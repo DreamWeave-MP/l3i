@@ -14,6 +14,8 @@
 //! binding's Rust frames to Luau's `pcall`; a Rust panic inside a native call aborts. Host-level
 //! code never sees a Luau raise: operations that can raise run under `lua_pcall` there.
 
+#[cfg(feature = "analysis")]
+pub mod analysis;
 pub mod bind;
 pub mod call;
 pub mod convert;

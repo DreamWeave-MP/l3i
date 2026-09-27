@@ -168,10 +168,18 @@ fn main() {
     }
 
     if analysis {
+        // Analysis runs user-defined type functions on a Luau VM, so it sees the VM, bytecode,
+        // and compiler headers too.
         luau.library(
             "luauanalysis",
             "Analysis",
-            &[ast_include.clone(), config_include.clone(), compiler_include.clone()],
+            &[
+                ast_include.clone(),
+                config_include.clone(),
+                compiler_include.clone(),
+                bytecode_include.clone(),
+                vm_include.clone(),
+            ],
             &[],
         );
         let mut shim = luau.base.clone();
@@ -179,6 +187,8 @@ fn main() {
             .include(&ast_include)
             .include(&config_include)
             .include(&compiler_include)
+            .include(&bytecode_include)
+            .include(&vm_include)
             .file("csrc/analysis.cpp");
         shim.compile("dreambinderanalysis");
     }
