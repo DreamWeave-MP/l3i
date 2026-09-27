@@ -7,6 +7,7 @@
 pub mod debug_name;
 pub mod diagnostics;
 pub mod error;
+pub mod flags;
 pub mod native;
 mod raw;
 pub mod runtime;

@@ -59,6 +59,9 @@ fn c_array(values: &[CString], storage: &mut Vec<*const c_char>) -> *const *cons
 /// Compiles Luau source to bytecode. A compile error is returned as `Error::Runtime` carrying
 /// Luau's message rather than as error bytecode.
 pub fn compile(source: &str, options: &CompileOptions) -> Result<Vec<u8>> {
+    // Several flags change emitted bytecode; standalone compilation must see the same policy
+    // a Runtime would.
+    crate::flags::initialize()?;
     let mut mutable_globals = Vec::new();
     let mut userdata_types = Vec::new();
     let mut disabled_builtins = Vec::new();
