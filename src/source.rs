@@ -57,8 +57,18 @@ fn c_array(values: &[CString], storage: &mut Vec<*const c_char>) -> *const *cons
 }
 
 /// Compiles Luau source to bytecode. A compile error is returned as `Error::Runtime` carrying
-/// Luau's message rather than as error bytecode.
+/// Luau's message (without a chunk name) rather than as error bytecode.
 pub fn compile(source: &str, options: &CompileOptions) -> Result<Vec<u8>> {
+    let bytes = compile_raw(source, options)?;
+    if bytes.first() == Some(&0) {
+        return Err(Error::runtime(String::from_utf8_lossy(&bytes[1..]).into_owned()));
+    }
+    Ok(bytes)
+}
+
+/// Compiles to bytecode, returning Luau's error bytecode (leading NUL byte) as-is so that
+/// `luau_load` reports the failure with the chunk name, as OpenMW's `loadBytecode` does.
+pub(crate) fn compile_raw(source: &str, options: &CompileOptions) -> Result<Vec<u8>> {
     // Several flags change emitted bytecode; standalone compilation must see the same policy
     // a Runtime would.
     crate::flags::initialize()?;
@@ -90,12 +100,7 @@ pub fn compile(source: &str, options: &CompileOptions) -> Result<Vec<u8>> {
         return Err(Error::runtime("Luau compiler returned no bytecode"));
     }
     // SAFETY: luau_compile returned `size` valid bytes at `bytecode`, owned by us until `free`.
-    let bytes = unsafe { std::slice::from_raw_parts(bytecode.cast::<u8>(), size) };
-    let result = if bytes.first() == Some(&0) {
-        Err(Error::runtime(String::from_utf8_lossy(&bytes[1..]).into_owned()))
-    } else {
-        Ok(bytes.to_vec())
-    };
+    let bytes = unsafe { std::slice::from_raw_parts(bytecode.cast::<u8>(), size) }.to_vec();
     unsafe { ffi::free(bytecode.cast()) };
-    result
+    Ok(bytes)
 }

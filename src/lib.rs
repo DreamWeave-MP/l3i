@@ -27,6 +27,7 @@ pub mod native;
 mod raw;
 pub mod readonly;
 pub mod runtime;
+pub mod sandbox;
 pub mod source;
 pub mod stack;
 pub mod userdata;

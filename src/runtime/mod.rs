@@ -16,7 +16,7 @@ use std::time::Duration;
 use crate::error::{Error, Result};
 use crate::flags;
 use crate::raw::ffi;
-use crate::source::{CompileOptions, compile};
+use crate::source::{CompileOptions, compile_raw};
 use crate::stack::{Frame, Stack, ValueView, same_vm};
 
 pub use call_scope::{CallContext, CallKind, CallScope};
@@ -31,9 +31,29 @@ pub struct RuntimeBuilder {
     standard_libraries: bool,
     limits: Limits,
     profiler: bool,
+    initialization_category: MemoryCategory,
+    native_code: bool,
 }
 
 impl RuntimeBuilder {
+    /// Creates the native code generator on a fresh state when requested and available.
+    #[cfg(feature = "jit")]
+    fn create_native_code(state: *mut ffi::lua_State, requested: bool) -> bool {
+        // SAFETY: fresh state; codegen must be created before any function is compiled.
+        unsafe {
+            if requested && ffi::luau_codegen_supported() != 0 {
+                ffi::luau_codegen_create(state);
+                return true;
+            }
+        }
+        false
+    }
+
+    #[cfg(not(feature = "jit"))]
+    fn create_native_code(_state: *mut ffi::lua_State, _requested: bool) -> bool {
+        false
+    }
+
     /// Root vocabulary for debug names (`openmw`, `string`, `vector` in OpenMW). Every native
     /// function and userdata type registered into the VM must be named under one of these.
     pub fn debug_roots(mut self, roots: &[&'static str]) -> Self {
@@ -74,6 +94,19 @@ impl RuntimeBuilder {
         self
     }
 
+    /// The memory category charged while sandboxes and templates are set up. Default 0.
+    pub fn initialization_category(mut self, category: MemoryCategory) -> Self {
+        self.initialization_category = category;
+        self
+    }
+
+    /// Enable Luau native code generation for templates (needs the `jit` feature and a
+    /// supported platform; silently stays off otherwise). Default off.
+    pub fn native_code(mut self, enabled: bool) -> Self {
+        self.native_code = enabled;
+        self
+    }
+
     pub fn build(self) -> Result<Runtime> {
         flags::initialize()?;
         // SAFETY: luaL_newstate uses the default allocator; a null result is out of memory.
@@ -82,7 +115,14 @@ impl RuntimeBuilder {
             return Err(Error::runtime("Unable to allocate a Luau state"));
         }
         let shared = Box::new(Shared::new(self.limits, self.profiler));
-        let runtime = Runtime { state, debug_roots: self.debug_roots, shared };
+        let native_code = Self::create_native_code(state, self.native_code);
+        let runtime = Runtime {
+            state,
+            debug_roots: self.debug_roots,
+            shared,
+            initialization_category: self.initialization_category,
+            native_code,
+        };
         if self.pointer_encoding {
             let key = PointerEncodingKey::random();
             // SAFETY: the state is fresh; this must precede any table or library creation.
@@ -147,7 +187,12 @@ pub struct Runtime {
     debug_roots: Vec<&'static str>,
     /// Per-VM state reachable from callbacks through `lua_Callbacks.userdata`.
     shared: Box<Shared>,
+    initialization_category: MemoryCategory,
+    native_code: bool,
 }
+
+/// The context id call scopes use for sandbox and template setup.
+pub const INITIALIZATION_CONTEXT: u64 = u64::MAX;
 
 impl Runtime {
     /// Starts configuring a VM. Defaults: debug root `dreamweave`, pointer encoding seeded,
@@ -159,7 +204,20 @@ impl Runtime {
             standard_libraries: true,
             limits: Limits::default(),
             profiler: false,
+            initialization_category: MemoryCategory(0),
+            native_code: false,
         }
+    }
+
+    /// The call context for initialization work: [`INITIALIZATION_CONTEXT`] in the configured
+    /// initialization category.
+    pub fn initialization_context(&self) -> CallContext {
+        CallContext { id: INITIALIZATION_CONTEXT, category: self.initialization_category }
+    }
+
+    /// True when native code generation was requested and is available on this VM.
+    pub fn native_code_enabled(&self) -> bool {
+        self.native_code
     }
 
     pub(crate) fn shared(&self) -> &Shared {
@@ -260,7 +318,7 @@ impl Runtime {
         if !same_vm(frame.state(), self.state) {
             return Err(Error::logic("Frame belongs to a different Lua VM"));
         }
-        let bytecode = compile(source, options)?;
+        let bytecode = compile_raw(source, options)?;
         let name = CString::new(chunk_name).map_err(|_| Error::logic("Chunk name cannot contain NUL"))?;
         // SAFETY: the frame's thread is live and in this VM; the bytecode slice and name
         // outlive the call. luau_load reports failure by status and leaves the message on top.

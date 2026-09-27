@@ -264,7 +264,7 @@ unsafe fn push_strict_metatable(runtime: &Runtime, state: *mut ffi::lua_State) -
 }
 
 /// Builds the proxy for the table on top of `frame`; leaves the proxy on top.
-fn build_proxy(runtime: &Runtime, frame: &Frame<'_>, strict: bool) -> Result<()> {
+pub(crate) fn build_read_only_view(runtime: &Runtime, frame: &Frame<'_>, strict: bool) -> Result<()> {
     let state = frame.state();
     // SAFETY: the backing table is on top of the frame; every index is absolute and the frame
     // owns every temporary.
@@ -376,7 +376,7 @@ fn make_view(runtime: &Runtime, table: &Table, strict: bool) -> Result<Table> {
     let stack = runtime.stack();
     stack.with_frame(|frame| {
         table.push_to(frame)?;
-        build_proxy(runtime, frame, strict)?;
+        build_read_only_view(runtime, frame, strict)?;
         Table::from_value(Value::store(frame.top_value())?)
     })
 }
