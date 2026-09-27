@@ -50,6 +50,21 @@ unsafe fn current_function_name(state: *mut ffi::lua_State) -> Option<String> {
     }
 }
 
+/// Raises `message` as a Lua error prefixed with the caller's location, the way `luaL_error`
+/// does. For hand-written dispatchers that run directly under Luau.
+///
+/// # Safety
+/// `state` is inside a native call and no Rust value that must be dropped is live in the
+/// caller's frame.
+pub(crate) unsafe fn raise_at_caller(state: *mut ffi::lua_State, message: &str) -> ! {
+    unsafe {
+        let text = format!("{}{message}", location(state, 1));
+        ffi::lua_pushlstring(state, text.as_ptr().cast(), text.len());
+        drop(text);
+        ffi::lua_error(state)
+    }
+}
+
 /// `luaT_objtypename`: `__type` from the metatable when present, else the basic type name.
 pub fn object_type_name(value: ValueView<'_>) -> String {
     // SAFETY: luaL_typename accepts any acceptable index, including none.

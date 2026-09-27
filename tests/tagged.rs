@@ -5,7 +5,7 @@ use std::cell::Cell;
 use std::ffi::c_int;
 
 use dream_binder::ffi;
-use dream_binder::userdata::{TaggedUserdata, tagged};
+use dream_binder::userdata::{Userdata, tagged};
 use dream_binder::{Error, Runtime, TAG_LIMIT};
 
 thread_local! {
@@ -30,36 +30,36 @@ impl Drop for Probe {
     }
 }
 
-unsafe impl TaggedUserdata for Probe {
-    const TAG: u8 = 7;
+unsafe impl Userdata for Probe {
+    const TAG: Option<u8> = Some(7);
     const NAME: &'static str = "dreamweave.test.Probe";
 }
 
 struct Impostor;
 
-unsafe impl TaggedUserdata for Impostor {
-    const TAG: u8 = 7;
+unsafe impl Userdata for Impostor {
+    const TAG: Option<u8> = Some(7);
     const NAME: &'static str = "dreamweave.test.Impostor";
 }
 
 struct SameNameOtherTag;
 
-unsafe impl TaggedUserdata for SameNameOtherTag {
-    const TAG: u8 = 8;
+unsafe impl Userdata for SameNameOtherTag {
+    const TAG: Option<u8> = Some(8);
     const NAME: &'static str = "dreamweave.test.Probe";
 }
 
 struct ZeroTag;
 
-unsafe impl TaggedUserdata for ZeroTag {
-    const TAG: u8 = 0;
+unsafe impl Userdata for ZeroTag {
+    const TAG: Option<u8> = Some(0);
     const NAME: &'static str = "dreamweave.test.ZeroTag";
 }
 
 struct LimitTag;
 
-unsafe impl TaggedUserdata for LimitTag {
-    const TAG: u8 = TAG_LIMIT;
+unsafe impl Userdata for LimitTag {
+    const TAG: Option<u8> = Some(TAG_LIMIT);
     const NAME: &'static str = "dreamweave.test.LimitTag";
 }
 
@@ -73,19 +73,9 @@ unsafe extern "C-unwind" fn make_probe(state: *mut ffi::lua_State) -> c_int {
     }
 }
 
-unsafe extern "C-unwind" fn probe_value(state: *mut ffi::lua_State) -> c_int {
-    unsafe {
-        dream_binder::native::enter(state, |stack| {
-            let probe = tagged::check::<Probe>(stack.at(1))?;
-            stack.push_number(probe.value);
-            Ok(1)
-        })
-    }
-}
-
 fn runtime_with_probe() -> Runtime {
     let runtime = Runtime::new().unwrap();
-    tagged::register::<Probe>(&runtime, |ty| ty.raw_method("value", probe_value)).unwrap();
+    tagged::register::<Probe>(&runtime, |ty| ty.method("value", |probe: &Probe| probe.value)).unwrap();
     {
         let stack = runtime.stack();
         let frame = stack.frame();
@@ -123,9 +113,11 @@ fn wrong_receiver_is_a_luau_type_error() {
         error.to_string().ends_with("invalid argument #1 to 'dreamweave.test.Probe.value' (dreamweave.test.Probe expected, got number)"),
         "{error}"
     );
+    // Method mode checks counts before the receiver, so a receiver-less call reports the C++
+    // binder's count message (see QUESTIONABLE.md).
     let error = runtime.exec("local p = make_probe(1) p.value()").unwrap_err();
     assert!(
-        error.to_string().ends_with("missing argument #1 to 'dreamweave.test.Probe.value' (dreamweave.test.Probe expected)"),
+        error.to_string().ends_with("dreamweave.test.Probe.value: bad argument count (expected at least 0, got -1)"),
         "{error}"
     );
 }

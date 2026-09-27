@@ -8,7 +8,7 @@ use super::diagnostics;
 use crate::convert::{BufferView, FromView, Integer, Vector3};
 use crate::error::{Error, Result};
 use crate::stack::{Scope, Type, ValueView};
-use crate::userdata::{TaggedUserdata, tagged};
+use crate::userdata::{Userdata, check_receiver, receiver};
 use crate::value::{Function, Table, Value};
 
 /// How a parameter consumes Lua arguments.
@@ -197,19 +197,19 @@ impl<'c> ParamItem<'c> for ValueView<'c> {
     }
 }
 
-/// A tagged userdata argument, borrowed for the call.
-impl<T: TaggedUserdata> Param for &'_ T {
+/// A userdata argument (tagged or untagged), borrowed for the call.
+impl<T: Userdata> Param for &'_ T {
     type Item<'c> = &'c T;
 }
 
-impl<'c, T: TaggedUserdata> ParamItem<'c> for &'c T {
+impl<'c, T: Userdata> ParamItem<'c> for &'c T {
     const KIND: ParamKind = ParamKind::Regular;
     const EXPECTED: &'static str = T::NAME;
     fn read_slot(view: ValueView<'c>) -> Result<Self> {
-        tagged::check::<T>(view)
+        check_receiver::<T>(view)
     }
     fn matches(view: ValueView<'c>) -> bool {
-        tagged::test::<T>(view).is_some()
+        receiver::<T>(view).is_some()
     }
 }
 

@@ -6,7 +6,7 @@ use std::ffi::c_int;
 use super::diagnostics;
 use super::param::{Param, ParamItem, ParamKind};
 use super::Call;
-use crate::error::Result;
+use crate::error::{Error, Result};
 
 /// A tuple of [`Param`] markers.
 pub trait Params {
@@ -20,12 +20,31 @@ pub trait Params {
     const MAX: usize = max_slots(Self::KINDS);
     /// True once a `VarArgs`/`ArgView` tail absorbs the remaining arguments.
     const TERMINATOR: bool = has_terminator(Self::KINDS);
+    /// The first parameter's expected type, i.e. a method's receiver type.
+    const RECEIVER_NAME: Option<&'static str>;
 
     /// `probeForOverload`: argument count fits, and every parameter probes in order.
     fn probe_for_overload(call: &Call<'_>) -> bool;
 
     /// `invokeAndPush`'s argument half: count checks, ordered conversion, unused check.
     fn materialize<'c>(call: &'c Call<'c>, debug_name: &str) -> Result<Self::Items<'c>>;
+
+    /// `MethodSignatureBase::invoke`'s argument half: the receiver at slot 1 is converted with
+    /// its own type error and left out of the numbering, the rest start at slot 2.
+    fn materialize_method<'c>(call: &'c Call<'c>, debug_name: &str) -> Result<Self::Items<'c>>;
+}
+
+/// Descriptor helpers over a kinds slice that may start after the receiver.
+fn count_checks(kinds: &[ParamKind], top: c_int, debug_name: &str) -> Result<()> {
+    let required = required_slots(kinds);
+    let max = max_slots(kinds);
+    if top < required as c_int {
+        return Err(diagnostics::too_few_arguments(debug_name, required, top));
+    }
+    if !has_terminator(kinds) && top > max as c_int {
+        return Err(diagnostics::too_many_arguments(debug_name, max, top));
+    }
+    Ok(())
 }
 
 const fn required_slots(kinds: &[ParamKind]) -> usize {
@@ -96,6 +115,10 @@ macro_rules! params_impls {
             type Items<'c> = ($(<$p as Param>::Item<'c>,)*);
 
             const KINDS: &'static [ParamKind] = &[$(<<$p as Param>::Item<'static> as ParamItem<'static>>::KIND,)*];
+            const RECEIVER_NAME: Option<&'static str> = {
+                let names: &[&'static str] = &[$(<<$p as Param>::Item<'static> as ParamItem<'static>>::EXPECTED,)*];
+                if names.is_empty() { None } else { Some(names[0]) }
+            };
 
             #[allow(unused_variables, unused_mut, clippy::let_unit_value)]
             fn probe_for_overload(call: &Call<'_>) -> bool {
@@ -119,12 +142,7 @@ macro_rules! params_impls {
             fn materialize<'c>(call: &'c Call<'c>, debug_name: &str) -> Result<Self::Items<'c>> {
                 const { assert!(terminators_are_final(Self::KINDS), "VarArgs/ArgView must be the final parameter") };
                 let top = call.argument_count();
-                if top < Self::REQUIRED as c_int {
-                    return Err(diagnostics::too_few_arguments(debug_name, Self::REQUIRED, top));
-                }
-                if !Self::TERMINATOR && top > Self::MAX as c_int {
-                    return Err(diagnostics::too_many_arguments(debug_name, Self::MAX, top));
-                }
+                count_checks(Self::KINDS, top, debug_name)?;
                 let mut cursor: c_int = 1;
                 let mut position: c_int = 0;
                 // Tuple fields evaluate left to right, preserving cursor advancement and
@@ -135,6 +153,33 @@ macro_rules! params_impls {
                     )?,
                 )*);
                 if !Self::TERMINATOR && cursor <= top {
+                    return Err(diagnostics::unused_arguments(debug_name));
+                }
+                Ok(items)
+            }
+
+            #[allow(unused_variables, unused_mut, clippy::let_unit_value, unreachable_code)]
+            fn materialize_method<'c>(call: &'c Call<'c>, debug_name: &str) -> Result<Self::Items<'c>> {
+                const { assert!(terminators_are_final(Self::KINDS), "VarArgs/ArgView must be the final parameter") };
+                if Self::KINDS.is_empty() {
+                    return Err(Error::logic(format!("{debug_name}: a method needs a receiver parameter")));
+                }
+                let rest = &Self::KINDS[1..];
+                let top = call.argument_count();
+                count_checks(rest, top - 1, debug_name)?;
+                let mut cursor: c_int = 2;
+                let mut position: c_int = 0;
+                let items = ($(
+                    if $i == 0 {
+                        // The receiver: its own type error, no argument numbering.
+                        <<$p as Param>::Item<'c> as ParamItem<'c>>::read_slot(call.arg(1))?
+                    } else {
+                        <<$p as Param>::Item<'c> as ParamItem<'c>>::materialize(
+                            call, &mut cursor, top, &mut position, debug_name, allow_mismatch(Self::KINDS, $i),
+                        )?
+                    },
+                )*);
+                if !has_terminator(rest) && cursor <= top {
                     return Err(diagnostics::unused_arguments(debug_name));
                 }
                 Ok(items)

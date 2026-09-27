@@ -47,12 +47,21 @@ use crate::value::{Function, Value};
 /// A Rust callable that the binder can expose. `Marker` is inferred from the callable's
 /// signature; users never name it.
 pub trait Binding<Marker>: 'static {
+    /// Parameter kinds in order; builders use them to validate member signatures.
+    const PARAM_KINDS: &'static [ParamKind];
+    /// The expected-type name of the first parameter, i.e. the receiver type of a method.
+    const RECEIVER_NAME: Option<&'static str>;
+
     /// True when the arguments currently on the stack fit this signature exactly enough to
     /// commit to it during overload resolution.
     fn probe_for_overload(&self, call: &Call<'_>) -> bool;
 
     /// Materialises the arguments, runs the callable, pushes the results.
     fn invoke(&self, call: &Call<'_>, debug_name: &str) -> Result<c_int>;
+
+    /// Method mode: slot 1 is the receiver, validated with the receiver type's own error and
+    /// excluded from argument numbering; remaining parameters start at slot 2.
+    fn invoke_method(&self, call: &Call<'_>, debug_name: &str) -> Result<c_int>;
 }
 
 /// Ordered overload set: candidates are tried in declaration order and the first whose probe
@@ -67,6 +76,9 @@ macro_rules! binding_impls {
             $($p: Param,)*
             Ret: Return,
         {
+            const PARAM_KINDS: &'static [ParamKind] = <($($p,)*) as Params>::KINDS;
+            const RECEIVER_NAME: Option<&'static str> = <($($p,)*) as Params>::RECEIVER_NAME;
+
             fn probe_for_overload(&self, call: &Call<'_>) -> bool {
                 <($($p,)*) as Params>::probe_for_overload(call)
             }
@@ -74,6 +86,13 @@ macro_rules! binding_impls {
             #[allow(non_snake_case, unused_variables)]
             fn invoke(&self, call: &Call<'_>, debug_name: &str) -> Result<c_int> {
                 let ($($m,)*) = <($($p,)*) as Params>::materialize(call, debug_name)?;
+                let result = self($($m,)*);
+                result.push_results(call)
+            }
+
+            #[allow(non_snake_case, unused_variables)]
+            fn invoke_method(&self, call: &Call<'_>, debug_name: &str) -> Result<c_int> {
+                let ($($m,)*) = <($($p,)*) as Params>::materialize_method(call, debug_name)?;
                 let result = self($($m,)*);
                 result.push_results(call)
             }
@@ -99,6 +118,9 @@ macro_rules! overload_impls {
         where
             $($f: Binding<$m>, $m: 'static,)+
         {
+            const PARAM_KINDS: &'static [ParamKind] = &[];
+            const RECEIVER_NAME: Option<&'static str> = None;
+
             fn probe_for_overload(&self, _: &Call<'_>) -> bool {
                 // An overload set never matches wholesale when nested inside another.
                 false
@@ -111,6 +133,10 @@ macro_rules! overload_impls {
                     }
                 )+
                 Err(diagnostics::no_matching_overload(debug_name))
+            }
+
+            fn invoke_method(&self, _: &Call<'_>, debug_name: &str) -> Result<c_int> {
+                Err(Error::logic(format!("{debug_name}: overload sets cannot be bound as methods")))
             }
         }
     )*};
@@ -141,8 +167,11 @@ unsafe extern "C" fn destroy_context<F>(_: *mut ffi::lua_State, userdata: *mut c
     }
 }
 
-/// The C closure every binding runs through: context in upvalue 1, then `Binding::invoke`.
-unsafe extern "C-unwind" fn thunk<F: Binding<M>, M>(state: *mut ffi::lua_State) -> c_int {
+/// Reads the context from upvalue 1 and runs `body` with it under the trampoline.
+unsafe fn with_context<F: Binding<M>, M>(
+    state: *mut ffi::lua_State,
+    body: impl FnOnce(&F, &Call<'_>, &str) -> Result<c_int>,
+) -> c_int {
     unsafe {
         trampoline::enter(state, || {
             let context = ffi::lua_touserdata(state, ffi::lua_upvalueindex(1)).cast::<Context<F>>();
@@ -153,15 +182,32 @@ unsafe extern "C-unwind" fn thunk<F: Binding<M>, M>(state: *mut ffi::lua_State) 
             let context = &*context;
             let debug_name = std::ffi::CStr::from_ptr(context.debug_name).to_str().unwrap_or("?");
             let call = Call::from_raw(state);
-            context.callable.invoke(&call, debug_name)
+            body(&context.callable, &call, debug_name)
         })
     }
 }
 
+/// The C closure every function binding runs through.
+unsafe extern "C-unwind" fn thunk<F: Binding<M>, M>(state: *mut ffi::lua_State) -> c_int {
+    unsafe { with_context::<F, M>(state, |callable, call, name| callable.invoke(call, name)) }
+}
+
+/// The C closure every method binding runs through.
+unsafe extern "C-unwind" fn method_thunk<F: Binding<M>, M>(state: *mut ffi::lua_State) -> c_int {
+    unsafe { with_context::<F, M>(state, |callable, call, name| callable.invoke_method(call, name)) }
+}
+
 /// Allocates the context userdata, moves `callable` into it, and pushes the C closure.
-fn push_closure<F: Binding<M>, M>(scope: &impl Scope, callable: F, debug_name: *const c_char) -> Result<()> {
+///
+/// # Safety
+/// `state` is live with room for two values; `debug_name` is retained for the VM's life.
+unsafe fn push_closure<F: Binding<M>, M>(
+    state: *mut ffi::lua_State,
+    callable: F,
+    debug_name: *const c_char,
+    entry: ffi::lua_CFunction,
+) -> Result<()> {
     const { assert_userdata_layout::<Context<F>>() };
-    let state = scope.state();
     // SAFETY: allocate, then initialise immediately: Luau owns the destructor as soon as
     // lua_newuserdatadtor returns, and the destructor only runs on a fully written Context.
     unsafe {
@@ -170,9 +216,25 @@ fn push_closure<F: Binding<M>, M>(scope: &impl Scope, callable: F, debug_name: *
             return Err(Error::runtime("Unable to allocate binding closure context"));
         }
         ptr::write(storage.cast::<Context<F>>(), Context { callable, debug_name });
-        ffi::lua_pushcclosure(state, thunk::<F, M>, debug_name, 1);
+        ffi::lua_pushcclosure(state, entry, debug_name, 1);
     }
     Ok(())
+}
+
+/// Pushes a function-mode closure. `debug_name` must already be retained.
+///
+/// # Safety
+/// As [`push_closure`].
+pub(crate) unsafe fn function_closure<F: Binding<M>, M>(state: *mut ffi::lua_State, callable: F, debug_name: *const c_char) -> Result<()> {
+    unsafe { push_closure(state, callable, debug_name, thunk::<F, M>) }
+}
+
+/// Pushes a method-mode closure. `debug_name` must already be retained.
+///
+/// # Safety
+/// As [`push_closure`].
+pub(crate) unsafe fn method_closure<F: Binding<M>, M>(state: *mut ffi::lua_State, callable: F, debug_name: *const c_char) -> Result<()> {
+    unsafe { push_closure(state, callable, debug_name, method_thunk::<F, M>) }
 }
 
 /// Binds `callable` as a Lua function named `debug_name` (validated against `roots` and
@@ -180,8 +242,10 @@ fn push_closure<F: Binding<M>, M>(scope: &impl Scope, callable: F, debug_name: *
 pub fn function<F: Binding<M>, M>(scope: &impl Scope, roots: &[&str], debug_name: &str, callable: F) -> Result<Function> {
     scope.with_frame(|frame| {
         // SAFETY: frame state is live; retain rebalances the stack itself.
-        let retained = unsafe { debug_name::retain(frame.state(), debug_name, roots)? };
-        push_closure(frame, callable, retained)?;
+        unsafe {
+            let retained = debug_name::retain(frame.state(), debug_name, roots)?;
+            function_closure(frame.state(), callable, retained)?;
+        }
         Function::from_value(Value::store(frame.top_value())?)
     })
 }

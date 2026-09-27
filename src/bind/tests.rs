@@ -8,7 +8,7 @@ use crate::convert::{Integer, Vector3};
 use crate::error::Error;
 use crate::runtime::Runtime;
 use crate::stack::{Scope, Type, ValueView};
-use crate::userdata::{TaggedUserdata, tagged};
+use crate::userdata::{Userdata, tagged};
 use crate::value::Value;
 
 const NAME: &str = "dreamweave.tests.fn";
@@ -274,8 +274,8 @@ fn table_error_objects_survive_forwarding_unchanged() {
 #[test]
 fn tagged_userdata_arguments_are_borrowed_and_checked() {
     struct Probe(f64);
-    unsafe impl TaggedUserdata for Probe {
-        const TAG: u8 = 9;
+    unsafe impl Userdata for Probe {
+        const TAG: Option<u8> = Some(9);
         const NAME: &'static str = "dreamweave.tests.Probe";
     }
     let runtime = Runtime::new().unwrap();
