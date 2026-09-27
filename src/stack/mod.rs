@@ -134,6 +134,11 @@ impl<'vm> Stack<'vm> {
         unsafe { ffi::lua_gettop(self.state) }
     }
 
+    /// The raw thread pointer, for VM identity checks.
+    pub(crate) fn state_ptr(&self) -> *mut ffi::lua_State {
+        self.state
+    }
+
     /// A view of slot `index`, borrowing the stack. Negative indexes resolve against the current
     /// top; `0`, out-of-range indexes, and indexes above the top are views of [`Type::None`].
     pub fn at(&self, index: c_int) -> ValueView<'_> {

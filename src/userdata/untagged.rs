@@ -82,8 +82,10 @@ pub fn register<T: Userdata>(
     runtime: &Runtime,
     configure: impl FnOnce(&mut MetatableBuilder<'_>) -> Result<()>,
 ) -> Result<()> {
-    const { assert_untagged::<T>() };
     const { assert_userdata_layout::<Storage<T>>() };
+    if T::TAG.is_some() {
+        return Err(Error::logic(format!("'{}' is tagged; use userdata::tagged", T::NAME)));
+    }
     if T::NAME.is_empty() {
         return Err(Error::logic("Untagged userdata name cannot be empty"));
     }

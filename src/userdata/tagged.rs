@@ -56,7 +56,11 @@ pub fn register<T: Userdata>(
     configure: impl FnOnce(&mut MetatableBuilder<'_>) -> Result<()>,
 ) -> Result<()> {
     const { assert_userdata_layout::<T>() };
-    let tag_value = const { tag_of::<T>() };
+    // A runtime check rather than a const one so a generic caller can dispatch on T::TAG
+    // without instantiating a failing constant in the branch it does not take.
+    let Some(tag_value) = T::TAG else {
+        return Err(Error::logic(format!("'{}' is untagged; use userdata::untagged", T::NAME)));
+    };
     require_tag_in_range(tag_value)?;
     crate::debug_name::require_valid_debug_name(T::NAME, runtime.debug_roots())?;
     let name = CString::new(T::NAME).map_err(|_| Error::logic("Userdata type name cannot contain NUL"))?;
