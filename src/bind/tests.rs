@@ -174,13 +174,12 @@ fn typed_varargs_and_heterogeneous_arg_view_tails() {
 #[test]
 fn return_adapters_cover_every_shape() {
     let runtime = Runtime::new().unwrap();
-    let stack = runtime.stack();
     let unit = runtime.bind_function(NAME, || ()).unwrap();
-    assert_eq!(unit.invoke_multi(&stack, ()).unwrap().len(), 0);
+    assert_eq!(unit.invoke_multi(&runtime.stack(), ()).unwrap().len(), 0);
 
     let optional = runtime.bind_function(NAME, |present: bool| present.then_some(7i32)).unwrap();
     assert_eq!(call::<Option<i32>, _>(&runtime, &optional, (true,)).unwrap(), Some(7));
-    assert_eq!(optional.invoke_multi(&stack, (false,)).unwrap().len(), 1);
+    assert_eq!(optional.invoke_multi(&runtime.stack(), (false,)).unwrap().len(), 1);
     assert!(call::<Value, _>(&runtime, &optional, (false,)).unwrap().is_nil());
 
     let tuple = runtime.bind_function(NAME, || (1i32, "two", Vector3::new(1.0, 2.0, 3.0))).unwrap();
@@ -190,12 +189,12 @@ fn return_adapters_cover_every_shape() {
     );
 
     let variadic = runtime.bind_function(NAME, |n: i32| Variadic((0..n).collect::<Vec<i32>>())).unwrap();
-    assert_eq!(variadic.invoke_multi(&stack, (3,)).unwrap().len(), 3);
-    assert_eq!(variadic.invoke_multi(&stack, (0,)).unwrap().len(), 0);
+    assert_eq!(variadic.invoke_multi(&runtime.stack(), (3,)).unwrap().len(), 3);
+    assert_eq!(variadic.invoke_multi(&runtime.stack(), (0,)).unwrap().len(), 0);
     let optional_variadic =
         runtime.bind_function(NAME, |some: bool| if some { Some(Variadic(vec![1i32, 2])) } else { None }).unwrap();
-    assert_eq!(optional_variadic.invoke_multi(&stack, (true,)).unwrap().len(), 2);
-    assert!(optional_variadic.invoke_multi(&stack, (false,)).unwrap()[0].is_nil());
+    assert_eq!(optional_variadic.invoke_multi(&runtime.stack(), (true,)).unwrap().len(), 2);
+    assert!(optional_variadic.invoke_multi(&runtime.stack(), (false,)).unwrap()[0].is_nil());
 
     let result_or_error = runtime
         .bind_function(
@@ -215,7 +214,7 @@ fn return_adapters_cover_every_shape() {
     let nil_then = runtime
         .bind_function(NAME, |ok: bool| if ok { NilThen::success(5i32) } else { NilThen::failure(9i32) })
         .unwrap();
-    assert_eq!(nil_then.invoke_multi(&stack, (true,)).unwrap().len(), 1);
+    assert_eq!(nil_then.invoke_multi(&runtime.stack(), (true,)).unwrap().len(), 1);
     assert_eq!(call::<(Option<i32>, Option<i32>), _>(&runtime, &nil_then, (false,)).unwrap(), (None, Some(9)));
 
     let raw = runtime
@@ -225,7 +224,7 @@ fn return_adapters_cover_every_shape() {
             StackResults
         })
         .unwrap();
-    let results = raw.invoke_multi(&stack, ()).unwrap();
+    let results = raw.invoke_multi(&runtime.stack(), ()).unwrap();
     assert_eq!(results.len(), 2);
     assert_eq!(results[1].type_of(), Type::Integer);
 
@@ -309,13 +308,12 @@ fn tagged_userdata_arguments_are_borrowed_and_checked() {
         })
         .unwrap();
     let read = runtime.bind_function(NAME, |probe: &Probe, scale: f64| probe.0 * scale).unwrap();
-    let stack = runtime.stack();
     let probe = call::<Value, _>(&runtime, &make, (2.5,)).unwrap();
     assert_eq!(call::<f64, _>(&runtime, &read, (&probe, 2.0)).unwrap(), 5.0);
     let text = error_text::<f64, _>(&runtime, &read, (1, 2.0));
     assert!(text.contains("bad argument #1 (expected dreamweave.tests.Probe)"), "{text}");
     assert!(text.contains("dreamweave.tests.Probe expected, got number"), "{text}");
-    assert_eq!(stack.top(), 0);
+    assert_eq!(runtime.stack().top(), 0);
 }
 
 #[test]

@@ -50,6 +50,7 @@ fn call_family_success_semantics() {
 fn call_family_error_parity_and_balance() {
     let runtime = Runtime::new().unwrap();
     let boom = load(&runtime, "return function() error('boom') end");
+    let table_error = load(&runtime, "return function() error({}) end");
     let stack = runtime.stack();
 
     let expect_boom = |error: Error| {
@@ -79,7 +80,6 @@ fn call_family_error_parity_and_balance() {
     assert_eq!(invalid.invoke_with(&stack, (), |_, _| Ok(())).unwrap_err(), logic);
 
     // Non-string error objects report their type name.
-    let table_error = load(&runtime, "return function() error({}) end");
     assert_eq!(table_error.invoke::<(), _>(&stack, ()).unwrap_err(), Error::runtime("Lua error: table"));
 
     // Borrowed-view invocation has its own wording.
@@ -97,10 +97,10 @@ fn multi_enforces_the_result_budget() {
     runtime
         .exec("function returnValues(n) local t = {} for i = 1, n do t[i] = 1 end return table.unpack(t) end")
         .unwrap();
-    let stack = runtime.stack();
     let ok = load(&runtime, "return function() return returnValues(256) end");
-    assert_eq!(ok.invoke_multi(&stack, ()).unwrap().len(), 256);
     let too_many = load(&runtime, "return function() return returnValues(300) end");
+    let stack = runtime.stack();
+    assert_eq!(ok.invoke_multi(&stack, ()).unwrap().len(), 256);
     assert_eq!(too_many.invoke_multi(&stack, ()).unwrap_err(), Error::runtime("Lua error: too many return values"));
     assert_eq!(stack.top(), 0);
 }
@@ -108,10 +108,12 @@ fn multi_enforces_the_result_budget() {
 #[test]
 fn with_result_visitor_and_argument_edges() {
     let runtime = Runtime::new().unwrap();
-    let stack = runtime.stack();
     let add = load(&runtime, "return function(a, b) return a + b, a * b end");
-    assert_eq!(add.invoke_with(&stack, (2, 3), |_, view| view.read::<i32>()).unwrap(), 5);
     let concat = load(&runtime, "return function(a, b) return a .. b end");
+    let plain_add = load(&runtime, "return function(a, b) return a + b end");
+    let count = load(&runtime, "return function(...) return select('#', ...) end");
+    let stack = runtime.stack();
+    assert_eq!(add.invoke_with(&stack, (2, 3), |_, view| view.read::<i32>()).unwrap(), 5);
     assert_eq!(concat.invoke::<String, _>(&stack, ("hello", "world")).unwrap(), "helloworld");
     let error = add
         .invoke_with(&stack, (2, 3), |frame, _| {
@@ -122,13 +124,11 @@ fn with_result_visitor_and_argument_edges() {
     assert_eq!(error, Error::logic("visitor failure"));
     assert_eq!(stack.top(), 0);
 
-    let plain_add = load(&runtime, "return function(a, b) return a + b end");
     let error = plain_add.invoke::<i32, _>(&stack, ()).unwrap_err().to_string();
     assert!(error.contains("attempt to perform arithmetic"), "{error}");
     assert_eq!(plain_add.invoke::<i32, _>(&stack, (2, 3)).unwrap(), 5);
     assert_eq!(plain_add.invoke::<i32, _>(&stack, (2, 3, 99)).unwrap(), 5, "extras ignored");
 
-    let count = load(&runtime, "return function(...) return select('#', ...) end");
     assert_eq!(count.invoke_with_values::<i32>(&stack, &[]).unwrap(), 0);
     let two = vec![Value::new_table(&stack, 0, 0).unwrap(), Value::new_table(&stack, 0, 0).unwrap()];
     assert_eq!(count.invoke_with_values::<i32>(&stack, &two).unwrap(), 2);
@@ -140,9 +140,9 @@ fn with_result_visitor_and_argument_edges() {
 #[test]
 fn integer_kind_is_preserved_through_the_call_boundary() {
     let runtime = Runtime::new().unwrap();
-    let stack = runtime.stack();
     let echo = load(&runtime, "return function(v) return v end");
     let kind_of = load(&runtime, "return function(v) return type(v) end");
+    let stack = runtime.stack();
     let echoed = echo.invoke::<Value, _>(&stack, (Integer(i64::MAX),)).unwrap();
     assert_eq!(echoed.type_of(), Type::Integer);
     assert_eq!(echo.invoke::<i64, _>(&stack, (Integer(i64::MAX),)).unwrap(), i64::MAX);
@@ -154,12 +154,12 @@ fn integer_kind_is_preserved_through_the_call_boundary() {
 #[test]
 fn yield_outside_a_coroutine_errors_cleanly() {
     let runtime = Runtime::new().unwrap();
-    let stack = runtime.stack();
     let yielder = load(&runtime, "return function() coroutine.yield('yielded') end");
+    let add = load(&runtime, "return function(a, b) return a + b end");
+    let stack = runtime.stack();
     let error = yielder.invoke::<(), _>(&stack, ()).unwrap_err().to_string();
     assert!(error.contains("attempt to yield across metamethod/C-call boundary"), "{error}");
     assert_eq!(stack.top(), 0);
-    let add = load(&runtime, "return function(a, b) return a + b end");
     assert_eq!(add.invoke::<i32, _>(&stack, (2, 3)).unwrap(), 5);
 }
 

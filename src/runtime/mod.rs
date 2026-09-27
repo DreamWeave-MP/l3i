@@ -8,7 +8,7 @@
 
 mod call_scope;
 pub mod profiler;
-mod shared;
+pub(crate) mod shared;
 
 use std::ffi::{CString, c_int};
 use std::hash::{BuildHasher, Hasher, RandomState};
@@ -22,6 +22,16 @@ use crate::stack::{Frame, Stack, ValueView, same_vm};
 
 pub use call_scope::{CallContext, CallKind, CallScope};
 use shared::Shared;
+
+/// The VM lifetime token of the runtime owning `state`, or a dead token for a foreign VM.
+///
+/// # Safety
+/// `state` is a live thread.
+pub(crate) unsafe fn vm_lifetime(state: *mut ffi::lua_State) -> std::rc::Weak<()> {
+    // SAFETY: forwarded contract.
+    let shared = unsafe { shared::shared_of(state) };
+    if shared.is_null() { std::rc::Weak::new() } else { unsafe { (*shared).lifetime() } }
+}
 pub use shared::{CallStats, Limits, MemoryCategory, SampledLocation, Samples};
 
 /// Host choices made before the VM exists.
@@ -342,11 +352,17 @@ impl Runtime {
         unsafe { ffi::lua_totalbytes(self.state, -1) }
     }
 
-    /// The main thread's stack at host level, valid while the runtime is.
+    /// The main thread's root stack at host level, valid while the runtime is. Only one root
+    /// stack may be alive at a time; helpers that take a `&Runtime` acquire it themselves, so
+    /// call them between root stacks, not while holding one. Inside a bound function use the
+    /// [`crate::bind::Call`] scope instead: the host's root is suspended there, and a second
+    /// root on the same frame is refused.
+    ///
+    /// # Panics
+    /// If a root stack from this runtime is alive and not suspended inside a Lua call.
     pub fn stack(&self) -> Stack<'_> {
-        // SAFETY: the state lives as long as `&self`; host code is the only user of the main
-        // thread while no Lua call is running.
-        unsafe { Stack::from_raw(self.state, true) }
+        // SAFETY: the state lives as long as `&self` and belongs to this runtime.
+        unsafe { Stack::lease_root(self.state) }
     }
 
     /// Compiles `source` and pushes the resulting chunk function onto `frame`, which may be on
@@ -390,6 +406,7 @@ impl Runtime {
         stack.with_frame(|frame| {
             self.load(frame, "=exec", source, &CompileOptions::default())?;
             // SAFETY: the chunk function is on top; pcall contains any raise.
+            let _lua_call = unsafe { shared::LuaCall::enter(self.state) };
             let status = unsafe { ffi::lua_pcall(self.state, 0, 0, 0) };
             if status != ffi::LUA_OK {
                 return Err(unsafe { crate::raw::protect::pop_error(self.state, status) });
@@ -407,6 +424,9 @@ pub fn caller_location(scope: &impl crate::stack::Scope) -> String {
 
 impl Drop for Runtime {
     fn drop(&mut self) {
+        // Values pinned on this VM check the lifetime token before touching it; ending it first
+        // turns every surviving `Value` into an inert invalid one.
+        self.shared.end_lifetime();
         // SAFETY: we own the state and nothing borrowed from it can outlive `self`. `shared`
         // outlives lua_close because struct fields drop after this body.
         unsafe {

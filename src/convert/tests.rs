@@ -143,8 +143,8 @@ fn integer_kind_vm_semantics_probe() {
     // Pins this Luau release's integer semantics: cross-kind equality is false, same-kind
     // compares payloads, arithmetic with a number errors. Re-verify on any Luau bump.
     let runtime = Runtime::new().unwrap();
-    let stack = runtime.stack();
     {
+        let stack = runtime.stack();
         let frame = stack.frame();
         frame.push(&Integer(5)).unwrap();
         frame.set_global("int_five").unwrap();
@@ -234,6 +234,7 @@ fn buffers_written_from_rust_are_visible_to_scripts_and_vice_versa() {
     assert_eq!(buffer.read_f32(0).unwrap(), 9.5);
     buffer.write_f32x3(0, Vector3::new(1.0, 2.0, 3.0)).unwrap();
     drop(frame);
+    drop(stack);
     runtime
         .exec("assert(buffer.readf32(shared, 0) == 1 and buffer.readf32(shared, 4) == 2 and buffer.readf32(shared, 8) == 3)")
         .unwrap();

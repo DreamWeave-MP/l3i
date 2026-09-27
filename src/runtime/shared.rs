@@ -4,6 +4,7 @@
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap};
 use std::ffi::{CStr, c_int, c_void};
+use std::rc::{Rc, Weak};
 use std::time::{Duration, Instant};
 
 use crate::raw::ffi;
@@ -89,6 +90,12 @@ pub(crate) struct Shared {
     safepoints_until_sample: Cell<u32>,
     samples: RefCell<Samples>,
     stats_frame: Cell<u64>,
+    /// The VM lifetime token: `Value`s hold a `Weak` to it and go inert when it ends.
+    lifetime: RefCell<Option<Rc<()>>>,
+    /// Live `Stack` handles on this VM (root and native-call).
+    alive_stacks: Cell<u32>,
+    /// Host-to-Lua transitions currently in progress (`LuaCall` guards).
+    lua_calls: Cell<u32>,
 }
 
 impl Shared {
@@ -104,7 +111,38 @@ impl Shared {
             safepoints_until_sample: Cell::new(0),
             samples: RefCell::new(Samples::default()),
             stats_frame: Cell::new(0),
+            lifetime: RefCell::new(Some(Rc::new(()))),
+            alive_stacks: Cell::new(0),
+            lua_calls: Cell::new(0),
         }
+    }
+
+    /// Registers a live `Stack`. A root stack is admitted only when every stack alive on the
+    /// VM is suspended inside a Lua call (one call per stack): then no frame of theirs can be
+    /// touched until the call returns, so a fresh root cannot alias them. Native-call stacks
+    /// arise only from Luau calling into Rust, which already implies the same condition.
+    pub(crate) fn register_stack(&self, root: bool) {
+        if root {
+            assert!(
+                self.alive_stacks.get() == self.lua_calls.get(),
+                "a root stack for this runtime is already alive; open frames from it instead"
+            );
+        }
+        self.alive_stacks.set(self.alive_stacks.get() + 1);
+    }
+
+    pub(crate) fn unregister_stack(&self) {
+        self.alive_stacks.set(self.alive_stacks.get() - 1);
+    }
+
+    /// A weak handle that stays alive exactly as long as the VM does.
+    pub(crate) fn lifetime(&self) -> Weak<()> {
+        self.lifetime.borrow().as_ref().map_or_else(Weak::new, Rc::downgrade)
+    }
+
+    /// Ends the VM lifetime; every `Weak` handed out is dead from here on.
+    pub(crate) fn end_lifetime(&self) {
+        self.lifetime.borrow_mut().take();
     }
 
     pub(crate) fn sampled_context(&self) -> Option<u64> {
@@ -182,11 +220,38 @@ impl Shared {
     }
 }
 
-/// The `Shared` block of the VM that owns `state`, or null before the runtime is set up.
+/// Marks one host-to-Lua transition (`lua_call`/`lua_pcall`) for the stack-lease accounting,
+/// for as long as the guard lives. A no-op on VMs no `Runtime` owns.
+pub(crate) struct LuaCall(*const Shared);
+
+impl LuaCall {
+    /// # Safety
+    /// `state` is a live thread.
+    pub(crate) unsafe fn enter(state: *mut ffi::lua_State) -> LuaCall {
+        // SAFETY: forwarded contract; Shared outlives every thread of its VM.
+        let shared = unsafe { shared_of(state) };
+        if let Some(shared) = unsafe { shared.as_ref() } {
+            shared.lua_calls.set(shared.lua_calls.get() + 1);
+        }
+        LuaCall(shared)
+    }
+}
+
+impl Drop for LuaCall {
+    fn drop(&mut self) {
+        // SAFETY: the pointer was null or a live Shared when created, and Shared outlives the VM.
+        if let Some(shared) = unsafe { self.0.as_ref() } {
+            shared.lua_calls.set(shared.lua_calls.get() - 1);
+        }
+    }
+}
+
+/// The `Shared` block of the VM that owns `state`, or null when the VM was not created by a
+/// [`crate::Runtime`].
 ///
 /// # Safety
-/// `state` is a live thread whose VM was created by [`crate::Runtime`].
-unsafe fn shared_of(state: *mut ffi::lua_State) -> *const Shared {
+/// `state` is a live thread.
+pub(crate) unsafe fn shared_of(state: *mut ffi::lua_State) -> *const Shared {
     unsafe { (*ffi::lua_callbacks(state)).userdata.cast_const().cast::<Shared>() }
 }
 

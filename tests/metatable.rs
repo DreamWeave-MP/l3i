@@ -222,12 +222,9 @@ fn metamethod_debug_names_compose_from_the_type() {
 #[test]
 fn script_visible_identity_and_protected_metatable() {
     let runtime = Runtime::new().unwrap();
-    tagged::register::<Baz>(&runtime, |ty| {
-        let stack_value = dream_binder::value::Value::get_global(&runtime.stack(), "_VERSION");
-        assert!(stack_value.is_ok());
-        ty.set_field("__metatable", &protected_marker(&runtime))
-    })
-    .unwrap();
+    // Registration holds the root stack, so anything the metatable needs is pinned beforehand.
+    let marker = protected_marker(&runtime);
+    tagged::register::<Baz>(&runtime, |ty| ty.set_field("__metatable", &marker)).unwrap();
     {
         let stack = runtime.stack();
         let frame = stack.frame();

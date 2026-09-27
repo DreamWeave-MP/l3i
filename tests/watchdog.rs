@@ -162,3 +162,46 @@ fn gc_steps_and_stats_frames_are_host_driven() {
     runtime.advance_stats_frame();
     assert_eq!(runtime.stats_frame(), 2);
 }
+
+#[test]
+fn values_that_outlive_their_runtime_become_invalid_instead_of_dangling() {
+    let (value, clone) = {
+        let runtime = Runtime::new().unwrap();
+        let function = runtime.load_function("return function() end").unwrap().into_value();
+        assert!(function.is_valid());
+        let clone = function.clone();
+        (function, clone)
+    };
+    assert!(!value.is_valid());
+    assert!(!clone.is_valid());
+    assert!(!value.is_function());
+    drop(value);
+    drop(clone);
+}
+
+#[test]
+#[should_panic(expected = "a root stack for this runtime is already alive")]
+fn a_second_root_stack_is_refused_while_one_is_alive() {
+    let runtime = Runtime::new().unwrap();
+    let first = runtime.stack();
+    let _second = runtime.stack();
+    drop(first);
+}
+
+#[test]
+fn root_stacks_can_be_taken_again_once_released() {
+    let runtime = Runtime::new().unwrap();
+    {
+        let stack = runtime.stack();
+        stack
+            .with_frame(|frame| {
+                frame.push_number(1.0);
+                Ok(())
+            })
+            .unwrap();
+    }
+    let stack = runtime.stack();
+    assert_eq!(stack.top(), 0);
+    drop(stack);
+    runtime.exec("local x = 1").unwrap();
+}

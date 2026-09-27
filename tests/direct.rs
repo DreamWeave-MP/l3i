@@ -216,24 +216,23 @@ fn direct_callbacks_dispatch_and_shadow_metamethods() {
     let runtime = runtime_with_atoms();
     install_foo(&runtime);
     let field = runtime.load_function("return function() local u = ud return u.get end").unwrap();
-    let stack = runtime.stack();
-    assert_eq!(field.invoke::<String, _>(&stack, ()).unwrap(), "direct-field");
-    assert_eq!(field.invoke::<String, _>(&stack, ()).unwrap(), "direct-field");
+    assert_eq!(field.invoke::<String, _>(&runtime.stack(), ()).unwrap(), "direct-field");
+    assert_eq!(field.invoke::<String, _>(&runtime.stack(), ()).unwrap(), "direct-field");
     let method = runtime.load_function("return function() return ud:get(7, 'argument') end").unwrap();
-    assert_eq!(method.invoke::<String, _>(&stack, ()).unwrap(), "direct-call");
+    assert_eq!(method.invoke::<String, _>(&runtime.stack(), ()).unwrap(), "direct-call");
     runtime.exec("ud.set = 1").unwrap();
     runtime.exec("local u = ud assert(u.name == 1)").unwrap();
 
     // Unknown keys and non-atom keys fall back to the original closures.
     let unknown = runtime.load_function("return function() local u = ud return u.unknown end").unwrap();
-    assert_eq!(unknown.invoke::<String, _>(&stack, ()).unwrap(), "closure-unknown");
+    assert_eq!(unknown.invoke::<String, _>(&runtime.stack(), ()).unwrap(), "closure-unknown");
     runtime.exec("local u = ud assert(u[37] == 'closure-37')").unwrap();
     runtime.exec("local u = ud assert(u:other() == 'closure-call')").unwrap();
     let error = runtime.exec("local u = ud u.other = 2").unwrap_err().to_string();
     assert!(error.contains("closure-newindex"), "{error}");
     let dynamic = runtime.load_function("return function(value, key) value[key] = 1 end").unwrap();
     let ud = runtime.global("ud").unwrap();
-    let error = dynamic.invoke::<(), _>(&stack, (&ud, "other")).unwrap_err().to_string();
+    let error = dynamic.invoke::<(), _>(&runtime.stack(), (&ud, "other")).unwrap_err().to_string();
     assert!(error.contains("closure-newindex"), "{error}");
 
     // The ordinary metamethod path (import-folded global access) runs the same handler.
@@ -241,7 +240,7 @@ fn direct_callbacks_dispatch_and_shadow_metamethods() {
         runtime
             .load_function("return function() return ud['get'] end")
             .unwrap()
-            .invoke::<String, _>(&stack, ())
+            .invoke::<String, _>(&runtime.stack(), ())
             .unwrap(),
         "direct-field"
     );
@@ -272,9 +271,9 @@ fn cache_rejects_cross_tag_poisoning_at_a_shared_site() {
         frame.set_global("bar").unwrap();
     }
     let access = runtime.load_function("return function(value) return value.name end").unwrap();
-    let stack = runtime.stack();
     let foo = runtime.global("ud").unwrap();
     let bar = runtime.global("bar").unwrap();
+    let stack = runtime.stack();
     let before_misses = count(&CACHE_MISSES);
     assert_eq!(access.invoke::<f64, _>(&stack, (&foo,)).unwrap(), 7.0);
     assert_eq!(access.invoke::<f64, _>(&stack, (&foo,)).unwrap(), 7.0);

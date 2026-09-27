@@ -74,7 +74,10 @@ impl<'c> Call<'c> {
             for offset in 0..argument_count {
                 ffi::lua_pushvalue(state, first_argument + offset);
             }
-            if ffi::lua_pcall(state, argument_count, ffi::LUA_MULTRET, 0) != ffi::LUA_OK {
+            let lua_call = crate::runtime::shared::LuaCall::enter(state);
+            let status = ffi::lua_pcall(state, argument_count, ffi::LUA_MULTRET, 0);
+            drop(lua_call);
+            if status != ffi::LUA_OK {
                 return Err(Error::LuaErrorOnStack);
             }
         }

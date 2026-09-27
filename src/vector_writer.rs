@@ -59,7 +59,10 @@ unsafe extern "C-unwind" fn vector_namecall(state: *mut ffi::lua_State) -> c_int
         ffi::lua_pushvalue(state, ffi::lua_upvalueindex(1));
         ffi::lua_pushvalue(state, 1);
         ffi::lua_pushstring(state, if name.is_null() { c"".as_ptr() } else { name });
-        ffi::lua_call(state, 2, 1);
+        {
+            let _lua_call = crate::runtime::shared::LuaCall::enter(state);
+            ffi::lua_call(state, 2, 1);
+        }
         ffi::luaL_errorL(state, c"attempt to call a %s value".as_ptr(), ffi::luaL_typename(state, -1));
     }
 }

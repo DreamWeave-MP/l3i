@@ -29,6 +29,7 @@ pub(crate) unsafe extern "C-unwind" fn index(state: *mut ffi::lua_State) -> c_in
         ffi::lua_remove(state, -2);
         if ffi::lua_isfunction(state, -1) {
             ffi::lua_pushvalue(state, 1);
+            let _lua_call = crate::runtime::shared::LuaCall::enter(state);
             ffi::lua_call(state, 1, 1);
             return 1;
         }
@@ -62,6 +63,7 @@ pub(crate) unsafe extern "C-unwind" fn namecall(state: *mut ffi::lua_State) -> c
             diagnostics::raise_at_caller(state, &format!("attempt to call method '{method}'"));
         }
         ffi::lua_insert(state, 1);
+        let _lua_call = crate::runtime::shared::LuaCall::enter(state);
         ffi::lua_call(state, top, ffi::LUA_MULTRET);
         ffi::lua_gettop(state)
     }
@@ -78,6 +80,7 @@ pub(crate) unsafe extern "C-unwind" fn newindex(state: *mut ffi::lua_State) -> c
         if ffi::lua_isfunction(state, -1) {
             ffi::lua_pushvalue(state, 1);
             ffi::lua_pushvalue(state, 3);
+            let _lua_call = crate::runtime::shared::LuaCall::enter(state);
             ffi::lua_call(state, 2, 0);
             return 0;
         }

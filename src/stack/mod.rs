@@ -103,6 +103,13 @@ impl Scope for Frame<'_> {
 /// `'vm` is the lifetime for which the caller guarantees the `lua_State` stays alive: inside a
 /// native callback that is the callback's frame, host side it is the borrow of the owning
 /// [`crate::runtime::Runtime`]. Not `Clone`: two handles would let one pop what the other views.
+///
+/// Two kinds exist and only one of each may be alive per thread at a time:
+/// - the **root** stack, leased from [`crate::runtime::Runtime::stack`]; the runtime holds the
+///   lease and refuses a second root while one is alive;
+/// - a **native-call** stack, created for a bound function's frame while Lua is calling into
+///   Rust. Those nest only through real Lua calls, so their exclusivity follows from Luau's
+///   single-threaded execution: nothing else runs on the thread until the callback returns.
 pub struct Stack<'vm> {
     state: *mut ffi::lua_State,
     /// True outside any Lua call. Operations that can raise a Luau error then run under
@@ -110,17 +117,45 @@ pub struct Stack<'vm> {
     host_level: bool,
     /// Whether a frame opened directly on this stack is currently alive.
     child_open: Cell<bool>,
+    /// The owning VM's shared block for stack accounting, or null for a foreign VM.
+    shared: *const crate::runtime::shared::Shared,
     _vm: PhantomData<&'vm mut ()>,
 }
 
 impl<'vm> Stack<'vm> {
+    /// A native-call stack.
+    ///
     /// # Safety
-    /// `state` must be a live Luau thread that outlives `'vm`, and no other `Stack` may exist
-    /// for it while this one does (Luau VMs are single-threaded; a native callback is the
-    /// only code running on its thread).
+    /// `state` must be a live Luau thread that outlives `'vm`, and the caller must be the
+    /// native callback Luau is currently running on that thread (so no other `Stack` for it
+    /// can be in use until this one is gone).
     pub(crate) unsafe fn from_raw(state: *mut ffi::lua_State, host_level: bool) -> Self {
+        // SAFETY: forwarded contract.
+        unsafe { Self::new(state, host_level, false) }
+    }
+
+    /// The root stack of a runtime-owned thread.
+    ///
+    /// # Safety
+    /// `state` must be a live Luau thread of a `Runtime` VM that outlives `'vm`.
+    ///
+    /// # Panics
+    /// If another root stack is alive and not suspended inside a Lua call: two live roots would
+    /// each believe they own the only root frame, and one frame's drop could pop what the other
+    /// still views.
+    pub(crate) unsafe fn lease_root(state: *mut ffi::lua_State) -> Self {
+        // SAFETY: forwarded contract.
+        unsafe { Self::new(state, true, true) }
+    }
+
+    unsafe fn new(state: *mut ffi::lua_State, host_level: bool, root: bool) -> Self {
         debug_assert!(!state.is_null(), "Stack requires a live Lua state");
-        Stack { state, host_level, child_open: Cell::new(false), _vm: PhantomData }
+        // SAFETY: `state` is live; Shared outlives every thread of its VM.
+        let shared = unsafe { crate::runtime::shared::shared_of(state) };
+        if let Some(shared) = unsafe { shared.as_ref() } {
+            shared.register_stack(root);
+        }
+        Stack { state, host_level, child_open: Cell::new(false), shared, _vm: PhantomData }
     }
 
     /// True when this stack is used from host code rather than inside a Lua call.
@@ -217,6 +252,15 @@ impl<'vm> Stack<'vm> {
         self.assert_no_open_frame();
         unsafe { ffi::lua_pushcfunction(self.state, function, debug_name) };
         self.at(-1)
+    }
+}
+
+impl Drop for Stack<'_> {
+    fn drop(&mut self) {
+        // SAFETY: null or a Shared that outlives this stack's VM borrow.
+        if let Some(shared) = unsafe { self.shared.as_ref() } {
+            shared.unregister_stack();
+        }
     }
 }
 

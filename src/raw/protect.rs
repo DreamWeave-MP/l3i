@@ -42,7 +42,9 @@ where
         // Both go beneath the arguments: [.. f, ud, arg1 .. argN].
         ffi::lua_insert(state, -(nargs + 2));
         ffi::lua_insert(state, -(nargs + 2));
+        let lua_call = crate::runtime::shared::LuaCall::enter(state);
         let status = ffi::lua_pcall(state, nargs + 1, nresults, 0);
+        drop(lua_call);
         if status == ffi::LUA_OK {
             return Ok(());
         }

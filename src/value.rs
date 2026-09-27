@@ -1,10 +1,12 @@
 //! Owned Lua values: the middle tier (`components/luau/reference.hpp`, `value.cpp`).
 //!
-//! A [`Value`] owns a registry pin (`lua_ref`) but never owns the VM. The [`crate::Runtime`]
-//! must outlive every `Value`, including their drops; the C++ binder had the same rule. Pins
+//! A [`Value`] owns a registry pin (`lua_ref`) but never owns the VM. Each value carries a weak
+//! handle to its VM's lifetime token, so a value that outlives its [`crate::Runtime`] becomes
+//! invalid instead of touching a closed VM (the C++ binder merely documented that rule). Pins
 //! are for values that must survive the current stack frame; hot paths use borrowed views.
 
 use std::ffi::{CString, c_int};
+use std::rc::Weak;
 
 use crate::error::{Error, Result};
 use crate::raw::ffi;
@@ -18,12 +20,14 @@ pub struct Value {
     /// The VM's main thread, or null for an invalid value.
     owner: *mut ffi::lua_State,
     reference: c_int,
+    /// Dead once the owning runtime is dropped; the pin is then already gone with the VM.
+    vm: Weak<()>,
 }
 
 impl Value {
     /// An invalid value: no VM, no pin.
     pub const fn invalid() -> Value {
-        Value { owner: std::ptr::null_mut(), reference: ffi::LUA_NOREF }
+        Value { owner: std::ptr::null_mut(), reference: ffi::LUA_NOREF, vm: Weak::new() }
     }
 
     /// Pins the value `view` names. Nonexistent slots and the registry pseudo-index cannot be
@@ -38,9 +42,13 @@ impl Value {
         // SAFETY: the view proves the slot exists on its live thread; lua_ref pins without
         // popping and the registry is shared by every thread of the VM.
         unsafe {
+            let vm = crate::runtime::vm_lifetime(view.state());
+            if vm.strong_count() == 0 {
+                return Err(Error::logic("Cannot pin a value on a VM that no Runtime owns"));
+            }
             let owner = ffi::lua_mainthread(view.state());
             let reference = ffi::lua_ref(view.state(), view.index());
-            Ok(Value { owner, reference })
+            Ok(Value { owner, reference, vm })
         }
     }
 
@@ -91,18 +99,23 @@ impl Value {
         }
     }
 
+    /// True while the value holds a pin on a VM that is still open. A value that outlived its
+    /// runtime is invalid, not dangling.
     pub fn is_valid(&self) -> bool {
-        !self.owner.is_null() && self.reference != ffi::LUA_NOREF
+        !self.owner.is_null() && self.reference != ffi::LUA_NOREF && self.vm.strong_count() > 0
     }
 
-    /// Releases the pin, leaving the value invalid. Safe to call twice.
+    /// Releases the pin, leaving the value invalid. Safe to call twice, and a no-op on a VM
+    /// that has already closed.
     pub fn reset(&mut self) {
         if self.is_valid() {
-            // SAFETY: the reference came from lua_ref on this VM and is released once.
+            // SAFETY: the reference came from lua_ref on this VM, which the lifetime token
+            // proves is still open, and is released once.
             unsafe { ffi::lua_unref(self.owner, self.reference) };
         }
         self.owner = std::ptr::null_mut();
         self.reference = ffi::LUA_NOREF;
+        self.vm = Weak::new();
     }
 
     /// The registry reference id, for raw `lua_getref` on a thread of this VM.
@@ -200,7 +213,7 @@ impl Clone for Value {
             ffi::lua_getref(self.owner, self.reference);
             let reference = ffi::lua_ref(self.owner, -1);
             ffi::lua_pop(self.owner, 1);
-            Value { owner: self.owner, reference }
+            Value { owner: self.owner, reference, vm: self.vm.clone() }
         }
     }
 }
@@ -328,14 +341,14 @@ mod tests {
     #[test]
     fn references_outlive_repeated_full_collections_and_reset_releases_the_pin() {
         let runtime = Runtime::new().unwrap();
-        let stack = runtime.stack();
-        let mut table = Value::new_table(&stack, 0, 0).unwrap();
+        let mut table = Value::new_table(&runtime.stack(), 0, 0).unwrap();
         let copy = table.clone();
         assert_eq!(table, copy);
 
         // A weak-valued table observes whether the pinned table stays alive.
         runtime.exec("weak = setmetatable({}, {__mode = 'v'})").unwrap();
         {
+            let stack = runtime.stack();
             let frame = stack.frame();
             let weak = Value::get_global(&frame, "weak").unwrap().push_to(&frame).unwrap().as_table().unwrap();
             copy.push_to(&frame).unwrap();

@@ -162,8 +162,7 @@ impl Runtime {
         }
         let write_to_log =
             self.bind_function(&format!("{root}.internal.writeToLog"), move |message: &str| log(message))?;
-        let stack = self.stack();
-        let generated = stack.with_frame(|frame| {
+        let generated = self.stack().with_frame(|frame| {
             // SAFETY: the name is a static C string, valid until the VM closes.
             let raw_metamethod = unsafe {
                 frame.push_c_function(compat_metamethod, c"dream_binder.internal.getCompatMetamethod".as_ptr())
@@ -546,7 +545,10 @@ unsafe extern "C-unwind" fn compat_string_format(state: *mut ffi::lua_State) -> 
             }
             ffi::lua_pushvalue(state, ffi::lua_upvalueindex(1));
             ffi::lua_insert(state, 1);
-            ffi::lua_call(state, top, ffi::LUA_MULTRET);
+            {
+                let _lua_call = crate::runtime::shared::LuaCall::enter(state);
+                ffi::lua_call(state, top, ffi::LUA_MULTRET);
+            }
             Ok(ffi::lua_gettop(state))
         })
     }

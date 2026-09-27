@@ -177,6 +177,7 @@ fn perform_pcall(
     style: ErrorStyle,
 ) -> Result<c_int> {
     // SAFETY: function and arguments are on the frame; pcall never unwinds into Rust.
+    let _lua_call = unsafe { crate::runtime::shared::LuaCall::enter(frame.state()) };
     let status = unsafe { ffi::lua_pcall(frame.state(), nargs, nresults, 0) };
     if status == ffi::LUA_OK {
         return Ok(frame.top() - function_index + 1);
