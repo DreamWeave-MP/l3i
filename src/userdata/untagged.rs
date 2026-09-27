@@ -6,13 +6,11 @@
 //! slot keeps working even if a host overwrites the named entries. Checks compare exact
 //! metatable identity and require the metatable to be read-only.
 
-use std::any::TypeId;
 use std::ffi::{CString, c_int, c_void};
-use std::hash::{Hash, Hasher};
 use std::ptr;
 
 use super::metatable::MetatableBuilder;
-use super::{StableRef, Storage, Userdata, assert_userdata_layout};
+use super::{StableRef, Storage, Userdata, assert_userdata_layout, type_key};
 use crate::error::{Error, Result};
 use crate::raw::ffi;
 use crate::runtime::Runtime;
@@ -24,19 +22,6 @@ fn private_registry_key() -> *mut c_void {
     (&PRIVATE_REGISTRY_KEY as *const u8).cast_mut().cast()
 }
 
-/// A per-type registry key. Rust statics inside generic functions are shared across
-/// instantiations, so the key is derived from the `TypeId` instead: a pointer-sized hash used
-/// only as a light-userdata identity.
-fn typed_key<T: 'static>() -> *mut c_void {
-    let mut hasher = std::hash::DefaultHasher::new();
-    TypeId::of::<T>().hash(&mut hasher);
-    // Odd and non-null so it can never collide with a real allocation used as a key.
-    ((hasher.finish() as usize) | 1) as *mut c_void
-}
-
-const fn assert_untagged<T: Userdata>() {
-    assert!(T::TAG.is_none(), "this Userdata type is tagged; use userdata::tagged");
-}
 
 /// Runs the storage's `Drop` when Luau frees the userdata (owned payloads drop; borrowed
 /// storage drops only the pointer).
@@ -91,7 +76,7 @@ pub fn register<T: Userdata>(
     }
     crate::debug_name::require_valid_debug_name(T::NAME, runtime.debug_roots())?;
     let name = CString::new(T::NAME).map_err(|_| Error::logic("Userdata type name cannot contain NUL"))?;
-    let key = typed_key::<T>();
+    let key = type_key::<T>();
 
     let stack = runtime.stack();
     stack.with_frame(|frame| {
@@ -187,7 +172,7 @@ pub fn register<T: Userdata>(
 /// `state` is live with stack room for one value.
 unsafe fn push_typed_metatable<T: Userdata>(state: *mut ffi::lua_State) -> bool {
     unsafe {
-        let kind = ffi::lua_rawgetp(state, ffi::LUA_REGISTRYINDEX, typed_key::<T>());
+        let kind = ffi::lua_rawgetp(state, ffi::LUA_REGISTRYINDEX, type_key::<T>());
         kind == ffi::LUA_TTABLE && ffi::lua_getreadonly(state, -1) != 0
     }
 }
@@ -212,8 +197,10 @@ fn require_registered<T: Userdata>(state: *mut ffi::lua_State) -> Result<()> {
 
 /// Allocates storage, writes it, attaches `T`'s metatable, returns the view.
 fn push_storage<'s, T: Userdata>(scope: &'s impl Scope, storage: Storage<T>) -> Result<ValueView<'s>> {
-    const { assert_untagged::<T>() };
     const { assert_userdata_layout::<Storage<T>>() };
+    if T::TAG.is_some() {
+        return Err(Error::logic(format!("'{}' is tagged; use userdata::tagged", T::NAME)));
+    }
     let state = scope.state();
     require_registered::<T>(state)?;
     // SAFETY: allocate, write immediately (Luau owns the destructor from allocation on), then

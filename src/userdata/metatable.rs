@@ -94,6 +94,26 @@ impl<'s> MetatableBuilder<'s> {
         Ok(())
     }
 
+    pub(crate) fn state_ptr(&self) -> *mut ffi::lua_State {
+        self.state
+    }
+
+    pub(crate) fn retain_name(&self, complete_name: &str) -> Result<*const std::ffi::c_char> {
+        self.retain(complete_name)
+    }
+
+    pub(crate) fn field_is_nil(&self, name: &CStr) -> bool {
+        self.rawget_field_is_nil(name)
+    }
+
+    /// Raw-sets the value on top of the stack into the metatable under `name`.
+    ///
+    /// # Safety
+    /// A value is on top of the stack.
+    pub(crate) unsafe fn raw_set_metatable_top(&self, name: &CStr) {
+        unsafe { ffi::lua_rawsetfield(self.state, self.metatable, name.as_ptr()) }
+    }
+
     fn rawget_field_is_nil(&self, name: &CStr) -> bool {
         unsafe {
             ffi::lua_rawgetfield(self.state, self.metatable, name.as_ptr());

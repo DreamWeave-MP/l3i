@@ -9,10 +9,14 @@
 //! Both are declared through one [`Userdata`] trait; `TAG` decides the path at compile time.
 
 pub mod dispatch;
+pub mod iterator;
 pub mod metatable;
 pub mod tagged;
 pub mod untagged;
 
+use std::any::TypeId;
+use std::ffi::c_void;
+use std::hash::{Hash, Hasher};
 use std::ptr::NonNull;
 
 use crate::error::Result;
@@ -101,6 +105,16 @@ impl<T> Storage<T> {
             Storage::Borrowed(_) => None,
         }
     }
+}
+
+/// A per-type registry key. Rust statics inside generic functions are shared across
+/// instantiations, so the key is derived from the `TypeId` instead: a pointer-sized hash used
+/// only as a light-userdata identity, odd and non-null so it never collides with a real
+/// allocation used as a key.
+pub(crate) fn type_key<T: 'static>() -> *mut c_void {
+    let mut hasher = std::hash::DefaultHasher::new();
+    TypeId::of::<T>().hash(&mut hasher);
+    ((hasher.finish() as usize) | 1) as *mut c_void
 }
 
 /// The payload when `value` is a `T` of either path; one tag compare for tagged types, one
