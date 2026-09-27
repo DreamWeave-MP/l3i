@@ -570,7 +570,7 @@ pub fn parse(source: &str, with_json: bool) -> ParseReport {
     let mut errors: Vec<Diagnostic> = Vec::new();
     let mut json = String::new();
     // SAFETY: callbacks fill our locals; the shim catches Luau's exceptions.
-    unsafe {
+    let status = unsafe {
         ffi::db_parse(
             source.as_ptr().cast(),
             source.len(),
@@ -578,7 +578,17 @@ pub fn parse(source: &str, with_json: bool) -> ParseReport {
             (&mut errors as *mut Vec<Diagnostic>).cast(),
             if with_json { Some(append_sink) } else { None },
             (&mut json as *mut String).cast(),
-        );
+        )
+    };
+    if status < 0 && !errors.iter().any(|error| error.kind == DiagnosticKind::Internal) {
+        errors.push(Diagnostic {
+            kind: DiagnosticKind::Internal,
+            code: 0,
+            name: String::new(),
+            module: String::new(),
+            text: "the Luau parser failed without a message".to_owned(),
+            span: Span::default(),
+        });
     }
     ParseReport { errors, json: (with_json && !json.is_empty()).then_some(json) }
 }

@@ -31,10 +31,17 @@ pub struct PlanEntry {
     pub member: String,
 }
 
+/// Slots and the catalogued atom span a plan accepts. Planners allocate both densely; a plan
+/// is a dense table, so a two-member plan with atoms 1 and 30000 would cost megabytes.
+pub const MAX_SLOT: u16 = 4096;
+pub const MAX_ATOM_SPAN: usize = 4096;
+
 /// The dense table; see the module docs.
 #[derive(Debug)]
 pub struct DirectPlan {
     entries: Vec<PlanEntry>,
+    /// Entry index per slot id, for the O(1) cache-hit check.
+    by_slot: Vec<Option<u32>>,
     first_atom: Atom,
     atom_count: usize,
     /// `slots[tag * ACCESS_KIND_COUNT * atom_count + kind * atom_count + (atom - first_atom)]`.
@@ -62,8 +69,9 @@ impl DirectPlan {
         self.index(tag, kind, atom).map_or(UNKNOWN_SLOT, |index| self.slots[index])
     }
 
+    #[inline]
     fn entry(&self, slot: u16) -> Option<&PlanEntry> {
-        self.entries.iter().find(|entry| entry.slot == slot)
+        self.by_slot.get(usize::from(slot)).copied().flatten().map(|index| &self.entries[index as usize])
     }
 
     /// True when `cached` names exactly `(T, atom, kind)` in this plan: the cache-hit test, with
@@ -111,6 +119,9 @@ impl<'r> DirectPlanBuilder<'r> {
         if slot == UNKNOWN_SLOT {
             return Err(Error::logic("Direct plan slots must be above 0 (Luau's cache starts at 0)"));
         }
+        if slot > MAX_SLOT {
+            return Err(Error::logic(format!("Direct plan slot {slot} exceeds {MAX_SLOT}; allocate slots densely")));
+        }
         let Some(tag) = tagged::tag_of::<T>(&self.runtime.stack()) else {
             return Err(Error::logic(format!(
                 "'{}' is not tagged in this runtime; direct dispatch needs a tag",
@@ -143,8 +154,18 @@ impl<'r> DirectPlanBuilder<'r> {
         let first_atom = self.entries.iter().map(|entry| entry.atom).min().unwrap_or(0);
         let last_atom = self.entries.iter().map(|entry| entry.atom).max().unwrap_or(-1);
         let atom_count = if last_atom < first_atom { 0 } else { (last_atom - first_atom) as usize + 1 };
+        if atom_count > MAX_ATOM_SPAN {
+            return Err(Error::logic(format!(
+                "Direct plan atoms span {atom_count} ids (from {first_atom} to {last_atom}); catalogue them densely (at most {MAX_ATOM_SPAN})"
+            )));
+        }
         let mut slots = vec![UNKNOWN_SLOT; usize::from(TAG_LIMIT) * ACCESS_KIND_COUNT * atom_count];
-        let mut plan = DirectPlan { entries: self.entries, first_atom, atom_count, slots: Vec::new() };
+        let max_slot = self.entries.iter().map(|entry| entry.slot).max().unwrap_or(0);
+        let mut by_slot = vec![None; usize::from(max_slot) + 1];
+        for (index, entry) in self.entries.iter().enumerate() {
+            by_slot[usize::from(entry.slot)] = Some(index as u32);
+        }
+        let mut plan = DirectPlan { entries: self.entries, by_slot, first_atom, atom_count, slots: Vec::new() };
         for entry in &plan.entries {
             let index = plan.index(i32::from(entry.tag), entry.kind, entry.atom).expect("entry atoms lie in range");
             slots[index] = entry.slot;

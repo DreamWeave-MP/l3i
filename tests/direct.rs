@@ -438,4 +438,20 @@ fn runtime_plans_resolve_slots_from_the_vms_own_tags_and_atoms() {
         .unwrap_err();
     assert!(error.to_string().contains("used twice"), "{error}");
     assert!(direct::plan::DirectPlanBuilder::new(&a).slot::<Planned>(AccessKind::Index, "value", 0).is_err());
+    // Slots and atom spans must stay dense: the table is dense.
+    let error = direct::plan::DirectPlanBuilder::new(&a).slot::<Planned>(AccessKind::Index, "value", 9000).unwrap_err();
+    assert!(error.to_string().contains("allocate slots densely"), "{error}");
+    let sparse = Runtime::builder()
+        .atom_catalogue(AtomCatalogue::try_new([("value", 1), ("far", 30000)]).unwrap())
+        .build()
+        .unwrap();
+    tagged::register::<Planned>(&sparse, 60, |ty| ty.property("value", |p: &Planned| p.value.get())).unwrap();
+    let error = direct::plan::DirectPlanBuilder::new(&sparse)
+        .slot::<Planned>(AccessKind::Index, "value", 1)
+        .unwrap()
+        .slot::<Planned>(AccessKind::Index, "far", 2)
+        .unwrap()
+        .finish()
+        .unwrap_err();
+    assert!(error.to_string().contains("catalogue them densely"), "{error}");
 }

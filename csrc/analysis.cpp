@@ -325,6 +325,7 @@ int db_parse(const char* source, size_t length, db_diagnostic_fn diagnostic, voi
     }
     catch (...)
     {
+        emitInternal(diagnostic, ctx, std::string(), "unknown parser failure");
         return -1;
     }
 }

@@ -171,22 +171,24 @@ impl RuntimeBuilder {
                 (*callbacks).onallocate = Some(shared::on_allocate);
             }
         }
-        // SAFETY: the state has its pointer key and callbacks; native execution must be set up
-        // before any function is loaded.
-        #[cfg(feature = "jit")]
-        let native_code = match self.native_code {
-            Some(options) => Some(unsafe { crate::native_code::NativeCodeGen::create(state, options) }?),
-            None => None,
-        };
-        let runtime = Runtime {
+        // From here on the Runtime owns the state: every later step that can fail returns
+        // through `?` and `Runtime::drop` closes the VM and frees the records.
+        #[allow(unused_mut)]
+        let mut runtime = Runtime {
             state,
             debug_roots: self.debug_roots,
             shared,
             initialization_category: self.initialization_category,
             #[cfg(feature = "jit")]
-            native_code,
+            native_code: None,
             buffer_cage,
         };
+        // SAFETY: the state has its pointer key and callbacks; native execution must be set up
+        // before any function is loaded, which nothing below this point does before it.
+        #[cfg(feature = "jit")]
+        if let Some(options) = self.native_code {
+            runtime.native_code = Some(unsafe { crate::native_code::NativeCodeGen::create(state, options) }?);
+        }
         runtime.update_interrupt_hook();
         if let Some(catalogue) = self.atom_catalogue {
             crate::direct::install_atom_callback(&runtime, catalogue)?;
@@ -507,15 +509,15 @@ impl Drop for Runtime {
         // Values pinned on this VM check the lifetime token before touching it; ending it first
         // turns every surviving `Value` into an inert invalid one.
         self.shared.end_lifetime();
-        // SAFETY: we own the state and nothing borrowed from it can outlive `self`. `shared`
-        // outlives lua_close because struct fields drop after this body.
+        // SAFETY: we own the state and nothing borrowed from it can outlive `self`. The main
+        // thread's record is freed while the state is still open (touching a closed state is
+        // not allowed); coroutine records go through `userthread` as lua_close frees their
+        // threads, which needs `shared` alive, and struct fields drop after this body.
         unsafe {
             (*ffi::lua_callbacks(self.state)).interrupt = None;
             (*ffi::lua_callbacks(self.state)).onallocate = None;
-            ffi::lua_close(self.state);
-            // Luau frees coroutine threads through `userthread` (records go with them); the
-            // main thread's record is ours to free.
             shared::detach_thread_record(self.state);
+            ffi::lua_close(self.state);
         }
     }
 }
