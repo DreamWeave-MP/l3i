@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use dream_binder::Runtime;
 use dream_binder::ffi::{LUA_TNUMBER, LUA_TUSERDATA};
-use dream_binder::native_code::hooks::{AccessSite, NamecallSite, NativeCodeHooks};
+use dream_binder::native_code::hooks::{AccessSite, NamecallSite, NativeCodeHooks, NativeContext};
 use dream_binder::native_code::ir::{IrBuilder, IrCmd, bytecode_type};
 use dream_binder::native_code::vector_buffer::VectorBufferWriter;
 use dream_binder::native_code::{NativeCodeMode, NativeCodeOptions, NativeCodeStatus, module_id};
@@ -26,8 +26,14 @@ impl NativeCodeHooks for CountingWriter {
     fn vector_namecall_type(&self, member: &str) -> u8 {
         VectorBufferWriter.vector_namecall_type(member)
     }
-    fn vector_namecall(&self, build: &mut IrBuilder<'_>, member: &str, site: NamecallSite) -> bool {
-        let lowered = VectorBufferWriter.vector_namecall(build, member, site);
+    fn vector_namecall(
+        &self,
+        context: &NativeContext<'_>,
+        build: &mut IrBuilder<'_>,
+        member: &str,
+        site: NamecallSite,
+    ) -> bool {
+        let lowered = VectorBufferWriter.vector_namecall(context, build, member, site);
         if lowered {
             WRITER_LOWERINGS.fetch_add(1, Ordering::Relaxed);
         }
@@ -60,10 +66,19 @@ impl NativeCodeHooks for PointFields {
         }
     }
 
-    fn userdata_access(&self, build: &mut IrBuilder<'_>, userdata_type: u8, member: &str, site: AccessSite) -> bool {
+    fn userdata_access(
+        &self,
+        context: &NativeContext<'_>,
+        build: &mut IrBuilder<'_>,
+        userdata_type: u8,
+        member: &str,
+        site: AccessSite,
+    ) -> bool {
         if userdata_type != bytecode_type::TAGGED_USERDATA_BASE {
             return false;
         }
+        // The tag comes from the VM being compiled for, never from a constant.
+        let Some(point_tag) = context.tag_of::<Point>() else { return false };
         let offset = match member {
             "x" => 0,
             "y" => 4,
@@ -71,7 +86,7 @@ impl NativeCodeHooks for PointFields {
         };
         let source = build.vm_reg(site.source_reg);
         let userdata = build.inst(IrCmd::LOAD_POINTER, &[source]);
-        let tag = build.const_int(i32::from(POINT_TAG));
+        let tag = build.const_int(i32::from(point_tag));
         let exit = build.vm_exit(site.pcpos);
         build.inst(IrCmd::CHECK_USERDATA_TAG, &[userdata, tag, exit]);
         let at = build.const_int(offset);

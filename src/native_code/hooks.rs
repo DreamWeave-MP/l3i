@@ -49,9 +49,30 @@ pub struct MetamethodSite {
     pub pcpos: c_int,
 }
 
+/// What the VM being compiled for actually assigned: the tag of a Rust type and the atom of a
+/// member name in *this* runtime. Lowering hooks take their tags from here rather than from
+/// constants, so native code checks the VM's real tags (the same type may be tag 8 in one VM
+/// and tag 17 in another).
+pub struct NativeContext<'a> {
+    shared: &'a crate::runtime::shared::Shared,
+}
+
+impl NativeContext<'_> {
+    /// The tag this VM assigned to `T`, if `T` is registered tagged here.
+    pub fn tag_of<T: crate::userdata::Userdata>(&self) -> Option<crate::userdata::RuntimeTag> {
+        self.shared.tag_of_type(std::any::TypeId::of::<T>())
+    }
+
+    /// The atom this VM assigned to `name`, if catalogued.
+    pub fn atom_of(&self, name: &str) -> Option<crate::direct::Atom> {
+        self.shared.atom_catalogue().and_then(|catalogue| catalogue.atom_of(name))
+    }
+}
+
 /// Lowering hooks. Every method has a "not mine" default; implement the ones the host lowers.
 /// `userdata type` values are `bytecode_type::TAGGED_USERDATA_BASE + index` into the
-/// compilation's userdata type names.
+/// compilation's userdata type names. Lowering methods receive the [`NativeContext`] of the VM
+/// the code is compiled for.
 pub trait NativeCodeHooks: 'static {
     fn vector_access_type(&self, member: &str) -> u8 {
         let _ = member;
@@ -61,12 +82,24 @@ pub trait NativeCodeHooks: 'static {
         let _ = member;
         bytecode_type::ANY
     }
-    fn vector_access(&self, build: &mut IrBuilder<'_>, member: &str, site: AccessSite) -> bool {
-        let _ = (build, member, site);
+    fn vector_access(
+        &self,
+        context: &NativeContext<'_>,
+        build: &mut IrBuilder<'_>,
+        member: &str,
+        site: AccessSite,
+    ) -> bool {
+        let _ = (context, build, member, site);
         false
     }
-    fn vector_namecall(&self, build: &mut IrBuilder<'_>, member: &str, site: NamecallSite) -> bool {
-        let _ = (build, member, site);
+    fn vector_namecall(
+        &self,
+        context: &NativeContext<'_>,
+        build: &mut IrBuilder<'_>,
+        member: &str,
+        site: NamecallSite,
+    ) -> bool {
+        let _ = (context, build, member, site);
         false
     }
     fn userdata_access_type(&self, userdata_type: u8, member: &str) -> u8 {
@@ -81,22 +114,35 @@ pub trait NativeCodeHooks: 'static {
         let _ = (userdata_type, member);
         bytecode_type::ANY
     }
-    fn userdata_access(&self, build: &mut IrBuilder<'_>, userdata_type: u8, member: &str, site: AccessSite) -> bool {
-        let _ = (build, userdata_type, member, site);
+    fn userdata_access(
+        &self,
+        context: &NativeContext<'_>,
+        build: &mut IrBuilder<'_>,
+        userdata_type: u8,
+        member: &str,
+        site: AccessSite,
+    ) -> bool {
+        let _ = (context, build, userdata_type, member, site);
         false
     }
-    fn userdata_metamethod(&self, build: &mut IrBuilder<'_>, site: MetamethodSite) -> bool {
-        let _ = (build, site);
+    fn userdata_metamethod(
+        &self,
+        context: &NativeContext<'_>,
+        build: &mut IrBuilder<'_>,
+        site: MetamethodSite,
+    ) -> bool {
+        let _ = (context, build, site);
         false
     }
     fn userdata_namecall(
         &self,
+        context: &NativeContext<'_>,
         build: &mut IrBuilder<'_>,
         userdata_type: u8,
         member: &str,
         site: NamecallSite,
     ) -> bool {
-        let _ = (build, userdata_type, member, site);
+        let _ = (context, build, userdata_type, member, site);
         false
     }
 }
@@ -119,11 +165,10 @@ impl HookChain {
         self.hooks.iter().any(|hooks| lower(hooks.as_ref()))
     }
 
-    /// The C hook table pointing at this chain. The chain must outlive every compilation that
-    /// uses the table.
-    pub(crate) fn table(&self) -> ffi::db_ir_hooks {
+    /// The C hook table pointing at `compile`, which must outlive the compilation.
+    pub(crate) fn table(compile: &CompileContext<'_>) -> ffi::db_ir_hooks {
         ffi::db_ir_hooks {
-            context: (self as *const HookChain).cast_mut().cast(),
+            context: (compile as *const CompileContext<'_>).cast_mut().cast(),
             vector_access_type: Some(vector_access_type),
             vector_namecall_type: Some(vector_namecall_type),
             vector_access: Some(vector_access),
@@ -138,9 +183,20 @@ impl HookChain {
     }
 }
 
+/// What one compilation hands to its hooks: the chain and the VM being compiled for.
+pub(crate) struct CompileContext<'a> {
+    pub(crate) chain: &'a HookChain,
+    pub(crate) shared: &'a crate::runtime::shared::Shared,
+}
+
 unsafe fn chain<'a>(context: *mut c_void) -> &'a HookChain {
-    // SAFETY: `context` is the chain pointer `HookChain::table` stored, alive for the compilation.
-    unsafe { &*context.cast_const().cast::<HookChain>() }
+    // SAFETY: `context` is the CompileContext `HookChain::table` stored, alive for the compilation.
+    unsafe { (*context.cast_const().cast::<CompileContext<'a>>()).chain }
+}
+
+unsafe fn native_context<'a>(context: *mut c_void) -> NativeContext<'a> {
+    // SAFETY: as `chain`.
+    NativeContext { shared: unsafe { (*context.cast_const().cast::<CompileContext<'a>>()).shared } }
 }
 
 unsafe fn member<'a>(text: *const c_char, length: usize) -> &'a str {
@@ -180,9 +236,11 @@ unsafe extern "C" fn vector_access(
     source_reg: c_int,
     pcpos: c_int,
 ) -> bool {
-    let (chain, member) = unsafe { (chain(context), member(text, length)) };
+    let (chain, member, native) = unsafe { (chain(context), member(text, length), native_context(context)) };
     let site = AccessSite { result_reg, source_reg, pcpos };
-    unsafe { with_builder(build, |build| chain.first_lowering(|hooks| hooks.vector_access(build, member, site))) }
+    unsafe {
+        with_builder(build, |build| chain.first_lowering(|hooks| hooks.vector_access(&native, build, member, site)))
+    }
 }
 
 unsafe extern "C" fn vector_namecall(
@@ -196,9 +254,11 @@ unsafe extern "C" fn vector_namecall(
     results: c_int,
     pcpos: c_int,
 ) -> bool {
-    let (chain, member) = unsafe { (chain(context), member(text, length)) };
+    let (chain, member, native) = unsafe { (chain(context), member(text, length), native_context(context)) };
     let site = NamecallSite { arg_res_reg, source_reg, params, results, pcpos };
-    unsafe { with_builder(build, |build| chain.first_lowering(|hooks| hooks.vector_namecall(build, member, site))) }
+    unsafe {
+        with_builder(build, |build| chain.first_lowering(|hooks| hooks.vector_namecall(&native, build, member, site)))
+    }
 }
 
 unsafe extern "C" fn userdata_access_type(context: *mut c_void, kind: u8, text: *const c_char, length: usize) -> u8 {
@@ -230,10 +290,12 @@ unsafe extern "C" fn userdata_access(
     source_reg: c_int,
     pcpos: c_int,
 ) -> bool {
-    let (chain, member) = unsafe { (chain(context), member(text, length)) };
+    let (chain, member, native) = unsafe { (chain(context), member(text, length), native_context(context)) };
     let site = AccessSite { result_reg, source_reg, pcpos };
     unsafe {
-        with_builder(build, |build| chain.first_lowering(|hooks| hooks.userdata_access(build, kind, member, site)))
+        with_builder(build, |build| {
+            chain.first_lowering(|hooks| hooks.userdata_access(&native, build, kind, member, site))
+        })
     }
 }
 
@@ -248,10 +310,12 @@ unsafe extern "C" fn userdata_metamethod(
     method: c_int,
     pcpos: c_int,
 ) -> bool {
-    let chain = unsafe { chain(context) };
+    let (chain, native) = unsafe { (chain(context), native_context(context)) };
     let Some(method) = host_metamethod(method) else { return false };
     let site = MetamethodSite { lhs_type, rhs_type, result_reg, lhs: IrOp(lhs), rhs: IrOp(rhs), method, pcpos };
-    unsafe { with_builder(build, |build| chain.first_lowering(|hooks| hooks.userdata_metamethod(build, site))) }
+    unsafe {
+        with_builder(build, |build| chain.first_lowering(|hooks| hooks.userdata_metamethod(&native, build, site)))
+    }
 }
 
 unsafe extern "C" fn userdata_namecall(
@@ -266,10 +330,12 @@ unsafe extern "C" fn userdata_namecall(
     results: c_int,
     pcpos: c_int,
 ) -> bool {
-    let (chain, member) = unsafe { (chain(context), member(text, length)) };
+    let (chain, member, native) = unsafe { (chain(context), member(text, length), native_context(context)) };
     let site = NamecallSite { arg_res_reg, source_reg, params, results, pcpos };
     unsafe {
-        with_builder(build, |build| chain.first_lowering(|hooks| hooks.userdata_namecall(build, kind, member, site)))
+        with_builder(build, |build| {
+            chain.first_lowering(|hooks| hooks.userdata_namecall(&native, build, kind, member, site))
+        })
     }
 }
 

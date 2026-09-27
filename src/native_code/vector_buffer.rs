@@ -6,7 +6,7 @@
 //! is not an in-range integer) exits to the interpreter, whose `__namecall` shim
 //! ([`crate::Runtime::install_vector_buffer_writer`]) applies the exact library semantics.
 
-use super::hooks::{NamecallSite, NativeCodeHooks};
+use super::hooks::{NamecallSite, NativeCodeHooks, NativeContext};
 use super::ir::{IrBuilder, IrCmd, bytecode_type};
 use crate::raw::ffi::{LUA_TBUFFER, LUA_TNUMBER};
 
@@ -22,7 +22,13 @@ impl NativeCodeHooks for VectorBufferWriter {
         if member == WRITER_NAME { bytecode_type::NIL } else { bytecode_type::ANY }
     }
 
-    fn vector_namecall(&self, build: &mut IrBuilder<'_>, member: &str, site: NamecallSite) -> bool {
+    fn vector_namecall(
+        &self,
+        _: &NativeContext<'_>,
+        build: &mut IrBuilder<'_>,
+        member: &str,
+        site: NamecallSite,
+    ) -> bool {
         if member != WRITER_NAME || site.params != 3 || site.results != 0 {
             return false;
         }

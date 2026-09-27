@@ -309,7 +309,12 @@ impl NativeCodeGen {
                 return Err(Error::logic("Native code generation needs a Lua closure"));
             }
         }
-        let table = self.hooks.table();
+        // SAFETY: the scope's thread is live; its runtime's shared block outlives the compilation.
+        let Some(shared) = (unsafe { crate::runtime::shared_for(state) }) else {
+            return Err(Error::logic("Native code generation needs a runtime-owned VM"));
+        };
+        let compile_context = hooks::CompileContext { chain: &self.hooks, shared };
+        let table = HookChain::table(&compile_context);
         let options = ffi::db_compilation_options {
             flags: if self.mode == NativeCodeMode::Annotated { 1 } else { 0 },
             record_counters: self.record_counters,
