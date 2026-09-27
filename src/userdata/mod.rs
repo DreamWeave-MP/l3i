@@ -15,9 +15,10 @@ pub mod tagged;
 pub mod untagged;
 
 use std::any::TypeId;
+use std::collections::HashMap;
 use std::ffi::c_void;
-use std::hash::{Hash, Hasher};
 use std::ptr::NonNull;
+use std::sync::{PoisonError, RwLock};
 
 use crate::error::Result;
 use crate::stack::ValueView;
@@ -107,14 +108,26 @@ impl<T> Storage<T> {
     }
 }
 
-/// A per-type registry key. Rust statics inside generic functions are shared across
-/// instantiations, so the key is derived from the `TypeId` instead: a pointer-sized hash used
-/// only as a light-userdata identity, odd and non-null so it never collides with a real
-/// allocation used as a key.
+/// A per-type registry key: a light-userdata identity that is unique per Rust type.
+///
+/// Rust statics inside generic functions are shared across instantiations, so the key cannot
+/// be a per-`T` static. Instead the first request for a type leaks one byte and records its
+/// address against the type's `TypeId` in a process-wide map. `TypeId` equality is exact, so two
+/// types can never share a key; a hash of the id (the previous scheme) could in principle
+/// collide and let `test::<T>()` accept another type's storage.
 pub(crate) fn type_key<T: 'static>() -> *mut c_void {
-    let mut hasher = std::hash::DefaultHasher::new();
-    TypeId::of::<T>().hash(&mut hasher);
-    ((hasher.finish() as usize) | 1) as *mut c_void
+    static KEYS: RwLock<Option<HashMap<TypeId, usize>>> = RwLock::new(None);
+    let id = TypeId::of::<T>();
+    if let Some(key) = KEYS.read().unwrap_or_else(PoisonError::into_inner).as_ref().and_then(|keys| keys.get(&id)) {
+        return *key as *mut c_void;
+    }
+    let mut keys = KEYS.write().unwrap_or_else(PoisonError::into_inner);
+    let key = *keys.get_or_insert_with(HashMap::new).entry(id).or_insert_with(|| {
+        // Leaked on purpose: one byte per Rust type ever used as a registry key, for the life
+        // of the process, so the address can never be reused by another allocation.
+        Box::leak(Box::new(0u8)) as *mut u8 as usize
+    });
+    key as *mut c_void
 }
 
 /// The payload when `value` is a `T` of either path; one tag compare for tagged types, one
@@ -126,4 +139,23 @@ pub fn receiver<'v, T: Userdata>(value: ValueView<'v>) -> Option<&'v T> {
 /// [`receiver`] or the Luau-style type error naming `T::NAME`.
 pub fn check_receiver<'v, T: Userdata>(value: ValueView<'v>) -> Result<&'v T> {
     receiver::<T>(value).ok_or_else(|| crate::diagnostics::type_error(value, T::NAME))
+}
+
+#[cfg(test)]
+mod type_key_tests {
+    use super::type_key;
+
+    struct A;
+    struct B;
+
+    #[test]
+    fn keys_are_stable_per_type_and_distinct_between_types() {
+        assert_eq!(type_key::<A>(), type_key::<A>());
+        assert_ne!(type_key::<A>(), type_key::<B>());
+        assert!(!type_key::<A>().is_null());
+        let threads: Vec<_> = (0..8).map(|_| std::thread::spawn(|| type_key::<A>() as usize)).collect();
+        for thread in threads {
+            assert_eq!(thread.join().unwrap(), type_key::<A>() as usize);
+        }
+    }
 }
