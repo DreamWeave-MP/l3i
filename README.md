@@ -126,8 +126,11 @@ libraries, the atom catalogue, and:
 
 Luau can call a native callback straight from `GETTABLEKS`/`SETTABLEKS`/`NAMECALL` for a tagged
 userdata when the key has an *atom*. Each runtime carries its own `AtomCatalogue`
-(`RuntimeBuilder::atom_catalogue`); `direct::Registry` is a compile-time `(tag, kind, atom) →
-slot` table that validates Luau's per-instruction cache before trusting it; `DirectAccess`
+(`RuntimeBuilder::atom_catalogue`). `direct::plan::DirectPlan` is the normal path: built per
+runtime from the tags and atoms that VM actually assigned, it maps `(tag, kind, atom)` to the
+host's slot ids and validates Luau's per-instruction cache in O(1) before trusting it, so one
+handler serves a type that is tag 8 in one VM and tag 17 in another. `direct::Registry` is the
+static alternative for hosts whose identities really are compile-time constants. `DirectAccess`
 handlers run on both the direct path and the ordinary metamethod path with the original
 metamethod retained as the fallback; `direct::field` registers per-field getters that write
 straight into the destination register. `Runtime::install_vector_buffer_writer` adds
@@ -146,6 +149,29 @@ the headers of the exact Luau build. `VectorBufferWriter` is the default hook se
 
 Everything the shim needs is in the tree: Luau is the `luau/` submodule, so the build is the
 same on every target and needs nothing outside the checkout.
+
+## Coroutines, debugging, and the rest of the VM
+
+- `thread::Thread`: host-driven coroutines (`start`, `resume`, `resume_with_error`, `reset`,
+  status queries, sandboxed globals, thread data); bound functions yield with `bind::Yield` and
+  request a debugger stop with `bind::Break`.
+- `debug`: activation records, locals, arguments, upvalues, tracebacks, single stepping,
+  breakpoints (`DebugAction::Break` stops a host-driven thread), coverage, and `RuntimeHooks`
+  for every remaining `lua_Callbacks` slot.
+- `memory`: `lua_gc` controls, allocation rate, memory and heap dumps, the buffer cage,
+  userdata marks and embedder GC with weak references, light userdata with tags and names,
+  coroutine finalizers, and fast-flag introspection.
+- `libraries`: opening standard libraries one at a time, `luaL_sandbox`, `luaL_register`,
+  `luaL_findtable`, table clone and clear, `concat`, `equal`, `less_than`, the `luaL_Strbuf`
+  string builder, `load_with_env`, compile-time library members and constants, and the inliner.
+- `require`: Luau's require-by-string runtime over a host `RequireNavigator`, with caching,
+  proxy requires, registered modules, and cyclic-require placeholders.
+- `native_code` (`jit`): also assembly and IR dumps for any target and the perf log.
+- `analysis` (feature): Luau's type checker, linter, autocomplete, and parser over a
+  `SourceProvider`, with diagnostics, spans, per-module strictness, and AST JSON.
+
+Every function in `lua.h`, `lualib.h`, `luacode.h`, `luacodegen.h`, `luajitinliner.h`, and
+`Require.h` is declared in `raw::ffi`; the only exception is the varargs `lua_pushvfstring`.
 
 ## Safety model
 
