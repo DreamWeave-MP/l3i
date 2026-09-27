@@ -114,6 +114,14 @@ impl<'s> MetatableBuilder<'s> {
         unsafe { ffi::lua_rawsetfield(self.state, self.metatable, name.as_ptr()) }
     }
 
+    /// Pushes the raw metatable field `name`.
+    ///
+    /// # Safety
+    /// Room for one value on the stack.
+    pub(crate) unsafe fn push_metatable_field(&self, name: &CStr) {
+        unsafe { ffi::lua_rawgetfield(self.state, self.metatable, name.as_ptr()) };
+    }
+
     fn rawget_field_is_nil(&self, name: &CStr) -> bool {
         unsafe {
             ffi::lua_rawgetfield(self.state, self.metatable, name.as_ptr());

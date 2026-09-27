@@ -19,6 +19,7 @@ pub mod call;
 pub mod convert;
 pub mod debug_name;
 pub mod diagnostics;
+pub mod direct;
 pub mod error;
 pub mod flags;
 pub mod module;
