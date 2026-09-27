@@ -14,3 +14,7 @@ mlua = { version = "0.12.1", default-features = false, features = ["luau"] }
 
 [features]
 default = []
+
+# Build the exact Luau release OpenMW pins (0.740). See luau0-src-shim/Cargo.toml.
+[patch.crates-io]
+luau0-src = { path = "luau0-src-shim" }

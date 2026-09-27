@@ -29,10 +29,24 @@ const fn parse_tag_limit(text: &str) -> u8 {
     value as u8
 }
 
+/// The Luau release the linked VM was built from, e.g. `"0.740"`.
+///
+/// The binder tracks the release OpenMW pins; `luau0-src-shim/` explains how that version
+/// reaches `mlua-sys`.
+pub const LUAU_VERSION: &str = match mlua::ffi::luau_version() {
+    Some(version) => version,
+    None => panic!("mlua-sys did not record the vendored Luau version"),
+};
+
 #[cfg(test)]
 mod tests {
     #[test]
     fn tag_limit_matches_the_configured_build() {
         assert_eq!(super::TAG_LIMIT, 254);
+    }
+
+    #[test]
+    fn luau_is_the_release_openmw_pins() {
+        assert_eq!(super::LUAU_VERSION, "0.740");
     }
 }
