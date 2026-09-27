@@ -144,8 +144,8 @@ type suggestions) in Rust against `native_code::ir::IrBuilder`, with `IrCmd` gen
 the headers of the exact Luau build. `VectorBufferWriter` is the default hook set: it lowers
 `vector:writef32x3` to three native f32 stores. Modes: off, annotated (`--!native`), eager.
 
-The shim needs the Luau headers luau0-src compiled from; `build.rs` finds them in the Cargo
-registry (or `vendor/`), or takes `LUAU0_SRC_DIR` pointing at that crate's `luau/` directory.
+Everything the shim needs is in the tree: Luau is the `luau/` submodule, so the build is the
+same on every target and needs nothing outside the checkout.
 
 ## Safety model
 
@@ -169,9 +169,13 @@ divergences.
 
 ## Building
 
-`luau0-src = "=0.22.0"` compiles Luau 0.740 (byte-identical to OpenMW's pinned commit) with
-`LUAI_MAXCSTACK=8000`, three-component vectors, and codegen under `jit`. Hosts may append
-compiler flags through `LUAU_CXXFLAGS`. Rust 1.88 or newer.
+Luau is a git submodule (`luau/`, pinned at release 0.740, the commit OpenMW pins); clone with
+`--recurse-submodules` or run `git submodule update --init`. `build.rs` compiles it and the
+binder's C++ additions with `cc`: `LUAI_MAXCSTACK=8000`, three-component vectors,
+`LUA_UTAG_LIMIT=254`, Luau's internal assertions in debug builds, CodeGen under `jit`, Analysis
+under `analysis`. No network access at build time and no external Lua crate; any C++17
+toolchain Cargo can drive (MSVC, clang, GCC, the Android NDK, cross sysroots) works. Hosts may
+append compiler flags through `LUAU_CXXFLAGS`. Rust 1.88 or newer.
 
 ## Quality
 

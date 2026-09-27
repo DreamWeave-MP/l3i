@@ -9,14 +9,44 @@ rust-version = "1.88"
 keywords = ["luau", "lua", "bindings", "gamedev"]
 categories = ["api-bindings", "game-development"]
 links = "luau"
+# The whole package builds from this tree: the Luau submodule (`luau/`, MIT, pinned at the
+# 0.740 release OpenMW pins; only the components the build uses are packaged) plus the binder's
+# C++ additions and shims (`csrc/`). No network at build time, no separate Lua binding crate.
+include = [
+    "Cargo.toml",
+    "build.rs",
+    ".gitmodules",
+    "src/**",
+    "csrc/**",
+    "luau/LICENSE.txt",
+    "luau/lua_LICENSE.txt",
+    "luau/Analysis/**",
+    "luau/Ast/**",
+    "luau/Bytecode/**",
+    "luau/CodeGen/**",
+    "luau/Common/**",
+    "luau/Compiler/**",
+    "luau/Config/**",
+    "luau/Inliner/**",
+    "luau/Require/**",
+    "luau/VM/**",
+    "tests/**",
+    "examples/**",
+    "benches/**",
+    "scripts/**",
+    "README.md",
+    "CHANGELOG.md",
+    "BENCHMARKS.md",
+    "QUESTIONABLE.md",
+    "LICENSE-MIT",
+    "LICENSE-APACHE",
+    "rustfmt.toml",
+]
 
 [dependencies]
 
 [build-dependencies]
-# Builds the Luau 0.740 release (the commit OpenMW pins) with cc. No Lua binding crate sits
-# in between: the C API is declared in src/raw/ffi.rs against this library.
-luau0-src = "=0.22.0"
-# Compiles csrc/codegen.cpp, the C ABI over Luau's C++ code generation API (jit feature).
+# Compiles the vendored Luau tree and the C++ shims.
 cc = "1"
 
 [dev-dependencies]
@@ -31,3 +61,5 @@ default = []
 # Luau native code generation: builds Luau's CodeGen library plus the C++ shim that exposes
 # its compilation options, host IR lowering hooks, and IrBuilder to Rust (`native_code`).
 jit = []
+# Luau's Analysis library (type checker, linter, autocomplete) behind a C++ shim (`analysis`).
+analysis = []

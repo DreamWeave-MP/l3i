@@ -1,3 +1,9 @@
+//! Builds Luau from the `luau/` git submodule (pinned at the 0.740 release, the commit OpenMW
+//! pins), the binder's own C additions (`csrc/extra.cpp`), and, per feature, the C++ shims over
+//! Luau's code generator and analysis libraries. Everything is compiled with `cc`, so the crate
+//! builds wherever a C++17 compiler and Cargo exist (MSVC, clang, GCC, the Android NDK, cross
+//! sysroots) with no network access at build time and nothing outside the package.
+
 use std::env;
 use std::path::{Path, PathBuf};
 
@@ -12,106 +18,176 @@ const MAX_CSTACK: usize = 8000;
 // LUAU_CXXFLAGS but cannot lower this one.
 const TAG_LIMIT: u32 = 254;
 
+// Three-component vectors, as OpenMW.
+const VECTOR_SIZE: u32 = 3;
+
+// The Luau release the `luau/` submodule is pinned at. Bumping the submodule means bumping this,
+// re-auditing src/raw/ffi.rs against the new headers, and re-checking the flag policy.
+const LUAU_VERSION: &str = "0.740";
+
+struct Luau {
+    root: PathBuf,
+    base: cc::Build,
+}
+
+impl Luau {
+    fn dir(&self, component: &str, part: &str) -> PathBuf {
+        self.root.join(component).join(part)
+    }
+
+    /// One Luau component library: its own include and source directories plus `extra`
+    /// include directories, compiled with the shared base configuration.
+    fn library(&self, name: &str, component: &str, extra_includes: &[PathBuf], defines: &[(&str, &str)]) {
+        let mut build = self.base.clone();
+        build.include(self.dir(component, "include"));
+        for include in extra_includes {
+            build.include(include);
+        }
+        for (key, value) in defines {
+            build.define(key, Some(*value));
+        }
+        for source in sources(&self.dir(component, "src")) {
+            build.file(source);
+        }
+        build.compile(name);
+    }
+}
+
+/// Every `.cpp` under `dir`, sorted for reproducible archives.
+fn sources(dir: &Path) -> Vec<PathBuf> {
+    let mut files: Vec<PathBuf> = std::fs::read_dir(dir)
+        .unwrap_or_else(|error| panic!("cannot read {}: {error}", dir.display()))
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "cpp"))
+        .collect();
+    files.sort();
+    files
+}
+
 fn main() {
     println!("cargo:rerun-if-env-changed=LUAU_CXXFLAGS");
+    println!("cargo:rerun-if-changed=luau");
+    println!("cargo:rerun-if-changed=csrc");
     println!("cargo:rustc-env=DREAM_BINDER_TAG_LIMIT={TAG_LIMIT}");
 
-    // luau0-src reads LUAU_CXXFLAGS from this process's environment while compiling Luau.
-    let mut flags = format!("-DLUA_UTAG_LIMIT={TAG_LIMIT}");
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("luau");
+    assert!(
+        root.join("VM/include/lua.h").is_file(),
+        "the Luau submodule is not checked out; run `git submodule update --init` in {}",
+        root.parent().unwrap().display()
+    );
+    println!("cargo:rustc-env=LUAU_VERSION={LUAU_VERSION}");
+
+    let target = env::var("TARGET").unwrap_or_default();
+    let debug = env::var("DEBUG").map(|value| value == "true").unwrap_or(false);
+    let jit = env::var_os("CARGO_FEATURE_JIT").is_some();
+    let analysis = env::var_os("CARGO_FEATURE_ANALYSIS").is_some();
+
+    let mut base = cc::Build::new();
+    base.cpp(true).std("c++17").warnings(false);
+    base.define("LUAI_MAXCSTACK", Some(MAX_CSTACK.to_string().as_str()));
+    base.define("LUA_VECTOR_SIZE", Some(VECTOR_SIZE.to_string().as_str()));
+    base.define("LUA_UTAG_LIMIT", Some(TAG_LIMIT.to_string().as_str()));
+    base.define("LUA_API", Some("extern \"C\""));
+    base.define("LUALIB_API", Some("extern \"C\""));
+    if debug {
+        // Luau's internal api_check assertions, as OpenMW's debug builds have them.
+        base.define("LUAU_ENABLE_ASSERT", None);
+    } else {
+        // Lets the compiler lower sqrt() to one instruction.
+        base.flag_if_supported("-fno-math-errno");
+    }
+    if target.ends_with("emscripten") {
+        // cc adds -fno-exceptions for wasm32; Luau needs exceptions, in the ABI Rust uses.
+        base.flag_if_supported("-fexceptions");
+        base.flag_if_supported("-fwasm-exceptions");
+    }
     if let Ok(extra) = env::var("LUAU_CXXFLAGS") {
         assert!(
             !extra.contains("LUA_UTAG_LIMIT"),
             "LUA_UTAG_LIMIT is fixed at {TAG_LIMIT} by dream-binder; remove it from LUAU_CXXFLAGS"
         );
-        flags.push(' ');
-        flags.push_str(&extra);
-    }
-    // SAFETY: build scripts are single-threaded at this point; no other thread reads the
-    // environment concurrently.
-    unsafe { env::set_var("LUAU_CXXFLAGS", &flags) };
-
-    let jit = env::var_os("CARGO_FEATURE_JIT").is_some();
-    if jit {
-        build_native_code_shim(&flags);
-    }
-
-    let artifacts =
-        luau0_src::Build::new().set_max_cstack_size(MAX_CSTACK).set_vector_size(3).enable_codegen(jit).build();
-    artifacts.print_cargo_metadata();
-}
-
-/// The `luau/` source tree luau0-src compiled, for the C++ headers the code generation shim
-/// includes. luau0-src does not export it, so it is located the way Cargo lays it out:
-/// `LUAU0_SRC_DIR` overrides; otherwise the registry checkout matching the pinned version,
-/// then a `vendor/` directory next to this manifest.
-fn luau_source_dir() -> PathBuf {
-    println!("cargo:rerun-if-env-changed=LUAU0_SRC_DIR");
-    if let Some(dir) = env::var_os("LUAU0_SRC_DIR") {
-        let dir = PathBuf::from(dir);
-        assert!(dir.join("VM/include/lua.h").is_file(), "LUAU0_SRC_DIR does not contain a Luau source tree");
-        return dir;
-    }
-    let mut roots = Vec::new();
-    if let Some(cargo_home) = env::var_os("CARGO_HOME")
-        .map(PathBuf::from)
-        .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".cargo")))
-    {
-        let registry = cargo_home.join("registry").join("src");
-        if let Ok(entries) = registry.read_dir() {
-            roots.extend(entries.flatten().map(|entry| entry.path()));
+        for flag in extra.split_whitespace() {
+            base.flag(flag);
         }
     }
-    roots.push(Path::new(env!("CARGO_MANIFEST_DIR")).join("vendor"));
-    for root in roots {
-        let Ok(entries) = root.read_dir() else { continue };
-        for entry in entries.flatten() {
-            let name = entry.file_name();
-            let name = name.to_string_lossy();
-            if name.starts_with(&format!("luau0-src-{LUAU0_SRC_VERSION}")) {
-                let candidate = entry.path().join("luau");
-                if candidate.join("VM/include/lua.h").is_file()
-                    && candidate.join("CodeGen/include/Luau/CodeGen.h").is_file()
-                {
-                    return candidate;
-                }
-            }
-        }
-    }
-    panic!(
-        "cannot find the luau0-src {LUAU0_SRC_VERSION} source tree for the native code shim; set LUAU0_SRC_DIR to its `luau/` directory"
+    base.include(root.join("Common/include"));
+
+    let luau = Luau { root: root.clone(), base };
+    let vm_include = luau.dir("VM", "include");
+    let vm_src = luau.dir("VM", "src");
+    let ast_include = luau.dir("Ast", "include");
+    let bytecode_include = luau.dir("Bytecode", "include");
+    let compiler_include = luau.dir("Compiler", "include");
+    let config_include = luau.dir("Config", "include");
+    let codegen_include = luau.dir("CodeGen", "include");
+
+    luau.library("luaucommon", "Common", &[], &[]);
+    luau.library("luauast", "Ast", &[], &[]);
+    luau.library("luaubytecode", "Bytecode", &[], &[]);
+    luau.library(
+        "luauinliner",
+        "Inliner",
+        &[bytecode_include.clone(), luau.dir("Bytecode", "src"), vm_include.clone(), vm_src.clone()],
+        &[("LUAJITINLINER_API", "extern \"C\"")],
     );
-}
+    luau.library(
+        "luaucompiler",
+        "Compiler",
+        &[bytecode_include.clone(), ast_include.clone()],
+        &[("LUACODE_API", "extern \"C\"")],
+    );
+    luau.library("luauconfig", "Config", &[ast_include.clone(), compiler_include.clone(), vm_include.clone()], &[]);
+    luau.library(
+        "luaurequire",
+        "Require",
+        &[ast_include.clone(), config_include.clone(), vm_include.clone()],
+        &[("LUAREQUIRE_API", "extern \"C\"")],
+    );
+    luau.library("luauvm", "VM", &[], &[]);
 
-/// The luau0-src version pinned in Cargo.toml; the registry directory is named after it.
-const LUAU0_SRC_VERSION: &str = "0.22.0";
+    // The binder's own additions to the C API.
+    let mut extra = luau.base.clone();
+    extra.include(&vm_include).include(&vm_src).file("csrc/extra.cpp").compile("dreambinderextra");
 
-/// Compiles `csrc/codegen.cpp` against Luau's CodeGen headers and generates the Rust mirror of
-/// `IrCmd`, so lowering hooks can be written in Rust against exactly this Luau's IR.
-fn build_native_code_shim(luau_flags: &str) {
-    let source = luau_source_dir();
-    println!("cargo:rerun-if-changed=csrc/codegen.cpp");
-    let mut build = cc::Build::new();
-    build
-        .cpp(true)
-        .std("c++17")
-        .warnings(false)
-        .file("csrc/codegen.cpp")
-        .include(source.join("CodeGen/include"))
-        .include(source.join("VM/include"))
-        .include(source.join("VM/src"))
-        .include(source.join("Common/include"));
-    for flag in luau_flags.split_whitespace() {
-        build.flag(flag);
+    if jit {
+        if target.ends_with("emscripten") {
+            panic!("native code generation (jit) is not supported on emscripten");
+        }
+        luau.library(
+            "luaucodegen",
+            "CodeGen",
+            &[vm_include.clone(), vm_src.clone()],
+            &[("LUACODEGEN_API", "extern \"C\"")],
+        );
+        let mut shim = luau.base.clone();
+        shim.include(&codegen_include).include(&vm_include).include(&vm_src).file("csrc/codegen.cpp");
+        shim.compile("dreambindercodegen");
+        generate_ir_enums(&codegen_include);
     }
-    build.compile("dreambindercodegen");
-    generate_ir_enums(&source);
+
+    if analysis {
+        luau.library(
+            "luauanalysis",
+            "Analysis",
+            &[ast_include.clone(), config_include.clone(), compiler_include.clone()],
+            &[],
+        );
+        let mut shim = luau.base.clone();
+        shim.include(luau.dir("Analysis", "include"))
+            .include(&ast_include)
+            .include(&config_include)
+            .include(&compiler_include)
+            .file("csrc/analysis.cpp");
+        shim.compile("dreambinderanalysis");
+    }
 }
 
 /// Parses the `enum class` bodies the Rust IR layer mirrors and writes them to `OUT_DIR`.
-fn generate_ir_enums(source: &Path) {
-    let ir_data = std::fs::read_to_string(source.join("CodeGen/include/Luau/IrData.h")).expect("IrData.h");
-    let options =
-        std::fs::read_to_string(source.join("CodeGen/include/Luau/CodeGenOptions.h")).expect("CodeGenOptions.h");
+fn generate_ir_enums(codegen_include: &Path) {
+    let ir_data = std::fs::read_to_string(codegen_include.join("Luau/IrData.h")).expect("IrData.h");
+    let options = std::fs::read_to_string(codegen_include.join("Luau/CodeGenOptions.h")).expect("CodeGenOptions.h");
     let mut out = String::new();
     out.push_str(&mirror_enum(&ir_data, "IrCmd", "u8", "IrCmd"));
     out.push_str(&mirror_enum(&ir_data, "IrCondition", "u8", "IrCondition"));
@@ -122,8 +198,7 @@ fn generate_ir_enums(source: &Path) {
 }
 
 /// Mirrors `enum class <name> ... { A, B, ... }` as a Rust `#[repr]` enum with the same order
-/// and values (implicit consecutive numbering; Luau's IR enums use no explicit values except a
-/// trailing `Count`).
+/// and values (implicit consecutive numbering; Luau's IR enums use no explicit values).
 fn mirror_enum(header: &str, name: &str, repr: &str, rust_name: &str) -> String {
     let start = header.find(&format!("enum class {name}")).unwrap_or_else(|| panic!("{name} not found"));
     let body_start = header[start..].find('{').unwrap() + start + 1;
@@ -139,23 +214,13 @@ fn mirror_enum(header: &str, name: &str, repr: &str, rust_name: &str) -> String 
         variants.push(line.to_owned());
     }
     let mut out = format!(
-        "/// Mirror of Luau's `Luau::CodeGen::{name}` for this exact Luau build, generated by build.rs.
-         #[allow(non_camel_case_types, clippy::upper_case_acronyms)]
-         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-#[repr({repr})]
-pub enum {rust_name} {{
-"
+        "/// Mirror of Luau's `Luau::CodeGen::{name}` for this exact Luau build, generated by build.rs.\n\
+         #[allow(non_camel_case_types, clippy::upper_case_acronyms)]\n\
+         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]\n#[repr({repr})]\npub enum {rust_name} {{\n"
     );
     for (index, variant) in variants.iter().enumerate() {
-        out.push_str(&format!(
-            "    {variant} = {index},
-"
-        ));
+        out.push_str(&format!("    {variant} = {index},\n"));
     }
-    out.push_str(
-        "}
-
-",
-    );
+    out.push_str("}\n\n");
     out
 }
