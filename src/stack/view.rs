@@ -1,6 +1,7 @@
 use std::ffi::c_int;
+use std::marker::PhantomData;
 
-use super::{Stack, TableView};
+use super::TableView;
 use crate::error::{Error, Result};
 use crate::raw::ffi;
 
@@ -61,21 +62,36 @@ impl Type {
     }
 }
 
-/// A borrowed view of one stack slot. Copying a view copies the index, not the value.
+/// A borrowed view of one stack slot. `'v` is the scope that keeps the slot alive: the
+/// [`super::Frame`] that pushed it, or the [`super::Stack`] for slots below every frame.
+/// Copying a view copies the index, not the value.
 #[derive(Clone, Copy, Debug)]
-pub struct ValueView<'s> {
-    stack: Stack<'s>,
+pub struct ValueView<'v> {
+    state: *mut ffi::lua_State,
+    /// Absolute index, a pseudo-index, or 0 for "no value".
     index: c_int,
+    _scope: PhantomData<&'v ()>,
 }
 
-impl<'s> ValueView<'s> {
-    pub(crate) fn new(stack: Stack<'s>, index: c_int) -> Self {
-        ValueView { stack, index }
+impl<'v> ValueView<'v> {
+    /// Resolves `index` the way the C++ `Stack::at` did: positive and pseudo indexes are kept
+    /// (a positive index above the top still names its argument position for diagnostics, and
+    /// reads as [`Type::None`]), negative ones are made absolute against the current top, and
+    /// an out-of-range negative index becomes 0.
+    pub(crate) fn resolve(state: *mut ffi::lua_State, index: c_int) -> Self {
+        let index = if index <= ffi::LUA_REGISTRYINDEX || index >= 0 {
+            index
+        } else {
+            // SAFETY: state is live for 'v.
+            let absolute = unsafe { ffi::lua_gettop(state) } + index + 1;
+            if absolute > 0 { absolute } else { 0 }
+        };
+        ValueView { state, index, _scope: PhantomData }
     }
 
     #[inline]
-    pub fn stack(&self) -> &Stack<'s> {
-        &self.stack
+    pub(crate) fn state(&self) -> *mut ffi::lua_State {
+        self.state
     }
 
     #[inline]
@@ -83,12 +99,23 @@ impl<'s> ValueView<'s> {
         self.index
     }
 
+    /// True when the slot still exists. A view left behind by an out-of-order frame drop
+    /// stops existing instead of aliasing whatever Luau puts there next.
+    #[inline]
+    pub(crate) fn exists(&self) -> bool {
+        if self.index <= ffi::LUA_REGISTRYINDEX {
+            return true;
+        }
+        // SAFETY: state is live for 'v.
+        self.index > 0 && self.index <= unsafe { ffi::lua_gettop(self.state) }
+    }
+
     pub fn type_of(&self) -> Type {
-        if self.index == 0 {
+        if !self.exists() {
             return Type::None;
         }
-        // SAFETY: the stack is live for 's; lua_type tolerates any acceptable index.
-        Type::from_raw(unsafe { ffi::lua_type(self.stack.state(), self.index) })
+        // SAFETY: `exists` proved the index is acceptable to Luau.
+        Type::from_raw(unsafe { ffi::lua_type(self.state, self.index) })
     }
 
     pub fn is_nil(&self) -> bool {
@@ -129,15 +156,14 @@ impl<'s> ValueView<'s> {
         self.type_of() == Type::Vector
     }
 
-    pub fn as_table(&self) -> Result<TableView<'s>> {
+    pub fn as_table(&self) -> Result<TableView<'v>> {
         if !self.is_table() {
             return Err(self.type_error(Type::Table));
         }
         Ok(TableView::new(*self))
     }
 
-    /// Formats the same message Luau's `luaL_typeerror` would for this slot, minus the
-    /// function-name lookup: `<expected> expected, got <actual>`.
+    /// `<expected> expected, got <actual>`, the wording of Luau's own `luaL_typeerror` core.
     pub(crate) fn type_error(&self, expected: Type) -> Error {
         Error::runtime(format!("{} expected, got {}", expected.name(), self.type_of().name()))
     }

@@ -53,7 +53,7 @@ unsafe fn current_function_name(state: *mut ffi::lua_State) -> Option<String> {
 /// `luaT_objtypename`: `__type` from the metatable when present, else the basic type name.
 pub fn object_type_name(value: ValueView<'_>) -> String {
     // SAFETY: luaL_typename accepts any acceptable index, including none.
-    unsafe { CStr::from_ptr(ffi::luaL_typename(value.stack().state(), value.index())).to_string_lossy().into_owned() }
+    unsafe { CStr::from_ptr(ffi::luaL_typename(value.state(), value.index())).to_string_lossy().into_owned() }
 }
 
 /// The message `luaL_typeerror(L, narg, expected)` would raise for `value`, including the
@@ -65,7 +65,7 @@ pub fn type_error(value: ValueView<'_>, expected: &str) -> Error {
 
 /// [`type_error`] with an explicit argument number.
 pub fn type_error_at(value: ValueView<'_>, position: c_int, expected: &str) -> Error {
-    let state = value.stack().state();
+    let state = value.state();
     // SAFETY: the view proves the state is live and we are inside a native call.
     let (location, function) = unsafe { (location(state, 1), current_function_name(state)) };
     let message = match (value.type_of() == Type::None, function) {

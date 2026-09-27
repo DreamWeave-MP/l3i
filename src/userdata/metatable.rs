@@ -7,30 +7,32 @@
 //! grow without changing behaviour already relied on.
 
 use std::ffi::{CString, c_int};
+use std::marker::PhantomData;
 
 use crate::debug_name;
 use crate::error::{Error, Result};
 use crate::raw::ffi;
-use crate::stack::Stack;
+use crate::stack::Frame;
 
 /// Configures a metatable that lives at a fixed stack index for the builder's lifetime.
 ///
 /// Not `Clone`: copies would alias one metatable while carrying independent registration
 /// flags.
 pub struct MetatableBuilder<'s> {
-    stack: &'s Stack<'s>,
+    state: *mut ffi::lua_State,
     metatable: c_int,
     roots: &'s [&'s str],
     has_explicit_index: bool,
     /// Registry reference to the methods table once the first method is registered.
     methods_table: Option<c_int>,
+    _frame: PhantomData<&'s Frame<'s>>,
 }
 
 impl<'s> MetatableBuilder<'s> {
     /// Wraps the mutable table at `metatable`. Metatables are protected by default: a missing
     /// `__metatable` field is set to `false`.
-    pub(crate) fn new(stack: &'s Stack<'s>, metatable: c_int, roots: &'s [&'s str]) -> Result<Self> {
-        let state = stack.state();
+    pub(crate) fn new(frame: &'s Frame<'_>, metatable: c_int, roots: &'s [&'s str]) -> Result<Self> {
+        let state = frame.state();
         // SAFETY: `metatable` is an index the caller pushed within the current frame.
         unsafe {
             let metatable = ffi::lua_absindex(state, metatable);
@@ -47,13 +49,20 @@ impl<'s> MetatableBuilder<'s> {
                 ffi::lua_pushboolean(state, 0);
                 ffi::lua_setfield(state, metatable, c"__metatable".as_ptr());
             }
-            Ok(MetatableBuilder { stack, metatable, roots, has_explicit_index: false, methods_table: None })
+            Ok(MetatableBuilder {
+                state,
+                metatable,
+                roots,
+                has_explicit_index: false,
+                methods_table: None,
+                _frame: PhantomData,
+            })
         }
     }
 
     /// Sets the script-visible `__type`. Registration does this from the type's `NAME`.
     pub fn set_type(&mut self, name: &str) -> Result<()> {
-        let state = self.stack.state();
+        let state = self.state;
         unsafe {
             ffi::lua_pushlstring(state, name.as_ptr().cast(), name.len());
             ffi::lua_setfield(state, self.metatable, c"__type".as_ptr());
@@ -63,7 +72,7 @@ impl<'s> MetatableBuilder<'s> {
 
     /// The `__type` string, required before members can be named.
     fn debug_prefix(&self) -> Result<String> {
-        let state = self.stack.state();
+        let state = self.state;
         unsafe {
             ffi::lua_rawgetfield(state, self.metatable, c"__type".as_ptr());
             let mut length = 0usize;
@@ -88,7 +97,7 @@ impl<'s> MetatableBuilder<'s> {
         }
         let type_name = self.debug_prefix()?;
         let debug_name = format!("{type_name}.{name}");
-        let state = self.stack.state();
+        let state = self.state;
         let key = CString::new(name).map_err(|_| Error::logic("Method name cannot contain NUL"))?;
         // SAFETY: indexes below are relative to values pushed here; the methods table is
         // pinned in the registry so its reference survives frames.
@@ -134,7 +143,7 @@ impl<'s> MetatableBuilder<'s> {
         let type_name = self.debug_prefix()?;
         let debug_name = format!("{type_name}.{metamethod}");
         let key = CString::new(metamethod).map_err(|_| Error::logic("Metamethod name cannot contain NUL"))?;
-        let state = self.stack.state();
+        let state = self.state;
         unsafe {
             let retained = debug_name::retain(state, &debug_name, self.roots)?;
             ffi::lua_pushcfunction(state, function, retained);
@@ -148,7 +157,7 @@ impl Drop for MetatableBuilder<'_> {
     fn drop(&mut self) {
         if let Some(methods) = self.methods_table {
             // SAFETY: the reference was created by lua_ref on this VM and is released once.
-            unsafe { ffi::lua_unref(self.stack.state(), methods) };
+            unsafe { ffi::lua_unref(self.state, methods) };
         }
     }
 }

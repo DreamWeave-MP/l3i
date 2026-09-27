@@ -4,13 +4,13 @@
 //! intentional choices OpenMW's `Lua::State` makes, in the same order, so bytecode, integer
 //! semantics, and performance characteristics match.
 
-use std::ffi::{CStr, CString};
+use std::ffi::CString;
 use std::sync::OnceLock;
 
 use crate::error::{Error, Result};
 use crate::raw::ffi;
 use crate::source::{CompileOptions, compile};
-use crate::stack::Stack;
+use crate::stack::{Frame, Stack, ValueView};
 
 /// Luau feature flags OpenMW enables (`components/luau/runtimeflags.cpp`) that live in the
 /// Ast, Bytecode, Compiler, and VM components, which are always linked.
@@ -157,54 +157,50 @@ impl Runtime {
         self.state
     }
 
-    /// A borrowed view of the main thread's stack, valid while the runtime is.
+    /// The main thread's stack at host level, valid while the runtime is.
     pub fn stack(&self) -> Stack<'_> {
-        // SAFETY: the state lives as long as `&self`.
-        unsafe { Stack::from_raw(self.state) }
+        // SAFETY: the state lives as long as `&self`; host code is the only user of the main
+        // thread while no Lua call is running.
+        unsafe { Stack::from_raw(self.state, true) }
     }
 
-    /// Compiles `source` and leaves the resulting chunk function on the stack.
-    pub fn load(&self, chunk_name: &str, source: &str, options: &CompileOptions) -> Result<()> {
+    /// Compiles `source` and pushes the resulting chunk function onto `frame`.
+    pub fn load<'f>(
+        &self,
+        frame: &'f Frame<'_>,
+        chunk_name: &str,
+        source: &str,
+        options: &CompileOptions,
+    ) -> Result<ValueView<'f>> {
         let bytecode = compile(source, options)?;
         let name = CString::new(chunk_name).map_err(|_| Error::logic("Chunk name cannot contain NUL"))?;
         // SAFETY: live state; the bytecode slice and name outlive the call. luau_load
         // reports failure by status and leaves the message on the stack.
         let status = unsafe { ffi::luau_load(self.state, name.as_ptr(), bytecode.as_ptr().cast(), bytecode.len(), 0) };
         if status != ffi::LUA_OK {
-            return Err(self.pop_error());
+            return Err(self.pop_error(status));
         }
-        Ok(())
+        Ok(frame.top_value())
     }
 
     /// Compiles and runs `source` on the main thread, discarding results.
     pub fn exec(&self, source: &str) -> Result<()> {
         let stack = self.stack();
-        stack.with_frame(|_| {
-            self.load("=exec", source, &CompileOptions::default())?;
+        stack.with_frame(|frame| {
+            self.load(frame, "=exec", source, &CompileOptions::default())?;
             // SAFETY: the chunk function is on top; pcall never unwinds into this frame.
             let status = unsafe { ffi::lua_pcall(self.state, 0, 0, 0) };
             if status != ffi::LUA_OK {
-                return Err(self.pop_error());
+                return Err(self.pop_error(status));
             }
             Ok(())
         })
     }
 
     /// Converts the error object on top of the stack to an `Error::Runtime`, popping it.
-    pub(crate) fn pop_error(&self) -> Error {
+    pub(crate) fn pop_error(&self, status: std::ffi::c_int) -> Error {
         // SAFETY: the caller guarantees an error object is on top.
-        let message = unsafe {
-            let mut length = 0usize;
-            let text = ffi::lua_tolstring(self.state, -1, &mut length);
-            let message = if text.is_null() {
-                CStr::from_ptr(ffi::luaL_typename(self.state, -1)).to_string_lossy().into_owned()
-            } else {
-                String::from_utf8_lossy(std::slice::from_raw_parts(text.cast::<u8>(), length)).into_owned()
-            };
-            ffi::lua_pop(self.state, 1);
-            message
-        };
-        Error::Runtime(message)
+        unsafe { crate::raw::protect::pop_error(self.state, status) }
     }
 }
 

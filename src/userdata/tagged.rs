@@ -14,7 +14,7 @@ use crate::TAG_LIMIT;
 use crate::error::{Error, Result};
 use crate::raw::ffi;
 use crate::runtime::Runtime;
-use crate::stack::{Stack, ValueView};
+use crate::stack::{Scope, ValueView};
 
 /// Runs the payload's `Drop` when Luau frees the userdata.
 ///
@@ -55,8 +55,8 @@ pub fn register<T: TaggedUserdata>(
     let destructor: ffi::lua_Destructor = destroy::<T>;
 
     let stack = runtime.stack();
-    stack.with_frame(|stack| {
-        let state = stack.state();
+    stack.with_frame(|frame| {
+        let state = frame.state();
         // SAFETY: live main thread; every index below is relative to values pushed here and
         // the frame restores the height on every path.
         unsafe {
@@ -84,7 +84,7 @@ pub fn register<T: TaggedUserdata>(
             let published = ffi::lua_topointer(state, metatable);
 
             let configured = (|| {
-                let mut builder = MetatableBuilder::new(stack, metatable, runtime.debug_roots())?;
+                let mut builder = MetatableBuilder::new(frame, metatable, runtime.debug_roots())?;
                 builder.set_type(T::NAME)?;
                 configure(&mut builder)?;
                 Ok(())
@@ -112,37 +112,37 @@ pub fn register<T: TaggedUserdata>(
 }
 
 /// True when `T`'s tag currently carries `T`'s destructor, i.e. `register::<T>` ran on this VM.
-pub fn is_registered<T: TaggedUserdata>(stack: &Stack<'_>) -> bool {
+pub fn is_registered<T: TaggedUserdata>(scope: &impl Scope) -> bool {
     // SAFETY: live state; reading the destructor table has no preconditions beyond tag range.
-    let registered = unsafe { ffi::lua_getuserdatadtor(stack.state(), c_int::from(T::TAG)) };
+    let registered = unsafe { ffi::lua_getuserdatadtor(scope.state(), c_int::from(T::TAG)) };
     registered.is_some_and(|f| ptr::fn_addr_eq(f, destroy::<T> as ffi::lua_Destructor))
 }
 
-fn require_registered<T: TaggedUserdata>(stack: &Stack<'_>) -> Result<()> {
-    if is_registered::<T>(stack) {
+fn require_registered<T: TaggedUserdata>(scope: &impl Scope) -> Result<()> {
+    if is_registered::<T>(scope) {
         return Ok(());
     }
     Err(Error::logic(format!("Luau tagged userdata type '{}' is not registered", T::NAME)))
 }
 
-/// Pushes `value` as a new tagged userdata and returns a view of it.
+/// Pushes `value` as a new tagged userdata onto `scope` and returns a view of it.
 ///
 /// One allocation, one write, no intermediate state: the metatable attached by Luau is the
 /// one `register::<T>` published.
-pub fn push<'s, T: TaggedUserdata>(stack: &'s Stack<'_>, value: T) -> Result<ValueView<'s>> {
+pub fn push<'s, T: TaggedUserdata>(scope: &'s impl Scope, value: T) -> Result<ValueView<'s>> {
     const { assert_userdata_layout::<T>() };
-    require_registered::<T>(stack)?;
+    require_registered::<T>(scope)?;
     // SAFETY: registration verified the tag has T's metatable and destructor. The allocation
     // is fully initialised by `ptr::write` before anything else can observe it. Luau raises
     // only for out of memory, before the destructor could see the slot.
     unsafe {
-        let storage = ffi::lua_newuserdatataggedwithmetatable(stack.state(), std::mem::size_of::<T>(), c_int::from(T::TAG));
+        let storage = ffi::lua_newuserdatataggedwithmetatable(scope.state(), std::mem::size_of::<T>(), c_int::from(T::TAG));
         if storage.is_null() {
             return Err(Error::runtime("Unable to allocate tagged userdata"));
         }
         ptr::write(storage.cast::<T>(), value);
     }
-    Ok(stack.top_value_static())
+    Ok(scope.top_value())
 }
 
 /// The payload when `value` is a `T`, else `None`. One tag comparison, no metatable walk.
@@ -150,8 +150,11 @@ pub fn test<'s, T: TaggedUserdata>(value: ValueView<'s>) -> Option<&'s T> {
     // SAFETY: lua_touserdatatagged returns the payload only when the userdata carries T's
     // tag, and only `push::<T>` creates userdata with that tag on a VM where T is registered.
     // The view's lifetime keeps the slot, and so the userdata, reachable.
+    if !value.exists() {
+        return None;
+    }
     unsafe {
-        let data = ffi::lua_touserdatatagged(value.stack().state(), value.index(), c_int::from(T::TAG));
+        let data = ffi::lua_touserdatatagged(value.state(), value.index(), c_int::from(T::TAG));
         data.cast::<T>().as_ref()
     }
 }
@@ -162,8 +165,11 @@ pub fn test<'s, T: TaggedUserdata>(value: ValueView<'s>) -> Option<&'s T> {
 /// No other reference to the same userdata's payload may be live: Luau lets the same value
 /// appear at several stack slots, and the binder cannot see aliasing through them.
 pub unsafe fn test_mut<'s, T: TaggedUserdata>(value: ValueView<'s>) -> Option<&'s mut T> {
+    if !value.exists() {
+        return None;
+    }
     unsafe {
-        let data = ffi::lua_touserdatatagged(value.stack().state(), value.index(), c_int::from(T::TAG));
+        let data = ffi::lua_touserdatatagged(value.state(), value.index(), c_int::from(T::TAG));
         data.cast::<T>().as_mut()
     }
 }

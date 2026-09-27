@@ -15,7 +15,7 @@ use crate::stack::Stack;
 pub unsafe fn enter(state: *mut ffi::lua_State, body: impl FnOnce(&Stack<'_>) -> Result<c_int>) -> c_int {
     unsafe {
         trampoline::enter(state, || {
-            let stack = Stack::from_raw(state);
+            let stack = Stack::from_raw(state, false);
             body(&stack)
         })
     }

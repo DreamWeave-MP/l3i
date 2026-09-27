@@ -86,9 +86,12 @@ unsafe extern "C-unwind" fn probe_value(state: *mut ffi::lua_State) -> c_int {
 fn runtime_with_probe() -> Runtime {
     let runtime = Runtime::new().unwrap();
     tagged::register::<Probe>(&runtime, |ty| ty.raw_method("value", probe_value)).unwrap();
-    let stack = runtime.stack();
-    unsafe { stack.push_c_function(make_probe, std::ptr::null()) };
-    stack.set_global("make_probe").unwrap();
+    {
+        let stack = runtime.stack();
+        let frame = stack.frame();
+        unsafe { frame.push_c_function(make_probe, std::ptr::null()) };
+        frame.set_global("make_probe").unwrap();
+    }
     runtime
 }
 

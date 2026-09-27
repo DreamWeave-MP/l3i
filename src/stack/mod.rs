@@ -1,9 +1,21 @@
 //! Borrowed views over a live Luau stack: the hot-path tier.
 //!
-//! Nothing here pins a registry reference. A [`ValueView`] is `(stack, index)` and is valid
-//! exactly as long as the raw Lua index it names; the lifetimes make a view unable to outlive
-//! the [`Stack`] or [`StackFrame`] it was read from, which is the compile-time form of the
-//! C++ binder's "borrowed values cannot escape a scoped frame" rule.
+//! Nothing here pins a registry reference. A [`ValueView`] names one stack slot and is valid
+//! exactly as long as the raw Lua index it names. Rust proves that the way the C++ binder only
+//! asserted it:
+//!
+//! - [`Stack`] is the exclusive handle to a thread's stack. It has no `pop`; only frames pop.
+//! - Temporaries are pushed through a [`Frame`], and the view returned borrows that frame
+//!   object. Dropping the frame while such a view is alive is a compile error.
+//! - [`Stack::with_frame`] / [`Frame::with_frame`] take a higher-ranked closure, so a view
+//!   cannot be returned out of the frame that made it.
+//! - Slots below every frame's floor (a native call's arguments, values the host pushed before
+//!   opening a frame) are read through [`Stack::at`] and borrow the stack instead.
+//!
+//! Two runtime guards back the types where lifetimes alone cannot: a frame's drop restores its
+//! floor only downwards, never by growing nils, and every view access is bounded by the live
+//! top, so a view left behind by an out-of-order frame drop reads as [`Type::None`] rather than
+//! touching memory past the frame.
 
 mod frame;
 mod table;
@@ -12,39 +24,84 @@ mod view;
 #[cfg(test)]
 mod tests;
 
+use std::cell::Cell;
 use std::ffi::{c_char, c_int};
 use std::marker::PhantomData;
 
 use crate::error::{Error, Result};
 use crate::raw::ffi;
 
-pub use frame::StackFrame;
+pub use frame::Frame;
 pub use table::TableView;
 pub use view::{Type, ValueView};
 
-/// A non-owning handle to one Lua thread's stack.
+mod sealed {
+    pub trait Sealed {}
+    impl Sealed for super::Stack<'_> {}
+    impl Sealed for super::Frame<'_> {}
+}
+
+/// Somewhere values can be pushed: the call-level [`Stack`] or a temporary [`Frame`].
+/// Helpers that create values (userdata, functions) are generic over it so a result can be
+/// pushed at the call level while a temporary goes through a frame.
+pub trait Scope: sealed::Sealed {
+    #[doc(hidden)]
+    fn state(&self) -> *mut ffi::lua_State;
+    /// A view of slot `index` bound to this scope.
+    fn at(&self, index: c_int) -> ValueView<'_>;
+    /// The most recently pushed value.
+    fn top_value(&self) -> ValueView<'_> {
+        self.at(-1)
+    }
+}
+
+impl Scope for Stack<'_> {
+    fn state(&self) -> *mut ffi::lua_State {
+        self.state
+    }
+    fn at(&self, index: c_int) -> ValueView<'_> {
+        Stack::at(self, index)
+    }
+}
+
+impl Scope for Frame<'_> {
+    fn state(&self) -> *mut ffi::lua_State {
+        Frame::state(self)
+    }
+    fn at(&self, index: c_int) -> ValueView<'_> {
+        Frame::at(self, index)
+    }
+}
+
+/// The exclusive handle to one Lua thread's stack.
 ///
-/// `'vm` is the lifetime for which the caller guarantees the `lua_State` stays alive; inside a
-/// native callback that is the callback's frame, inside a host-side operation it is the borrow
-/// of the owning [`crate::runtime::Runtime`].
-#[derive(Clone, Copy, Debug)]
+/// `'vm` is the lifetime for which the caller guarantees the `lua_State` stays alive: inside a
+/// native callback that is the callback's frame, host side it is the borrow of the owning
+/// [`crate::runtime::Runtime`]. Not `Clone`: two handles would let one pop what the other views.
 pub struct Stack<'vm> {
     state: *mut ffi::lua_State,
-    _vm: PhantomData<&'vm ()>,
+    /// True outside any Lua call. Operations that can raise a Luau error then run under
+    /// [`crate::raw::protect::protected_call`], because no `pcall` above us would catch them.
+    host_level: bool,
+    /// Frames currently open on this stack. Pushing directly on the stack while a frame is
+    /// open would put the value inside the frame's territory; debug builds refuse it.
+    open_frames: Cell<u32>,
+    _vm: PhantomData<&'vm mut ()>,
 }
 
 impl<'vm> Stack<'vm> {
     /// # Safety
-    /// `state` must be a live Luau thread that outlives `'vm`, and no other code may run on
-    /// that VM concurrently (Luau VMs are single-threaded).
-    pub(crate) unsafe fn from_raw(state: *mut ffi::lua_State) -> Self {
+    /// `state` must be a live Luau thread that outlives `'vm`, and no other `Stack` may exist
+    /// for it while this one does (Luau VMs are single-threaded; a native callback is the
+    /// only code running on its thread).
+    pub(crate) unsafe fn from_raw(state: *mut ffi::lua_State, host_level: bool) -> Self {
         debug_assert!(!state.is_null(), "Stack requires a live Lua state");
-        Stack { state, _vm: PhantomData }
+        Stack { state, host_level, open_frames: Cell::new(0), _vm: PhantomData }
     }
 
-    #[inline]
-    pub(crate) fn state(&self) -> *mut ffi::lua_State {
-        self.state
+    /// True when this stack is used from host code rather than inside a Lua call.
+    pub fn is_host_level(&self) -> bool {
+        self.host_level
     }
 
     #[inline]
@@ -53,89 +110,22 @@ impl<'vm> Stack<'vm> {
         unsafe { ffi::lua_gettop(self.state) }
     }
 
-    #[inline]
-    pub fn pop(&self, count: c_int) {
-        // SAFETY: state is live; lua_settop below top is always valid.
-        unsafe { ffi::lua_pop(self.state, count) }
-    }
-
-    /// Records the current height and restores it when the frame drops.
-    pub fn frame(&self) -> StackFrame<'_, 'vm> {
-        StackFrame::new(self)
-    }
-
-    /// Runs `body` with the stack height restored afterwards, whether or not it succeeded.
-    ///
-    /// The callback must preserve the entry prefix and work only above it. Its result cannot
-    /// borrow from the frame: the higher-ranked lifetime on the closure makes returning a view
-    /// a compile error, replacing the C++ `requireOwnedFrameResult` assertion.
-    pub fn with_frame<R>(&self, body: impl for<'f> FnOnce(&'f Stack<'vm>) -> Result<R>) -> Result<R> {
-        let _frame = self.frame();
-        body(self)
-    }
-
-    /// A view of the value at `index`. Negative indexes are resolved against the current top so
-    /// the view stays stable while values are pushed above it. `at(0)` and out-of-range negative
-    /// indexes produce a view of type [`Type::None`], as in the C++ binder. Positive indexes must
-    /// be acceptable to Luau: at most the current frame's allocated top (`lua_checkstack`).
+    /// A view of slot `index`, borrowing the stack. Negative indexes resolve against the current
+    /// top; `0`, out-of-range indexes, and indexes above the top are views of [`Type::None`].
     pub fn at(&self, index: c_int) -> ValueView<'_> {
-        if index > 0 || index <= ffi::LUA_REGISTRYINDEX {
-            return ValueView::new(*self, index);
-        }
-        if index == 0 {
-            return ValueView::new(*self, 0);
-        }
-        let absolute = self.top() + index + 1;
-        ValueView::new(*self, if absolute > 0 { absolute } else { 0 })
+        ValueView::resolve(self.state, index)
     }
 
-    pub fn top_value(&self) -> ValueView<'_> {
-        self.at(-1)
+    /// Opens a temporary frame. Values pushed through it are popped when it drops.
+    pub fn frame(&self) -> Frame<'_> {
+        Frame::open(self.state, self.host_level, &self.open_frames)
     }
 
-    pub fn push_nil(&self) -> ValueView<'_> {
-        // SAFETY: live state; Luau guarantees LUA_MINSTACK free slots on entry and the binder
-        // calls check_stack before pushing more than that.
-        unsafe { ffi::lua_pushnil(self.state) };
-        self.top_value()
-    }
-
-    pub fn push_boolean(&self, value: bool) -> ValueView<'_> {
-        unsafe { ffi::lua_pushboolean(self.state, c_int::from(value)) };
-        self.top_value()
-    }
-
-    pub fn push_number(&self, value: f64) -> ValueView<'_> {
-        unsafe { ffi::lua_pushnumber(self.state, value) };
-        self.top_value()
-    }
-
-    pub fn push_string(&self, value: &str) -> ValueView<'_> {
-        unsafe { ffi::lua_pushlstring(self.state, value.as_ptr().cast(), value.len()) };
-        self.top_value()
-    }
-
-    pub fn push_table(&self, array_capacity: usize, hash_capacity: usize) -> Result<TableView<'_>> {
-        let narr = checked_capacity(array_capacity)?;
-        let nrec = checked_capacity(hash_capacity)?;
-        unsafe { ffi::lua_createtable(self.state, narr, nrec) };
-        Ok(TableView::new(self.top_value()))
-    }
-
-    /// Pushes a C function with an already-retained debug name (see [`crate::debug_name`]).
-    ///
-    /// # Safety
-    /// `debug_name` is null or a pointer that stays valid until the VM closes.
-    pub unsafe fn push_c_function(&self, function: ffi::lua_CFunction, debug_name: *const c_char) -> ValueView<'_> {
-        unsafe { ffi::lua_pushcfunction(self.state, function, debug_name) };
-        self.top_value()
-    }
-
-    /// Pops the top value into the global `name`.
-    pub fn set_global(&self, name: &str) -> Result<()> {
-        let name = std::ffi::CString::new(name).map_err(|_| Error::logic("Global name cannot contain NUL"))?;
-        unsafe { ffi::lua_setglobal(self.state, name.as_ptr()) };
-        Ok(())
+    /// Runs `body` inside a temporary frame. The closure is higher-ranked over the frame, so
+    /// its result cannot borrow anything the frame pushed.
+    pub fn with_frame<R>(&self, body: impl FnOnce(&Frame<'_>) -> Result<R>) -> Result<R> {
+        let frame = self.frame();
+        body(&frame)
     }
 
     /// Ensures `extra` free slots, as `lua_checkstack`.
@@ -145,14 +135,82 @@ impl<'vm> Stack<'vm> {
         }
         Ok(())
     }
+
+    fn assert_no_open_frame(&self) {
+        debug_assert_eq!(self.open_frames.get(), 0, "push through the open Frame, not the Stack beneath it");
+    }
+
+    // Pushes at the call level: results of a native function, or host setup before any frame.
+    // Nothing pops these within the current scope, so their views borrow the stack.
+
+    pub fn push_nil(&self) -> ValueView<'_> {
+        self.assert_no_open_frame();
+        // SAFETY: live state; Luau guarantees LUA_MINSTACK free slots on entry and callers use
+        // `check` before pushing more than that.
+        unsafe { ffi::lua_pushnil(self.state) };
+        self.at(-1)
+    }
+
+    pub fn push_boolean(&self, value: bool) -> ValueView<'_> {
+        self.assert_no_open_frame();
+        unsafe { ffi::lua_pushboolean(self.state, c_int::from(value)) };
+        self.at(-1)
+    }
+
+    pub fn push_number(&self, value: f64) -> ValueView<'_> {
+        self.assert_no_open_frame();
+        unsafe { ffi::lua_pushnumber(self.state, value) };
+        self.at(-1)
+    }
+
+    pub fn push_string(&self, value: &str) -> ValueView<'_> {
+        self.assert_no_open_frame();
+        unsafe { ffi::lua_pushlstring(self.state, value.as_ptr().cast(), value.len()) };
+        self.at(-1)
+    }
+
+    /// Pushes a copy of `value`, which must belong to this stack.
+    pub fn push_value(&self, value: ValueView<'_>) -> Result<ValueView<'_>> {
+        self.assert_no_open_frame();
+        push_copy(self.state, value)?;
+        Ok(self.at(-1))
+    }
+
+    /// Pushes a C function with an already-retained debug name (see [`crate::debug_name`]).
+    ///
+    /// # Safety
+    /// `debug_name` is null or a pointer that stays valid until the VM closes.
+    pub unsafe fn push_c_function(&self, function: ffi::lua_CFunction, debug_name: *const c_char) -> ValueView<'_> {
+        self.assert_no_open_frame();
+        unsafe { ffi::lua_pushcfunction(self.state, function, debug_name) };
+        self.at(-1)
+    }
 }
 
-fn checked_capacity(capacity: usize) -> Result<c_int> {
-    c_int::try_from(capacity).map_err(|_| Error::logic("Lua table capacity exceeds the supported range"))
+/// `lua_pushvalue` for a view of this state, or `lua_xpush` for a view of another thread of the
+/// same VM. Nonexistent slots and other VMs are logic errors, as in the C++ `pushLuaValue`.
+pub(crate) fn push_copy(state: *mut ffi::lua_State, value: ValueView<'_>) -> Result<()> {
+    if value.type_of() == Type::None {
+        return Err(Error::logic("Cannot push a nonexistent Lua stack value"));
+    }
+    // SAFETY: `value` proved its slot exists on its own live thread.
+    unsafe {
+        if value.state() == state {
+            ffi::lua_pushvalue(state, value.index());
+        } else if same_vm(state, value.state()) {
+            ffi::lua_xpush(value.state(), state, value.index());
+        } else {
+            return Err(Error::logic("Lua value belongs to a different VM"));
+        }
+    }
+    Ok(())
 }
 
 /// True when both threads belong to one VM.
-#[allow(dead_code)] // used from the tagged/untagged userdata slices
 pub(crate) fn same_vm(left: *mut ffi::lua_State, right: *mut ffi::lua_State) -> bool {
     !left.is_null() && !right.is_null() && unsafe { ffi::lua_mainthread(left) == ffi::lua_mainthread(right) }
+}
+
+pub(crate) fn checked_capacity(capacity: usize) -> Result<c_int> {
+    c_int::try_from(capacity).map_err(|_| Error::logic("Lua table capacity exceeds the supported range"))
 }
