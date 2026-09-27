@@ -2,7 +2,7 @@
 //! callbacks themselves: the interrupt watchdog and allocation activity.
 
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::ffi::{CStr, c_int, c_void};
 use std::time::{Duration, Instant};
 
@@ -54,7 +54,29 @@ pub struct CallStats {
 }
 
 pub(crate) const SAFEPOINTS_PER_WATCHDOG_POLL: u32 = 64;
+pub(crate) const SAFEPOINTS_PER_SAMPLE: u32 = 32;
 const TIMED_CALLS_PER_OVERHEAD_SAMPLE: u64 = 64;
+/// How many Lua frames one sample walks.
+const SAMPLE_MAX_DEPTH: c_int = 32;
+
+/// One sampled location: where the sampler found Lua code running, and how often.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SampledLocation {
+    /// The function's name, empty when it has none.
+    pub function: String,
+    pub samples: u64,
+}
+
+/// Where a sampled context spends its time: innermost Lua frames by `source:line`, and every
+/// Lua function on the sampled stacks by `source:linedefined` (counted once per sample however
+/// deep it recurses).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Samples {
+    pub lines: BTreeMap<String, SampledLocation>,
+    pub functions: BTreeMap<String, SampledLocation>,
+    /// Samples that found at least one Lua frame.
+    pub count: u64,
+}
 
 pub(crate) struct Shared {
     limits: Cell<Limits>,
@@ -63,6 +85,10 @@ pub(crate) struct Shared {
     deadline: Cell<Option<Deadline>>,
     safepoints_until_poll: Cell<u32>,
     stats: RefCell<CallStats>,
+    sampled_context: Cell<Option<u64>>,
+    safepoints_until_sample: Cell<u32>,
+    samples: RefCell<Samples>,
+    stats_frame: Cell<u64>,
 }
 
 impl Shared {
@@ -74,7 +100,33 @@ impl Shared {
             deadline: Cell::new(None),
             safepoints_until_poll: Cell::new(0),
             stats: RefCell::new(CallStats::default()),
+            sampled_context: Cell::new(None),
+            safepoints_until_sample: Cell::new(0),
+            samples: RefCell::new(Samples::default()),
+            stats_frame: Cell::new(0),
         }
+    }
+
+    pub(crate) fn sampled_context(&self) -> Option<u64> {
+        self.sampled_context.get()
+    }
+
+    /// Selects the context to sample, clearing earlier samples (`setSampledScript`).
+    pub(crate) fn set_sampled_context(&self, context: Option<u64>) {
+        if context == self.sampled_context.get() {
+            return;
+        }
+        self.sampled_context.set(context);
+        *self.samples.borrow_mut() = Samples::default();
+        self.safepoints_until_sample.set(0);
+    }
+
+    pub(crate) fn samples(&self) -> Samples {
+        self.samples.borrow().clone()
+    }
+
+    pub(crate) fn stats_frame(&self) -> &Cell<u64> {
+        &self.stats_frame
     }
 
     pub(crate) fn profiler_enabled(&self) -> bool {
@@ -91,7 +143,7 @@ impl Shared {
 
     pub(crate) fn needs_interrupt(&self) -> bool {
         let limits = self.limits.get();
-        !limits.execution_time.is_zero() || limits.memory_bytes != 0
+        !limits.execution_time.is_zero() || limits.memory_bytes != 0 || self.sampled_context.get().is_some()
     }
 
     pub(crate) fn stats(&self) -> CallStats {
@@ -151,9 +203,22 @@ pub(crate) unsafe extern "C-unwind" fn interrupt(state: *mut ffi::lua_State, gc:
         return;
     }
     let shared = unsafe { &*shared };
-    if shared.active_calls.borrow().is_empty() {
-        return;
+    let innermost = shared.active_calls.borrow().last().map(|call| call.context);
+    let Some(innermost) = innermost else { return };
+
+    if let Some(sampled) = shared.sampled_context.get() {
+        let remaining = shared.safepoints_until_sample.get();
+        if remaining != 0 {
+            shared.safepoints_until_sample.set(remaining - 1);
+        } else {
+            shared.safepoints_until_sample.set(SAFEPOINTS_PER_SAMPLE - 1);
+            if innermost == sampled {
+                // SAFETY: the interrupt runs at a safepoint of `state`; lua_getinfo only reads.
+                unsafe { sample(state, &mut shared.samples.borrow_mut()) };
+            }
+        }
     }
+
     let remaining = shared.safepoints_until_poll.get();
     if remaining != 0 {
         shared.safepoints_until_poll.set(remaining - 1);
@@ -211,27 +276,86 @@ pub(crate) unsafe extern "C" fn on_allocate(
     }
 }
 
+/// One Lua frame's `sln` debug info, or `None` for native frames.
+struct LuaFrameInfo {
+    source: String,
+    name: String,
+    current_line: c_int,
+    line_defined: c_int,
+}
+
+/// Reads level `level` of `state`'s call stack; `Some(None)` is a native frame, `None` is the
+/// end of the stack.
+///
+/// # Safety
+/// `state` is live; called from the host or from a safepoint of `state`.
+unsafe fn lua_frame_info(state: *mut ffi::lua_State, level: c_int, what: &CStr) -> Option<Option<LuaFrameInfo>> {
+    let mut ar = std::mem::MaybeUninit::<ffi::lua_Debug>::zeroed();
+    // SAFETY: lua_getinfo fills the requested fields; pointers reference ar.ssbuf or interned
+    // strings that outlive the read.
+    unsafe {
+        if ffi::lua_getinfo(state, level, what.as_ptr(), ar.as_mut_ptr()) == 0 {
+            return None;
+        }
+        let ar = ar.assume_init_ref();
+        if ar.what.is_null() || CStr::from_ptr(ar.what).to_bytes() != b"Lua" {
+            return Some(None);
+        }
+        let source = if ar.source.is_null() { ar.short_src } else { ar.source };
+        let mut source = CStr::from_ptr(source).to_string_lossy().into_owned();
+        if source.starts_with('@') || source.starts_with('=') {
+            source.remove(0);
+        }
+        let name =
+            if ar.name.is_null() { String::new() } else { CStr::from_ptr(ar.name).to_string_lossy().into_owned() };
+        Some(Some(LuaFrameInfo { source, name, current_line: ar.currentline, line_defined: ar.linedefined }))
+    }
+}
+
+/// Takes one sample of `state` (`State::sample`): the innermost Lua frame counts for its line,
+/// every Lua function on the stack counts once for its definition.
+///
+/// # Safety
+/// `state` is live and at a safepoint.
+unsafe fn sample(state: *mut ffi::lua_State, samples: &mut Samples) {
+    let mut innermost = true;
+    let mut counted: Vec<String> = Vec::new();
+    for level in 0..SAMPLE_MAX_DEPTH {
+        let Some(frame) = (unsafe { lua_frame_info(state, level, c"sln") }) else { break };
+        let Some(frame) = frame else { continue };
+        if innermost {
+            let line = samples.lines.entry(format!("{}:{}", frame.source, frame.current_line)).or_default();
+            if line.function.is_empty() {
+                line.function.clone_from(&frame.name);
+            }
+            line.samples += 1;
+            innermost = false;
+        }
+        let key = format!("{}:{}", frame.source, frame.line_defined);
+        if counted.contains(&key) {
+            continue;
+        }
+        let function = samples.functions.entry(key.clone()).or_default();
+        if function.function.is_empty() {
+            function.function = frame.name;
+        }
+        function.samples += 1;
+        counted.push(key);
+    }
+    if !innermost {
+        samples.count += 1;
+    }
+}
+
 /// `source:line` of the innermost Lua frame on `state`, or empty.
 pub(crate) fn caller_location(state: *mut ffi::lua_State) -> String {
     let mut level = 0;
-    loop {
-        let mut ar = std::mem::MaybeUninit::<ffi::lua_Debug>::zeroed();
-        // SAFETY: lua_getinfo fills the "sl" fields; pointers reference ar.ssbuf or interned
-        // strings that outlive the read.
-        unsafe {
-            if ffi::lua_getinfo(state, level, c"sl".as_ptr(), ar.as_mut_ptr()) == 0 {
-                return String::new();
-            }
-            let ar = ar.assume_init_ref();
-            if !ar.what.is_null() && CStr::from_ptr(ar.what).to_bytes() == b"Lua" {
-                let source = if ar.source.is_null() { ar.short_src } else { ar.source };
-                let mut source = CStr::from_ptr(source).to_string_lossy().into_owned();
-                if source.starts_with('@') || source.starts_with('=') {
-                    source.remove(0);
-                }
-                return format!("{source}:{}", ar.currentline);
-            }
+    // SAFETY: the host or a bound function calls this on a live thread.
+    while let Some(frame) = unsafe { lua_frame_info(state, level, c"sl") } {
+        if let Some(frame) = frame {
+            return format!("{}:{}", frame.source, frame.current_line);
         }
         level += 1;
     }
+    String::new()
 }

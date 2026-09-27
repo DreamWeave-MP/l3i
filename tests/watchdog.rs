@@ -112,3 +112,53 @@ fn caller_location_names_the_running_script_line() {
     runtime.exec("local x = 1\n\nwhere()").unwrap();
     assert_eq!(*seen.borrow(), "exec:3");
 }
+
+#[test]
+fn the_sampler_attributes_safepoints_to_the_sampled_context_only() {
+    let runtime = Runtime::builder().profiler(true).build().unwrap();
+    let spin = runtime
+        .load_function(
+            "local function inner(n)\n  local s = 0\n  for i = 1, n do s = s + i end\n  return s\nend\n\
+             return function()\n  local total = 0\n  for i = 1, 4000 do total = total + inner(50) end\n  return total\nend",
+        )
+        .unwrap();
+    assert_eq!(runtime.sampled_context(), None);
+    runtime.set_sampled_context(Some(7));
+    {
+        let _other = runtime.call_scope(context(8, 0), CallKind::ScriptCall);
+        spin.invoke::<f64, _>(&runtime.stack(), ()).unwrap();
+    }
+    assert_eq!(runtime.samples().count, 0, "another context is never sampled");
+    {
+        let _sampled = runtime.call_scope(context(7, 0), CallKind::ScriptCall);
+        spin.invoke::<f64, _>(&runtime.stack(), ()).unwrap();
+    }
+    let samples = runtime.samples();
+    assert!(samples.count > 0);
+    assert!(samples.lines.keys().all(|key| key.starts_with("load_function:")), "{:?}", samples.lines.keys());
+    assert!(samples.functions.contains_key("load_function:1"), "{:?}", samples.functions.keys());
+    assert_eq!(samples.functions["load_function:1"].function, "inner");
+    assert!(samples.functions.contains_key("load_function:6"));
+    assert!(samples.lines.values().map(|l| l.samples).sum::<u64>() == samples.count);
+    runtime.set_sampled_context(None);
+    assert_eq!(runtime.samples(), dream_binder::runtime::Samples::default());
+}
+
+#[test]
+fn gc_steps_and_stats_frames_are_host_driven() {
+    let runtime = Runtime::new().unwrap();
+    runtime.exec("local t = {} for i = 1, 10000 do t[i] = {} end").unwrap();
+    let mut finished = false;
+    for _ in 0..10_000 {
+        let (done, _elapsed) = runtime.gc_step_timed(1);
+        if done {
+            finished = true;
+            break;
+        }
+    }
+    assert!(finished, "incremental steps eventually finish a cycle");
+    assert_eq!(runtime.stats_frame(), 0);
+    runtime.advance_stats_frame();
+    runtime.advance_stats_frame();
+    assert_eq!(runtime.stats_frame(), 2);
+}

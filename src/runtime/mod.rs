@@ -7,6 +7,7 @@
 //! libraries. Every step is a builder choice so nothing is entrenched by the constructor.
 
 mod call_scope;
+pub mod profiler;
 mod shared;
 
 use std::ffi::{CString, c_int};
@@ -21,7 +22,7 @@ use crate::stack::{Frame, Stack, ValueView, same_vm};
 
 pub use call_scope::{CallContext, CallKind, CallScope};
 use shared::Shared;
-pub use shared::{CallStats, Limits, MemoryCategory};
+pub use shared::{CallStats, Limits, MemoryCategory, SampledLocation, Samples};
 
 /// Host choices made before the VM exists.
 #[derive(Clone, Debug)]
@@ -258,6 +259,48 @@ impl Runtime {
     /// Accumulated call statistics (profiler only).
     pub fn call_stats(&self) -> CallStats {
         self.shared.stats()
+    }
+
+    /// Selects one call context to sample at safepoints (every 32nd, while it is the innermost
+    /// active call), or stops sampling. Changing the selection clears the samples. Costs nothing
+    /// while nothing is sampled.
+    pub fn set_sampled_context(&self, context: Option<u64>) {
+        self.shared.set_sampled_context(context);
+        self.update_interrupt_hook();
+    }
+
+    pub fn sampled_context(&self) -> Option<u64> {
+        self.shared.sampled_context()
+    }
+
+    /// A copy of the samples taken for the sampled context so far.
+    pub fn samples(&self) -> Samples {
+        self.shared.samples()
+    }
+
+    /// The host's frame counter for statistics; [`profiler::FrameStats::catch_up`] folds
+    /// per-frame accumulators against it.
+    pub fn stats_frame(&self) -> u64 {
+        self.shared.stats_frame().get()
+    }
+
+    pub fn advance_stats_frame(&self) {
+        let frame = self.shared.stats_frame();
+        frame.set(frame.get() + 1);
+    }
+
+    /// Runs one incremental GC step of `steps` kilobytes (0 = one basic step); true when a
+    /// cycle finished.
+    pub fn gc_step(&self, steps: i32) -> bool {
+        // SAFETY: live state; an incremental step is always permitted from the host.
+        unsafe { ffi::lua_gc(self.state, ffi::LUA_GCSTEP, steps) == 1 }
+    }
+
+    /// [`Runtime::gc_step`] with its wall time, for GC accounting (`LuaManager::gcStep`).
+    pub fn gc_step_timed(&self, steps: i32) -> (bool, Duration) {
+        let start = std::time::Instant::now();
+        let finished = self.gc_step(steps);
+        (finished, start.elapsed())
     }
 
     /// `source:line` of the innermost Lua code running on the main thread: the script line
