@@ -44,7 +44,6 @@ pub(crate) unsafe fn vm_lifetime(state: *mut ffi::lua_State) -> std::rc::Weak<()
 pub use shared::{CallStats, Limits, MemoryCategory, SampledLocation, Samples};
 
 /// Host choices made before the VM exists.
-#[derive(Debug)]
 pub struct RuntimeBuilder {
     debug_roots: Vec<&'static str>,
     pointer_encoding: bool,
@@ -55,9 +54,17 @@ pub struct RuntimeBuilder {
     #[cfg(feature = "jit")]
     native_code: Option<crate::native_code::NativeCodeOptions>,
     atom_catalogue: Option<crate::direct::AtomCatalogue>,
+    buffer_cage: Option<Box<dyn crate::memory::BufferCage>>,
 }
 
 impl RuntimeBuilder {
+    /// Routes every `buffer` allocation through `cage` (`lua_setbuffercage`), installed right
+    /// after the state is created so no buffer exists outside it.
+    pub fn buffer_cage(mut self, cage: impl crate::memory::BufferCage) -> Self {
+        self.buffer_cage = Some(Box::new(cage));
+        self
+    }
+
     /// The atom catalogue for this VM, installed before the standard libraries open (OpenMW's
     /// order). Each runtime may carry its own.
     pub fn atom_catalogue(mut self, catalogue: crate::direct::AtomCatalogue) -> Self {
@@ -131,6 +138,18 @@ impl RuntimeBuilder {
         if state.is_null() {
             return Err(Error::runtime("Unable to allocate a Luau state"));
         }
+        let buffer_cage = self.buffer_cage.map(Box::new);
+        if let Some(cage) = &buffer_cage {
+            // SAFETY: fresh state, before any buffer; the outer Box keeps the cage's address
+            // stable for the VM's life (it is dropped after lua_close).
+            unsafe {
+                ffi::lua_setbuffercage(
+                    state,
+                    crate::memory::cage_callback,
+                    (&**cage as *const Box<dyn crate::memory::BufferCage>).cast_mut().cast(),
+                )
+            };
+        }
         let shared = Box::new(Shared::new(self.limits, self.profiler));
         // SAFETY: fresh state; native execution must be set up before any function is loaded.
         #[cfg(feature = "jit")]
@@ -143,6 +162,7 @@ impl RuntimeBuilder {
             initialization_category: self.initialization_category,
             #[cfg(feature = "jit")]
             native_code,
+            buffer_cage,
         };
         if self.pointer_encoding {
             let key = PointerEncodingKey::random();
@@ -216,6 +236,10 @@ pub struct Runtime {
     /// shared code contexts.
     #[cfg(feature = "jit")]
     native_code: Option<crate::native_code::NativeCodeGen>,
+    /// Boxed twice so the pointer Luau holds stays valid while the runtime moves; kept only to
+    /// outlive `lua_close`.
+    #[allow(dead_code, clippy::box_collection)]
+    buffer_cage: Option<Box<Box<dyn crate::memory::BufferCage>>>,
 }
 
 /// The context id call scopes use for sandbox and template setup.
@@ -235,6 +259,7 @@ impl Runtime {
             #[cfg(feature = "jit")]
             native_code: None,
             atom_catalogue: None,
+            buffer_cage: None,
         }
     }
 

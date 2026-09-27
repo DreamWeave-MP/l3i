@@ -77,6 +77,10 @@ impl Thread {
         &self.pin
     }
 
+    pub(crate) fn state_ptr(&self) -> *mut ffi::lua_State {
+        self.state
+    }
+
     fn require_live(&self, scope: &impl Scope) -> Result<()> {
         if !self.pin.is_valid() {
             return Err(Error::logic("Cannot use a Lua thread whose runtime has closed"));

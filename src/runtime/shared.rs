@@ -108,6 +108,8 @@ pub(crate) struct Shared {
     tags: TagPlan,
     /// Host hooks for the debugger and lifecycle callback slots.
     hooks: crate::debug::HookSlot,
+    /// The embedder half of cross-heap GC marking.
+    embedder_gc: crate::memory::EmbedderGcSlot,
 }
 
 /// The host's tag assignments for one VM. `by_tag` answers the hot-path question ("is the
@@ -143,7 +145,12 @@ impl Shared {
             atoms: RefCell::new(None),
             tags: TagPlan::new(),
             hooks: crate::debug::HookSlot::new(),
+            embedder_gc: RefCell::new(None),
         }
+    }
+
+    pub(crate) fn embedder_gc(&self) -> &crate::memory::EmbedderGcSlot {
+        &self.embedder_gc
     }
 
     pub(crate) fn hooks(&self) -> &crate::debug::HookSlot {

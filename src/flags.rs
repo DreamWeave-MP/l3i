@@ -44,6 +44,11 @@ pub const LUAU_FLAGS: &[&str] = &[
     "LuauBackedgeHeapCheck",
     "LuauFastpcall",
     "LuauFastpcallInterrupt",
+    // Not in OpenMW's policy: these two gate APIs the binder exposes (embedder GC integration
+    // with userdata marks and weak references; the buffer cage). Both are inert until a host
+    // installs the corresponding callback.
+    "LuauGcTraceUdata",
+    "LuauBufferCage",
 ];
 
 /// The remaining OpenMW flags, defined in Luau's CodeGen component. CodeGen is compiled only
