@@ -33,6 +33,8 @@ pub const LUAU_FLAGS: &[&str] = &[
     "LuauCompileMoveElision",
     "LuauCompileFastpcall",
     "LuauIntegerType2",
+    // DreamWeave addition: `if local x = f() then ... end` syntax. OpenMW leaves this off.
+    "LuauExperimentalIfLocalSyntax",
     // Runtime side
     "LuauIntegerLibrary",
     "LuauTableArrayAdjustCheck",
@@ -187,6 +189,14 @@ mod tests {
         let runtime = Runtime::new().unwrap();
         // LuauIntegerType2 parses `42i`; LuauIntegerLibrary provides the integer library.
         runtime.exec("assert(typeof(42i) == 'integer', typeof(42i))").unwrap();
+    }
+
+    #[test]
+    fn if_local_expressions_parse() {
+        let runtime = Runtime::new().unwrap();
+        runtime
+            .exec("local t = {x = 3} local r = if local v = t.x then v * 2 else 0 assert(r == 6, r)")
+            .unwrap();
     }
 
     #[test]
