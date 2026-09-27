@@ -1,11 +1,9 @@
 //! The single boundary between Rust and Luau's C ABI.
 //!
-//! Luau in `mlua-sys` is built with C++ exceptions, so a `lua_error` unwinds as a foreign
+//! Luau is built with C++ exceptions, so a `lua_error` unwinds as a foreign
 //! exception. It must never pass through a Rust frame that still owns values. `enter` runs the
 //! whole body first, lets every Rust value drop, and only then raises. Panics are contained
 //! here as well; nothing Rust ever unwinds into Luau.
-
-#![allow(dead_code)] // consumers arrive with the tagged userdata slice
 
 use std::any::Any;
 use std::ffi::c_int;
@@ -23,6 +21,7 @@ use crate::error::{Error, Result};
 /// # Safety
 /// `state` must be the live `lua_State*` Luau handed to the enclosing C function, and the
 /// caller must be that C function's frame, so that raising here unwinds only Luau frames.
+#[allow(dead_code)] // the tagged userdata slice adds the first C entry points
 pub(crate) unsafe fn enter(state: *mut ffi::lua_State, body: impl FnOnce() -> Result<c_int>) -> c_int {
     match catch_unwind(AssertUnwindSafe(body)) {
         Ok(Ok(count)) => count,
@@ -33,6 +32,7 @@ pub(crate) unsafe fn enter(state: *mut ffi::lua_State, body: impl FnOnce() -> Re
 
 /// # Safety
 /// Same as `enter`; additionally no Rust value with a destructor may be live in the caller.
+#[allow(dead_code)] // the typed binder raises directly from its own entry points
 pub(crate) unsafe fn raise(state: *mut ffi::lua_State, error: Error) -> ! {
     unsafe {
         match error {
@@ -61,6 +61,7 @@ fn panic_message(payload: &(dyn Any + Send)) -> String {
 mod tests {
     use std::cell::Cell;
     use std::ffi::c_int;
+    use std::ptr;
 
     use super::*;
 
@@ -101,20 +102,23 @@ mod tests {
     }
 
     fn run(mode: i32) -> (bool, String) {
-        let lua = mlua::Lua::new();
-        let probe = unsafe { lua.create_c_function(probe) }.unwrap();
-        lua.globals().set("probe", probe).unwrap();
-        let (ok, value): (bool, mlua::Value) = lua
-            .load("local ok, value = pcall(probe, ...) return ok, value")
-            .call(mode)
-            .unwrap();
-        let text = match value {
-            mlua::Value::Integer(number) => number.to_string(),
-            mlua::Value::Number(number) => number.to_string(),
-            mlua::Value::String(string) => string.to_str().unwrap().to_owned(),
-            other => format!("{other:?}"),
-        };
-        (ok, text)
+        let runtime = crate::runtime::Runtime::new().unwrap();
+        let state = runtime.state();
+        // SAFETY: fresh live state on this thread; the stack is balanced by the frame.
+        unsafe {
+            ffi::lua_pushcfunction(state, probe, ptr::null());
+            ffi::lua_pushnumber(state, f64::from(mode));
+            let ok = ffi::lua_pcall(state, 1, 1, 0) == ffi::LUA_OK;
+            let text = if ffi::lua_type(state, -1) == ffi::LUA_TNUMBER {
+                ffi::lua_tonumber(state, -1).to_string()
+            } else {
+                let mut length = 0usize;
+                let bytes = ffi::lua_tolstring(state, -1, &mut length);
+                String::from_utf8_lossy(std::slice::from_raw_parts(bytes.cast::<u8>(), length)).into_owned()
+            };
+            ffi::lua_pop(state, 1);
+            (ok, text)
+        }
     }
 
     #[test]

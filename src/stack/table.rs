@@ -75,7 +75,8 @@ impl<'s> TableView<'s> {
 
     /// Raw border length, ignoring `__len`.
     pub fn raw_len(&self) -> usize {
-        unsafe { ffi::lua_objlen(self.stack().state(), self.index()) }
+        // lua_objlen returns int; Luau lengths are never negative.
+        unsafe { ffi::lua_objlen(self.stack().state(), self.index()) as usize }
     }
 
     pub fn is_read_only(&self) -> bool {

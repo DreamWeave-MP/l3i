@@ -1,15 +1,9 @@
 use super::*;
 
-/// Runs `body` on the raw state of a fresh VM, inside mlua's protected closure.
+/// Runs `body` on the main stack of a fresh VM.
 fn with_stack(body: impl FnOnce(&Stack<'_>)) {
-    let lua = mlua::Lua::new();
-    unsafe {
-        lua.exec_raw::<()>((), |state| {
-            let stack = Stack::from_raw(state);
-            body(&stack);
-        })
-    }
-    .unwrap();
+    let runtime = crate::runtime::Runtime::new().unwrap();
+    body(&runtime.stack());
 }
 
 #[test]

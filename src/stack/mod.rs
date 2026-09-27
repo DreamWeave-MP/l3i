@@ -26,7 +26,7 @@ pub use view::{Type, ValueView};
 ///
 /// `'vm` is the lifetime for which the caller guarantees the `lua_State` stays alive; inside a
 /// native callback that is the callback's frame, inside a host-side operation it is the borrow
-/// of the owning `mlua::Lua`.
+/// of the owning [`crate::runtime::Runtime`].
 #[derive(Clone, Copy, Debug)]
 pub struct Stack<'vm> {
     state: *mut ffi::lua_State,
@@ -35,9 +35,8 @@ pub struct Stack<'vm> {
 
 impl<'vm> Stack<'vm> {
     /// # Safety
-    /// `state` must be a live Luau thread that outlives `'vm`, and the caller must hold whatever
-    /// exclusive access `mlua` requires (its lock, or being inside a callback on this thread).
-    #[allow(dead_code)] // the Binder entry points arrive with the next slice
+    /// `state` must be a live Luau thread that outlives `'vm`, and no other code may run on
+    /// that VM concurrently (Luau VMs are single-threaded).
     pub(crate) unsafe fn from_raw(state: *mut ffi::lua_State) -> Self {
         debug_assert!(!state.is_null(), "Stack requires a live Lua state");
         Stack { state, _vm: PhantomData }

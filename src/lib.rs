@@ -1,20 +1,21 @@
 //! Luau binder for DreamWeave component crates.
 //!
-//! The host application owns the [`mlua::Lua`]; component crates register bindings into it
-//! through the shared contract in this crate. See the README for the usage tiers and the
+//! The host application owns the [`runtime::Runtime`]; component crates register bindings
+//! into it through the shared contract in this crate. See the README for the usage tiers and the
 //! ownership models.
 
 pub mod error;
 mod raw;
+pub mod runtime;
+pub mod source;
 pub mod stack;
 
 pub use error::{Error, Result};
 
 /// Number of userdata tags the linked Luau VM was compiled with (`LUA_UTAG_LIMIT`).
 ///
-/// Comes from the `LUAU_CXXFLAGS` the host built Luau with, not from `mlua_sys`, whose
-/// constant is hard-coded to 128. Valid runtime tags are `2..TAG_LIMIT`; tags 0 and 1 are
-/// reserved (`mlua` stamps tag 1 on userdata it has moved a value out of).
+/// Comes from the `LUAU_CXXFLAGS` the host built Luau with. Valid runtime tags are
+/// `1..TAG_LIMIT`; tag 0 is Luau's untagged default and is never registered.
 pub const TAG_LIMIT: u8 = parse_tag_limit(env!("DREAM_BINDER_TAG_LIMIT"));
 
 const fn parse_tag_limit(text: &str) -> u8 {
@@ -29,14 +30,8 @@ const fn parse_tag_limit(text: &str) -> u8 {
     value as u8
 }
 
-/// The Luau release the linked VM was built from, e.g. `"0.740"`.
-///
-/// The binder tracks the release OpenMW pins; `luau0-src-shim/` explains how that version
-/// reaches `mlua-sys`.
-pub const LUAU_VERSION: &str = match mlua::ffi::luau_version() {
-    Some(version) => version,
-    None => panic!("mlua-sys did not record the vendored Luau version"),
-};
+/// The Luau release the linked VM was built from, e.g. `"0.740"`: the release OpenMW pins.
+pub const LUAU_VERSION: &str = env!("LUAU_VERSION");
 
 #[cfg(test)]
 mod tests {

@@ -1,20 +1,23 @@
 [package]
 name = "dream-binder"
 version = "0.1.0"
-description = "Luau binder for DreamWeave component crates on top of mlua: typed function binding, tagged and untagged userdata, direct userdata access"
+description = "Luau binder for DreamWeave component crates: typed function binding, tagged and untagged userdata, direct userdata access, sandboxed runtimes"
 authors = ["Dave Corley (S3kshun8) <corleycomputerrepair@protonmail.ch>"]
 license = "MIT OR Apache-2.0"
 edition = "2024"
 rust-version = "1.88"
-keywords = ["luau", "lua", "mlua", "bindings", "gamedev"]
+keywords = ["luau", "lua", "bindings", "gamedev"]
 categories = ["api-bindings", "game-development"]
+links = "luau"
 
 [dependencies]
-mlua = { version = "0.12.1", default-features = false, features = ["luau"] }
+
+[build-dependencies]
+# Builds the Luau 0.740 release (the commit OpenMW pins) with cc. No Lua binding crate sits
+# in between: the C API is declared in src/raw/ffi.rs against this library.
+luau0-src = "=0.22.0"
 
 [features]
 default = []
-
-# Build the exact Luau release OpenMW pins (0.740). See luau0-src-shim/Cargo.toml.
-[patch.crates-io]
-luau0-src = { path = "luau0-src-shim" }
+# Luau native code generation. Hosts turn it on; the binder core does not require it.
+jit = []
