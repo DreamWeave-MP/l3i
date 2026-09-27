@@ -10,7 +10,7 @@ use std::sync::OnceLock;
 use crate::error::{Error, Result};
 use crate::raw::ffi;
 use crate::source::{CompileOptions, compile};
-use crate::stack::{Frame, Stack, ValueView};
+use crate::stack::{Frame, Stack, ValueView, same_vm};
 
 /// Luau feature flags OpenMW enables (`components/luau/runtimeflags.cpp`) that live in the
 /// Ast, Bytecode, Compiler, and VM components, which are always linked.
@@ -172,13 +172,18 @@ impl Runtime {
         source: &str,
         options: &CompileOptions,
     ) -> Result<ValueView<'f>> {
+        if !same_vm(frame.state(), self.state) {
+            return Err(Error::logic("Frame belongs to a different Lua VM"));
+        }
         let bytecode = compile(source, options)?;
         let name = CString::new(chunk_name).map_err(|_| Error::logic("Chunk name cannot contain NUL"))?;
-        // SAFETY: live state; the bytecode slice and name outlive the call. luau_load
-        // reports failure by status and leaves the message on the stack.
-        let status = unsafe { ffi::luau_load(self.state, name.as_ptr(), bytecode.as_ptr().cast(), bytecode.len(), 0) };
+        // SAFETY: the frame's thread is live and in this VM; the bytecode slice and name
+        // outlive the call. luau_load reports failure by status and leaves the message on top.
+        let status =
+            unsafe { ffi::luau_load(frame.state(), name.as_ptr(), bytecode.as_ptr().cast(), bytecode.len(), 0) };
         if status != ffi::LUA_OK {
-            return Err(self.pop_error(status));
+            // SAFETY: the message is on the frame's thread.
+            return Err(unsafe { crate::raw::protect::pop_error(frame.state(), status) });
         }
         Ok(frame.top_value())
     }

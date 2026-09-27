@@ -112,13 +112,18 @@ pub fn register<T: TaggedUserdata>(
 }
 
 /// True when `T`'s tag currently carries `T`'s destructor, i.e. `register::<T>` ran on this VM.
+/// A tag outside `1..TAG_LIMIT` is never registered.
 pub fn is_registered<T: TaggedUserdata>(scope: &impl Scope) -> bool {
-    // SAFETY: live state; reading the destructor table has no preconditions beyond tag range.
+    if require_tag_in_range(T::TAG).is_err() {
+        return false;
+    }
+    // SAFETY: live state; the tag is within Luau's destructor table.
     let registered = unsafe { ffi::lua_getuserdatadtor(scope.state(), c_int::from(T::TAG)) };
     registered.is_some_and(|f| ptr::fn_addr_eq(f, destroy::<T> as ffi::lua_Destructor))
 }
 
 fn require_registered<T: TaggedUserdata>(scope: &impl Scope) -> Result<()> {
+    require_tag_in_range(T::TAG)?;
     if is_registered::<T>(scope) {
         return Ok(());
     }
@@ -149,8 +154,9 @@ pub fn push<'s, T: TaggedUserdata>(scope: &'s impl Scope, value: T) -> Result<Va
 pub fn test<'s, T: TaggedUserdata>(value: ValueView<'s>) -> Option<&'s T> {
     // SAFETY: lua_touserdatatagged returns the payload only when the userdata carries T's
     // tag, and only `push::<T>` creates userdata with that tag on a VM where T is registered.
-    // The view's lifetime keeps the slot, and so the userdata, reachable.
-    if !value.exists() {
+    // The view's lifetime keeps the slot, and so the userdata, reachable. Out-of-range tags
+    // never match any userdata, so the comparison is safe without a range check.
+    if !value.exists() || require_tag_in_range(T::TAG).is_err() {
         return None;
     }
     unsafe {
@@ -165,7 +171,7 @@ pub fn test<'s, T: TaggedUserdata>(value: ValueView<'s>) -> Option<&'s T> {
 /// No other reference to the same userdata's payload may be live: Luau lets the same value
 /// appear at several stack slots, and the binder cannot see aliasing through them.
 pub unsafe fn test_mut<'s, T: TaggedUserdata>(value: ValueView<'s>) -> Option<&'s mut T> {
-    if !value.exists() {
+    if !value.exists() || require_tag_in_range(T::TAG).is_err() {
         return None;
     }
     unsafe {

@@ -12,10 +12,13 @@
 //! - Slots below every frame's floor (a native call's arguments, values the host pushed before
 //!   opening a frame) are read through [`Stack::at`] and borrow the stack instead.
 //!
-//! Two runtime guards back the types where lifetimes alone cannot: a frame's drop restores its
-//! floor only downwards, never by growing nils, and every view access is bounded by the live
-//! top, so a view left behind by an out-of-order frame drop reads as [`Type::None`] rather than
-//! touching memory past the frame.
+//! Frame topology is strictly nested. A stack or a frame has at most one open child frame:
+//! opening a second sibling panics at the opening line (it would let one drop pop the other's
+//! slots), pushing into a scope while its child is open is refused, and popping or releasing a
+//! frame needs `&mut`, so no live view of that frame can survive the pop. Together these make a
+//! view of a reused slot unrepresentable rather than merely detectable. Two runtime guards
+//! remain as belt and braces: a frame's drop restores its floor only downwards, and every view
+//! access is bounded by the live top.
 
 mod frame;
 mod table;
@@ -83,9 +86,8 @@ pub struct Stack<'vm> {
     /// True outside any Lua call. Operations that can raise a Luau error then run under
     /// [`crate::raw::protect::protected_call`], because no `pcall` above us would catch them.
     host_level: bool,
-    /// Frames currently open on this stack. Pushing directly on the stack while a frame is
-    /// open would put the value inside the frame's territory; debug builds refuse it.
-    open_frames: Cell<u32>,
+    /// Whether a frame opened directly on this stack is currently alive.
+    child_open: Cell<bool>,
     _vm: PhantomData<&'vm mut ()>,
 }
 
@@ -96,7 +98,7 @@ impl<'vm> Stack<'vm> {
     /// only code running on its thread).
     pub(crate) unsafe fn from_raw(state: *mut ffi::lua_State, host_level: bool) -> Self {
         debug_assert!(!state.is_null(), "Stack requires a live Lua state");
-        Stack { state, host_level, open_frames: Cell::new(0), _vm: PhantomData }
+        Stack { state, host_level, child_open: Cell::new(false), _vm: PhantomData }
     }
 
     /// True when this stack is used from host code rather than inside a Lua call.
@@ -117,8 +119,12 @@ impl<'vm> Stack<'vm> {
     }
 
     /// Opens a temporary frame. Values pushed through it are popped when it drops.
+    ///
+    /// # Panics
+    /// If a frame opened from this stack is still alive: sibling frames would let one drop pop
+    /// the other's slots. Open the second frame from the first instead.
     pub fn frame(&self) -> Frame<'_> {
-        Frame::open(self.state, self.host_level, &self.open_frames)
+        Frame::open(self.state, self.host_level, &self.child_open)
     }
 
     /// Runs `body` inside a temporary frame. The closure is higher-ranked over the frame, so
@@ -137,7 +143,7 @@ impl<'vm> Stack<'vm> {
     }
 
     fn assert_no_open_frame(&self) {
-        debug_assert_eq!(self.open_frames.get(), 0, "push through the open Frame, not the Stack beneath it");
+        debug_assert!(!self.child_open.get(), "push through the open Frame, not the Stack beneath it");
     }
 
     // Pushes at the call level: results of a native function, or host setup before any frame.

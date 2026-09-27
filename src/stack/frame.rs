@@ -8,25 +8,42 @@ use crate::raw::{ffi, protect};
 
 /// A temporary region of the stack. Everything pushed through it is popped when it drops.
 ///
-/// Views produced by a frame borrow the frame, so they cannot outlive it. Nested frames are
-/// opened from a frame with [`Frame::frame`]; sibling frames are legal but drop in the wrong
-/// order at your own cost: the later-dropped frame does nothing (it never grows the stack), and
-/// its views read as [`super::Type::None`].
+/// Views produced by a frame borrow the frame, so they cannot outlive it; popping needs `&mut`,
+/// so they cannot survive a pop either. Nested frames are opened from a frame with
+/// [`Frame::frame`], one at a time.
 pub struct Frame<'p> {
     state: *mut ffi::lua_State,
     floor: c_int,
     armed: bool,
     host_level: bool,
-    open_frames: &'p Cell<u32>,
+    /// The parent's "child open" flag, cleared when this frame drops.
+    parent_child_open: &'p Cell<bool>,
+    /// Whether a frame opened from this one is currently alive.
+    child_open: Cell<bool>,
     _parent: PhantomData<&'p ()>,
 }
 
 impl<'p> Frame<'p> {
-    pub(super) fn open(state: *mut ffi::lua_State, host_level: bool, open_frames: &'p Cell<u32>) -> Self {
-        open_frames.set(open_frames.get() + 1);
+    pub(super) fn open(state: *mut ffi::lua_State, host_level: bool, parent_child_open: &'p Cell<bool>) -> Self {
+        assert!(
+            !parent_child_open.replace(true),
+            "a frame is already open on this scope; open nested frames from the innermost frame"
+        );
         // SAFETY: state is live for the parent's lifetime.
         let floor = unsafe { ffi::lua_gettop(state) };
-        Frame { state, floor, armed: true, host_level, open_frames, _parent: PhantomData }
+        Frame {
+            state,
+            floor,
+            armed: true,
+            host_level,
+            parent_child_open,
+            child_open: Cell::new(false),
+            _parent: PhantomData,
+        }
+    }
+
+    fn assert_no_open_child(&self) {
+        debug_assert!(!self.child_open.get(), "push through the open child Frame, not its parent");
     }
 
     /// True outside any Lua call; see [`super::Stack::is_host_level`].
@@ -88,8 +105,11 @@ impl<'p> Frame<'p> {
     }
 
     /// Opens a nested frame.
+    ///
+    /// # Panics
+    /// If a nested frame opened from this one is still alive.
     pub fn frame(&self) -> Frame<'_> {
-        Frame::open(self.state, self.host_level, self.open_frames)
+        Frame::open(self.state, self.host_level, &self.child_open)
     }
 
     pub fn with_frame<R>(&self, body: impl FnOnce(&Frame<'_>) -> Result<R>) -> Result<R> {
@@ -97,8 +117,9 @@ impl<'p> Frame<'p> {
         body(&frame)
     }
 
-    /// Pops `count` values, never below the floor. Negative counts pop nothing.
-    pub fn pop(&self, count: c_int) {
+    /// Pops `count` values, never below the floor. Negative counts pop nothing. Takes `&mut`
+    /// so no view of this frame can be alive across the pop.
+    pub fn pop(&mut self, count: c_int) {
         let count = count.clamp(0, self.len());
         if count > 0 {
             // SAFETY: the target height is between the floor and the current top.
@@ -130,26 +151,31 @@ impl<'p> Frame<'p> {
     }
 
     pub fn push_nil(&self) -> ValueView<'_> {
+        self.assert_no_open_child();
         unsafe { ffi::lua_pushnil(self.state) };
         self.top_value()
     }
 
     pub fn push_boolean(&self, value: bool) -> ValueView<'_> {
+        self.assert_no_open_child();
         unsafe { ffi::lua_pushboolean(self.state, c_int::from(value)) };
         self.top_value()
     }
 
     pub fn push_number(&self, value: f64) -> ValueView<'_> {
+        self.assert_no_open_child();
         unsafe { ffi::lua_pushnumber(self.state, value) };
         self.top_value()
     }
 
     pub fn push_string(&self, value: &str) -> ValueView<'_> {
+        self.assert_no_open_child();
         unsafe { ffi::lua_pushlstring(self.state, value.as_ptr().cast(), value.len()) };
         self.top_value()
     }
 
     pub fn push_table(&self, array_capacity: usize, hash_capacity: usize) -> Result<TableView<'_>> {
+        self.assert_no_open_child();
         let narr = checked_capacity(array_capacity)?;
         let nrec = checked_capacity(hash_capacity)?;
         unsafe { ffi::lua_createtable(self.state, narr, nrec) };
@@ -158,6 +184,7 @@ impl<'p> Frame<'p> {
 
     /// Pushes a copy of `value`, which may come from any scope of this VM.
     pub fn push_value(&self, value: ValueView<'_>) -> Result<ValueView<'_>> {
+        self.assert_no_open_child();
         push_copy(self.state, value)?;
         Ok(self.top_value())
     }
@@ -165,6 +192,7 @@ impl<'p> Frame<'p> {
     /// # Safety
     /// `debug_name` is null or a pointer that stays valid until the VM closes.
     pub unsafe fn push_c_function(&self, function: ffi::lua_CFunction, debug_name: *const c_char) -> ValueView<'_> {
+        self.assert_no_open_child();
         unsafe { ffi::lua_pushcfunction(self.state, function, debug_name) };
         self.top_value()
     }
@@ -193,7 +221,7 @@ impl<'p> Frame<'p> {
 
 impl Drop for Frame<'_> {
     fn drop(&mut self) {
-        self.open_frames.set(self.open_frames.get() - 1);
+        self.parent_child_open.set(false);
         if self.armed {
             // SAFETY: the target height is not above the current one; restoring downwards is
             // always valid. Never grow: an earlier-dropped sibling may have lowered the top.

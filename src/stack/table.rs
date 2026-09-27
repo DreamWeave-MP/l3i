@@ -27,9 +27,12 @@ impl<'v> TableView<'v> {
         self.value.index()
     }
 
-    fn require_live(&self) -> Result<()> {
+    fn require_live(&self, frame: &Frame<'_>) -> Result<()> {
         if !self.value.exists() {
             return Err(Error::logic("Table view no longer names a live stack slot"));
+        }
+        if frame.state() != self.value.state() {
+            return Err(Error::logic("Frame and table belong to different Lua threads"));
         }
         Ok(())
     }
@@ -37,7 +40,7 @@ impl<'v> TableView<'v> {
     /// Honours `__index`; the result is pushed onto `frame`. A raising `__index` unwinds to
     /// Luau inside a call and becomes `Err` at host level.
     pub fn get<'f>(&self, frame: &'f Frame<'_>, key: &str) -> Result<ValueView<'f>> {
-        self.require_live()?;
+        self.require_live(frame)?;
         let state = frame.state();
         // SAFETY: the table slot exists; operands (table copy, key) sit on top for the raising
         // body, which consumes both and leaves one result.
@@ -55,7 +58,7 @@ impl<'v> TableView<'v> {
 
     /// Bypasses `__index`; the result is pushed onto `frame`. Never raises.
     pub fn raw_get<'f>(&self, frame: &'f Frame<'_>, key: &str) -> Result<ValueView<'f>> {
-        self.require_live()?;
+        self.require_live(frame)?;
         let state = frame.state();
         unsafe {
             ffi::lua_pushlstring(state, key.as_ptr().cast(), key.len());
@@ -115,18 +118,17 @@ impl<'v> TableView<'v> {
     }
 
     pub fn set_read_only(&self, read_only: bool) -> Result<()> {
-        self.require_live()?;
+        if !self.value.exists() {
+            return Err(Error::logic("Table view no longer names a live stack slot"));
+        }
         unsafe { ffi::lua_setreadonly(self.value.state(), self.index(), read_only.into()) };
         Ok(())
     }
 
     fn require_store(&self, frame: &Frame<'_>) -> Result<()> {
-        self.require_live()?;
+        self.require_live(frame)?;
         if self.index() == ffi::LUA_REGISTRYINDEX {
             return Err(Error::logic("Cannot set the Lua registry pseudo-index"));
-        }
-        if frame.state() != self.value.state() {
-            return Err(Error::logic("Frame and table belong to different Lua threads"));
         }
         frame.require_value("store into a table")
     }

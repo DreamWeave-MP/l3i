@@ -42,16 +42,47 @@ fn frames_restore_the_entry_height_and_never_grow() {
         drop(frame);
         assert_eq!(stack.top(), base + 1, "a released frame leaves its value behind");
 
-        // Sibling frames dropped out of order: the second drop must not grow the stack.
+        // Nested frames close in order, each to its own floor.
         let outer = stack.frame();
-        let inner = stack.frame();
-        inner.push_number(1.0);
-        let stale = inner.at(-1);
-        drop(outer);
-        assert_eq!(stack.top(), base + 1);
-        assert_eq!(stale.type_of(), Type::None, "a slot popped by another frame reads as none");
-        drop(inner);
-        assert_eq!(stack.top(), base + 1);
+        outer.push_number(1.0);
+        {
+            let inner = outer.frame();
+            inner.push_number(2.0);
+            assert_eq!(inner.len(), 1);
+        }
+        assert_eq!(outer.len(), 1);
+    });
+}
+
+#[test]
+#[should_panic(expected = "a frame is already open on this scope")]
+fn sibling_frames_are_rejected_at_the_opening_line() {
+    with_stack(|stack| {
+        let _first = stack.frame();
+        let _second = stack.frame();
+    });
+}
+
+#[test]
+#[should_panic(expected = "a frame is already open on this scope")]
+fn sibling_nested_frames_are_rejected_too() {
+    with_stack(|stack| {
+        let outer = stack.frame();
+        let _a = outer.frame();
+        let _b = outer.frame();
+    });
+}
+
+#[test]
+fn a_new_frame_may_open_once_the_previous_one_closed() {
+    with_stack(|stack| {
+        {
+            let first = stack.frame();
+            first.push_nil();
+        }
+        let second = stack.frame();
+        second.push_nil();
+        assert_eq!(second.len(), 1);
     });
 }
 
@@ -60,7 +91,7 @@ fn pop_is_clamped_to_the_frame_floor() {
     with_stack(|stack| {
         let outer = stack.frame();
         outer.push_number(1.0);
-        let inner = outer.frame();
+        let mut inner = outer.frame();
         inner.push_number(2.0);
         inner.push_number(3.0);
         inner.pop(-5);
