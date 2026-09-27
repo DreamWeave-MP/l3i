@@ -11,7 +11,7 @@ use criterion::{BatchSize, Criterion, Throughput, criterion_group, criterion_mai
 use l3i::bind::Call;
 use l3i::convert::Vector3;
 use l3i::direct::field::{DirectField, FieldValue};
-use l3i::direct::{self, Atom, AtomCatalogue, DirectAccess, DirectMetamethods, Dispatch};
+use l3i::direct::{self, AccessKind, Atom, AtomCatalogue, DirectAccess, DirectMetamethods, Dispatch};
 use l3i::ffi;
 use l3i::stack::Scope;
 use l3i::userdata::{Userdata, receiver, tagged, untagged};
@@ -274,5 +274,98 @@ fn configure() -> Criterion {
     Criterion::default().measurement_time(Duration::from_secs(2)).warm_up_time(Duration::from_secs(1))
 }
 
-criterion_group! { name = benches; config = configure(); targets = rust_to_luau, luau_to_rust, methods_and_properties, host_side }
+criterion_group! { name = benches; config = configure(); targets = rust_to_luau, luau_to_rust, methods_and_properties, host_side, plan_dispatch }
 criterion_main!(benches);
+
+// ---- Runtime-resolved plans: cached direct index and namecall at several plan sizes ---------
+
+struct Wide {
+    value: Cell<f64>,
+}
+
+unsafe impl Userdata for Wide {
+    const NAME: &'static str = "dreamweave.bench.Wide";
+}
+
+impl DirectAccess for Wide {
+    fn direct_index(call: &Call<'_>, data: &Wide, atom: Atom, slot: &mut u16) -> Result<Dispatch> {
+        let Some(plan) = direct::plan::plan(call) else { return Ok(Dispatch::Fallback) };
+        if plan.resolve_cached_slot::<Wide>(call, slot, atom, AccessKind::Index) == 0 {
+            return Ok(Dispatch::Fallback);
+        }
+        call.push(&data.value.get())?;
+        Ok(Dispatch::Handled)
+    }
+
+    fn direct_namecall(call: &Call<'_>, data: &Wide, atom: Atom, slot: &mut u16) -> Result<Option<c_int>> {
+        let Some(plan) = direct::plan::plan(call) else { return Ok(None) };
+        if plan.resolve_cached_slot::<Wide>(call, slot, atom, AccessKind::Namecall) == 0 {
+            return Ok(None);
+        }
+        call.push(&data.value.get())?;
+        Ok(Some(1))
+    }
+}
+
+/// A runtime whose plan maps `members` index slots (`m0..`) and `members` namecall slots
+/// (`c0..`) on `Wide`.
+fn plan_runtime(members: usize) -> Runtime {
+    let fields: Vec<String> = (0..members).map(|i| format!("m{i}")).collect();
+    let methods: Vec<String> = (0..members).map(|i| format!("c{i}")).collect();
+    let catalogue = AtomCatalogue::try_new(
+        fields.iter().chain(methods.iter()).enumerate().map(|(i, n)| (n.clone(), 1000 + i as Atom)),
+    )
+    .unwrap();
+    let runtime = Runtime::builder().atom_catalogue(catalogue).build().unwrap();
+    const DIRECT: DirectMetamethods = DirectMetamethods { index: true, newindex: false, namecall: true };
+    tagged::register::<Wide>(&runtime, 45, |ty| {
+        ty.property("m0", |w: &Wide| w.value.get())?;
+        ty.method("c0", |w: &Wide| w.value.get())?;
+        ty.direct_dispatch::<Wide>(DIRECT)
+    })
+    .unwrap();
+    direct::register::<Wide>(&runtime, DIRECT).unwrap();
+    let mut builder = direct::plan::DirectPlanBuilder::new(&runtime);
+    for (i, name) in fields.iter().enumerate() {
+        builder = builder.slot::<Wide>(AccessKind::Index, name, (1 + i) as u16).unwrap();
+    }
+    for (i, name) in methods.iter().enumerate() {
+        builder = builder.slot::<Wide>(AccessKind::Namecall, name, (1 + members + i) as u16).unwrap();
+    }
+    builder.finish().unwrap();
+    {
+        let stack = runtime.stack();
+        let frame = stack.frame();
+        tagged::push(&frame, Wide { value: Cell::new(7.0) }).unwrap();
+        frame.set_global("wide").unwrap();
+    }
+    runtime
+}
+
+fn plan_dispatch(c: &mut Criterion) {
+    let mut group = c.benchmark_group("plan_dispatch");
+    group.throughput(Throughput::Elements(CALLS));
+    for members in [4usize, 32, 128] {
+        let runtime = plan_runtime(members);
+        // The last member: a hit path that never depends on the plan's size.
+        let last = members - 1;
+        let index = runtime
+            .load_function(&format!(
+                "return function() local w = wide local s = 0 for i = 1, {CALLS} do s = w.m{last} end return s end"
+            ))
+            .unwrap();
+        let namecall = runtime
+            .load_function(&format!(
+                "return function() local w = wide local s = 0 for i = 1, {CALLS} do s = w:c{last}() end return s end"
+            ))
+            .unwrap();
+        let stack = runtime.stack();
+        group.bench_function(format!("cached direct index, {members} members"), |b| {
+            b.iter(|| index.invoke::<f64, _>(&stack, ()).unwrap())
+        });
+        group.bench_function(format!("cached direct namecall, {members} members"), |b| {
+            b.iter(|| namecall.invoke::<f64, _>(&stack, ()).unwrap())
+        });
+    }
+    group.finish();
+}

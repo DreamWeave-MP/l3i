@@ -10,16 +10,16 @@ All times are wall-clock means measured by [Criterion.rs](https://github.com/bhe
 
 | Variant | Mean | ± Std Dev |
 |---|---:|---:|
-| table argument, view result | 94.09 ns | 5.97 ns |
-| scalar (f64, f64) -> f64 | 118.1 ns | 26.26 ns |
-| table argument, pinned result | 132.9 ns | 6.01 ns |
+| scalar (f64, f64) -> f64 | 85.34 ns | 2.77 ns |
+| table argument, view result | 91.48 ns | 5.74 ns |
+| table argument, pinned result | 135.5 ns | 2.74 ns |
 
 ```mermaid
 xychart-beta
     title "rust_to_luau_call"
-    x-axis ["table argument, view result", "scalar (f64, f64) -> f64", "table argument, pinned result"]
+    x-axis ["scalar (f64, f64) -> f64", "table argument, view result", "table argument, pinned result"]
     y-axis "time (ns)" 0 --> 200.00
-    bar [94.09, 118.09, 132.87]
+    bar [85.34, 91.48, 135.46]
 ```
 
 ## luau_to_rust_call
@@ -28,17 +28,17 @@ A Lua loop calling the bound function 1000 times; per call = loop / 1000.
 
 | Variant | Mean | ± Std Dev | Per item |
 |---|---:|---:|---:|
-| hand-written lua_CFunction | 40.55 µs | 830.8 ns | 40.55 ns |
-| captured Rust context | 55.06 µs | 2.48 µs | 55.06 ns |
-| Vector3 ingress | 130.4 µs | 5.44 µs | 130.4 ns |
-| typed binder (f64, f64) -> f64 | 145.3 µs | 51.06 µs | 145.3 ns |
+| hand-written lua_CFunction | 42.14 µs | 533.7 ns | 42.14 ns |
+| captured Rust context | 67.08 µs | 8.64 µs | 67.08 ns |
+| typed binder (f64, f64) -> f64 | 93.68 µs | 1.74 µs | 93.68 ns |
+| Vector3 ingress | 162.6 µs | 3.64 µs | 162.6 ns |
 
 ```mermaid
 xychart-beta
     title "luau_to_rust_call"
-    x-axis ["hand-written lua_CFunction", "captured Rust context", "Vector3 ingress", "typed binder (f64, f64) -> f64"]
+    x-axis ["hand-written lua_CFunction", "captured Rust context", "typed binder (f64, f64) -> f64", "Vector3 ingress"]
     y-axis "time (ns)" 0 --> 200.00
-    bar [40.55, 55.06, 130.40, 145.30]
+    bar [42.14, 67.08, 93.68, 162.63]
 ```
 
 ## method_call
@@ -47,16 +47,16 @@ xychart-beta
 
 | Variant | Mean | ± Std Dev | Per item |
 |---|---:|---:|---:|
-| tagged direct namecall | 37.51 µs | 1.61 µs | 37.51 ns |
-| tagged generated __namecall | 122.0 µs | 1.59 µs | 122.0 ns |
-| untagged generated __namecall | 172.5 µs | 3.06 µs | 172.5 ns |
+| tagged direct namecall | 45.76 µs | 2.82 µs | 45.76 ns |
+| tagged generated __namecall | 158.1 µs | 31.49 µs | 158.1 ns |
+| untagged generated __namecall | 197.0 µs | 5.00 µs | 197.0 ns |
 
 ```mermaid
 xychart-beta
     title "method_call"
     x-axis ["tagged direct namecall", "tagged generated __namecall", "untagged generated __namecall"]
     y-axis "time (ns)" 0 --> 500.00
-    bar [37.51, 122.02, 172.47]
+    bar [45.76, 158.12, 197.03]
 ```
 
 ## property_get
@@ -65,18 +65,39 @@ xychart-beta
 
 | Variant | Mean | ± Std Dev | Per item |
 |---|---:|---:|---:|
-| plain table field | 8.16 µs | 1.24 µs | 8.16 ns |
-| tagged direct field | 11.81 µs | 533.8 ns | 11.81 ns |
-| tagged direct index | 36.71 µs | 1.30 µs | 36.71 ns |
-| tagged generated __index | 168.3 µs | 4.04 µs | 168.3 ns |
-| untagged generated __index | 212.3 µs | 7.49 µs | 212.3 ns |
+| plain table field | 8.35 µs | 193.9 ns | 8.35 ns |
+| tagged direct field | 12.50 µs | 461.3 ns | 12.50 ns |
+| tagged direct index | 35.14 µs | 683.0 ns | 35.14 ns |
+| tagged generated __index | 140.1 µs | 1.98 µs | 140.1 ns |
+| untagged generated __index | 203.2 µs | 1.63 µs | 203.2 ns |
 
 ```mermaid
 xychart-beta
     title "property_get"
     x-axis ["plain table field", "tagged direct field", "tagged direct index", "tagged generated __index", "untagged generated __index"]
     y-axis "time (ns)" 0 --> 500.00
-    bar [8.16, 11.81, 36.71, 168.29, 212.30]
+    bar [8.35, 12.50, 35.14, 140.07, 203.25]
+```
+
+## plan_dispatch
+
+Runtime-resolved `DirectPlan` dispatch with the cache hit path, 1000 accesses of the last member; per access = loop / 1000.
+
+| Variant | Mean | ± Std Dev | Per item |
+|---|---:|---:|---:|
+| cached direct index, 128 members | 44.03 µs | 1.04 µs | 44.03 ns |
+| cached direct namecall, 32 members | 45.02 µs | 1.91 µs | 45.02 ns |
+| cached direct index, 32 members | 45.28 µs | 411.3 ns | 45.28 ns |
+| cached direct namecall, 128 members | 46.22 µs | 1.47 µs | 46.22 ns |
+| cached direct namecall, 4 members | 47.04 µs | 1.75 µs | 47.04 ns |
+| cached direct index, 4 members | 54.87 µs | 5.30 µs | 54.87 ns |
+
+```mermaid
+xychart-beta
+    title "plan_dispatch"
+    x-axis ["cached direct index, 128 members", "cached direct namecall, 32 members", "cached direct index, 32 members", "cached direct namecall, 128 members", "cached direct namecall, 4 members", "cached direct index, 4 members"]
+    y-axis "time (ns)" 0 --> 100.00
+    bar [44.03, 45.02, 45.28, 46.22, 47.04, 54.87]
 ```
 
 ## iterator
@@ -85,14 +106,14 @@ A generic `for` over a 100-element array iterator, 1000 loops; per element = loo
 
 | Variant | Mean | ± Std Dev | Per item |
 |---|---:|---:|---:|
-| array __iter, 100 elements | 9.73 ms | 448.5 µs | 97.31 ns |
+| array __iter, 100 elements | 9.03 ms | 55.78 µs | 90.33 ns |
 
 ```mermaid
 xychart-beta
     title "iterator"
     x-axis ["array __iter, 100 elements"]
     y-axis "time (ns)" 0 --> 200.00
-    bar [97.31]
+    bar [90.33]
 ```
 
 ## host_side
@@ -101,16 +122,16 @@ Host-side operations, per call.
 
 | Variant | Mean | ± Std Dev |
 |---|---:|---:|
-| tagged receiver check | 31.16 ns | 0.39 ns |
-| value pin create and drop | 57.71 ns | 19.24 ns |
-| untagged receiver check | 79.49 ns | 1.24 ns |
-| borrowed table field read | 188.1 ns | 9.60 ns |
-| owned table field read | 194.2 ns | 3.32 ns |
+| tagged receiver check | 23.90 ns | 0.70 ns |
+| value pin create and drop | 50.89 ns | 17.18 ns |
+| untagged receiver check | 81.78 ns | 0.97 ns |
+| borrowed table field read | 178.6 ns | 2.28 ns |
+| owned table field read | 193.0 ns | 2.65 ns |
 
 ```mermaid
 xychart-beta
     title "host_side"
     x-axis ["tagged receiver check", "value pin create and drop", "untagged receiver check", "borrowed table field read", "owned table field read"]
     y-axis "time (ns)" 0 --> 500.00
-    bar [31.16, 57.71, 79.49, 188.13, 194.21]
+    bar [23.90, 50.89, 81.78, 178.56, 193.00]
 ```

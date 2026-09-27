@@ -18,16 +18,17 @@ from pathlib import Path
 
 CRITERION_DIR = Path("target/criterion")
 OUTPUT = Path("BENCHMARKS.md")
-GROUP_ORDER = ["rust_to_luau_call", "luau_to_rust_call", "method_call", "property_get", "iterator", "host_side"]
+GROUP_ORDER = ["rust_to_luau_call", "luau_to_rust_call", "method_call", "property_get", "plan_dispatch", "iterator", "host_side"]
 GROUP_NOTES = {
     "rust_to_luau_call": "`Function::invoke` from the host, per call.",
     "luau_to_rust_call": "A Lua loop calling the bound function 1000 times; per call = loop / 1000.",
     "method_call": "`obj:get()` 1000 times; per call = loop / 1000.",
     "property_get": "`obj.value` 1000 times; per access = loop / 1000.",
+    "plan_dispatch": "Runtime-resolved `DirectPlan` dispatch with the cache hit path, 1000 accesses of the last member; per access = loop / 1000.",
     "iterator": "A generic `for` over a 100-element array iterator, 1000 loops; per element = loop / 100000.",
     "host_side": "Host-side operations, per call.",
 }
-PER_ITEM_DIVISOR = {"luau_to_rust_call": 1000, "method_call": 1000, "property_get": 1000, "iterator": 100_000}
+PER_ITEM_DIVISOR = {"luau_to_rust_call": 1000, "method_call": 1000, "property_get": 1000, "plan_dispatch": 1000, "iterator": 100_000}
 
 
 def load():
