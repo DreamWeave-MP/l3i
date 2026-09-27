@@ -113,11 +113,9 @@ fn wrong_receiver_is_a_luau_type_error() {
         error.to_string().ends_with("invalid argument #1 to 'dreamweave.test.Probe.value' (dreamweave.test.Probe expected, got number)"),
         "{error}"
     );
-    // Method mode checks counts before the receiver, so a receiver-less call reports the C++
-    // binder's count message (see QUESTIONABLE.md).
     let error = runtime.exec("local p = make_probe(1) p.value()").unwrap_err();
     assert!(
-        error.to_string().ends_with("dreamweave.test.Probe.value: bad argument count (expected at least 0, got -1)"),
+        error.to_string().ends_with("missing argument #1 to 'dreamweave.test.Probe.value' (dreamweave.test.Probe expected)"),
         "{error}"
     );
 }

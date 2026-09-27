@@ -4,15 +4,6 @@ The port reproduces the C++ binder's observable behaviour. Where that behaviour 
 accidental, it is listed here rather than silently corrected. Each entry names the source and
 the test that pins it.
 
-- **Method calls without a receiver report a negative argument count.**
-  `MethodSignatureBase::invoke` validates counts before reading the receiver, so `obj.method()`
-  with no arguments at all fails with `bad argument count (expected at least N, got -1)`.
-  Ported as-is (`bind::params::Params::materialize_method`; `tests/tagged.rs`).
-- **A missing required argument reports two nested count messages.**
-  `materializeOne` raised `throwMissingArgument` inside the `catch` that wraps conversion
-  failures, so the message reads `<name>: bad argument #N (expected T): <name>: bad argument
-  count (got M)`. Reachable only after an optional consumed the last argument. Ported as-is
-  (`bind::param::ParamItem::materialize`).
 - **Luau integers report `expected integer, got integer` when out of range.**
   `ValueView::as<Integral>()` used `LUA_TINTEGER` as the expected type for both non-integral
   numbers and out-of-range integers. Ported as-is (`convert::scalar`).
@@ -28,4 +19,11 @@ the test that pins it.
 - **Receivers are `&T`, never `&mut T`.** The same userdata can appear in several argument slots
   of one call, so a `&mut` receiver could alias a `&T` argument. Mutation goes through interior
   mutability in the payload; `tagged::test_mut` exists as an `unsafe` escape hatch.
+- **Method calls without a receiver say so.** The C++ `MethodSignatureBase::invoke` checked
+  counts before reading the receiver, so `obj.method()` failed with `expected at least N, got
+  -1`. Here the receiver is read first and a receiver-less call reports `missing argument #1 to
+  '<name>' (<type> expected)`.
+- **A missing required argument is one message.** The C++ binder nested `bad argument count
+  (got M)` inside `bad argument #N (expected T)`. Here it is `<name>: bad argument #N (expected
+  T): missing argument`.
 - **`LuauExperimentalIfLocalSyntax` is on.** OpenMW leaves it off.

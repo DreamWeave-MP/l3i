@@ -166,13 +166,16 @@ macro_rules! params_impls {
                 }
                 let rest = &Self::KINDS[1..];
                 let top = call.argument_count();
-                count_checks(rest, top - 1, debug_name)?;
                 let mut cursor: c_int = 2;
                 let mut position: c_int = 0;
                 let items = ($(
                     if $i == 0 {
-                        // The receiver: its own type error, no argument numbering.
-                        <<$p as Param>::Item<'c> as ParamItem<'c>>::read_slot(call.arg(1))?
+                        // The receiver comes first, with its own type error (including "missing
+                        // argument #1" when the call has no receiver at all) and no argument
+                        // numbering; only then are the remaining arguments counted.
+                        let receiver = <<$p as Param>::Item<'c> as ParamItem<'c>>::read_slot(call.arg(1))?;
+                        count_checks(rest, top - 1, debug_name)?;
+                        receiver
                     } else {
                         <<$p as Param>::Item<'c> as ParamItem<'c>>::materialize(
                             call, &mut cursor, top, &mut position, debug_name, allow_mismatch(Self::KINDS, $i),

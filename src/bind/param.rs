@@ -68,10 +68,7 @@ pub trait ParamItem<'c>: Sized {
         let _ = allow_mismatch;
         *position += 1;
         if *cursor > top {
-            // The C++ binder raised the missing-argument error inside the bad-argument catch,
-            // so the two messages nest; keep that wording.
-            let missing = diagnostics::missing_argument(debug_name, top);
-            return Err(diagnostics::bad_argument(debug_name, *position, Self::EXPECTED, &missing));
+            return Err(diagnostics::missing_argument(debug_name, *position, Self::EXPECTED));
         }
         let value = Self::read_slot(call.arg(*cursor))
             .map_err(|cause| diagnostics::bad_argument(debug_name, *position, Self::EXPECTED, &cause))?;

@@ -75,6 +75,10 @@ fn optional_trailing_absent_nil_and_middle_optional_rules() {
     assert_eq!(call::<String, _>(&runtime, &middle, (4.5, true)).unwrap(), "4.500000:true");
     assert!(error_text::<String, _>(&runtime, &middle, ("bad", true)).contains("dreamweave.tests.fn: bad argument #1"));
     assert!(error_text::<String, _>(&runtime, &middle, (&nil, "bad")).contains("dreamweave.tests.fn: bad argument #2"));
+    assert_eq!(
+        error_text::<String, _>(&runtime, &middle, (&nil,)),
+        "Lua error: dreamweave.tests.fn: bad argument #2 (expected boolean): missing argument"
+    );
     assert!(error_text::<String, _>(&runtime, &middle, (true, true)).contains("unused arguments"));
     assert!(error_text::<String, _>(&runtime, &middle, (&nil, true, false)).contains("expected at most 2"));
 

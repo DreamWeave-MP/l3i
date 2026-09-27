@@ -8,8 +8,8 @@ pub(crate) fn bad_argument(debug_name: &str, position: c_int, expected: &str, ca
     Error::runtime(format!("{debug_name}: bad argument #{position} (expected {expected}): {cause}"))
 }
 
-pub(crate) fn missing_argument(debug_name: &str, top: c_int) -> Error {
-    Error::runtime(format!("{debug_name}: bad argument count (got {top})"))
+pub(crate) fn missing_argument(debug_name: &str, position: c_int, expected: &str) -> Error {
+    Error::runtime(format!("{debug_name}: bad argument #{position} (expected {expected}): missing argument"))
 }
 
 pub(crate) fn too_few_arguments(debug_name: &str, required: usize, got: c_int) -> Error {
