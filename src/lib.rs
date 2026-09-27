@@ -24,6 +24,7 @@ pub mod runtime;
 pub mod source;
 pub mod stack;
 pub mod userdata;
+pub mod value;
 
 pub use error::{Error, Result};
 pub use runtime::Runtime;

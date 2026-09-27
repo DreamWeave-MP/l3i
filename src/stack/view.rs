@@ -50,7 +50,8 @@ impl Type {
             Type::Nil => "nil",
             Type::Boolean => "boolean",
             Type::LightUserdata => "userdata",
-            Type::Number | Type::Integer => "number",
+            Type::Number => "number",
+            Type::Integer => "integer",
             Type::Vector => "vector",
             Type::String => "string",
             Type::Table => "table",
@@ -163,8 +164,13 @@ impl<'v> ValueView<'v> {
         Ok(TableView::new(*self))
     }
 
-    /// `<expected> expected, got <actual>`, the wording of Luau's own `luaL_typeerror` core.
+    /// `Lua stack index N: expected <type>, got <type>`, the C++ `luaValueTypeError` wording.
     pub(crate) fn type_error(&self, expected: Type) -> Error {
-        Error::runtime(format!("{} expected, got {}", expected.name(), self.type_of().name()))
+        Error::runtime(format!(
+            "Lua stack index {}: expected {}, got {}",
+            self.index,
+            expected.name(),
+            self.type_of().name()
+        ))
     }
 }

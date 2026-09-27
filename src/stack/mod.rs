@@ -52,9 +52,16 @@ pub trait Scope: sealed::Sealed {
     fn state(&self) -> *mut ffi::lua_State;
     /// A view of slot `index` bound to this scope.
     fn at(&self, index: c_int) -> ValueView<'_>;
+    /// Opens a temporary frame on this scope.
+    fn frame(&self) -> Frame<'_>;
     /// The most recently pushed value.
     fn top_value(&self) -> ValueView<'_> {
         self.at(-1)
+    }
+    /// Runs `body` inside a temporary frame; the result cannot borrow the frame.
+    fn with_frame<R>(&self, body: impl FnOnce(&Frame<'_>) -> Result<R>) -> Result<R> {
+        let frame = self.frame();
+        body(&frame)
     }
 }
 
@@ -65,6 +72,9 @@ impl Scope for Stack<'_> {
     fn at(&self, index: c_int) -> ValueView<'_> {
         Stack::at(self, index)
     }
+    fn frame(&self) -> Frame<'_> {
+        Stack::frame(self)
+    }
 }
 
 impl Scope for Frame<'_> {
@@ -73,6 +83,9 @@ impl Scope for Frame<'_> {
     }
     fn at(&self, index: c_int) -> ValueView<'_> {
         Frame::at(self, index)
+    }
+    fn frame(&self) -> Frame<'_> {
+        Frame::frame(self)
     }
 }
 

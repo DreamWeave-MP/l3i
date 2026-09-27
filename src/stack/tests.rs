@@ -178,7 +178,7 @@ fn tables_get_and_set_through_frames() {
             assert!(table.set(&empty, "nothing").is_err(), "storing with no value on the frame is a logic error");
         }
         let error = frame.push_boolean(false).as_table().unwrap_err();
-        assert_eq!(error.to_string(), "table expected, got boolean");
+        assert_eq!(error.to_string(), format!("Lua stack index {}: expected table, got boolean", frame.top()));
     });
 }
 
