@@ -23,7 +23,8 @@ pub struct MemoryCategory(pub u8);
 pub struct Limits {
     /// Wall-clock budget per outermost script call.
     pub execution_time: Duration,
-    /// Heap ceiling in bytes across all categories.
+    /// Heap ceiling in bytes across all categories, polled at safepoints (see
+    /// `RuntimeBuilder::memory_limit` for what that does and does not guarantee).
     pub memory_bytes: usize,
 }
 

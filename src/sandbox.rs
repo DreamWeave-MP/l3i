@@ -25,7 +25,7 @@ use crate::raw::{ffi, trampoline};
 use crate::readonly;
 use crate::runtime::{CallContext, CallKind, Runtime};
 use crate::source::{CompileOptions, compile_raw};
-use crate::stack::Frame;
+use crate::stack::{Frame, Scope};
 use crate::value::{Function, Table, Value};
 
 /// Globals that never reach a sandbox: environment escape hatches, and the three names every
@@ -376,16 +376,27 @@ impl Sandbox {
 
     /// Compiles `source` once and loads it on the loader thread (`loadScriptTemplate`). Binary
     /// chunks are rejected. With the `jit` feature the closure is natively compiled when the
-    /// runtime enabled native code.
+    /// runtime enabled native code. Takes the root stack; from inside a bound function (a
+    /// `require` loader, say) use [`Sandbox::load_template_in`] with the call's scope.
     pub fn load_template(&self, runtime: &Runtime, chunk_name: &str, source: &str) -> Result<Template> {
+        self.load_template_in(&runtime.stack(), runtime, chunk_name, source)
+    }
+
+    /// [`Sandbox::load_template`] on an existing scope of this runtime's VM.
+    pub fn load_template_in(
+        &self,
+        scope: &impl Scope,
+        runtime: &Runtime,
+        chunk_name: &str,
+        source: &str,
+    ) -> Result<Template> {
         if source.as_bytes().starts_with(b"\x1bLua") {
             return Err(Error::runtime(format!("Binary Lua/Luau chunks are not supported: {chunk_name}")));
         }
         let name = CString::new(chunk_name).map_err(|_| Error::logic("Chunk name cannot contain NUL"))?;
         let bytecode = compile_raw(source, &self.compile_options)?;
         let _scope = runtime.call_scope(runtime.initialization_context(), CallKind::Initialization);
-        let stack = runtime.stack();
-        stack.with_frame(|frame| {
+        scope.with_frame(|frame| {
             let thread = self.loader_thread.push_to(frame)?;
             let state = frame.state();
             // SAFETY: the loader thread is pinned and belongs to this VM; luau_load leaves one
@@ -413,14 +424,24 @@ impl Sandbox {
     }
 
     /// A fresh closure sharing the template's prototype, running in `env` (or in the real
-    /// globals when `None`) (`instantiateScriptTemplate`).
+    /// globals when `None`) (`instantiateScriptTemplate`). Takes the root stack; from inside a
+    /// bound function use [`Sandbox::instantiate_in`].
     pub fn instantiate(&self, runtime: &Runtime, template: &Template, env: Option<&Table>) -> Result<Function> {
-        require_same_vm(runtime, template.closure.value(), "Script template")?;
-        if let Some(env) = env {
-            require_same_vm(runtime, env.value(), "Script environment")?;
+        self.instantiate_in(&runtime.stack(), template, env)
+    }
+
+    /// [`Sandbox::instantiate`] on an existing scope of the template's VM.
+    pub fn instantiate_in(&self, scope: &impl Scope, template: &Template, env: Option<&Table>) -> Result<Function> {
+        let state = scope.state();
+        if !template.closure.value().belongs_to(state) {
+            return Err(Error::logic("Script template belongs to a different Lua state"));
         }
-        let stack = runtime.stack();
-        stack.with_frame(|frame| {
+        if let Some(env) = env
+            && !env.value().is_valid_on(state)
+        {
+            return Err(Error::logic("Script environment belongs to a different Lua state"));
+        }
+        scope.with_frame(|frame| {
             template.closure.push_to(frame)?;
             let state = frame.state();
             // SAFETY: the template is a Lua closure (luau_load made it); clonefunction pushes the

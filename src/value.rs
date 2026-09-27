@@ -128,6 +128,11 @@ impl Value {
         self.is_valid() && same_vm(self.owner, state)
     }
 
+    /// True when the value is valid and pinned on the VM that `state` belongs to.
+    pub(crate) fn is_valid_on(&self, state: *mut ffi::lua_State) -> bool {
+        self.belongs_to(state)
+    }
+
     fn require_valid(&self) -> Result<()> {
         if self.is_valid() {
             return Ok(());

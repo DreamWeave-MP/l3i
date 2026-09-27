@@ -110,7 +110,11 @@ impl RuntimeBuilder {
         self
     }
 
-    /// Heap ceiling in bytes across every memory category, polled at safepoints. Zero disables.
+    /// Heap ceiling in bytes across every memory category, matching OpenMW's watchdog: it is
+    /// **polled every 64th safepoint**, not enforced by the allocator, so a script can overshoot
+    /// it by whatever it allocates between two polls before the error fires. It bounds runaway
+    /// scripts; it is not a hard quota against a hostile one (that would need allocator-level
+    /// policy). Zero disables.
     pub fn memory_limit(mut self, bytes: usize) -> Self {
         self.limits.memory_bytes = bytes;
         self

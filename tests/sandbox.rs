@@ -164,3 +164,54 @@ fn neutered_randomseed_is_a_no_op() {
         .unwrap();
     assert!(probe.invoke::<bool, _>(&runtime.stack(), ()).unwrap(), "reseeding does not reset the sequence");
 }
+
+#[test]
+fn a_rust_require_loader_can_instantiate_templates_from_inside_the_call() {
+    use dream_binder::bind::{Call, StackResults};
+    use std::rc::Rc;
+    let runtime = Rc::new(Runtime::new().unwrap());
+    let (sandbox, _log) = sandbox_with_log(&runtime, SandboxOptions::default());
+    let sandbox = Rc::new(sandbox);
+    // `require('util')` compiles the module source on demand, on the calling scope, while the
+    // host's root stack is suspended inside the script call.
+    let loader = {
+        let captured = Rc::clone(&runtime);
+        let sandbox = Rc::clone(&sandbox);
+        runtime
+            .bind_function(
+                "dreamweave.test.loader",
+                move |call: &Call, name: &str, env: Value| -> dream_binder::Result<StackResults> {
+                    if name != "util" {
+                        return Err(dream_binder::Error::runtime(format!("module '{name}' not found")));
+                    }
+                    let env = dream_binder::value::Table::from_value(env)?;
+                    let template = sandbox.load_template_in(
+                        call,
+                        &captured,
+                        "util.lua",
+                        "return function(name) return { twice = function(x) return x * 2 end, name = name } end",
+                    )?;
+                    let factory = sandbox.instantiate_in(call, &template, Some(&env))?;
+                    factory.invoke::<dream_binder::value::Function, _>(call, ())?.value().push_to_scope(call)?;
+                    Ok(StackResults)
+                },
+            )
+            .unwrap()
+    };
+    let instance = sandbox
+        .new_instance(&runtime, &InstanceSpec { name: "consumer", packages: &[], hidden_data: None, loader: &loader })
+        .unwrap();
+    let script = sandbox
+        .load_template(
+            &runtime,
+            "consumer.lua",
+            "local util = require('util') assert(util.name == 'util') return util.twice(21)",
+        )
+        .unwrap();
+    let results = sandbox.run(&runtime, &script, &instance, context()).unwrap();
+    assert_eq!(results[0].with_value(&runtime.stack(), |_, view| view.read::<i32>()).unwrap(), 42);
+    drop(script);
+    drop(instance);
+    drop(loader);
+    drop(sandbox);
+}
