@@ -2,11 +2,16 @@
 //!
 //! The host owns a [`Runtime`], which owns the `lua_State`. Creation follows OpenMW's
 //! `Lua::State` order (`components/lua/luastate.cpp`): flag policy, `luaL_newstate`, pointer
-//! encoding seed, then (later slices) callbacks and the atom catalogue, then the standard
+//! encoding seed, the per-VM shared state behind `lua_Callbacks.userdata`, the interrupt and
+//! allocation callbacks when a limit or the profiler asks for them, then the standard
 //! libraries. Every step is a builder choice so nothing is entrenched by the constructor.
 
-use std::ffi::CString;
+mod call_scope;
+mod shared;
+
+use std::ffi::{CString, c_int};
 use std::hash::{BuildHasher, Hasher, RandomState};
+use std::time::Duration;
 
 use crate::error::{Error, Result};
 use crate::flags;
@@ -14,12 +19,18 @@ use crate::raw::ffi;
 use crate::source::{CompileOptions, compile};
 use crate::stack::{Frame, Stack, ValueView, same_vm};
 
+pub use call_scope::{CallContext, CallKind, CallScope};
+pub use shared::{CallStats, Limits, MemoryCategory};
+use shared::Shared;
+
 /// Host choices made before the VM exists.
 #[derive(Clone, Debug)]
 pub struct RuntimeBuilder {
     debug_roots: Vec<&'static str>,
     pointer_encoding: bool,
     standard_libraries: bool,
+    limits: Limits,
+    profiler: bool,
 }
 
 impl RuntimeBuilder {
@@ -45,6 +56,24 @@ impl RuntimeBuilder {
         self
     }
 
+    /// Wall-clock budget per outermost script call, enforced at Luau safepoints. Zero disables.
+    pub fn execution_time_limit(mut self, limit: Duration) -> Self {
+        self.limits.execution_time = limit;
+        self
+    }
+
+    /// Heap ceiling in bytes across every memory category, polled at safepoints. Zero disables.
+    pub fn memory_limit(mut self, bytes: usize) -> Self {
+        self.limits.memory_bytes = bytes;
+        self
+    }
+
+    /// Time script calls, switch memory categories per call, and record allocation activity.
+    pub fn profiler(mut self, enabled: bool) -> Self {
+        self.profiler = enabled;
+        self
+    }
+
     pub fn build(self) -> Result<Runtime> {
         flags::initialize()?;
         // SAFETY: luaL_newstate uses the default allocator; a null result is out of memory.
@@ -52,12 +81,23 @@ impl RuntimeBuilder {
         if state.is_null() {
             return Err(Error::runtime("Unable to allocate a Luau state"));
         }
-        let runtime = Runtime { state, debug_roots: self.debug_roots };
+        let shared = Box::new(Shared::new(self.limits, self.profiler));
+        let runtime = Runtime { state, debug_roots: self.debug_roots, shared };
         if self.pointer_encoding {
             let key = PointerEncodingKey::random();
             // SAFETY: the state is fresh; this must precede any table or library creation.
             unsafe { ffi::lua_setpointerencodekey(state, key.0[0], key.0[1], key.0[2], key.0[3]) };
         }
+        // SAFETY: the callback block belongs to this VM; `shared` lives as long as the state
+        // (dropped after lua_close) and is never moved out of its Box.
+        unsafe {
+            let callbacks = ffi::lua_callbacks(state);
+            (*callbacks).userdata = (&*runtime.shared as *const Shared).cast_mut().cast();
+            if runtime.shared.profiler_enabled() {
+                (*callbacks).onallocate = Some(shared::on_allocate);
+            }
+        }
+        runtime.update_interrupt_hook();
         if self.standard_libraries {
             runtime.open_standard_libraries();
         }
@@ -105,13 +145,67 @@ impl PointerEncodingKey {
 pub struct Runtime {
     state: *mut ffi::lua_State,
     debug_roots: Vec<&'static str>,
+    /// Per-VM state reachable from callbacks through `lua_Callbacks.userdata`.
+    shared: Box<Shared>,
 }
 
 impl Runtime {
     /// Starts configuring a VM. Defaults: debug root `dreamweave`, pointer encoding seeded,
-    /// standard libraries opened.
+    /// standard libraries opened, no limits, profiler off.
     pub fn builder() -> RuntimeBuilder {
-        RuntimeBuilder { debug_roots: vec!["dreamweave"], pointer_encoding: true, standard_libraries: true }
+        RuntimeBuilder {
+            debug_roots: vec!["dreamweave"],
+            pointer_encoding: true,
+            standard_libraries: true,
+            limits: Limits::default(),
+            profiler: false,
+        }
+    }
+
+    pub(crate) fn shared(&self) -> &Shared {
+        &self.shared
+    }
+
+    /// Installs or removes the interrupt hook according to the limits and sampler state
+    /// (`State::updateInterruptHook`).
+    pub(crate) fn update_interrupt_hook(&self) {
+        let needed = self.shared.needs_interrupt();
+        // SAFETY: interrupt is documented safe to set at any time.
+        unsafe {
+            (*ffi::lua_callbacks(self.state)).interrupt = if needed { Some(shared::interrupt) } else { None };
+        }
+    }
+
+    /// The configured limits.
+    pub fn limits(&self) -> Limits {
+        self.shared.limits()
+    }
+
+    /// Changes the limits; takes effect for the next call scope.
+    pub fn set_limits(&self, limits: Limits) {
+        self.shared.set_limits(limits);
+        self.update_interrupt_hook();
+    }
+
+    /// Bytes currently allocated in one memory category.
+    pub fn total_bytes_in(&self, category: MemoryCategory) -> usize {
+        unsafe { ffi::lua_totalbytes(self.state, c_int::from(category.0)) }
+    }
+
+    /// The active memory category of the main thread. Allocations are attributed to it.
+    pub fn set_memory_category(&self, category: MemoryCategory) {
+        unsafe { ffi::lua_setmemcat(self.state, c_int::from(category.0)) }
+    }
+
+    /// Accumulated call statistics (profiler only).
+    pub fn call_stats(&self) -> CallStats {
+        self.shared.stats()
+    }
+
+    /// `source:line` of the innermost Lua code running on the main thread: the script line
+    /// that called the running native function. Empty when no Lua code is running.
+    pub fn caller_location(&self) -> String {
+        caller_location(&self.stack())
     }
 
     /// A VM with the default configuration.
@@ -204,10 +298,21 @@ impl Runtime {
     }
 }
 
+/// `source:line` of the innermost Lua code running on `scope`'s thread; from inside a bound
+/// function, the script line that called it. Empty when no Lua code is running there.
+pub fn caller_location(scope: &impl crate::stack::Scope) -> String {
+    shared::caller_location(scope.state())
+}
+
 impl Drop for Runtime {
     fn drop(&mut self) {
-        // SAFETY: we own the state and nothing borrowed from it can outlive `self`.
-        unsafe { ffi::lua_close(self.state) }
+        // SAFETY: we own the state and nothing borrowed from it can outlive `self`. `shared`
+        // outlives lua_close because struct fields drop after this body.
+        unsafe {
+            (*ffi::lua_callbacks(self.state)).interrupt = None;
+            (*ffi::lua_callbacks(self.state)).onallocate = None;
+            ffi::lua_close(self.state);
+        }
     }
 }
 
