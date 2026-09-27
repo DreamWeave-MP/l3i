@@ -25,6 +25,8 @@ mod table;
 mod view;
 
 #[cfg(test)]
+mod table_tests;
+#[cfg(test)]
 mod tests;
 
 use std::cell::Cell;

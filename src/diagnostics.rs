@@ -81,3 +81,78 @@ pub fn type_error_at(value: ValueView<'_>, position: c_int, expected: &str) -> E
     };
     Error::Runtime(message)
 }
+
+/// UTF-8-safe bounded truncation for diagnostic text (`truncateDiagnostic`).
+pub fn truncate_diagnostic(text: &str, max_length: usize) -> String {
+    if text.len() <= max_length {
+        return text.to_owned();
+    }
+    let mut keep = max_length;
+    while keep > 0 && !text.is_char_boundary(keep) {
+        keep -= 1;
+    }
+    format!("{}...", &text[..keep])
+}
+
+/// Escapes quotes, backslashes, and control bytes; multibyte UTF-8 passes through
+/// (`escapeDiagnostic`).
+pub fn escape_diagnostic(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 || c as u32 == 0x7F => out.push_str(&format!("\\x{:02x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// Non-executing description of a value for error messages (`describeLuaValue`): booleans,
+/// numbers, and (truncated, escaped) strings by content, everything else as `<type>`.
+pub fn describe_value(value: ValueView<'_>, max_length: usize) -> String {
+    let state = value.state();
+    // SAFETY: every accessor is guarded by the matching type test and the view proved the slot.
+    unsafe {
+        match value.type_of() {
+            Type::Boolean => return if ffi::lua_toboolean(state, value.index()) != 0 { "true" } else { "false" }.to_owned(),
+            Type::Integer => {
+                let mut is_integer = 0;
+                let integer = ffi::lua_tointeger64(state, value.index(), &mut is_integer);
+                if is_integer != 0 {
+                    return integer.to_string();
+                }
+            }
+            Type::Number => {
+                let mut is_number = 0;
+                let number = ffi::lua_tonumberx(state, value.index(), &mut is_number);
+                if is_number != 0 {
+                    return format_number(number);
+                }
+            }
+            Type::String => {
+                let mut length = 0usize;
+                let text = ffi::lua_tolstring(state, value.index(), &mut length);
+                if !text.is_null() {
+                    let bytes = std::slice::from_raw_parts(text.cast::<u8>(), length);
+                    return escape_diagnostic(&truncate_diagnostic(&String::from_utf8_lossy(bytes), max_length));
+                }
+            }
+            _ => {}
+        }
+        format!("<{}>", value.type_of().name())
+    }
+}
+
+/// Shortest round-trip text for a double, as `std::to_chars` prints it.
+fn format_number(number: f64) -> String {
+    if number.is_finite() && number.fract() == 0.0 && number.abs() < 1e15 {
+        // to_chars prints whole doubles without a fraction.
+        return format!("{}", number as i64);
+    }
+    format!("{number}")
+}

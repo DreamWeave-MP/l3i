@@ -139,15 +139,20 @@ impl Value {
         Ok(scope.top_value())
     }
 
-    /// Pushes the value in a temporary frame on `scope` and hands the view to `body`.
-    pub fn with_value<R>(&self, scope: &impl Scope, body: impl FnOnce(ValueView<'_>) -> Result<R>) -> Result<R> {
+    /// Pushes the value in a temporary frame on `scope` and hands that frame and the view to
+    /// `body`, so nested lookups open their frames from it.
+    pub fn with_value<R>(
+        &self,
+        scope: &impl Scope,
+        body: impl FnOnce(&Frame<'_>, ValueView<'_>) -> Result<R>,
+    ) -> Result<R> {
         self.require_valid()?;
         if !self.belongs_to(scope.state()) {
             return Err(Error::logic("Lua reference belongs to a different VM"));
         }
         scope.with_frame(|frame| {
             let view = self.push_to(frame)?;
-            body(view)
+            body(frame, view)
         })
     }
 
@@ -266,6 +271,16 @@ impl Table {
     pub fn push_to<'f>(&self, frame: &'f Frame<'_>) -> Result<crate::stack::TableView<'f>> {
         self.0.push_to(frame)?.as_table()
     }
+
+    /// Cold tier: `t[key]` converted to `T`, with the stack of `scope` left as it was.
+    pub fn get<T: for<'a> crate::convert::FromView<'a>>(&self, scope: &impl Scope, key: &str) -> Result<T> {
+        self.0.with_value(scope, |frame, view| view.as_table()?.get_as::<T>(frame, key))
+    }
+
+    /// Cold tier: `t[key] = value`, honouring `__newindex`.
+    pub fn set<T: crate::convert::Push + ?Sized>(&self, scope: &impl Scope, key: &str, value: &T) -> Result<()> {
+        self.0.with_value(scope, |frame, view| view.as_table()?.set_value(frame, key, value))
+    }
 }
 
 /// A pinned value known to be a function.
@@ -365,7 +380,7 @@ mod tests {
         let stack = other.stack();
         let frame = stack.frame();
         assert_eq!(value.push_to(&frame).unwrap_err(), Error::logic("Lua reference belongs to a different VM"));
-        assert!(value.with_value(&stack, |_| Ok(())).is_err());
+        assert!(value.with_value(&stack, |_, _| Ok(())).is_err());
         assert_eq!(frame.len(), 0);
     }
 
@@ -397,7 +412,7 @@ mod tests {
         runtime.collect_garbage();
         let answer = table
             .value()
-            .with_value(&stack, |view| {
+            .with_value(&stack, |_, view| {
                 let frame_value = view.as_table()?;
                 Ok(frame_value.index())
             })
