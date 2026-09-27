@@ -6,6 +6,7 @@
 
 pub mod error;
 mod raw;
+pub mod stack;
 
 pub use error::{Error, Result};
 
