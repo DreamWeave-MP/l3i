@@ -182,7 +182,9 @@ fn rust_to_luau(c: &mut Criterion) {
     group.bench_function("table argument, view result", |b| {
         b.iter(|| identity.invoke_with(&stack, (&table,), |_, view| Ok(view.is_table())).unwrap())
     });
-    group.bench_function("table argument, pinned result", |b| b.iter(|| identity.invoke::<Table, _>(&stack, (&table,)).unwrap()));
+    group.bench_function("table argument, pinned result", |b| {
+        b.iter(|| identity.invoke::<Table, _>(&stack, (&table,)).unwrap())
+    });
     group.finish();
 }
 
@@ -233,30 +235,33 @@ fn host_side(c: &mut Criterion) {
     let mut group = c.benchmark_group("host_side");
     group.bench_function("borrowed table field read", |b| {
         b.iter(|| {
-            stack.with_frame(|frame| {
-                let view = fields.push_to(frame)?;
-                view.get_as::<f64>(frame, "value")
-            })
-            .unwrap()
+            stack
+                .with_frame(|frame| {
+                    let view = fields.push_to(frame)?;
+                    view.get_as::<f64>(frame, "value")
+                })
+                .unwrap()
         })
     });
     group.bench_function("owned table field read", |b| b.iter(|| fields.get::<f64>(&stack, "value").unwrap()));
     group.bench_function("tagged receiver check", |b| {
         b.iter(|| {
-            stack.with_frame(|frame| {
-                let view = direct.push_to(frame)?;
-                Ok(receiver::<Tagged>(view).is_some())
-            })
-            .unwrap()
+            stack
+                .with_frame(|frame| {
+                    let view = direct.push_to(frame)?;
+                    Ok(receiver::<Tagged>(view).is_some())
+                })
+                .unwrap()
         })
     });
     group.bench_function("untagged receiver check", |b| {
         b.iter(|| {
-            stack.with_frame(|frame| {
-                let view = untagged.push_to(frame)?;
-                Ok(receiver::<Untagged>(view).is_some())
-            })
-            .unwrap()
+            stack
+                .with_frame(|frame| {
+                    let view = untagged.push_to(frame)?;
+                    Ok(receiver::<Untagged>(view).is_some())
+                })
+                .unwrap()
         })
     });
     group.bench_function("value pin create and drop", |b| {
