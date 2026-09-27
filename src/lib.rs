@@ -4,6 +4,7 @@
 //! into it through the shared contract in this crate. See the README for the usage tiers and the
 //! ownership models.
 
+pub mod debug_name;
 pub mod error;
 mod raw;
 pub mod runtime;
