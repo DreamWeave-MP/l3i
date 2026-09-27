@@ -44,7 +44,7 @@ pub(crate) unsafe fn vm_lifetime(state: *mut ffi::lua_State) -> std::rc::Weak<()
 pub use shared::{CallStats, Limits, MemoryCategory, SampledLocation, Samples};
 
 /// Host choices made before the VM exists.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct RuntimeBuilder {
     debug_roots: Vec<&'static str>,
     pointer_encoding: bool,
@@ -52,7 +52,8 @@ pub struct RuntimeBuilder {
     limits: Limits,
     profiler: bool,
     initialization_category: MemoryCategory,
-    native_code: bool,
+    #[cfg(feature = "jit")]
+    native_code: Option<crate::native_code::NativeCodeOptions>,
     atom_catalogue: Option<crate::direct::AtomCatalogue>,
 }
 
@@ -62,24 +63,6 @@ impl RuntimeBuilder {
     pub fn atom_catalogue(mut self, catalogue: crate::direct::AtomCatalogue) -> Self {
         self.atom_catalogue = Some(catalogue);
         self
-    }
-
-    /// Creates the native code generator on a fresh state when requested and available.
-    #[cfg(feature = "jit")]
-    fn create_native_code(state: *mut ffi::lua_State, requested: bool) -> bool {
-        // SAFETY: fresh state; codegen must be created before any function is compiled.
-        unsafe {
-            if requested && ffi::luau_codegen_supported() != 0 {
-                ffi::luau_codegen_create(state);
-                return true;
-            }
-        }
-        false
-    }
-
-    #[cfg(not(feature = "jit"))]
-    fn create_native_code(_state: *mut ffi::lua_State, _requested: bool) -> bool {
-        false
     }
 
     /// Root vocabulary for debug names (`openmw`, `string`, `vector` in OpenMW). Every native
@@ -132,10 +115,12 @@ impl RuntimeBuilder {
         self
     }
 
-    /// Enable Luau native code generation for templates (needs the `jit` feature and a
-    /// supported platform; silently stays off otherwise). Default off.
-    pub fn native_code(mut self, enabled: bool) -> Self {
-        self.native_code = enabled;
+    /// Enables Luau native code generation with `options` (`jit` feature). Templates loaded
+    /// through a sandbox are compiled according to the mode; `Runtime::native_code` exposes the
+    /// generator for host-driven compilation. Off by default.
+    #[cfg(feature = "jit")]
+    pub fn native_code(mut self, options: crate::native_code::NativeCodeOptions) -> Self {
+        self.native_code = Some(options);
         self
     }
 
@@ -147,12 +132,16 @@ impl RuntimeBuilder {
             return Err(Error::runtime("Unable to allocate a Luau state"));
         }
         let shared = Box::new(Shared::new(self.limits, self.profiler));
-        let native_code = Self::create_native_code(state, self.native_code);
+        // SAFETY: fresh state; native execution must be set up before any function is loaded.
+        #[cfg(feature = "jit")]
+        let native_code =
+            self.native_code.map(|options| unsafe { crate::native_code::NativeCodeGen::create(state, options) });
         let runtime = Runtime {
             state,
             debug_roots: self.debug_roots,
             shared,
             initialization_category: self.initialization_category,
+            #[cfg(feature = "jit")]
             native_code,
         };
         if self.pointer_encoding {
@@ -223,7 +212,10 @@ pub struct Runtime {
     /// Per-VM state reachable from callbacks through `lua_Callbacks.userdata`.
     shared: Box<Shared>,
     initialization_category: MemoryCategory,
-    native_code: bool,
+    /// Dropped after `lua_close` (the `Drop` body closes the VM first), as Luau requires for
+    /// shared code contexts.
+    #[cfg(feature = "jit")]
+    native_code: Option<crate::native_code::NativeCodeGen>,
 }
 
 /// The context id call scopes use for sandbox and template setup.
@@ -240,7 +232,8 @@ impl Runtime {
             limits: Limits::default(),
             profiler: false,
             initialization_category: MemoryCategory(0),
-            native_code: false,
+            #[cfg(feature = "jit")]
+            native_code: None,
             atom_catalogue: None,
         }
     }
@@ -251,9 +244,10 @@ impl Runtime {
         CallContext { id: INITIALIZATION_CONTEXT, category: self.initialization_category }
     }
 
-    /// True when native code generation was requested and is available on this VM.
-    pub fn native_code_enabled(&self) -> bool {
-        self.native_code
+    /// The native code generator, when the runtime was built with one (`jit` feature).
+    #[cfg(feature = "jit")]
+    pub fn native_code(&self) -> Option<&crate::native_code::NativeCodeGen> {
+        self.native_code.as_ref()
     }
 
     pub(crate) fn shared(&self) -> &Shared {

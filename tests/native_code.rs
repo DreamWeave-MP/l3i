@@ -1,0 +1,200 @@
+//! Native code generation (`jit` feature): Luau's code generator with the binder's hooks, the
+//! `writef32x3` lowering, and a userdata field lowering written in Rust.
+#![cfg(feature = "jit")]
+
+use std::cell::Cell;
+use std::sync::atomic::{AtomicU32, Ordering};
+
+use dream_binder::Runtime;
+use dream_binder::ffi::{LUA_TNUMBER, LUA_TUSERDATA};
+use dream_binder::native_code::hooks::{AccessSite, NamecallSite, NativeCodeHooks};
+use dream_binder::native_code::ir::{IrBuilder, IrCmd, bytecode_type};
+use dream_binder::native_code::vector_buffer::VectorBufferWriter;
+use dream_binder::native_code::{NativeCodeMode, NativeCodeOptions, NativeCodeStatus, module_id};
+use dream_binder::runtime::{CallContext, MemoryCategory};
+use dream_binder::sandbox::{InstanceSpec, SandboxOptions};
+use dream_binder::source::CompileOptions;
+use dream_binder::userdata::{Userdata, tagged};
+
+static WRITER_LOWERINGS: AtomicU32 = AtomicU32::new(0);
+static FIELD_LOWERINGS: AtomicU32 = AtomicU32::new(0);
+
+/// Counts how often the default writer lowering fires, then delegates to it.
+struct CountingWriter;
+
+impl NativeCodeHooks for CountingWriter {
+    fn vector_namecall_type(&self, member: &str) -> u8 {
+        VectorBufferWriter.vector_namecall_type(member)
+    }
+    fn vector_namecall(&self, build: &mut IrBuilder<'_>, member: &str, site: NamecallSite) -> bool {
+        let lowered = VectorBufferWriter.vector_namecall(build, member, site);
+        if lowered {
+            WRITER_LOWERINGS.fetch_add(1, Ordering::Relaxed);
+        }
+        lowered
+    }
+}
+
+const POINT_TAG: u8 = 12;
+
+#[repr(C)]
+struct Point {
+    x: f32,
+    y: f32,
+}
+
+unsafe impl Userdata for Point {
+    const NAME: &'static str = "dreamweave.tests.Point";
+}
+
+/// Lowers `p.x` / `p.y` on a `Point` (userdata type index 0) to a tag check and an f32 load,
+/// exactly the shape OpenMW uses for its vector types, but authored in Rust.
+struct PointFields;
+
+impl NativeCodeHooks for PointFields {
+    fn userdata_access_type(&self, userdata_type: u8, member: &str) -> u8 {
+        if userdata_type == bytecode_type::TAGGED_USERDATA_BASE && matches!(member, "x" | "y") {
+            bytecode_type::NUMBER
+        } else {
+            bytecode_type::ANY
+        }
+    }
+
+    fn userdata_access(&self, build: &mut IrBuilder<'_>, userdata_type: u8, member: &str, site: AccessSite) -> bool {
+        if userdata_type != bytecode_type::TAGGED_USERDATA_BASE {
+            return false;
+        }
+        let offset = match member {
+            "x" => 0,
+            "y" => 4,
+            _ => return false,
+        };
+        let source = build.vm_reg(site.source_reg);
+        let userdata = build.inst(IrCmd::LOAD_POINTER, &[source]);
+        let tag = build.const_int(i32::from(POINT_TAG));
+        let exit = build.vm_exit(site.pcpos);
+        build.inst(IrCmd::CHECK_USERDATA_TAG, &[userdata, tag, exit]);
+        let at = build.const_int(offset);
+        let userdata_tag = build.const_tag(LUA_TUSERDATA as u8);
+        let value = build.inst(IrCmd::BUFFER_READF32, &[userdata, at, userdata_tag]);
+        let number = build.inst(IrCmd::FLOAT_TO_NUM, &[value]);
+        let result = build.vm_reg(site.result_reg);
+        build.inst(IrCmd::STORE_DOUBLE, &[result, number]);
+        let number_tag = build.const_tag(LUA_TNUMBER as u8);
+        build.inst(IrCmd::STORE_TAG, &[result, number_tag]);
+        FIELD_LOWERINGS.fetch_add(1, Ordering::Relaxed);
+        true
+    }
+}
+
+fn runtime(mode: NativeCodeMode) -> Runtime {
+    let options = NativeCodeOptions { hooks: vec![Box::new(CountingWriter)], ..NativeCodeOptions::default() }
+        .mode(mode)
+        .hooks(PointFields)
+        .userdata_types(["Point"]);
+    let options = NativeCodeOptions { record_counters: true, ..options };
+    let runtime = Runtime::builder().native_code(options).build().unwrap();
+    runtime.install_vector_buffer_writer().unwrap();
+    runtime
+}
+
+fn compile_options() -> CompileOptions {
+    CompileOptions { userdata_types: vec![c"Point".to_owned()], type_info_level: 1, ..CompileOptions::default() }
+}
+
+#[test]
+fn writef32x3_is_lowered_to_native_stores_and_stays_exact() {
+    let runtime = runtime(NativeCodeMode::Eager);
+    let generator = runtime.native_code().expect("built with native code");
+    assert!(generator.is_available(), "this platform has no Luau code generator");
+    let sandbox = runtime
+        .sandbox(|_| {}, SandboxOptions { compile_options: compile_options(), ..SandboxOptions::default() })
+        .unwrap();
+    let before = WRITER_LOWERINGS.load(Ordering::Relaxed);
+    let template = sandbox
+        .load_template(
+            &runtime,
+            "writer.lua",
+            "local a, b = buffer.create(16), buffer.create(16)\n\
+             local v = vector.create(1.5, -2.25, 1e10)\n\
+             for i = 1, 3 do v:writef32x3(a, 4) end\n\
+             buffer.writef32(b, 4, 1.5) buffer.writef32(b, 8, -2.25) buffer.writef32(b, 12, 1e10)\n\
+             assert(buffer.tostring(a) == buffer.tostring(b), 'native stores match the library')\n\
+             local ok, err = pcall(function() v:writef32x3(a, 5) end)\n\
+             assert(not ok and err:find('buffer access out of bounds'), 'guard exits to the interpreter shim')\n\
+             return 1",
+        )
+        .unwrap();
+    let native = template.native_code().expect("compiled");
+    assert_eq!(native.status, NativeCodeStatus::Success, "{native:?}");
+    assert!(native.stats.functions_compiled >= 1 && native.stats.native_code_size_bytes > 0, "{native:?}");
+    assert!(WRITER_LOWERINGS.load(Ordering::Relaxed) > before, "the Rust lowering hook ran");
+    let loader = runtime.load_function("return function(name) error('module ' .. name .. ' not found') end").unwrap();
+    let instance = sandbox
+        .new_instance(&runtime, &InstanceSpec { name: "w", packages: &[], hidden_data: None, loader: &loader })
+        .unwrap();
+    let results =
+        sandbox.run(&runtime, &template, &instance, CallContext { id: 1, category: MemoryCategory(0) }).unwrap();
+    assert_eq!(results.len(), 1);
+    let stats = generator.execution_stats(&runtime.stack());
+    assert!(stats.regular_blocks_executed > 0, "{stats:?}");
+    assert!(stats.vm_exits_taken > 0, "the out-of-bounds call took a VM exit: {stats:?}");
+}
+
+#[test]
+fn userdata_field_access_can_be_lowered_from_rust() {
+    let runtime = runtime(NativeCodeMode::Eager);
+    tagged::register::<Point>(&runtime, POINT_TAG, |ty| {
+        ty.property("x", |p: &Point| p.x)?;
+        ty.property("y", |p: &Point| p.y)
+    })
+    .unwrap();
+    {
+        let stack = runtime.stack();
+        let frame = stack.frame();
+        tagged::push(&frame, Point { x: 3.0, y: 4.0 }).unwrap();
+        frame.set_global("point").unwrap();
+    }
+    let sandbox = runtime
+        .sandbox(|_| {}, SandboxOptions { compile_options: compile_options(), ..SandboxOptions::default() })
+        .unwrap();
+    let before = FIELD_LOWERINGS.load(Ordering::Relaxed);
+    let template = sandbox
+        .load_template(
+            &runtime,
+            "point.lua",
+            "local function len(p: Point): number return math.sqrt(p.x * p.x + p.y * p.y) end\n\
+             return len",
+        )
+        .unwrap();
+    assert_eq!(template.native_code().unwrap().status, NativeCodeStatus::Success);
+    assert!(FIELD_LOWERINGS.load(Ordering::Relaxed) > before, "the annotated parameter reached the Rust hook");
+    let len = sandbox.instantiate(&runtime, &template, None).unwrap();
+    let len: dream_binder::value::Function = len.invoke(&runtime.stack(), ()).unwrap();
+    let point = runtime.global("point").unwrap();
+    assert_eq!(len.invoke::<f64, _>(&runtime.stack(), (&point,)).unwrap(), 5.0);
+    // A wrong tag at the same site exits to the interpreter, which reports the ordinary error.
+    let error = len.invoke::<f64, _>(&runtime.stack(), (7,)).unwrap_err().to_string();
+    assert!(error.contains("attempt to index number"), "{error}");
+}
+
+#[test]
+fn annotated_mode_compiles_only_marked_modules_and_ids_are_stable() {
+    let runtime = runtime(NativeCodeMode::Annotated);
+    let sandbox = runtime.sandbox(|_| {}, SandboxOptions::default()).unwrap();
+    let plain = sandbox.load_template(&runtime, "plain.lua", "return 1").unwrap();
+    assert_eq!(plain.native_code().unwrap().status, NativeCodeStatus::NotNativeModule);
+    // A trivial chunk is not profitable to compile; give the module a loop.
+    let source = "--!native\nlocal s = 0 for i = 1, 100 do s += i end return s";
+    let marked = sandbox.load_template(&runtime, "marked.lua", source).unwrap();
+    assert_eq!(marked.native_code().unwrap().status, NativeCodeStatus::Success);
+    let again = sandbox.load_template(&runtime, "marked.lua", source).unwrap();
+    assert_eq!(again.native_code().unwrap().module_id, marked.native_code().unwrap().module_id);
+    assert_eq!(module_id(b""), module_id(b""));
+    assert_ne!(module_id(b"a"), module_id(b"b"));
+    let off = Runtime::builder().native_code(NativeCodeOptions::default().mode(NativeCodeMode::Off)).build().unwrap();
+    let sandbox = off.sandbox(|_| {}, SandboxOptions::default()).unwrap();
+    let template = sandbox.load_template(&off, "x.lua", "--!native\nreturn 1").unwrap();
+    assert_eq!(template.native_code().unwrap().status, NativeCodeStatus::Skipped);
+    let _ = Cell::new(0);
+}

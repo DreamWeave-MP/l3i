@@ -24,6 +24,8 @@ pub mod error;
 pub mod flags;
 pub mod module;
 pub mod native;
+#[cfg(feature = "jit")]
+pub mod native_code;
 mod raw;
 pub mod readonly;
 pub mod runtime;

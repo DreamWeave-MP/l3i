@@ -5,9 +5,10 @@
 //! script write a vector into a buffer in a single call with exactly the semantics of three
 //! `buffer.writef32` calls: same offset conversion, same bounds check, same message, host byte
 //! order. Any other method name resolves through the original `__index` (kept as upvalue 1) so
-//! its diagnostics are unchanged. The code generation half (lowering the call to three native
-//! f32 stores) needs Luau's C++ CodeGen hooks, which the C API does not expose; with the `jit`
-//! feature this call runs through the interpreter path, still one call instead of three.
+//! its diagnostics are unchanged. The code generation half, lowering the call to three native
+//! f32 stores, is [`crate::native_code::vector_buffer::VectorBufferWriter`] (`jit` feature),
+//! part of the default native code hooks; natively compiled functions never reach this shim
+//! unless a guard fails, and then this shim provides the exact semantics.
 
 use std::ffi::{CStr, c_int};
 

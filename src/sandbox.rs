@@ -116,11 +116,19 @@ pub struct Sandbox {
 pub struct Template {
     closure: Function,
     chunk_name: String,
+    #[cfg(feature = "jit")]
+    native: Option<crate::native_code::NativeCodeResult>,
 }
 
 impl Template {
     pub fn chunk_name(&self) -> &str {
         &self.chunk_name
+    }
+
+    /// How native compilation of this template went, when the runtime has a generator.
+    #[cfg(feature = "jit")]
+    pub fn native_code(&self) -> Option<crate::native_code::NativeCodeResult> {
+        self.native
     }
 }
 
@@ -375,9 +383,10 @@ impl Sandbox {
     }
 
     /// Compiles `source` once and loads it on the loader thread (`loadScriptTemplate`). Binary
-    /// chunks are rejected. With the `jit` feature the closure is natively compiled when the
-    /// runtime enabled native code. Takes the root stack; from inside a bound function (a
-    /// `require` loader, say) use [`Sandbox::load_template_in`] with the call's scope.
+    /// chunks are rejected. With the `jit` feature and a runtime built with native code, the
+    /// closure is compiled natively and the outcome is kept on the template. Takes the root
+    /// stack; from inside a bound function (a `require` loader, say) use
+    /// [`Sandbox::load_template_in`] with the call's scope.
     pub fn load_template(&self, runtime: &Runtime, chunk_name: &str, source: &str) -> Result<Template> {
         self.load_template_in(&runtime.stack(), runtime, chunk_name, source)
     }
@@ -411,14 +420,17 @@ impl Sandbox {
                 if status != ffi::LUA_OK {
                     return Err(pop_error(state, status));
                 }
-                #[cfg(feature = "jit")]
-                if runtime.native_code_enabled() {
-                    ffi::luau_codegen_compile(state, -1);
-                }
             }
+            #[cfg(feature = "jit")]
+            let native = match runtime.native_code() {
+                Some(generator) => Some(generator.compile(frame, -1, &bytecode)?),
+                None => None,
+            };
             Ok(Template {
                 closure: Function::from_value(Value::store(frame.top_value())?)?,
                 chunk_name: chunk_name.to_owned(),
+                #[cfg(feature = "jit")]
+                native,
             })
         })
     }

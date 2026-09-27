@@ -16,8 +16,11 @@ links = "luau"
 # Builds the Luau 0.740 release (the commit OpenMW pins) with cc. No Lua binding crate sits
 # in between: the C API is declared in src/raw/ffi.rs against this library.
 luau0-src = "=0.22.0"
+# Compiles csrc/codegen.cpp, the C ABI over Luau's C++ code generation API (jit feature).
+cc = "1"
 
 [features]
 default = []
-# Luau native code generation. Hosts turn it on; the binder core does not require it.
+# Luau native code generation: builds Luau's CodeGen library plus the C++ shim that exposes
+# its compilation options, host IR lowering hooks, and IrBuilder to Rust (`native_code`).
 jit = []
