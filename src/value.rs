@@ -128,6 +128,17 @@ impl Value {
         Ok(frame.top_value())
     }
 
+    /// Pushes the value onto any scope of the same VM (a native call's result slot, or a frame).
+    pub fn push_to_scope<'s, S: Scope>(&self, scope: &'s S) -> Result<ValueView<'s>> {
+        self.require_valid()?;
+        if !self.belongs_to(scope.state()) {
+            return Err(Error::logic("Lua reference belongs to a different VM"));
+        }
+        // SAFETY: the registry is shared by all threads of the VM; getref pushes one value.
+        unsafe { ffi::lua_getref(scope.state(), self.reference) };
+        Ok(scope.top_value())
+    }
+
     /// Pushes the value in a temporary frame on `scope` and hands the view to `body`.
     pub fn with_value<R>(&self, scope: &impl Scope, body: impl FnOnce(ValueView<'_>) -> Result<R>) -> Result<R> {
         self.require_valid()?;

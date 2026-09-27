@@ -63,6 +63,13 @@ pub trait Scope: sealed::Sealed {
         let frame = self.frame();
         body(&frame)
     }
+    /// Pushes a Rust value through its [`crate::convert::Push`] conversion.
+    fn push<T: crate::convert::Push + ?Sized>(&self, value: &T) -> Result<ValueView<'_>>
+    where
+        Self: Sized,
+    {
+        value.push(self)
+    }
 }
 
 impl Scope for Stack<'_> {
