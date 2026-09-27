@@ -4,6 +4,11 @@
 //! through the shared contract in this crate. See the README for the usage tiers and the
 //! ownership models.
 
+pub mod error;
+mod raw;
+
+pub use error::{Error, Result};
+
 /// Number of userdata tags the linked Luau VM was compiled with (`LUA_UTAG_LIMIT`).
 ///
 /// Comes from the `LUAU_CXXFLAGS` the host built Luau with, not from `mlua_sys`, whose
