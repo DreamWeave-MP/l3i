@@ -168,3 +168,28 @@ impl Return for StackResults {
         Ok(call.result_count())
     }
 }
+
+/// Yields the inner results to the coroutine resuming this function (`lua_yield`). The bound
+/// function must be running inside a coroutine with no C-call boundary in between; otherwise
+/// Luau raises "attempt to yield across metamethod/C-call boundary".
+pub struct Yield<T: Return>(pub T);
+
+impl<T: Return> Return for Yield<T> {
+    fn push_results(self, call: &Call<'_>) -> Result<c_int> {
+        let count = self.0.push_results(call)?;
+        // SAFETY: the results are on the stack; lua_yield records them and returns the value the
+        // C function must return to Luau.
+        Ok(unsafe { crate::raw::ffi::lua_yield(call.state(), count) })
+    }
+}
+
+/// Requests a debugger break (`lua_break`): the running thread stops with `LUA_BREAK` and can
+/// be resumed by the host.
+pub struct Break;
+
+impl Return for Break {
+    fn push_results(self, call: &Call<'_>) -> Result<c_int> {
+        // SAFETY: lua_break only records the request and returns the C function's return value.
+        Ok(unsafe { crate::raw::ffi::lua_break(call.state()) })
+    }
+}

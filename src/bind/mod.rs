@@ -35,7 +35,7 @@ use std::ptr;
 pub use call::Call;
 pub use param::{ArgView, Param, ParamItem, ParamKind, VarArgs};
 pub use params::Params;
-pub use returns::{NilThen, ResultOrError, Return, StackResults, Variadic};
+pub use returns::{Break, NilThen, ResultOrError, Return, StackResults, Variadic, Yield};
 
 use crate::debug_name;
 use crate::error::{Error, Result};

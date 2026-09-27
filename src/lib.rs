@@ -32,6 +32,7 @@ pub mod runtime;
 pub mod sandbox;
 pub mod source;
 pub mod stack;
+pub mod thread;
 pub mod userdata;
 pub mod value;
 pub mod vector_writer;
