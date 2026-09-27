@@ -77,25 +77,25 @@ fn push_bytes<'s, S: Scope>(scope: &'s S, bytes: &[u8]) -> Result<ValueView<'s>>
 }
 
 impl Push for str {
-    fn push<'s, S: Scope>(&self, scope: &'s S) -> Result<ValueView<'s>> {
+    fn push_into<'s, S: Scope>(&self, scope: &'s S) -> Result<ValueView<'s>> {
         push_bytes(scope, self.as_bytes())
     }
 }
 
 impl Push for String {
-    fn push<'s, S: Scope>(&self, scope: &'s S) -> Result<ValueView<'s>> {
+    fn push_into<'s, S: Scope>(&self, scope: &'s S) -> Result<ValueView<'s>> {
         push_bytes(scope, self.as_bytes())
     }
 }
 
 impl Push for [u8] {
-    fn push<'s, S: Scope>(&self, scope: &'s S) -> Result<ValueView<'s>> {
+    fn push_into<'s, S: Scope>(&self, scope: &'s S) -> Result<ValueView<'s>> {
         push_bytes(scope, self)
     }
 }
 
 impl Push for Vec<u8> {
-    fn push<'s, S: Scope>(&self, scope: &'s S) -> Result<ValueView<'s>> {
+    fn push_into<'s, S: Scope>(&self, scope: &'s S) -> Result<ValueView<'s>> {
         push_bytes(scope, self)
     }
 }

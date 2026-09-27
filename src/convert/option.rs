@@ -20,10 +20,10 @@ impl<'v, T: FromView<'v>> FromView<'v> for Option<T> {
 }
 
 impl<T: Push> Push for Option<T> {
-    fn push<'s, S: Scope>(&self, scope: &'s S) -> Result<ValueView<'s>> {
+    fn push_into<'s, S: Scope>(&self, scope: &'s S) -> Result<ValueView<'s>> {
         match self {
-            Some(value) => value.push(scope),
-            None => ().push(scope),
+            Some(value) => value.push_into(scope),
+            None => ().push_into(scope),
         }
     }
 }

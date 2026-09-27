@@ -179,6 +179,16 @@ impl Runtime {
         Ok(frame.top_value())
     }
 
+    /// Compiles and runs `source`, which must return one function, and pins that function.
+    /// The usual way to get a Lua closure into Rust hands for tests and host setup.
+    pub fn load_function(&self, source: &str) -> Result<crate::value::Function> {
+        let stack = self.stack();
+        stack.with_frame(|frame| {
+            let chunk = self.load(frame, "=load_function", source, &CompileOptions::default())?;
+            chunk.as_function()?.invoke::<crate::value::Function, ()>(frame, ())
+        })
+    }
+
     /// Compiles and runs `source` on the main thread, discarding results.
     pub fn exec(&self, source: &str) -> Result<()> {
         let stack = self.stack();

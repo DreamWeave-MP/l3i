@@ -55,7 +55,7 @@ impl<'v> FromView<'v> for Vector3 {
 }
 
 impl Push for Vector3 {
-    fn push<'s, S: Scope>(&self, scope: &'s S) -> crate::error::Result<ValueView<'s>> {
+    fn push_into<'s, S: Scope>(&self, scope: &'s S) -> crate::error::Result<ValueView<'s>> {
         unsafe { ffi::lua_pushvector(scope.state(), self.x, self.y, self.z) };
         Ok(scope.top_value())
     }

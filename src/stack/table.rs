@@ -171,13 +171,13 @@ impl<'v> TableView<'v> {
 
     /// Pushes `value` and stores it under `key`, honouring `__newindex`.
     pub fn set_value<T: Push + ?Sized>(&self, frame: &Frame<'_>, key: &str, value: &T) -> Result<()> {
-        value.push(frame)?;
+        value.push_into(frame)?;
         self.set(frame, key)
     }
 
     /// Pushes `value` and raw-stores it under `key`.
     pub fn raw_set_value<T: Push + ?Sized>(&self, frame: &Frame<'_>, key: &str, value: &T) -> Result<()> {
-        value.push(frame)?;
+        value.push_into(frame)?;
         self.raw_set(frame, key)
     }
 

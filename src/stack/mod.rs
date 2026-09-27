@@ -70,7 +70,7 @@ pub trait Scope: sealed::Sealed {
     where
         Self: Sized,
     {
-        value.push(self)
+        value.push_into(self)
     }
 }
 

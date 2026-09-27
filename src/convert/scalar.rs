@@ -26,7 +26,7 @@ impl<'v> FromView<'v> for bool {
 }
 
 impl Push for bool {
-    fn push<'s, S: Scope>(&self, scope: &'s S) -> Result<ValueView<'s>> {
+    fn push_into<'s, S: Scope>(&self, scope: &'s S) -> Result<ValueView<'s>> {
         unsafe { ffi::lua_pushboolean(scope.state(), c_int::from(*self)) };
         Ok(scope.top_value())
     }
@@ -57,7 +57,7 @@ impl<'v> FromView<'v> for Integer {
 }
 
 impl Push for Integer {
-    fn push<'s, S: Scope>(&self, scope: &'s S) -> Result<ValueView<'s>> {
+    fn push_into<'s, S: Scope>(&self, scope: &'s S) -> Result<ValueView<'s>> {
         unsafe { ffi::lua_pushinteger64(scope.state(), self.0) };
         Ok(scope.top_value())
     }
@@ -128,7 +128,7 @@ macro_rules! integer_conversions {
         impl Push for $t {
             /// Pushes a Lua `number`; values an f64 cannot hold exactly are an error rather than
             /// a silently rounded result.
-            fn push<'s, S: Scope>(&self, scope: &'s S) -> Result<ValueView<'s>> {
+            fn push_into<'s, S: Scope>(&self, scope: &'s S) -> Result<ValueView<'s>> {
                 #[allow(unused_comparisons)]
                 let magnitude: u64 = if *self < 0 { (*self as i128).unsigned_abs() as u64 } else { *self as u64 };
                 if !exactly_representable_as_f64(magnitude) {
@@ -191,7 +191,7 @@ impl<'v> FromView<'v> for f64 {
 }
 
 impl Push for f64 {
-    fn push<'s, S: Scope>(&self, scope: &'s S) -> Result<ValueView<'s>> {
+    fn push_into<'s, S: Scope>(&self, scope: &'s S) -> Result<ValueView<'s>> {
         unsafe { ffi::lua_pushnumber(scope.state(), *self) };
         Ok(scope.top_value())
     }
@@ -225,7 +225,7 @@ impl<'v> FromView<'v> for f32 {
 }
 
 impl Push for f32 {
-    fn push<'s, S: Scope>(&self, scope: &'s S) -> Result<ValueView<'s>> {
+    fn push_into<'s, S: Scope>(&self, scope: &'s S) -> Result<ValueView<'s>> {
         unsafe { ffi::lua_pushnumber(scope.state(), f64::from(*self)) };
         Ok(scope.top_value())
     }
@@ -237,7 +237,7 @@ impl Push for f32 {
 
 impl Push for () {
     /// Unit pushes nil, the counterpart of `Option::None`.
-    fn push<'s, S: Scope>(&self, scope: &'s S) -> Result<ValueView<'s>> {
+    fn push_into<'s, S: Scope>(&self, scope: &'s S) -> Result<ValueView<'s>> {
         unsafe { ffi::lua_pushnil(scope.state()) };
         Ok(scope.top_value())
     }

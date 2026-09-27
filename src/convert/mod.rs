@@ -51,7 +51,7 @@ pub trait FromView<'v>: Sized {
 
 /// A Rust type that can be pushed onto a scope as one Lua value.
 pub trait Push {
-    fn push<'s, S: Scope>(&self, scope: &'s S) -> Result<ValueView<'s>>;
+    fn push_into<'s, S: Scope>(&self, scope: &'s S) -> Result<ValueView<'s>>;
 }
 
 impl<'v> FromView<'v> for ValueView<'v> {
@@ -71,20 +71,20 @@ impl<'v> FromView<'v> for ValueView<'v> {
 }
 
 impl Push for ValueView<'_> {
-    fn push<'s, S: Scope>(&self, scope: &'s S) -> Result<ValueView<'s>> {
+    fn push_into<'s, S: Scope>(&self, scope: &'s S) -> Result<ValueView<'s>> {
         crate::stack::push_copy(scope.state(), *self)?;
         Ok(scope.top_value())
     }
 }
 
 impl<T: Push + ?Sized> Push for &T {
-    fn push<'s, S: Scope>(&self, scope: &'s S) -> Result<ValueView<'s>> {
-        (**self).push(scope)
+    fn push_into<'s, S: Scope>(&self, scope: &'s S) -> Result<ValueView<'s>> {
+        (**self).push_into(scope)
     }
 }
 
 impl Push for crate::value::Value {
-    fn push<'s, S: Scope>(&self, scope: &'s S) -> Result<ValueView<'s>> {
+    fn push_into<'s, S: Scope>(&self, scope: &'s S) -> Result<ValueView<'s>> {
         self.push_to_scope(scope)
     }
 }
