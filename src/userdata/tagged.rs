@@ -1,10 +1,15 @@
 //! Tagged userdata: the scarce hot path (`components/luau/taggeduserdata.hpp`).
 //!
+//! Tags are assigned by the host per VM: [`register`] takes the tag, records `tag -> type` in
+//! the runtime's tag plan, and every check afterwards is `lua_userdatatag` + one `TypeId`
+//! compare against that plan. A Rust type carries no tag of its own.
+//!
 //! Registration order is the contract: build and freeze the metatable first, then publish the
 //! destructor and metatable for the tag last, because the Luau setters cannot report failure.
 //! Instances are allocated with `lua_newuserdatataggedwithmetatable` and initialised
 //! immediately, so Luau never owns a destructor over uninitialised Rust memory.
 
+use std::any::TypeId;
 use std::ffi::{CStr, CString, c_int, c_void};
 use std::ptr;
 
@@ -16,11 +21,42 @@ use crate::raw::ffi;
 use crate::runtime::Runtime;
 use crate::stack::{Scope, ValueView};
 
-/// The tag `T` declares; a compile error for an untagged type.
-const fn tag_of<T: Userdata>() -> RuntimeTag {
-    match T::TAG {
-        Some(tag) => tag,
-        None => panic!("this Userdata type is untagged; use userdata::untagged"),
+/// The tag this VM assigned to `T`, if `T` is registered tagged here.
+pub fn tag_of<T: Userdata>(scope: &impl Scope) -> Option<RuntimeTag> {
+    // SAFETY: a scope proves its thread is live.
+    unsafe { planned_tag::<T>(scope.state()) }
+}
+
+/// [`tag_of`] on a raw thread.
+///
+/// # Safety
+/// `state` is a live thread.
+pub(crate) unsafe fn planned_tag<T: Userdata>(state: *mut ffi::lua_State) -> Option<RuntimeTag> {
+    unsafe { crate::runtime::shared_for(state) }.and_then(|shared| shared.tag_of_type(TypeId::of::<T>()))
+}
+
+/// True when `utag` is the tag this VM assigned to `T`.
+///
+/// # Safety
+/// `state` is a live thread.
+#[inline]
+pub(crate) unsafe fn type_matches_tag<T: Userdata>(state: *mut ffi::lua_State, utag: c_int) -> bool {
+    unsafe { crate::runtime::shared_for(state) }.and_then(|shared| shared.type_of_tag(utag)) == Some(TypeId::of::<T>())
+}
+
+/// The payload pointer when the userdata at `index` is a `T` of this VM, else null. No pushes.
+///
+/// # Safety
+/// `state` is a live thread and `index` names an existing slot (or an acceptable index for
+/// `lua_userdatatag`, which reports -1 for non-userdata).
+#[inline]
+pub(crate) unsafe fn payload_ptr<T: Userdata>(state: *mut ffi::lua_State, index: c_int) -> *mut T {
+    unsafe {
+        let tag = ffi::lua_userdatatag(state, index);
+        if tag <= 0 || !type_matches_tag::<T>(state, tag) {
+            return ptr::null_mut();
+        }
+        ffi::lua_touserdata(state, index).cast::<T>()
     }
 }
 
@@ -44,22 +80,36 @@ fn require_tag_in_range(tag: RuntimeTag) -> Result<()> {
     Ok(())
 }
 
-/// Registers `T` under its tag with a metatable configured by `configure`.
+/// Registers `T` under `tag` in this VM with a metatable configured by `configure`.
 ///
-/// Registering the same `T` twice under the same name is a no-op. Any other collision (a
-/// different type or name on the tag, or the name already naming a registry metatable) is a
-/// logic error, and a failure inside `configure` unpublishes the half-built metatable.
+/// Registering the same `T` twice under the same tag is a no-op. Any other collision (another
+/// type on the tag, `T` already on another tag, the name already naming a registry metatable)
+/// is a logic error, and a failure inside `configure` unpublishes the half-built metatable.
 pub fn register<T: Userdata>(
     runtime: &Runtime,
+    tag_value: RuntimeTag,
     configure: impl FnOnce(&mut MetatableBuilder<'_>) -> Result<()>,
 ) -> Result<()> {
     const { assert_userdata_layout::<T>() };
-    // A runtime check rather than a const one so a generic caller can dispatch on T::TAG
-    // without instantiating a failing constant in the branch it does not take.
-    let Some(tag_value) = T::TAG else {
-        return Err(Error::logic(format!("'{}' is untagged; use userdata::untagged", T::NAME)));
-    };
     require_tag_in_range(tag_value)?;
+    let shared = runtime.shared();
+    let identity = TypeId::of::<T>();
+    if let Some(existing) = shared.tag_of_type(identity)
+        && existing != tag_value
+    {
+        return Err(Error::logic(format!(
+            "Conflicting Luau userdata tag registration: '{}' is already tag {existing} in this runtime",
+            T::NAME
+        )));
+    }
+    if let Some(other) = shared.type_of_tag(c_int::from(tag_value))
+        && other != identity
+    {
+        return Err(Error::logic(format!(
+            "Conflicting Luau userdata tag registration: tag {tag_value} is already '{}'",
+            registered_name(runtime, tag_value)
+        )));
+    }
     crate::debug_name::require_valid_debug_name(T::NAME, runtime.debug_roots())?;
     let name = CString::new(T::NAME).map_err(|_| Error::logic("Userdata type name cannot contain NUL"))?;
     let tag = c_int::from(tag_value);
@@ -117,38 +167,39 @@ pub fn register<T: Userdata>(
             ffi::lua_setuserdatadtor(state, tag, Some(destructor));
             ffi::lua_pushvalue(state, metatable);
             ffi::lua_setuserdatametatable(state, tag);
+            shared.assign_tag(identity, tag_value);
             Ok(())
         }
     })
 }
 
-/// True when `T`'s tag currently carries `T`'s destructor, i.e. `register::<T>` ran on this VM.
-/// An untagged type or a tag outside `1..TAG_LIMIT` is never registered.
-pub fn is_registered<T: Userdata>(scope: &impl Scope) -> bool {
-    let Some(tag) = T::TAG else { return false };
-    if require_tag_in_range(tag).is_err() {
-        return false;
+/// The `__type` name Luau reports for `tag`, for diagnostics.
+fn registered_name(runtime: &Runtime, tag: RuntimeTag) -> String {
+    let stack = runtime.stack();
+    // SAFETY: lua_getuserdataname reads the tag's metatable; the tag is in range.
+    unsafe {
+        CStr::from_ptr(ffi::lua_getuserdataname(stack.state_ptr(), c_int::from(tag))).to_string_lossy().into_owned()
     }
+}
+
+/// True when this VM assigned `T` a tag that carries `T`'s destructor, i.e. `register::<T>`
+/// ran here.
+pub fn is_registered<T: Userdata>(scope: &impl Scope) -> bool {
+    let Some(tag) = tag_of::<T>(scope) else { return false };
     // SAFETY: live state; the tag is within Luau's destructor table.
     let registered = unsafe { ffi::lua_getuserdatadtor(scope.state(), c_int::from(tag)) };
     registered.is_some_and(|f| ptr::fn_addr_eq(f, destroy::<T> as ffi::lua_Destructor))
 }
 
-fn require_registered<T: Userdata>(scope: &impl Scope) -> Result<()> {
-    if is_registered::<T>(scope) {
-        return Ok(());
-    }
-    Err(Error::logic(format!("Luau tagged userdata type '{}' is not registered", T::NAME)))
-}
-
 /// Pushes `value` as a new tagged userdata onto `scope` and returns a view of it.
 ///
 /// One allocation, one write, no intermediate state: the metatable attached by Luau is the
-/// one `register::<T>` published.
+/// one `register::<T>` published for the tag this VM gave `T`.
 pub fn push<'s, T: Userdata>(scope: &'s impl Scope, value: T) -> Result<ValueView<'s>> {
     const { assert_userdata_layout::<T>() };
-    let tag = const { tag_of::<T>() };
-    require_registered::<T>(scope)?;
+    let Some(tag) = tag_of::<T>(scope) else {
+        return Err(Error::logic(format!("Luau tagged userdata type '{}' is not registered", T::NAME)));
+    };
     // SAFETY: registration verified the tag has T's metatable and destructor. The allocation
     // is fully initialised by `ptr::write` before anything else can observe it. Luau raises
     // only for out of memory, before the destructor could see the slot.
@@ -163,19 +214,16 @@ pub fn push<'s, T: Userdata>(scope: &'s impl Scope, value: T) -> Result<ValueVie
     Ok(scope.top_value())
 }
 
-/// The payload when `value` is a `T`, else `None`. One tag comparison, no metatable walk.
+/// The payload when `value` is a `T`, else `None`. One tag read and one `TypeId` compare
+/// against this VM's plan; no metatable walk.
 pub fn test<'v, T: Userdata>(value: ValueView<'v>) -> Option<&'v T> {
-    let tag = T::TAG?;
-    if !value.exists() || require_tag_in_range(tag).is_err() {
+    if !value.exists() {
         return None;
     }
-    // SAFETY: lua_touserdatatagged returns the payload only when the userdata carries T's
-    // tag, and only `push::<T>` creates userdata with that tag on a VM where T is registered.
-    // The view's lifetime keeps the slot, and so the userdata, reachable.
-    unsafe {
-        let data = ffi::lua_touserdatatagged(value.state(), value.index(), c_int::from(tag));
-        data.cast::<T>().as_ref()
-    }
+    // SAFETY: the plan maps a tag to T only after `register::<T>` published T's metatable and
+    // destructor for it, and only `push::<T>` creates userdata with that tag. The view's
+    // lifetime keeps the slot, and so the userdata, reachable.
+    unsafe { payload_ptr::<T>(value.state(), value.index()).as_ref() }
 }
 
 /// Mutable access to the payload.
@@ -184,14 +232,10 @@ pub fn test<'v, T: Userdata>(value: ValueView<'v>) -> Option<&'v T> {
 /// No other reference to the same userdata's payload may be live: Luau lets the same value
 /// appear at several stack slots, and the binder cannot see aliasing through them.
 pub unsafe fn test_mut<'v, T: Userdata>(value: ValueView<'v>) -> Option<&'v mut T> {
-    let tag = T::TAG?;
-    if !value.exists() || require_tag_in_range(tag).is_err() {
+    if !value.exists() {
         return None;
     }
-    unsafe {
-        let data = ffi::lua_touserdatatagged(value.state(), value.index(), c_int::from(tag));
-        data.cast::<T>().as_mut()
-    }
+    unsafe { payload_ptr::<T>(value.state(), value.index()).as_mut() }
 }
 
 /// [`test`] or a Luau-style type error for argument `value`.

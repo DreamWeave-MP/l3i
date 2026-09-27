@@ -16,7 +16,6 @@ struct Asset {
 
 unsafe impl Userdata for Asset {
     const NAME: &'static str = "dreamweave.assets.Asset";
-    const TAG: Option<u8> = Some(30);
 }
 
 struct AssetsModule;
@@ -25,7 +24,7 @@ impl LuauModule for AssetsModule {
     const NAME: &'static str = "dreamweave.assets";
 
     fn register(_runtime: &Runtime, module: &mut ModuleBuilder<'_>) -> Result<()> {
-        module.userdata::<Asset>(|ty| {
+        module.userdata::<Asset>(Some(30), |ty| {
             ty.property("name", |asset: &Asset| asset.name.clone())?;
             ty.method("load", |asset: &Asset| {
                 asset.loads.set(asset.loads.get() + 1);

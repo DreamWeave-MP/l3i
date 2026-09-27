@@ -6,7 +6,10 @@
 //! - [`untagged`]: exact-metatable identity and per-instance destructors for the long tail,
 //!   consuming no tag. Storage may be owned or a stable borrow of an engine-owned object.
 //!
-//! Both are declared through one [`Userdata`] trait; `TAG` decides the path at compile time.
+//! Both are declared through one [`Userdata`] trait, which gives a type its identity and script
+//! name only. Whether a type is tagged, and which tag it gets, is decided by the host per VM at
+//! registration (`tagged::register` takes the tag); the same Rust type may be tagged 8 in one
+//! runtime, 17 in another, and untagged in a third.
 
 pub mod dispatch;
 pub mod iterator;
@@ -42,21 +45,19 @@ pub(crate) const fn assert_userdata_layout<T>() {
     );
 }
 
-/// A Rust type exposed to Luau as userdata.
+/// A Rust type exposed to Luau as userdata: a stable type identity plus a script name.
 ///
-/// `TAG = Some(n)` selects the tagged hot path (payload inline, tag `n`); `None` selects the
-/// untagged long-tail path (exact metatable identity, [`Storage`] wrapper).
+/// The path is chosen at registration, not here: [`tagged::register`] takes the tag the host
+/// assigns in that VM (payload inline, O(1) checks); [`untagged::register`] uses exact metatable
+/// identity and the [`Storage`] wrapper.
 ///
 /// # Safety
 /// Implementors promise that `Drop` never calls into the Lua API, never panics, and does not
-/// depend on the VM being in a consistent state: Luau runs it while sweeping GC memory. `TAG`
-/// and `NAME` are declared by the host and must be unique within a VM; the binder verifies
-/// conflicts at registration but cannot see two crates that agree on a number by accident.
+/// depend on the VM being in a consistent state: Luau runs it while sweeping GC memory. `NAME`
+/// must be unique within a VM; the binder verifies conflicts at registration.
 pub unsafe trait Userdata: Sized + 'static {
     /// Script-visible `__type` and the root of the type's debug names, e.g. `openmw.util.Vector3`.
     const NAME: &'static str;
-    /// The Luau runtime tag for the tagged path, or `None` for the untagged path.
-    const TAG: Option<RuntimeTag>;
 }
 
 /// A pointer to an engine-owned object that Luau may observe but never owns.
@@ -65,8 +66,16 @@ pub unsafe trait Userdata: Sized + 'static {
 /// userdata, and that the pointee is destroyed only after Lua execution has stopped. Dropping
 /// the userdata never dereferences the pointer. Prefer `Arc<T>` payloads or handle/id payloads
 /// wherever the engine object's lifetime is not already this strong.
-#[derive(Clone, Copy, Debug)]
+#[derive(Debug)]
 pub struct StableRef<T>(NonNull<T>);
+
+impl<T> Clone for StableRef<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T> Copy for StableRef<T> {}
 
 impl<T> StableRef<T> {
     /// # Safety
@@ -130,10 +139,10 @@ pub(crate) fn type_key<T: 'static>() -> *mut c_void {
     key as *mut c_void
 }
 
-/// The payload when `value` is a `T` of either path; one tag compare for tagged types, one
-/// metatable identity compare for untagged ones.
+/// The payload when `value` is a `T` of either path: one tag-to-type compare for tagged types
+/// (which also rejects untagged userdata in one read), then one metatable identity compare.
 pub fn receiver<'v, T: Userdata>(value: ValueView<'v>) -> Option<&'v T> {
-    if T::TAG.is_some() { tagged::test::<T>(value) } else { untagged::test::<T>(value) }
+    tagged::test::<T>(value).or_else(|| untagged::test::<T>(value))
 }
 
 /// [`receiver`] or the Luau-style type error naming `T::NAME`.
@@ -157,5 +166,57 @@ mod type_key_tests {
         for thread in threads {
             assert_eq!(thread.join().unwrap(), type_key::<A>() as usize);
         }
+    }
+}
+
+/// A userdata result: moves `value` into a new Lua-owned instance of its registered type
+/// (tagged or untagged, as this VM registered it). Returned from bound functions as
+/// `Owned(value)`.
+pub struct Owned<T: Userdata>(pub T);
+
+impl<T: Userdata> crate::bind::Return for Owned<T> {
+    fn push_results(self, call: &crate::bind::Call<'_>) -> Result<std::ffi::c_int> {
+        push_owned(call, self.0)?;
+        Ok(1)
+    }
+}
+
+/// Pushes `value` as a new Lua-owned userdata of whichever path this VM registered `T` on.
+pub fn push_owned<'s, T: Userdata>(scope: &'s impl crate::stack::Scope, value: T) -> Result<ValueView<'s>> {
+    match tagged::tag_of::<T>(scope) {
+        Some(_) => tagged::push(scope, value),
+        None => untagged::push(scope, value),
+    }
+}
+
+/// A stable borrow of an engine object as a userdata value (untagged types only: tagged
+/// payloads are always owned). Pushable as an argument and returnable from bound functions.
+#[derive(Debug)]
+pub struct Borrowed<T: Userdata>(pub StableRef<T>);
+
+impl<T: Userdata> Clone for Borrowed<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T: Userdata> Copy for Borrowed<T> {}
+
+impl<T: Userdata> crate::convert::Push for Borrowed<T> {
+    fn push_into<'s, S: crate::stack::Scope>(&self, scope: &'s S) -> Result<ValueView<'s>> {
+        if tagged::tag_of::<T>(scope).is_some() {
+            return Err(crate::error::Error::logic(format!(
+                "'{}' is tagged in this runtime; tagged userdata always owns its payload",
+                T::NAME
+            )));
+        }
+        untagged::push_borrowed(scope, self.0)
+    }
+}
+
+impl<T: Userdata> crate::bind::Return for Borrowed<T> {
+    fn push_results(self, call: &crate::bind::Call<'_>) -> Result<std::ffi::c_int> {
+        crate::convert::Push::push_into(&self, call)?;
+        Ok(1)
     }
 }

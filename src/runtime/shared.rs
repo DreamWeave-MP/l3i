@@ -1,14 +1,17 @@
 //! Per-VM state reachable from Luau callbacks (`Lua::State` in luastate.cpp), and the
 //! callbacks themselves: the interrupt watchdog and allocation activity.
 
+use std::any::TypeId;
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap};
 use std::ffi::{CStr, c_int, c_void};
 use std::rc::{Rc, Weak};
 use std::time::{Duration, Instant};
 
+use crate::TAG_LIMIT;
 use crate::direct::AtomCatalogue;
 use crate::raw::ffi;
+use crate::userdata::RuntimeTag;
 
 /// A Luau memory category (0..256). Ids and their meanings are host data; OpenMW uses 0 for
 /// shared, 1 global, 2 menu, 3 player, and so on.
@@ -99,6 +102,23 @@ pub(crate) struct Shared {
     lua_calls: Cell<u32>,
     /// This VM's atom catalogue, read by `useratom`.
     atoms: RefCell<Option<Rc<AtomCatalogue>>>,
+    /// This VM's tag plan: which Rust type each Luau tag carries, assigned by the host at
+    /// registration.
+    tags: TagPlan,
+}
+
+/// The host's tag assignments for one VM. `by_tag` answers the hot-path question ("is the
+/// userdata at this slot a `T`?") with an array read and a `TypeId` compare; `by_type` answers
+/// the registration and push question ("which tag does `T` have here?").
+pub(crate) struct TagPlan {
+    by_tag: Vec<Cell<Option<TypeId>>>,
+    by_type: RefCell<HashMap<TypeId, RuntimeTag>>,
+}
+
+impl TagPlan {
+    fn new() -> TagPlan {
+        TagPlan { by_tag: (0..TAG_LIMIT).map(|_| Cell::new(None)).collect(), by_type: RefCell::new(HashMap::new()) }
+    }
 }
 
 impl Shared {
@@ -118,7 +138,25 @@ impl Shared {
             alive_stacks: Cell::new(0),
             lua_calls: Cell::new(0),
             atoms: RefCell::new(None),
+            tags: TagPlan::new(),
         }
+    }
+
+    /// The tag this VM assigned to the Rust type `id`, if any.
+    pub(crate) fn tag_of_type(&self, id: TypeId) -> Option<RuntimeTag> {
+        self.tags.by_type.borrow().get(&id).copied()
+    }
+
+    /// The Rust type this VM assigned to `tag`, if any. Out-of-range tags have none.
+    #[inline]
+    pub(crate) fn type_of_tag(&self, tag: c_int) -> Option<TypeId> {
+        usize::try_from(tag).ok().and_then(|tag| self.tags.by_tag.get(tag)).and_then(Cell::get)
+    }
+
+    /// Records `tag -> id`; the caller has checked the range and both directions for conflicts.
+    pub(crate) fn assign_tag(&self, id: TypeId, tag: RuntimeTag) {
+        self.tags.by_tag[usize::from(tag)].set(Some(id));
+        self.tags.by_type.borrow_mut().insert(id, tag);
     }
 
     /// The installed catalogue; `None` while a (re)installation is in progress, so `useratom`

@@ -67,8 +67,8 @@ pub fn register<T: Userdata>(
     configure: impl FnOnce(&mut MetatableBuilder<'_>) -> Result<()>,
 ) -> Result<()> {
     const { assert_userdata_layout::<Storage<T>>() };
-    if T::TAG.is_some() {
-        return Err(Error::logic(format!("'{}' is tagged; use userdata::tagged", T::NAME)));
+    if let Some(tag) = runtime.shared().tag_of_type(std::any::TypeId::of::<T>()) {
+        return Err(Error::logic(format!("'{}' is already tag {tag} in this runtime; use userdata::tagged", T::NAME)));
     }
     if T::NAME.is_empty() {
         return Err(Error::logic("Untagged userdata name cannot be empty"));
@@ -197,9 +197,6 @@ fn require_registered<T: Userdata>(state: *mut ffi::lua_State) -> Result<()> {
 /// Allocates storage, writes it, attaches `T`'s metatable, returns the view.
 fn push_storage<'s, T: Userdata>(scope: &'s impl Scope, storage: Storage<T>) -> Result<ValueView<'s>> {
     const { assert_userdata_layout::<Storage<T>>() };
-    if T::TAG.is_some() {
-        return Err(Error::logic(format!("'{}' is tagged; use userdata::tagged", T::NAME)));
-    }
     let state = scope.state();
     require_registered::<T>(state)?;
     // SAFETY: allocate, write immediately (Luau owns the destructor from allocation on), then
@@ -231,7 +228,7 @@ pub fn push_borrowed<'s, T: Userdata>(scope: &'s impl Scope, borrowed: StableRef
 
 /// The storage when `value` is a `T` whose metatable is `T`'s registered read-only one.
 fn storage<'v, T: Userdata>(value: ValueView<'v>) -> Option<&'v Storage<T>> {
-    if T::TAG.is_some() || !value.is_userdata() {
+    if !value.is_userdata() {
         return None;
     }
     let state = value.state();

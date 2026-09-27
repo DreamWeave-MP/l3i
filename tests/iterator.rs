@@ -12,14 +12,12 @@ struct Sequence;
 
 unsafe impl Userdata for Sequence {
     const NAME: &'static str = "dreamweave.tests.Sequence";
-    const TAG: Option<u8> = Some(40);
 }
 
 struct Keyed;
 
 unsafe impl Userdata for Keyed {
     const NAME: &'static str = "dreamweave.tests.Keyed";
-    const TAG: Option<u8> = Some(41);
 }
 
 struct Counted {
@@ -28,7 +26,6 @@ struct Counted {
 
 unsafe impl Userdata for Counted {
     const NAME: &'static str = "dreamweave.tests.Counted";
-    const TAG: Option<u8> = Some(42);
 }
 
 struct CountCursor {
@@ -46,7 +43,7 @@ fn push_global<T: Userdata>(runtime: &Runtime, name: &str, value: T) {
 #[test]
 fn stateless_iterator_reuses_the_generator_and_preserves_state() {
     let runtime = Runtime::new().unwrap();
-    tagged::register::<Sequence>(&runtime, |ty| {
+    tagged::register::<Sequence>(&runtime, 40, |ty| {
         ty.array_iterator(|_: &Sequence, index: f64| -> Option<(f64, f64)> {
             if index >= 3.0 { None } else { Some((index + 1.0, (index + 1.0) * 10.0)) }
         })
@@ -71,7 +68,7 @@ fn stateless_iterator_reuses_the_generator_and_preserves_state() {
 #[test]
 fn keyed_iterator_starts_with_nil_control() {
     let runtime = Runtime::new().unwrap();
-    tagged::register::<Keyed>(&runtime, |ty| {
+    tagged::register::<Keyed>(&runtime, 41, |ty| {
         ty.keyed_iterator(|_: &Keyed, previous: ValueView| -> Result<Option<(String, f64)>> {
             if previous.is_nil() {
                 return Ok(Some(("first".to_owned(), 10.0)));
@@ -95,7 +92,7 @@ fn keyed_iterator_starts_with_nil_control() {
 #[test]
 fn cursor_iterator_creates_independent_state_for_nested_loops() {
     let runtime = Runtime::new().unwrap();
-    tagged::register::<Counted>(&runtime, |ty| {
+    tagged::register::<Counted>(&runtime, 42, |ty| {
         ty.cursor_iterator(
             |call: &Call| -> Result<CountCursor> {
                 let counted = dream_binder::userdata::check_receiver::<Counted>(call.arg(1))?;
@@ -137,7 +134,7 @@ fn cursor_iterator_creates_independent_state_for_nested_loops() {
 #[test]
 fn iter_conflicts_are_detected() {
     let runtime = Runtime::new().unwrap();
-    let error = tagged::register::<Sequence>(&runtime, |ty| {
+    let error = tagged::register::<Sequence>(&runtime, 40, |ty| {
         ty.array_iterator(|_: &Sequence, _: f64| -> Option<(f64, f64)> { None })?;
         ty.keyed_iterator(|_: &Sequence, _: ValueView| -> Option<(f64, f64)> { None })
     })

@@ -55,7 +55,6 @@ struct Foo {
 
 unsafe impl Userdata for Foo {
     const NAME: &'static str = "dreamweave.tests.Foo";
-    const TAG: Option<u8> = Some(FOO_TAG);
 }
 
 impl DirectAccess for Foo {
@@ -108,7 +107,6 @@ struct Bar;
 
 unsafe impl Userdata for Bar {
     const NAME: &'static str = "dreamweave.tests.Bar";
-    const TAG: Option<u8> = Some(BAR_TAG);
 }
 
 impl DirectAccess for Bar {
@@ -155,7 +153,7 @@ fn install_foo(runtime: &Runtime) {
     let index = runtime.load_function("return function(v, k) return 'closure-' .. tostring(k) end").unwrap();
     let namecall = runtime.load_function("return function(self) return 'closure-call' end").unwrap();
     let newindex = runtime.load_function("return function(v, k, val) error('closure-newindex', 0) end").unwrap();
-    tagged::register::<Foo>(runtime, |ty| {
+    tagged::register::<Foo>(runtime, FOO_TAG, |ty| {
         ty.metamethod_value("__index", index.value())?;
         ty.metamethod_value("__namecall", namecall.value())?;
         ty.metamethod_value("__newindex", newindex.value())?;
@@ -278,7 +276,7 @@ fn cache_rejects_cross_tag_poisoning_at_a_shared_site() {
     let runtime = runtime_with_atoms();
     install_foo(&runtime);
     let index = runtime.load_function("return function(v, k) return 'bar-closure' end").unwrap();
-    tagged::register::<Bar>(&runtime, |ty| {
+    tagged::register::<Bar>(&runtime, BAR_TAG, |ty| {
         ty.metamethod_value("__index", index.value())?;
         ty.direct_dispatch::<Bar>(DirectMetamethods::INDEX)
     })
@@ -334,13 +332,13 @@ impl DirectField<Bar> for FooOriginForBar {
 fn registration_requires_wrappers_and_a_frozen_metatable() {
     let runtime = runtime_with_atoms();
     let error = direct::register::<Foo>(&runtime, DirectMetamethods::ALL).unwrap_err();
-    assert_eq!(error, Error::logic("Luau userdata tag has no registered metatable"));
-    tagged::register::<Foo>(&runtime, |ty| ty.method("plain", |f: &Foo| f.value.get())).unwrap();
+    assert_eq!(error, Error::logic("'dreamweave.tests.Foo' is not tagged in this runtime; direct access needs a tag"));
+    tagged::register::<Foo>(&runtime, FOO_TAG, |ty| ty.method("plain", |f: &Foo| f.value.get())).unwrap();
     let error = direct::register::<Foo>(&runtime, DirectMetamethods::INDEX).unwrap_err();
     assert!(error.to_string().contains("no corresponding wrapper metamethod"), "{error}");
     assert!(direct::register::<Foo>(&runtime, DirectMetamethods::default()).is_err());
     // Wrapping requires an original metamethod to exist.
-    let error =
-        tagged::register::<Bar>(&runtime, |ty| ty.direct_dispatch::<Bar>(DirectMetamethods::NAMECALL)).unwrap_err();
+    let error = tagged::register::<Bar>(&runtime, BAR_TAG, |ty| ty.direct_dispatch::<Bar>(DirectMetamethods::NAMECALL))
+        .unwrap_err();
     assert!(error.to_string().contains("requires an original __namecall metamethod"), "{error}");
 }

@@ -23,6 +23,15 @@ use crate::stack::{Frame, Stack, ValueView, same_vm};
 pub use call_scope::{CallContext, CallKind, CallScope};
 use shared::Shared;
 
+/// The shared block of the runtime owning `state`, for as long as that runtime lives.
+///
+/// # Safety
+/// `state` is a live thread; the returned borrow must not outlive the runtime.
+pub(crate) unsafe fn shared_for<'a>(state: *mut ffi::lua_State) -> Option<&'a Shared> {
+    // SAFETY: forwarded contract.
+    unsafe { shared::shared_of(state).as_ref() }
+}
+
 /// The VM lifetime token of the runtime owning `state`, or a dead token for a foreign VM.
 ///
 /// # Safety

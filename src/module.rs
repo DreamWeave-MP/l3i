@@ -15,7 +15,7 @@ use crate::error::{Error, Result};
 use crate::runtime::Runtime;
 use crate::stack::Scope;
 use crate::userdata::metatable::MetatableBuilder;
-use crate::userdata::{Userdata, tagged, untagged};
+use crate::userdata::{RuntimeTag, Userdata, tagged, untagged};
 use crate::value::{Function, Table, Value};
 
 /// A library of Luau bindings that a host can install into its runtime.
@@ -69,16 +69,16 @@ impl<'r> ModuleBuilder<'r> {
         self.table.set(&self.runtime.stack(), key, value)
     }
 
-    /// Registers a userdata type (tagged or untagged by its `TAG`) and configures its
+    /// Registers a userdata type, tagged under `tag` or untagged for `None`, and configures its
     /// metatable. The type's `NAME` must live under the host's debug roots.
     pub fn userdata<T: Userdata>(
         &mut self,
+        tag: Option<RuntimeTag>,
         configure: impl FnOnce(&mut MetatableBuilder<'_>) -> Result<()>,
     ) -> Result<()> {
-        if T::TAG.is_some() {
-            tagged::register::<T>(self.runtime, configure)
-        } else {
-            untagged::register::<T>(self.runtime, configure)
+        match tag {
+            Some(tag) => tagged::register::<T>(self.runtime, tag, configure),
+            None => untagged::register::<T>(self.runtime, configure),
         }
     }
 

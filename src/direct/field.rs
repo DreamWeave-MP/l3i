@@ -49,15 +49,15 @@ unsafe extern "C" fn field_thunk<T: Userdata, H: DirectField<T>>(userdata: *mut 
 /// with a read-only metatable. Luau offers no query, replacement, or removal for direct
 /// fields, so registering a field twice is a logic error here.
 pub fn register<T: Userdata, H: DirectField<T>>(runtime: &Runtime, field: &str) -> Result<()> {
-    let Some(tag) = T::TAG else {
-        return Err(Error::logic(format!("'{}' is untagged; direct fields need a runtime tag", T::NAME)));
-    };
-    super::require_tag(tag)?;
     if field.is_empty() || field.contains('\0') {
         return Err(Error::logic("Direct userdata field name must be a non-empty C string"));
     }
     let name = CString::new(field).expect("checked for NUL above");
     let stack = runtime.stack();
+    let Some(tag) = crate::userdata::tagged::tag_of::<T>(&stack) else {
+        return Err(Error::logic(format!("'{}' is not tagged in this runtime; direct fields need a tag", T::NAME)));
+    };
+    super::require_tag(tag)?;
     stack.with_frame(|frame| {
         let state = frame.state();
         // SAFETY: the metatable check is a balanced push/pop; registration copies the field

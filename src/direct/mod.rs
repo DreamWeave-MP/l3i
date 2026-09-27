@@ -257,8 +257,9 @@ pub trait DirectAccess: Userdata {
 
 /// The payload for a direct callback: `data` is the userdata payload Luau passed and `utag` its
 /// tag, which must be `T`'s.
-unsafe fn payload<'a, T: Userdata>(data: *mut c_void, utag: c_int) -> Result<&'a T> {
-    if T::TAG.map(c_int::from) != Some(utag) || data.is_null() {
+unsafe fn payload<'a, T: Userdata>(state: *mut ffi::lua_State, data: *mut c_void, utag: c_int) -> Result<&'a T> {
+    // SAFETY: `state` is the live thread Luau passed to the direct callback.
+    if data.is_null() || !unsafe { crate::userdata::tagged::type_matches_tag::<T>(state, utag) } {
         return Err(Error::logic(format!("direct callback for '{}' received userdata of tag {utag}", T::NAME)));
     }
     // SAFETY: the tag matched, so Luau's payload is a T written by tagged::push.
@@ -317,7 +318,7 @@ pub unsafe extern "C-unwind" fn index_callback<T: DirectAccess>(
     unsafe {
         trampoline::enter(state, || {
             let call = Call::from_raw(state);
-            let payload = payload::<T>(data, utag)?;
+            let payload = payload::<T>(state, data, utag)?;
             let mut cached = if slot.is_null() { 0 } else { *slot };
             let outcome = T::direct_index(&call, payload, atom as Atom, &mut cached)?;
             if !slot.is_null() {
@@ -346,7 +347,7 @@ pub unsafe extern "C-unwind" fn newindex_callback<T: DirectAccess>(
     unsafe {
         trampoline::enter(state, || {
             let call = Call::from_raw(state);
-            let payload = payload::<T>(data, utag)?;
+            let payload = payload::<T>(state, data, utag)?;
             let mut cached = if slot.is_null() { 0 } else { *slot };
             let outcome = T::direct_newindex(&call, payload, atom as Atom, &mut cached)?;
             if !slot.is_null() {
@@ -378,7 +379,7 @@ pub unsafe extern "C-unwind" fn namecall_callback<T: DirectAccess>(
     unsafe {
         trampoline::enter(state, || {
             let call = Call::from_raw(state);
-            let payload = payload::<T>(data, utag)?;
+            let payload = payload::<T>(state, data, utag)?;
             let mut cached = if slot.is_null() { 0 } else { *slot };
             let outcome = T::direct_namecall(&call, payload, atom as Atom, &mut cached)?;
             if !slot.is_null() {
@@ -405,8 +406,7 @@ pub unsafe extern "C-unwind" fn namecall_callback<T: DirectAccess>(
 pub unsafe extern "C-unwind" fn index_wrapper<T: DirectAccess>(state: *mut ffi::lua_State) -> c_int {
     unsafe {
         trampoline::enter(state, || {
-            let Some(tag) = T::TAG else { return index_fallback(state) };
-            let data = ffi::lua_touserdatatagged(state, 1, c_int::from(tag));
+            let data = crate::userdata::tagged::payload_ptr::<T>(state, 1);
             if data.is_null() || ffi::lua_type(state, 2) != ffi::LUA_TSTRING {
                 return index_fallback(state);
             }
@@ -417,7 +417,7 @@ pub unsafe extern "C-unwind" fn index_wrapper<T: DirectAccess>(state: *mut ffi::
             }
             let call = Call::from_raw(state);
             let mut slot: u16 = 0;
-            match T::direct_index(&call, &*data.cast::<T>(), atom as Atom, &mut slot)? {
+            match T::direct_index(&call, &*data, atom as Atom, &mut slot)? {
                 Dispatch::Handled => Ok(1),
                 Dispatch::Fallback => index_fallback(state),
             }
@@ -433,8 +433,7 @@ pub unsafe extern "C-unwind" fn index_wrapper<T: DirectAccess>(state: *mut ffi::
 pub unsafe extern "C-unwind" fn newindex_wrapper<T: DirectAccess>(state: *mut ffi::lua_State) -> c_int {
     unsafe {
         trampoline::enter(state, || {
-            let Some(tag) = T::TAG else { return call_original(state).map(|_| 0) };
-            let data = ffi::lua_touserdatatagged(state, 1, c_int::from(tag));
+            let data = crate::userdata::tagged::payload_ptr::<T>(state, 1);
             if data.is_null() || ffi::lua_type(state, 2) != ffi::LUA_TSTRING {
                 return call_original(state).map(|_| 0);
             }
@@ -445,7 +444,7 @@ pub unsafe extern "C-unwind" fn newindex_wrapper<T: DirectAccess>(state: *mut ff
             }
             let call = Call::from_raw(state);
             let mut slot: u16 = 0;
-            match T::direct_newindex(&call, &*data.cast::<T>(), atom as Atom, &mut slot)? {
+            match T::direct_newindex(&call, &*data, atom as Atom, &mut slot)? {
                 Dispatch::Handled => Ok(0),
                 Dispatch::Fallback => call_original(state).map(|_| 0),
             }
@@ -461,8 +460,7 @@ pub unsafe extern "C-unwind" fn newindex_wrapper<T: DirectAccess>(state: *mut ff
 pub unsafe extern "C-unwind" fn namecall_wrapper<T: DirectAccess>(state: *mut ffi::lua_State) -> c_int {
     unsafe {
         trampoline::enter(state, || {
-            let Some(tag) = T::TAG else { return call_original(state) };
-            let data = ffi::lua_touserdatatagged(state, 1, c_int::from(tag));
+            let data = crate::userdata::tagged::payload_ptr::<T>(state, 1);
             let mut atom: c_int = -1;
             let name = ffi::lua_namecallatom(state, &mut atom);
             if data.is_null() || name.is_null() || atom < 0 {
@@ -470,7 +468,7 @@ pub unsafe extern "C-unwind" fn namecall_wrapper<T: DirectAccess>(state: *mut ff
             }
             let call = Call::from_raw(state);
             let mut slot: u16 = 0;
-            match T::direct_namecall(&call, &*data.cast::<T>(), atom as Atom, &mut slot)? {
+            match T::direct_namecall(&call, &*data, atom as Atom, &mut slot)? {
                 Some(results) => Ok(results),
                 None => call_original(state),
             }
@@ -558,11 +556,11 @@ pub fn register<T: DirectAccess>(runtime: &Runtime, which: DirectMetamethods) ->
     if !which.any() {
         return Err(Error::logic("Direct userdata access requires a callback"));
     }
-    let Some(tag) = T::TAG else {
-        return Err(Error::logic(format!("'{}' is untagged; direct access needs a runtime tag", T::NAME)));
+    let stack = runtime.stack();
+    let Some(tag) = crate::userdata::tagged::tag_of::<T>(&stack) else {
+        return Err(Error::logic(format!("'{}' is not tagged in this runtime; direct access needs a tag", T::NAME)));
     };
     require_tag(tag)?;
-    let stack = runtime.stack();
     stack.with_frame(|frame| {
         let state = frame.state();
         // SAFETY: balanced pushes within the frame.

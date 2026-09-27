@@ -21,7 +21,6 @@ impl Drop for Untagged {
 
 unsafe impl Userdata for Untagged {
     const NAME: &'static str = "dreamweave.tests.Untagged";
-    const TAG: Option<u8> = None;
 }
 
 struct Other {
@@ -30,14 +29,12 @@ struct Other {
 
 unsafe impl Userdata for Other {
     const NAME: &'static str = "dreamweave.tests.Other";
-    const TAG: Option<u8> = None;
 }
 
 struct SameName;
 
 unsafe impl Userdata for SameName {
     const NAME: &'static str = "dreamweave.tests.Untagged";
-    const TAG: Option<u8> = None;
 }
 
 fn register_untagged(runtime: &Runtime) {

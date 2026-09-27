@@ -16,14 +16,12 @@ struct Bar {
 
 unsafe impl Userdata for Bar {
     const NAME: &'static str = "dreamweave.tests.Bar";
-    const TAG: Option<u8> = Some(20);
 }
 
 struct Baz;
 
 unsafe impl Userdata for Baz {
     const NAME: &'static str = "dreamweave.tests.Baz";
-    const TAG: Option<u8> = Some(21);
 }
 
 unsafe extern "C-unwind" fn good_method_body(state: *mut ffi::lua_State) -> c_int {
@@ -53,7 +51,7 @@ fn set_global_bar(runtime: &Runtime, name: &str, value: i32) {
 #[test]
 fn properties_methods_and_setters_dispatch_through_generated_metamethods() {
     let runtime = Runtime::new().unwrap();
-    tagged::register::<Bar>(&runtime, |ty| {
+    tagged::register::<Bar>(&runtime, 20, |ty| {
         ty.method("double", |bar: &Bar| bar.value.get() * 2)?;
         ty.property_rw("value", |bar: &Bar| bar.value.get(), |bar: &Bar, value: i32| bar.value.set(value))?;
         ty.property("readonly", |bar: &Bar| bar.value.get() + 100)?;
@@ -92,7 +90,7 @@ fn properties_methods_and_setters_dispatch_through_generated_metamethods() {
 fn builder_conflict_rules() {
     let runtime = Runtime::new().unwrap();
     // Method first, then explicit __index conflicts.
-    let error = tagged::register::<Bar>(&runtime, |ty| {
+    let error = tagged::register::<Bar>(&runtime, 20, |ty| {
         ty.method("len", |_: &Bar| 0i32)?;
         ty.raw_metamethod("__index", good_method_body)
     })
@@ -100,7 +98,7 @@ fn builder_conflict_rules() {
     assert_eq!(error, Error::logic("Metatable already has an explicit __index"));
 
     // Explicit __index first, then a method conflicts.
-    let error = tagged::register::<Bar>(&runtime, |ty| {
+    let error = tagged::register::<Bar>(&runtime, 20, |ty| {
         ty.raw_metamethod("__index", good_method_body)?;
         ty.method("len", |_: &Bar| 0i32)
     })
@@ -108,7 +106,7 @@ fn builder_conflict_rules() {
     assert_eq!(error, Error::logic("Explicit __index conflicts with setMethod"));
 
     // Native methods after an explicit __index.
-    let error = tagged::register::<Bar>(&runtime, |ty| {
+    let error = tagged::register::<Bar>(&runtime, 20, |ty| {
         ty.raw_metamethod("__index", good_method_body)?;
         ty.begin_native_methods()
     })
@@ -116,7 +114,7 @@ fn builder_conflict_rules() {
     assert_eq!(error, Error::logic("Native methods cannot be added after an explicit __index"));
 
     // Double begin.
-    let error = tagged::register::<Bar>(&runtime, |ty| {
+    let error = tagged::register::<Bar>(&runtime, 20, |ty| {
         ty.begin_native_methods()?;
         ty.begin_native_methods()
     })
@@ -124,7 +122,7 @@ fn builder_conflict_rules() {
     assert_eq!(error, Error::logic("Native method registration already started"));
 
     // Setter then explicit __newindex.
-    let error = tagged::register::<Bar>(&runtime, |ty| {
+    let error = tagged::register::<Bar>(&runtime, 20, |ty| {
         ty.property_rw("posX", |_: &Bar| 0f32, |_: &Bar, _: f32| ())?;
         ty.raw_metamethod("__newindex", good_method_body)
     })
@@ -132,7 +130,7 @@ fn builder_conflict_rules() {
     assert_eq!(error, Error::logic("Explicit __newindex conflicts with registered properties"));
 
     // Generated __namecall cannot be replaced.
-    let error = tagged::register::<Bar>(&runtime, |ty| {
+    let error = tagged::register::<Bar>(&runtime, 20, |ty| {
         ty.method("getValue", |bar: &Bar| bar.value.get())?;
         ty.property("value", |bar: &Bar| bar.value.get())?;
         ty.raw_metamethod("__namecall", good_method_body)
@@ -141,32 +139,32 @@ fn builder_conflict_rules() {
     assert_eq!(error, Error::logic("Metatable already has an explicit or generated __namecall"));
 
     // Duplicate member names, and a setter that takes no value.
-    let error = tagged::register::<Bar>(&runtime, |ty| {
+    let error = tagged::register::<Bar>(&runtime, 20, |ty| {
         ty.method("value", |bar: &Bar| bar.value.get())?;
         ty.property("value", |bar: &Bar| bar.value.get())
     })
     .unwrap_err();
     assert_eq!(error, Error::logic("dreamweave.tests.Bar.value already registered"));
     let error =
-        tagged::register::<Bar>(&runtime, |ty| ty.property_rw("value", |bar: &Bar| bar.value.get(), |_: &Bar| ()))
+        tagged::register::<Bar>(&runtime, 20, |ty| ty.property_rw("value", |bar: &Bar| bar.value.get(), |_: &Bar| ()))
             .unwrap_err();
     assert_eq!(error, Error::logic("A property setter must accept one Lua value argument"));
 
     // A member whose receiver is another type.
-    let error = tagged::register::<Bar>(&runtime, |ty| ty.method("wrong", |_: &Baz| 0i32)).unwrap_err();
+    let error = tagged::register::<Bar>(&runtime, 20, |ty| ty.method("wrong", |_: &Baz| 0i32)).unwrap_err();
     assert!(error.to_string().contains("receiverTypeName mismatch for dreamweave.tests.Baz"), "{error}");
-    let error = tagged::register::<Bar>(&runtime, |ty| ty.method("wrong", || 0i32)).unwrap_err();
+    let error = tagged::register::<Bar>(&runtime, 20, |ty| ty.method("wrong", || 0i32)).unwrap_err();
     assert_eq!(error, Error::logic("Member bindings need a receiver as their first parameter"));
 
     // Every failure rolled back: the type can still be registered cleanly.
-    tagged::register::<Bar>(&runtime, |ty| ty.method("ok", |bar: &Bar| bar.value.get())).unwrap();
+    tagged::register::<Bar>(&runtime, 20, |ty| ty.method("ok", |bar: &Bar| bar.value.get())).unwrap();
     assert!(tagged::is_registered::<Bar>(&runtime.stack()));
 }
 
 #[test]
 fn native_method_table_lifecycle_and_dispatch() {
     let runtime = Runtime::new().unwrap();
-    tagged::register::<Baz>(&runtime, |ty| {
+    tagged::register::<Baz>(&runtime, 21, |ty| {
         ty.begin_native_methods()?;
         ty.add_native_method("good", good_method_body, 21)?;
         let duplicate = ty.add_native_method("good", good_method_body, 22).unwrap_err();
@@ -192,7 +190,7 @@ fn native_method_table_lifecycle_and_dispatch() {
 #[test]
 fn metamethod_debug_names_compose_from_the_type() {
     let runtime = Runtime::new().unwrap();
-    tagged::register::<Baz>(&runtime, |ty| ty.raw_metamethod("__namecall", arg_error_body)).unwrap();
+    tagged::register::<Baz>(&runtime, 21, |ty| ty.raw_metamethod("__namecall", arg_error_body)).unwrap();
     {
         let stack = runtime.stack();
         let frame = stack.frame();
@@ -203,7 +201,7 @@ fn metamethod_debug_names_compose_from_the_type() {
     let error = runtime.exec("composed:anything()").unwrap_err().to_string();
     assert!(error.contains("invalid argument #1 to 'dreamweave.tests.Baz.__namecall' (probe expected"), "{error}");
 
-    tagged::register::<Bar>(&runtime, |ty| {
+    tagged::register::<Bar>(&runtime, 20, |ty| {
         ty.metamethod("__len", |bar: &Bar, _extra: dream_binder::stack::ValueView| bar.value.get())?;
         ty.metamethod("__tostring", |bar: &Bar| format!("Bar({})", bar.value.get()))?;
         // Metamethods bind in function mode: the receiver is argument #1, so a variadic call
@@ -224,7 +222,7 @@ fn script_visible_identity_and_protected_metatable() {
     let runtime = Runtime::new().unwrap();
     // Registration holds the root stack, so anything the metatable needs is pinned beforehand.
     let marker = protected_marker(&runtime);
-    tagged::register::<Baz>(&runtime, |ty| ty.set_field("__metatable", &marker)).unwrap();
+    tagged::register::<Baz>(&runtime, 21, |ty| ty.set_field("__metatable", &marker)).unwrap();
     {
         let stack = runtime.stack();
         let frame = stack.frame();

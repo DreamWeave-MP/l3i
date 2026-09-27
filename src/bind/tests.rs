@@ -296,11 +296,10 @@ fn table_error_objects_survive_forwarding_unchanged() {
 fn tagged_userdata_arguments_are_borrowed_and_checked() {
     struct Probe(f64);
     unsafe impl Userdata for Probe {
-        const TAG: Option<u8> = Some(9);
         const NAME: &'static str = "dreamweave.tests.Probe";
     }
     let runtime = Runtime::new().unwrap();
-    tagged::register::<Probe>(&runtime, |_| Ok(())).unwrap();
+    tagged::register::<Probe>(&runtime, 9, |_| Ok(())).unwrap();
     let make = runtime
         .bind_function(NAME, |call: &Call, value: f64| -> Result<StackResults> {
             tagged::push(call, Probe(value))?;
