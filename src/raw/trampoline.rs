@@ -20,13 +20,23 @@ use std::ffi::c_int;
 use super::ffi;
 use crate::error::{Error, Result};
 
-/// Aborts if dropped while a Rust panic is unwinding. Foreign (Luau) unwinds drop it
-/// normally: `std::thread::panicking()` is false for them.
-pub(crate) struct AbortOnPanic;
+/// Aborts if dropped while a Rust panic that started inside the guarded region is unwinding.
+/// Foreign (Luau) unwinds drop it normally: `std::thread::panicking()` is false for them. A
+/// panic already in flight when the guard is created (a callback such as `userthread` running
+/// while the host's own panic unwinds through `lua_close`) is not ours to escalate.
+pub(crate) struct AbortOnPanic {
+    panicking_at_entry: bool,
+}
+
+impl AbortOnPanic {
+    pub(crate) fn new() -> AbortOnPanic {
+        AbortOnPanic { panicking_at_entry: std::thread::panicking() }
+    }
+}
 
 impl Drop for AbortOnPanic {
     fn drop(&mut self) {
-        if std::thread::panicking() {
+        if std::thread::panicking() && !self.panicking_at_entry {
             eprintln!("dream-binder: a Rust panic inside a Luau native function cannot be recovered; aborting");
             std::process::abort();
         }
@@ -44,7 +54,7 @@ impl Drop for AbortOnPanic {
 /// caller must be that C function's frame, so that raising here unwinds only Luau frames and
 /// `extern "C-unwind"` Rust frames.
 pub(crate) unsafe fn enter(state: *mut ffi::lua_State, body: impl FnOnce() -> Result<c_int>) -> c_int {
-    let _guard = AbortOnPanic;
+    let _guard = AbortOnPanic::new();
     match body() {
         Ok(count) => count,
         Err(error) => unsafe { raise(state, error) },

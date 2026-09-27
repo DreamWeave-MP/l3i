@@ -30,7 +30,7 @@ pub trait DirectField<T: Userdata>: 'static {
 
 /// The Luau callback for `(T, H)`.
 unsafe extern "C" fn field_thunk<T: Userdata, H: DirectField<T>>(userdata: *mut c_void, result: *mut c_void) {
-    let _guard = crate::raw::trampoline::AbortOnPanic;
+    let _guard = crate::raw::trampoline::AbortOnPanic::new();
     // SAFETY: Luau calls this only for userdata of the tag it was registered on, so the
     // payload is a T; `result` is the destination TValue Luau's setters write.
     unsafe {

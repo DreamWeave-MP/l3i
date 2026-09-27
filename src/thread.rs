@@ -124,12 +124,14 @@ impl Thread {
         if !function.value().belongs_to(scope.state()) {
             return Err(Error::logic("Coroutine function belongs to a different VM"));
         }
-        // SAFETY: the thread is live; lua_gettop and lua_status only read.
+        // SAFETY: the thread is live; lua_gettop and lua_status only read. The arguments go on
+        // the coroutine's own stack through a root lease on that thread, which refuses to
+        // coexist with a live `with_stack` on it.
         unsafe {
             if ffi::lua_status(self.state) != ffi::LUA_OK || ffi::lua_gettop(self.state) != 0 {
                 return Err(Error::logic("Lua thread is already running or holds values; reset it before starting"));
             }
-            let own = Stack::from_raw(self.state, false);
+            let own = Stack::lease_root(self.state);
             ffi::lua_getref(self.state, function.value().reference_id());
             args.push_all(&own)?;
             drop(own);
@@ -145,7 +147,7 @@ impl Thread {
         }
         // SAFETY: arguments go on the suspended thread's own stack, as Luau expects.
         unsafe {
-            let own = Stack::from_raw(self.state, false);
+            let own = Stack::lease_root(self.state);
             args.push_all(&own)?;
         }
         self.step(scope, A::COUNT)
@@ -183,7 +185,7 @@ impl Thread {
             match status {
                 ffi::LUA_OK | ffi::LUA_YIELD => {
                     let count = ffi::lua_gettop(self.state);
-                    let own = Stack::from_raw(self.state, false);
+                    let own = Stack::lease_root(self.state);
                     let mut values = Vec::with_capacity(count as usize);
                     for index in 1..=count {
                         values.push(Value::store(own.at(index))?);
@@ -216,12 +218,16 @@ impl Thread {
         self.pin.is_valid() && unsafe { ffi::lua_isthreadreset(self.state) != 0 }
     }
 
-    /// Runs `body` with a stack over this thread, for pushing arguments or reading values
+    /// Runs `body` with the root stack of this thread, for pushing arguments or reading values
     /// between resumes. Never call into Lua on a suspended thread through it.
+    ///
+    /// # Panics
+    /// If a root stack on this thread is already alive (a nested `with_stack`, or a `start` or
+    /// `resume` in progress): the lease is per Lua thread.
     pub fn with_stack<R>(&self, scope: &impl Scope, body: impl FnOnce(&Stack<'_>) -> Result<R>) -> Result<R> {
         self.require_live(scope)?;
         // SAFETY: the thread is live and not running (the host holds `scope`'s thread).
-        let stack = unsafe { Stack::from_raw(self.state, true) };
+        let stack = unsafe { Stack::lease_root(self.state) };
         body(&stack)
     }
 
@@ -234,15 +240,18 @@ impl Thread {
         Ok(())
     }
 
-    /// Host data attached to the thread (`lua_setthreaddata`); null when none.
+    /// Host data attached to the thread; null when none. (Luau's own `lua_setthreaddata` slot
+    /// holds the binder's per-thread record; the host's pointer lives inside it.)
     pub fn data(&self) -> *mut c_void {
         if !self.pin.is_valid() {
             return std::ptr::null_mut();
         }
-        unsafe { ffi::lua_getthreaddata(self.state) }
+        // SAFETY: the pin proves the VM is open, so the record is live.
+        unsafe { crate::runtime::shared::thread_record(self.state) }
+            .map_or(std::ptr::null_mut(), |record| record.host_data.get())
     }
 
-    /// Attaches host data to the thread. Luau only stores the pointer.
+    /// Attaches host data to the thread. The binder only stores the pointer.
     ///
     /// # Safety
     /// Whatever the host later reads through [`Thread::data`] must stay valid for as long as
@@ -251,8 +260,13 @@ impl Thread {
         if !self.pin.is_valid() {
             return Err(Error::logic("Cannot set data on a Lua thread whose runtime has closed"));
         }
-        unsafe { ffi::lua_setthreaddata(self.state, data) };
-        Ok(())
+        match unsafe { crate::runtime::shared::thread_record(self.state) } {
+            Some(record) => {
+                record.host_data.set(data);
+                Ok(())
+            }
+            None => Err(Error::logic("Lua thread has no runtime record")),
+        }
     }
 }
 

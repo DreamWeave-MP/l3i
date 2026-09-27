@@ -194,7 +194,7 @@ pub(crate) unsafe extern "C" fn cage_callback(
     nsize: usize,
     kind: c_int,
 ) -> *mut c_void {
-    let _guard = crate::raw::trampoline::AbortOnPanic;
+    let _guard = crate::raw::trampoline::AbortOnPanic::new();
     // SAFETY: `ud` is the runtime's boxed cage, alive as long as the VM.
     let cage = unsafe { &**ud.cast_const().cast::<Box<dyn BufferCage>>() };
     cage.allocate(ptr, osize, nsize, kind)
@@ -210,7 +210,7 @@ pub trait EmbedderGc: 'static {
 }
 
 unsafe extern "C" fn embedder_gc_callback(state: *mut ffi::lua_State, markref: Option<ffi::lua_EmbedderMark>) {
-    let _guard = crate::raw::trampoline::AbortOnPanic;
+    let _guard = crate::raw::trampoline::AbortOnPanic::new();
     // SAFETY: called by the collector on a live VM; Shared outlives it.
     let Some(shared) = (unsafe { crate::runtime::shared_for(state) }) else { return };
     let Ok(slot) = shared.embedder_gc().try_borrow() else { return };
@@ -229,7 +229,7 @@ pub trait UserdataMark<T: Userdata>: 'static {
 }
 
 unsafe extern "C" fn mark_thunk<T: Userdata, M: UserdataMark<T>>(_: *mut ffi::lua_State, ud: *mut c_void) {
-    let _guard = crate::raw::trampoline::AbortOnPanic;
+    let _guard = crate::raw::trampoline::AbortOnPanic::new();
     // SAFETY: Luau calls the mark registered for T's tag only on userdata of that tag.
     M::mark(unsafe { &*ud.cast::<T>() });
 }

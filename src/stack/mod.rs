@@ -117,8 +117,8 @@ pub struct Stack<'vm> {
     host_level: bool,
     /// Whether a frame opened directly on this stack is currently alive.
     child_open: Cell<bool>,
-    /// The owning VM's shared block for stack accounting, or null for a foreign VM.
-    shared: *const crate::runtime::shared::Shared,
+    /// The thread's record for stack accounting, or null for a thread no runtime manages.
+    record: *const crate::runtime::shared::ThreadRecord,
     _vm: PhantomData<&'vm mut ()>,
 }
 
@@ -134,15 +134,15 @@ impl<'vm> Stack<'vm> {
         unsafe { Self::new(state, host_level, false) }
     }
 
-    /// The root stack of a runtime-owned thread.
+    /// The root stack of a runtime-owned thread (the main thread or a coroutine).
     ///
     /// # Safety
     /// `state` must be a live Luau thread of a `Runtime` VM that outlives `'vm`.
     ///
     /// # Panics
-    /// If another root stack is alive and not suspended inside a Lua call: two live roots would
-    /// each believe they own the only root frame, and one frame's drop could pop what the other
-    /// still views.
+    /// If another root stack on the same thread is alive and not suspended inside a Lua call:
+    /// two live roots would each believe they own the only root frame, and one frame's drop
+    /// could pop what the other still views.
     pub(crate) unsafe fn lease_root(state: *mut ffi::lua_State) -> Self {
         // SAFETY: forwarded contract.
         unsafe { Self::new(state, true, true) }
@@ -150,12 +150,13 @@ impl<'vm> Stack<'vm> {
 
     unsafe fn new(state: *mut ffi::lua_State, host_level: bool, root: bool) -> Self {
         debug_assert!(!state.is_null(), "Stack requires a live Lua state");
-        // SAFETY: `state` is live; Shared outlives every thread of its VM.
-        let shared = unsafe { crate::runtime::shared::shared_of(state) };
-        if let Some(shared) = unsafe { shared.as_ref() } {
-            shared.register_stack(root);
+        // SAFETY: `state` is live; its record lives as long as the thread.
+        let record = unsafe { crate::runtime::shared::thread_record(state) };
+        if let Some(record) = record {
+            record.register_stack(root);
         }
-        Stack { state, host_level, child_open: Cell::new(false), shared, _vm: PhantomData }
+        let record = record.map_or(std::ptr::null(), |record| record as *const _);
+        Stack { state, host_level, child_open: Cell::new(false), record, _vm: PhantomData }
     }
 
     /// True when this stack is used from host code rather than inside a Lua call.
@@ -257,9 +258,9 @@ impl<'vm> Stack<'vm> {
 
 impl Drop for Stack<'_> {
     fn drop(&mut self) {
-        // SAFETY: null or a Shared that outlives this stack's VM borrow.
-        if let Some(shared) = unsafe { self.shared.as_ref() } {
-            shared.unregister_stack();
+        // SAFETY: null or a record that outlives this stack's borrow of its thread.
+        if let Some(record) = unsafe { self.record.as_ref() } {
+            record.unregister_stack();
         }
     }
 }

@@ -119,3 +119,48 @@ fn thread_data_and_sandboxed_globals() {
     );
     assert!(runtime.global("new_value").unwrap().is_nil());
 }
+
+#[test]
+#[should_panic(expected = "a root stack for this Lua thread is already alive")]
+fn a_coroutine_thread_leases_its_stack_like_the_main_thread() {
+    let runtime = Runtime::new().unwrap();
+    let thread = runtime.new_thread().unwrap();
+    let stack = runtime.stack();
+    thread
+        .with_stack(&stack, |outer| {
+            outer.push_number(1.0);
+            // A second root on the same coroutine thread would let its frames alias the first's.
+            thread.with_stack(&stack, |_inner| Ok(()))
+        })
+        .unwrap();
+}
+
+#[test]
+fn thread_stacks_are_leased_per_thread_not_per_vm() {
+    let runtime = Runtime::new().unwrap();
+    let thread = runtime.new_thread().unwrap();
+    let other = runtime.new_thread().unwrap();
+    // A root on the main thread and a root on each coroutine coexist: different Lua threads,
+    // different stacks.
+    let stack = runtime.stack();
+    let frame = stack.frame();
+    frame.push_number(1.0);
+    thread
+        .with_stack(&stack, |a| {
+            a.push_number(2.0);
+            other.with_stack(&stack, |b| {
+                b.push_number(3.0);
+                assert_eq!((a.top(), b.top(), frame.len()), (1, 1, 1));
+                Ok(())
+            })
+        })
+        .unwrap();
+    drop(frame);
+    drop(stack);
+    // Every thread gets its own record, including Lua-created coroutines, and records go away
+    // with their threads without disturbing the host's thread data on others.
+    runtime.exec("for i = 1, 50 do local co = coroutine.create(function() end) coroutine.resume(co) end").unwrap();
+    runtime.collect_garbage();
+    runtime.collect_garbage();
+    assert!(thread.data().is_null());
+}

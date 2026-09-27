@@ -291,7 +291,8 @@ pub trait RuntimeHooks: 'static {
     }
 }
 
-/// Which [`RuntimeHooks`] slots to install.
+/// Which [`RuntimeHooks`] slots to install. `user_thread` is always delivered (the runtime owns
+/// that callback for its per-thread records); the flag is kept for symmetry.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct HookSet {
     pub panic: bool,
@@ -354,7 +355,7 @@ impl HookSlot {
 
 /// Runs `body` with the installed hooks, if any, aborting on panic (we are inside a callback).
 unsafe fn with_hooks(state: *mut ffi::lua_State, body: impl FnOnce(&dyn RuntimeHooks)) {
-    let _guard = crate::raw::trampoline::AbortOnPanic;
+    let _guard = crate::raw::trampoline::AbortOnPanic::new();
     // SAFETY: the callback's thread is live; Shared outlives every thread of its VM.
     let Some(shared) = (unsafe { crate::runtime::shared_for(state) }) else { return };
     if let Ok(slot) = shared.hooks().hooks.try_borrow()
@@ -366,7 +367,7 @@ unsafe fn with_hooks(state: *mut ffi::lua_State, body: impl FnOnce(&dyn RuntimeH
 
 unsafe extern "C-unwind" fn on_panic(_: *mut ffi::lua_State, code: c_int) {
     // No Lua API: the state is mid-unwind.
-    let _guard = crate::raw::trampoline::AbortOnPanic;
+    let _guard = crate::raw::trampoline::AbortOnPanic::new();
     HOOKS_FOR_PANIC.with(|slot| {
         if let Some(hooks) = slot.borrow().as_ref() {
             hooks.panic(code);
@@ -380,10 +381,20 @@ thread_local! {
     static HOOKS_FOR_PANIC: RefCell<Option<std::rc::Rc<dyn RuntimeHooks>>> = const { RefCell::new(None) };
 }
 
-unsafe extern "C" fn on_user_thread(parent: *mut ffi::lua_State, thread: *mut ffi::lua_State) {
-    // The thread being destroyed may be the one we look Shared up through; use whichever is live.
-    let live = if parent.is_null() { thread } else { parent };
-    unsafe { with_hooks(live, |hooks| hooks.user_thread((!parent.is_null()).then_some(parent), thread)) }
+/// The runtime's `userthread` callback: maintains the per-thread records the stack lease and
+/// thread data rely on, then forwards to the host hook (if installed).
+pub(crate) unsafe extern "C" fn on_user_thread(parent: *mut ffi::lua_State, thread: *mut ffi::lua_State) {
+    let _guard = crate::raw::trampoline::AbortOnPanic::new();
+    // SAFETY: Luau passes the live parent on creation, or the thread being destroyed.
+    unsafe {
+        if parent.is_null() {
+            with_hooks(thread, |hooks| hooks.user_thread(None, thread));
+            crate::runtime::shared::detach_thread_record(thread);
+        } else {
+            crate::runtime::shared::attach_thread_record(thread);
+            with_hooks(parent, |hooks| hooks.user_thread(Some(parent), thread));
+        }
+    }
 }
 
 unsafe extern "C" fn on_user_finalizer(thread: *mut ffi::lua_State, coroutine: *mut ffi::lua_State) {
@@ -489,7 +500,8 @@ impl Runtime {
         unsafe {
             let callbacks = ffi::lua_callbacks(self.stack().state_ptr());
             (*callbacks).panic = set.panic.then_some(on_panic as _);
-            (*callbacks).userthread = set.user_thread.then_some(on_user_thread as _);
+            // `userthread` stays the runtime's own callback; the hook is forwarded to from it.
+            let _ = set.user_thread;
             (*callbacks).userfinalizer = set.user_finalizer.then_some(on_user_finalizer as _);
             (*callbacks).debugbreak = set.debug_break.then_some(on_debug_break as _);
             (*callbacks).debugstep = set.debug_step.then_some(on_debug_step as _);

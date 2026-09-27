@@ -180,7 +180,7 @@ fn values_that_outlive_their_runtime_become_invalid_instead_of_dangling() {
 }
 
 #[test]
-#[should_panic(expected = "a root stack for this runtime is already alive")]
+#[should_panic(expected = "a root stack for this Lua thread is already alive")]
 fn a_second_root_stack_is_refused_while_one_is_alive() {
     let runtime = Runtime::new().unwrap();
     let first = runtime.stack();

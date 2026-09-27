@@ -138,6 +138,14 @@ impl RuntimeBuilder {
         if state.is_null() {
             return Err(Error::runtime("Unable to allocate a Luau state"));
         }
+        // Creation order (luastate.cpp): pointer-encoding key first, before any table or library
+        // exists; then the buffer cage, the per-VM state and callbacks, native code generation,
+        // the atom catalogue, and last the standard libraries.
+        if self.pointer_encoding {
+            let key = PointerEncodingKey::random();
+            // SAFETY: the state is fresh; this must precede any table or library creation.
+            unsafe { ffi::lua_setpointerencodekey(state, key.0[0], key.0[1], key.0[2], key.0[3]) };
+        }
         let buffer_cage = self.buffer_cage.map(Box::new);
         if let Some(cage) = &buffer_cage {
             // SAFETY: fresh state, before any buffer; the outer Box keeps the cage's address
@@ -151,10 +159,25 @@ impl RuntimeBuilder {
             };
         }
         let shared = Box::new(Shared::new(self.limits, self.profiler));
-        // SAFETY: fresh state; native execution must be set up before any function is loaded.
+        // SAFETY: fresh state; the main thread's record lives until `Drop` frees it after
+        // lua_close, and the `userthread` callback gives every other thread its own. The
+        // callback block belongs to this VM; `shared` is never moved out of its Box.
+        unsafe {
+            shared::attach_thread_record(state);
+            let callbacks = ffi::lua_callbacks(state);
+            (*callbacks).userthread = Some(crate::debug::on_user_thread);
+            (*callbacks).userdata = (&*shared as *const Shared).cast_mut().cast();
+            if shared.profiler_enabled() {
+                (*callbacks).onallocate = Some(shared::on_allocate);
+            }
+        }
+        // SAFETY: the state has its pointer key and callbacks; native execution must be set up
+        // before any function is loaded.
         #[cfg(feature = "jit")]
-        let native_code =
-            self.native_code.map(|options| unsafe { crate::native_code::NativeCodeGen::create(state, options) });
+        let native_code = match self.native_code {
+            Some(options) => Some(unsafe { crate::native_code::NativeCodeGen::create(state, options) }?),
+            None => None,
+        };
         let runtime = Runtime {
             state,
             debug_roots: self.debug_roots,
@@ -164,20 +187,6 @@ impl RuntimeBuilder {
             native_code,
             buffer_cage,
         };
-        if self.pointer_encoding {
-            let key = PointerEncodingKey::random();
-            // SAFETY: the state is fresh; this must precede any table or library creation.
-            unsafe { ffi::lua_setpointerencodekey(state, key.0[0], key.0[1], key.0[2], key.0[3]) };
-        }
-        // SAFETY: the callback block belongs to this VM; `shared` lives as long as the state
-        // (dropped after lua_close) and is never moved out of its Box.
-        unsafe {
-            let callbacks = ffi::lua_callbacks(state);
-            (*callbacks).userdata = (&*runtime.shared as *const Shared).cast_mut().cast();
-            if runtime.shared.profiler_enabled() {
-                (*callbacks).onallocate = Some(shared::on_allocate);
-            }
-        }
         runtime.update_interrupt_hook();
         if let Some(catalogue) = self.atom_catalogue {
             crate::direct::install_atom_callback(&runtime, catalogue)?;
@@ -477,6 +486,9 @@ impl Drop for Runtime {
             (*ffi::lua_callbacks(self.state)).interrupt = None;
             (*ffi::lua_callbacks(self.state)).onallocate = None;
             ffi::lua_close(self.state);
+            // Luau frees coroutine threads through `userthread` (records go with them); the
+            // main thread's record is ours to free.
+            shared::detach_thread_record(self.state);
         }
     }
 }

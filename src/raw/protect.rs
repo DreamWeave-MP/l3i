@@ -14,7 +14,7 @@ use super::trampoline::AbortOnPanic;
 use crate::error::{Error, Result};
 
 unsafe extern "C-unwind" fn thunk<F: FnOnce(*mut ffi::lua_State) -> c_int>(state: *mut ffi::lua_State) -> c_int {
-    let _guard = AbortOnPanic;
+    let _guard = AbortOnPanic::new();
     // SAFETY: `protected_call` passed a pointer to an `Option<F>` as argument 1 and keeps that
     // storage alive across the pcall.
     unsafe {

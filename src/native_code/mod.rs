@@ -188,10 +188,15 @@ static COUNTER_CLOSURES_KEY: u8 = 0;
 impl NativeCodeGen {
     /// Creates the generator and initialises native execution on `state`, which must be a
     /// fresh main thread (before any function that should run natively is loaded).
-    pub(crate) unsafe fn create(state: *mut lua::lua_State, options: NativeCodeOptions) -> NativeCodeGen {
-        let userdata_types: Box<Vec<CString>> = Box::new(
-            options.userdata_types.iter().map(|name| CString::new(name.as_str()).unwrap_or_default()).collect(),
-        );
+    pub(crate) unsafe fn create(state: *mut lua::lua_State, options: NativeCodeOptions) -> Result<NativeCodeGen> {
+        let mut names = Vec::with_capacity(options.userdata_types.len());
+        for name in &options.userdata_types {
+            names.push(
+                CString::new(name.as_str())
+                    .map_err(|_| Error::logic(format!("Native code userdata type name {name:?} contains NUL")))?,
+            );
+        }
+        let userdata_types: Box<Vec<CString>> = Box::new(names);
         let mut userdata_type_pointers: Vec<*const std::ffi::c_char> =
             userdata_types.iter().map(|name| name.as_ptr()).collect();
         userdata_type_pointers.push(std::ptr::null());
@@ -228,7 +233,7 @@ impl NativeCodeGen {
                 lua::lua_rawset(state, lua::LUA_REGISTRYINDEX);
             }
         }
-        generator
+        Ok(generator)
     }
 
     /// Whether native execution is live on this runtime.
