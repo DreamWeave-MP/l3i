@@ -213,3 +213,42 @@ fn annotated_mode_compiles_only_marked_modules_and_ids_are_stable() {
     assert_eq!(template.native_code().unwrap().status, NativeCodeStatus::Skipped);
     let _ = Cell::new(0);
 }
+
+#[test]
+fn assembly_dumps_and_the_perf_log_describe_compiled_code() {
+    use l3i::native_code::{AssemblyOptions, AssemblyTarget};
+    use std::sync::{Arc, Mutex};
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let sink = seen.clone();
+    l3i::native_code::set_perf_log(move |entry| sink.lock().unwrap().push(entry));
+    let runtime = runtime(NativeCodeMode::Eager);
+    let generator = runtime.native_code().unwrap();
+    let function =
+        runtime.load_function("return function(n) local s = 0 for i = 1, n do s += i end return s end").unwrap();
+    let text = runtime
+        .stack()
+        .with_frame(|frame| {
+            let view = function.push_to(frame)?;
+            generator.assembly(frame, view.index(), AssemblyOptions { include_ir: true, ..AssemblyOptions::default() })
+        })
+        .unwrap();
+    assert!(text.contains("bb_"), "IR blocks are printed: {}", &text[..text.len().min(200)]);
+    let cross = runtime
+        .stack()
+        .with_frame(|frame| {
+            let view = function.push_to(frame)?;
+            generator.assembly(
+                frame,
+                view.index(),
+                AssemblyOptions { target: AssemblyTarget::A64, ..AssemblyOptions::default() },
+            )
+        })
+        .unwrap();
+    assert!(!cross.is_empty(), "cross-target assembly is generated without installing it");
+    // Compiling for real reports the functions to the perf log.
+    let sandbox = runtime.sandbox(|_| {}, SandboxOptions::default()).unwrap();
+    sandbox.load_template(&runtime, "perf.lua", "local s = 0 for i = 1, 100 do s += i end return s").unwrap();
+    assert!(!seen.lock().unwrap().is_empty(), "perf log entries");
+    assert!(seen.lock().unwrap().iter().all(|entry| entry.size > 0));
+    l3i::native_code::clear_perf_log();
+}

@@ -84,7 +84,30 @@ pub struct db_compilation_stats {
     pub functions_bound: u32,
 }
 
+/// Mirrors `struct db_assembly_options`.
+#[repr(C)]
+pub struct db_assembly_options {
+    pub target: c_int,
+    pub include_assembly: bool,
+    pub include_ir: bool,
+    pub include_outlined_code: bool,
+    pub include_ir_types: bool,
+    pub include_reg_spills: bool,
+    pub compilation: *const db_compilation_options,
+}
+
+pub type db_text_sink = unsafe extern "C" fn(*mut c_void, *const c_char, usize);
+pub type db_perf_log_fn = unsafe extern "C" fn(*mut c_void, usize, c_uint, *const c_char);
+
 unsafe extern "C" {
+    pub fn db_codegen_get_assembly(
+        L: *mut lua_State,
+        idx: c_int,
+        options: *const db_assembly_options,
+        sink: db_text_sink,
+        ctx: *mut c_void,
+    ) -> c_int;
+    pub fn db_codegen_set_perf_log(ctx: *mut c_void, log: Option<db_perf_log_fn>);
     pub fn db_codegen_supported() -> c_int;
     pub fn db_codegen_create_shared_context(block_size: usize, max_total_size: usize) -> *mut c_void;
     pub fn db_codegen_destroy_shared_context(context: *mut c_void);

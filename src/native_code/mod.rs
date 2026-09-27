@@ -14,7 +14,7 @@ pub mod vector_buffer;
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
-use std::ffi::{CString, c_int, c_void};
+use std::ffi::{CString, c_int, c_uint, c_void};
 
 use crate::error::{Error, Result};
 use crate::raw::ffi as lua;
@@ -157,6 +157,94 @@ pub struct NativeCodeResult {
     pub status: NativeCodeStatus,
     pub stats: NativeCodeStats,
     pub module_id: Option<ModuleId>,
+}
+
+/// Which machine the assembly dump targets (`Luau::CodeGen::AssemblyOptions::Target`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum AssemblyTarget {
+    #[default]
+    Host,
+    A64,
+    A64NoFeatures,
+    X64Windows,
+    X64SystemV,
+}
+
+/// What [`NativeCodeGen::assembly`] prints.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AssemblyOptions {
+    pub target: AssemblyTarget,
+    pub include_assembly: bool,
+    pub include_ir: bool,
+    pub include_outlined_code: bool,
+    pub include_ir_types: bool,
+    pub include_reg_spills: bool,
+}
+
+impl Default for AssemblyOptions {
+    fn default() -> Self {
+        AssemblyOptions {
+            target: AssemblyTarget::Host,
+            include_assembly: true,
+            include_ir: false,
+            include_outlined_code: false,
+            include_ir_types: false,
+            include_reg_spills: false,
+        }
+    }
+}
+
+/// One natively compiled function, as reported to the perf log.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PerfEntry {
+    pub address: usize,
+    pub size: u32,
+    pub symbol: String,
+}
+
+type PerfLog = Box<dyn Fn(PerfEntry) + Send + 'static>;
+static PERF_LOG: std::sync::Mutex<Option<PerfLog>> = std::sync::Mutex::new(None);
+
+unsafe extern "C" fn perf_log_callback(_: *mut c_void, address: usize, size: c_uint, symbol: *const std::ffi::c_char) {
+    let _guard = crate::raw::trampoline::AbortOnPanic::new();
+    let symbol = if symbol.is_null() {
+        String::new()
+    } else {
+        // SAFETY: Luau passes a NUL-terminated symbol.
+        unsafe { std::ffi::CStr::from_ptr(symbol) }.to_string_lossy().into_owned()
+    };
+    if let Ok(log) = PERF_LOG.lock()
+        && let Some(log) = log.as_ref()
+    {
+        log(PerfEntry { address, size, symbol });
+    }
+}
+
+/// Installs the process-wide perf log (`Luau::CodeGen::setPerfLog`): every function compiled
+/// natively afterwards, in any runtime, is reported with its code address and size, for
+/// profiler symbolisation (perf maps, ETW, ...).
+pub fn set_perf_log(log: impl Fn(PerfEntry) + Send + 'static) {
+    if let Ok(mut slot) = PERF_LOG.lock() {
+        *slot = Some(Box::new(log));
+    }
+    // SAFETY: a process-wide callback pointer write.
+    unsafe { ffi::db_codegen_set_perf_log(std::ptr::null_mut(), Some(perf_log_callback)) };
+}
+
+/// Removes the perf log.
+pub fn clear_perf_log() {
+    unsafe { ffi::db_codegen_set_perf_log(std::ptr::null_mut(), None) };
+    if let Ok(mut slot) = PERF_LOG.lock() {
+        slot.take();
+    }
+}
+
+unsafe extern "C" fn append_text(ctx: *mut c_void, data: *const std::ffi::c_char, length: usize) {
+    // SAFETY: `ctx` is the String below; Luau gives `length` bytes at `data`.
+    unsafe {
+        (*ctx.cast::<String>())
+            .push_str(&String::from_utf8_lossy(std::slice::from_raw_parts(data.cast::<u8>(), length)));
+    }
 }
 
 /// Block counters summed over every module compiled with counters on.
@@ -339,6 +427,49 @@ impl NativeCodeGen {
             unsafe { retain_counter_closure(state, index, &module_id) };
         }
         Ok(result)
+    }
+
+    /// The assembly and/or IR Luau generates for the Lua closure at `index` of `scope` (and its
+    /// nested functions), as text, with this generator's hooks and userdata types in effect.
+    /// Does not install the code. Empty output means nothing could be lowered.
+    pub fn assembly(&self, scope: &impl Scope, index: c_int, options: AssemblyOptions) -> Result<String> {
+        let state = scope.state();
+        // SAFETY: the scope's thread is live; its runtime's shared block outlives the call.
+        let Some(shared) = (unsafe { crate::runtime::shared_for(state) }) else {
+            return Err(Error::logic("Assembly dumps need a runtime-owned VM"));
+        };
+        let compile_context = hooks::CompileContext { chain: &self.hooks, shared };
+        let table = HookChain::table(&compile_context);
+        let compilation = ffi::db_compilation_options {
+            flags: 0,
+            record_counters: false,
+            nop_padding: self.nop_padding,
+            userdata_types: self.userdata_type_pointers.as_ptr(),
+            hooks: &table,
+        };
+        let raw = ffi::db_assembly_options {
+            target: match options.target {
+                AssemblyTarget::Host => 0,
+                AssemblyTarget::A64 => 1,
+                AssemblyTarget::A64NoFeatures => 2,
+                AssemblyTarget::X64Windows => 3,
+                AssemblyTarget::X64SystemV => 4,
+            },
+            include_assembly: options.include_assembly,
+            include_ir: options.include_ir,
+            include_outlined_code: options.include_outlined_code,
+            include_ir_types: options.include_ir_types,
+            include_reg_spills: options.include_reg_spills,
+            compilation: &compilation,
+        };
+        let mut text = String::new();
+        // SAFETY: the closure index is the caller's; options and the hook table outlive the call.
+        let status =
+            unsafe { ffi::db_codegen_get_assembly(state, index, &raw, append_text, (&mut text as *mut String).cast()) };
+        if status == 2 {
+            return Err(Error::runtime("Luau failed to generate assembly for this function"));
+        }
+        Ok(text)
     }
 
     /// Sums Luau's block counters over every retained module (counters must be on).

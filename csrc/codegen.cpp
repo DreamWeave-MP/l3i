@@ -372,3 +372,74 @@ int db_ir_in_terminated_block(db_ir_builder* build)
 }
 
 } // extern "C"
+
+// ---- Assembly and IR dumps, perf log -------------------------------------------------------
+
+extern "C" {
+
+struct db_assembly_options
+{
+    int target; // 0 host, 1 A64, 2 A64 without extensions, 3 X64 Windows, 4 X64 System V
+    bool include_assembly;
+    bool include_ir;
+    bool include_outlined_code;
+    bool include_ir_types;
+    bool include_reg_spills;
+    const db_compilation_options* compilation; // or null for defaults
+};
+
+typedef void (*db_text_sink)(void* ctx, const char* data, size_t length);
+typedef void (*db_perf_log_fn)(void* ctx, uintptr_t address, unsigned size, const char* symbol);
+
+// Writes the assembly (and/or IR) Luau would generate for the closure at `idx` through `sink`.
+// Returns 0 on success, 1 when the function could not be lowered, 2 on an exception.
+int db_codegen_get_assembly(lua_State* L, int idx, const db_assembly_options* options, db_text_sink sink, void* ctx)
+{
+    try
+    {
+        CG::AssemblyOptions assembly;
+        switch (options->target)
+        {
+        case 1:
+            assembly.target = CG::AssemblyOptions::A64;
+            break;
+        case 2:
+            assembly.target = CG::AssemblyOptions::A64_NoFeatures;
+            break;
+        case 3:
+            assembly.target = CG::AssemblyOptions::X64_Windows;
+            break;
+        case 4:
+            assembly.target = CG::AssemblyOptions::X64_SystemV;
+            break;
+        default:
+            assembly.target = CG::AssemblyOptions::Host;
+            break;
+        }
+        assembly.includeAssembly = options->include_assembly;
+        assembly.includeIr = options->include_ir;
+        assembly.includeOutlinedCode = options->include_outlined_code;
+        assembly.includeIrTypes = options->include_ir_types;
+        assembly.includeRegSpills = options->include_reg_spills;
+        ActiveHooks active(options->compilation ? options->compilation->hooks : nullptr);
+        if (options->compilation)
+            assembly.compilationOptions = translate(*options->compilation);
+        CG::LoweringStats stats;
+        std::string text = CG::getAssembly(L, idx, assembly, &stats);
+        sink(ctx, text.data(), text.size());
+        return text.empty() ? 1 : 0;
+    }
+    catch (...)
+    {
+        return 2;
+    }
+}
+
+// Installs (or clears, with a null function) the process-wide perf log that receives every
+// natively compiled function's address, size, and symbol.
+void db_codegen_set_perf_log(void* ctx, db_perf_log_fn log)
+{
+    CG::setPerfLog(ctx, reinterpret_cast<CG::PerfLogFn>(log));
+}
+
+} // extern "C"
