@@ -443,6 +443,33 @@ impl Runtime {
         Ok(frame.top_value())
     }
 
+    /// [`Runtime::load`] with the chunk's environment set to `env` (the `env` argument of
+    /// `luau_load`), so its globals resolve through that table instead of the real globals.
+    pub fn load_with_env<'f>(
+        &self,
+        frame: &'f Frame<'_>,
+        chunk_name: &str,
+        source: &str,
+        options: &CompileOptions,
+        env: &crate::value::Table,
+    ) -> Result<ValueView<'f>> {
+        if !same_vm(frame.state(), self.state) {
+            return Err(Error::logic("Frame belongs to a different Lua VM"));
+        }
+        let bytecode = compile_raw(source, options)?;
+        let name = CString::new(chunk_name).map_err(|_| Error::logic("Chunk name cannot contain NUL"))?;
+        let env_view = env.push_to(frame)?;
+        // SAFETY: the environment table is on the frame; luau_load reads it by index and the
+        // frame owns the loaded chunk (or the error message).
+        let status = unsafe {
+            ffi::luau_load(frame.state(), name.as_ptr(), bytecode.as_ptr().cast(), bytecode.len(), env_view.index())
+        };
+        if status != ffi::LUA_OK {
+            return Err(unsafe { crate::raw::protect::pop_error(frame.state(), status) });
+        }
+        Ok(frame.top_value())
+    }
+
     /// Compiles and runs `source`, which must return one function, and pins that function.
     /// The usual way to get a Lua closure into Rust hands for tests and host setup.
     pub fn load_function(&self, source: &str) -> Result<crate::value::Function> {

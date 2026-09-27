@@ -9,7 +9,7 @@ use crate::raw::ffi;
 
 /// Luau compiler policy. Defaults match OpenMW: optimisation 2, line info and function names,
 /// no type information, no coverage.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct CompileOptions {
     pub optimization_level: u8,
     pub debug_level: u8,
@@ -23,6 +23,107 @@ pub struct CompileOptions {
     pub mutable_globals: Vec<CString>,
     pub userdata_types: Vec<CString>,
     pub disabled_builtins: Vec<CString>,
+    /// Libraries whose members the compiler may ask about through `library_members`
+    /// (`librariesWithKnownMembers`); the compiler folds constant members and specialises on
+    /// member types.
+    pub known_libraries: Vec<CString>,
+    /// Answers the compiler's member queries for the known libraries.
+    pub library_members: Option<std::rc::Rc<dyn LibraryMembers>>,
+}
+
+/// Compile-time knowledge about a library's members (`lua_LibraryMemberTypeCallback` and
+/// `lua_LibraryMemberConstantCallback`).
+pub trait LibraryMembers {
+    /// The bytecode type of `library.member`, as a `LuauBytecodeType` value
+    /// (`native_code::ir::bytecode_type` constants), or `None` for unknown.
+    fn member_type(&self, library: &str, member: &str) -> Option<u8> {
+        let _ = (library, member);
+        None
+    }
+    /// The constant value of `library.member`, if it is one.
+    fn member_constant(&self, library: &str, member: &str) -> Option<CompileConstant> {
+        let _ = (library, member);
+        None
+    }
+}
+
+/// A constant the compiler may fold in place of a library member access.
+#[derive(Clone, Debug, PartialEq)]
+pub enum CompileConstant {
+    Nil,
+    Boolean(bool),
+    Number(f64),
+    Integer(i64),
+    Vector(f32, f32, f32),
+    String(String),
+}
+
+thread_local! {
+    static ACTIVE_MEMBERS: std::cell::RefCell<Option<std::rc::Rc<dyn LibraryMembers>>> = const { std::cell::RefCell::new(None) };
+    /// String constants handed to the compiler are borrowed, not copied, until compilation ends.
+    static CONSTANT_STRINGS: std::cell::RefCell<Vec<Box<str>>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+unsafe fn member_names<'a>(library: *const c_char, member: *const c_char) -> Option<(&'a str, &'a str)> {
+    if library.is_null() || member.is_null() {
+        return None;
+    }
+    // SAFETY: the compiler passes NUL-terminated names valid for the call.
+    unsafe { Some((std::ffi::CStr::from_ptr(library).to_str().ok()?, std::ffi::CStr::from_ptr(member).to_str().ok()?)) }
+}
+
+unsafe extern "C" fn member_type_callback(library: *const c_char, member: *const c_char) -> c_int {
+    let _guard = crate::raw::trampoline::AbortOnPanic::new();
+    let Some((library, member)) = (unsafe { member_names(library, member) }) else { return -1 };
+    ACTIVE_MEMBERS.with(|active| {
+        active.borrow().as_ref().and_then(|members| members.member_type(library, member)).map_or(-1, c_int::from)
+    })
+}
+
+unsafe extern "C" fn member_constant_callback(
+    library: *const c_char,
+    member: *const c_char,
+    constant: *mut ffi::lua_CompileConstant,
+) {
+    let _guard = crate::raw::trampoline::AbortOnPanic::new();
+    let Some((library, member)) = (unsafe { member_names(library, member) }) else { return };
+    let value = ACTIVE_MEMBERS
+        .with(|active| active.borrow().as_ref().and_then(|members| members.member_constant(library, member)));
+    // SAFETY: `constant` is the compiler's slot for this query.
+    unsafe {
+        match value {
+            None => {}
+            Some(CompileConstant::Nil) => ffi::luau_set_compile_constant_nil(constant),
+            Some(CompileConstant::Boolean(b)) => ffi::luau_set_compile_constant_boolean(constant, c_int::from(b)),
+            Some(CompileConstant::Number(n)) => ffi::luau_set_compile_constant_number(constant, n),
+            Some(CompileConstant::Integer(i)) => ffi::luau_set_compile_constant_integer64(constant, i),
+            Some(CompileConstant::Vector(x, y, z)) => ffi::luau_set_compile_constant_vector(constant, x, y, z, 0.0),
+            Some(CompileConstant::String(text)) => {
+                let kept: Box<str> = text.into_boxed_str();
+                ffi::luau_set_compile_constant_string(constant, kept.as_ptr().cast(), kept.len());
+                CONSTANT_STRINGS.with(|strings| strings.borrow_mut().push(kept));
+            }
+        }
+    }
+}
+
+impl std::fmt::Debug for CompileOptions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CompileOptions")
+            .field("optimization_level", &self.optimization_level)
+            .field("debug_level", &self.debug_level)
+            .field("type_info_level", &self.type_info_level)
+            .field("coverage_level", &self.coverage_level)
+            .field("vector_lib", &self.vector_lib)
+            .field("vector_ctor", &self.vector_ctor)
+            .field("vector_type", &self.vector_type)
+            .field("mutable_globals", &self.mutable_globals)
+            .field("userdata_types", &self.userdata_types)
+            .field("disabled_builtins", &self.disabled_builtins)
+            .field("known_libraries", &self.known_libraries)
+            .field("library_members", &self.library_members.is_some())
+            .finish()
+    }
 }
 
 impl Default for CompileOptions {
@@ -38,6 +139,8 @@ impl Default for CompileOptions {
             mutable_globals: Vec::new(),
             userdata_types: Vec::new(),
             disabled_builtins: Vec::new(),
+            known_libraries: Vec::new(),
+            library_members: None,
         }
     }
 }
@@ -75,6 +178,8 @@ pub(crate) fn compile_raw(source: &str, options: &CompileOptions) -> Result<Vec<
     let mut mutable_globals = Vec::new();
     let mut userdata_types = Vec::new();
     let mut disabled_builtins = Vec::new();
+    let mut known_libraries = Vec::new();
+    let with_members = options.library_members.is_some() && !options.known_libraries.is_empty();
     let mut raw = ffi::lua_CompileOptions {
         optimizationLevel: c_int::from(options.optimization_level),
         debugLevel: c_int::from(options.debug_level),
@@ -86,16 +191,28 @@ pub(crate) fn compile_raw(source: &str, options: &CompileOptions) -> Result<Vec<
         vectorPrecision: 0,
         mutableGlobals: c_array(&options.mutable_globals, &mut mutable_globals),
         userdataTypes: c_array(&options.userdata_types, &mut userdata_types),
-        librariesWithKnownMembers: ptr::null(),
-        libraryMemberTypeCb: None,
-        libraryMemberConstantCb: None,
+        librariesWithKnownMembers: if with_members {
+            c_array(&options.known_libraries, &mut known_libraries)
+        } else {
+            ptr::null()
+        },
+        libraryMemberTypeCb: with_members.then_some(member_type_callback as ffi::lua_LibraryMemberTypeCallback),
+        libraryMemberConstantCb: with_members
+            .then_some(member_constant_callback as ffi::lua_LibraryMemberConstantCallback),
         disabledBuiltins: c_array(&options.disabled_builtins, &mut disabled_builtins),
     };
 
     let mut size = 0usize;
     // SAFETY: every pointer in `raw` outlives this call (the CStrings and the pointer arrays
     // are locals of this function). luau_compile never raises; it reports failure in-band.
+    if with_members {
+        ACTIVE_MEMBERS.with(|active| *active.borrow_mut() = options.library_members.clone());
+    }
     let bytecode = unsafe { ffi::luau_compile(source.as_ptr().cast(), source.len(), &mut raw, &mut size) };
+    if with_members {
+        ACTIVE_MEMBERS.with(|active| active.borrow_mut().take());
+        CONSTANT_STRINGS.with(|strings| strings.borrow_mut().clear());
+    }
     if bytecode.is_null() {
         return Err(Error::runtime("Luau compiler returned no bytecode"));
     }

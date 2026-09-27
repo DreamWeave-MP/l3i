@@ -25,6 +25,7 @@ pub mod diagnostics;
 pub mod direct;
 pub mod error;
 pub mod flags;
+pub mod libraries;
 pub mod memory;
 pub mod module;
 pub mod native;
