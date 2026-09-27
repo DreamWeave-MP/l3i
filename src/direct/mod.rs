@@ -18,6 +18,7 @@
 //! destination register with no frame at all.
 
 pub mod field;
+pub mod plan;
 pub mod registry;
 
 use std::borrow::Cow;

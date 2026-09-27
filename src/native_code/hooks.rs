@@ -153,20 +153,20 @@ unsafe fn member<'a>(text: *const c_char, length: usize) -> &'a str {
 }
 
 unsafe fn with_builder<R>(raw: *mut ffi::db_ir_builder, body: impl FnOnce(&mut IrBuilder<'_>) -> R) -> R {
-    let _guard = crate::raw::trampoline::AbortOnPanic;
+    let _guard = crate::raw::trampoline::AbortOnPanic::new();
     // SAFETY: Luau hands us its live IrBuilder for the duration of the hook.
     let mut build = unsafe { IrBuilder::from_raw(raw) };
     body(&mut build)
 }
 
 unsafe extern "C" fn vector_access_type(context: *mut c_void, text: *const c_char, length: usize) -> u8 {
-    let _guard = crate::raw::trampoline::AbortOnPanic;
+    let _guard = crate::raw::trampoline::AbortOnPanic::new();
     let (chain, member) = unsafe { (chain(context), member(text, length)) };
     chain.first_type(|hooks| hooks.vector_access_type(member))
 }
 
 unsafe extern "C" fn vector_namecall_type(context: *mut c_void, text: *const c_char, length: usize) -> u8 {
-    let _guard = crate::raw::trampoline::AbortOnPanic;
+    let _guard = crate::raw::trampoline::AbortOnPanic::new();
     let (chain, member) = unsafe { (chain(context), member(text, length)) };
     chain.first_type(|hooks| hooks.vector_namecall_type(member))
 }
@@ -202,20 +202,20 @@ unsafe extern "C" fn vector_namecall(
 }
 
 unsafe extern "C" fn userdata_access_type(context: *mut c_void, kind: u8, text: *const c_char, length: usize) -> u8 {
-    let _guard = crate::raw::trampoline::AbortOnPanic;
+    let _guard = crate::raw::trampoline::AbortOnPanic::new();
     let (chain, member) = unsafe { (chain(context), member(text, length)) };
     chain.first_type(|hooks| hooks.userdata_access_type(kind, member))
 }
 
 unsafe extern "C" fn userdata_metamethod_type(context: *mut c_void, lhs: u8, rhs: u8, method: c_int) -> u8 {
-    let _guard = crate::raw::trampoline::AbortOnPanic;
+    let _guard = crate::raw::trampoline::AbortOnPanic::new();
     let chain = unsafe { chain(context) };
     let Some(method) = host_metamethod(method) else { return bytecode_type::ANY };
     chain.first_type(|hooks| hooks.userdata_metamethod_type(lhs, rhs, method))
 }
 
 unsafe extern "C" fn userdata_namecall_type(context: *mut c_void, kind: u8, text: *const c_char, length: usize) -> u8 {
-    let _guard = crate::raw::trampoline::AbortOnPanic;
+    let _guard = crate::raw::trampoline::AbortOnPanic::new();
     let (chain, member) = unsafe { (chain(context), member(text, length)) };
     chain.first_type(|hooks| hooks.userdata_namecall_type(kind, member))
 }
@@ -296,7 +296,7 @@ fn host_metamethod(value: c_int) -> Option<HostMetamethod> {
 /// The userdata remapper: script type annotations are resolved to indexes into the
 /// compilation's `userdata_types` list (0xff for unknown), matching the bytecode compiler.
 pub(crate) unsafe extern "C" fn remap_userdata_type(context: *mut c_void, name: *const c_char, length: usize) -> u8 {
-    let _guard = crate::raw::trampoline::AbortOnPanic;
+    let _guard = crate::raw::trampoline::AbortOnPanic::new();
     // SAFETY: `context` is the NativeCodeGen's type-name list; Luau passes the annotation text.
     let names = unsafe { &*context.cast_const().cast::<Vec<std::ffi::CString>>() };
     let requested = unsafe { std::slice::from_raw_parts(name.cast::<u8>(), length) };

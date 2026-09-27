@@ -342,3 +342,100 @@ fn registration_requires_wrappers_and_a_frozen_metatable() {
         .unwrap_err();
     assert!(error.to_string().contains("requires an original __namecall metamethod"), "{error}");
 }
+
+// ---- Runtime-resolved plans: the same handler code, different tags per VM ------------------
+
+struct Planned {
+    value: Cell<f64>,
+}
+
+unsafe impl Userdata for Planned {
+    const NAME: &'static str = "dreamweave.tests.Planned";
+}
+
+const PLANNED_VALUE_GET: u16 = 1;
+const PLANNED_VALUE_SET: u16 = 2;
+
+impl DirectAccess for Planned {
+    fn direct_index(call: &Call<'_>, data: &Planned, atom: Atom, slot: &mut u16) -> Result<Dispatch> {
+        let Some(plan) = direct::plan::plan(call) else { return Ok(Dispatch::Fallback) };
+        match plan.resolve_cached_slot::<Planned>(call, slot, atom, AccessKind::Index) {
+            PLANNED_VALUE_GET => {
+                call.push(&data.value.get())?;
+                Ok(Dispatch::Handled)
+            }
+            _ => Ok(Dispatch::Fallback),
+        }
+    }
+
+    fn direct_newindex(call: &Call<'_>, data: &Planned, atom: Atom, slot: &mut u16) -> Result<Dispatch> {
+        let Some(plan) = direct::plan::plan(call) else { return Ok(Dispatch::Fallback) };
+        match plan.resolve_cached_slot::<Planned>(call, slot, atom, AccessKind::NewIndex) {
+            PLANNED_VALUE_SET => {
+                data.value.set(call.arg(3).read::<f64>()?);
+                Ok(Dispatch::Handled)
+            }
+            _ => Ok(Dispatch::Fallback),
+        }
+    }
+}
+
+fn planned_runtime(tag: u8, atom_base: Atom) -> Runtime {
+    let catalogue = AtomCatalogue::try_new([("value", atom_base), ("name", atom_base + 1)]).unwrap();
+    let runtime = Runtime::builder().atom_catalogue(catalogue).build().unwrap();
+    let index = runtime.load_function("return function(v, k) return 'fallback-' .. tostring(k) end").unwrap();
+    let newindex =
+        runtime.load_function("return function(v, k, val) error('read-only ' .. tostring(k), 0) end").unwrap();
+    tagged::register::<Planned>(&runtime, tag, |ty| {
+        ty.metamethod_value("__index", index.value())?;
+        ty.metamethod_value("__newindex", newindex.value())?;
+        ty.direct_dispatch::<Planned>(DirectMetamethods { index: true, newindex: true, namecall: false })
+    })
+    .unwrap();
+    direct::register::<Planned>(&runtime, DirectMetamethods { index: true, newindex: true, namecall: false }).unwrap();
+    direct::plan::DirectPlanBuilder::new(&runtime)
+        .slot::<Planned>(AccessKind::Index, "value", PLANNED_VALUE_GET)
+        .unwrap()
+        .slot::<Planned>(AccessKind::NewIndex, "value", PLANNED_VALUE_SET)
+        .unwrap()
+        .finish()
+        .unwrap();
+    {
+        let stack = runtime.stack();
+        let frame = stack.frame();
+        tagged::push(&frame, Planned { value: Cell::new(1.5) }).unwrap();
+        frame.set_global("p").unwrap();
+    }
+    runtime
+}
+
+#[test]
+fn runtime_plans_resolve_slots_from_the_vms_own_tags_and_atoms() {
+    // Two runtimes, two tags, two atom numberings, one handler.
+    let a = planned_runtime(60, 2000);
+    let b = planned_runtime(61, 3000);
+    for runtime in [&a, &b] {
+        runtime
+            .exec("local u = p assert(u.value == 1.5) u.value = 4 assert(u.value == 4) assert(u.other == 'fallback-other') \
+                   local ok, err = pcall(function() u.other = 1 end) assert(not ok and err == 'read-only other')")
+            .unwrap();
+    }
+    let plan = direct::plan::plan(&a.stack()).unwrap();
+    assert_eq!(plan.entries().len(), 2);
+    assert_eq!(plan.resolve_slot(60, 2000, AccessKind::Index), PLANNED_VALUE_GET);
+    assert_eq!(plan.resolve_slot(61, 2000, AccessKind::Index), UNKNOWN_SLOT, "tag 61 is another VM's");
+    let plan_b = direct::plan::plan(&b.stack()).unwrap();
+    assert_eq!(plan_b.resolve_slot(61, 3000, AccessKind::Index), PLANNED_VALUE_GET);
+    // Builder validation.
+    let error = direct::plan::DirectPlanBuilder::new(&a).slot::<Planned>(AccessKind::Index, "missing", 5).unwrap_err();
+    assert!(error.to_string().contains("not in this runtime's atom catalogue"), "{error}");
+    let error = direct::plan::DirectPlanBuilder::new(&a).slot::<Bar>(AccessKind::Index, "value", 5).unwrap_err();
+    assert!(error.to_string().contains("not tagged in this runtime"), "{error}");
+    let error = direct::plan::DirectPlanBuilder::new(&a)
+        .slot::<Planned>(AccessKind::Index, "value", 7)
+        .unwrap()
+        .slot::<Planned>(AccessKind::Index, "name", 7)
+        .unwrap_err();
+    assert!(error.to_string().contains("used twice"), "{error}");
+    assert!(direct::plan::DirectPlanBuilder::new(&a).slot::<Planned>(AccessKind::Index, "value", 0).is_err());
+}

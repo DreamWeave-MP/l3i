@@ -106,6 +106,8 @@ pub(crate) struct Shared {
     hooks: crate::debug::HookSlot,
     /// The embedder half of cross-heap GC marking.
     embedder_gc: crate::memory::EmbedderGcSlot,
+    /// The runtime-resolved direct dispatch plan.
+    direct_plan: crate::direct::plan::DirectPlanSlot,
 }
 
 /// The host's tag assignments for one VM. `by_tag` answers the hot-path question ("is the
@@ -140,7 +142,12 @@ impl Shared {
             tags: TagPlan::new(),
             hooks: crate::debug::HookSlot::new(),
             embedder_gc: RefCell::new(None),
+            direct_plan: RefCell::new(None),
         }
+    }
+
+    pub(crate) fn direct_plan(&self) -> &crate::direct::plan::DirectPlanSlot {
+        &self.direct_plan
     }
 
     pub(crate) fn embedder_gc(&self) -> &crate::memory::EmbedderGcSlot {
