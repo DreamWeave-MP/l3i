@@ -1,5 +1,0 @@
-# Luau's default is 128 userdata tags. The binder uses every tag Luau can address,
-# so the vendored VM is compiled with the same limit OpenMW uses. Host executables
-# must carry this same line; build.rs turns it into dream_binder::TAG_LIMIT.
-[env]
-LUAU_CXXFLAGS = "-DLUA_UTAG_LIMIT=254"
