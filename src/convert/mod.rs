@@ -89,6 +89,18 @@ impl Push for crate::value::Value {
     }
 }
 
+impl Push for crate::value::Table {
+    fn push_into<'s, S: Scope>(&self, scope: &'s S) -> Result<ValueView<'s>> {
+        self.value().push_to_scope(scope)
+    }
+}
+
+impl Push for crate::value::Function {
+    fn push_into<'s, S: Scope>(&self, scope: &'s S) -> Result<ValueView<'s>> {
+        self.value().push_to_scope(scope)
+    }
+}
+
 impl<'v> FromView<'v> for crate::value::Value {
     const EXPECTED: &'static str = "any value";
 

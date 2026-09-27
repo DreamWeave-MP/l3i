@@ -105,6 +105,11 @@ impl Value {
         self.reference = ffi::LUA_NOREF;
     }
 
+    /// The registry reference id, for raw `lua_getref` on a thread of this VM.
+    pub(crate) fn reference_id(&self) -> c_int {
+        self.reference
+    }
+
     /// True when `state` is a thread of this value's VM.
     pub(crate) fn belongs_to(&self, state: *mut ffi::lua_State) -> bool {
         self.is_valid() && same_vm(self.owner, state)

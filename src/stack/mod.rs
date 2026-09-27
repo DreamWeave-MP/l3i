@@ -40,7 +40,7 @@ pub use frame::Frame;
 pub use table::TableView;
 pub use view::{Type, ValueView};
 
-mod sealed {
+pub(crate) mod sealed {
     pub trait Sealed {}
     impl Sealed for super::Stack<'_> {}
     impl Sealed for super::Frame<'_> {}
