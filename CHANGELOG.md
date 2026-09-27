@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- 1b525fa - DOCS: Describe runtime dispatch plans, the new modules, and the C API coverage in the README
+- a182b43 - PERF: Benchmark runtime plan dispatch at several plan sizes and refresh the numbers
+- 71ad563 - FIX: Free the main thread record before lua_close, own the VM through every builder error path, make plan cache hits O(1) with density caps, and report parser failures
+- 6adbabb - FEAT: Add native code assembly and IR dumps and the perf log
+- c34b783 - FEAT: Add Luau's require-by-string runtime over a host navigator
+- 99af32f - FEAT: Add selective library opening, Luau sandboxing, C library registration, table and comparison utilities, the string builder, chunk environments, compile-time library members, and the inliner toggle
+- 9faebc1 - BREAK: Rename the crate from dream-binder to l3i
+- 880a1cf - FEAT: Add the analysis feature: Luau's type checker, linter, autocomplete, and parser over a C++ shim
+- 82415af - FEAT: Give native lowering hooks a per-VM context that resolves tags and atoms
+- aad1193 - FEAT: Add runtime-resolved direct dispatch plans built from the VM's own tags and atoms
+- c4f9423 - FIX: Lease stacks per Lua thread through thread records, order VM creation as documented, and reject NUL in native type names
+- 290fe2a - FEAT: Add GC controls, heap dumps, the buffer cage, embedder GC marking with weak references, light userdata, and coroutine finalizers
+- 70d63af - FEAT: Add the debug API: activation records, locals and upvalues, breakpoints, stepping, coverage, and runtime hooks
+- 1a8bd3b - FEAT: Add host-driven coroutines with Yield and Break return adapters
+- 290dbfc - BREAK: Build Luau 0.740 from a git submodule instead of the luau0-src crate
+- e0ab214 - CLEANUP: Format the benchmark and test sources
+- 8deb104 - DOCS: Add the README, the changelog, and its generator
 - 5694ed9 - PERF: Add Criterion benchmarks for the hot paths and record the numbers
 - 91c294c - FEAT: Add native code generation with Luau's lowering hooks, a Rust IR builder, and the writef32x3 lowering
 - 2f50cda - FEAT: Let bound functions load and instantiate templates on their own scope, and document the memory limit as safepoint-polled
