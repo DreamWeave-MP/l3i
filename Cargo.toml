@@ -19,6 +19,13 @@ luau0-src = "=0.22.0"
 # Compiles csrc/codegen.cpp, the C ABI over Luau's C++ code generation API (jit feature).
 cc = "1"
 
+[dev-dependencies]
+criterion = { version = "0.8.2", features = ["html_reports"] }
+
+[[bench]]
+name = "hot_paths"
+harness = false
+
 [features]
 default = []
 # Luau native code generation: builds Luau's CodeGen library plus the C++ shim that exposes
