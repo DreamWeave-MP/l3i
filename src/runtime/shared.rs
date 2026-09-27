@@ -106,6 +106,8 @@ pub(crate) struct Shared {
     /// This VM's tag plan: which Rust type each Luau tag carries, assigned by the host at
     /// registration.
     tags: TagPlan,
+    /// Host hooks for the debugger and lifecycle callback slots.
+    hooks: crate::debug::HookSlot,
 }
 
 /// The host's tag assignments for one VM. `by_tag` answers the hot-path question ("is the
@@ -140,7 +142,12 @@ impl Shared {
             lua_calls: Cell::new(0),
             atoms: RefCell::new(None),
             tags: TagPlan::new(),
+            hooks: crate::debug::HookSlot::new(),
         }
+    }
+
+    pub(crate) fn hooks(&self) -> &crate::debug::HookSlot {
+        &self.hooks
     }
 
     /// The tag this VM assigned to the Rust type `id`, if any.

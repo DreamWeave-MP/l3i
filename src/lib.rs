@@ -17,6 +17,7 @@
 pub mod bind;
 pub mod call;
 pub mod convert;
+pub mod debug;
 pub mod debug_name;
 pub mod diagnostics;
 pub mod direct;
