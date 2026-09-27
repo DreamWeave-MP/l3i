@@ -108,6 +108,8 @@ pub(crate) struct Shared {
     embedder_gc: crate::memory::EmbedderGcSlot,
     /// The runtime-resolved direct dispatch plan.
     direct_plan: crate::direct::plan::DirectPlanSlot,
+    /// The host's require navigator.
+    require_navigator: crate::require::NavigatorSlot,
 }
 
 /// The host's tag assignments for one VM. `by_tag` answers the hot-path question ("is the
@@ -143,7 +145,12 @@ impl Shared {
             hooks: crate::debug::HookSlot::new(),
             embedder_gc: RefCell::new(None),
             direct_plan: RefCell::new(None),
+            require_navigator: RefCell::new(None),
         }
+    }
+
+    pub(crate) fn require_navigator(&self) -> &crate::require::NavigatorSlot {
+        &self.require_navigator
     }
 
     pub(crate) fn direct_plan(&self) -> &crate::direct::plan::DirectPlanSlot {

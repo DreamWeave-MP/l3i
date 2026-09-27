@@ -33,6 +33,7 @@ pub mod native;
 pub mod native_code;
 mod raw;
 pub mod readonly;
+pub mod require;
 pub mod runtime;
 pub mod sandbox;
 pub mod source;
