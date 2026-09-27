@@ -1,8 +1,18 @@
-//! Luau binder for DreamWeave component crates.
+//! Luau binder for DreamWeave component crates: a Rust port of the OpenMW Luau binder that
+//! owns its own Luau 0.740 build (no intermediate Lua binding crate).
 //!
 //! The host application owns the [`runtime::Runtime`]; component crates register bindings
-//! into it through the shared contract in this crate. See the README for the usage tiers and the
-//! ownership models.
+//! into it through the shared contract in this crate.
+//!
+//! Three usage tiers, as in the C++ binder:
+//! - hot path: the borrowed [`stack`] layer (`Stack`, `Frame`, `ValueView`, `TableView`), no
+//!   registry pins, lifetimes tied to the frame that owns the slot;
+//! - middle tier: owned registry pins (`lua_ref`), for values that outlive a call;
+//! - cold tier: convenience lookups that may push temporaries and pin.
+//!
+//! Error model: Luau raises C++ exceptions. Inside a native call they unwind through the
+//! binding's Rust frames to Luau's `pcall`; a Rust panic inside a native call aborts. Host-level
+//! code never sees a Luau raise: operations that can raise run under `lua_pcall` there.
 
 pub mod debug_name;
 pub mod diagnostics;
