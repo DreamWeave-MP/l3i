@@ -7,6 +7,7 @@ use std::ffi::{CStr, c_int, c_void};
 use std::rc::{Rc, Weak};
 use std::time::{Duration, Instant};
 
+use crate::direct::AtomCatalogue;
 use crate::raw::ffi;
 
 /// A Luau memory category (0..256). Ids and their meanings are host data; OpenMW uses 0 for
@@ -96,6 +97,8 @@ pub(crate) struct Shared {
     alive_stacks: Cell<u32>,
     /// Host-to-Lua transitions currently in progress (`LuaCall` guards).
     lua_calls: Cell<u32>,
+    /// This VM's atom catalogue, read by `useratom`.
+    atoms: RefCell<Option<Rc<AtomCatalogue>>>,
 }
 
 impl Shared {
@@ -114,7 +117,22 @@ impl Shared {
             lifetime: RefCell::new(Some(Rc::new(()))),
             alive_stacks: Cell::new(0),
             lua_calls: Cell::new(0),
+            atoms: RefCell::new(None),
         }
+    }
+
+    /// The installed catalogue; `None` while a (re)installation is in progress, so `useratom`
+    /// never panics on a busy cell.
+    pub(crate) fn atom_catalogue(&self) -> Option<Rc<AtomCatalogue>> {
+        self.atoms.try_borrow().ok().and_then(|atoms| atoms.clone())
+    }
+
+    pub(crate) fn set_atom_catalogue(&self, catalogue: Rc<AtomCatalogue>) {
+        *self.atoms.borrow_mut() = Some(catalogue);
+    }
+
+    pub(crate) fn clear_atom_catalogue(&self) {
+        self.atoms.borrow_mut().take();
     }
 
     /// Registers a live `Stack`. A root stack is admitted only when every stack alive on the

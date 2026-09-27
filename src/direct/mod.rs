@@ -20,9 +20,10 @@
 pub mod field;
 pub mod registry;
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::ffi::{CStr, c_char, c_int, c_void};
-use std::sync::OnceLock;
+use std::rc::Rc;
 
 use crate::bind::Call;
 use crate::error::{Error, Result};
@@ -48,72 +49,76 @@ pub enum AccessKind {
 
 pub const ACCESS_KIND_COUNT: usize = 3;
 
-/// Interned member names eligible for direct dispatch. Names and atoms are host data; the
-/// binder only requires them to be unique and non-negative.
-#[derive(Debug)]
+/// Interned member names eligible for direct dispatch, owned by one VM. Names and atoms are
+/// host data; the binder only requires them to be unique and non-negative. Two runtimes in one
+/// process may carry different catalogues: `useratom` receives the `lua_State`, and the binder
+/// resolves through that VM's shared block.
+#[derive(Clone, Debug)]
 pub struct AtomCatalogue {
-    entries: &'static [(&'static str, Atom)],
+    entries: Vec<(Cow<'static, str>, Atom)>,
+    by_name: HashMap<Vec<u8>, Atom>,
 }
 
 impl AtomCatalogue {
-    /// Validates the catalogue at compile time: non-empty names, unique names, unique
-    /// non-negative atoms. The error is a static message so the function stays `const`.
-    pub const fn try_new(entries: &'static [(&'static str, Atom)]) -> std::result::Result<AtomCatalogue, &'static str> {
-        let mut i = 0;
-        while i < entries.len() {
-            let (name, atom) = entries[i];
+    /// Validates `entries`: non-empty names, unique names, unique non-negative atoms.
+    pub fn try_new<N: Into<Cow<'static, str>>>(entries: impl IntoIterator<Item = (N, Atom)>) -> Result<AtomCatalogue> {
+        let entries: Vec<(Cow<'static, str>, Atom)> =
+            entries.into_iter().map(|(name, atom)| (name.into(), atom)).collect();
+        let mut by_name = HashMap::with_capacity(entries.len());
+        let mut atoms = std::collections::HashSet::with_capacity(entries.len());
+        for (name, atom) in &entries {
             if name.is_empty() {
-                return Err("atom catalogue has an empty name");
+                return Err(Error::logic("atom catalogue has an empty name"));
             }
-            if atom < 0 {
-                return Err("atom catalogue has a negative atom");
+            if *atom < 0 {
+                return Err(Error::logic(format!("atom catalogue has a negative atom for '{name}'")));
             }
-            let mut j = 0;
-            while j < i {
-                let (other_name, other_atom) = entries[j];
-                if other_atom == atom {
-                    return Err("atom catalogue has a duplicate atom");
-                }
-                if const_str_eq(other_name, name) {
-                    return Err("atom catalogue has a duplicate name");
-                }
-                j += 1;
+            if !atoms.insert(*atom) {
+                return Err(Error::logic(format!("atom catalogue has a duplicate atom {atom}")));
             }
-            i += 1;
+            if by_name.insert(name.as_bytes().to_vec(), *atom).is_some() {
+                return Err(Error::logic(format!("atom catalogue has a duplicate name '{name}'")));
+            }
         }
-        Ok(AtomCatalogue { entries })
+        Ok(AtomCatalogue { entries, by_name })
     }
 
-    /// Validates the catalogue, reporting a logic error.
-    pub fn new(entries: &'static [(&'static str, Atom)]) -> Result<AtomCatalogue> {
-        AtomCatalogue::try_new(entries).map_err(Error::logic)
+    /// [`AtomCatalogue::try_new`] over a static table, such as a [`registry::Registry`]'s
+    /// `catalogue_entries()`.
+    pub fn from_static(entries: &'static [(&'static str, Atom)]) -> Result<AtomCatalogue> {
+        AtomCatalogue::try_new(entries.iter().map(|(name, atom)| (*name, *atom)))
     }
 
-    /// Like [`AtomCatalogue::new`] but panics at compile time on an invalid catalogue, for use
-    /// in a `const` item.
-    pub const fn validated(entries: &'static [(&'static str, Atom)]) -> AtomCatalogue {
-        match AtomCatalogue::try_new(entries) {
-            Ok(catalogue) => catalogue,
-            Err(message) => panic!("{}", message),
-        }
+    /// The catalogued `(name, atom)` pairs in the order given.
+    pub fn entries(&self) -> impl Iterator<Item = (&str, Atom)> {
+        self.entries.iter().map(|(name, atom)| (name.as_ref(), *atom))
     }
 
-    pub fn entries(&self) -> &'static [(&'static str, Atom)] {
-        self.entries
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
     }
 
     /// The atom for `name`, if catalogued.
     pub fn atom_of(&self, name: &str) -> Option<Atom> {
-        self.entries.iter().find(|(entry, _)| *entry == name).map(|(_, atom)| *atom)
+        self.by_name.get(name.as_bytes()).copied()
+    }
+
+    /// The atom for interned bytes, if catalogued; what `useratom` asks.
+    pub fn atom_of_bytes(&self, name: &[u8]) -> Option<Atom> {
+        self.by_name.get(name).copied()
     }
 
     /// The spelling of `atom`, if catalogued.
-    pub fn name_of(&self, atom: Atom) -> Option<&'static str> {
-        self.entries.iter().find(|(_, entry)| *entry == atom).map(|(name, _)| *name)
+    pub fn name_of(&self, atom: Atom) -> Option<&str> {
+        self.entries.iter().find(|(_, entry)| *entry == atom).map(|(name, _)| name.as_ref())
     }
 }
 
-const fn const_str_eq(a: &str, b: &str) -> bool {
+pub(crate) const fn const_str_eq(a: &str, b: &str) -> bool {
     let (a, b) = (a.as_bytes(), b.as_bytes());
     if a.len() != b.len() {
         return false;
@@ -128,35 +133,28 @@ const fn const_str_eq(a: &str, b: &str) -> bool {
     true
 }
 
-/// `useratom` receives no context pointer, so the installed catalogue is process-global, as in
-/// the C++ binder. A process has exactly one.
-static INSTALLED: OnceLock<(&'static AtomCatalogue, HashMap<&'static [u8], Atom>)> = OnceLock::new();
-
-/// The Luau callback: no Lua API, no panics; a hash lookup on the interned bytes.
-unsafe extern "C" fn user_atom(_: *mut ffi::lua_State, text: *const c_char, length: usize) -> i16 {
-    let Some((_, table)) = INSTALLED.get() else { return UNKNOWN_ATOM };
-    // SAFETY: Luau passes the string's bytes and length.
+/// The Luau callback: no Lua API, no panics; one hash lookup in the calling VM's catalogue.
+unsafe extern "C" fn user_atom(state: *mut ffi::lua_State, text: *const c_char, length: usize) -> i16 {
+    // SAFETY: Luau passes a live thread and the string's bytes and length.
+    let catalogue =
+        unsafe { crate::runtime::shared::shared_of(state).as_ref() }.and_then(|shared| shared.atom_catalogue());
+    let Some(catalogue) = catalogue else { return UNKNOWN_ATOM };
     let bytes = unsafe { std::slice::from_raw_parts(text.cast::<u8>(), length) };
-    table.get(bytes).copied().unwrap_or(UNKNOWN_ATOM)
+    catalogue.atom_of_bytes(bytes).unwrap_or(UNKNOWN_ATOM)
 }
 
-/// Installs `catalogue` as the VM's `useratom` callback and verifies every spelling resolves.
+/// Installs `catalogue` as this VM's `useratom` callback and verifies every spelling resolves.
 ///
 /// Luau 0.740 resolves atoms lazily (`luaS_updateatom`), but OpenMW installs the callback
 /// before `luaL_openlibs` and the binder keeps that order: call this on a runtime built with
-/// `standard_libraries(false)`, then open them. Installing a different catalogue in the same
-/// process, or over a different `useratom`, is a logic error.
-pub fn install_atom_callback(runtime: &Runtime, catalogue: &'static AtomCatalogue) -> Result<()> {
-    let (installed, _) = INSTALLED.get_or_init(|| {
-        let table = catalogue.entries.iter().map(|(name, atom)| (name.as_bytes(), *atom)).collect();
-        (catalogue, table)
-    });
-    if !std::ptr::eq(*installed, catalogue) {
-        return Err(Error::logic("A different atom catalogue is already installed in this process"));
-    }
+/// `standard_libraries(false)`, then open them, or pass the catalogue to
+/// [`crate::runtime::RuntimeBuilder::atom_catalogue`]. A VM takes exactly one catalogue;
+/// installing a second, or over a foreign `useratom`, is a logic error.
+pub fn install_atom_callback(runtime: &Runtime, catalogue: AtomCatalogue) -> Result<()> {
     let stack = runtime.stack();
     let state = stack.state_ptr();
-    // SAFETY: lua_callbacks returns the VM's callback block; only useratom is touched.
+    // SAFETY: lua_callbacks returns the VM's callback block; only useratom is touched. The
+    // shared block belongs to this runtime.
     unsafe {
         let callbacks = ffi::lua_callbacks(state);
         if let Some(existing) = (*callbacks).useratom
@@ -167,25 +165,45 @@ pub fn install_atom_callback(runtime: &Runtime, catalogue: &'static AtomCatalogu
         {
             return Err(Error::logic("A different Luau useratom callback is already installed"));
         }
-        (*callbacks).useratom = Some(user_atom);
-    }
-    stack.with_frame(|frame| {
-        for (name, atom) in catalogue.entries {
-            let view = frame.push_string(name);
-            let mut resolved: c_int = UNKNOWN_ATOM as c_int;
-            // SAFETY: the string is on the frame.
-            let text = unsafe { ffi::lua_tostringatom(frame.state(), view.index(), &mut resolved) };
-            if text.is_null() || resolved != c_int::from(*atom) {
-                return Err(Error::logic(format!("Luau useratom callback did not resolve '{name}' to atom {atom}")));
-            }
+        let shared = &*crate::runtime::shared::shared_of(state);
+        if shared.atom_catalogue().is_some() {
+            return Err(Error::logic("This runtime already has an atom catalogue"));
         }
-        Ok(())
-    })
+        let catalogue = Rc::new(catalogue);
+        shared.set_atom_catalogue(Rc::clone(&catalogue));
+        (*callbacks).useratom = Some(user_atom);
+        let verified = stack.with_frame(|frame| {
+            for (name, atom) in catalogue.entries() {
+                let view = frame.push_string(name);
+                let mut resolved: c_int = UNKNOWN_ATOM as c_int;
+                // SAFETY: the string is on the frame.
+                let text = ffi::lua_tostringatom(frame.state(), view.index(), &mut resolved);
+                if text.is_null() || resolved != c_int::from(atom) {
+                    return Err(Error::logic(format!(
+                        "Luau useratom callback did not resolve '{name}' to atom {atom}"
+                    )));
+                }
+            }
+            Ok(())
+        });
+        if verified.is_err() {
+            shared.clear_atom_catalogue();
+            (*callbacks).useratom = None;
+        }
+        verified
+    }
 }
 
-/// The installed catalogue, if any.
-pub fn installed_catalogue() -> Option<&'static AtomCatalogue> {
-    INSTALLED.get().map(|(catalogue, _)| *catalogue)
+impl Runtime {
+    /// This VM's atom catalogue, if one was installed.
+    pub fn atom_catalogue(&self) -> Option<Rc<AtomCatalogue>> {
+        self.shared().atom_catalogue()
+    }
+
+    /// The atom this VM assigns to `name`, if catalogued.
+    pub fn atom_of(&self, name: &str) -> Option<Atom> {
+        self.atom_catalogue().and_then(|catalogue| catalogue.atom_of(name))
+    }
 }
 
 /// The atom of the string at `view`, resolving it now if Luau has not yet.

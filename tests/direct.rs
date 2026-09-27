@@ -20,7 +20,9 @@ const BAR_TAG: u8 = 51;
 // A stand-in application catalogue: "get"/"set"/"name" as atoms, one "name" Index slot on two
 // tags so the cache can be poisoned across tags.
 const ATOMS: [(&str, Atom); 3] = [("get", 1024), ("set", 1025), ("name", 1026)];
-const CATALOGUE: AtomCatalogue = AtomCatalogue::validated(&ATOMS);
+fn catalogue() -> AtomCatalogue {
+    AtomCatalogue::from_static(&ATOMS).unwrap()
+}
 const REGISTRY: Registry<3, 4> = Registry::new(
     ATOMS,
     [
@@ -144,10 +146,7 @@ impl DirectField<Foo> for FooOrigin {
 }
 
 fn runtime_with_atoms() -> Runtime {
-    let runtime = Runtime::builder().standard_libraries(false).build().unwrap();
-    direct::install_atom_callback(&runtime, &CATALOGUE).unwrap();
-    runtime.open_standard_libraries();
-    runtime
+    Runtime::builder().atom_catalogue(catalogue()).build().unwrap()
 }
 
 /// Registers Foo with Lua closure metamethods (so fallbacks are observable), wraps them, and
@@ -171,25 +170,46 @@ fn install_foo(runtime: &Runtime) {
 }
 
 #[test]
-fn atom_catalogue_installs_once_and_resolves_every_spelling() {
+fn atom_catalogues_are_per_vm_and_resolve_every_spelling() {
     let runtime = runtime_with_atoms();
-    assert_eq!(CATALOGUE.atom_of("get"), Some(1024));
-    assert_eq!(CATALOGUE.name_of(1026), Some("name"));
-    assert_eq!(direct::installed_catalogue().map(|c| c.entries().len()), Some(3));
-    let stack = runtime.stack();
-    let frame = stack.frame();
-    assert_eq!(direct::atom_of_view(frame.push_string("set")), Some(1025));
-    assert_eq!(direct::atom_of_view(frame.push_string("nothing")), None);
-    // A second runtime shares the process-wide catalogue.
-    let other = runtime_with_atoms();
-    let stack = other.stack();
-    let frame = stack.frame();
-    assert_eq!(direct::atom_of_view(frame.push_string("name")), Some(1026));
-    static OTHER: AtomCatalogue = AtomCatalogue::validated(&[("zzz", 9000)]);
-    assert!(direct::install_atom_callback(&other, &OTHER).is_err());
-    assert!(AtomCatalogue::new(&[("a", 1), ("a", 2)]).is_err());
-    assert!(AtomCatalogue::new(&[("a", 1), ("b", 1)]).is_err());
-    assert!(AtomCatalogue::new(&[("a", -1)]).is_err());
+    let installed = runtime.atom_catalogue().expect("installed at build");
+    assert_eq!(installed.atom_of("get"), Some(1024));
+    assert_eq!(installed.name_of(1026), Some("name"));
+    assert_eq!(installed.len(), 3);
+    assert_eq!(runtime.atom_of("set"), Some(1025));
+    {
+        let stack = runtime.stack();
+        let frame = stack.frame();
+        assert_eq!(direct::atom_of_view(frame.push_string("set")), Some(1025));
+        assert_eq!(direct::atom_of_view(frame.push_string("nothing")), None);
+    }
+    // A second runtime carries its own catalogue; the two never see each other's atoms.
+    let other = Runtime::builder().standard_libraries(false).build().unwrap();
+    direct::install_atom_callback(&other, AtomCatalogue::try_new([("zzz", 9000), ("name", 5)]).unwrap()).unwrap();
+    other.open_standard_libraries();
+    {
+        let stack = other.stack();
+        let frame = stack.frame();
+        assert_eq!(direct::atom_of_view(frame.push_string("zzz")), Some(9000));
+        assert_eq!(direct::atom_of_view(frame.push_string("name")), Some(5));
+        assert_eq!(direct::atom_of_view(frame.push_string("get")), None);
+    }
+    {
+        let stack = runtime.stack();
+        let frame = stack.frame();
+        assert_eq!(direct::atom_of_view(frame.push_string("name")), Some(1026));
+        assert_eq!(direct::atom_of_view(frame.push_string("zzz")), None);
+    }
+    // One catalogue per VM.
+    assert!(direct::install_atom_callback(&other, catalogue()).is_err());
+    // A runtime without a catalogue resolves nothing and offers no atoms.
+    let bare = Runtime::new().unwrap();
+    assert!(bare.atom_catalogue().is_none());
+    assert_eq!(bare.atom_of("get"), None);
+    assert!(AtomCatalogue::try_new([("a", 1), ("a", 2)]).is_err());
+    assert!(AtomCatalogue::try_new([("a", 1), ("b", 1)]).is_err());
+    assert!(AtomCatalogue::try_new([("a", -1)]).is_err());
+    assert!(AtomCatalogue::try_new([("", 1)]).is_err());
 }
 
 #[test]

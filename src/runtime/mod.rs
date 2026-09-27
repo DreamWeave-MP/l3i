@@ -44,9 +44,17 @@ pub struct RuntimeBuilder {
     profiler: bool,
     initialization_category: MemoryCategory,
     native_code: bool,
+    atom_catalogue: Option<crate::direct::AtomCatalogue>,
 }
 
 impl RuntimeBuilder {
+    /// The atom catalogue for this VM, installed before the standard libraries open (OpenMW's
+    /// order). Each runtime may carry its own.
+    pub fn atom_catalogue(mut self, catalogue: crate::direct::AtomCatalogue) -> Self {
+        self.atom_catalogue = Some(catalogue);
+        self
+    }
+
     /// Creates the native code generator on a fresh state when requested and available.
     #[cfg(feature = "jit")]
     fn create_native_code(state: *mut ffi::lua_State, requested: bool) -> bool {
@@ -149,6 +157,9 @@ impl RuntimeBuilder {
             }
         }
         runtime.update_interrupt_hook();
+        if let Some(catalogue) = self.atom_catalogue {
+            crate::direct::install_atom_callback(&runtime, catalogue)?;
+        }
         if self.standard_libraries {
             runtime.open_standard_libraries();
         }
@@ -217,6 +228,7 @@ impl Runtime {
             profiler: false,
             initialization_category: MemoryCategory(0),
             native_code: false,
+            atom_catalogue: None,
         }
     }
 

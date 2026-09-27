@@ -69,12 +69,10 @@ unsafe extern "C-unwind" fn vector_namecall(state: *mut ffi::lua_State) -> c_int
 
 impl Runtime {
     /// Installs `vector:writef32x3(buffer, offset)` on Luau's vector metatable. Fails when the
-    /// metatable already has a `__namecall`. Uses the installed atom catalogue's atom for
-    /// `writef32x3` when there is one, else compares the method name.
+    /// metatable already has a `__namecall`. Uses this VM's atom for `writef32x3` when its
+    /// catalogue has one, else compares the method name.
     pub fn install_vector_buffer_writer(&self) -> Result<()> {
-        let atom = crate::direct::installed_catalogue()
-            .and_then(|catalogue| catalogue.atom_of("writef32x3"))
-            .map_or(-1, c_int::from);
+        let atom = self.atom_of("writef32x3").map_or(-1, c_int::from);
         let stack = self.stack();
         stack.with_frame(|frame| {
             let state = frame.state();
