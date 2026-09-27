@@ -5,12 +5,12 @@ use std::cell::{Cell, RefCell};
 use std::ffi::{c_int, c_void};
 use std::rc::Rc;
 
-use dream_binder::Runtime;
-use dream_binder::memory::{self, BufferCage, EmbedderGc, GcControl, LightUserdata, UserdataMark, WeakRef};
-use dream_binder::stack::Scope;
-use dream_binder::thread::Resume;
-use dream_binder::userdata::{Userdata, tagged};
-use dream_binder::value::{Table, Value};
+use l3i::Runtime;
+use l3i::memory::{self, BufferCage, EmbedderGc, GcControl, LightUserdata, UserdataMark, WeakRef};
+use l3i::stack::Scope;
+use l3i::thread::Resume;
+use l3i::userdata::{Userdata, tagged};
+use l3i::value::{Table, Value};
 
 #[test]
 fn gc_controls_and_counters() {
@@ -48,7 +48,7 @@ fn gc_controls_and_counters() {
 fn dumps_write_files() {
     let runtime = Runtime::new().unwrap();
     runtime.exec("held = { nested = { 1, 2, 3 }, text = 'x' }").unwrap();
-    let dir = std::env::temp_dir().join(format!("dream-binder-dump-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("l3i-dump-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let memory = dir.join("memory.txt");
     let heap = dir.join("heap.json");

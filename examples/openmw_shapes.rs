@@ -12,16 +12,16 @@ use std::cell::{Cell, RefCell};
 use std::ptr::NonNull;
 use std::rc::Rc;
 
-use dream_binder::bind::Call;
-use dream_binder::convert::Vector3;
-use dream_binder::direct::field::{DirectField, FieldValue};
-use dream_binder::module::{LuauModule, ModuleBuilder};
-use dream_binder::runtime::{CallContext, MemoryCategory};
-use dream_binder::sandbox::{InstanceSpec, SandboxOptions};
-use dream_binder::stack::Scope;
-use dream_binder::userdata::{Borrowed, Owned, StableRef, Userdata, check_receiver};
-use dream_binder::value::{Function, Value};
-use dream_binder::{Result, Runtime};
+use l3i::bind::Call;
+use l3i::convert::Vector3;
+use l3i::direct::field::{DirectField, FieldValue};
+use l3i::module::{LuauModule, ModuleBuilder};
+use l3i::runtime::{CallContext, MemoryCategory};
+use l3i::sandbox::{InstanceSpec, SandboxOptions};
+use l3i::stack::Scope;
+use l3i::userdata::{Borrowed, Owned, StableRef, Userdata, check_receiver};
+use l3i::value::{Function, Value};
+use l3i::{Result, Runtime};
 
 // --- A tagged hot type: inline payload, one tag, direct field for `x` -------------------------
 
@@ -134,7 +134,7 @@ impl LuauModule for Shapes {
 fn main() {
     let runtime = Runtime::builder().debug_roots(&["shapes", "dreamweave"]).profiler(true).build().unwrap();
     let shapes = runtime.register_module::<Shapes>().unwrap();
-    dream_binder::direct::field::register::<Vec3, Vec3X>(&runtime, "x").unwrap();
+    l3i::direct::field::register::<Vec3, Vec3X>(&runtime, "x").unwrap();
     runtime.set_global("shapes", &shapes).unwrap();
 
     // An engine object outliving every script observation of it.
@@ -197,7 +197,7 @@ fn main() {
     let doubled = runtime
         .stack()
         .with_frame(|frame| {
-            dream_binder::userdata::tagged::push(frame, Vec3::new(0.0, 3.0, 4.0))?;
+            l3i::userdata::tagged::push(frame, Vec3::new(0.0, 3.0, 4.0))?;
             let view = frame.top_value();
             let _ = check_receiver::<Vec3>(view)?;
             callback.invoke::<f32, _>(frame, (view,))

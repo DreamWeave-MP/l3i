@@ -1,10 +1,10 @@
 //! Ported from `testluaucall.cpp`.
 
-use dream_binder::call::CallResults;
-use dream_binder::convert::Integer;
-use dream_binder::stack::Type;
-use dream_binder::value::{Function, Value};
-use dream_binder::{Error, Runtime};
+use l3i::call::CallResults;
+use l3i::convert::Integer;
+use l3i::stack::Type;
+use l3i::value::{Function, Value};
+use l3i::{Error, Runtime};
 
 fn load(runtime: &Runtime, source: &str) -> Function {
     runtime.load_function(source).unwrap()

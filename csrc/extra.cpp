@@ -1,4 +1,4 @@
-// dream-binder additions to the Luau C API. Luau leaves these to the embedder; they are the
+// l3i additions to the Luau C API. Luau leaves these to the embedder; they are the
 // only pieces of the binder's C surface that are not stock Luau, and each is a thin reach into
 // VM internals the public headers do not expose.
 

@@ -1,6 +1,6 @@
 //! `vector:writef32x3` (nativevectorbuffer.cpp, interpreter path).
 
-use dream_binder::Runtime;
+use l3i::Runtime;
 
 #[test]
 fn writef32x3_matches_three_writef32_calls_and_keeps_other_methods_intact() {

@@ -2,11 +2,11 @@
 
 use std::cell::Cell;
 
-use dream_binder::bind::Call;
-use dream_binder::stack::ValueView;
-use dream_binder::userdata::iterator::Cursor;
-use dream_binder::userdata::{Userdata, tagged};
-use dream_binder::{Result, Runtime};
+use l3i::bind::Call;
+use l3i::stack::ValueView;
+use l3i::userdata::iterator::Cursor;
+use l3i::userdata::{Userdata, tagged};
+use l3i::{Result, Runtime};
 
 struct Sequence;
 
@@ -95,7 +95,7 @@ fn cursor_iterator_creates_independent_state_for_nested_loops() {
     tagged::register::<Counted>(&runtime, 42, |ty| {
         ty.cursor_iterator(
             |call: &Call| -> Result<CountCursor> {
-                let counted = dream_binder::userdata::check_receiver::<Counted>(call.arg(1))?;
+                let counted = l3i::userdata::check_receiver::<Counted>(call.arg(1))?;
                 Ok(CountCursor { current: Cell::new(0.0), end: counted.limit })
             },
             |cursor: Cursor<CountCursor>, _control: ValueView| -> Option<(f64, f64)> {
@@ -139,5 +139,5 @@ fn iter_conflicts_are_detected() {
         ty.keyed_iterator(|_: &Sequence, _: ValueView| -> Option<(f64, f64)> { None })
     })
     .unwrap_err();
-    assert_eq!(error, dream_binder::Error::logic("Metatable already has an __iter metamethod"));
+    assert_eq!(error, l3i::Error::logic("Metatable already has an __iter metamethod"));
 }

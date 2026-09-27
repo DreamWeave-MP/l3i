@@ -172,13 +172,12 @@ impl Runtime {
             self.bind_function(&format!("{root}.internal.writeToLog"), move |message: &str| log(message))?;
         let generated = self.stack().with_frame(|frame| {
             // SAFETY: the name is a static C string, valid until the VM closes.
-            let raw_metamethod = unsafe {
-                frame.push_c_function(compat_metamethod, c"dream_binder.internal.getCompatMetamethod".as_ptr())
-            };
+            let raw_metamethod =
+                unsafe { frame.push_c_function(compat_metamethod, c"l3i.internal.getCompatMetamethod".as_ptr()) };
             let raw_metamethod = Function::from_value(Value::store(raw_metamethod)?)?;
             let pairs = Value::get_global(frame, "pairs")?;
             let ipairs = Value::get_global(frame, "ipairs")?;
-            let chunk = self.load(frame, "=dream_binder.prelude", PRELUDE, &options.compile_options)?;
+            let chunk = self.load(frame, "=l3i.prelude", PRELUDE, &options.compile_options)?;
             let prelude = Function::from_value(Value::store(chunk)?)?;
             prelude.invoke_multi(frame, (&write_to_log, &raw_metamethod, &pairs, &ipairs))
         })?;

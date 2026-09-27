@@ -1,6 +1,6 @@
-# dream-binder
+# l3i
 
-**dream-binder** is a Rust binder for [Luau](https://luau.org) 0.740, ported from the OpenMW
+**l3i** is a Rust binder for [Luau](https://luau.org) 0.740, ported from the OpenMW
 Luau binder (`components/luau` and `components/lua/bindfunction.hpp`). It owns its Luau build,
 declares the C API by hand, and puts a safe, scoped layer over it: frame-scoped stack views,
 registry-pinned owned values, a typed function binder that reads arguments straight from stack
@@ -27,12 +27,12 @@ mechanism, never a catalogue.
 
 ```toml
 [dependencies]
-dream-binder = { version = "0.1", features = ["jit"] } # jit is optional
+l3i = { version = "0.1", features = ["jit"] } # jit is optional
 ```
 
 ```rust
-use dream_binder::Runtime;
-use dream_binder::userdata::{Owned, Userdata, tagged};
+use l3i::Runtime;
+use l3i::userdata::{Owned, Userdata, tagged};
 
 struct Vec3 { x: f32, y: f32, z: f32 }
 
@@ -40,7 +40,7 @@ unsafe impl Userdata for Vec3 {
     const NAME: &'static str = "dreamweave.Vec3";
 }
 
-fn main() -> dream_binder::Result<()> {
+fn main() -> l3i::Result<()> {
     let runtime = Runtime::new()?;
     // The host picks the tag, per runtime, at registration.
     tagged::register::<Vec3>(&runtime, 10, |ty| {
@@ -159,7 +159,7 @@ same on every target and needs nothing outside the checkout.
   a Lua call panics, so no two frames can alias one stack region. Native-call stacks only arise
   from Luau calling into Rust.
 - Untagged type identity is a leaked per-type address recorded by exact `TypeId`, never a hash.
-- `build.rs` owns `-DLUA_UTAG_LIMIT=254`; `dream_binder::TAG_LIMIT` mirrors it. Tag 0 is Luau's
+- `build.rs` owns `-DLUA_UTAG_LIMIT=254`; `l3i::TAG_LIMIT` mirrors it. Tag 0 is Luau's
   untagged default; nothing else is reserved.
 - Fast flags follow OpenMW's policy (plus `LuauExperimentalIfLocalSyntax`), frozen before the
   first VM or compile.

@@ -3,9 +3,9 @@
 use std::cell::Cell;
 use std::ptr::NonNull;
 
-use dream_binder::stack::Scope;
-use dream_binder::userdata::{StableRef, Userdata, untagged};
-use dream_binder::{Error, Runtime};
+use l3i::stack::Scope;
+use l3i::userdata::{StableRef, Userdata, untagged};
+use l3i::{Error, Runtime};
 
 thread_local!(static DROPPED: Cell<usize> = const { Cell::new(0) });
 
@@ -143,10 +143,10 @@ fn receivers_respect_owned_and_borrowed_storage_and_exact_identity() {
     {
         let stack = runtime.stack();
         let frame = stack.frame();
-        let global = dream_binder::value::Value::get_global(&frame, "borrowed").unwrap().push_to(&frame).unwrap();
+        let global = l3i::value::Value::get_global(&frame, "borrowed").unwrap().push_to(&frame).unwrap();
         assert_eq!(untagged::test::<Untagged>(global).unwrap().value, 11);
         assert!(untagged::test_owned::<Untagged>(global).is_none());
-        let owned = dream_binder::value::Value::get_global(&frame, "owned").unwrap().push_to(&frame).unwrap();
+        let owned = l3i::value::Value::get_global(&frame, "owned").unwrap().push_to(&frame).unwrap();
         assert_eq!(untagged::test_owned::<Untagged>(owned).unwrap().value, 7);
     }
     drop(runtime);

@@ -5,14 +5,14 @@
 use std::cell::Cell;
 use std::ffi::c_int;
 
-use dream_binder::bind::Call;
-use dream_binder::convert::Vector3;
-use dream_binder::direct::field::{DirectField, FieldValue};
-use dream_binder::direct::registry::{Descriptor, Registry, UNKNOWN_SLOT};
-use dream_binder::direct::{self, AccessKind, Atom, AtomCatalogue, DirectAccess, DirectMetamethods, Dispatch};
-use dream_binder::stack::Scope;
-use dream_binder::userdata::{Userdata, tagged};
-use dream_binder::{Error, Result, Runtime};
+use l3i::bind::Call;
+use l3i::convert::Vector3;
+use l3i::direct::field::{DirectField, FieldValue};
+use l3i::direct::registry::{Descriptor, Registry, UNKNOWN_SLOT};
+use l3i::direct::{self, AccessKind, Atom, AtomCatalogue, DirectAccess, DirectMetamethods, Dispatch};
+use l3i::stack::Scope;
+use l3i::userdata::{Userdata, tagged};
+use l3i::{Error, Result, Runtime};
 
 const FOO_TAG: u8 = 50;
 const BAR_TAG: u8 = 51;

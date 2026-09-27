@@ -3,10 +3,10 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use dream_binder::Runtime;
-use dream_binder::runtime::{CallContext, MemoryCategory};
-use dream_binder::sandbox::{InstanceSpec, Sandbox, SandboxOptions};
-use dream_binder::value::Value;
+use l3i::Runtime;
+use l3i::runtime::{CallContext, MemoryCategory};
+use l3i::sandbox::{InstanceSpec, Sandbox, SandboxOptions};
+use l3i::value::Value;
 
 type Log = Rc<RefCell<Vec<String>>>;
 
@@ -119,9 +119,8 @@ fn compat_iterators_honour_pairs_metamethods_on_views_and_userdata() {
     let runtime = Runtime::new().unwrap();
     let (_sandbox, _log) = sandbox_with_log(&runtime, SandboxOptions::default());
     let backing = runtime.load_function("return function() return { a = 1, b = 2 } end").unwrap();
-    let backing =
-        dream_binder::value::Table::from_value(backing.invoke::<Value, _>(&runtime.stack(), ()).unwrap()).unwrap();
-    let view = dream_binder::readonly::make_read_only_view(&runtime, &backing).unwrap();
+    let backing = l3i::value::Table::from_value(backing.invoke::<Value, _>(&runtime.stack(), ()).unwrap()).unwrap();
+    let view = l3i::readonly::make_read_only_view(&runtime, &backing).unwrap();
     let count = runtime
         .load_function("return function(t) local n = 0 for k, v in pairs(t) do n = n + v end return n end")
         .unwrap();
@@ -167,7 +166,7 @@ fn neutered_randomseed_is_a_no_op() {
 
 #[test]
 fn a_rust_require_loader_can_instantiate_templates_from_inside_the_call() {
-    use dream_binder::bind::{Call, StackResults};
+    use l3i::bind::{Call, StackResults};
     use std::rc::Rc;
     let runtime = Rc::new(Runtime::new().unwrap());
     let (sandbox, _log) = sandbox_with_log(&runtime, SandboxOptions::default());
@@ -180,11 +179,11 @@ fn a_rust_require_loader_can_instantiate_templates_from_inside_the_call() {
         runtime
             .bind_function(
                 "dreamweave.test.loader",
-                move |call: &Call, name: &str, env: Value| -> dream_binder::Result<StackResults> {
+                move |call: &Call, name: &str, env: Value| -> l3i::Result<StackResults> {
                     if name != "util" {
-                        return Err(dream_binder::Error::runtime(format!("module '{name}' not found")));
+                        return Err(l3i::Error::runtime(format!("module '{name}' not found")));
                     }
-                    let env = dream_binder::value::Table::from_value(env)?;
+                    let env = l3i::value::Table::from_value(env)?;
                     let template = sandbox.load_template_in(
                         call,
                         &captured,
@@ -192,7 +191,7 @@ fn a_rust_require_loader_can_instantiate_templates_from_inside_the_call() {
                         "return function(name) return { twice = function(x) return x * 2 end, name = name } end",
                     )?;
                     let factory = sandbox.instantiate_in(call, &template, Some(&env))?;
-                    factory.invoke::<dream_binder::value::Function, _>(call, ())?.value().push_to_scope(call)?;
+                    factory.invoke::<l3i::value::Function, _>(call, ())?.value().push_to_scope(call)?;
                     Ok(StackResults)
                 },
             )

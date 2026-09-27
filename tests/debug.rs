@@ -4,13 +4,13 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use dream_binder::Runtime;
-use dream_binder::bind::Call;
-use dream_binder::debug::{DebugAction, DebugInfo, DebugScope, HookSet, RuntimeHooks};
-use dream_binder::source::CompileOptions;
-use dream_binder::stack::Stack;
-use dream_binder::thread::Resume;
-use dream_binder::value::{Function, Value};
+use l3i::Runtime;
+use l3i::bind::Call;
+use l3i::debug::{DebugAction, DebugInfo, DebugScope, HookSet, RuntimeHooks};
+use l3i::source::CompileOptions;
+use l3i::stack::Stack;
+use l3i::thread::Resume;
+use l3i::value::{Function, Value};
 
 #[test]
 fn activation_records_locals_arguments_and_upvalues_are_readable_from_a_bound_function() {
@@ -222,19 +222,15 @@ struct Lifecycle {
 }
 
 impl RuntimeHooks for Lifecycle {
-    fn user_thread(
-        &self,
-        parent: Option<*mut dream_binder::ffi::lua_State>,
-        _thread: *mut dream_binder::ffi::lua_State,
-    ) {
+    fn user_thread(&self, parent: Option<*mut l3i::ffi::lua_State>, _thread: *mut l3i::ffi::lua_State) {
         if parent.is_some() {
             self.threads.set(self.threads.get() + 1);
         }
     }
-    fn pre_resume(&self, _: *mut dream_binder::ffi::lua_State) {
+    fn pre_resume(&self, _: *mut l3i::ffi::lua_State) {
         self.resumes.set(self.resumes.get() + 1);
     }
-    fn on_free(&self, _: *mut dream_binder::ffi::lua_State, _: *mut std::ffi::c_void) {
+    fn on_free(&self, _: *mut l3i::ffi::lua_State, _: *mut std::ffi::c_void) {
         self.frees.set(self.frees.get() + 1);
     }
     fn debug_protected_error(&self, stack: &Stack<'_>) {

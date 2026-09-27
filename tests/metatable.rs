@@ -4,11 +4,11 @@
 use std::cell::Cell;
 use std::ffi::c_int;
 
-use dream_binder::bind::ArgView;
-use dream_binder::ffi;
-use dream_binder::stack::Scope;
-use dream_binder::userdata::{Userdata, tagged};
-use dream_binder::{Error, Runtime};
+use l3i::bind::ArgView;
+use l3i::ffi;
+use l3i::stack::Scope;
+use l3i::userdata::{Userdata, tagged};
+use l3i::{Error, Runtime};
 
 struct Bar {
     value: Cell<i32>,
@@ -26,7 +26,7 @@ unsafe impl Userdata for Baz {
 
 unsafe extern "C-unwind" fn good_method_body(state: *mut ffi::lua_State) -> c_int {
     unsafe {
-        dream_binder::native::enter(state, |stack| {
+        l3i::native::enter(state, |stack| {
             let discriminator = stack.at(ffi::lua_upvalueindex(1)).read::<i32>()?;
             let argument = stack.at(2).read::<i32>()?;
             stack.push(&(argument * discriminator))?;
@@ -36,9 +36,7 @@ unsafe extern "C-unwind" fn good_method_body(state: *mut ffi::lua_State) -> c_in
 }
 
 unsafe extern "C-unwind" fn arg_error_body(state: *mut ffi::lua_State) -> c_int {
-    unsafe {
-        dream_binder::native::enter(state, |stack| Err(dream_binder::diagnostics::type_error(stack.at(1), "probe")))
-    }
+    unsafe { l3i::native::enter(state, |stack| Err(l3i::diagnostics::type_error(stack.at(1), "probe"))) }
 }
 
 fn set_global_bar(runtime: &Runtime, name: &str, value: i32) {
@@ -202,7 +200,7 @@ fn metamethod_debug_names_compose_from_the_type() {
     assert!(error.contains("invalid argument #1 to 'dreamweave.tests.Baz.__namecall' (probe expected"), "{error}");
 
     tagged::register::<Bar>(&runtime, 20, |ty| {
-        ty.metamethod("__len", |bar: &Bar, _extra: dream_binder::stack::ValueView| bar.value.get())?;
+        ty.metamethod("__len", |bar: &Bar, _extra: l3i::stack::ValueView| bar.value.get())?;
         ty.metamethod("__tostring", |bar: &Bar| format!("Bar({})", bar.value.get()))?;
         // Metamethods bind in function mode: the receiver is argument #1, so a variadic call
         // metamethod takes the rest as an ArgView.
@@ -236,8 +234,8 @@ fn script_visible_identity_and_protected_metatable() {
     assert!(error.contains("table expected"), "{error}");
 }
 
-fn protected_marker(runtime: &Runtime) -> dream_binder::value::Value {
+fn protected_marker(runtime: &Runtime) -> l3i::value::Value {
     let stack = runtime.stack();
     let frame = stack.frame();
-    dream_binder::value::Value::store(frame.push_string("Baz protected")).unwrap()
+    l3i::value::Value::store(frame.push_string("Baz protected")).unwrap()
 }

@@ -13,7 +13,7 @@ const MAX_CSTACK: usize = 8000;
 
 // Luau's default is 128 userdata tags. The binder uses every tag Luau can address: Udata::tag
 // is a uint8_t and Luau keeps LUA_UTAG_LIMIT itself for LU_TAG_ITERATOR, so 254 is the ceiling
-// and the value OpenMW builds with. dream-binder owns the Luau build, so it owns this ABI
+// and the value OpenMW builds with. l3i owns the Luau build, so it owns this ABI
 // choice; src/lib.rs mirrors it as TAG_LIMIT. Hosts may append their own flags through
 // LUAU_CXXFLAGS but cannot lower this one.
 const TAG_LIMIT: u32 = 254;
@@ -69,7 +69,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=LUAU_CXXFLAGS");
     println!("cargo:rerun-if-changed=luau");
     println!("cargo:rerun-if-changed=csrc");
-    println!("cargo:rustc-env=DREAM_BINDER_TAG_LIMIT={TAG_LIMIT}");
+    println!("cargo:rustc-env=L3I_TAG_LIMIT={TAG_LIMIT}");
 
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("luau");
     assert!(
@@ -106,7 +106,7 @@ fn main() {
     if let Ok(extra) = env::var("LUAU_CXXFLAGS") {
         assert!(
             !extra.contains("LUA_UTAG_LIMIT"),
-            "LUA_UTAG_LIMIT is fixed at {TAG_LIMIT} by dream-binder; remove it from LUAU_CXXFLAGS"
+            "LUA_UTAG_LIMIT is fixed at {TAG_LIMIT} by l3i; remove it from LUAU_CXXFLAGS"
         );
         for flag in extra.split_whitespace() {
             base.flag(flag);
@@ -149,7 +149,7 @@ fn main() {
 
     // The binder's own additions to the C API.
     let mut extra = luau.base.clone();
-    extra.include(&vm_include).include(&vm_src).file("csrc/extra.cpp").compile("dreambinderextra");
+    extra.include(&vm_include).include(&vm_src).file("csrc/extra.cpp").compile("l3iextra");
 
     if jit {
         if target.ends_with("emscripten") {
@@ -163,7 +163,7 @@ fn main() {
         );
         let mut shim = luau.base.clone();
         shim.include(&codegen_include).include(&vm_include).include(&vm_src).file("csrc/codegen.cpp");
-        shim.compile("dreambindercodegen");
+        shim.compile("l3icodegen");
         generate_ir_enums(&codegen_include);
     }
 
@@ -190,7 +190,7 @@ fn main() {
             .include(&bytecode_include)
             .include(&vm_include)
             .file("csrc/analysis.cpp");
-        shim.compile("dreambinderanalysis");
+        shim.compile("l3ianalysis");
     }
 }
 

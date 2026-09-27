@@ -2,12 +2,12 @@
 
 use std::cell::Cell;
 
-use dream_binder::bind::Call;
-use dream_binder::module::{LuauModule, ModuleBuilder};
-use dream_binder::readonly;
-use dream_binder::userdata::{Userdata, tagged};
-use dream_binder::value::{Table, Value};
-use dream_binder::{Error, Result, Runtime};
+use l3i::bind::Call;
+use l3i::module::{LuauModule, ModuleBuilder};
+use l3i::readonly;
+use l3i::userdata::{Userdata, tagged};
+use l3i::value::{Table, Value};
+use l3i::{Error, Result, Runtime};
 
 struct Asset {
     name: String,
@@ -31,9 +31,9 @@ impl LuauModule for AssetsModule {
                 asset.loads.get()
             })
         })?;
-        module.function("open", |call: &Call, name: &str| -> Result<dream_binder::bind::StackResults> {
+        module.function("open", |call: &Call, name: &str| -> Result<l3i::bind::StackResults> {
             tagged::push(call, Asset { name: name.to_owned(), loads: Cell::new(0) })?;
-            Ok(dream_binder::bind::StackResults)
+            Ok(l3i::bind::StackResults)
         })?;
         module.set("VERSION", &3i32)?;
         module.metamethod("__tostring", |_: Table| "dreamweave.assets package")?;

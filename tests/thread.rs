@@ -1,9 +1,9 @@
 //! Coroutines driven from the host, and yields from bound functions.
 
-use dream_binder::Runtime;
-use dream_binder::bind::{Break, Yield};
-use dream_binder::thread::{CoroutineStatus, Resume, ThreadStatus};
-use dream_binder::value::Value;
+use l3i::Runtime;
+use l3i::bind::{Break, Yield};
+use l3i::thread::{CoroutineStatus, Resume, ThreadStatus};
+use l3i::value::Value;
 
 fn number(runtime: &Runtime, value: &Value) -> f64 {
     value.with_value(&runtime.stack(), |_, view| view.read::<f64>()).unwrap()
@@ -106,7 +106,7 @@ fn thread_data_and_sandboxed_globals() {
                     "shared_value = 2 new_value = 3 return shared_value",
                     &Default::default(),
                 )?;
-                dream_binder::value::Function::from_value(Value::store(chunk)?)
+                l3i::value::Function::from_value(Value::store(chunk)?)
             })
         })
         .unwrap();

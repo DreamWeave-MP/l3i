@@ -1,4 +1,4 @@
-// dream-binder analysis shim: a C ABI over Luau's Analysis library (type checker, linter,
+// l3i analysis shim: a C ABI over Luau's Analysis library (type checker, linter,
 // autocomplete) and the parser. The host supplies sources and per-module configuration through
 // callbacks; results come back through callbacks too, so no C++ types cross the boundary.
 //

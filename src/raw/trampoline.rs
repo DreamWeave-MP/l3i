@@ -37,7 +37,7 @@ impl AbortOnPanic {
 impl Drop for AbortOnPanic {
     fn drop(&mut self) {
         if std::thread::panicking() && !self.panicking_at_entry {
-            eprintln!("dream-binder: a Rust panic inside a Luau native function cannot be recovered; aborting");
+            eprintln!("l3i: a Rust panic inside a Luau native function cannot be recovered; aborting");
             std::process::abort();
         }
     }

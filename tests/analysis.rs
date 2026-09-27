@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 
-use dream_binder::analysis::{
+use l3i::analysis::{
     self, Analysis, AnalysisOptions, CompletionContext, CompletionKind, DiagnosticKind, Mode, ModuleConfig, SourceCode,
     SourceProvider,
 };

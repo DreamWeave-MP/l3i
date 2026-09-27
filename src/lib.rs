@@ -52,10 +52,10 @@ pub mod ffi {
 
 /// Number of userdata tags the linked Luau VM was compiled with (`LUA_UTAG_LIMIT`).
 ///
-/// dream-binder builds Luau with 254, the most Luau can address, and `build.rs` is the single
+/// l3i builds Luau with 254, the most Luau can address, and `build.rs` is the single
 /// owner of that define. Valid runtime tags are `1..TAG_LIMIT`; tag 0 is Luau's untagged
 /// default and is never registered.
-pub const TAG_LIMIT: u8 = parse_tag_limit(env!("DREAM_BINDER_TAG_LIMIT"));
+pub const TAG_LIMIT: u8 = parse_tag_limit(env!("L3I_TAG_LIMIT"));
 
 const fn parse_tag_limit(text: &str) -> u8 {
     let bytes = text.as_bytes();

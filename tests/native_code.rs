@@ -5,16 +5,16 @@
 use std::cell::Cell;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use dream_binder::Runtime;
-use dream_binder::ffi::{LUA_TNUMBER, LUA_TUSERDATA};
-use dream_binder::native_code::hooks::{AccessSite, NamecallSite, NativeCodeHooks, NativeContext};
-use dream_binder::native_code::ir::{IrBuilder, IrCmd, bytecode_type};
-use dream_binder::native_code::vector_buffer::VectorBufferWriter;
-use dream_binder::native_code::{NativeCodeMode, NativeCodeOptions, NativeCodeStatus, module_id};
-use dream_binder::runtime::{CallContext, MemoryCategory};
-use dream_binder::sandbox::{InstanceSpec, SandboxOptions};
-use dream_binder::source::CompileOptions;
-use dream_binder::userdata::{Userdata, tagged};
+use l3i::Runtime;
+use l3i::ffi::{LUA_TNUMBER, LUA_TUSERDATA};
+use l3i::native_code::hooks::{AccessSite, NamecallSite, NativeCodeHooks, NativeContext};
+use l3i::native_code::ir::{IrBuilder, IrCmd, bytecode_type};
+use l3i::native_code::vector_buffer::VectorBufferWriter;
+use l3i::native_code::{NativeCodeMode, NativeCodeOptions, NativeCodeStatus, module_id};
+use l3i::runtime::{CallContext, MemoryCategory};
+use l3i::sandbox::{InstanceSpec, SandboxOptions};
+use l3i::source::CompileOptions;
+use l3i::userdata::{Userdata, tagged};
 
 static WRITER_LOWERINGS: AtomicU32 = AtomicU32::new(0);
 static FIELD_LOWERINGS: AtomicU32 = AtomicU32::new(0);
@@ -185,7 +185,7 @@ fn userdata_field_access_can_be_lowered_from_rust() {
     assert_eq!(template.native_code().unwrap().status, NativeCodeStatus::Success);
     assert!(FIELD_LOWERINGS.load(Ordering::Relaxed) > before, "the annotated parameter reached the Rust hook");
     let len = sandbox.instantiate(&runtime, &template, None).unwrap();
-    let len: dream_binder::value::Function = len.invoke(&runtime.stack(), ()).unwrap();
+    let len: l3i::value::Function = len.invoke(&runtime.stack(), ()).unwrap();
     let point = runtime.global("point").unwrap();
     assert_eq!(len.invoke::<f64, _>(&runtime.stack(), (&point,)).unwrap(), 5.0);
     // A wrong tag at the same site exits to the interpreter, which reports the ordinary error.

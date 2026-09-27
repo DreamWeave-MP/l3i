@@ -1,4 +1,4 @@
-// dream-binder native code generation shim.
+// l3i native code generation shim.
 //
 // Luau's code generator is a C++ API (Luau/CodeGen.h): shared code contexts, compilation with
 // CompilationOptions, the host IR hooks that lower vector/userdata operations, and the IrBuilder

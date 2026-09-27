@@ -4,10 +4,10 @@
 use std::cell::Cell;
 use std::ffi::c_int;
 
-use dream_binder::ffi;
-use dream_binder::stack::Scope;
-use dream_binder::userdata::{Userdata, tagged};
-use dream_binder::{Error, Runtime, TAG_LIMIT};
+use l3i::ffi;
+use l3i::stack::Scope;
+use l3i::userdata::{Userdata, tagged};
+use l3i::{Error, Runtime, TAG_LIMIT};
 
 thread_local! {
     static CONSTRUCTED: Cell<usize> = const { Cell::new(0) };
@@ -61,7 +61,7 @@ unsafe impl Userdata for LimitTag {
 
 unsafe extern "C-unwind" fn make_probe(state: *mut ffi::lua_State) -> c_int {
     unsafe {
-        dream_binder::native::enter(state, |stack| {
+        l3i::native::enter(state, |stack| {
             let value = ffi::lua_tonumber(state, 1);
             tagged::push(stack, Probe::new(value))?;
             Ok(1)
@@ -182,7 +182,7 @@ fn tags_are_assigned_per_runtime_not_per_type() {
             "Conflicting Luau userdata tag registration: 'dreamweave.test.Probe' is already tag 100 in this runtime"
         )
     );
-    let error = dream_binder::userdata::untagged::register::<Probe>(&hundred, |_| Ok(())).unwrap_err();
+    let error = l3i::userdata::untagged::register::<Probe>(&hundred, |_| Ok(())).unwrap_err();
     assert!(error.to_string().contains("is already tag 100 in this runtime"), "{error}");
     // Unregistered in a third VM: nothing is tagged there.
     let bare = Runtime::new().unwrap();

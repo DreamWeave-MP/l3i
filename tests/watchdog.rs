@@ -4,9 +4,9 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Duration;
 
-use dream_binder::Runtime;
-use dream_binder::bind::Call;
-use dream_binder::runtime::{CallContext, CallKind, Limits, MemoryCategory};
+use l3i::Runtime;
+use l3i::bind::Call;
+use l3i::runtime::{CallContext, CallKind, Limits, MemoryCategory};
 
 fn context(id: u64, category: u8) -> CallContext {
     CallContext { id, category: MemoryCategory(category) }
@@ -105,7 +105,7 @@ fn caller_location_names_the_running_script_line() {
     let probe = runtime
         .bind_function("dreamweave.where", {
             let seen = seen.clone();
-            move |call: &Call| *seen.borrow_mut() = dream_binder::runtime::caller_location(call)
+            move |call: &Call| *seen.borrow_mut() = l3i::runtime::caller_location(call)
         })
         .unwrap();
     runtime.set_global("where", &probe).unwrap();
@@ -141,7 +141,7 @@ fn the_sampler_attributes_safepoints_to_the_sampled_context_only() {
     assert!(samples.functions.contains_key("load_function:6"));
     assert!(samples.lines.values().map(|l| l.samples).sum::<u64>() == samples.count);
     runtime.set_sampled_context(None);
-    assert_eq!(runtime.samples(), dream_binder::runtime::Samples::default());
+    assert_eq!(runtime.samples(), l3i::runtime::Samples::default());
 }
 
 #[test]
