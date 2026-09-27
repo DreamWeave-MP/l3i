@@ -1,0 +1,16 @@
+[package]
+name = "dream-binder"
+version = "0.1.0"
+description = "Luau binder for DreamWeave component crates on top of mlua: typed function binding, tagged and untagged userdata, direct userdata access"
+authors = ["Dave Corley (S3kshun8) <corleycomputerrepair@protonmail.ch>"]
+license = "MIT OR Apache-2.0"
+edition = "2024"
+rust-version = "1.88"
+keywords = ["luau", "lua", "mlua", "bindings", "gamedev"]
+categories = ["api-bindings", "game-development"]
+
+[dependencies]
+mlua = { version = "0.12.1", default-features = false, features = ["luau"] }
+
+[features]
+default = []
