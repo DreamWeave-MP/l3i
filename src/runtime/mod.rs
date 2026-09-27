@@ -20,8 +20,8 @@ use crate::source::{CompileOptions, compile};
 use crate::stack::{Frame, Stack, ValueView, same_vm};
 
 pub use call_scope::{CallContext, CallKind, CallScope};
-pub use shared::{CallStats, Limits, MemoryCategory};
 use shared::Shared;
+pub use shared::{CallStats, Limits, MemoryCategory};
 
 /// Host choices made before the VM exists.
 #[derive(Clone, Debug)]
@@ -330,17 +330,13 @@ mod tests {
     #[test]
     fn if_local_expressions_parse() {
         let runtime = Runtime::new().unwrap();
-        runtime
-            .exec("local t = {x = 3} local r = if local v = t.x then v * 2 else 0 assert(r == 6, r)")
-            .unwrap();
+        runtime.exec("local t = {x = 3} local r = if local v = t.x then v * 2 else 0 assert(r == 6, r)").unwrap();
     }
 
     #[test]
     fn fastpcall_bytecode_loads_and_runs() {
         let runtime = Runtime::new().unwrap();
-        runtime
-            .exec("local ok, err = pcall(function() error('x') end) assert(not ok and err:find('x'))")
-            .unwrap();
+        runtime.exec("local ok, err = pcall(function() error('x') end) assert(not ok and err:find('x'))").unwrap();
     }
 
     #[test]
@@ -371,8 +367,6 @@ mod tests {
         assert_ne!(first, second);
         // Table keying by pointer still works with a non-identity key.
         let runtime = Runtime::new().unwrap();
-        runtime
-            .exec("local k = {} local t = {[k] = 1} for i = 1, 100 do t[{}] = i end assert(t[k] == 1)")
-            .unwrap();
+        runtime.exec("local k = {} local t = {[k] = 1} for i = 1, 100 do t[{}] = i end assert(t[k] == 1)").unwrap();
     }
 }

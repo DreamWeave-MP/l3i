@@ -110,12 +110,16 @@ fn wrong_receiver_is_a_luau_type_error() {
     let runtime = runtime_with_probe();
     let error = runtime.exec("local p = make_probe(1) p.value(42)").unwrap_err();
     assert!(
-        error.to_string().ends_with("invalid argument #1 to 'dreamweave.test.Probe.value' (dreamweave.test.Probe expected, got number)"),
+        error.to_string().ends_with(
+            "invalid argument #1 to 'dreamweave.test.Probe.value' (dreamweave.test.Probe expected, got number)"
+        ),
         "{error}"
     );
     let error = runtime.exec("local p = make_probe(1) p.value()").unwrap_err();
     assert!(
-        error.to_string().ends_with("missing argument #1 to 'dreamweave.test.Probe.value' (dreamweave.test.Probe expected)"),
+        error
+            .to_string()
+            .ends_with("missing argument #1 to 'dreamweave.test.Probe.value' (dreamweave.test.Probe expected)"),
         "{error}"
     );
 }

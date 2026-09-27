@@ -9,7 +9,7 @@ use dream_binder::bind::Call;
 use dream_binder::convert::Vector3;
 use dream_binder::direct::field::{DirectField, FieldValue};
 use dream_binder::direct::registry::{Descriptor, Registry, UNKNOWN_SLOT};
-use dream_binder::direct::{self, AccessKind, Atom, AtomCatalogue, Dispatch, DirectAccess, DirectMetamethods};
+use dream_binder::direct::{self, AccessKind, Atom, AtomCatalogue, DirectAccess, DirectMetamethods, Dispatch};
 use dream_binder::stack::Scope;
 use dream_binder::userdata::{Userdata, tagged};
 use dream_binder::{Error, Result, Runtime};
@@ -237,7 +237,14 @@ fn direct_callbacks_dispatch_and_shadow_metamethods() {
     assert!(error.contains("closure-newindex"), "{error}");
 
     // The ordinary metamethod path (import-folded global access) runs the same handler.
-    assert_eq!(runtime.load_function("return function() return ud['get'] end").unwrap().invoke::<String, _>(&stack, ()).unwrap(), "direct-field");
+    assert_eq!(
+        runtime
+            .load_function("return function() return ud['get'] end")
+            .unwrap()
+            .invoke::<String, _>(&stack, ())
+            .unwrap(),
+        "direct-field"
+    );
 
     assert!(count(&INDEX_CALLS) >= 3);
     // Keys without an atom never reach the handler: only the atom-keyed `ud.set = 1` counted.
@@ -290,7 +297,10 @@ fn direct_fields_bypass_the_metatable_entirely() {
         .unwrap();
     assert_eq!(count(&INDEX_CALLS), before, "direct fields never reach __index");
     assert!(direct::field::register::<Foo, FooValue>(&runtime, "").is_err());
-    assert!(direct::field::register::<Bar, FooOriginForBar>(&runtime, "x").is_err(), "unregistered tag has no metatable");
+    assert!(
+        direct::field::register::<Bar, FooOriginForBar>(&runtime, "x").is_err(),
+        "unregistered tag has no metatable"
+    );
 }
 
 struct FooOriginForBar;
@@ -311,6 +321,7 @@ fn registration_requires_wrappers_and_a_frozen_metatable() {
     assert!(error.to_string().contains("no corresponding wrapper metamethod"), "{error}");
     assert!(direct::register::<Foo>(&runtime, DirectMetamethods::default()).is_err());
     // Wrapping requires an original metamethod to exist.
-    let error = tagged::register::<Bar>(&runtime, |ty| ty.direct_dispatch::<Bar>(DirectMetamethods::NAMECALL)).unwrap_err();
+    let error =
+        tagged::register::<Bar>(&runtime, |ty| ty.direct_dispatch::<Bar>(DirectMetamethods::NAMECALL)).unwrap_err();
     assert!(error.to_string().contains("requires an original __namecall metamethod"), "{error}");
 }

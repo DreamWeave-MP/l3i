@@ -68,7 +68,10 @@ fn integers_convert_by_range_and_numbers_by_rounding() {
 
         let huge = frame.push_number(f64::MAX);
         assert!(!huge.is::<f32>());
-        assert_eq!(huge.read::<f32>().unwrap_err(), Error::runtime("Lua number does not fit destination floating-point type"));
+        assert_eq!(
+            huge.read::<f32>().unwrap_err(),
+            Error::runtime("Lua number does not fit destination floating-point type")
+        );
 
         let before = frame.len();
         assert_eq!(
@@ -193,7 +196,9 @@ fn vectors_and_buffers_are_first_class() {
         assert!(v.is_vector() && v.is::<Vector3>());
         assert_eq!(v.read::<Vector3>().unwrap(), Vector3::new(1.0, 2.5, -3.0));
         assert!(v.read::<f64>().unwrap_err().to_string().ends_with("expected number, got vector"));
-        assert!(frame.push_number(1.0).read::<Vector3>().unwrap_err().to_string().ends_with("expected vector, got number"));
+        assert!(
+            frame.push_number(1.0).read::<Vector3>().unwrap_err().to_string().ends_with("expected vector, got number")
+        );
 
         let buffer = new_buffer(frame, 16).unwrap();
         assert_eq!(buffer.len(), 16);
@@ -201,7 +206,10 @@ fn vectors_and_buffers_are_first_class() {
         buffer.write_f32x3(4, Vector3::new(1.0, 2.0, 3.0)).unwrap();
         assert_eq!(buffer.read_f32x3(4).unwrap(), Vector3::new(1.0, 2.0, 3.0));
         assert_eq!(buffer.read_f32(8).unwrap(), 2.0);
-        assert_eq!(buffer.write_f32x3(5, Vector3::default()).unwrap_err(), Error::runtime("buffer access out of bounds"));
+        assert_eq!(
+            buffer.write_f32x3(5, Vector3::default()).unwrap_err(),
+            Error::runtime("buffer access out of bounds")
+        );
         assert_eq!(buffer.read_u8(16).unwrap_err(), Error::runtime("buffer access out of bounds"));
         assert!(buffer.write(usize::MAX, &[1]).is_err(), "offset overflow is out of bounds, not a wrap");
         buffer.write_u8(15, 0xAB).unwrap();

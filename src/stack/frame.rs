@@ -58,7 +58,12 @@ impl<'p> Frame<'p> {
     ///
     /// # Safety
     /// `nargs` values are on top of the frame; `body` leaves exactly `nresults` results.
-    pub(crate) unsafe fn raising(&self, nargs: c_int, nresults: c_int, body: impl FnOnce(*mut ffi::lua_State) -> c_int) -> Result<()> {
+    pub(crate) unsafe fn raising(
+        &self,
+        nargs: c_int,
+        nresults: c_int,
+        body: impl FnOnce(*mut ffi::lua_State) -> c_int,
+    ) -> Result<()> {
         unsafe {
             if self.host_level {
                 protect::protected_call(self.state, nargs, nresults, body)

@@ -3,9 +3,9 @@
 
 use std::ffi::c_int;
 
+use super::Call;
 use super::diagnostics;
 use super::param::{Param, ParamItem, ParamKind};
-use super::Call;
 use crate::error::{Error, Result};
 
 /// A tuple of [`Param`] markers.

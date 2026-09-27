@@ -22,7 +22,6 @@ fn private_registry_key() -> *mut c_void {
     (&PRIVATE_REGISTRY_KEY as *const u8).cast_mut().cast()
 }
 
-
 /// Runs the storage's `Drop` when Luau frees the userdata (owned payloads drop; borrowed
 /// storage drops only the pointer).
 unsafe extern "C" fn destroy_storage<T: Userdata>(_: *mut ffi::lua_State, userdata: *mut c_void) {

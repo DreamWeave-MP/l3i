@@ -82,8 +82,24 @@ macro_rules! single_results {
 }
 
 single_results!(
-    bool, i8, i16, i32, i64, isize, u8, u16, u32, u64, usize, f32, f64, String, Vec<u8>,
-    crate::convert::Integer, crate::convert::Vector3, Value,
+    bool,
+    i8,
+    i16,
+    i32,
+    i64,
+    isize,
+    u8,
+    u16,
+    u32,
+    u64,
+    usize,
+    f32,
+    f64,
+    String,
+    Vec<u8>,
+    crate::convert::Integer,
+    crate::convert::Vector3,
+    Value,
 );
 
 impl<T> CallResults for Option<T>
@@ -153,7 +169,13 @@ fn error_text(frame: &Frame<'_>) -> String {
 /// The function must be at `function_index` with `nargs` arguments above it, all inside
 /// `frame`. Runs `lua_pcall` and reports failure in `style`. On success the results occupy
 /// `function_index..` and the count is returned.
-fn perform_pcall(frame: &Frame<'_>, function_index: c_int, nargs: c_int, nresults: c_int, style: ErrorStyle) -> Result<c_int> {
+fn perform_pcall(
+    frame: &Frame<'_>,
+    function_index: c_int,
+    nargs: c_int,
+    nresults: c_int,
+    style: ErrorStyle,
+) -> Result<c_int> {
     // SAFETY: function and arguments are on the frame; pcall never unwinds into Rust.
     let status = unsafe { ffi::lua_pcall(frame.state(), nargs, nresults, 0) };
     if status == ffi::LUA_OK {

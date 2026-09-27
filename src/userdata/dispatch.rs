@@ -82,7 +82,8 @@ pub(crate) unsafe extern "C-unwind" fn newindex(state: *mut ffi::lua_State) -> c
             return 0;
         }
         ffi::lua_pop(state, 1);
-        let type_name = CStr::from_ptr(ffi::lua_tostring(state, ffi::lua_upvalueindex(2))).to_string_lossy().into_owned();
+        let type_name =
+            CStr::from_ptr(ffi::lua_tostring(state, ffi::lua_upvalueindex(2))).to_string_lossy().into_owned();
         let message = if ffi::lua_type(state, 2) == ffi::LUA_TSTRING {
             let field = CStr::from_ptr(ffi::lua_tostring(state, 2)).to_string_lossy().into_owned();
             format!("{type_name} field '{field}' is read-only")

@@ -39,9 +39,7 @@ unsafe extern "C" fn destroy<T: Userdata>(_: *mut ffi::lua_State, userdata: *mut
 
 fn require_tag_in_range(tag: RuntimeTag) -> Result<()> {
     if tag == 0 || tag >= TAG_LIMIT {
-        return Err(Error::logic(format!(
-            "Luau userdata tag {tag} is outside the usable range 1..{TAG_LIMIT}"
-        )));
+        return Err(Error::logic(format!("Luau userdata tag {tag} is outside the usable range 1..{TAG_LIMIT}")));
     }
     Ok(())
 }
@@ -155,7 +153,8 @@ pub fn push<'s, T: Userdata>(scope: &'s impl Scope, value: T) -> Result<ValueVie
     // is fully initialised by `ptr::write` before anything else can observe it. Luau raises
     // only for out of memory, before the destructor could see the slot.
     unsafe {
-        let storage = ffi::lua_newuserdatataggedwithmetatable(scope.state(), std::mem::size_of::<T>(), c_int::from(tag));
+        let storage =
+            ffi::lua_newuserdatataggedwithmetatable(scope.state(), std::mem::size_of::<T>(), c_int::from(tag));
         if storage.is_null() {
             return Err(Error::runtime("Unable to allocate tagged userdata"));
         }

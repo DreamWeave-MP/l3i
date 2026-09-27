@@ -13,11 +13,19 @@ use crate::value::Value;
 
 const NAME: &str = "dreamweave.tests.fn";
 
-fn call<R: crate::call::CallResults, A: crate::call::PushArgs>(runtime: &Runtime, function: &Function, args: A) -> Result<R> {
+fn call<R: crate::call::CallResults, A: crate::call::PushArgs>(
+    runtime: &Runtime,
+    function: &Function,
+    args: A,
+) -> Result<R> {
     function.invoke::<R, A>(&runtime.stack(), args)
 }
 
-fn error_text<R: crate::call::CallResults + std::fmt::Debug, A: crate::call::PushArgs>(runtime: &Runtime, function: &Function, args: A) -> String {
+fn error_text<R: crate::call::CallResults + std::fmt::Debug, A: crate::call::PushArgs>(
+    runtime: &Runtime,
+    function: &Function,
+    args: A,
+) -> String {
     call::<R, A>(runtime, function, args).unwrap_err().to_string()
 }
 
@@ -108,15 +116,16 @@ fn middle_optionals_work_during_overload_probing() {
     assert_eq!(call::<String, _>(&runtime, &overload, (&nil, true)).unwrap(), "middle:nil:true");
     assert_eq!(call::<String, _>(&runtime, &overload, (2.5, false)).unwrap(), "middle:value:false");
     assert_eq!(call::<String, _>(&runtime, &overload, ("fallback",)).unwrap(), "string:fallback");
-    assert_eq!(error_text::<String, _>(&runtime, &overload, (1, 2, 3)), "Lua error: dreamweave.tests.fn: no matching overload");
+    assert_eq!(
+        error_text::<String, _>(&runtime, &overload, (1, 2, 3)),
+        "Lua error: dreamweave.tests.fn: no matching overload"
+    );
 }
 
 #[test]
 fn optional_value_view_uses_the_same_probe_and_materialization_rules() {
     let runtime = Runtime::new().unwrap();
-    let f = runtime
-        .bind_function(NAME, |value: Option<ValueView>, enabled: bool| value.is_some() && enabled)
-        .unwrap();
+    let f = runtime.bind_function(NAME, |value: Option<ValueView>, enabled: bool| value.is_some() && enabled).unwrap();
     let nil = nil(&runtime);
     let table = Value::new_table(&runtime.stack(), 0, 0).unwrap();
     assert!(!call::<bool, _>(&runtime, &f, (&nil, true)).unwrap());
@@ -183,16 +192,21 @@ fn return_adapters_cover_every_shape() {
     let variadic = runtime.bind_function(NAME, |n: i32| Variadic((0..n).collect::<Vec<i32>>())).unwrap();
     assert_eq!(variadic.invoke_multi(&stack, (3,)).unwrap().len(), 3);
     assert_eq!(variadic.invoke_multi(&stack, (0,)).unwrap().len(), 0);
-    let optional_variadic = runtime
-        .bind_function(NAME, |some: bool| if some { Some(Variadic(vec![1i32, 2])) } else { None })
-        .unwrap();
+    let optional_variadic =
+        runtime.bind_function(NAME, |some: bool| if some { Some(Variadic(vec![1i32, 2])) } else { None }).unwrap();
     assert_eq!(optional_variadic.invoke_multi(&stack, (true,)).unwrap().len(), 2);
     assert!(optional_variadic.invoke_multi(&stack, (false,)).unwrap()[0].is_nil());
 
     let result_or_error = runtime
-        .bind_function(NAME, |ok: bool| if ok { ResultOrError::Success(42i32) } else { ResultOrError::Failure("nope".into()) })
+        .bind_function(
+            NAME,
+            |ok: bool| if ok { ResultOrError::Success(42i32) } else { ResultOrError::Failure("nope".into()) },
+        )
         .unwrap();
-    assert_eq!(call::<(Option<i32>, Option<String>), _>(&runtime, &result_or_error, (true,)).unwrap(), (Some(42), None));
+    assert_eq!(
+        call::<(Option<i32>, Option<String>), _>(&runtime, &result_or_error, (true,)).unwrap(),
+        (Some(42), None)
+    );
     assert_eq!(
         call::<(Option<i32>, Option<String>), _>(&runtime, &result_or_error, (false,)).unwrap(),
         (None, Some("nope".to_owned()))
@@ -215,7 +229,11 @@ fn return_adapters_cover_every_shape() {
     assert_eq!(results.len(), 2);
     assert_eq!(results[1].type_of(), Type::Integer);
 
-    let failing = runtime.bind_function(NAME, |fail: bool| -> Result<i32> { if fail { Err(Error::runtime("custom failure")) } else { Ok(1) } }).unwrap();
+    let failing = runtime
+        .bind_function(NAME, |fail: bool| -> Result<i32> {
+            if fail { Err(Error::runtime("custom failure")) } else { Ok(1) }
+        })
+        .unwrap();
     assert_eq!(call::<i32, _>(&runtime, &failing, (false,)).unwrap(), 1);
     assert_eq!(error_text::<i32, _>(&runtime, &failing, (true,)), "Lua error: custom failure");
 }
@@ -284,10 +302,12 @@ fn tagged_userdata_arguments_are_borrowed_and_checked() {
     }
     let runtime = Runtime::new().unwrap();
     tagged::register::<Probe>(&runtime, |_| Ok(())).unwrap();
-    let make = runtime.bind_function(NAME, |call: &Call, value: f64| -> Result<StackResults> {
-        tagged::push(call, Probe(value))?;
-        Ok(StackResults)
-    }).unwrap();
+    let make = runtime
+        .bind_function(NAME, |call: &Call, value: f64| -> Result<StackResults> {
+            tagged::push(call, Probe(value))?;
+            Ok(StackResults)
+        })
+        .unwrap();
     let read = runtime.bind_function(NAME, |probe: &Probe, scale: f64| probe.0 * scale).unwrap();
     let stack = runtime.stack();
     let probe = call::<Value, _>(&runtime, &make, (2.5,)).unwrap();

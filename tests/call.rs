@@ -94,7 +94,9 @@ fn call_family_error_parity_and_balance() {
 #[test]
 fn multi_enforces_the_result_budget() {
     let runtime = Runtime::new().unwrap();
-    runtime.exec("function returnValues(n) local t = {} for i = 1, n do t[i] = 1 end return table.unpack(t) end").unwrap();
+    runtime
+        .exec("function returnValues(n) local t = {} for i = 1, n do t[i] = 1 end return table.unpack(t) end")
+        .unwrap();
     let stack = runtime.stack();
     let ok = load(&runtime, "return function() return returnValues(256) end");
     assert_eq!(ok.invoke_multi(&stack, ()).unwrap().len(), 256);

@@ -101,15 +101,9 @@ pub type LUA_VECTOR_TYPE = f32;
 
 pub type lua_CFunction = unsafe extern "C-unwind" fn(L: *mut lua_State) -> c_int;
 pub type lua_Continuation = unsafe extern "C-unwind" fn(L: *mut lua_State, status: c_int) -> c_int;
-pub type lua_Alloc =
-    unsafe extern "C" fn(ud: *mut c_void, ptr: *mut c_void, osize: usize, nsize: usize) -> *mut c_void;
-pub type lua_CageAlloc = unsafe extern "C" fn(
-    ud: *mut c_void,
-    ptr: *mut c_void,
-    osize: usize,
-    nsize: usize,
-    r#type: c_int,
-) -> *mut c_void;
+pub type lua_Alloc = unsafe extern "C" fn(ud: *mut c_void, ptr: *mut c_void, osize: usize, nsize: usize) -> *mut c_void;
+pub type lua_CageAlloc =
+    unsafe extern "C" fn(ud: *mut c_void, ptr: *mut c_void, osize: usize, nsize: usize, r#type: c_int) -> *mut c_void;
 
 /// Runs during GC traversal: must not touch the Lua API and must not unwind.
 pub type lua_Destructor = unsafe extern "C" fn(L: *mut lua_State, userdata: *mut c_void);
@@ -141,8 +135,7 @@ pub type lua_Coverage = unsafe extern "C" fn(
     hits: *const c_int,
     size: usize,
 );
-pub type lua_CounterFunction =
-    unsafe extern "C" fn(context: *mut c_void, function: *const c_char, linedefined: c_int);
+pub type lua_CounterFunction = unsafe extern "C" fn(context: *mut c_void, function: *const c_char, linedefined: c_int);
 pub type lua_CounterValue = unsafe extern "C" fn(context: *mut c_void, kind: c_int, line: c_int, hits: u64);
 
 #[repr(C)]
@@ -218,8 +211,7 @@ pub struct lua_CompileOptions {
 }
 
 pub type lua_CompileConstant = *mut c_void;
-pub type lua_LibraryMemberTypeCallback =
-    unsafe extern "C" fn(library: *const c_char, member: *const c_char) -> c_int;
+pub type lua_LibraryMemberTypeCallback = unsafe extern "C" fn(library: *const c_char, member: *const c_char) -> c_int;
 pub type lua_LibraryMemberConstantCallback =
     unsafe extern "C" fn(library: *const c_char, member: *const c_char, constant: *mut lua_CompileConstant);
 
@@ -333,8 +325,13 @@ unsafe extern "C-unwind" {
     pub fn lua_setfenv(L: *mut lua_State, idx: c_int) -> c_int;
 
     // load and call
-    pub fn luau_load(L: *mut lua_State, chunkname: *const c_char, data: *const c_char, size: usize, env: c_int)
-    -> c_int;
+    pub fn luau_load(
+        L: *mut lua_State,
+        chunkname: *const c_char,
+        data: *const c_char,
+        size: usize,
+        env: c_int,
+    ) -> c_int;
     pub fn lua_call(L: *mut lua_State, nargs: c_int, nresults: c_int);
     pub fn lua_pcall(L: *mut lua_State, nargs: c_int, nresults: c_int, errfunc: c_int) -> c_int;
     pub fn lua_cpcall(L: *mut lua_State, func: lua_CFunction, ud: *mut c_void) -> c_int;

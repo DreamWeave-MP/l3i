@@ -106,7 +106,24 @@ macro_rules! impl_param_from_view {
 }
 
 impl_param_from_view!(
-    bool, i8, i16, i32, i64, isize, u8, u16, u32, u64, usize, f32, f64, String, Vec<u8>, Integer, Vector3, Value,
+    bool,
+    i8,
+    i16,
+    i32,
+    i64,
+    isize,
+    u8,
+    u16,
+    u32,
+    u64,
+    usize,
+    f32,
+    f64,
+    String,
+    Vec<u8>,
+    Integer,
+    Vector3,
+    Value,
 );
 
 impl Param for Table {
@@ -248,7 +265,12 @@ enum OptionalState {
 }
 
 /// `inspectOptionalArgument`: a borrowed-view inner type accepts any present value.
-fn inspect_optional<'c, Inner: ParamItem<'c>>(call: &'c Call<'c>, cursor: c_int, top: c_int, allow_mismatch: bool) -> OptionalState {
+fn inspect_optional<'c, Inner: ParamItem<'c>>(
+    call: &'c Call<'c>,
+    cursor: c_int,
+    top: c_int,
+    allow_mismatch: bool,
+) -> OptionalState {
     if cursor > top {
         return OptionalState::Absent;
     }
@@ -359,7 +381,14 @@ impl<'c, T: ParamItem<'c>> ParamItem<'c> for VarArgs<T> {
         true
     }
 
-    fn materialize(call: &'c Call<'c>, cursor: &mut c_int, top: c_int, position: &mut c_int, debug_name: &str, _: bool) -> Result<Self> {
+    fn materialize(
+        call: &'c Call<'c>,
+        cursor: &mut c_int,
+        top: c_int,
+        position: &mut c_int,
+        debug_name: &str,
+        _: bool,
+    ) -> Result<Self> {
         let start_slot = *cursor;
         let mut values = Vec::with_capacity((top - *cursor + 1).max(0) as usize);
         while *cursor <= top {
@@ -431,7 +460,14 @@ impl<'c> ParamItem<'c> for ArgView<'c> {
         *cursor = top + 1;
         true
     }
-    fn materialize(call: &'c Call<'c>, cursor: &mut c_int, top: c_int, _: &mut c_int, _: &str, _: bool) -> Result<Self> {
+    fn materialize(
+        call: &'c Call<'c>,
+        cursor: &mut c_int,
+        top: c_int,
+        _: &mut c_int,
+        _: &str,
+        _: bool,
+    ) -> Result<Self> {
         let view = ArgView { call, from: *cursor, to_exclusive: top + 1 };
         *cursor = top + 1;
         Ok(view)

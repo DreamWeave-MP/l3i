@@ -4,9 +4,9 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Duration;
 
+use dream_binder::Runtime;
 use dream_binder::bind::Call;
 use dream_binder::runtime::{CallContext, CallKind, Limits, MemoryCategory};
-use dream_binder::Runtime;
 
 fn context(id: u64, category: u8) -> CallContext {
     CallContext { id, category: MemoryCategory(category) }
@@ -44,7 +44,9 @@ fn the_watchdog_only_watches_inside_a_scope_and_never_during_initialization() {
 fn memory_limit_stops_allocation_heavy_scripts() {
     let runtime = Runtime::builder().memory_limit(2 * 1024 * 1024).build().unwrap();
     let hog = runtime
-        .load_function("return function() local t = {} for i = 1, 10000000 do t[i] = {i, tostring(i)} end return #t end")
+        .load_function(
+            "return function() local t = {} for i = 1, 10000000 do t[i] = {i, tostring(i)} end return #t end",
+        )
         .unwrap();
     let _scope = runtime.call_scope(context(2, 0), CallKind::ScriptCall);
     let error = hog.invoke::<i32, _>(&runtime.stack(), ()).unwrap_err().to_string();

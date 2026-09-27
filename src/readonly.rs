@@ -231,8 +231,10 @@ unsafe fn push_shared_factory(
             return Ok(());
         }
         ffi::lua_pop(state, 1);
-        let iterator_name = crate::debug_name::retain(state, &internal_name(runtime, iterator_name), runtime.debug_roots())?;
-        let factory_name = crate::debug_name::retain(state, &internal_name(runtime, factory_name), runtime.debug_roots())?;
+        let iterator_name =
+            crate::debug_name::retain(state, &internal_name(runtime, iterator_name), runtime.debug_roots())?;
+        let factory_name =
+            crate::debug_name::retain(state, &internal_name(runtime, factory_name), runtime.debug_roots())?;
         ffi::lua_pushcfunction(state, iterator, iterator_name);
         ffi::lua_pushcclosure(state, factory, factory_name, 1);
         ffi::lua_pushvalue(state, -1);
@@ -289,17 +291,35 @@ fn build_proxy(runtime: &Runtime, frame: &Frame<'_>, strict: bool) -> Result<()>
         let metatable = ffi::lua_gettop(state);
         ffi::lua_pushvalue(state, backing);
         if strict {
-            let name = crate::debug_name::retain(state, &internal_name(runtime, "strictViewIndex"), runtime.debug_roots())?;
+            let name =
+                crate::debug_name::retain(state, &internal_name(runtime, "strictViewIndex"), runtime.debug_roots())?;
             ffi::lua_pushcclosure(state, strict_view_index, name, 1);
         }
         ffi::lua_rawsetfield(state, metatable, c"__index".as_ptr());
-        push_shared_factory(runtime, state, key(&PAIRS_FACTORY_KEY), pairs_factory, pairs_iterator, "readOnlyPairs", "readOnlyPairsIterator")?;
+        push_shared_factory(
+            runtime,
+            state,
+            key(&PAIRS_FACTORY_KEY),
+            pairs_factory,
+            pairs_iterator,
+            "readOnlyPairs",
+            "readOnlyPairsIterator",
+        )?;
         ffi::lua_pushvalue(state, -1);
         ffi::lua_rawsetfield(state, metatable, c"__pairs".as_ptr());
         ffi::lua_rawsetfield(state, metatable, c"__iter".as_ptr());
-        push_shared_factory(runtime, state, key(&IPAIRS_FACTORY_KEY), ipairs_factory, ipairs_iterator, "readOnlyIpairs", "readOnlyIpairsIterator")?;
+        push_shared_factory(
+            runtime,
+            state,
+            key(&IPAIRS_FACTORY_KEY),
+            ipairs_factory,
+            ipairs_iterator,
+            "readOnlyIpairs",
+            "readOnlyIpairsIterator",
+        )?;
         ffi::lua_rawsetfield(state, metatable, c"__ipairs".as_ptr());
-        let length_name = crate::debug_name::retain(state, &internal_name(runtime, "readOnlyLength"), runtime.debug_roots())?;
+        let length_name =
+            crate::debug_name::retain(state, &internal_name(runtime, "readOnlyLength"), runtime.debug_roots())?;
         ffi::lua_pushvalue(state, backing);
         ffi::lua_pushcclosure(state, read_only_length, length_name, 1);
         ffi::lua_rawsetfield(state, metatable, c"__len".as_ptr());
@@ -386,7 +406,12 @@ pub fn make_strict_read_only(runtime: &Runtime, table: &Table) -> Result<()> {
 
 /// Sets `key` on a frozen table (or the backing table of a view), restoring the frozen state
 /// afterwards. For tables the host owns.
-pub fn set_read_only_field<T: crate::convert::Push + ?Sized>(runtime: &Runtime, table: &Table, key: &str, value: &T) -> Result<()> {
+pub fn set_read_only_field<T: crate::convert::Push + ?Sized>(
+    runtime: &Runtime,
+    table: &Table,
+    key: &str,
+    value: &T,
+) -> Result<()> {
     require_same_vm(runtime, table.value())?;
     let stack = runtime.stack();
     stack.with_frame(|frame| {

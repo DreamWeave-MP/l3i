@@ -91,7 +91,9 @@ pub fn type_error_at(value: ValueView<'_>, position: c_int, expected: &str) -> E
         (false, None) => {
             format!("{location}invalid argument #{position} ({expected} expected, got {})", object_type_name(value))
         }
-        (true, Some(function)) => format!("{location}missing argument #{position} to '{function}' ({expected} expected)"),
+        (true, Some(function)) => {
+            format!("{location}missing argument #{position} to '{function}' ({expected} expected)")
+        }
         (true, None) => format!("{location}missing argument #{position} ({expected} expected)"),
     };
     Error::Runtime(message)
@@ -134,7 +136,9 @@ pub fn describe_value(value: ValueView<'_>, max_length: usize) -> String {
     // SAFETY: every accessor is guarded by the matching type test and the view proved the slot.
     unsafe {
         match value.type_of() {
-            Type::Boolean => return if ffi::lua_toboolean(state, value.index()) != 0 { "true" } else { "false" }.to_owned(),
+            Type::Boolean => {
+                return if ffi::lua_toboolean(state, value.index()) != 0 { "true" } else { "false" }.to_owned();
+            }
             Type::Integer => {
                 let mut is_integer = 0;
                 let integer = ffi::lua_tointeger64(state, value.index(), &mut is_integer);

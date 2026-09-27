@@ -64,7 +64,9 @@ impl<'c, C: 'static> ParamItem<'c> for Cursor<'c, C> {
     const KIND: ParamKind = ParamKind::Regular;
     const EXPECTED: &'static str = "iterator cursor";
     fn read_slot(view: ValueView<'c>) -> Result<Self> {
-        cursor_payload::<C>(view).map(|cursor| Cursor { cursor }).ok_or_else(|| crate::diagnostics::type_error(view, "iterator cursor"))
+        cursor_payload::<C>(view)
+            .map(|cursor| Cursor { cursor })
+            .ok_or_else(|| crate::diagnostics::type_error(view, "iterator cursor"))
     }
     fn matches(view: ValueView<'c>) -> bool {
         cursor_payload::<C>(view).is_some()
@@ -231,7 +233,8 @@ impl super::metatable::MetatableBuilder<'_> {
         // SAFETY: context userdata is written immediately after allocation; it and the next
         // closure become the factory's two upvalues.
         unsafe {
-            let raw = ffi::lua_newuserdatadtor(state, std::mem::size_of::<FactoryContext<Make>>(), destroy_factory::<Make>);
+            let raw =
+                ffi::lua_newuserdatadtor(state, std::mem::size_of::<FactoryContext<Make>>(), destroy_factory::<Make>);
             if raw.is_null() {
                 return Err(Error::runtime("Unable to allocate iterator factory context"));
             }

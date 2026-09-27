@@ -52,7 +52,8 @@ fn register_untagged(runtime: &Runtime) {
 #[test]
 fn registration_is_transactional_and_strict() {
     let runtime = Runtime::new().unwrap();
-    let failed = untagged::register::<Untagged>(&runtime, |_| Err(Error::logic("untagged configure failed"))).unwrap_err();
+    let failed =
+        untagged::register::<Untagged>(&runtime, |_| Err(Error::logic("untagged configure failed"))).unwrap_err();
     assert_eq!(failed, Error::logic("untagged configure failed"));
     assert_eq!(runtime.stack().top(), 0);
     {
@@ -133,9 +134,7 @@ fn receivers_respect_owned_and_borrowed_storage_and_exact_identity() {
         let view = frame.push(&()).unwrap();
         assert!(untagged::test::<Untagged>(view).is_none());
     }
-    runtime
-        .exec("assert(owned.value == 7 and owned:getValue() == 7 and owned.constValue == 7)")
-        .unwrap();
+    runtime.exec("assert(owned.value == 7 and owned:getValue() == 7 and owned.constValue == 7)").unwrap();
     runtime.exec("assert(borrowed.constValue == 11 and borrowed:getValue() == 11)").unwrap();
     runtime.exec("assert(other.value == 3)").unwrap();
 

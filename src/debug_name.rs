@@ -50,9 +50,7 @@ pub fn require_valid_debug_name(name: &str, roots: &[&str]) -> Result<()> {
     if is_valid_debug_name(name, roots) {
         return Ok(());
     }
-    Err(Error::logic(format!(
-        "Lua debug name '{name}' must be dot-separated identifiers rooted at one of {roots:?}"
-    )))
+    Err(Error::logic(format!("Lua debug name '{name}' must be dot-separated identifiers rooted at one of {roots:?}")))
 }
 
 static DEBUG_NAME_REGISTRY_KEY: u8 = 0;

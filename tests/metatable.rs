@@ -39,9 +39,7 @@ unsafe extern "C-unwind" fn good_method_body(state: *mut ffi::lua_State) -> c_in
 
 unsafe extern "C-unwind" fn arg_error_body(state: *mut ffi::lua_State) -> c_int {
     unsafe {
-        dream_binder::native::enter(state, |stack| {
-            Err(dream_binder::diagnostics::type_error(stack.at(1), "probe"))
-        })
+        dream_binder::native::enter(state, |stack| Err(dream_binder::diagnostics::type_error(stack.at(1), "probe")))
     }
 }
 
@@ -80,7 +78,12 @@ fn properties_methods_and_setters_dispatch_through_generated_metamethods() {
     let error = runtime.exec("bar:add(5)").unwrap_err().to_string();
     assert!(error.contains("dreamweave.tests.Bar.add: bad argument #1 (expected dreamweave.tests.Bar)"), "{error}");
     let error = runtime.exec("bar.double(7)").unwrap_err().to_string();
-    assert!(error.contains("invalid argument #1 to 'dreamweave.tests.Bar.double' (dreamweave.tests.Bar expected, got number)"), "{error}");
+    assert!(
+        error.contains(
+            "invalid argument #1 to 'dreamweave.tests.Bar.double' (dreamweave.tests.Bar expected, got number)"
+        ),
+        "{error}"
+    );
     let error = runtime.exec("bar.value = 'x'").unwrap_err().to_string();
     assert!(error.contains("dreamweave.tests.Bar.set.value: bad argument #1 (expected number)"), "{error}");
 }
@@ -144,7 +147,9 @@ fn builder_conflict_rules() {
     })
     .unwrap_err();
     assert_eq!(error, Error::logic("dreamweave.tests.Bar.value already registered"));
-    let error = tagged::register::<Bar>(&runtime, |ty| ty.property_rw("value", |bar: &Bar| bar.value.get(), |_: &Bar| ())).unwrap_err();
+    let error =
+        tagged::register::<Bar>(&runtime, |ty| ty.property_rw("value", |bar: &Bar| bar.value.get(), |_: &Bar| ()))
+            .unwrap_err();
     assert_eq!(error, Error::logic("A property setter must accept one Lua value argument"));
 
     // A member whose receiver is another type.
@@ -207,7 +212,9 @@ fn metamethod_debug_names_compose_from_the_type() {
     })
     .unwrap();
     set_global_bar(&runtime, "bar", 42);
-    runtime.exec("assert(#bar == 42) assert(tostring(bar) == 'Bar(42)') assert(bar(1, 2, 3) == 3) assert(bar() == 0)").unwrap();
+    runtime
+        .exec("assert(#bar == 42) assert(tostring(bar) == 'Bar(42)') assert(bar(1, 2, 3) == 3) assert(bar() == 0)")
+        .unwrap();
     let error = runtime.exec("return #bar + tostring(bar)").unwrap_err().to_string();
     assert!(error.contains("attempt to perform arithmetic"), "{error}");
 }

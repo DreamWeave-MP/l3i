@@ -32,8 +32,27 @@ macro_rules! single_returns {
 }
 
 single_returns!(
-    bool, i8, i16, i32, i64, isize, u8, u16, u32, u64, usize, f32, f64, String, &'static str, Vec<u8>, Integer,
-    Vector3, Value, Table, Function,
+    bool,
+    i8,
+    i16,
+    i32,
+    i64,
+    isize,
+    u8,
+    u16,
+    u32,
+    u64,
+    usize,
+    f32,
+    f64,
+    String,
+    &'static str,
+    Vec<u8>,
+    Integer,
+    Vector3,
+    Value,
+    Table,
+    Function,
 );
 
 /// `None` is one nil result; `Some` pushes the inner value's results.

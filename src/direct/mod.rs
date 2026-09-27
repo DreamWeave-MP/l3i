@@ -160,7 +160,10 @@ pub fn install_atom_callback(runtime: &Runtime, catalogue: &'static AtomCatalogu
     unsafe {
         let callbacks = ffi::lua_callbacks(state);
         if let Some(existing) = (*callbacks).useratom
-            && !std::ptr::fn_addr_eq(existing, user_atom as unsafe extern "C" fn(*mut ffi::lua_State, *const c_char, usize) -> i16)
+            && !std::ptr::fn_addr_eq(
+                existing,
+                user_atom as unsafe extern "C" fn(*mut ffi::lua_State, *const c_char, usize) -> i16,
+            )
         {
             return Err(Error::logic("A different Luau useratom callback is already installed"));
         }
@@ -496,7 +499,13 @@ impl MetatableBuilder<'_> {
         Ok(())
     }
 
-    fn install_wrapper(&mut self, name: &CStr, wrapper: ffi::lua_CFunction, debug_name: &str, allow_table: bool) -> Result<()> {
+    fn install_wrapper(
+        &mut self,
+        name: &CStr,
+        wrapper: ffi::lua_CFunction,
+        debug_name: &str,
+        allow_table: bool,
+    ) -> Result<()> {
         let state = self.state_ptr();
         let retained = self.retain_name(debug_name)?;
         // SAFETY: the original metamethod is read into the frame and becomes the wrapper's

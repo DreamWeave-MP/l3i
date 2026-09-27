@@ -300,7 +300,12 @@ impl<'s> MetatableBuilder<'s> {
     }
 
     /// Registers a read/write property. The setter takes the receiver and exactly one Lua value.
-    pub fn property_rw<G: Binding<MG>, MG, S: Binding<MS>, MS>(&mut self, name: &str, getter: G, setter: S) -> Result<()> {
+    pub fn property_rw<G: Binding<MG>, MG, S: Binding<MS>, MS>(
+        &mut self,
+        name: &str,
+        getter: G,
+        setter: S,
+    ) -> Result<()> {
         self.check_member_allowed(MemberKind::Getter)?;
         self.check_member_allowed(MemberKind::Setter)?;
         if self.has_explicit_index || self.has_explicit_newindex {

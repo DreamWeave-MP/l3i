@@ -183,7 +183,12 @@ impl<'v> TableView<'v> {
 
     /// Looks `key` up in a nested frame and hands the borrowed value to `body`; the frame is
     /// restored afterwards, so chained lookups stay balanced.
-    pub fn with_field<R>(&self, frame: &Frame<'_>, key: &str, body: impl FnOnce(ValueView<'_>) -> Result<R>) -> Result<R> {
+    pub fn with_field<R>(
+        &self,
+        frame: &Frame<'_>,
+        key: &str,
+        body: impl FnOnce(ValueView<'_>) -> Result<R>,
+    ) -> Result<R> {
         frame.with_frame(|lookup| {
             let value = self.get(lookup, key)?;
             body(value)
@@ -197,7 +202,12 @@ impl<'v> TableView<'v> {
 
     /// Strictly typed optional read honouring `__index`: nil is `None`, a wrong type is an
     /// error naming `context`, the key, and the offending value (`TableView::getOptional`).
-    pub fn get_optional<T: for<'a> FromView<'a>>(&self, frame: &Frame<'_>, key: &str, context: &str) -> Result<Option<T>> {
+    pub fn get_optional<T: for<'a> FromView<'a>>(
+        &self,
+        frame: &Frame<'_>,
+        key: &str,
+        context: &str,
+    ) -> Result<Option<T>> {
         frame.with_frame(|lookup| {
             let value = self.get(lookup, key)?;
             checked_optional::<T>(value, key, context)
@@ -205,7 +215,12 @@ impl<'v> TableView<'v> {
     }
 
     /// [`TableView::get_optional`] bypassing `__index`.
-    pub fn raw_get_optional<T: for<'a> FromView<'a>>(&self, frame: &Frame<'_>, key: &str, context: &str) -> Result<Option<T>> {
+    pub fn raw_get_optional<T: for<'a> FromView<'a>>(
+        &self,
+        frame: &Frame<'_>,
+        key: &str,
+        context: &str,
+    ) -> Result<Option<T>> {
         frame.with_frame(|lookup| {
             let value = self.raw_get(lookup, key)?;
             checked_optional::<T>(value, key, context)
@@ -235,7 +250,11 @@ impl<'v> TableView<'v> {
     }
 
     /// True when `predicate` accepts some key. Iteration stops at the first match.
-    pub fn find_key(&self, frame: &Frame<'_>, mut predicate: impl FnMut(ValueView<'_>) -> Result<bool>) -> Result<bool> {
+    pub fn find_key(
+        &self,
+        frame: &Frame<'_>,
+        mut predicate: impl FnMut(ValueView<'_>) -> Result<bool>,
+    ) -> Result<bool> {
         self.require_live(frame)?;
         let state = frame.state();
         let mut iterator: c_int = 0;

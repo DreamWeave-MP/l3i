@@ -225,7 +225,11 @@ unsafe fn push_closure<F: Binding<M>, M>(
 ///
 /// # Safety
 /// As [`push_closure`].
-pub(crate) unsafe fn function_closure<F: Binding<M>, M>(state: *mut ffi::lua_State, callable: F, debug_name: *const c_char) -> Result<()> {
+pub(crate) unsafe fn function_closure<F: Binding<M>, M>(
+    state: *mut ffi::lua_State,
+    callable: F,
+    debug_name: *const c_char,
+) -> Result<()> {
     unsafe { push_closure(state, callable, debug_name, thunk::<F, M>) }
 }
 
@@ -233,13 +237,22 @@ pub(crate) unsafe fn function_closure<F: Binding<M>, M>(state: *mut ffi::lua_Sta
 ///
 /// # Safety
 /// As [`push_closure`].
-pub(crate) unsafe fn method_closure<F: Binding<M>, M>(state: *mut ffi::lua_State, callable: F, debug_name: *const c_char) -> Result<()> {
+pub(crate) unsafe fn method_closure<F: Binding<M>, M>(
+    state: *mut ffi::lua_State,
+    callable: F,
+    debug_name: *const c_char,
+) -> Result<()> {
     unsafe { push_closure(state, callable, debug_name, method_thunk::<F, M>) }
 }
 
 /// Binds `callable` as a Lua function named `debug_name` (validated against `roots` and
 /// retained for the VM's life) and returns it pinned. The stack of `scope` is left as it was.
-pub fn function<F: Binding<M>, M>(scope: &impl Scope, roots: &[&str], debug_name: &str, callable: F) -> Result<Function> {
+pub fn function<F: Binding<M>, M>(
+    scope: &impl Scope,
+    roots: &[&str],
+    debug_name: &str,
+    callable: F,
+) -> Result<Function> {
     scope.with_frame(|frame| {
         // SAFETY: frame state is live; retain rebalances the stack itself.
         unsafe {

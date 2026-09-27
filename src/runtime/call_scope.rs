@@ -9,8 +9,8 @@
 
 use std::time::Instant;
 
-use super::shared::{ActiveCall, Deadline, MemoryCategory, Shared};
 use super::Runtime;
+use super::shared::{ActiveCall, Deadline, MemoryCategory, Shared};
 
 /// What kind of call a scope wraps; only the ordinary script call is timed and time-limited.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

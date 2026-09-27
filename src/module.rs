@@ -71,8 +71,15 @@ impl<'r> ModuleBuilder<'r> {
 
     /// Registers a userdata type (tagged or untagged by its `TAG`) and configures its
     /// metatable. The type's `NAME` must live under the host's debug roots.
-    pub fn userdata<T: Userdata>(&mut self, configure: impl FnOnce(&mut MetatableBuilder<'_>) -> Result<()>) -> Result<()> {
-        if T::TAG.is_some() { tagged::register::<T>(self.runtime, configure) } else { untagged::register::<T>(self.runtime, configure) }
+    pub fn userdata<T: Userdata>(
+        &mut self,
+        configure: impl FnOnce(&mut MetatableBuilder<'_>) -> Result<()>,
+    ) -> Result<()> {
+        if T::TAG.is_some() {
+            tagged::register::<T>(self.runtime, configure)
+        } else {
+            untagged::register::<T>(self.runtime, configure)
+        }
     }
 
     /// Binds a metamethod on the package's own metatable, named `<path>.<name>`; the metatable
@@ -140,8 +147,7 @@ impl Runtime {
 
     /// Fails unless `name` is a valid debug name under this runtime's roots.
     pub fn require_debug_name(&self, name: &str) -> Result<()> {
-        crate::debug_name::require_valid_debug_name(name, self.debug_roots()).map_err(|_| {
-            Error::logic(format!("'{name}' is not a debug name under roots {:?}", self.debug_roots()))
-        })
+        crate::debug_name::require_valid_debug_name(name, self.debug_roots())
+            .map_err(|_| Error::logic(format!("'{name}' is not a debug name under roots {:?}", self.debug_roots())))
     }
 }
