@@ -1,0 +1,174 @@
+//! Tagged userdata: the scarce hot path (`components/luau/taggeduserdata.hpp`).
+//!
+//! Registration order is the contract: build and freeze the metatable first, then publish the
+//! destructor and metatable for the tag last, because the Luau setters cannot report failure.
+//! Instances are allocated with `lua_newuserdatataggedwithmetatable` and initialised
+//! immediately, so Luau never owns a destructor over uninitialised Rust memory.
+
+use std::ffi::{CStr, CString, c_int, c_void};
+use std::ptr;
+
+use super::metatable::MetatableBuilder;
+use super::{RuntimeTag, TaggedUserdata, assert_userdata_layout};
+use crate::TAG_LIMIT;
+use crate::error::{Error, Result};
+use crate::raw::ffi;
+use crate::runtime::Runtime;
+use crate::stack::{Stack, ValueView};
+
+/// Runs the payload's `Drop` when Luau frees the userdata.
+///
+/// Luau calls this while sweeping; the payload contract forbids Lua access and panics, so a
+/// panic here is a contract violation and aborts rather than unwinding into the collector.
+unsafe extern "C" fn destroy<T: TaggedUserdata>(_: *mut ffi::lua_State, userdata: *mut c_void) {
+    // SAFETY: Luau only calls the destructor registered for T's tag on userdata created by
+    // `push::<T>`, which wrote a valid T at this address; nothing reads it afterwards.
+    let outcome = std::panic::catch_unwind(|| unsafe { ptr::drop_in_place(userdata.cast::<T>()) });
+    if outcome.is_err() {
+        std::process::abort();
+    }
+}
+
+fn require_tag_in_range(tag: RuntimeTag) -> Result<()> {
+    if tag == 0 || tag >= TAG_LIMIT {
+        return Err(Error::logic(format!(
+            "Luau userdata tag {tag} is outside the usable range 1..{TAG_LIMIT}"
+        )));
+    }
+    Ok(())
+}
+
+/// Registers `T` under its tag with a metatable configured by `configure`.
+///
+/// Registering the same `T` twice under the same name is a no-op. Any other collision (a
+/// different type or name on the tag, or the name already naming a registry metatable) is a
+/// logic error, and a failure inside `configure` unpublishes the half-built metatable.
+pub fn register<T: TaggedUserdata>(
+    runtime: &Runtime,
+    configure: impl FnOnce(&mut MetatableBuilder<'_>) -> Result<()>,
+) -> Result<()> {
+    const { assert_userdata_layout::<T>() };
+    require_tag_in_range(T::TAG)?;
+    crate::debug_name::require_valid_debug_name(T::NAME, runtime.debug_roots())?;
+    let name = CString::new(T::NAME).map_err(|_| Error::logic("Userdata type name cannot contain NUL"))?;
+    let tag = c_int::from(T::TAG);
+    let destructor: ffi::lua_Destructor = destroy::<T>;
+
+    let stack = runtime.stack();
+    stack.with_frame(|stack| {
+        let state = stack.state();
+        // SAFETY: live main thread; every index below is relative to values pushed here and
+        // the frame restores the height on every path.
+        unsafe {
+            ffi::lua_getuserdatametatable(state, tag);
+            let already_registered = !ffi::lua_isnil(state, -1);
+            ffi::lua_pop(state, 1);
+            if already_registered {
+                let registered_name = CStr::from_ptr(ffi::lua_getuserdataname(state, tag));
+                let same_destructor =
+                    ffi::lua_getuserdatadtor(state, tag).is_some_and(|f| ptr::fn_addr_eq(f, destructor));
+                if registered_name.to_bytes() != T::NAME.as_bytes() || !same_destructor {
+                    return Err(Error::logic(format!(
+                        "Conflicting Luau userdata tag registration: tag {} is already '{}'",
+                        T::TAG,
+                        registered_name.to_string_lossy()
+                    )));
+                }
+                return Ok(());
+            }
+
+            if ffi::luaL_newmetatable(state, name.as_ptr()) == 0 {
+                return Err(Error::logic(format!("Conflicting Luau userdata name registration: '{}'", T::NAME)));
+            }
+            let metatable = ffi::lua_gettop(state);
+            let published = ffi::lua_topointer(state, metatable);
+
+            let configured = (|| {
+                let mut builder = MetatableBuilder::new(stack, metatable, runtime.debug_roots())?;
+                builder.set_type(T::NAME)?;
+                configure(&mut builder)?;
+                Ok(())
+            })();
+            if let Err(error) = configured {
+                // Unpublish the registry name only if it still names our table.
+                ffi::lua_getfield(state, ffi::LUA_REGISTRYINDEX, name.as_ptr());
+                let still_ours = ffi::lua_topointer(state, -1) == published;
+                ffi::lua_pop(state, 1);
+                if still_ours {
+                    ffi::lua_pushnil(state);
+                    ffi::lua_setfield(state, ffi::LUA_REGISTRYINDEX, name.as_ptr());
+                }
+                return Err(error);
+            }
+            ffi::lua_setreadonly(state, metatable, 1);
+
+            // Publication is last: neither setter reports failure.
+            ffi::lua_setuserdatadtor(state, tag, Some(destructor));
+            ffi::lua_pushvalue(state, metatable);
+            ffi::lua_setuserdatametatable(state, tag);
+            Ok(())
+        }
+    })
+}
+
+/// True when `T`'s tag currently carries `T`'s destructor, i.e. `register::<T>` ran on this VM.
+pub fn is_registered<T: TaggedUserdata>(stack: &Stack<'_>) -> bool {
+    // SAFETY: live state; reading the destructor table has no preconditions beyond tag range.
+    let registered = unsafe { ffi::lua_getuserdatadtor(stack.state(), c_int::from(T::TAG)) };
+    registered.is_some_and(|f| ptr::fn_addr_eq(f, destroy::<T> as ffi::lua_Destructor))
+}
+
+fn require_registered<T: TaggedUserdata>(stack: &Stack<'_>) -> Result<()> {
+    if is_registered::<T>(stack) {
+        return Ok(());
+    }
+    Err(Error::logic(format!("Luau tagged userdata type '{}' is not registered", T::NAME)))
+}
+
+/// Pushes `value` as a new tagged userdata and returns a view of it.
+///
+/// One allocation, one write, no intermediate state: the metatable attached by Luau is the
+/// one `register::<T>` published.
+pub fn push<'s, T: TaggedUserdata>(stack: &'s Stack<'_>, value: T) -> Result<ValueView<'s>> {
+    const { assert_userdata_layout::<T>() };
+    require_registered::<T>(stack)?;
+    // SAFETY: registration verified the tag has T's metatable and destructor. The allocation
+    // is fully initialised by `ptr::write` before anything else can observe it. Luau raises
+    // only for out of memory, before the destructor could see the slot.
+    unsafe {
+        let storage = ffi::lua_newuserdatataggedwithmetatable(stack.state(), std::mem::size_of::<T>(), c_int::from(T::TAG));
+        if storage.is_null() {
+            return Err(Error::runtime("Unable to allocate tagged userdata"));
+        }
+        ptr::write(storage.cast::<T>(), value);
+    }
+    Ok(stack.top_value_static())
+}
+
+/// The payload when `value` is a `T`, else `None`. One tag comparison, no metatable walk.
+pub fn test<'s, T: TaggedUserdata>(value: ValueView<'s>) -> Option<&'s T> {
+    // SAFETY: lua_touserdatatagged returns the payload only when the userdata carries T's
+    // tag, and only `push::<T>` creates userdata with that tag on a VM where T is registered.
+    // The view's lifetime keeps the slot, and so the userdata, reachable.
+    unsafe {
+        let data = ffi::lua_touserdatatagged(value.stack().state(), value.index(), c_int::from(T::TAG));
+        data.cast::<T>().as_ref()
+    }
+}
+
+/// Mutable access to the payload.
+///
+/// # Safety
+/// No other reference to the same userdata's payload may be live: Luau lets the same value
+/// appear at several stack slots, and the binder cannot see aliasing through them.
+pub unsafe fn test_mut<'s, T: TaggedUserdata>(value: ValueView<'s>) -> Option<&'s mut T> {
+    unsafe {
+        let data = ffi::lua_touserdatatagged(value.stack().state(), value.index(), c_int::from(T::TAG));
+        data.cast::<T>().as_mut()
+    }
+}
+
+/// [`test`] or a Luau-style type error for argument `value`.
+pub fn check<'s, T: TaggedUserdata>(value: ValueView<'s>) -> Result<&'s T> {
+    test::<T>(value).ok_or_else(|| crate::diagnostics::type_error(value, T::NAME))
+}

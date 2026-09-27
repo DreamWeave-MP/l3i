@@ -12,7 +12,7 @@ mod view;
 #[cfg(test)]
 mod tests;
 
-use std::ffi::c_int;
+use std::ffi::{c_char, c_int};
 use std::marker::PhantomData;
 
 use crate::error::{Error, Result};
@@ -120,6 +120,22 @@ impl<'vm> Stack<'vm> {
         let nrec = checked_capacity(hash_capacity)?;
         unsafe { ffi::lua_createtable(self.state, narr, nrec) };
         Ok(TableView::new(self.top_value()))
+    }
+
+    /// Pushes a C function with an already-retained debug name (see [`crate::debug_name`]).
+    ///
+    /// # Safety
+    /// `debug_name` is null or a pointer that stays valid until the VM closes.
+    pub unsafe fn push_c_function(&self, function: ffi::lua_CFunction, debug_name: *const c_char) -> ValueView<'_> {
+        unsafe { ffi::lua_pushcfunction(self.state, function, debug_name) };
+        self.top_value()
+    }
+
+    /// Pops the top value into the global `name`.
+    pub fn set_global(&self, name: &str) -> Result<()> {
+        let name = std::ffi::CString::new(name).map_err(|_| Error::logic("Global name cannot contain NUL"))?;
+        unsafe { ffi::lua_setglobal(self.state, name.as_ptr()) };
+        Ok(())
     }
 
     /// Ensures `extra` free slots, as `lua_checkstack`.

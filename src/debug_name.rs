@@ -63,7 +63,6 @@ static DEBUG_NAME_REGISTRY_KEY: u8 = 0;
 ///
 /// # Safety
 /// `state` is a live thread of the VM with `LUA_MINSTACK` free slots.
-#[allow(dead_code)] // the tagged userdata slice is the first caller
 pub(crate) unsafe fn retain(state: *mut ffi::lua_State, name: &str, roots: &[&str]) -> Result<*const c_char> {
     if name.is_empty() {
         return Err(Error::logic("Lua function debug name cannot be empty"));

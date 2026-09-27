@@ -89,29 +89,70 @@ pub fn initialize_luau_flags() -> Result<()> {
         .map_err(Error::Logic)
 }
 
-/// Owns one Luau VM. Dropping it closes the VM, so every owned reference into it must be gone
-/// first; borrowed views cannot outlive it by construction.
-pub struct Runtime {
-    state: *mut ffi::lua_State,
+/// Host choices made before the VM exists.
+#[derive(Clone, Debug)]
+pub struct RuntimeBuilder {
+    debug_roots: Vec<&'static str>,
 }
 
-impl Runtime {
-    /// Creates a VM with OpenMW's flag policy applied and the standard libraries opened.
-    pub fn new() -> Result<Runtime> {
+impl RuntimeBuilder {
+    /// Root vocabulary for debug names (`openmw`, `string`, `vector` in OpenMW). Every native
+    /// function and userdata type registered into the VM must be named under one of these.
+    pub fn debug_roots(mut self, roots: &[&'static str]) -> Self {
+        self.debug_roots = roots.to_vec();
+        self
+    }
+
+    pub fn build(self) -> Result<Runtime> {
         initialize_luau_flags()?;
         // SAFETY: luaL_newstate uses the default allocator; a null result is out of memory.
         let state = unsafe { ffi::luaL_newstate() };
         if state.is_null() {
             return Err(Error::runtime("Unable to allocate a Luau state"));
         }
-        let runtime = Runtime { state };
+        let runtime = Runtime { state, debug_roots: self.debug_roots };
         // SAFETY: fresh live state; openlibs raises only on out of memory.
         unsafe { ffi::luaL_openlibs(state) };
         Ok(runtime)
     }
+}
+
+/// Owns one Luau VM. Dropping it closes the VM, so every owned reference into it must be gone
+/// first; borrowed views cannot outlive it by construction.
+pub struct Runtime {
+    state: *mut ffi::lua_State,
+    debug_roots: Vec<&'static str>,
+}
+
+impl Runtime {
+    /// Starts configuring a VM. Defaults: debug root `dreamweave`.
+    pub fn builder() -> RuntimeBuilder {
+        RuntimeBuilder { debug_roots: vec!["dreamweave"] }
+    }
+
+    /// A VM with the default configuration, OpenMW's flag policy, and the standard libraries.
+    pub fn new() -> Result<Runtime> {
+        Runtime::builder().build()
+    }
+
+    /// The configured debug-name roots.
+    pub fn debug_roots(&self) -> &[&'static str] {
+        &self.debug_roots
+    }
+
+    /// Runs a full collection cycle. Rust destructors of unreachable userdata run inside.
+    pub fn collect_garbage(&self) {
+        // SAFETY: live state; a full collect is always permitted from the host.
+        unsafe { ffi::lua_gc(self.state, ffi::LUA_GCCOLLECT, 0) };
+    }
+
+    /// Bytes currently allocated by the VM across all memory categories.
+    pub fn total_bytes(&self) -> usize {
+        unsafe { ffi::lua_totalbytes(self.state, -1) }
+    }
 
     /// The main thread of this VM.
-    #[allow(dead_code)] // the tagged userdata slice registers through it
+    #[cfg(test)]
     pub(crate) fn state(&self) -> *mut ffi::lua_State {
         self.state
     }

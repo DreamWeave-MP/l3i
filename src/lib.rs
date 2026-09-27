@@ -5,13 +5,23 @@
 //! ownership models.
 
 pub mod debug_name;
+pub mod diagnostics;
 pub mod error;
+pub mod native;
 mod raw;
 pub mod runtime;
 pub mod source;
 pub mod stack;
+pub mod userdata;
 
 pub use error::{Error, Result};
+pub use runtime::Runtime;
+
+/// The raw Luau C API for hand-written native functions. Everything here is `unsafe`; prefer
+/// the safe layers.
+pub mod ffi {
+    pub use crate::raw::ffi::*;
+}
 
 /// Number of userdata tags the linked Luau VM was compiled with (`LUA_UTAG_LIMIT`).
 ///

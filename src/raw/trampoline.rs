@@ -21,7 +21,6 @@ use crate::error::{Error, Result};
 /// # Safety
 /// `state` must be the live `lua_State*` Luau handed to the enclosing C function, and the
 /// caller must be that C function's frame, so that raising here unwinds only Luau frames.
-#[allow(dead_code)] // the tagged userdata slice adds the first C entry points
 pub(crate) unsafe fn enter(state: *mut ffi::lua_State, body: impl FnOnce() -> Result<c_int>) -> c_int {
     match catch_unwind(AssertUnwindSafe(body)) {
         Ok(Ok(count)) => count,
