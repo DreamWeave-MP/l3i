@@ -49,6 +49,8 @@ include = [
 [dependencies]
 # Networking is runtime infrastructure, not a feature: l3i owns the Luau bridge to dream-net.
 dream-net = "=1.0.0"
+# The CPU rasterizer is a domain extension, behind the `soft-render` feature.
+dream-soft-render = { version = "=1.0.0", optional = true }
 
 [build-dependencies]
 # Compiles the vendored Luau tree and the C++ shims.
@@ -80,3 +82,5 @@ default = []
 jit = []
 # Luau's Analysis library (type checker, linter, autocomplete) behind a C++ shim (`analysis`).
 analysis = []
+# dream-soft-render as the `dream.soft-render` extension (`soft_render`).
+soft-render = ["dep:dream-soft-render"]

@@ -83,6 +83,8 @@ pub mod require;
 pub mod runtime;
 pub mod sandbox;
 pub mod sequence;
+#[cfg(feature = "soft-render")]
+pub mod soft_render;
 pub mod source;
 pub mod stack;
 pub mod thread;

@@ -43,6 +43,8 @@ mod quat;
 mod raster;
 mod require;
 mod sandbox;
+#[cfg(feature = "soft-render")]
+mod soft_render;
 mod tagged;
 mod thread;
 mod untagged;

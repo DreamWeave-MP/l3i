@@ -21,6 +21,7 @@
 //! local raster = require('@dream/raster')
 //! local c = raster.rgba8(80, 160, 255, 192)       -- a Color, physically an integer
 //! local r, g, b, a = raster.channels(c)
+//! buffer.writeu32(vertices, 16, raster.packed(c))   -- the u32 form: the bytes r, g, b, a
 //! local half = raster.lerp(raster.BLACK, c, 0.5)
 //! local clip = raster.clip(0, 0, 640, 480)       -- a ClipRect
 //! local x0, y0, x1, y1 = raster.clipBounds(clip)
@@ -122,9 +123,9 @@ impl ClipRect {
     pub const FIELD_BITS: u32 = 14;
     /// The largest coordinate a packed clip rectangle can hold.
     pub const MAX_COORD: u32 = (1 << Self::FIELD_BITS) - 1;
-    /// Every field at the maximum: no clipping for any surface this type can address.
-    pub const ALL: ClipRect =
-        ClipRect { min_x: Self::MAX_COORD, min_y: Self::MAX_COORD, max_x: Self::MAX_COORD, max_y: Self::MAX_COORD };
+    /// From the origin to the addressable limit: no clipping for any surface this type can
+    /// address.
+    pub const ALL: ClipRect = ClipRect { min_x: 0, min_y: 0, max_x: Self::MAX_COORD, max_y: Self::MAX_COORD };
 
     /// A rectangle from its bounds; fails when a value exceeds [`Self::MAX_COORD`] or
     /// `min > max` on an axis.
@@ -218,6 +219,7 @@ impl Extension for RasterExtension {
             .function("rgb8", |r: i64, g: i64, b: i64| -> Result<Packed<Color>> {
                 Ok(Color::rgba(channel("rgb8 red", r)?, channel("rgb8 green", g)?, channel("rgb8 blue", b)?, 255).pack())
             })?
+            .function("packed", |c: Packed<Color>| f64::from(c.0.packed()))?
             .function("channels", |c: Packed<Color>| {
                 (f64::from(c.0.r), f64::from(c.0.g), f64::from(c.0.b), f64::from(c.0.a))
             })?

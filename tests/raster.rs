@@ -21,14 +21,15 @@ fn colors_and_clips_are_distinct_packed_kinds() {
              assert(raster.lerp(raster.BLACK, raster.WHITE, 0.5) == raster.rgba8(128, 128, 128, 255), 'lerp') \
              assert(raster.WHITE == raster.rgba8(255, 255, 255, 255), 'folded constant') \
              -- The four bytes of a color in a buffer are r, g, b, a: the pixel layout. \
-             local buf = buffer.create(4) buffer.writeu32(buf, 0, 0x44332211) \
+             local buf = buffer.create(4) buffer.writeu32(buf, 0, raster.packed(c)) assert(raster.packed(c) == 0x44332211, 'packed') \
              assert(buffer.readu8(buf, 0) == 0x11 and buffer.readu8(buf, 3) == 0x44, 'byte order') \
              local ok, err = pcall(raster.rgba8, 256, 0, 0, 0) assert(not ok and err:find('outside 0..=255'), err) \
              local clip = raster.clip(1, 2, 640, 480) \
              local x0, y0, x1, y1 = raster.clipBounds(clip) assert(x0 == 1 and y0 == 2 and x1 == 640 and y1 == 480, 'bounds') \
              local ok2, err2 = pcall(raster.clip, 5, 0, 4, 0) assert(not ok2 and err2:find('exceeds max'), err2) \
              local ok3, err3 = pcall(raster.clip, 0, 0, 16384, 0) assert(not ok3 and err3:find('16383'), err3) \
-             assert(raster.clipBounds(raster.CLIP_ALL) == raster.CLIP_MAX_COORD, 'ALL reaches the limit') \
+             local ax0, ay0, ax1, ay1 = raster.clipBounds(raster.CLIP_ALL) \
+             assert(ax0 == 0 and ay0 == 0 and ax1 == raster.CLIP_MAX_COORD and ay1 == raster.CLIP_MAX_COORD, 'ALL spans origin to limit') \
              -- Kinds are checked: a clip is not a color, a color is not a clip, an integer is neither. \
              local ok4, err4 = pcall(raster.channels, clip) assert(not ok4 and err4:find('Color'), err4) \
              local ok5, err5 = pcall(raster.clipBounds, c) assert(not ok5 and err5:find('ClipRect'), err5) \
