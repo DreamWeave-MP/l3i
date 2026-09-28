@@ -40,6 +40,7 @@ pub use returns::{Break, NilThen, ResultOrError, Return, StackResults, Variadic,
 use crate::debug_name;
 use crate::error::{Error, Result};
 use crate::raw::{ffi, trampoline};
+use crate::runtime::shared::ThreadRecord;
 use crate::stack::Scope;
 use crate::userdata::assert_userdata_layout;
 use crate::value::{Function, Value};
@@ -205,7 +206,52 @@ unsafe extern "C-unwind" fn method_thunk<F: Binding<M>, M>(state: *mut ffi::lua_
     unsafe { with_context::<F, M>(state, |callable, call, name| callable.invoke_method(call, name)) }
 }
 
-/// Allocates the context userdata, moves `callable` into it, and pushes the C closure.
+/// A direct entry to a bound method: the generated `__index`/`__namecall`/`__newindex`
+/// dispatchers run the member through it instead of `lua_call`ing its closure, which spares
+/// the Luau call frame. The context pointer stays valid while the member's closure (which owns
+/// the context) is reachable, and the dispatch tables holding entries hold those closures too.
+#[derive(Clone, Copy)]
+#[repr(C)]
+pub(crate) struct MemberEntry {
+    invoke: unsafe fn(*mut ffi::lua_State, *const c_void, c_int, *const ThreadRecord) -> c_int,
+    context: *const c_void,
+}
+
+impl MemberEntry {
+    /// Runs the member with the receiver at slot 1 and `top` arguments on the stack, pushing
+    /// its results and returning their count. Errors raise through Luau like any native call.
+    ///
+    /// # Safety
+    /// `state` is the running thread of a native call with `top` values on its stack.
+    #[inline(always)]
+    pub(crate) unsafe fn call(self, state: *mut ffi::lua_State, top: c_int) -> c_int {
+        unsafe {
+            let record = ffi::lua_getthreaddata(state).cast_const().cast::<ThreadRecord>();
+            (self.invoke)(state, self.context, top, record)
+        }
+    }
+}
+
+/// The type-erased body behind [`MemberEntry`] for a method-mode binding.
+unsafe fn direct_method<F: Binding<M>, M>(
+    state: *mut ffi::lua_State,
+    context: *const c_void,
+    top: c_int,
+    record: *const ThreadRecord,
+) -> c_int {
+    unsafe {
+        trampoline::enter(state, || {
+            // SAFETY: the entry was built from this context by `method_member`, and the
+            // dispatch table that produced the entry keeps the owning closure alive.
+            let context = &*context.cast::<Context<F>>();
+            let call = Call::from_parts(state, top, record);
+            context.callable.invoke_method(&call, context.debug_name)
+        })
+    }
+}
+
+/// Allocates the context userdata, moves `callable` into it, pushes the C closure, and returns
+/// the context's address (owned by the closure's upvalue).
 ///
 /// # Safety
 /// `state` is live with room for two values; `debug_name` is retained for the VM's life.
@@ -214,7 +260,7 @@ unsafe fn push_closure<F: Binding<M>, M>(
     callable: F,
     debug_name: *const c_char,
     entry: ffi::lua_CFunction,
-) -> Result<()> {
+) -> Result<*const Context<F>> {
     const { assert_userdata_layout::<Context<F>>() };
     // SAFETY: allocate, then initialise immediately: Luau owns the destructor as soon as
     // lua_newuserdatadtor returns, and the destructor only runs on a fully written Context.
@@ -229,8 +275,8 @@ unsafe fn push_closure<F: Binding<M>, M>(
         }
         ptr::write(storage.cast::<Context<F>>(), Context { callable, debug_name: name });
         ffi::lua_pushcclosure(state, entry, debug_name, 1);
+        Ok(storage.cast_const().cast::<Context<F>>())
     }
-    Ok(())
 }
 
 /// Pushes a function-mode closure. `debug_name` must already be retained.
@@ -242,19 +288,21 @@ pub(crate) unsafe fn function_closure<F: Binding<M>, M>(
     callable: F,
     debug_name: *const c_char,
 ) -> Result<()> {
-    unsafe { push_closure(state, callable, debug_name, thunk::<F, M>) }
+    unsafe { push_closure(state, callable, debug_name, thunk::<F, M>).map(drop) }
 }
 
-/// Pushes a method-mode closure. `debug_name` must already be retained.
+/// Pushes a method-mode closure and returns its direct entry. `debug_name` must already be
+/// retained.
 ///
 /// # Safety
 /// As [`push_closure`].
-pub(crate) unsafe fn method_closure<F: Binding<M>, M>(
+pub(crate) unsafe fn method_member<F: Binding<M>, M>(
     state: *mut ffi::lua_State,
     callable: F,
     debug_name: *const c_char,
-) -> Result<()> {
-    unsafe { push_closure(state, callable, debug_name, method_thunk::<F, M>) }
+) -> Result<MemberEntry> {
+    let context = unsafe { push_closure(state, callable, debug_name, method_thunk::<F, M>)? };
+    Ok(MemberEntry { invoke: direct_method::<F, M>, context: context.cast::<c_void>() })
 }
 
 /// Binds `callable` as a Lua function named `debug_name` (validated against `roots` and

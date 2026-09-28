@@ -16,7 +16,7 @@ use std::ffi::{CStr, CString, c_int};
 use std::marker::PhantomData;
 
 use super::dispatch;
-use crate::bind::{Binding, Call, ParamKind, function_closure};
+use crate::bind::{Binding, Call, MemberEntry, ParamKind, function_closure};
 use crate::debug_name;
 use crate::error::{Error, Result};
 use crate::raw::ffi;
@@ -41,10 +41,21 @@ pub struct MetatableBuilder<'s> {
     has_explicit_index: bool,
     has_explicit_newindex: bool,
     has_explicit_len: bool,
+    /// Method closures by name; the plain `__index` before any getter exists, and the
+    /// conflict-check and keep-alive table afterwards.
     methods: Option<Value>,
+    /// Method entries (or unbound functions) by name, for `__namecall` misses on the atom index.
+    method_entries: Option<Value>,
+    /// Method entries (or unbound functions) by Luau atom, for `__namecall`.
     method_atoms: Option<Value>,
+    /// Method functions and getter entries by name: the generated `__index` table.
+    members: Option<Value>,
+    /// Getter closures by name (conflict checks, keep-alive for the entries in `members`).
     getters: Option<Value>,
+    /// Setter closures by name (conflict checks, keep-alive for `setter_entries`).
     setters: Option<Value>,
+    /// Setter entries by name: the generated `__newindex` table.
+    setter_entries: Option<Value>,
     native_methods: Option<Value>,
     native_methods_frozen: bool,
     _frame: PhantomData<&'s Frame<'s>>,
@@ -79,9 +90,12 @@ impl<'s> MetatableBuilder<'s> {
                 has_explicit_newindex: false,
                 has_explicit_len: false,
                 methods: None,
+                method_entries: None,
                 method_atoms: None,
+                members: None,
                 getters: None,
                 setters: None,
+                setter_entries: None,
                 native_methods: None,
                 native_methods_frozen: false,
                 _frame: PhantomData,
@@ -287,16 +301,16 @@ impl<'s> MetatableBuilder<'s> {
     pub fn method<F: Binding<M>, M>(&mut self, name: &str, callable: F) -> Result<()> {
         self.check_member_allowed(MemberKind::Method)?;
         let type_name = self.validated_receiver::<F, M>()?;
-        let closure = self.member_closure(&format!("{type_name}.{name}"), callable)?;
-        self.register_member(MemberKind::Method, &type_name, name, closure)
+        let (closure, entry) = self.member_closure(&format!("{type_name}.{name}"), callable)?;
+        self.register_member(MemberKind::Method, &type_name, name, closure, Some(entry))
     }
 
     /// Registers a read-only property: `getter` takes the receiver and returns the value.
     pub fn property<G: Binding<MG>, MG>(&mut self, name: &str, getter: G) -> Result<()> {
         self.check_member_allowed(MemberKind::Getter)?;
         let type_name = self.validated_receiver::<G, MG>()?;
-        let closure = self.member_closure(&format!("{type_name}.get.{name}"), getter)?;
-        self.register_member(MemberKind::Getter, &type_name, name, closure)
+        let (closure, entry) = self.member_closure(&format!("{type_name}.get.{name}"), getter)?;
+        self.register_member(MemberKind::Getter, &type_name, name, closure, Some(entry))
     }
 
     /// Registers a read/write property. The setter takes the receiver and exactly one Lua value.
@@ -323,10 +337,10 @@ impl<'s> MetatableBuilder<'s> {
         if setter_type != type_name {
             return Err(Error::logic(format!("receiverTypeName mismatch for {type_name}")));
         }
-        let getter_closure = self.member_closure(&format!("{type_name}.get.{name}"), getter)?;
-        self.register_member(MemberKind::Getter, &type_name, name, getter_closure)?;
-        let setter_closure = self.member_closure(&format!("{type_name}.set.{name}"), setter)?;
-        self.register_member(MemberKind::Setter, &type_name, name, setter_closure)
+        let (getter_closure, getter_entry) = self.member_closure(&format!("{type_name}.get.{name}"), getter)?;
+        self.register_member(MemberKind::Getter, &type_name, name, getter_closure, Some(getter_entry))?;
+        let (setter_closure, setter_entry) = self.member_closure(&format!("{type_name}.set.{name}"), setter)?;
+        self.register_member(MemberKind::Setter, &type_name, name, setter_closure, Some(setter_entry))
     }
 
     /// Registers an already-bound function as a callable member without a native receiver
@@ -337,7 +351,7 @@ impl<'s> MetatableBuilder<'s> {
         }
         self.check_member_allowed(MemberKind::Method)?;
         let type_name = self.type_name()?;
-        self.register_member(MemberKind::Method, &type_name, name, function.clone())
+        self.register_member(MemberKind::Method, &type_name, name, function.clone(), None)
     }
 
     fn check_member_allowed(&self, kind: MemberKind) -> Result<()> {
@@ -368,14 +382,44 @@ impl<'s> MetatableBuilder<'s> {
         }
     }
 
-    /// Builds a method-mode closure and pins it.
-    fn member_closure<F: Binding<M>, M>(&mut self, debug_name: &str, callable: F) -> Result<Value> {
+    /// Builds a method-mode closure, pins it, and returns its direct entry.
+    fn member_closure<F: Binding<M>, M>(&mut self, debug_name: &str, callable: F) -> Result<(Value, MemberEntry)> {
         let retained = self.retain(debug_name)?;
         unsafe {
-            crate::bind::method_closure(self.state, callable, retained)?;
+            let entry = crate::bind::method_member(self.state, callable, retained)?;
             let value = Value::store(crate::stack::ValueView::resolve(self.state, -1))?;
             ffi::lua_pop(self.state, 1);
-            Ok(value)
+            Ok((value, entry))
+        }
+    }
+
+    /// Raw-sets `name` in `table` to the member's direct entry (a plain userdata holding a
+    /// `MemberEntry`), or to `closure` itself for an unbound function.
+    fn store_member(&self, table: &Value, name: &str, closure: &Value, entry: Option<MemberEntry>) {
+        unsafe {
+            ffi::lua_getref(self.state, table.reference_id());
+            ffi::lua_pushlstring(self.state, name.as_ptr().cast(), name.len());
+            self.push_member(closure, entry);
+            ffi::lua_rawset(self.state, -3);
+            ffi::lua_pop(self.state, 1);
+        }
+    }
+
+    /// Pushes the entry userdata, or the closure when there is no entry.
+    unsafe fn push_member(&self, closure: &Value, entry: Option<MemberEntry>) {
+        const { crate::userdata::assert_userdata_layout::<MemberEntry>() };
+        unsafe {
+            match entry {
+                Some(entry) => {
+                    // SAFETY: a fresh untagged userdata of the entry's size, written before
+                    // anything can read it; entries hold no destructor and no owned data.
+                    let raw = ffi::lua_newuserdatatagged(self.state, std::mem::size_of::<MemberEntry>(), 0);
+                    std::ptr::write(raw.cast::<MemberEntry>(), entry);
+                }
+                None => {
+                    ffi::lua_getref(self.state, closure.reference_id());
+                }
+            }
         }
     }
 
@@ -461,7 +505,14 @@ impl<'s> MetatableBuilder<'s> {
         Ok(())
     }
 
-    fn register_member(&mut self, kind: MemberKind, type_name: &str, name: &str, closure: Value) -> Result<()> {
+    fn register_member(
+        &mut self,
+        kind: MemberKind,
+        type_name: &str,
+        name: &str,
+        closure: Value,
+        entry: Option<MemberEntry>,
+    ) -> Result<()> {
         let getters_were_absent = self.getters.is_none();
         let setters_were_absent = self.setters.is_none();
         match kind {
@@ -492,13 +543,43 @@ impl<'s> MetatableBuilder<'s> {
         .expect("created above");
         self.store_in(target, name, &closure);
 
+        // The dispatch tables: entries for bound members, the function itself otherwise.
+        match kind {
+            MemberKind::Method => {
+                if self.method_entries.is_none() {
+                    self.method_entries = Some(self.new_table()?);
+                }
+                let entries = self.method_entries.clone().expect("created above");
+                self.store_member(&entries, name, &closure, entry);
+            }
+            MemberKind::Setter => {
+                if self.setter_entries.is_none() {
+                    self.setter_entries = Some(self.new_table()?);
+                }
+                let entries = self.setter_entries.clone().expect("created above");
+                self.store_member(&entries, name, &closure, entry);
+            }
+            MemberKind::Getter => {
+                if self.members.is_none() {
+                    self.members = Some(self.members_from_methods()?);
+                }
+            }
+        }
+        if let Some(members) = self.members.clone() {
+            match kind {
+                MemberKind::Method => self.store_in(&members, name, &closure),
+                MemberKind::Getter => self.store_member(&members, name, &closure, entry),
+                MemberKind::Setter => {}
+            }
+        }
+
         match kind {
             MemberKind::Method if self.getters.is_none() => {
                 // Phase A: the plain methods table is __index.
                 let methods = self.methods.clone().expect("methods table exists");
                 self.set_field("__index", &methods)?;
             }
-            MemberKind::Method => self.register_method_atom(type_name, name, &closure)?,
+            MemberKind::Method => self.register_method_atom(name, &closure, entry)?,
             MemberKind::Getter if getters_were_absent => self.install_index_and_namecall_dispatchers(type_name)?,
             MemberKind::Setter if setters_were_absent => self.install_newindex_dispatcher(type_name)?,
             _ => {}
@@ -506,8 +587,34 @@ impl<'s> MetatableBuilder<'s> {
         Ok(())
     }
 
+    /// A new `members` table seeded with every method function registered so far.
+    fn members_from_methods(&self) -> Result<Value> {
+        let members = self.new_table()?;
+        if let Some(methods) = &self.methods {
+            unsafe {
+                ffi::lua_getref(self.state, members.reference_id());
+                ffi::lua_getref(self.state, methods.reference_id());
+                let (target, source) = (ffi::lua_gettop(self.state) - 1, ffi::lua_gettop(self.state));
+                let mut iterator: c_int = 0;
+                loop {
+                    iterator = ffi::lua_rawiter(self.state, source, iterator);
+                    if iterator < 0 {
+                        break;
+                    }
+                    // rawiter pushed key, value: copy the key beneath and raw-set into `target`.
+                    ffi::lua_pushvalue(self.state, -2);
+                    ffi::lua_insert(self.state, -2);
+                    ffi::lua_rawset(self.state, target);
+                    ffi::lua_pop(self.state, 1);
+                }
+                ffi::lua_pop(self.state, 2);
+            }
+        }
+        Ok(members)
+    }
+
     /// Methods whose name has a Luau atom are also indexed by atom for `__namecall`.
-    fn register_method_atom(&mut self, _type_name: &str, name: &str, closure: &Value) -> Result<()> {
+    fn register_method_atom(&mut self, name: &str, closure: &Value, entry: Option<MemberEntry>) -> Result<()> {
         let atom = unsafe {
             ffi::lua_pushlstring(self.state, name.as_ptr().cast(), name.len());
             let mut atom: c_int = -1;
@@ -521,21 +628,24 @@ impl<'s> MetatableBuilder<'s> {
         if self.method_atoms.is_none() {
             self.method_atoms = Some(self.new_table()?);
         }
-        let atoms = self.method_atoms.as_ref().expect("created above");
+        let atoms = self.method_atoms.clone().expect("created above");
         unsafe {
             ffi::lua_getref(self.state, atoms.reference_id());
-            ffi::lua_getref(self.state, closure.reference_id());
+            self.push_member(closure, entry);
             ffi::lua_rawseti(self.state, -2, atom);
             ffi::lua_pop(self.state, 1);
         }
         Ok(())
     }
 
-    /// Phase B: methods table + getters table behind a generated `__index`, and a generated
-    /// `__namecall` over the methods table and its atom index.
+    /// Phase B: the `members` table (method functions, getter entries) behind a generated
+    /// `__index`, and a generated `__namecall` over the method entries and their atom index.
     fn install_index_and_namecall_dispatchers(&mut self, type_name: &str) -> Result<()> {
         if self.methods.is_none() {
             self.methods = Some(self.new_table()?);
+        }
+        if self.method_entries.is_none() {
+            self.method_entries = Some(self.new_table()?);
         }
         if self.method_atoms.is_none() {
             self.method_atoms = Some(self.new_table()?);
@@ -543,42 +653,49 @@ impl<'s> MetatableBuilder<'s> {
         if self.getters.is_none() {
             self.getters = Some(self.new_table()?);
         }
-        // Methods registered before the first getter only lived in the plain-table __index.
-        let methods = self.methods.clone().expect("methods table exists");
-        let mut names = Vec::new();
+        let members = match &self.members {
+            Some(members) => members.clone(),
+            None => {
+                let members = self.members_from_methods()?;
+                self.members = Some(members.clone());
+                members
+            }
+        };
+        // Methods registered before the first getter have entries by name but no atoms yet.
+        let entries = self.method_entries.clone().expect("method entries table exists");
+        let atoms = self.method_atoms.clone().expect("atoms table exists");
         unsafe {
-            ffi::lua_getref(self.state, methods.reference_id());
-            let table = ffi::lua_gettop(self.state);
+            ffi::lua_getref(self.state, atoms.reference_id());
+            ffi::lua_getref(self.state, entries.reference_id());
+            let (atoms_index, source) = (ffi::lua_gettop(self.state) - 1, ffi::lua_gettop(self.state));
             let mut iterator: c_int = 0;
             loop {
-                iterator = ffi::lua_rawiter(self.state, table, iterator);
+                iterator = ffi::lua_rawiter(self.state, source, iterator);
                 if iterator < 0 {
                     break;
                 }
-                let key = crate::stack::ValueView::resolve(self.state, -2);
-                if let Ok(name) = key.read::<&str>() {
-                    let closure = Value::store(crate::stack::ValueView::resolve(self.state, -1))?;
-                    names.push((name.to_owned(), closure));
+                let mut atom: c_int = -1;
+                ffi::lua_tostringatom(self.state, -2, &mut atom);
+                if atom >= 0 {
+                    ffi::lua_rawseti(self.state, atoms_index, atom);
+                    ffi::lua_pop(self.state, 1);
+                } else {
+                    ffi::lua_pop(self.state, 2);
                 }
-                ffi::lua_pop(self.state, 2);
             }
-            ffi::lua_pop(self.state, 1);
-        }
-        for (name, closure) in &names {
-            self.register_method_atom(type_name, name, closure)?;
+            ffi::lua_pop(self.state, 2);
         }
 
         let index_name = self.retain(&format!("{type_name}.__index"))?;
         let namecall_name = self.retain(&format!("{type_name}.__namecall"))?;
         let getters = self.getters.clone().expect("getters table exists");
-        let atoms = self.method_atoms.clone().expect("atoms table exists");
         unsafe {
-            ffi::lua_getref(self.state, methods.reference_id());
+            ffi::lua_getref(self.state, members.reference_id());
             ffi::lua_getref(self.state, getters.reference_id());
             ffi::lua_pushcclosure(self.state, dispatch::index, index_name, 2);
             ffi::lua_rawsetfield(self.state, self.metatable, c"__index".as_ptr());
 
-            ffi::lua_getref(self.state, methods.reference_id());
+            ffi::lua_getref(self.state, entries.reference_id());
             ffi::lua_pushlstring(self.state, type_name.as_ptr().cast(), type_name.len());
             ffi::lua_getref(self.state, atoms.reference_id());
             ffi::lua_pushcclosure(self.state, dispatch::namecall, namecall_name, 3);
@@ -589,11 +706,13 @@ impl<'s> MetatableBuilder<'s> {
 
     fn install_newindex_dispatcher(&mut self, type_name: &str) -> Result<()> {
         let setters = self.setters.clone().expect("setters table exists");
+        let entries = self.setter_entries.clone().expect("setter entries table exists");
         let debug_name = self.retain(&format!("{type_name}.__newindex"))?;
         unsafe {
-            ffi::lua_getref(self.state, setters.reference_id());
+            ffi::lua_getref(self.state, entries.reference_id());
             ffi::lua_pushlstring(self.state, type_name.as_ptr().cast(), type_name.len());
-            ffi::lua_pushcclosure(self.state, dispatch::newindex, debug_name, 2);
+            ffi::lua_getref(self.state, setters.reference_id());
+            ffi::lua_pushcclosure(self.state, dispatch::newindex, debug_name, 3);
             ffi::lua_rawsetfield(self.state, self.metatable, c"__newindex".as_ptr());
         }
         Ok(())
