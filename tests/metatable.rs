@@ -4,9 +4,9 @@
 use std::cell::Cell;
 use std::ffi::c_int;
 
-use l3i::bind::ArgView;
+use l3i::bind::{ArgView, Call, StackResults};
 use l3i::ffi;
-use l3i::stack::Scope;
+use l3i::stack::{Scope, Type};
 use l3i::userdata::{Userdata, tagged};
 use l3i::{Error, Runtime};
 
@@ -82,6 +82,61 @@ fn properties_methods_and_setters_dispatch_through_generated_metamethods() {
     );
     let error = runtime.exec("bar.value = 'x'").unwrap_err().to_string();
     assert!(error.contains("dreamweave.tests.Bar.set.value: bad argument #1 (expected number)"), "{error}");
+}
+
+#[test]
+fn generated_getters_see_only_the_receiver() {
+    // `obj.name` reaches the getter through the generated `__index`, whose own stack holds
+    // the receiver and the key. The getter must see one argument, and results must be counted
+    // from above that argument alone. Observations are returned as values: a panic inside a
+    // native call aborts the process instead of failing the test.
+    let runtime = Runtime::new().unwrap();
+    tagged::register::<Bar>(&runtime, 20, |ty| {
+        ty.property("probe", |_: &Bar, call: &Call| {
+            format!("{} {} {}", call.argument_count(), call.arg(2).type_of() == Type::None, call.result_count())
+        })?;
+        ty.property("pushed", |bar: &Bar, call: &Call| {
+            let clean = call.arg(2).type_of() == Type::None && call.result_count() == 0;
+            call.stack().push(&if clean { bar.value.get() * 3 } else { -1 }).unwrap();
+            StackResults
+        })?;
+        ty.method("counted", |_: &Bar, call: &Call| {
+            call.stack().push(&1i32).unwrap();
+            call.stack().push(&2i32).unwrap();
+            // A temporary above the arguments is not an argument.
+            let beyond = call.arg(call.argument_count() + 1).type_of() == Type::None;
+            call.stack().push(&format!("{beyond} {}", call.result_count())).unwrap();
+            StackResults
+        })
+    })
+    .unwrap();
+    set_global_bar(&runtime, "bar", 7);
+    runtime
+        .exec(
+            "assert(bar.probe == '1 true 0', bar.probe) assert(bar.pushed == 21, bar.pushed) \
+             local a, b, c, d = bar:counted() assert(a == 1 and b == 2 and c == 'true 2' and d == nil, c)",
+        )
+        .unwrap();
+}
+
+#[test]
+fn generated_dispatch_survives_a_full_collection_before_first_use() {
+    // The dispatch tables hold direct entries pointing into contexts owned by member closures;
+    // the metatable must root those closures through a full GC before anything runs.
+    let runtime = Runtime::new().unwrap();
+    tagged::register::<Bar>(&runtime, 20, |ty| {
+        ty.method("double", |bar: &Bar| bar.value.get() * 2)?;
+        ty.property_rw("value", |bar: &Bar| bar.value.get(), |bar: &Bar, value: i32| bar.value.set(value))?;
+        ty.property("readonly", |bar: &Bar| bar.value.get() + 100)
+    })
+    .unwrap();
+    runtime.collect_garbage();
+    runtime.collect_garbage();
+    set_global_bar(&runtime, "bar", 5);
+    runtime.collect_garbage();
+    runtime
+        .exec("assert(bar:double() == 10) assert(bar.value == 5) bar.value = 8 assert(bar.readonly == 108)")
+        .unwrap();
 }
 
 #[test]

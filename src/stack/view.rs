@@ -96,10 +96,11 @@ impl<'v> ValueView<'v> {
     }
 
     /// A view of argument slot `index` on a native call whose argument count is `top`: the
-    /// slot's existence is settled without asking Luau.
+    /// slot's existence is settled without asking Luau. An `index` above `top` reads as none
+    /// even while temporaries or results physically occupy it.
     #[inline(always)]
     pub(crate) fn within(state: *mut ffi::lua_State, index: c_int, top: c_int) -> Self {
-        debug_assert!(index >= 1 && index <= top);
+        debug_assert!(index >= 1 && top >= 0);
         ValueView { state, index, known_top: top, _scope: PhantomData }
     }
 

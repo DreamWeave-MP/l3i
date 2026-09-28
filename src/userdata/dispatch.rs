@@ -34,8 +34,12 @@ pub(crate) unsafe extern "C-unwind" fn index(state: *mut ffi::lua_State) -> c_in
     unsafe {
         ffi::lua_pushvalue(state, 2);
         if ffi::lua_rawget(state, ffi::lua_upvalueindex(1)) == ffi::LUA_TUSERDATA {
-            // Stack: receiver, key. The getter sees one argument; its result lands above.
-            return pop_entry(state).call(state, 1);
+            let entry = pop_entry(state);
+            // Stack: receiver, key. The getter takes the receiver alone, so the key leaves the
+            // stack: `Call::result_count` and `StackResults` count everything above the
+            // arguments, and a hidden slot there would be counted as a result.
+            ffi::lua_remove(state, 2);
+            return entry.call(state, 1);
         }
         // A method function, or nil for a miss: either is the answer.
         1

@@ -52,10 +52,11 @@ impl<'c> Call<'c> {
         self.initial_top
     }
 
-    /// Argument `index` (1-based). Beyond `argument_count` the view reads as none.
+    /// Argument `index` (1-based). Beyond `argument_count` the view reads as none, whatever
+    /// temporaries or results the callable has pushed above the arguments since.
     #[inline(always)]
     pub fn arg(&self, index: c_int) -> ValueView<'_> {
-        if index >= 1 && index <= self.initial_top {
+        if index >= 1 {
             return ValueView::within(self.stack.state(), index, self.initial_top);
         }
         self.stack.at(index)
