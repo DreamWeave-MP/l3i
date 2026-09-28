@@ -305,7 +305,8 @@ fn services_capabilities_state_and_drop_order() {
         .unwrap();
     let runtime = Runtime::from_plan(&plan).unwrap();
     runtime.exec("assert(require('@dream/needy').greet() == 'hello')").unwrap();
-    assert!(runtime.extension_state::<State>().is_some());
+    assert!(runtime.state_of::<State>("dream.needy").is_some());
+    assert!(runtime.extension_state::<State>().is_none(), "an extension's state is not the host's");
     assert!(!dropped.get());
     drop(runtime);
     assert!(dropped.get(), "extension state must drop with the runtime, before lua_close");
@@ -670,4 +671,32 @@ fn compiler_type_slots_go_to_required_types_first_and_a_required_type_without_on
     // Never is never named.
     let plan = RuntimePlan::builder().extension(Many(TagPolicy::Required, CompilerTypePolicy::Never)).finalize().unwrap();
     assert!(plan.userdata().iter().all(|u| u.bytecode_type.is_none()));
+}
+
+#[test]
+fn two_extensions_storing_the_same_state_type_keep_their_own() {
+    struct Cache(&'static str);
+    struct Keeper(&'static str, &'static str);
+    impl Extension for Keeper {
+        fn id(&self) -> &'static str {
+            self.0
+        }
+        fn describe(&self, _: &mut ExtensionDescriptor) -> Result<()> {
+            Ok(())
+        }
+        fn install(&self, cx: &mut InstallContext<'_>) -> Result<()> {
+            assert!(cx.state::<Cache>().is_none());
+            cx.insert_state(Cache(self.1));
+            assert_eq!(cx.state::<Cache>().unwrap().0, self.1);
+            Ok(())
+        }
+    }
+    let plan = RuntimePlan::builder().extension(Keeper("dream.a", "a's")).extension(Keeper("dream.b", "b's")).finalize().unwrap();
+    let runtime = Runtime::from_plan(&plan).unwrap();
+    assert_eq!(runtime.state_of::<Cache>("dream.a").unwrap().0, "a's");
+    assert_eq!(runtime.state_of::<Cache>("dream.b").unwrap().0, "b's");
+    assert!(runtime.extension_state::<Cache>().is_none());
+    runtime.insert_state(Cache("host's"));
+    assert_eq!(runtime.extension_state::<Cache>().unwrap().0, "host's");
+    assert_eq!(runtime.state_of::<Cache>("dream.a").unwrap().0, "a's");
 }

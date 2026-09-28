@@ -215,6 +215,9 @@ impl RuntimeBuilder {
     }
 }
 
+/// `(owner, type)` of a runtime-owned state value; `None` is the host's namespace.
+type StateKey = (Option<&'static str>, TypeId);
+
 /// Four 64-bit words for `lua_setpointerencodekey`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PointerEncodingKey(pub [u64; 4]);
@@ -269,7 +272,9 @@ pub struct Runtime {
     /// The plan this runtime was made from, for introspection; `None` for a builder-made VM.
     plan: RefCell<Option<Rc<crate::extension::RuntimePlan>>>,
     /// Extension-owned state by type, dropped before `lua_close`.
-    states: RefCell<HashMap<TypeId, Rc<dyn Any>>>,
+    /// Runtime-owned state by `(owner, type)`: `None` is the host's namespace, an extension id
+    /// its own, so two extensions storing the same Rust type never overwrite each other.
+    states: RefCell<HashMap<StateKey, Rc<dyn Any>>>,
     /// The compiler options `exec` and `load_function` use; a plan sets the known libraries.
     compile_options: RefCell<CompileOptions>,
     /// Module members installed by a plan, for type definitions.
@@ -518,16 +523,31 @@ impl Runtime {
         self.shared().register_packed_kind(crate::packed::PackedKind::of::<T>())
     }
 
-    /// Stores runtime-owned state by type (one value per type), dropped before the VM closes.
+    /// Stores host-owned runtime state by type (one value per type in the host's namespace),
+    /// dropped before the VM closes. Extensions store theirs through `InstallContext`, in
+    /// their own namespace.
     pub fn insert_state<S: 'static>(&self, state: S) -> Rc<S> {
+        self.insert_state_for(None, state)
+    }
+
+    /// Host-owned runtime state of type `S`, if stored.
+    pub fn extension_state<S: 'static>(&self) -> Option<Rc<S>> {
+        self.state_for::<S>(None)
+    }
+
+    /// The state of type `S` that extension `owner` stored, if any.
+    pub fn state_of<S: 'static>(&self, owner: &'static str) -> Option<Rc<S>> {
+        self.state_for::<S>(Some(owner))
+    }
+
+    pub(crate) fn insert_state_for<S: 'static>(&self, owner: Option<&'static str>, state: S) -> Rc<S> {
         let shared = Rc::new(state);
-        self.states.borrow_mut().insert(TypeId::of::<S>(), Rc::clone(&shared) as Rc<dyn Any>);
+        self.states.borrow_mut().insert((owner, TypeId::of::<S>()), Rc::clone(&shared) as Rc<dyn Any>);
         shared
     }
 
-    /// Runtime-owned state of type `S`, if stored.
-    pub fn extension_state<S: 'static>(&self) -> Option<Rc<S>> {
-        self.states.borrow().get(&TypeId::of::<S>()).and_then(crate::extension::install_detail::downcast::<S>)
+    pub(crate) fn state_for<S: 'static>(&self, owner: Option<&'static str>) -> Option<Rc<S>> {
+        self.states.borrow().get(&(owner, TypeId::of::<S>())).and_then(crate::extension::install_detail::downcast::<S>)
     }
 
     /// The compiler options `exec` and `load_function` use (a plan fills in the known

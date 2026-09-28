@@ -183,13 +183,20 @@ impl<'r> InstallContext<'r> {
             .ok_or_else(|| Error::logic(format!("memory category '{name}' was not resolved")))
     }
 
-    /// Stores extension-owned runtime state, dropped before the VM closes.
+    /// Stores this extension's runtime state (one value per type per extension), dropped
+    /// before the VM closes. Another extension storing the same Rust type keeps its own.
     pub fn insert_state<S: 'static>(&self, state: S) -> Rc<S> {
-        self.runtime.insert_state(state)
+        self.runtime.insert_state_for(Some(self.current), state)
     }
 
+    /// This extension's state of type `S`, if stored.
     pub fn state<S: 'static>(&self) -> Option<Rc<S>> {
-        self.runtime.extension_state::<S>()
+        self.runtime.state_for::<S>(Some(self.current))
+    }
+
+    /// The state of type `S` that extension `owner` stored (a dependency's, say), if any.
+    pub fn state_of<S: 'static>(&self, owner: &'static str) -> Option<Rc<S>> {
+        self.runtime.state_for::<S>(Some(owner))
     }
 }
 
