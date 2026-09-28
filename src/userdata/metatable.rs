@@ -301,18 +301,30 @@ impl<'s> MetatableBuilder<'s> {
     /// registered userdata type whose `NAME` is this metatable's `__type`); argument numbering
     /// in diagnostics excludes it.
     pub fn method<F: Binding<M>, M>(&mut self, name: &str, callable: F) -> Result<()> {
+        self.method_with_entry(name, callable).map(drop)
+    }
+
+    /// [`Self::method`], also returning the member's direct entry for the extension planner.
+    pub(crate) fn method_with_entry<F: Binding<M>, M>(&mut self, name: &str, callable: F) -> Result<MemberEntry> {
         self.check_member_allowed(MemberKind::Method)?;
         let type_name = self.validated_receiver::<F, M>()?;
         let (closure, entry) = self.member_closure(&format!("{type_name}.{name}"), callable)?;
-        self.register_member(MemberKind::Method, &type_name, name, closure, Some(entry))
+        self.register_member(MemberKind::Method, &type_name, name, closure, Some(entry))?;
+        Ok(entry)
     }
 
     /// Registers a read-only property: `getter` takes the receiver and returns the value.
     pub fn property<G: Binding<MG>, MG>(&mut self, name: &str, getter: G) -> Result<()> {
+        self.property_with_entry(name, getter).map(drop)
+    }
+
+    /// [`Self::property`], also returning the getter's direct entry for the extension planner.
+    pub(crate) fn property_with_entry<G: Binding<MG>, MG>(&mut self, name: &str, getter: G) -> Result<MemberEntry> {
         self.check_member_allowed(MemberKind::Getter)?;
         let type_name = self.validated_receiver::<G, MG>()?;
         let (closure, entry) = self.member_closure(&format!("{type_name}.get.{name}"), getter)?;
-        self.register_member(MemberKind::Getter, &type_name, name, closure, Some(entry))
+        self.register_member(MemberKind::Getter, &type_name, name, closure, Some(entry))?;
+        Ok(entry)
     }
 
     /// Registers a read/write property. The setter takes the receiver and exactly one Lua value.
@@ -322,6 +334,16 @@ impl<'s> MetatableBuilder<'s> {
         getter: G,
         setter: S,
     ) -> Result<()> {
+        self.property_rw_with_entries(name, getter, setter).map(drop)
+    }
+
+    /// [`Self::property_rw`], also returning the getter's and setter's direct entries.
+    pub(crate) fn property_rw_with_entries<G: Binding<MG>, MG, S: Binding<MS>, MS>(
+        &mut self,
+        name: &str,
+        getter: G,
+        setter: S,
+    ) -> Result<(MemberEntry, MemberEntry)> {
         self.check_member_allowed(MemberKind::Getter)?;
         self.check_member_allowed(MemberKind::Setter)?;
         if self.has_explicit_index || self.has_explicit_newindex {
@@ -342,7 +364,8 @@ impl<'s> MetatableBuilder<'s> {
         let (getter_closure, getter_entry) = self.member_closure(&format!("{type_name}.get.{name}"), getter)?;
         self.register_member(MemberKind::Getter, &type_name, name, getter_closure, Some(getter_entry))?;
         let (setter_closure, setter_entry) = self.member_closure(&format!("{type_name}.set.{name}"), setter)?;
-        self.register_member(MemberKind::Setter, &type_name, name, setter_closure, Some(setter_entry))
+        self.register_member(MemberKind::Setter, &type_name, name, setter_closure, Some(setter_entry))?;
+        Ok((getter_entry, setter_entry))
     }
 
     /// Registers an already-bound function as a callable member without a native receiver

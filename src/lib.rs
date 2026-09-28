@@ -64,6 +64,7 @@ pub mod debug_name;
 pub mod diagnostics;
 pub mod direct;
 pub mod error;
+pub mod extension;
 pub mod flags;
 pub mod libraries;
 pub mod memory;

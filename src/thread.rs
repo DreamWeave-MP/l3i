@@ -272,7 +272,7 @@ impl Thread {
 
 fn message_text(error: &Error) -> String {
     match error {
-        Error::Runtime(text) | Error::Logic(text) => text.clone(),
+        Error::Runtime(text) | Error::Logic(text) | Error::Permission(text) => text.clone(),
         Error::LuaErrorOnStack => "error object left on the stack".to_owned(),
     }
 }

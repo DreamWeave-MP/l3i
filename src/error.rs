@@ -12,6 +12,9 @@ pub enum Error {
     /// The Lua error object is already on top of the stack. The native entry point that
     /// receives this re-raises that object unchanged instead of replacing it with a message.
     LuaErrorOnStack,
+    /// A capability the runtime policy did not grant, or a host facility a script may not use.
+    /// Distinct from `Runtime` so a denial is never mistaken for an operating-system failure.
+    Permission(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -24,12 +27,16 @@ impl Error {
     pub fn runtime(message: impl Into<String>) -> Self {
         Error::Runtime(message.into())
     }
+
+    pub fn permission(message: impl Into<String>) -> Self {
+        Error::Permission(message.into())
+    }
 }
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Error::Logic(message) | Error::Runtime(message) => f.write_str(message),
+            Error::Logic(message) | Error::Runtime(message) | Error::Permission(message) => f.write_str(message),
             Error::LuaErrorOnStack => f.write_str("Lua error"),
         }
     }

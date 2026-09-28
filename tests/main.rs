@@ -29,6 +29,7 @@ mod analysis;
 mod call;
 mod debug;
 mod direct;
+mod extension;
 mod iterator;
 mod libraries;
 mod memory;

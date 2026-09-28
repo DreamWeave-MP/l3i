@@ -114,6 +114,9 @@ pub(crate) struct Shared {
     /// Registered untagged userdata metatables by Rust type: the identity the receiver check
     /// compares against and a registry reference for attaching the metatable on push.
     untagged: RefCell<HashMap<TypeId, UntaggedIdentity, BuildHasherDefault<TypeIdHasher>>>,
+    /// The extension planner's direct members by plan slot: the bound member each resolved
+    /// direct slot runs, so one generic VM callback serves every planned type.
+    direct_entries: RefCell<Vec<Option<crate::bind::MemberEntry>>>,
 }
 
 /// An untagged type's registered metatable, as cached at registration.
@@ -182,6 +185,7 @@ impl Shared {
             direct_plan: RefCell::new(None),
             require_navigator: RefCell::new(None),
             untagged: RefCell::new(HashMap::default()),
+            direct_entries: RefCell::new(Vec::new()),
         }
     }
 
@@ -199,6 +203,22 @@ impl Shared {
 
     pub(crate) fn hooks(&self) -> &crate::debug::HookSlot {
         &self.hooks
+    }
+
+    /// The planned direct member at `slot`, if any.
+    #[inline]
+    pub(crate) fn direct_entry(&self, slot: u16) -> Option<crate::bind::MemberEntry> {
+        self.direct_entries.borrow().get(usize::from(slot)).copied().flatten()
+    }
+
+    /// Records the member the planned direct `slot` runs.
+    pub(crate) fn set_direct_entry(&self, slot: u16, entry: crate::bind::MemberEntry) {
+        let mut entries = self.direct_entries.borrow_mut();
+        let index = usize::from(slot);
+        if entries.len() <= index {
+            entries.resize(index + 1, None);
+        }
+        entries[index] = Some(entry);
     }
 
     /// The registered untagged metatable of the Rust type `id`, if any.

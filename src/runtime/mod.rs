@@ -10,8 +10,12 @@ mod call_scope;
 pub mod profiler;
 pub(crate) mod shared;
 
+use std::any::{Any, TypeId};
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::ffi::{CString, c_int};
 use std::hash::{BuildHasher, Hasher, RandomState};
+use std::rc::Rc;
 use std::time::Duration;
 
 use crate::error::{Error, Result};
@@ -182,6 +186,10 @@ impl RuntimeBuilder {
             #[cfg(feature = "jit")]
             native_code: None,
             buffer_cage,
+            plan: RefCell::new(None),
+            states: RefCell::new(HashMap::new()),
+            compile_options: RefCell::new(CompileOptions::default()),
+            module_members: RefCell::new(None),
         };
         // SAFETY: the state has its pointer key and callbacks; native execution must be set up
         // before any function is loaded, which nothing below this point does before it.
@@ -251,6 +259,14 @@ pub struct Runtime {
     /// outlive `lua_close`.
     #[allow(dead_code, clippy::box_collection)]
     buffer_cage: Option<Box<Box<dyn crate::memory::BufferCage>>>,
+    /// The plan this runtime was made from, for introspection; `None` for a builder-made VM.
+    plan: RefCell<Option<Rc<crate::extension::RuntimePlan>>>,
+    /// Extension-owned state by type, dropped before `lua_close`.
+    states: RefCell<HashMap<TypeId, Rc<dyn Any>>>,
+    /// The compiler options `exec` and `load_function` use; a plan sets the known libraries.
+    compile_options: RefCell<CompileOptions>,
+    /// Module members installed by a plan, for type definitions.
+    module_members: RefCell<Option<Rc<crate::extension::install_detail::ModuleMembers>>>,
 }
 
 /// The context id call scopes use for sandbox and template setup.
@@ -472,21 +488,78 @@ impl Runtime {
         Ok(frame.top_value())
     }
 
+    /// Creates a runtime from a finalised extension plan: the VM, every extension installed in
+    /// dependency order, direct dispatch, modules, and compiler metadata, published together.
+    pub fn from_plan(plan: &Rc<crate::extension::RuntimePlan>) -> Result<Runtime> {
+        crate::extension::install_detail::instantiate(plan)
+    }
+
+    /// The plan this runtime was created from, if any.
+    pub fn plan(&self) -> Option<Rc<crate::extension::RuntimePlan>> {
+        self.plan.borrow().clone()
+    }
+
+    pub(crate) fn set_plan(&self, plan: Rc<crate::extension::RuntimePlan>) {
+        *self.plan.borrow_mut() = Some(plan);
+    }
+
+    /// Stores runtime-owned state by type (one value per type), dropped before the VM closes.
+    pub fn insert_state<S: 'static>(&self, state: S) -> Rc<S> {
+        let shared = Rc::new(state);
+        self.states.borrow_mut().insert(TypeId::of::<S>(), Rc::clone(&shared) as Rc<dyn Any>);
+        shared
+    }
+
+    /// Runtime-owned state of type `S`, if stored.
+    pub fn extension_state<S: 'static>(&self) -> Option<Rc<S>> {
+        self.states.borrow().get(&TypeId::of::<S>()).and_then(crate::extension::install_detail::downcast::<S>)
+    }
+
+    /// The compiler options `exec` and `load_function` use (a plan fills in the known
+    /// libraries and userdata types).
+    pub fn compile_options(&self) -> CompileOptions {
+        self.compile_options.borrow().clone()
+    }
+
+    pub fn set_compile_options(&self, options: CompileOptions) {
+        *self.compile_options.borrow_mut() = options;
+    }
+
+    pub(crate) fn set_module_members(&self, members: Rc<crate::extension::install_detail::ModuleMembers>) {
+        *self.module_members.borrow_mut() = Some(members);
+    }
+
+    /// Luau type definitions for this runtime's plan, including installed module members.
+    pub fn type_definitions(&self) -> Option<String> {
+        let plan = self.plan()?;
+        let members = self.module_members.borrow();
+        Some(crate::extension::install_detail::render_definitions(&plan, members.as_deref()))
+    }
+
+    /// `luaL_sandbox`: globals and the standard library tables become read-only and the
+    /// globals table a safe environment. Call after every module is installed.
+    pub fn sandbox_globals(&self) {
+        // SAFETY: live main thread; luaL_sandbox raises only on out of memory.
+        unsafe { ffi::luaL_sandbox(self.state) };
+    }
+
     /// Compiles and runs `source`, which must return one function, and pins that function.
     /// The usual way to get a Lua closure into Rust hands for tests and host setup.
     pub fn load_function(&self, source: &str) -> Result<crate::value::Function> {
+        let options = self.compile_options();
         let stack = self.stack();
         stack.with_frame(|frame| {
-            let chunk = self.load(frame, "=load_function", source, &CompileOptions::default())?;
+            let chunk = self.load(frame, "=load_function", source, &options)?;
             chunk.as_function()?.invoke::<crate::value::Function, ()>(frame, ())
         })
     }
 
     /// Compiles and runs `source` on the main thread, discarding results.
     pub fn exec(&self, source: &str) -> Result<()> {
+        let options = self.compile_options();
         let stack = self.stack();
         stack.with_frame(|frame| {
-            self.load(frame, "=exec", source, &CompileOptions::default())?;
+            self.load(frame, "=exec", source, &options)?;
             // SAFETY: the chunk function is on top; pcall contains any raise.
             let _lua_call = unsafe { shared::LuaCall::enter(self.state) };
             let status = unsafe { ffi::lua_pcall(self.state, 0, 0, 0) };
@@ -506,6 +579,11 @@ pub fn caller_location(scope: &impl crate::stack::Scope) -> String {
 
 impl Drop for Runtime {
     fn drop(&mut self) {
+        // Extension state may hold pinned values; it goes first, while the VM is live, then the
+        // plan (extensions hold no Lua values).
+        self.states.borrow_mut().clear();
+        self.module_members.borrow_mut().take();
+        self.plan.borrow_mut().take();
         // Values pinned on this VM check the lifetime token before touching it; ending it first
         // turns every surviving `Value` into an inert invalid one.
         self.shared.end_lifetime();

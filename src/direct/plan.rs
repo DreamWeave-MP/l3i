@@ -74,6 +74,13 @@ impl DirectPlan {
         self.by_slot.get(usize::from(slot)).copied().flatten().map(|index| &self.entries[index as usize])
     }
 
+    /// True when `cached` names exactly `(tag, atom, kind)` in this plan: the cache-hit test for
+    /// callbacks that know the receiver's tag but not its Rust type (the extension planner's).
+    #[inline]
+    pub fn cached_slot_matches_tag(&self, cached: u16, tag: i32, atom: Atom, kind: AccessKind) -> bool {
+        self.entry(cached).is_some_and(|entry| i32::from(entry.tag) == tag && entry.atom == atom && entry.kind == kind)
+    }
+
     /// True when `cached` names exactly `(T, atom, kind)` in this plan: the cache-hit test, with
     /// no tag lookup.
     pub fn cached_slot_matches<T: Userdata>(&self, cached: u16, atom: Atom, kind: AccessKind) -> bool {
@@ -147,6 +154,31 @@ impl<'r> DirectPlanBuilder<'r> {
             member: member.to_owned(),
         });
         Ok(self)
+    }
+
+    /// Adds an entry the extension planner resolved itself (tag, atom, and identity already
+    /// known), with the same slot validation as [`Self::slot`].
+    pub(crate) fn push_resolved(&mut self, entry: PlanEntry) -> Result<()> {
+        if entry.slot == UNKNOWN_SLOT {
+            return Err(Error::logic("Direct plan slots must be above 0 (Luau's cache starts at 0)"));
+        }
+        if entry.slot > MAX_SLOT {
+            return Err(Error::logic(format!(
+                "Direct plan slot {} exceeds {MAX_SLOT}; allocate slots densely",
+                entry.slot
+            )));
+        }
+        if self.entries.iter().any(|existing| existing.slot == entry.slot) {
+            return Err(Error::logic(format!("Direct plan slot {} is used twice", entry.slot)));
+        }
+        if self.entries.iter().any(|e| e.tag == entry.tag && e.atom == entry.atom && e.kind == entry.kind) {
+            return Err(Error::logic(format!(
+                "Direct plan already maps '{}'.{} for this access kind",
+                entry.type_name, entry.member
+            )));
+        }
+        self.entries.push(entry);
+        Ok(())
     }
 
     /// Builds the dense table and installs the plan as the runtime's. A runtime takes exactly
