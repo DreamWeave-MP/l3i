@@ -5,6 +5,7 @@ use std::any::TypeId;
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap};
 use std::ffi::{CStr, c_int, c_void};
+use std::hash::{BuildHasherDefault, Hasher};
 use std::rc::{Rc, Weak};
 use std::time::{Duration, Instant};
 
@@ -110,6 +111,40 @@ pub(crate) struct Shared {
     direct_plan: crate::direct::plan::DirectPlanSlot,
     /// The host's require navigator.
     require_navigator: crate::require::NavigatorSlot,
+    /// Registered untagged userdata metatables by Rust type: the identity the receiver check
+    /// compares against and a registry reference for attaching the metatable on push.
+    untagged: RefCell<HashMap<TypeId, UntaggedIdentity, BuildHasherDefault<TypeIdHasher>>>,
+}
+
+/// An untagged type's registered metatable, as cached at registration.
+#[derive(Clone, Copy)]
+pub(crate) struct UntaggedIdentity {
+    /// `lua_topointer` of the metatable; `lua_getmetatablepointer` on a receiver compares equal
+    /// only for userdata created with it.
+    pub(crate) pointer: *const c_void,
+    /// A registry reference to the metatable, for `lua_getref`.
+    pub(crate) reference: c_int,
+}
+
+/// `TypeId` already is a hash: its `Hash` impl writes one `u64`, which this hasher passes
+/// through so a lookup costs a mask and a compare.
+#[derive(Default)]
+pub(crate) struct TypeIdHasher(u64);
+
+impl Hasher for TypeIdHasher {
+    fn write(&mut self, bytes: &[u8]) {
+        for chunk in bytes.chunks(8) {
+            let mut word = [0u8; 8];
+            word[..chunk.len()].copy_from_slice(chunk);
+            self.0 = self.0.rotate_left(5) ^ u64::from_le_bytes(word);
+        }
+    }
+    fn write_u64(&mut self, value: u64) {
+        self.0 = value;
+    }
+    fn finish(&self) -> u64 {
+        self.0
+    }
 }
 
 /// The host's tag assignments for one VM. `by_tag` answers the hot-path question ("is the
@@ -146,6 +181,7 @@ impl Shared {
             embedder_gc: RefCell::new(None),
             direct_plan: RefCell::new(None),
             require_navigator: RefCell::new(None),
+            untagged: RefCell::new(HashMap::default()),
         }
     }
 
@@ -163,6 +199,17 @@ impl Shared {
 
     pub(crate) fn hooks(&self) -> &crate::debug::HookSlot {
         &self.hooks
+    }
+
+    /// The registered untagged metatable of the Rust type `id`, if any.
+    #[inline]
+    pub(crate) fn untagged_identity(&self, id: TypeId) -> Option<UntaggedIdentity> {
+        self.untagged.borrow().get(&id).copied()
+    }
+
+    /// Records `id`'s registered untagged metatable; registration has rejected duplicates.
+    pub(crate) fn set_untagged_identity(&self, id: TypeId, identity: UntaggedIdentity) {
+        self.untagged.borrow_mut().insert(id, identity);
     }
 
     /// The tag this VM assigned to the Rust type `id`, if any.

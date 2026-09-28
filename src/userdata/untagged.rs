@@ -13,6 +13,7 @@ use super::metatable::MetatableBuilder;
 use super::{StableRef, Storage, Userdata, assert_userdata_layout, type_key};
 use crate::error::{Error, Result};
 use crate::raw::ffi;
+use crate::runtime::shared::{UntaggedIdentity, shared_of};
 use crate::runtime::Runtime;
 use crate::stack::{Frame, Scope, ValueView};
 
@@ -154,6 +155,12 @@ pub fn register<T: Userdata>(
                 ffi::lua_setfield(state, registry, name.as_ptr());
                 ffi::lua_pushvalue(state, metatable);
                 ffi::lua_setfield(state, ffi::LUA_REGISTRYINDEX, name.as_ptr());
+                // The hot-path identity and the push reference, read through `identity_of`.
+                ffi::lua_pushvalue(state, metatable);
+                let reference = ffi::lua_ref(state, -1);
+                ffi::lua_pop(state, 1);
+                let pointer = ffi::lua_topointer(state, metatable);
+                runtime.shared().set_untagged_identity(std::any::TypeId::of::<T>(), UntaggedIdentity { pointer, reference });
                 Ok(())
             })();
             if let Err(error) = configured {
@@ -165,49 +172,33 @@ pub fn register<T: Userdata>(
     })
 }
 
-/// Pushes `T`'s registered metatable if it is a read-only table; returns whether it was.
-///
-/// # Safety
-/// `state` is live with stack room for one value.
-unsafe fn push_typed_metatable<T: Userdata>(state: *mut ffi::lua_State) -> bool {
-    unsafe {
-        let kind = ffi::lua_rawgetp(state, ffi::LUA_REGISTRYINDEX, type_key::<T>());
-        kind == ffi::LUA_TTABLE && ffi::lua_getreadonly(state, -1) != 0
+/// `T`'s registered metatable in the VM that owns `state`, from the runtime's per-VM cache.
+/// One callbacks read and one hash lookup; registration is the only writer.
+#[inline]
+fn identity_of<T: Userdata>(state: *mut ffi::lua_State) -> Option<UntaggedIdentity> {
+    // SAFETY: the state is live; a VM without a runtime block has no untagged registrations.
+    let shared = unsafe { shared_of(state) };
+    if shared.is_null() {
+        return None;
     }
-}
-
-/// The identity of `T`'s registered read-only metatable, or null. Balanced on the stack.
-fn registered_identity<T: Userdata>(state: *mut ffi::lua_State) -> *const c_void {
-    // SAFETY: one push, one pop.
-    unsafe {
-        let usable = push_typed_metatable::<T>(state);
-        let identity = if usable { ffi::lua_topointer(state, -1) } else { ptr::null() };
-        ffi::lua_pop(state, 1);
-        identity
-    }
-}
-
-fn require_registered<T: Userdata>(state: *mut ffi::lua_State) -> Result<()> {
-    if registered_identity::<T>(state).is_null() {
-        return Err(Error::logic(format!("Unknown or writable untagged userdata metatable: {}", T::NAME)));
-    }
-    Ok(())
+    unsafe { (*shared).untagged_identity(std::any::TypeId::of::<T>()) }
 }
 
 /// Allocates storage, writes it, attaches `T`'s metatable, returns the view.
 fn push_storage<'s, T: Userdata>(scope: &'s impl Scope, storage: Storage<T>) -> Result<ValueView<'s>> {
     const { assert_userdata_layout::<Storage<T>>() };
     let state = scope.state();
-    require_registered::<T>(state)?;
+    let identity = identity_of::<T>(state)
+        .ok_or_else(|| Error::logic(format!("Unknown or writable untagged userdata metatable: {}", T::NAME)))?;
     // SAFETY: allocate, write immediately (Luau owns the destructor from allocation on), then
-    // attach the verified metatable. Out of memory is the only raise.
+    // attach the registered metatable. Out of memory is the only raise.
     unsafe {
         let raw = ffi::lua_newuserdatadtor(state, std::mem::size_of::<Storage<T>>(), destroy_storage::<T>);
         if raw.is_null() {
             return Err(Error::runtime("Unable to allocate untagged userdata"));
         }
         ptr::write(raw.cast::<Storage<T>>(), storage);
-        push_typed_metatable::<T>(state);
+        ffi::lua_getref(state, identity.reference);
         if ffi::lua_setmetatable(state, -2) == 0 {
             return Err(Error::logic("Unable to attach untagged userdata metatable"));
         }
@@ -232,10 +223,7 @@ fn storage<'v, T: Userdata>(value: ValueView<'v>) -> Option<&'v Storage<T>> {
         return None;
     }
     let state = value.state();
-    let expected = registered_identity::<T>(state);
-    if expected.is_null() {
-        return None;
-    }
+    let expected = identity_of::<T>(state)?.pointer;
     // SAFETY: the view proved the slot; lua_getmetatablepointer is a read with no pushes, and a
     // matching identity means only `push_storage::<T>` could have created this userdata.
     unsafe {
@@ -261,7 +249,7 @@ pub fn check<'v, T: Userdata>(value: ValueView<'v>) -> Result<&'v T> {
     test::<T>(value).ok_or_else(|| crate::diagnostics::type_error(value, T::NAME))
 }
 
-/// True when the registry currently holds `T`'s read-only metatable.
+/// True when this VM has registered `T`'s metatable.
 pub fn is_registered<T: Userdata>(frame: &Frame<'_>) -> bool {
-    !registered_identity::<T>(frame.state()).is_null()
+    identity_of::<T>(frame.state()).is_some()
 }
