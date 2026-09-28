@@ -1,8 +1,11 @@
-//! Builds Luau from the `luau/` git submodule (pinned at the 0.740 release, the commit OpenMW
+//! Builds Luau from the `luau/` git submodule (pinned at the 0.740 release, the commit `OpenMW`
 //! pins), the binder's own C additions (`csrc/extra.cpp`), and, per feature, the C++ shims over
 //! Luau's code generator and analysis libraries. Everything is compiled with `cc`, so the crate
 //! builds wherever a C++17 compiler and Cargo exist (MSVC, clang, GCC, the Android NDK, cross
 //! sysroots) with no network access at build time and nothing outside the package.
+
+// The shared CI runs `-W clippy::pedantic -D warnings`.
+#![allow(clippy::doc_markdown)]
 
 use std::env;
 use std::path::{Path, PathBuf};
@@ -65,6 +68,8 @@ fn sources(dir: &Path) -> Vec<PathBuf> {
     files
 }
 
+// A build script is one linear recipe; splitting it into functions would only scatter the order.
+#[allow(clippy::too_many_lines)]
 fn main() {
     println!("cargo:rerun-if-env-changed=LUAU_CXXFLAGS");
     println!("cargo:rerun-if-changed=luau");
@@ -80,7 +85,7 @@ fn main() {
     println!("cargo:rustc-env=LUAU_VERSION={LUAU_VERSION}");
 
     let target = env::var("TARGET").unwrap_or_default();
-    let debug = env::var("DEBUG").map(|value| value == "true").unwrap_or(false);
+    let debug = env::var("DEBUG").is_ok_and(|value| value == "true");
     let jit = env::var_os("CARGO_FEATURE_JIT").is_some();
     let analysis = env::var_os("CARGO_FEATURE_ANALYSIS").is_some();
 
@@ -153,9 +158,7 @@ fn main() {
     extra.include(&vm_include).include(&vm_src).file("csrc/extra.cpp").compile("l3iextra");
 
     if jit {
-        if target.ends_with("emscripten") {
-            panic!("native code generation (jit) is not supported on emscripten");
-        }
+        assert!(!target.ends_with("emscripten"), "native code generation (jit) is not supported on emscripten");
         luau.library(
             "luaucodegen",
             "CodeGen",
@@ -201,32 +204,41 @@ fn main() {
 /// run 8 to 15 percent faster than under GCC only when the Rust thunks and Luau's API inline into
 /// each other, and the same configuration also has the shortest clean build. Plain clang is
 /// slower than GCC at runtime, so the LTO half is not optional. `L3I_UNVERIFIED_TOOLCHAIN=1`
-/// downgrades the refusal to a warning for hosts that cannot meet the requirement.
+/// downgrades the refusal to a warning for hosts that cannot meet the requirement; docs.rs
+/// (which sets `DOCS_RS`) gets the same treatment, since it only renders documentation and
+/// cannot be given a linker configuration.
 fn toolchain_policy(base: &mut cc::Build) {
     println!("cargo:rerun-if-env-changed=L3I_UNVERIFIED_TOOLCHAIN");
+    println!("cargo:rerun-if-env-changed=DOCS_RS");
     println!("cargo:rerun-if-env-changed=CXX");
     println!("cargo:rerun-if-env-changed=CARGO_ENCODED_RUSTFLAGS");
     let compiler = base.get_compiler();
     let rustflags = env::var("CARGO_ENCODED_RUSTFLAGS").unwrap_or_default().replace('\u{1f}', " ");
     let plugin_lto = rustflags.contains("linker-plugin-lto");
-    let linker_is_clang = rustflag_value(&rustflags, "linker")
-        .is_some_and(|linker| Path::new(linker).file_name().is_some_and(|name| name.to_string_lossy().starts_with("clang")));
-    let uses_lld = rustflags.contains("-fuse-ld=lld");
+    // The linker must consume LLVM bitcode: clang driving lld (GNU and Apple targets), or
+    // lld-link itself (MSVC targets, where clang-cl compiles and rustc links with lld-link).
+    let linker = rustflag_value(&rustflags, "linker")
+        .and_then(|linker| Path::new(linker).file_stem())
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let linker_is_clang = linker.starts_with("clang");
+    let linker_is_lld_link = linker == "lld-link";
+    let uses_lld = linker_is_lld_link || rustflags.contains("-fuse-ld=lld");
 
     let problem = if !compiler.is_like_clang() {
         Some(format!("the C++ compiler is `{}`, not clang", compiler.path().display()))
     } else if !plugin_lto {
         Some("RUSTFLAGS lacks -Clinker-plugin-lto".to_string())
-    } else if !linker_is_clang {
-        Some("RUSTFLAGS lacks -Clinker=clang (the final link must run through clang)".to_string())
+    } else if !(linker_is_clang || linker_is_lld_link) {
+        Some("RUSTFLAGS lacks -Clinker=clang (or -Clinker=lld-link on MSVC targets); the final link must consume LLVM bitcode".to_string())
     } else if !uses_lld {
         Some("RUSTFLAGS lacks -Clink-arg=-fuse-ld=lld (ld.bfd cannot consume the LTO bitcode)".to_string())
     } else {
         match (llvm_major_of_clang(&compiler), llvm_major_of_rustc()) {
             (Some(clang), Some(rustc)) if clang == rustc => None,
-            (Some(clang), Some(rustc)) => {
-                Some(format!("clang is LLVM {clang} but rustc is LLVM {rustc}; cross-language LTO needs the same major"))
-            }
+            (Some(clang), Some(rustc)) => Some(format!(
+                "clang is LLVM {clang} but rustc is LLVM {rustc}; cross-language LTO needs the same major"
+            )),
             (None, _) => Some(format!("`{} --version` did not report an LLVM version", compiler.path().display())),
             (_, None) => Some("`rustc -vV` did not report an LLVM version".to_string()),
         }
@@ -237,8 +249,15 @@ fn toolchain_policy(base: &mut cc::Build) {
             // Bitcode objects, so the linker's LTO sees Luau and the Rust thunks as one module.
             base.flag("-flto=thin");
         }
+        Some(problem) if env::var_os("DOCS_RS").is_some() => {
+            println!(
+                "cargo:warning=l3i is building for docs.rs with an unverified toolchain ({problem}); documentation only"
+            );
+        }
         Some(problem) if env::var_os("L3I_UNVERIFIED_TOOLCHAIN").is_some() => {
-            println!("cargo:warning=l3i is building with an unverified toolchain ({problem}); expect slower binder hot paths, see TOOLCHAIN.md");
+            println!(
+                "cargo:warning=l3i is building with an unverified toolchain ({problem}); expect slower binder hot paths, see TOOLCHAIN.md"
+            );
         }
         Some(problem) => panic!(
             "l3i builds only with the verified toolchain ({problem}).\n\
@@ -252,10 +271,20 @@ fn toolchain_policy(base: &mut cc::Build) {
 }
 
 /// The value of `-C<name>=<value>` (or `-C <name>=<value>`) in space-separated rustflags.
+/// Unrelated flags (`-Dwarnings`, `--cfg ...`) are skipped, not treated as the end.
 fn rustflag_value<'a>(rustflags: &'a str, name: &str) -> Option<&'a str> {
-    let mut words = rustflags.split_whitespace().peekable();
+    let mut words = rustflags.split_whitespace();
     while let Some(word) = words.next() {
-        let option = if word == "-C" { words.next()? } else { word.strip_prefix("-C")? };
+        let option = if word == "-C" {
+            match words.next() {
+                Some(option) => option,
+                None => break,
+            }
+        } else if let Some(option) = word.strip_prefix("-C") {
+            option
+        } else {
+            continue;
+        };
         if let Some(value) = option.strip_prefix(name).and_then(|rest| rest.strip_prefix('=')) {
             return Some(value);
         }
@@ -314,7 +343,8 @@ fn mirror_enum(header: &str, name: &str, repr: &str, rust_name: &str) -> String 
          #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]\n#[repr({repr})]\npub enum {rust_name} {{\n"
     );
     for (index, variant) in variants.iter().enumerate() {
-        out.push_str(&format!("    {variant} = {index},\n"));
+        use std::fmt::Write;
+        writeln!(out, "    {variant} = {index},").expect("writing to a String cannot fail");
     }
     out.push_str("}\n\n");
     out

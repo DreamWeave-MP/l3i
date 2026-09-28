@@ -10,7 +10,14 @@ else; `L3I_UNVERIFIED_TOOLCHAIN=1` turns the refusal into a warning. This page r
 | C++ (Luau, `csrc/`) | `clang++`; `build.rs` adds `-flto=thin` itself | `CXX=clang++` (`.cargo/config.toml` `[env]`) |
 | Rust | `-Clinker-plugin-lto -Clinker=clang -Clink-arg=-fuse-ld=lld`, all three checked by `build.rs` | `.cargo/config.toml` `[target.*] rustflags` |
 | Both | clang and rustc on the same LLVM major (`clang++ --version`, `rustc -vV`) | checked by `build.rs` |
+| MSVC targets | `clang-cl` compiles (`CXX_x86_64-pc-windows-msvc`), rustc links with `-Clinker=lld-link` | `.cargo/config.toml` |
 | `cc` crate | `parallel` feature | `Cargo.toml` |
+
+Two exemptions: `L3I_UNVERIFIED_TOOLCHAIN=1` turns the refusal into a warning, and docs.rs (which
+sets `DOCS_RS`) is exempt automatically, since it only renders documentation and cannot be handed
+a linker configuration. Linux is the measured configuration below. The macOS entries (Homebrew
+or release LLVM, `clang` driving `ld64.lld`) and the Windows entries follow the same shape and
+are what CI runs; they were not part of the measurement.
 
 A crate that depends on l3i copies the `[env]` and `rustflags` lines into its own
 `.cargo/config.toml`: Cargo does not inherit a dependency's config. Fedora: `dnf install clang

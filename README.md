@@ -213,9 +213,10 @@ The toolchain is fixed: **clang++ for the C++ side, lld, and cross-language thin
 same LLVM major. Measured against gcc, that configuration is the only one that makes the binder
 hot paths faster (8 to 15 percent, from the Rust thunks and Luau's API inlining into each
 other) and it is also the fastest clean build. `build.rs` refuses other configurations;
-`L3I_UNVERIFIED_TOOLCHAIN=1` downgrades that to a warning. This repository's
-`.cargo/config.toml` sets everything; a dependent crate copies its `[env]` and `rustflags`
-lines. [TOOLCHAIN.md](TOOLCHAIN.md) has the measurements.
+`L3I_UNVERIFIED_TOOLCHAIN=1` downgrades that to a warning, and docs.rs is exempt. This
+repository's `.cargo/config.toml` sets everything for Linux, macOS, and MSVC targets; a
+dependent crate copies its `[env]` and `rustflags` lines. [TOOLCHAIN.md](TOOLCHAIN.md) has the
+measurements.
 
 ## Quality
 
