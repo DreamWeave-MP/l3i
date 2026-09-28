@@ -197,11 +197,19 @@ divergences.
 
 Luau is a git submodule (`luau/`, pinned at release 0.740, the commit OpenMW pins); clone with
 `--recurse-submodules` or run `git submodule update --init`. `build.rs` compiles it and the
-binder's C++ additions with `cc`: `LUAI_MAXCSTACK=8000`, three-component vectors,
+binder's C++ additions with `cc` (in parallel): `LUAI_MAXCSTACK=8000`, three-component vectors,
 `LUA_UTAG_LIMIT=254`, Luau's internal assertions in debug builds, CodeGen under `jit`, Analysis
-under `analysis`. No network access at build time and no external Lua crate; any C++17
-toolchain Cargo can drive (MSVC, clang, GCC, the Android NDK, cross sysroots) works. Hosts may
-append compiler flags through `LUAU_CXXFLAGS`. Rust 1.88 or newer.
+under `analysis`. No network access at build time and no external Lua crate. Hosts may append
+compiler flags through `LUAU_CXXFLAGS`. Rust 1.88 or newer.
+
+The toolchain is fixed: **clang++ for the C++ side, lld, and cross-language thin LTO**
+(`-Clinker-plugin-lto -Clinker=clang -Clink-arg=-fuse-ld=lld`), with clang and rustc on the
+same LLVM major. Measured against gcc, that configuration is the only one that makes the binder
+hot paths faster (8 to 15 percent, from the Rust thunks and Luau's API inlining into each
+other) and it is also the fastest clean build. `build.rs` refuses other configurations;
+`L3I_UNVERIFIED_TOOLCHAIN=1` downgrades that to a warning. This repository's
+`.cargo/config.toml` sets everything; a dependent crate copies its `[env]` and `rustflags`
+lines. [TOOLCHAIN.md](TOOLCHAIN.md) has the measurements.
 
 ## Quality
 

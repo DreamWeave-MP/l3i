@@ -86,6 +86,7 @@ fn main() {
 
     let mut base = cc::Build::new();
     base.cpp(true).std("c++17").warnings(false);
+    toolchain_policy(&mut base);
     base.define("LUAI_MAXCSTACK", Some(MAX_CSTACK.to_string().as_str()));
     base.define("LUA_VECTOR_SIZE", Some(VECTOR_SIZE.to_string().as_str()));
     base.define("LUA_UTAG_LIMIT", Some(TAG_LIMIT.to_string().as_str()));
@@ -195,6 +196,71 @@ fn main() {
 }
 
 /// Parses the `enum class` bodies the Rust IR layer mirrors and writes them to `OUT_DIR`.
+/// Enforces the verified toolchain: clang for the C++ side, cross-language thin LTO, and an LLVM
+/// major shared by clang and rustc. TOOLCHAIN.md holds the measurements: the binder's hot paths
+/// run 8 to 15 percent faster than under GCC only when the Rust thunks and Luau's API inline into
+/// each other, and the same configuration also has the shortest clean build. Plain clang is
+/// slower than GCC at runtime, so the LTO half is not optional. `L3I_UNVERIFIED_TOOLCHAIN=1`
+/// downgrades the refusal to a warning for hosts that cannot meet the requirement.
+fn toolchain_policy(base: &mut cc::Build) {
+    println!("cargo:rerun-if-env-changed=L3I_UNVERIFIED_TOOLCHAIN");
+    println!("cargo:rerun-if-env-changed=CXX");
+    println!("cargo:rerun-if-env-changed=CARGO_ENCODED_RUSTFLAGS");
+    let compiler = base.get_compiler();
+    let rustflags = env::var("CARGO_ENCODED_RUSTFLAGS").unwrap_or_default().replace('\u{1f}', " ");
+    let plugin_lto = rustflags.contains("linker-plugin-lto");
+
+    let problem = if !compiler.is_like_clang() {
+        Some(format!("the C++ compiler is `{}`, not clang", compiler.path().display()))
+    } else if !plugin_lto {
+        Some("RUSTFLAGS lacks -Clinker-plugin-lto".to_string())
+    } else {
+        match (llvm_major_of_clang(&compiler), llvm_major_of_rustc()) {
+            (Some(clang), Some(rustc)) if clang == rustc => None,
+            (Some(clang), Some(rustc)) => {
+                Some(format!("clang is LLVM {clang} but rustc is LLVM {rustc}; cross-language LTO needs the same major"))
+            }
+            (None, _) => Some(format!("`{} --version` did not report an LLVM version", compiler.path().display())),
+            (_, None) => Some("`rustc -vV` did not report an LLVM version".to_string()),
+        }
+    };
+
+    match problem {
+        None => {
+            // Bitcode objects, so the linker's LTO sees Luau and the Rust thunks as one module.
+            base.flag("-flto=thin");
+        }
+        Some(problem) if env::var_os("L3I_UNVERIFIED_TOOLCHAIN").is_some() => {
+            println!("cargo:warning=l3i is building with an unverified toolchain ({problem}); expect slower binder hot paths, see TOOLCHAIN.md");
+        }
+        Some(problem) => panic!(
+            "l3i builds only with the verified toolchain ({problem}).\n\
+             Required: clang++ as the C++ compiler (CXX=clang++), lld, and RUSTFLAGS containing\n\
+             `-Clinker-plugin-lto -Clinker=clang -Clink-arg=-fuse-ld=lld`, with clang and rustc on the\n\
+             same LLVM major. This repository's .cargo/config.toml sets them; a dependent crate adds the\n\
+             same lines to its own .cargo/config.toml. Set L3I_UNVERIFIED_TOOLCHAIN=1 to build anyway\n\
+             with a warning. TOOLCHAIN.md has the measurements behind this policy."
+        ),
+    }
+}
+
+/// The LLVM major of the C++ compiler, from `clang++ --version`.
+fn llvm_major_of_clang(compiler: &cc::Tool) -> Option<u32> {
+    let output = compiler.to_command().arg("--version").output().ok()?;
+    let text = String::from_utf8_lossy(&output.stdout);
+    let after = text.split("clang version ").nth(1)?;
+    after.split(|c: char| !c.is_ascii_digit()).next()?.parse().ok()
+}
+
+/// The LLVM major rustc was built against, from `rustc -vV`.
+fn llvm_major_of_rustc() -> Option<u32> {
+    let rustc = env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
+    let output = std::process::Command::new(rustc).arg("-vV").output().ok()?;
+    let text = String::from_utf8_lossy(&output.stdout);
+    let after = text.split("LLVM version: ").nth(1)?;
+    after.split('.').next()?.trim().parse().ok()
+}
+
 fn generate_ir_enums(codegen_include: &Path) {
     let ir_data = std::fs::read_to_string(codegen_include.join("Luau/IrData.h")).expect("IrData.h");
     let options = std::fs::read_to_string(codegen_include.join("Luau/CodeGenOptions.h")).expect("CodeGenOptions.h");

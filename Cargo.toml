@@ -37,6 +37,7 @@ include = [
     "README.md",
     "CHANGELOG.md",
     "BENCHMARKS.md",
+    "TOOLCHAIN.md",
     "QUESTIONABLE.md",
     "LICENSE-MIT",
     "LICENSE-APACHE",
