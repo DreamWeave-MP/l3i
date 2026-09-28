@@ -180,9 +180,11 @@ runtime-owned extension state (`InstallContext::insert_state`) drops before the 
 
 The shapes the migration audits asked for, all allocation-free at the boundary:
 `convert::BytesView` accepts a Lua string or a Luau buffer without normalising;
-`BufferView::with_bytes`/`with_bytes_mut`/`range` give scoped zero-copy slices under the same
-rules `lua_tobuffer` imposes on C; `packed::BufferPack` reads and writes fixed layouts in one
-bounds check, and `packed::PackedScalar` puts a semantic value into one Luau integer (4-bit
+`BufferView` reads and writes through bounds-checked copies (`read`, `write`, `fill`, `range`,
+scalar helpers), never a safe slice, because a script can pass one buffer to two parameters;
+the zero-copy slices are `unsafe fn bytes_unchecked`/`bytes_mut_unchecked` for trusted code
+that proves nothing writes the buffer meanwhile, the rules `lua_tobuffer` imposes on C;
+`packed::BufferPack` reads and writes fixed layouts through a copy in one bounds check, and `packed::PackedScalar` puts a semantic value into one Luau integer (4-bit
 kind, 4 flag bits, 56-bit payload) with the kind checked on every read; `options::Options`
 reads camelCase option tables strictly (unknown keys are errors, required keys and field paths
 are named); `sequence::Sequence` and `sequence::Stream` show a Rust collection to scripts as

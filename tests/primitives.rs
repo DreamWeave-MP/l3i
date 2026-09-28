@@ -18,7 +18,7 @@ fn bytes_view_reads_strings_and_buffers_without_copying() {
     let runtime = Runtime::new().unwrap();
     let total = runtime
         .bind_function("dreamweave.tests.total", |bytes: BytesView| {
-            bytes.with_bytes(|b| b.iter().map(|&x| i64::from(x)).sum::<i64>())
+            bytes.to_vec().iter().map(|&x| i64::from(x)).sum::<i64>()
         })
         .unwrap();
     runtime.set_global("total", &total).unwrap();
@@ -30,9 +30,10 @@ fn bytes_view_reads_strings_and_buffers_without_copying() {
         .unwrap();
     // Mutable scoped access and ranges.
     let fill = runtime
-        .bind_function("dreamweave.tests.fill", |mut buffer: BufferView, value: i64| {
-            buffer.with_bytes_mut(|bytes| bytes.fill(value as u8));
-            buffer.range(1, 2).unwrap().with_bytes(|b| i64::from(b[0]) + i64::from(b[1]))
+        .bind_function("dreamweave.tests.fill", |buffer: BufferView, value: i64| {
+            buffer.fill(0, buffer.len(), value as u8)?;
+            let range = buffer.range(1, 2)?;
+            Ok::<i64, l3i::Error>(i64::from(range.read_u8(0)?) + i64::from(range.read_u8(1)?))
         })
         .unwrap();
     runtime.set_global("fill", &fill).unwrap();
@@ -185,6 +186,29 @@ fn sequences_index_iterate_measure_and_materialise() {
             )
             .unwrap();
     }
+}
+
+#[test]
+fn one_buffer_in_two_parameters_is_two_views_that_may_read_and_write_each_other() {
+    // A script can hand the same buffer to both parameters; the safe API copies, so writing
+    // through one view while reading the other is ordinary, never an aliased slice.
+    let runtime = Runtime::new().unwrap();
+    let swap = runtime
+        .bind_function("dreamweave.tests.swap", |a: BufferView, b: BufferView| {
+            let first = a.read_u8(0)?;
+            b.write_u8(0, a.read_u8(1)?)?;
+            a.write_u8(1, first)?;
+            b.write_packed(0, &0x0201u16)?;
+            a.read_packed::<u16>(0)
+        })
+        .unwrap();
+    runtime.set_global("swap", &swap).unwrap();
+    runtime
+        .exec(
+            "local b = buffer.create(2) buffer.writeu8(b, 0, 9) buffer.writeu8(b, 1, 4) \
+             assert(swap(b, b) == 513) assert(buffer.readu8(b, 0) == 1 and buffer.readu8(b, 1) == 2)",
+        )
+        .unwrap();
 }
 
 // ---- packed scalars --------------------------------------------------------------------------

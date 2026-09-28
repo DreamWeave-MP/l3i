@@ -25,17 +25,37 @@ pub trait BufferPack: Sized {
     fn write_to(&self, bytes: &mut [u8]) -> Result<()>;
 }
 
+/// Packed values up to this size cross through a stack scratch; larger ones through a `Vec`.
+const SCRATCH: usize = 64;
+
 impl BufferView<'_> {
-    /// Reads a packed `T` at `offset`, bounds checked once.
+    /// Reads a packed `T` at `offset`, bounds checked once. The bytes are copied out first, so
+    /// `read_from` never sees a slice of Luau's storage.
     pub fn read_packed<T: BufferPack>(&self, offset: usize) -> Result<T> {
-        let range = self.range(offset, T::SIZE)?;
-        range.with_bytes(T::read_from)
+        if T::SIZE <= SCRATCH {
+            let mut scratch = [0u8; SCRATCH];
+            self.read(offset, &mut scratch[..T::SIZE])?;
+            T::read_from(&scratch[..T::SIZE])
+        } else {
+            let mut bytes = vec![0u8; T::SIZE];
+            self.read(offset, &mut bytes)?;
+            T::read_from(&bytes)
+        }
     }
 
-    /// Writes a packed `T` at `offset`, bounds checked once.
+    /// Writes a packed `T` at `offset`, bounds checked once; `write_to` fills a scratch that is
+    /// then copied in.
     pub fn write_packed<T: BufferPack>(&self, offset: usize, value: &T) -> Result<()> {
-        let mut range = self.range(offset, T::SIZE)?;
-        range.with_bytes_mut(|bytes| value.write_to(bytes))
+        self.check_packed(offset, T::SIZE)?;
+        if T::SIZE <= SCRATCH {
+            let mut scratch = [0u8; SCRATCH];
+            value.write_to(&mut scratch[..T::SIZE])?;
+            self.write(offset, &scratch[..T::SIZE])
+        } else {
+            let mut bytes = vec![0u8; T::SIZE];
+            value.write_to(&mut bytes)?;
+            self.write(offset, &bytes)
+        }
     }
 }
 

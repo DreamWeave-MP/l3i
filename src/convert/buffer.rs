@@ -8,10 +8,13 @@ use crate::stack::{Scope, Type, ValueView};
 /// A borrowed view of a Luau `buffer`: raw bytes owned by Luau, mutable from scripts and from
 /// the host.
 ///
-/// Access goes through bounds-checked copies rather than a `&mut [u8]`, so several views of one
-/// buffer (or a view held across a call back into Lua that also writes the buffer) never form
-/// aliasing Rust references. Bounds failures use the buffer library's own wording so a host
-/// method and `buffer.writef32` fail identically.
+/// Safe access goes through bounds-checked copies, never a Rust slice: a script can pass one
+/// buffer to two parameters, so two views of the same storage are ordinary, and safe code
+/// could otherwise hold a `&[u8]` while writing the bytes through the other view or through
+/// a call back into Lua. The slice forms exist for trusted code that can prove neither
+/// happens and are `unsafe` ([`Self::bytes_unchecked`], [`Self::bytes_mut_unchecked`]).
+/// Bounds failures use the buffer library's own wording so a host method and `buffer.writef32`
+/// fail identically.
 #[derive(Clone, Copy, Debug)]
 pub struct BufferView<'v> {
     data: *mut u8,
@@ -36,6 +39,11 @@ impl<'v> BufferView<'v> {
         Ok(())
     }
 
+    /// The bounds check alone, so a packed write fails before its encoder runs.
+    pub(crate) fn check_packed(&self, offset: usize, size: usize) -> Result<()> {
+        self.check(offset, size)
+    }
+
     /// Copies `dst.len()` bytes starting at `offset`.
     pub fn read(&self, offset: usize, dst: &mut [u8]) -> Result<()> {
         self.check(offset, dst.len())?;
@@ -49,6 +57,14 @@ impl<'v> BufferView<'v> {
     pub fn write(&self, offset: usize, src: &[u8]) -> Result<()> {
         self.check(offset, src.len())?;
         unsafe { std::ptr::copy_nonoverlapping(src.as_ptr(), self.data.add(offset), src.len()) };
+        Ok(())
+    }
+
+    /// Sets `len` bytes from `offset` to `value`.
+    pub fn fill(&self, offset: usize, len: usize, value: u8) -> Result<()> {
+        self.check(offset, len)?;
+        // SAFETY: bounds verified; a byte store into Luau's writable storage, no reference held.
+        unsafe { std::ptr::write_bytes(self.data.add(offset), value, len) };
         Ok(())
     }
 
@@ -139,25 +155,33 @@ impl<'v> FromView<'v> for BufferView<'v> {
 }
 
 impl BufferView<'_> {
-    /// Runs `body` over the buffer's bytes without copying. The slice lives only inside `body`,
-    /// which must not call back into Lua (a script could write the buffer under the slice) and
-    /// must not touch another view of the same buffer mutably: those are the same rules
-    /// `lua_tobuffer` imposes on C, stated once here.
+    /// The buffer's bytes as a slice, without copying.
+    ///
+    /// # Safety
+    ///
+    /// While the slice lives, nothing may write the buffer: no call back into Lua (a script
+    /// could write it), no write through this or any other view of the same storage (a script
+    /// can pass one buffer to several parameters). Those are the rules `lua_tobuffer` imposes
+    /// on C; the caller proves them for the slice's whole lifetime.
     #[inline]
-    pub fn with_bytes<R>(&self, body: impl FnOnce(&[u8]) -> R) -> R {
+    #[must_use]
+    pub unsafe fn bytes_unchecked(&self) -> &[u8] {
         // SAFETY: the buffer's storage is stable and at least `len` bytes while the slot that
-        // produced this view keeps it alive; `body` cannot re-enter Lua by contract.
-        let bytes = unsafe { std::slice::from_raw_parts(self.data.cast_const(), self.len) };
-        body(bytes)
+        // produced this view keeps it alive; the caller upholds the no-write contract above.
+        unsafe { std::slice::from_raw_parts(self.data.cast_const(), self.len) }
     }
 
-    /// Runs `body` over the buffer's bytes mutably, without copying; see [`Self::with_bytes`]
-    /// for the contract. Takes `&mut self` so two mutable slices cannot come from one view.
+    /// The buffer's bytes as a mutable slice, without copying.
+    ///
+    /// # Safety
+    ///
+    /// As [`Self::bytes_unchecked`], and additionally nothing may read the buffer through
+    /// another view while the slice lives.
     #[inline]
-    pub fn with_bytes_mut<R>(&mut self, body: impl FnOnce(&mut [u8]) -> R) -> R {
-        // SAFETY: as `with_bytes`; Luau buffers are writable byte storage.
-        let bytes = unsafe { std::slice::from_raw_parts_mut(self.data, self.len) };
-        body(bytes)
+    #[must_use]
+    pub unsafe fn bytes_mut_unchecked(&mut self) -> &mut [u8] {
+        // SAFETY: as `bytes_unchecked`; Luau buffers are writable byte storage.
+        unsafe { std::slice::from_raw_parts_mut(self.data, self.len) }
     }
 
     /// A bounds-checked sub-range as a new view over the same storage.
@@ -188,17 +212,40 @@ impl BytesView<'_> {
         self.len() == 0
     }
 
-    /// Runs `body` over the bytes; see [`BufferView::with_bytes`] for the buffer contract.
-    #[inline]
-    pub fn with_bytes<R>(&self, body: impl FnOnce(&[u8]) -> R) -> R {
+    /// Copies `dst.len()` bytes starting at `offset`.
+    pub fn read(&self, offset: usize, dst: &mut [u8]) -> Result<()> {
         match self {
-            BytesView::String(bytes) => body(bytes),
-            BytesView::Buffer(buffer) => buffer.with_bytes(body),
+            BytesView::String(bytes) => {
+                let end = offset.checked_add(dst.len()).filter(|end| *end <= bytes.len());
+                let Some(end) = end else { return Err(Error::runtime("buffer access out of bounds")) };
+                dst.copy_from_slice(&bytes[offset..end]);
+                Ok(())
+            }
+            BytesView::Buffer(buffer) => buffer.read(offset, dst),
+        }
+    }
+
+    /// The bytes as a slice, without copying.
+    ///
+    /// # Safety
+    ///
+    /// For a buffer, [`BufferView::bytes_unchecked`]'s contract; a string's bytes are immutable
+    /// and carry no condition.
+    #[inline]
+    #[must_use]
+    pub unsafe fn bytes_unchecked(&self) -> &[u8] {
+        match self {
+            BytesView::String(bytes) => bytes,
+            // SAFETY: forwarded contract.
+            BytesView::Buffer(buffer) => unsafe { buffer.bytes_unchecked() },
         }
     }
 
     pub fn to_vec(&self) -> Vec<u8> {
-        self.with_bytes(<[u8]>::to_vec)
+        match self {
+            BytesView::String(bytes) => bytes.to_vec(),
+            BytesView::Buffer(buffer) => buffer.to_vec(),
+        }
     }
 }
 

@@ -182,7 +182,10 @@ impl Renderer {
     fn create_texture(&self, width: i64, height: i64, pixels: BytesView<'_>) -> Result<Owned<Texture>> {
         let (width, height) = (dimension("width", width)?, dimension("height", height)?);
         let mut renderer = self.state.borrow_mut()?;
-        let id = pixels.with_bytes(|bytes| renderer.create_texture(width, height, bytes)).map_err(raster_error)?;
+        // SAFETY: the renderer is a pure Rust crate holding no Lua handle, so nothing writes the
+        // buffer while it reads the slice; the slice ends with this statement.
+        let bytes = unsafe { pixels.bytes_unchecked() };
+        let id = renderer.create_texture(width, height, bytes).map_err(raster_error)?;
         drop(renderer);
         Ok(Owned(Texture { state: Rc::clone(&self.state), id, width, height, freed: Cell::new(false) }))
     }
@@ -274,16 +277,16 @@ impl Frame {
         clip: Packed<ClipRect>,
     ) -> Result<()> {
         let texture = texture.map(Texture::id).transpose()?;
-        vertices.with_bytes(|vertex_bytes| {
-            indices.with_bytes(|index_bytes| {
-                let mesh = dream_soft_render::Mesh {
-                    vertices: self::vertices(vertex_bytes)?,
-                    indices: self::indices(index_bytes)?,
-                    texture,
-                };
-                self.draw(|frame| frame.mesh(mesh, self::clip(clip)).map_err(raster_error))
-            })
-        })
+        // SAFETY: both slices are read-only and live only through `draw`, which hands them to
+        // the renderer, a pure Rust crate holding no Lua handle: nothing writes either buffer
+        // meanwhile, and the same buffer in both parameters is two shared slices.
+        let (vertex_bytes, index_bytes) = unsafe { (vertices.bytes_unchecked(), indices.bytes_unchecked()) };
+        let mesh = dream_soft_render::Mesh {
+            vertices: self::vertices(vertex_bytes)?,
+            indices: self::indices(index_bytes)?,
+            texture,
+        };
+        self.draw(|frame| frame.mesh(mesh, self::clip(clip)).map_err(raster_error))
     }
 
     fn finish(&self) -> Result<()> {
@@ -321,7 +324,9 @@ impl Texture {
         let (x, y) = (dimension("x", x)?, dimension("y", y)?);
         let (width, height) = (dimension("width", width)?, dimension("height", height)?);
         let mut renderer = self.state.borrow_mut()?;
-        pixels.with_bytes(|bytes| renderer.update_texture(id, x, y, width, height, bytes)).map_err(raster_error)
+        // SAFETY: as `create_texture`: the renderer holds no Lua handle and the slice ends here.
+        let bytes = unsafe { pixels.bytes_unchecked() };
+        renderer.update_texture(id, x, y, width, height, bytes).map_err(raster_error)
     }
 
     fn free(&self) -> Result<()> {

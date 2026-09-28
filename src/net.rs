@@ -281,7 +281,10 @@ fn payload_range<R>(
             offset.saturating_add(length)
         )));
     }
-    Ok(bytes.with_bytes(|all| body(&all[offset..offset + length])))
+    // SAFETY: `body` is this module's own code handing the range to dream-net, which holds no
+    // Lua handle and no other view; nothing writes the buffer while the slice lives.
+    let all = unsafe { bytes.bytes_unchecked() };
+    Ok(body(&all[offset..offset + length]))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -319,7 +322,9 @@ impl Server {
 
     fn poll_into(&self, mut buffer: BufferView<'_>) -> Result<Polled> {
         let mut server = self.inner.borrow_mut();
-        let polled = buffer.with_bytes_mut(|bytes| server.poll_into(bytes));
+        // SAFETY: dream-net fills the slice and returns; it holds no Lua handle and no other
+        // view of the buffer exists in this call, so the slice is the only access while it lives.
+        let polled = server.poll_into(unsafe { buffer.bytes_mut_unchecked() });
         match polled {
             Ok(None) => Ok(Polled::Empty),
             Ok(Some(ServerEvent::Message { peer, event, channel, payload })) => Ok(Polled::Message {
@@ -419,7 +424,8 @@ impl NetClient {
 
     fn poll_into(&self, mut buffer: BufferView<'_>) -> Result<Polled> {
         let mut client = self.inner.borrow_mut();
-        let polled = buffer.with_bytes_mut(|bytes| client.poll_into(bytes));
+        // SAFETY: as the server's `poll_into`.
+        let polled = client.poll_into(unsafe { buffer.bytes_mut_unchecked() });
         match polled {
             Ok(None) => Ok(Polled::Empty),
             Ok(Some(ClientEvent::Message { event, channel, payload })) => Ok(Polled::Message {
@@ -737,10 +743,12 @@ fn describe_client(d: &mut ExtensionDescriptor) {
         .doc("A transport client; `net.client{}` needs the network.transport capability.");
     client
         .method("connect", |client: &NetClient, token: BytesView| {
-            let token: [u8; dream_net::CONNECT_TOKEN_BYTES] =
-                token.with_bytes(|bytes| bytes.try_into().ok()).ok_or_else(|| {
-                    Error::runtime(format!("dream.net: a connect token is {} bytes", dream_net::CONNECT_TOKEN_BYTES))
-                })?;
+            let mut bytes = [0u8; dream_net::CONNECT_TOKEN_BYTES];
+            if token.len() != bytes.len() {
+                return Err(Error::runtime(format!("dream.net: a connect token is {} bytes", bytes.len())));
+            }
+            token.read(0, &mut bytes)?;
+            let token = bytes;
             client.inner.borrow_mut().connect(&token).map_err(config_error)
         })
         .signature("(self, token: buffer | string)");
