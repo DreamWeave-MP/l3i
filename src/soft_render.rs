@@ -42,7 +42,7 @@ use dream_soft_render::{SoftwareRenderer, TextureId};
 use crate::convert::{BufferView, BytesView, Vector3};
 use crate::direct::field::{DirectField, FieldValue};
 use crate::error::{Error, Result};
-use crate::extension::{Extension, ExtensionDescriptor, InstallContext, TagPolicy};
+use crate::extension::{Extension, ExtensionDescriptor, TagPolicy};
 use crate::packed::Packed;
 use crate::raster::{ClipRect, Color};
 use crate::source::CompileConstant;
@@ -402,66 +402,31 @@ impl Extension for SoftRenderExtension {
 
     fn describe(&self, d: &mut ExtensionDescriptor) -> Result<()> {
         d.requires(crate::raster::EXTENSION_ID);
-        let renderer = d.userdata::<Renderer>("dream.soft_render.Renderer");
+        let mut renderer = d.userdata::<Renderer>("dream.soft_render.Renderer");
         renderer.tag(TagPolicy::Preferred).doc("A CPU rasterizer: one surface, a texture store.");
-        renderer.method("beginFrame").signature("(self, width: number, height: number): dream_soft_render_Frame");
         renderer
-            .method("createTexture")
-            .signature("(self, width: number, height: number, pixels: buffer | string): dream_soft_render_Texture");
-        renderer.method("readInto").signature("(self, buffer: buffer, offset: number?): number");
-        renderer.field("width").signature("number");
-        renderer.field("height").signature("number");
-
-        let frame = d.userdata::<Frame>("dream.soft_render.Frame");
-        frame.tag(TagPolicy::Required).doc("One frame of immediate drawing; stale after finish().");
-        frame.method("clear").signature("(self, color: integer)");
-        frame.method("rect").signature("(self, min: vector, max: vector, color: integer, clip: integer)");
-        frame.method("image").signature(
-            "(self, min: vector, max: vector, uvMin: vector, uvMax: vector, texture: dream_soft_render_Texture, tint: integer, clip: integer)",
-        );
-        frame
-            .method("mesh")
-            .signature("(self, vertices: buffer, indices: buffer, texture: dream_soft_render_Texture?, clip: integer)");
-        frame.method("finish").signature("(self)");
-        frame.field("width").signature("number");
-        frame.field("height").signature("number");
-
-        let texture = d.userdata::<Texture>("dream.soft_render.Texture");
-        texture.tag(TagPolicy::Preferred).doc("Premultiplied RGBA8 pixels in the renderer's store.");
-        texture
-            .method("update")
-            .signature("(self, x: number, y: number, width: number, height: number, pixels: buffer | string)");
-        texture.method("free").signature("(self)");
-        texture.field("width").signature("number");
-        texture.field("height").signature("number");
-
-        let vertices = d.userdata::<Vertices>("dream.soft_render.Vertices");
-        vertices.tag(TagPolicy::Required).doc("Packs vertices into buffers; natively lowered under jit.");
-        vertices
-            .method("write")
-            .signature("(self, buffer: buffer, offset: number, pos: vector, uv: vector, color: integer): number");
-        #[cfg(feature = "jit")]
-        d.native_hooks(lowering::VertexWriter);
-
-        d.module(MODULE).doc("A software rendering device.");
-        d.memory_category(EXTENSION_ID);
-        Ok(())
-    }
-
-    fn install(&self, cx: &mut InstallContext<'_>) -> Result<()> {
-        cx.userdata::<Renderer>("dream.soft_render.Renderer")?
-            .method("beginFrame", |r: &Renderer, width: i64, height: i64| r.begin_frame(width, height))?
+            .method("beginFrame", |r: &Renderer, width: i64, height: i64| r.begin_frame(width, height))
+            .signature("(self, width: number, height: number): dream_soft_render_Frame");
+        renderer
             .method("createTexture", |r: &Renderer, width: i64, height: i64, pixels: BytesView| {
                 r.create_texture(width, height, pixels)
-            })?
-            .method("readInto", |r: &Renderer, buffer: BufferView, offset: Option<i64>| r.read_into(buffer, offset))?
-            .field::<RendererWidth>("width")?
-            .field::<RendererHeight>("height")?;
-        cx.userdata::<Frame>("dream.soft_render.Frame")?
-            .method("clear", |f: &Frame, color: Packed<Color>| f.clear(color))?
+            })
+            .signature("(self, width: number, height: number, pixels: buffer | string): dream_soft_render_Texture");
+        renderer
+            .method("readInto", |r: &Renderer, buffer: BufferView, offset: Option<i64>| r.read_into(buffer, offset))
+            .signature("(self, buffer: buffer, offset: number?): number");
+        renderer.field::<RendererWidth>("width").signature("number");
+        renderer.field::<RendererHeight>("height").signature("number");
+
+        let mut frame = d.userdata::<Frame>("dream.soft_render.Frame");
+        frame.tag(TagPolicy::Required).doc("One frame of immediate drawing; stale after finish().");
+        frame.method("clear", |f: &Frame, color: Packed<Color>| f.clear(color)).signature("(self, color: integer)");
+        frame
             .method("rect", |f: &Frame, min: Vector3, max: Vector3, color: Packed<Color>, clip: Packed<ClipRect>| {
                 f.rect(min, max, color, clip)
-            })?
+            })
+            .signature("(self, min: vector, max: vector, color: integer, clip: integer)");
+        frame
             .method(
                 "image",
                 |f: &Frame,
@@ -472,42 +437,59 @@ impl Extension for SoftRenderExtension {
                  texture: &Texture,
                  tint: Packed<Color>,
                  clip: Packed<ClipRect>| f.image(min, max, uv_min, uv_max, texture, tint, clip),
-            )?
+            )
+            .signature(
+                "(self, min: vector, max: vector, uvMin: vector, uvMax: vector, texture: dream_soft_render_Texture, tint: integer, clip: integer)",
+            );
+        frame
             .method(
                 "mesh",
                 |f: &Frame, vertices: BufferView, indices: BufferView, texture: Option<&Texture>, clip: Packed<ClipRect>| {
                     f.mesh(vertices, indices, texture, clip)
                 },
-            )?
-            .method("finish", |f: &Frame| f.finish())?
-            .field::<FrameWidth>("width")?
-            .field::<FrameHeight>("height")?;
-        cx.userdata::<Texture>("dream.soft_render.Texture")?
+            )
+            .signature("(self, vertices: buffer, indices: buffer, texture: dream_soft_render_Texture?, clip: integer)");
+        frame.method("finish", |f: &Frame| f.finish()).signature("(self)");
+        frame.field::<FrameWidth>("width").signature("number");
+        frame.field::<FrameHeight>("height").signature("number");
+
+        let mut texture = d.userdata::<Texture>("dream.soft_render.Texture");
+        texture.tag(TagPolicy::Preferred).doc("Premultiplied RGBA8 pixels in the renderer's store.");
+        texture
             .method("update", |t: &Texture, x: i64, y: i64, width: i64, height: i64, pixels: BytesView| {
                 t.update(x, y, width, height, pixels)
-            })?
-            .method("free", |t: &Texture| t.free())?
-            .field::<TextureWidth>("width")?
-            .field::<TextureHeight>("height")?;
-        cx.userdata::<Vertices>("dream.soft_render.Vertices")?.method(
-            "write",
-            |_: &Vertices, buffer: BufferView, offset: f64, pos: Vector3, uv: Vector3, color: Packed<Color>| {
-                write_vertex(buffer, offset, pos, uv, color)
-            },
-        )?;
-        let mut module = cx.module(MODULE)?;
-        module
-            .function("renderer", || Owned(Renderer::new()))?
-            .function("vertices", || Owned(Vertices))?
+            })
+            .signature("(self, x: number, y: number, width: number, height: number, pixels: buffer | string)");
+        texture.method("free", |t: &Texture| t.free()).signature("(self)");
+        texture.field::<TextureWidth>("width").signature("number");
+        texture.field::<TextureHeight>("height").signature("number");
+
+        let mut vertices = d.userdata::<Vertices>("dream.soft_render.Vertices");
+        vertices.tag(TagPolicy::Required).doc("Packs vertices into buffers; natively lowered under jit.");
+        vertices
+            .method(
+                "write",
+                |_: &Vertices, buffer: BufferView, offset: f64, pos: Vector3, uv: Vector3, color: Packed<Color>| {
+                    write_vertex(buffer, offset, pos, uv, color)
+                },
+            )
+            .signature("(self, buffer: buffer, offset: number, pos: vector, uv: vector, color: integer): number");
+        #[cfg(feature = "jit")]
+        d.native_hooks(lowering::VertexWriter);
+
+        d.module(MODULE)
+            .doc("A software rendering device.")
+            .function("renderer", || Owned(Renderer::new()))
+            .function("vertices", || Owned(Vertices))
             .function("premultiply", |c: Packed<Color>| {
                 let c = c.0;
                 Color::from_packed(dream_soft_render::Color::from_rgba_unmultiplied(c.r, c.g, c.b, c.a).to_packed())
                     .pack()
-            })?
-            .constant("MAX_SURFACE_PIXELS", CompileConstant::Number(dream_soft_render::MAX_SURFACE_PIXELS as f64))?
-            .constant("MAX_TEXTURE_BYTES", CompileConstant::Number(dream_soft_render::MAX_TEXTURE_BYTES as f64))?
-            .constant("VERTEX_BYTES", CompileConstant::Number(VERTEX_BYTES as f64))?;
-        module.finish()?;
+            })
+            .constant("MAX_SURFACE_PIXELS", CompileConstant::Number(dream_soft_render::MAX_SURFACE_PIXELS as f64))
+            .constant("MAX_TEXTURE_BYTES", CompileConstant::Number(dream_soft_render::MAX_TEXTURE_BYTES as f64))
+            .constant("VERTEX_BYTES", CompileConstant::Number(VERTEX_BYTES as f64));
+        d.memory_category(EXTENSION_ID);
         Ok(())
     }
 }

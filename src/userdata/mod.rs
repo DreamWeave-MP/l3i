@@ -181,6 +181,14 @@ impl<T: Userdata> crate::bind::Return for Owned<T> {
     }
 }
 
+/// Pushing an `Owned<T>` by reference clones the payload into the new instance (a module value
+/// set at install, a table field); returning one from a bound function moves it.
+impl<T: Userdata + Clone> crate::convert::Push for Owned<T> {
+    fn push_into<'s, S: crate::stack::Scope>(&self, scope: &'s S) -> Result<ValueView<'s>> {
+        push_owned(scope, self.0.clone())
+    }
+}
+
 /// Pushes `value` as a new Lua-owned userdata of whichever path this VM registered `T` on.
 pub fn push_owned<'s, T: Userdata>(scope: &'s impl crate::stack::Scope, value: T) -> Result<ValueView<'s>> {
     match tagged::tag_of::<T>(scope) {

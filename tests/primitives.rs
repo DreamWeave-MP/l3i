@@ -5,7 +5,7 @@ use std::cell::Cell;
 
 use l3i::bind::Call;
 use l3i::convert::{BufferView, BytesView, Integer};
-use l3i::extension::{Extension, ExtensionDescriptor, InstallContext, RuntimePlan, RuntimePolicy};
+use l3i::extension::{Extension, ExtensionDescriptor, RuntimePlan, RuntimePolicy};
 use l3i::options::{FromOptions, Options};
 use l3i::packed::{BufferPack, Packed, PackedScalar};
 use l3i::sequence::{Sequence, SequenceSource, Stream, StreamSource};
@@ -152,22 +152,13 @@ impl Extension for Views {
     fn describe(&self, d: &mut ExtensionDescriptor) -> Result<()> {
         d.sequence::<Numbers>("dreamweave.tests.Numbers").tag(l3i::extension::TagPolicy::Preferred);
         d.stream::<Countdown>("dreamweave.tests.Countdown").tag(l3i::extension::TagPolicy::Never);
-        d.module("@dream/views");
-        Ok(())
-    }
-
-    fn install(&self, cx: &mut InstallContext<'_>) -> Result<()> {
-        cx.sequence::<Numbers>("dreamweave.tests.Numbers")?;
-        cx.stream::<Countdown>("dreamweave.tests.Countdown")?;
-        let mut module = cx.module("@dream/views")?;
-        module
+        d.module("@dream/views")
             .function("numbers", |call: &Call, count: i64| {
                 Sequence::push(call, Numbers((1..=count).map(|n| n * 10).collect())).map(l3i::value::Value::store)?
-            })?
+            })
             .function("countdown", |call: &Call, from: i64| {
                 Stream::push(call, Countdown(from)).map(l3i::value::Value::store)?
-            })?;
-        module.finish()?;
+            });
         Ok(())
     }
 }

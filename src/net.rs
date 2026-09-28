@@ -521,171 +521,112 @@ impl Extension for NetExtension {
     }
 
     fn describe(&self, d: &mut ExtensionDescriptor) -> Result<()> {
-        let schema = d.userdata::<NetSchema>("dream.net.Schema");
-        schema.tag(TagPolicy::Never).doc("A frozen wire schema: channels, events, fingerprint.");
-        schema.getter("version").signature("number");
-        schema.getter("fingerprint").signature("string");
-        schema.getter("eventCount").signature("number");
-        schema.getter("channelCount").signature("number");
-        schema.method("eventId").signature("(self, name: string): number?");
-        schema.method("channelId").signature("(self, name: string): number?");
-        schema.method("eventName").signature("(self, id: number): string?");
-        schema.method("channelName").signature("(self, id: number): string?");
-        schema.method("maxPayload").signature("(self, eventId: number): number?");
-        schema.method("fingerprintHalves").signature("(self): (number, number)");
-
-        let server = d.userdata::<Server>("dream.net.Server");
-        server
-            .tag(TagPolicy::Preferred)
-            .doc("The host's transport server; created in Rust, the private key stays there.");
-        server.method("update").signature("(self)");
-        server.method("pollInto").signature("(self, buffer: buffer): (string?, number, ...any)");
-        server.method("sendEvent").signature(
-            "(self, peer: number, eventId: number, payload: buffer | string, offset: number?, length: number?)",
-        );
-        server
-            .method("broadcast")
-            
-            .signature("(self, eventId: number, payload: buffer | string, offset: number?, length: number?): number");
-        server.method("broadcastExcept").signature(
-            "(self, peer: number, eventId: number, payload: buffer | string, offset: number?, length: number?): number",
-        );
-        server.method("flush").signature("(self)");
-        server.method("disconnect").signature("(self, peer: number)");
-        server.method("disconnectAll").signature("(self)");
-        server.method("peers").signature("(self): { number }");
-        server.method("clientId").signature("(self, peer: number): number?");
-        server.method("clientAddress").signature("(self, peer: number): string?");
-        server.method("peerRtt").signature("(self, peer: number): number?");
-        server.method("peerJitter").signature("(self, peer: number): number?");
-        server.method("peerPacketLoss").signature("(self, peer: number): number?");
-        server.method("peerSentKbps").signature("(self, peer: number): number?");
-        server.method("peerReceivedKbps").signature("(self, peer: number): number?");
-        server.method("peerAckedKbps").signature("(self, peer: number): number?");
-        server.method("counters").signature("(self, peer: number): { [string]: number }?");
-        server.method("memoryUsage").signature("(self): { [string]: number }");
-        server.getter("numConnected").signature("number");
-        server.getter("maxClients").signature("number");
-        server.getter("address").signature("string");
-
-        let client = d.userdata::<NetClient>("dream.net.Client");
-        client
-            .tag(TagPolicy::Preferred)
-            .doc("A transport client; `net.client{}` needs the network.transport capability.");
-        client.method("connect").signature("(self, token: buffer | string)");
-        client.method("disconnect").signature("(self)");
-        client.method("update").signature("(self)");
-        client.method("pollInto").signature("(self, buffer: buffer): (string?, number, ...any)");
-        client
-            .method("sendEvent")
-            
-            .signature("(self, eventId: number, payload: buffer | string, offset: number?, length: number?)");
-        client.method("flush").signature("(self)");
-        client.method("counters").signature("(self): { [string]: number }?");
-        client.method("memoryUsage").signature("(self): { [string]: number }");
-        client.getter("status").signature("string");
-        client.getter("port").signature("number");
-        client.getter("serverAddress").signature("string?");
-        client.field("connected").signature("boolean");
-        client.field("rtt").signature("number?");
-        client.field("jitter").signature("number?");
-        client.field("packetLoss").signature("number?");
-        client.field("sentKbps").signature("number?");
-        client.field("receivedKbps").signature("number?");
-        client.field("ackedKbps").signature("number?");
-
-        d.module(MODULE).doc("dream-net transport: schemas, clients, and the host's server handles.");
+        describe_schema(d);
+        describe_server(d);
+        describe_client(d);
+        d.module(MODULE)
+            .doc("dream-net transport: schemas, clients, and the host's server handles.")
+            .function("schema", build_schema)
+            .constant(
+                "CONNECT_TOKEN_BYTES",
+                crate::source::CompileConstant::Number(dream_net::CONNECT_TOKEN_BYTES as f64),
+            )
+            .constant(
+                "MAX_EVENT_PAYLOAD",
+                crate::source::CompileConstant::Number(f64::from(dream_net::schema::MAX_EVENT_PAYLOAD)),
+            )
+            .constant("MAX_CHANNELS", crate::source::CompileConstant::Number(dream_net::schema::MAX_CHANNELS as f64));
         d.optional_capability(TRANSPORT_CAPABILITY);
         d.memory_category("dream.net");
         Ok(())
     }
 
+    /// `net.client{}` depends on the runtime's capabilities, so it binds here.
     fn install(&self, cx: &mut InstallContext<'_>) -> Result<()> {
-        install_schema(cx)?;
-        install_server(cx)?;
-        install_client(cx)?;
-        self.install_module(cx)
-    }
-}
-
-impl NetExtension {
-    fn install_module(&self, cx: &mut InstallContext<'_>) -> Result<()> {
         let transport_allowed = cx.has_capability(TRANSPORT_CAPABILITY);
         let clock = Rc::clone(&self.clock);
-        let mut module = cx.module(MODULE)?;
-        module
-            .function("schema", build_schema)?
-            .function("client", move |call: &Call, options: ValueView| -> Result<Owned<NetClient>> {
-                if !transport_allowed {
-                    return Err(Error::permission(format!(
-                        "net.client requires the '{TRANSPORT_CAPABILITY}' capability, which this runtime does not grant"
-                    )));
-                }
-                let (bind, schema) = Options::read(call, options, "net.client", |o| {
-                    let bind: Option<String> = o.optional("bind")?;
-                    let schema: crate::value::Value = o.required("schema")?;
-                    let schema = o.frame().with_frame(|frame| {
-                        let view = schema.push_to(frame)?;
-                        crate::userdata::check_receiver::<NetSchema>(view)
-                            .map(|s| s.0.clone())
-                            .map_err(|_| Error::runtime("net.client.schema: expected a dream.net.Schema"))
-                    })?;
-                    Ok((bind.unwrap_or_else(|| "0.0.0.0:0".to_owned()), schema))
+        cx.module(MODULE)?.function("client", move |call: &Call, options: ValueView| -> Result<Owned<NetClient>> {
+            if !transport_allowed {
+                return Err(Error::permission(format!(
+                    "net.client requires the '{TRANSPORT_CAPABILITY}' capability, which this runtime does not grant"
+                )));
+            }
+            let (bind, schema) = Options::read(call, options, "net.client", |o| {
+                let bind: Option<String> = o.optional("bind")?;
+                let schema: crate::value::Value = o.required("schema")?;
+                let schema = o.frame().with_frame(|frame| {
+                    let view = schema.push_to(frame)?;
+                    crate::userdata::check_receiver::<NetSchema>(view)
+                        .map(|s| s.0.clone())
+                        .map_err(|_| Error::runtime("net.client.schema: expected a dream.net.Schema"))
                 })?;
-                let bind_address = bind.parse().map_err(|e| Error::runtime(format!("net.client.bind: {e}")))?;
-                let config = ClientConfig { bind_address, transport: TransportConfig::default() };
-                let client = Client::new(config, schema, clock()).map_err(config_error)?;
-                Ok(Owned(NetClient::new(client, Rc::clone(&clock))))
-            })?
-            .constant(
-                "CONNECT_TOKEN_BYTES",
-                crate::source::CompileConstant::Number(dream_net::CONNECT_TOKEN_BYTES as f64),
-            )?
-            .constant(
-                "MAX_EVENT_PAYLOAD",
-                crate::source::CompileConstant::Number(f64::from(dream_net::schema::MAX_EVENT_PAYLOAD)),
-            )?
-            .constant("MAX_CHANNELS", crate::source::CompileConstant::Number(dream_net::schema::MAX_CHANNELS as f64))?;
-        module.finish()?;
+                Ok((bind.unwrap_or_else(|| "0.0.0.0:0".to_owned()), schema))
+            })?;
+            let bind_address = bind.parse().map_err(|e| Error::runtime(format!("net.client.bind: {e}")))?;
+            let config = ClientConfig { bind_address, transport: TransportConfig::default() };
+            let client = Client::new(config, schema, clock()).map_err(config_error)?;
+            Ok(Owned(NetClient::new(client, Rc::clone(&clock))))
+        })?;
         Ok(())
     }
 }
 
-fn install_schema(cx: &mut InstallContext<'_>) -> Result<()> {
-    cx.userdata::<NetSchema>("dream.net.Schema")?
-        .getter("version", |s: &NetSchema| i64::from(s.0.schema_version()))?
-        .getter("fingerprint", |s: &NetSchema| s.0.fingerprint().to_string())?
-        .getter("eventCount", |s: &NetSchema| s.0.events().len() as i64)?
-        .getter("channelCount", |s: &NetSchema| s.0.channels().len() as i64)?
-        .method("eventId", |s: &NetSchema, name: &str| s.0.event_id(name).map(|id| Integer(i64::from(id.0))))?
-        .method("channelId", |s: &NetSchema, name: &str| s.0.channel_id(name).map(|id| Integer(i64::from(id.0))))?
+fn describe_schema(d: &mut ExtensionDescriptor) {
+    let mut schema = d.userdata::<NetSchema>("dream.net.Schema");
+    schema.tag(TagPolicy::Never).doc("A frozen wire schema: channels, events, fingerprint.");
+    schema.getter("version", |s: &NetSchema| i64::from(s.0.schema_version())).signature("number");
+    schema.getter("fingerprint", |s: &NetSchema| s.0.fingerprint().to_string()).signature("string");
+    schema.getter("eventCount", |s: &NetSchema| s.0.events().len() as i64).signature("number");
+    schema.getter("channelCount", |s: &NetSchema| s.0.channels().len() as i64).signature("number");
+    schema
+        .method("eventId", |s: &NetSchema, name: &str| s.0.event_id(name).map(|id| Integer(i64::from(id.0))))
+        .signature("(self, name: string): number?");
+    schema
+        .method("channelId", |s: &NetSchema, name: &str| s.0.channel_id(name).map(|id| Integer(i64::from(id.0))))
+        .signature("(self, name: string): number?");
+    schema
         .method("eventName", |s: &NetSchema, id: i64| -> Option<String> {
             u32::try_from(id).ok().and_then(|id| s.0.event(EventTypeId(id))).map(|e| e.name.clone())
-        })?
+        })
+        .signature("(self, id: number): string?");
+    schema
         .method("channelName", |s: &NetSchema, id: i64| -> Option<String> {
             u8::try_from(id).ok().and_then(|id| s.0.channel(ChannelId(id))).map(|c| c.name().to_owned())
-        })?
+        })
+        .signature("(self, id: number): string?");
+    schema
         .method("maxPayload", |s: &NetSchema, id: i64| -> Option<Integer> {
             u32::try_from(id).ok().and_then(|id| s.0.event(EventTypeId(id))).map(|e| Integer(i64::from(e.max_payload)))
-        })?
+        })
+        .signature("(self, eventId: number): number?");
+    schema
         .method("fingerprintHalves", |s: &NetSchema| {
             let (hi, lo) = s.0.fingerprint().halves();
             (Integer(hi as i64), Integer(lo as i64))
-        })?
-        .metamethod("__tostring", |s: &NetSchema| {
-            format!("dream.net.Schema(v{}, {})", s.0.schema_version(), s.0.fingerprint())
-        })?;
-
-    Ok(())
+        })
+        .signature("(self): (number, number)");
+    schema.metamethod("__tostring", |s: &NetSchema| {
+        format!("dream.net.Schema(v{}, {})", s.0.schema_version(), s.0.fingerprint())
+    });
 }
 
-fn install_server(cx: &mut InstallContext<'_>) -> Result<()> {
-    cx.userdata::<Server>("dream.net.Server")?
+// One declaration per member reads best as one list, however long.
+#[allow(clippy::too_many_lines)]
+fn describe_server(d: &mut ExtensionDescriptor) {
+    let mut server = d.userdata::<Server>("dream.net.Server");
+    server
+        .tag(TagPolicy::Preferred)
+        .doc("The host's transport server; created in Rust, the private key stays there.");
+    server
         .method("update", |server: &Server| {
             let now = (server.clock)();
             server.inner.borrow_mut().update(now);
-        })?
-        .method("pollInto", |server: &Server, buffer: BufferView| server.poll_into(buffer))?
+        })
+        .signature("(self)");
+    server
+        .method("pollInto", |server: &Server, buffer: BufferView| server.poll_into(buffer))
+        .signature("(self, buffer: buffer): (string?, number, ...any)");
+    server
         .method(
             "sendEvent",
             |server: &Server, peer: i64, event: i64, payload: BytesView, offset: Option<i64>, length: Option<i64>| {
@@ -695,7 +636,9 @@ fn install_server(cx: &mut InstallContext<'_>) -> Result<()> {
                 })?
                 .map_err(send_error)
             },
-        )?
+        )
+        .signature("(self, peer: number, eventId: number, payload: buffer | string, offset: number?, length: number?)");
+    server
         .method(
             "broadcast",
             |server: &Server, event: i64, payload: BytesView, offset: Option<i64>, length: Option<i64>| {
@@ -704,7 +647,9 @@ fn install_server(cx: &mut InstallContext<'_>) -> Result<()> {
                     .map(|refused| Integer(refused as i64))
                     .map_err(send_error)
             },
-        )?
+        )
+        .signature("(self, eventId: number, payload: buffer | string, offset: number?, length: number?): number");
+    server
         .method(
             "broadcastExcept",
             |server: &Server, peer: i64, event: i64, payload: BytesView, offset: Option<i64>, length: Option<i64>| {
@@ -715,10 +660,16 @@ fn install_server(cx: &mut InstallContext<'_>) -> Result<()> {
                 .map(|refused| Integer(refused as i64))
                 .map_err(send_error)
             },
-        )?
-        .method("flush", |server: &Server| server.inner.borrow_mut().flush())?
-        .method("disconnect", |server: &Server, peer: i64| server.inner.borrow_mut().disconnect(peer_from_int(peer)))?
-        .method("disconnectAll", |server: &Server| server.inner.borrow_mut().disconnect_all())?
+        )
+        .signature(
+            "(self, peer: number, eventId: number, payload: buffer | string, offset: number?, length: number?): number",
+        );
+    server.method("flush", |server: &Server| server.inner.borrow_mut().flush()).signature("(self)");
+    server
+        .method("disconnect", |server: &Server, peer: i64| server.inner.borrow_mut().disconnect(peer_from_int(peer)))
+        .signature("(self, peer: number)");
+    server.method("disconnectAll", |server: &Server| server.inner.borrow_mut().disconnect_all()).signature("(self)");
+    server
         .method("peers", |server: &Server, call: &Call| {
             let peers: Vec<PeerId> = server.inner.borrow().peers().collect();
             let table = Table::new(call, peers.len(), 0)?;
@@ -731,54 +682,79 @@ fn install_server(cx: &mut InstallContext<'_>) -> Result<()> {
                 Ok(())
             })?;
             Ok::<Table, Error>(table)
-        })?
+        })
+        .signature("(self): { number }");
+    server
         .method("clientId", |server: &Server, peer: i64| {
             server.inner.borrow().client_id(peer_from_int(peer)).map(|id| Integer(id as i64))
-        })?
+        })
+        .signature("(self, peer: number): number?");
+    server
         .method("clientAddress", |server: &Server, peer: i64| {
             server.inner.borrow().client_address(peer_from_int(peer)).map(|a| a.to_string())
-        })?
-        .method("peerRtt", |server: &Server, peer: i64| server.stat(peer, |s| s.rtt))?
-        .method("peerJitter", |server: &Server, peer: i64| server.stat(peer, |s| s.jitter))?
-        .method("peerPacketLoss", |server: &Server, peer: i64| server.stat(peer, |s| s.packet_loss))?
-        .method("peerSentKbps", |server: &Server, peer: i64| server.stat(peer, |s| s.sent_kbps))?
-        .method("peerReceivedKbps", |server: &Server, peer: i64| server.stat(peer, |s| s.received_kbps))?
-        .method("peerAckedKbps", |server: &Server, peer: i64| server.stat(peer, |s| s.acked_kbps))?
+        })
+        .signature("(self, peer: number): string?");
+    server.method("peerRtt", |server: &Server, peer: i64| server.stat(peer, |s| s.rtt)).signature("(self, peer: number): number?");
+    server
+        .method("peerJitter", |server: &Server, peer: i64| server.stat(peer, |s| s.jitter))
+        .signature("(self, peer: number): number?");
+    server
+        .method("peerPacketLoss", |server: &Server, peer: i64| server.stat(peer, |s| s.packet_loss))
+        .signature("(self, peer: number): number?");
+    server
+        .method("peerSentKbps", |server: &Server, peer: i64| server.stat(peer, |s| s.sent_kbps))
+        .signature("(self, peer: number): number?");
+    server
+        .method("peerReceivedKbps", |server: &Server, peer: i64| server.stat(peer, |s| s.received_kbps))
+        .signature("(self, peer: number): number?");
+    server
+        .method("peerAckedKbps", |server: &Server, peer: i64| server.stat(peer, |s| s.acked_kbps))
+        .signature("(self, peer: number): number?");
+    server
         .method("counters", |server: &Server, call: &Call, peer: i64| -> Result<Option<Table>> {
             match server.inner.borrow().counters(peer_from_int(peer)) {
                 Some(counters) => counters_table(call, &counters).map(Some),
                 None => Ok(None),
             }
-        })?
-        .method("memoryUsage", |server: &Server, call: &Call| {
-            memory_table(call, &server.inner.borrow().memory_usage())
-        })?
-        .getter("numConnected", |server: &Server| server.inner.borrow().num_connected() as i64)?
-        .getter("maxClients", |server: &Server| server.inner.borrow().max_clients() as i64)?
-        .getter("address", |server: &Server| server.inner.borrow().address().to_string())?
-        .metamethod("__tostring", |server: &Server| {
-            let inner = server.inner.borrow();
-            format!("dream.net.Server({}, {} connected)", inner.address(), inner.num_connected())
-        })?;
-
-    Ok(())
+        })
+        .signature("(self, peer: number): { [string]: number }?");
+    server
+        .method("memoryUsage", |server: &Server, call: &Call| memory_table(call, &server.inner.borrow().memory_usage()))
+        .signature("(self): { [string]: number }");
+    server.getter("numConnected", |server: &Server| server.inner.borrow().num_connected() as i64).signature("number");
+    server.getter("maxClients", |server: &Server| server.inner.borrow().max_clients() as i64).signature("number");
+    server.getter("address", |server: &Server| server.inner.borrow().address().to_string()).signature("string");
+    server.metamethod("__tostring", |server: &Server| {
+        let inner = server.inner.borrow();
+        format!("dream.net.Server({}, {} connected)", inner.address(), inner.num_connected())
+    });
 }
 
-fn install_client(cx: &mut InstallContext<'_>) -> Result<()> {
-    cx.userdata::<NetClient>("dream.net.Client")?
+fn describe_client(d: &mut ExtensionDescriptor) {
+    let mut client = d.userdata::<NetClient>("dream.net.Client");
+    client
+        .tag(TagPolicy::Preferred)
+        .doc("A transport client; `net.client{}` needs the network.transport capability.");
+    client
         .method("connect", |client: &NetClient, token: BytesView| {
             let token: [u8; dream_net::CONNECT_TOKEN_BYTES] =
                 token.with_bytes(|bytes| bytes.try_into().ok()).ok_or_else(|| {
                     Error::runtime(format!("dream.net: a connect token is {} bytes", dream_net::CONNECT_TOKEN_BYTES))
                 })?;
             client.inner.borrow_mut().connect(&token).map_err(config_error)
-        })?
-        .method("disconnect", |client: &NetClient| client.inner.borrow_mut().disconnect())?
+        })
+        .signature("(self, token: buffer | string)");
+    client.method("disconnect", |client: &NetClient| client.inner.borrow_mut().disconnect()).signature("(self)");
+    client
         .method("update", |client: &NetClient| {
             let now = (client.clock)();
             client.inner.borrow_mut().update(now);
-        })?
-        .method("pollInto", |client: &NetClient, buffer: BufferView| client.poll_into(buffer))?
+        })
+        .signature("(self)");
+    client
+        .method("pollInto", |client: &NetClient, buffer: BufferView| client.poll_into(buffer))
+        .signature("(self, buffer: buffer): (string?, number, ...any)");
+    client
         .method(
             "sendEvent",
             |client: &NetClient, event: i64, payload: BytesView, offset: Option<i64>, length: Option<i64>| {
@@ -786,30 +762,33 @@ fn install_client(cx: &mut InstallContext<'_>) -> Result<()> {
                 payload_range(payload, offset, length, |bytes| client.inner.borrow_mut().send(event, bytes))?
                     .map_err(send_error)
             },
-        )?
-        .method("flush", |client: &NetClient| client.inner.borrow_mut().flush())?
+        )
+        .signature("(self, eventId: number, payload: buffer | string, offset: number?, length: number?)");
+    client.method("flush", |client: &NetClient| client.inner.borrow_mut().flush()).signature("(self)");
+    client
         .method("counters", |client: &NetClient, call: &Call| -> Result<Option<Table>> {
             match client.inner.borrow().counters() {
                 Some(counters) => counters_table(call, &counters).map(Some),
                 None => Ok(None),
             }
-        })?
-        .method("memoryUsage", |client: &NetClient, call: &Call| {
-            memory_table(call, &client.inner.borrow().memory_usage())
-        })?
-        .getter("status", |client: &NetClient| client.status_name())?
-        .getter("port", |client: &NetClient| i64::from(client.inner.borrow().port()))?
-        .getter("serverAddress", |client: &NetClient| client.inner.borrow().server_address().map(|a| a.to_string()))?
-        .field::<ConnectedField>("connected")?
-        .field::<RttField>("rtt")?
-        .field::<JitterField>("jitter")?
-        .field::<PacketLossField>("packetLoss")?
-        .field::<SentKbpsField>("sentKbps")?
-        .field::<ReceivedKbpsField>("receivedKbps")?
-        .field::<AckedKbpsField>("ackedKbps")?
-        .metamethod("__tostring", |client: &NetClient| format!("dream.net.Client({})", client.status_name()))?;
-
-    Ok(())
+        })
+        .signature("(self): { [string]: number }?");
+    client
+        .method("memoryUsage", |client: &NetClient, call: &Call| memory_table(call, &client.inner.borrow().memory_usage()))
+        .signature("(self): { [string]: number }");
+    client.getter("status", |client: &NetClient| client.status_name()).signature("string");
+    client.getter("port", |client: &NetClient| i64::from(client.inner.borrow().port())).signature("number");
+    client
+        .getter("serverAddress", |client: &NetClient| client.inner.borrow().server_address().map(|a| a.to_string()))
+        .signature("string?");
+    client.field::<ConnectedField>("connected").signature("boolean");
+    client.field::<RttField>("rtt").signature("number?");
+    client.field::<JitterField>("jitter").signature("number?");
+    client.field::<PacketLossField>("packetLoss").signature("number?");
+    client.field::<SentKbpsField>("sentKbps").signature("number?");
+    client.field::<ReceivedKbpsField>("receivedKbps").signature("number?");
+    client.field::<AckedKbpsField>("ackedKbps").signature("number?");
+    client.metamethod("__tostring", |client: &NetClient| format!("dream.net.Client({})", client.status_name()));
 }
 
 /// `Delivery` names as scripts spell them.

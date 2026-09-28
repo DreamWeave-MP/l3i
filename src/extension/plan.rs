@@ -47,7 +47,7 @@ impl ResolvedMember {
 }
 
 /// A userdata type after ownership and augmentations merged.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct ResolvedUserdata {
     pub key: String,
     pub type_id: TypeId,
@@ -58,6 +58,24 @@ pub struct ResolvedUserdata {
     pub tag: Option<RuntimeTag>,
     pub members: Vec<ResolvedMember>,
     pub doc: Option<String>,
+    pub(crate) installers: Vec<super::install::SharedInstaller>,
+    pub(crate) fields: Vec<(String, super::install::SharedFieldRegistrar)>,
+    pub(crate) registrar: super::install::Registrar,
+}
+
+impl std::fmt::Debug for ResolvedUserdata {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ResolvedUserdata")
+            .field("key", &self.key)
+            .field("type_id", &self.type_id)
+            .field("type_name", &self.type_name)
+            .field("owner", &self.owner)
+            .field("policy", &self.policy)
+            .field("tag", &self.tag)
+            .field("members", &self.members)
+            .field("doc", &self.doc)
+            .finish_non_exhaustive()
+    }
 }
 
 impl ResolvedUserdata {
@@ -72,7 +90,7 @@ impl ResolvedUserdata {
 }
 
 /// A module after planning.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct ResolvedModule {
     pub path: String,
     pub frozen: bool,
@@ -80,6 +98,22 @@ pub struct ResolvedModule {
     pub doc: Option<String>,
     /// The compatibility global the policy exposes it as, if any.
     pub global: Option<String>,
+    pub(crate) functions: Vec<(String, super::install::SharedModuleFunction)>,
+    pub(crate) constants: Vec<(String, crate::source::CompileConstant)>,
+}
+
+impl std::fmt::Debug for ResolvedModule {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ResolvedModule")
+            .field("path", &self.path)
+            .field("frozen", &self.frozen)
+            .field("provider", &self.provider)
+            .field("doc", &self.doc)
+            .field("global", &self.global)
+            .field("functions", &self.functions.iter().map(|(name, _)| name).collect::<Vec<_>>())
+            .field("constants", &self.constants)
+            .finish()
+    }
 }
 
 /// Collects extensions, services, and policy into a [`RuntimePlan`].
@@ -173,6 +207,8 @@ impl RuntimePlanBuilder {
                     provider: module.provider,
                     doc: module.doc.clone(),
                     global,
+                    functions: module.functions.clone(),
+                    constants: module.constants.clone(),
                 });
             }
         }
@@ -433,6 +469,9 @@ fn merge_userdata(descriptors: &[ExtensionDescriptor], order: &[usize]) -> Resul
                 tag: None,
                 members: Vec::new(),
                 doc: decl.doc.clone(),
+                installers: Vec::new(),
+                fields: Vec::new(),
+                registrar: decl.registrar,
             };
             add_members(&mut resolved, decl)?;
             by_key.insert(decl.key.clone(), resolved);
@@ -473,6 +512,8 @@ fn merge_userdata(descriptors: &[ExtensionDescriptor], order: &[usize]) -> Resul
 }
 
 fn add_members(resolved: &mut ResolvedUserdata, decl: &UserdataDecl) -> Result<()> {
+    resolved.installers.extend(decl.installers.iter().cloned());
+    resolved.fields.extend(decl.fields.iter().cloned());
     for member in &decl.members {
         if let Some(existing) = resolved.members.iter().find(|m| m.name == member.name) {
             // A getter and a setter of one name are a pair; anything else collides.

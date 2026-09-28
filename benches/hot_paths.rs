@@ -462,30 +462,15 @@ impl l3i::extension::Extension for PlannedExtension {
     }
 
     fn describe(&self, d: &mut l3i::extension::ExtensionDescriptor) -> Result<()> {
-        let planned = d.userdata::<Planned>("dream.bench.Planned");
+        let mut planned = d.userdata::<Planned>("dream.bench.Planned");
         planned.tag(self.tag);
-        planned.method("get");
-        planned.getter("value");
-        planned.method("slow");
+        planned.method("get", |p: &Planned| p.value.get());
+        planned.getter("value", |p: &Planned| p.value.get());
+        planned.method("slow", |p: &Planned| p.value.get());
         if self.tag != l3i::extension::TagPolicy::Never {
-            planned.field("field");
+            planned.field::<PlannedValue>("field");
         }
-        d.module("@dream/bench");
-        Ok(())
-    }
-
-    fn install(&self, cx: &mut l3i::extension::InstallContext<'_>) -> Result<()> {
-        let mut planned = cx.userdata::<Planned>("dream.bench.Planned")?;
-        planned
-            .method("get", |p: &Planned| p.value.get())?
-            .getter("value", |p: &Planned| p.value.get())?
-            .method("slow", |p: &Planned| p.value.get())?;
-        if self.tag != l3i::extension::TagPolicy::Never {
-            planned.field::<PlannedValue>("field")?;
-        }
-        let mut module = cx.module("@dream/bench")?;
-        module.function("new", |v: f64| l3i::userdata::Owned(Planned { value: Cell::new(v) }))?;
-        module.finish()?;
+        d.module("@dream/bench").function("new", |v: f64| l3i::userdata::Owned(Planned { value: Cell::new(v) }));
         Ok(())
     }
 }

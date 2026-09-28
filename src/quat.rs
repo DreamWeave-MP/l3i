@@ -39,7 +39,7 @@
 
 use crate::convert::Vector3;
 use crate::error::Result;
-use crate::extension::{Extension, ExtensionDescriptor, InstallContext};
+use crate::extension::{Extension, ExtensionDescriptor};
 use crate::packed::{Packed, PackedScalar};
 use crate::source::CompileConstant;
 
@@ -280,46 +280,43 @@ impl Extension for QuatExtension {
     }
 
     fn describe(&self, d: &mut ExtensionDescriptor) -> Result<()> {
-        d.module("@dream/quat").doc("Rotations as packed integers.");
+        let module = d.module("@dream/quat");
+        module
+            .doc("Rotations as packed integers.")
+            .constant("IDENTITY", CompileConstant::Integer(Quaternion::pack(Quat::IDENTITY).bits()))
+            .function("axisAngle", |axis: Vector3, angle: f64| Quaternion::pack(Quat::from_axis_angle(from_vec3(axis), angle)))
+            .function("fromXYZW", |x: f64, y: f64, z: f64, w: f64| Quaternion::pack(Quat { x, y, z, w }.normalize()))
+            .function("toXYZW", |q: Packed<Quaternion>| (q.0.0.x, q.0.0.y, q.0.0.z, q.0.0.w))
+            .function("mul", |a: Packed<Quaternion>, b: Packed<Quaternion>| Quaternion::pack(a.0.0 * b.0.0))
+            .function("inverse", |q: Packed<Quaternion>| Quaternion::pack(q.0.0.inverse()))
+            .function("slerp", |a: Packed<Quaternion>, b: Packed<Quaternion>, t: f64| Quaternion::pack(a.0.0.slerp(b.0.0, t)))
+            .function("rotate", |q: Packed<Quaternion>, v: Vector3| to_vec3(q.0.0.rotate(from_vec3(v))))
+            .function("angleTo", |a: Packed<Quaternion>, b: Packed<Quaternion>| a.0.0.angle_to(b.0.0))
+            .function("key", |q: Packed<Quaternion>, flags: i64| AnimationKey::pack(q.0.0, flags as u8))
+            .function("keyRotation", |k: Packed<AnimationKey>| Quaternion::pack(k.0.rotation))
+            .function("keyFlags", |k: Packed<AnimationKey>| i64::from(k.0.flags));
         #[cfg(feature = "jit")]
         {
-            let receiver = d.userdata::<lowering::Math>("dream.quat.Math");
+            module.function("math", || crate::userdata::Owned(lowering::Math));
+            let mut receiver = d.userdata::<lowering::Math>("dream.quat.Math");
             receiver.tag(crate::extension::TagPolicy::Required).doc("Natively lowered rotation operations.");
-            receiver.method("rotate").signature("(self, q: number, v: vector): vector");
-            receiver.method("mul").signature("(self, a: number, b: number): number");
-            receiver.method("key").signature("(self, q: number, flags: number): number");
-            receiver.method("keyRotation").signature("(self, k: number): number");
-            receiver.method("keyFlags").signature("(self, k: number): number");
+            receiver
+                .method("rotate", |_: &lowering::Math, q: Packed<Quaternion>, v: Vector3| lowering::rotate(q, v))
+                .signature("(self, q: number, v: vector): vector");
+            receiver
+                .method("mul", |_: &lowering::Math, a: Packed<Quaternion>, b: Packed<Quaternion>| lowering::mul(a, b))
+                .signature("(self, a: number, b: number): number");
+            receiver
+                .method("key", |_: &lowering::Math, q: Packed<Quaternion>, flags: i64| AnimationKey::pack(q.0.0, flags as u8))
+                .signature("(self, q: number, flags: number): number");
+            receiver
+                .method("keyRotation", |_: &lowering::Math, k: Packed<AnimationKey>| Quaternion::pack(k.0.rotation))
+                .signature("(self, k: number): number");
+            receiver
+                .method("keyFlags", |_: &lowering::Math, k: Packed<AnimationKey>| i64::from(k.0.flags))
+                .signature("(self, k: number): number");
             d.native_hooks(lowering::Lowering);
         }
-        Ok(())
-    }
-
-    fn install(&self, cx: &mut InstallContext<'_>) -> Result<()> {
-        #[cfg(feature = "jit")]
-        cx.userdata::<lowering::Math>("dream.quat.Math")?
-            .method("rotate", |_: &lowering::Math, q: Packed<Quaternion>, v: Vector3| lowering::rotate(q, v))?
-            .method("mul", |_: &lowering::Math, a: Packed<Quaternion>, b: Packed<Quaternion>| lowering::mul(a, b))?
-            .method("key", |_: &lowering::Math, q: Packed<Quaternion>, flags: i64| AnimationKey::pack(q.0.0, flags as u8))?
-            .method("keyRotation", |_: &lowering::Math, k: Packed<AnimationKey>| Quaternion::pack(k.0.rotation))?
-            .method("keyFlags", |_: &lowering::Math, k: Packed<AnimationKey>| i64::from(k.0.flags))?;
-        let mut module = cx.module("@dream/quat")?;
-        module
-            .constant("IDENTITY", CompileConstant::Integer(Quaternion::pack(Quat::IDENTITY).bits()))?
-            .function("axisAngle", |axis: Vector3, angle: f64| Quaternion::pack(Quat::from_axis_angle(from_vec3(axis), angle)))?
-            .function("fromXYZW", |x: f64, y: f64, z: f64, w: f64| Quaternion::pack(Quat { x, y, z, w }.normalize()))?
-            .function("toXYZW", |q: Packed<Quaternion>| (q.0.0.x, q.0.0.y, q.0.0.z, q.0.0.w))?
-            .function("mul", |a: Packed<Quaternion>, b: Packed<Quaternion>| Quaternion::pack(a.0.0 * b.0.0))?
-            .function("inverse", |q: Packed<Quaternion>| Quaternion::pack(q.0.0.inverse()))?
-            .function("slerp", |a: Packed<Quaternion>, b: Packed<Quaternion>, t: f64| Quaternion::pack(a.0.0.slerp(b.0.0, t)))?
-            .function("rotate", |q: Packed<Quaternion>, v: Vector3| to_vec3(q.0.0.rotate(from_vec3(v))))?
-            .function("angleTo", |a: Packed<Quaternion>, b: Packed<Quaternion>| a.0.0.angle_to(b.0.0))?
-            .function("key", |q: Packed<Quaternion>, flags: i64| AnimationKey::pack(q.0.0, flags as u8))?
-            .function("keyRotation", |k: Packed<AnimationKey>| Quaternion::pack(k.0.rotation))?
-            .function("keyFlags", |k: Packed<AnimationKey>| i64::from(k.0.flags))?;
-        #[cfg(feature = "jit")]
-        module.function("math", || crate::userdata::Owned(lowering::Math))?;
-        module.finish()?;
         Ok(())
     }
 }

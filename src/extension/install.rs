@@ -1,8 +1,9 @@
-//! The install phase: extensions supply callables for the members they declared, the planner
-//! registers metatables, direct dispatch, modules, and compiler metadata, then publishes.
+//! The install phase: the planner registers the declared metatables with their bound members,
+//! direct dispatch, the declared modules, then runs each extension's `install` for what needs
+//! the live VM, freezes the modules, derives compiler metadata, and publishes.
 
 use std::any::{Any, TypeId};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::ffi::CString;
 use std::rc::Rc;
 
@@ -10,7 +11,7 @@ use super::plan::{ResolvedModule, ResolvedUserdata, RuntimePlan};
 use super::{MemberKind, debug_prefix};
 use crate::bind::{Binding, MemberEntry};
 use crate::convert::Push;
-use crate::direct::field::{DirectField, FieldValue};
+use crate::direct::field::FieldValue;
 use crate::direct::plan::DirectPlanBuilder;
 use crate::error::{Error, Result};
 use crate::runtime::{MemoryCategory, Runtime};
@@ -20,21 +21,16 @@ use crate::userdata::metatable::MetatableBuilder;
 use crate::userdata::{Userdata, tagged, untagged};
 use crate::value::{Function, Table};
 
-/// Installs one member into the metatable being built; returns the entries it created.
-type MemberInstaller = Box<dyn FnOnce(&mut MetatableBuilder<'_>) -> Result<Vec<(String, MemberKind, MemberEntry)>>>;
-/// Registers the type (tagged or untagged) with every collected member.
-type Registrar = Box<dyn FnOnce(&Runtime, &ResolvedUserdata, Vec<MemberInstaller>) -> Result<()>>;
-/// Registers a direct primitive field after the metatable exists, unless the plan serves that
-/// field through its slot.
-type FieldRegistrar = (String, Box<dyn FnOnce(&Runtime) -> Result<()>>);
-
-#[derive(Default)]
-struct PendingUserdata {
-    registrar: Option<Registrar>,
-    installers: Vec<MemberInstaller>,
-    fields: Vec<FieldRegistrar>,
-    installed: HashSet<(String, MemberKind)>,
-}
+/// Installs one member into the metatable being built; returns the entries it created. Shared
+/// by every runtime the plan instantiates, so it binds a clone of the callable each time.
+pub(crate) type SharedInstaller =
+    Rc<dyn Fn(&mut MetatableBuilder<'_>) -> Result<Vec<(String, MemberKind, MemberEntry)>>>;
+/// Registers a direct primitive field after the metatable exists.
+pub(crate) type SharedFieldRegistrar = Rc<dyn Fn(&Runtime) -> Result<()>>;
+/// Registers the type (tagged or untagged) with every collected member: `register_type::<T>`.
+pub(crate) type Registrar = fn(&Runtime, &ResolvedUserdata, &[SharedInstaller]) -> Result<()>;
+/// Binds a declared module function in one runtime: `(runtime, debug roots, debug name)`.
+pub(crate) type SharedModuleFunction = Rc<dyn Fn(&Runtime, &[&str], &str) -> Result<Function>>;
 
 /// What the compiler may know about a module member exposed as a global library.
 #[derive(Clone, Debug)]
@@ -90,20 +86,14 @@ mod bytecode {
     pub const INTEGER: u8 = 10;
 }
 
-#[derive(Default)]
-struct Pending {
-    userdata: HashMap<TypeId, PendingUserdata>,
-    modules: ModuleMembers,
-    finished_modules: HashSet<String>,
-}
-
 /// The install-phase view of the runtime one extension receives.
 pub struct InstallContext<'r> {
     runtime: &'r Runtime,
     plan: &'r RuntimePlan,
     current: &'static str,
     descriptor_index: usize,
-    pending: &'r mut Pending,
+    /// The open modules, lent to the context for the duration of one extension's `install`.
+    modules: Vec<ModuleInstaller<'r>>,
 }
 
 impl<'r> InstallContext<'r> {
@@ -120,83 +110,21 @@ impl<'r> InstallContext<'r> {
         self.current
     }
 
-    /// Supplies the callables for the userdata type `T` declared under `key` (owned or
-    /// augmented by this extension).
-    pub fn userdata<T: Userdata>(&mut self, key: &str) -> Result<UserdataInstaller<'_, T>> {
-        let resolved = self.plan.userdata_by_key(key).ok_or_else(|| {
-            Error::logic(format!(
-                "extension '{}' installs userdata '{key}', which the plan does not know",
-                self.current
-            ))
+    /// The module at `path`, which this extension declared, with its declared functions and
+    /// constants already in place: add what needs the live VM or the resolved policy. The
+    /// planner freezes it after every extension has installed.
+    pub fn module(&mut self, path: &str) -> Result<&mut ModuleInstaller<'r>> {
+        let current = self.current;
+        let module = self.modules.iter_mut().find(|module| module.resolved.path == path).ok_or_else(|| {
+            Error::logic(format!("extension '{current}' installs module '{path}', which the plan does not know"))
         })?;
-        if resolved.type_id != TypeId::of::<T>() {
+        if module.resolved.provider != current {
             return Err(Error::logic(format!(
-                "extension '{}' installs '{key}' as {}, but the plan registered it as {}",
-                self.current,
-                T::NAME,
-                resolved.type_name
+                "extension '{current}' installs module '{path}', which '{}' provides",
+                module.resolved.provider
             )));
         }
-        let contributes =
-            resolved.members.iter().any(|member| member.contributor == self.current) || resolved.owner == self.current;
-        if !contributes {
-            return Err(Error::logic(format!(
-                "extension '{}' installs '{key}' without having declared any member of it",
-                self.current
-            )));
-        }
-        let pending = self.pending.userdata.entry(resolved.type_id).or_default();
-        if pending.registrar.is_none() {
-            pending.registrar = Some(Box::new(register_type::<T>));
-        }
-        Ok(UserdataInstaller { pending, resolved, contributor: self.current, _type: std::marker::PhantomData })
-    }
-
-    /// Installs the sequence type declared with `ExtensionDescriptor::sequence::<S>`.
-    pub fn sequence<S: crate::sequence::SequenceSource>(&mut self, key: &str) -> Result<()> {
-        let mut installer = self.userdata::<crate::sequence::Sequence<S>>(key)?;
-        installer.declared("toTable", MemberKind::Method)?;
-        installer.pending.installers.push(Box::new(|ty| {
-            let entry = crate::sequence::configure_sequence_with_entry::<S>(ty)?;
-            Ok(vec![("toTable".to_owned(), MemberKind::Method, entry)])
-        }));
-        Ok(())
-    }
-
-    /// Installs the stream type declared with `ExtensionDescriptor::stream::<S>`.
-    pub fn stream<S: crate::sequence::StreamSource>(&mut self, key: &str) -> Result<()> {
-        let installer = self.userdata::<crate::sequence::Stream<S>>(key)?;
-        installer.pending.installers.push(Box::new(|ty| {
-            crate::sequence::configure_stream::<S>(ty)?;
-            Ok(Vec::new())
-        }));
-        Ok(())
-    }
-
-    /// Starts installing the module at `path`, which this extension declared.
-    pub fn module(&mut self, path: &str) -> Result<ModuleInstaller<'_>> {
-        let resolved = self.plan.modules.iter().find(|module| module.path == path).ok_or_else(|| {
-            Error::logic(format!("extension '{}' installs module '{path}', which the plan does not know", self.current))
-        })?;
-        if resolved.provider != self.current {
-            return Err(Error::logic(format!(
-                "extension '{}' installs module '{path}', which '{}' provides",
-                self.current, resolved.provider
-            )));
-        }
-        if self.pending.finished_modules.contains(path) {
-            return Err(Error::logic(format!("module '{path}' is installed twice")));
-        }
-        let table = Table::new(&self.runtime.stack(), 0, 8)?;
-        Ok(ModuleInstaller {
-            runtime: self.runtime,
-            plan: self.plan,
-            resolved,
-            table,
-            members: Vec::new(),
-            prefix: debug_prefix(self.current),
-            pending: self.pending,
-        })
+        Ok(module)
     }
 
     /// A host service this extension declared it needs.
@@ -265,102 +193,6 @@ impl<'r> InstallContext<'r> {
     }
 }
 
-/// Installs the callables of one userdata type for one extension.
-pub struct UserdataInstaller<'c, T: Userdata> {
-    pending: &'c mut PendingUserdata,
-    resolved: &'c ResolvedUserdata,
-    contributor: &'static str,
-    _type: std::marker::PhantomData<T>,
-}
-
-impl<T: Userdata> UserdataInstaller<'_, T> {
-    fn declared(&mut self, name: &str, kind: MemberKind) -> Result<()> {
-        let declared = self
-            .resolved
-            .members
-            .iter()
-            .any(|member| member.name == name && member.kind == kind && member.contributor == self.contributor);
-        if !declared {
-            return Err(Error::logic(format!(
-                "extension '{}' installs undeclared {kind:?} '{}' on '{}'",
-                self.contributor, name, self.resolved.key
-            )));
-        }
-        if !self.pending.installed.insert((name.to_owned(), kind)) {
-            return Err(Error::logic(format!("'{}'.{name} is installed twice", self.resolved.key)));
-        }
-        Ok(())
-    }
-
-    /// The callable for a declared method.
-    pub fn method<F: Binding<M>, M>(&mut self, name: &str, callable: F) -> Result<&mut Self> {
-        self.declared(name, MemberKind::Method)?;
-        let name = name.to_owned();
-        self.pending.installers.push(Box::new(move |ty| {
-            let entry = ty.method_with_entry(&name, callable)?;
-            Ok(vec![(name, MemberKind::Method, entry)])
-        }));
-        Ok(self)
-    }
-
-    /// The callable for a declared read-only getter.
-    pub fn getter<G: Binding<MG>, MG>(&mut self, name: &str, getter: G) -> Result<&mut Self> {
-        self.declared(name, MemberKind::Getter)?;
-        let name = name.to_owned();
-        self.pending.installers.push(Box::new(move |ty| {
-            let entry = ty.property_with_entry(&name, getter)?;
-            Ok(vec![(name, MemberKind::Getter, entry)])
-        }));
-        Ok(self)
-    }
-
-    /// The callables for a declared getter/setter pair.
-    pub fn property<G: Binding<MG>, MG, S: Binding<MS>, MS>(
-        &mut self,
-        name: &str,
-        getter: G,
-        setter: S,
-    ) -> Result<&mut Self> {
-        self.declared(name, MemberKind::Getter)?;
-        self.declared(name, MemberKind::Setter)?;
-        let name = name.to_owned();
-        self.pending.installers.push(Box::new(move |ty| {
-            let (get, set) = ty.property_rw_with_entries(&name, getter, setter)?;
-            Ok(vec![(name.clone(), MemberKind::Getter, get), (name, MemberKind::Setter, set)])
-        }));
-        Ok(self)
-    }
-
-    /// The handler for a declared direct primitive field: installed as the canonical property
-    /// and, once the metatable exists, as Luau's direct field getter (or, when the plan resolved
-    /// the field `through_slot`, bound to its plan slot like a getter).
-    pub fn field<H: DirectField<T>>(&mut self, name: &str) -> Result<&mut Self> {
-        self.declared(name, MemberKind::Field)?;
-        let owned = name.to_owned();
-        let for_property = owned.clone();
-        self.pending.installers.push(Box::new(move |ty| {
-            let entry = ty.property_with_entry(&for_property, |value: &T| H::get(value))?;
-            Ok(vec![(for_property, MemberKind::Field, entry)])
-        }));
-        let for_register = owned.clone();
-        self.pending
-            .fields
-            .push((owned, Box::new(move |runtime| crate::direct::field::register::<T, H>(runtime, &for_register))));
-        Ok(self)
-    }
-
-    /// A metamethod (`__tostring`, `__eq`, `__len`, ...): not a dispatch member, so it needs no
-    /// declaration.
-    pub fn metamethod<F: Binding<M>, M>(&mut self, name: &str, callable: F) -> Result<&mut Self> {
-        let name = name.to_owned();
-        self.pending.installers.push(Box::new(move |ty| {
-            ty.metamethod(&name, callable)?;
-            Ok(Vec::new())
-        }));
-        Ok(self)
-    }
-}
-
 impl Push for FieldValue {
     fn push_into<'s, S: Scope>(&self, scope: &'s S) -> Result<crate::stack::ValueView<'s>> {
         match self {
@@ -380,11 +212,11 @@ impl crate::bind::Return for FieldValue {
     }
 }
 
-/// Registers `T` with every collected installer and binds the direct slots to their entries.
-fn register_type<T: Userdata>(
+/// Registers `T` with every declared installer and binds the direct slots to their entries.
+pub(crate) fn register_type<T: Userdata>(
     runtime: &Runtime,
     resolved: &ResolvedUserdata,
-    installers: Vec<MemberInstaller>,
+    installers: &[SharedInstaller],
 ) -> Result<()> {
     let mut entries: Vec<(String, MemberKind, MemberEntry)> = Vec::new();
     let configure = |ty: &mut MetatableBuilder<'_>| -> Result<()> {
@@ -411,7 +243,8 @@ fn register_type<T: Userdata>(
     Ok(())
 }
 
-/// Builds one module table.
+/// One module table under construction: the declared functions and constants first, then
+/// whatever the provider's `install` adds, then frozen by the planner.
 pub struct ModuleInstaller<'c> {
     runtime: &'c Runtime,
     plan: &'c RuntimePlan,
@@ -419,10 +252,9 @@ pub struct ModuleInstaller<'c> {
     table: Table,
     members: Vec<(String, ModuleMemberInfo)>,
     prefix: String,
-    pending: &'c mut Pending,
 }
 
-impl ModuleInstaller<'_> {
+impl<'c> ModuleInstaller<'c> {
     pub fn path(&self) -> &str {
         &self.resolved.path
     }
@@ -473,21 +305,37 @@ impl ModuleInstaller<'_> {
         Ok(self)
     }
 
+    /// Creates the table with the module's declared functions and constants.
+    fn open(runtime: &'c Runtime, plan: &'c RuntimePlan, resolved: &'c ResolvedModule) -> Result<Self> {
+        let table = Table::new(&runtime.stack(), 0, 8)?;
+        let mut module =
+            ModuleInstaller { runtime, plan, resolved, table, members: Vec::new(), prefix: debug_prefix(resolved.provider) };
+        for (name, bind) in &resolved.functions {
+            module.record(name, ModuleMemberInfo::Function)?;
+            let debug_name = format!("{}.{name}", module.prefix);
+            let function = bind(runtime, plan.debug_roots(), &debug_name)?;
+            module.table.set(&runtime.stack(), name, &function)?;
+        }
+        for (name, value) in &resolved.constants {
+            module.constant(name, value.clone())?;
+        }
+        Ok(module)
+    }
+
     /// Freezes the module (unless declared mutable), registers it for `require`, and exposes
     /// the compatibility global the policy asked for.
-    pub fn finish(self) -> Result<Table> {
-        let ModuleInstaller { runtime, resolved, table, members, pending, .. } = self;
+    fn finish(self, members: &mut ModuleMembers) -> Result<()> {
+        let ModuleInstaller { runtime, resolved, table, members: recorded, .. } = self;
         if resolved.frozen {
             crate::readonly::make_read_only(runtime, &table)?;
         }
         runtime.register_require_module(&resolved.path, table.value())?;
         if let Some(global) = &resolved.global {
             runtime.set_global(global, &table)?;
-            pending.modules.globals.insert(global.clone(), resolved.path.clone());
+            members.globals.insert(global.clone(), resolved.path.clone());
         }
-        pending.modules.by_module.insert(resolved.path.clone(), members);
-        pending.finished_modules.insert(resolved.path.clone());
-        Ok(table)
+        members.by_module.insert(resolved.path.clone(), recorded);
+        Ok(())
     }
 }
 
@@ -527,29 +375,23 @@ impl crate::require::RequireNavigator for PlanRequire {
     }
 }
 
-/// Creates a runtime from a finalised plan: build the VM, install every extension in order,
-/// register types, direct dispatch, modules, and compiler metadata, then publish.
+/// Creates a runtime from a finalised plan: build the VM, register every declared type with its
+/// bound members and the direct dispatch over them, open the declared modules, run each
+/// extension's `install` in dependency order, freeze the modules, derive compiler metadata,
+/// and publish.
 pub(crate) fn instantiate(plan: &Rc<RuntimePlan>) -> Result<Runtime> {
     let runtime = build_runtime(plan)?;
-    let mut pending = Pending::default();
-    install_all(&runtime, plan, &mut pending)?;
-    check_declared_installed(plan, &pending)?;
-    register_types(&runtime, plan, &mut pending)?;
+    register_types(&runtime, plan)?;
     register_direct(&runtime, plan)?;
-    for resolved in &plan.userdata {
-        if let Some(pending_type) = pending.userdata.remove(&resolved.type_id) {
-            for (name, register_field) in pending_type.fields {
-                let served_by_slot = resolved
-                    .members
-                    .iter()
-                    .any(|member| member.kind == MemberKind::Field && member.name == name && member.through_slot);
-                if !served_by_slot {
-                    register_field(&runtime)?;
-                }
-            }
-        }
+    register_fields(&runtime, plan)?;
+    let mut modules: Vec<ModuleInstaller<'_>> =
+        plan.modules.iter().map(|resolved| ModuleInstaller::open(&runtime, plan, resolved)).collect::<Result<_>>()?;
+    install_all(&runtime, plan, &mut modules)?;
+    let mut members = ModuleMembers::default();
+    for module in modules {
+        module.finish(&mut members)?;
     }
-    let members = Rc::new(std::mem::take(&mut pending.modules));
+    let members = Rc::new(members);
     runtime.set_compile_options(compile_options(plan, &members));
     runtime.set_module_members(members);
     if plan.policy.sandbox {
@@ -616,55 +458,38 @@ fn tagged_in_order(plan: &RuntimePlan) -> Vec<&ResolvedUserdata> {
 }
 
 /// Runs every extension's `install` in dependency order.
-fn install_all(runtime: &Runtime, plan: &RuntimePlan, pending: &mut Pending) -> Result<()> {
+fn install_all<'r>(runtime: &'r Runtime, plan: &'r RuntimePlan, modules: &mut Vec<ModuleInstaller<'r>>) -> Result<()> {
     for &index in &plan.order {
         let extension = &plan.extensions[index];
         let id = plan.descriptors[index].id();
-        {
-            let mut context = InstallContext { runtime, plan, current: id, descriptor_index: index, pending };
-            extension.install(&mut context)?;
-        }
-        for module in plan.modules.iter().filter(|module| module.provider == id) {
-            if !pending.finished_modules.contains(&module.path) {
-                return Err(Error::logic(format!(
-                    "extension '{id}' declared module '{}' but did not install it",
-                    module.path
-                )));
-            }
-        }
+        let mut context =
+            InstallContext { runtime, plan, current: id, descriptor_index: index, modules: std::mem::take(modules) };
+        extension.install(&mut context)?;
+        *modules = context.modules;
     }
     Ok(())
 }
 
-/// Every declared member received a callable.
-fn check_declared_installed(plan: &RuntimePlan, pending: &Pending) -> Result<()> {
+/// Registers every declared type with its bound members.
+fn register_types(runtime: &Runtime, plan: &RuntimePlan) -> Result<()> {
     for resolved in &plan.userdata {
-        let pending_type = pending.userdata.get(&resolved.type_id);
-        for member in &resolved.members {
-            let installed = pending_type.is_some_and(|p| p.installed.contains(&(member.name.clone(), member.kind)));
-            if !installed {
-                return Err(Error::logic(format!(
-                    "'{}' declared '{}'.{} but did not install it",
-                    member.contributor, resolved.key, member.name
-                )));
-            }
-        }
-        if pending_type.is_none() && resolved.members.is_empty() {
-            return Err(Error::logic(format!("userdata '{}' has no members and was never installed", resolved.key)));
-        }
+        (resolved.registrar)(runtime, resolved, &resolved.installers)?;
     }
     Ok(())
 }
 
-/// Registers every planned type's metatable with all contributed members.
-fn register_types(runtime: &Runtime, plan: &RuntimePlan, pending: &mut Pending) -> Result<()> {
+/// Registers the direct primitive fields, except those the plan serves through a slot.
+fn register_fields(runtime: &Runtime, plan: &RuntimePlan) -> Result<()> {
     for resolved in &plan.userdata {
-        let Some(pending_type) = pending.userdata.remove(&resolved.type_id) else { continue };
-        let registrar = pending_type.registrar.expect("set on first installer");
-        registrar(runtime, resolved, pending_type.installers)?;
-        pending
-            .userdata
-            .insert(resolved.type_id, PendingUserdata { fields: pending_type.fields, ..Default::default() });
+        for (name, register_field) in &resolved.fields {
+            let served_by_slot = resolved
+                .members
+                .iter()
+                .any(|member| member.kind == MemberKind::Field && member.name == *name && member.through_slot);
+            if !served_by_slot {
+                register_field(runtime)?;
+            }
+        }
     }
     Ok(())
 }

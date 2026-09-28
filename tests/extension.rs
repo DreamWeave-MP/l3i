@@ -18,6 +18,7 @@ unsafe impl Userdata for Counter {
     const NAME: &'static str = "dream.tests.Counter";
 }
 
+#[derive(Clone)]
 struct Other;
 
 unsafe impl Userdata for Other {
@@ -53,16 +54,23 @@ impl Extension for Core {
     }
 
     fn describe(&self, d: &mut ExtensionDescriptor) -> Result<()> {
-        let counter = d.userdata::<Counter>("dream.tests.Counter");
+        let mut counter = d.userdata::<Counter>("dream.tests.Counter");
         counter.tag(self.tag).doc("A counter.");
-        counter.method("get").signature("(self): number");
-        counter.method("add");
-        counter.getter("twice").signature("number");
-        counter.setter("twice");
+        counter.method("get", |c: &Counter| c.value.get()).signature("(self): number");
+        counter.method("add", |c: &Counter, n: i64| c.value.set(c.value.get() + n));
+        counter
+            .property("twice", |c: &Counter| c.value.get() * 2, |c: &Counter, v: i64| c.value.set(v / 2))
+            .signature("number");
+        counter.metamethod("__tostring", |c: &Counter| format!("Counter({})", c.value.get()));
         if self.with_field {
-            counter.field("value").signature("number");
+            counter.field::<ValueField>("value").signature("number");
         }
-        d.module("@dream/core").doc("Counters.");
+        d.module("@dream/core")
+            .doc("Counters.")
+            .function("new", |n: i64| Owned(Counter { value: Cell::new(n) }))
+            .constant("ANSWER", CompileConstant::Number(42.0))
+            .constant("LIMIT", CompileConstant::Integer(7))
+            .constant("NAME", CompileConstant::String("core".to_owned()));
         d.memory_category("dream.core");
         Ok(())
     }
@@ -70,22 +78,6 @@ impl Extension for Core {
     fn install(&self, cx: &mut InstallContext<'_>) -> Result<()> {
         let category = cx.memory_category("dream.core")?;
         assert_eq!(category, MemoryCategory(1));
-        let mut counter = cx.userdata::<Counter>("dream.tests.Counter")?;
-        counter
-            .method("get", |c: &Counter| c.value.get())?
-            .method("add", |c: &Counter, n: i64| c.value.set(c.value.get() + n))?
-            .property("twice", |c: &Counter| c.value.get() * 2, |c: &Counter, v: i64| c.value.set(v / 2))?
-            .metamethod("__tostring", |c: &Counter| format!("Counter({})", c.value.get()))?;
-        if self.with_field {
-            counter.field::<ValueField>("value")?;
-        }
-        let mut module = cx.module("@dream/core")?;
-        module
-            .function("new", |n: i64| Owned(Counter { value: Cell::new(n) }))?
-            .constant("ANSWER", CompileConstant::Number(42.0))?
-            .constant("LIMIT", CompileConstant::Integer(7))?
-            .constant("NAME", CompileConstant::String("core".to_owned()))?;
-        module.finish()?;
         Ok(())
     }
 }
@@ -100,20 +92,10 @@ impl Extension for Tools {
 
     fn describe(&self, d: &mut ExtensionDescriptor) -> Result<()> {
         d.requires("dream.core");
-        let counter = d.augment_userdata::<Counter>("dream.tests.Counter");
-        counter.method("double");
-        counter.method("describe");
-        d.module("@dream/tools");
-        Ok(())
-    }
-
-    fn install(&self, cx: &mut InstallContext<'_>) -> Result<()> {
-        cx.userdata::<Counter>("dream.tests.Counter")?
-            .method("double", |c: &Counter| c.value.get() * 2)?
-            .method("describe", |c: &Counter| format!("counter at {}", c.value.get()))?;
-        let mut module = cx.module("@dream/tools")?;
-        module.function("version", || 2i64)?;
-        module.finish()?;
+        let mut counter = d.augment_userdata::<Counter>("dream.tests.Counter");
+        counter.method("double", |c: &Counter| c.value.get() * 2);
+        counter.method("describe", |c: &Counter| format!("counter at {}", c.value.get()));
+        d.module("@dream/tools").function("version", || 2i64);
         Ok(())
     }
 }
@@ -181,11 +163,7 @@ fn per_vm_tags_and_atoms_differ_with_identical_semantics() {
             "dream.aaa"
         }
         fn describe(&self, d: &mut ExtensionDescriptor) -> Result<()> {
-            d.userdata::<Other>("dream.tests.Other").method("aardvark");
-            Ok(())
-        }
-        fn install(&self, cx: &mut InstallContext<'_>) -> Result<()> {
-            cx.userdata::<Other>("dream.tests.Other")?.method("aardvark", |_: &Other| 1i64)?;
+            d.userdata::<Other>("dream.tests.Other").method("aardvark", |_: &Other| 1i64);
             Ok(())
         }
     }
@@ -208,19 +186,11 @@ fn stale_direct_cache_is_rejected_across_types() {
             "dream.pair"
         }
         fn describe(&self, d: &mut ExtensionDescriptor) -> Result<()> {
-            d.userdata::<Counter>("dream.tests.Counter").tag(TagPolicy::Required).method("get");
-            d.userdata::<Other>("dream.tests.Other").tag(TagPolicy::Required).method("get");
-            d.module("@dream/pair");
-            Ok(())
-        }
-        fn install(&self, cx: &mut InstallContext<'_>) -> Result<()> {
-            cx.userdata::<Counter>("dream.tests.Counter")?.method("get", |c: &Counter| c.value.get())?;
-            cx.userdata::<Other>("dream.tests.Other")?.method("get", |_: &Other| -1i64)?;
-            let mut module = cx.module("@dream/pair")?;
-            module
-                .function("counter", |n: i64| Owned(Counter { value: Cell::new(n) }))?
-                .function("other", || Owned(Other))?;
-            module.finish()?;
+            d.userdata::<Counter>("dream.tests.Counter").tag(TagPolicy::Required).method("get", |c: &Counter| c.value.get());
+            d.userdata::<Other>("dream.tests.Other").tag(TagPolicy::Required).method("get", |_: &Other| -1i64);
+            d.module("@dream/pair")
+                .function("counter", |n: i64| Owned(Counter { value: Cell::new(n) }))
+                .function("other", || Owned(Other));
             Ok(())
         }
     }
@@ -300,9 +270,9 @@ fn services_capabilities_state_and_drop_order() {
             let pinned = cx.runtime().load_function("return function() end").unwrap().into_value();
             cx.insert_state(State { pinned, dropped: Rc::clone(&self.dropped) });
             let text = greeting.0.clone();
-            let mut module = cx.module("@dream/needy")?;
-            module.function("greet", move || text.clone())?;
-            module.finish()?;
+            // A module function that depends on a service binds at install, next to the
+            // declared ones.
+            cx.module("@dream/needy")?.function("greet", move || text.clone())?;
             Ok(())
         }
     }
@@ -351,9 +321,6 @@ fn finalization_rejects_bad_compositions() {
             }
             Ok(())
         }
-        fn install(&self, _: &mut InstallContext<'_>) -> Result<()> {
-            Ok(())
-        }
     }
     let text = |result: std::result::Result<Rc<RuntimePlan>, Error>| result.err().unwrap().to_string();
 
@@ -381,10 +348,6 @@ fn finalization_rejects_bad_compositions() {
             d.module("@dream/dup");
             Ok(())
         }
-        fn install(&self, cx: &mut InstallContext<'_>) -> Result<()> {
-            cx.module("@dream/dup")?.finish()?;
-            Ok(())
-        }
     }
     let error = text(RuntimePlan::builder().extension(Dup("x")).extension(Dup("y")).finalize());
     assert!(error.contains("module '@dream/dup' is provided twice"), "{error}");
@@ -396,11 +359,7 @@ fn finalization_rejects_bad_compositions() {
             self.0
         }
         fn describe(&self, d: &mut ExtensionDescriptor) -> Result<()> {
-            d.userdata::<Counter>("dream.tests.Counter").method("get");
-            Ok(())
-        }
-        fn install(&self, cx: &mut InstallContext<'_>) -> Result<()> {
-            cx.userdata::<Counter>("dream.tests.Counter")?.method("get", |c: &Counter| c.value.get())?;
+            d.userdata::<Counter>("dream.tests.Counter").method("get", |c: &Counter| c.value.get());
             Ok(())
         }
     }
@@ -418,19 +377,16 @@ fn finalization_rejects_bad_compositions() {
             match self.0 {
                 0 => {
                     d.requires("dream.core");
-                    d.augment_userdata::<Other>("dream.tests.Counter").method("x");
+                    d.augment_userdata::<Other>("dream.tests.Counter").method("x", |_: &Other| 0i64);
                 }
                 1 => {
-                    d.augment_userdata::<Counter>("dream.tests.Counter").method("x");
+                    d.augment_userdata::<Counter>("dream.tests.Counter").method("x", |_: &Counter| 0i64);
                 }
                 _ => {
                     d.requires("dream.core");
-                    d.augment_userdata::<Counter>("dream.tests.Counter").method("get");
+                    d.augment_userdata::<Counter>("dream.tests.Counter").method("get", |_: &Counter| 0i64);
                 }
             }
-            Ok(())
-        }
-        fn install(&self, _: &mut InstallContext<'_>) -> Result<()> {
             Ok(())
         }
     }
@@ -450,15 +406,8 @@ fn finalization_rejects_bad_compositions() {
         }
         fn describe(&self, d: &mut ExtensionDescriptor) -> Result<()> {
             d.requires("dream.core");
-            d.userdata::<Other>("dream.tests.Other").tag(TagPolicy::Required).method("value");
-            d.module("@dream/clash");
-            Ok(())
-        }
-        fn install(&self, cx: &mut InstallContext<'_>) -> Result<()> {
-            cx.userdata::<Other>("dream.tests.Other")?.method("value", |_: &Other| 99i64)?;
-            let mut module = cx.module("@dream/clash")?;
-            module.function("new", || Owned(Other))?;
-            module.finish()?;
+            d.userdata::<Other>("dream.tests.Other").tag(TagPolicy::Required).method("value", |_: &Other| 99i64);
+            d.module("@dream/clash").function("new", || Owned(Other));
             Ok(())
         }
     }
@@ -482,12 +431,15 @@ fn finalization_rejects_bad_compositions() {
             "dream.sameclash"
         }
         fn describe(&self, d: &mut ExtensionDescriptor) -> Result<()> {
-            let other = d.userdata::<Other>("dream.tests.Other");
-            other.field("value");
-            other.method("value");
-            Ok(())
-        }
-        fn install(&self, _: &mut InstallContext<'_>) -> Result<()> {
+            struct OtherValue;
+            impl DirectField<Other> for OtherValue {
+                fn get(_: &Other) -> FieldValue {
+                    FieldValue::Integer(0)
+                }
+            }
+            let mut other = d.userdata::<Other>("dream.tests.Other");
+            other.field::<OtherValue>("value");
+            other.method("value", |_: &Other| 0i64);
             Ok(())
         }
     }
@@ -514,58 +466,42 @@ fn finalization_rejects_bad_compositions() {
 }
 
 #[test]
-fn install_must_match_declarations() {
-    struct Sloppy(u8);
-    impl Extension for Sloppy {
+fn install_adds_to_declared_modules_and_rejects_duplicates() {
+    struct Late(u8);
+    impl Extension for Late {
         fn id(&self) -> &'static str {
-            "dream.sloppy"
+            "dream.late"
         }
         fn describe(&self, d: &mut ExtensionDescriptor) -> Result<()> {
-            d.userdata::<Counter>("dream.tests.Counter").method("get");
-            d.module("@dream/sloppy");
+            d.userdata::<Other>("dream.tests.Other").method("get", |_: &Other| 5i64);
+            d.module("@dream/late").function("declared", || 1i64);
             Ok(())
         }
         fn install(&self, cx: &mut InstallContext<'_>) -> Result<()> {
             match self.0 {
-                0 => {
-                    // Undeclared member.
-                    cx.userdata::<Counter>("dream.tests.Counter")?.method("nope", |c: &Counter| c.value.get())?;
-                }
-                1 => {
-                    // Declared member left out; module installed.
-                    cx.module("@dream/sloppy")?.finish()?;
-                }
-                _ => {
-                    // Member installed, module never finished.
-                    cx.userdata::<Counter>("dream.tests.Counter")?.method("get", |c: &Counter| c.value.get())?;
-                }
-            }
+                // A value that needs the live VM: an instance of a declared type.
+                0 => cx.module("@dream/late")?.function("installed", || 2i64)?.set("instance", &Owned(Other))?,
+                // The same name declared and installed.
+                1 => cx.module("@dream/late")?.function("declared", || 3i64)?,
+                // A module another extension provides.
+                _ => cx.module("@dream/core")?,
+            };
             Ok(())
         }
     }
-    for (variant, expected) in
-        [(0, "installs undeclared Method 'nope'"), (1, "did not install it"), (2, "did not install it")]
-    {
-        let plan = RuntimePlan::builder().extension(Sloppy(variant)).finalize().unwrap();
-        let error = Runtime::from_plan(&plan).err().unwrap().to_string();
-        assert!(error.contains(expected), "variant {variant}: {error}");
-    }
-}
-
-#[test]
-fn generated_dispatch_survives_collection_before_first_use() {
-    let plan = plan_with(Core::preferred(), RuntimePolicy::new());
+    let plan = RuntimePlan::builder().extension(Late(0)).finalize().unwrap();
     let runtime = Runtime::from_plan(&plan).unwrap();
-    runtime.collect_garbage();
-    runtime.collect_garbage();
-    runtime.exec(SCRIPT).unwrap();
-}
-
-#[test]
-fn sandboxed_policy_freezes_globals() {
-    let plan = plan_with(Core::preferred(), RuntimePolicy::new().sandbox(true).compat_global("@dream/core", "core"));
-    let runtime = Runtime::from_plan(&plan).unwrap();
-    runtime.exec("assert(core.new(2):get() == 2)").unwrap();
-    let error = runtime.exec("newGlobal = 1").unwrap_err().to_string();
+    runtime
+        .exec(
+            "local late = require('@dream/late') assert(late.declared() == 1 and late.installed() == 2) \
+             assert(late.instance:get() == 5, 'a declared type instance set at install')",
+        )
+        .unwrap();
+    // The module is frozen after install, whoever added the member.
+    let error = runtime.exec("require('@dream/late').declared = nil").unwrap_err().to_string();
     assert!(error.contains("readonly"), "{error}");
+    let error = Runtime::from_plan(&RuntimePlan::builder().extension(Late(1)).finalize().unwrap()).err().unwrap().to_string();
+    assert!(error.contains("member 'declared' is set twice"), "{error}");
+    let error = Runtime::from_plan(&RuntimePlan::builder().extension(Late(2)).finalize().unwrap()).err().unwrap().to_string();
+    assert!(error.contains("which the plan does not know"), "{error}");
 }

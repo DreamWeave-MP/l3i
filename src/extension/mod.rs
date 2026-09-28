@@ -1,12 +1,15 @@
-//! The extension planner: describe once, resolve per runtime, install after planning.
+//! The extension planner: describe once, resolve per runtime, instantiate after planning.
 //!
 //! An [`Extension`] is a native crate's Luau surface. It declares what it provides in
-//! [`Extension::describe`] (identity, dependencies, modules, userdata ownership and
-//! augmentation, member names, services, capabilities, memory categories) without touching a
-//! VM, and provides the callables in [`Extension::install`]
-//! against a plan that has already resolved every runtime detail: which extension installs
-//! first, which Luau tag a type gets in *this* VM, which atom a member name gets, which direct
-//! slot a member occupies, which numeric memory category a symbolic one maps to.
+//! [`Extension::describe`], callables included: identity, dependencies, modules with their
+//! functions and constants, userdata ownership and augmentation with each member's binding,
+//! services, capabilities, memory categories, all without touching a VM. The plan resolves
+//! every runtime detail (which extension installs first, which Luau tag a type gets in *this*
+//! VM, which atom a member name gets, which direct slot a member occupies, which numeric memory
+//! category a symbolic one maps to) and binds the declared callables in each runtime it
+//! creates. [`Extension::install`] exists only for what needs the live VM or the resolved
+//! policy: capability-gated module functions, module values built from Lua objects, services,
+//! runtime-owned state.
 //!
 //! A [`RuntimePlan`] is finalised once and can instantiate any number of runtimes; each VM gets
 //! its own tags, atoms, and direct plan. Nothing here is process-global. The same Rust type may
@@ -15,8 +18,9 @@
 //!
 //! The lifecycle is the one `L3I_EXTENSION_RUNTIME_ARCHITECTURE.md` §7 draws: collect
 //! descriptions, resolve dependencies, resolve shared userdata, resolve tags, resolve atoms,
-//! build the direct plan, validate services and capabilities, create the VM, install, freeze,
-//! publish. After publication nothing about the native shape of the VM changes.
+//! build the direct plan, validate services and capabilities, create the VM, register the
+//! declared types and modules, run `install`, freeze, publish. After publication nothing about
+//! the native shape of the VM changes.
 
 mod dispatch;
 mod install;
@@ -34,25 +38,39 @@ pub(crate) mod install_detail {
 use std::any::TypeId;
 use std::collections::BTreeSet;
 
-pub use install::{InstallContext, ModuleInstaller, UserdataInstaller};
+pub use install::{InstallContext, ModuleInstaller};
 pub use plan::{ResolvedMember, ResolvedModule, ResolvedUserdata, RuntimePlan, RuntimePlanBuilder};
 
+use std::rc::Rc;
+
+use install::{Registrar, SharedFieldRegistrar, SharedInstaller, SharedModuleFunction};
+
+use crate::bind::Binding;
+use crate::direct::field::DirectField;
 use crate::error::{Error, Result};
+use crate::source::CompileConstant;
 use crate::userdata::{RuntimeTag, Userdata};
 
-/// A native crate's Luau surface, in two phases. See the module docs.
+/// A native crate's Luau surface. See the module docs.
 pub trait Extension: 'static {
     /// The stable public identity, e.g. `dream.archive`: dot-separated segments of identifier
     /// characters and hyphens. Other extensions name it in `requires`; profiler and debug
     /// identities derive from it. Never a Rust `TypeId`.
     fn id(&self) -> &'static str;
 
-    /// Declares everything the planner must know. Must not touch a VM or create Lua values.
+    /// Declares everything the planner must know, callables included: userdata members bind
+    /// here, so do module functions and constants. Must not touch a VM or create Lua values;
+    /// the callables run later, in every runtime the plan instantiates.
     fn describe(&self, descriptor: &mut ExtensionDescriptor) -> Result<()>;
 
-    /// Installs the declared members against the resolved plan. Installing an undeclared member
-    /// or leaving a declared one out is an error.
-    fn install(&self, context: &mut InstallContext<'_>) -> Result<()>;
+    /// Runs once per runtime after the declared types and modules exist, for what genuinely
+    /// needs the live VM or the resolved policy: services, capability-gated module functions,
+    /// module values built from Lua objects, runtime-owned state. Most extensions leave the
+    /// default.
+    fn install(&self, context: &mut InstallContext<'_>) -> Result<()> {
+        let _ = context;
+        Ok(())
+    }
 }
 
 /// How much a userdata type wants a Luau tag in a runtime.
@@ -105,8 +123,9 @@ impl MemberDecl {
     }
 }
 
-/// A userdata type one extension owns or augments.
-#[derive(Clone, Debug)]
+/// A userdata type one extension owns or augments: its members, and the callables that bind
+/// them in every runtime the plan instantiates.
+#[derive(Clone)]
 pub struct UserdataDecl {
     /// The stable script identity, e.g. `dream.archive.Archive`.
     pub key: String,
@@ -117,6 +136,22 @@ pub struct UserdataDecl {
     pub members: Vec<MemberDecl>,
     pub doc: Option<String>,
     contributor: &'static str,
+    pub(crate) installers: Vec<SharedInstaller>,
+    pub(crate) fields: Vec<(String, SharedFieldRegistrar)>,
+    pub(crate) registrar: Registrar,
+}
+
+impl std::fmt::Debug for UserdataDecl {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("UserdataDecl")
+            .field("key", &self.key)
+            .field("type_name", &self.type_name)
+            .field("tag", &self.tag)
+            .field("members", &self.members)
+            .field("doc", &self.doc)
+            .field("contributor", &self.contributor)
+            .finish_non_exhaustive()
+    }
 }
 
 impl UserdataDecl {
@@ -129,18 +164,10 @@ impl UserdataDecl {
             members: Vec::new(),
             doc: None,
             contributor,
+            installers: Vec::new(),
+            fields: Vec::new(),
+            registrar: install::register_type::<T>,
         }
-    }
-
-    /// The tag policy (owner only; augmentations inherit the owner's).
-    pub fn tag(&mut self, policy: TagPolicy) -> &mut Self {
-        self.tag = policy;
-        self
-    }
-
-    pub fn doc(&mut self, doc: impl Into<String>) -> &mut Self {
-        self.doc = Some(doc.into());
-        self
     }
 
     fn member(&mut self, name: &str, kind: MemberKind) -> &mut MemberDecl {
@@ -153,29 +180,106 @@ impl UserdataDecl {
         });
         self.members.last_mut().expect("pushed above")
     }
+}
 
-    pub fn method(&mut self, name: &str) -> &mut MemberDecl {
-        self.member(name, MemberKind::Method)
+/// The typed view of a [`UserdataDecl`] under construction: declares a member and binds its
+/// callable in one call. Callables are `Clone` because a plan instantiates any number of
+/// runtimes and binds each member once per VM; closures that capture nothing, `Rc`s, or
+/// `Clone` data qualify.
+pub struct UserdataBuilder<'a, T: Userdata> {
+    decl: &'a mut UserdataDecl,
+    _type: std::marker::PhantomData<T>,
+}
+
+impl<T: Userdata> UserdataBuilder<'_, T> {
+    /// The tag policy (owner only; augmentations inherit the owner's).
+    pub fn tag(&mut self, policy: TagPolicy) -> &mut Self {
+        self.decl.tag = policy;
+        self
     }
 
-    pub fn getter(&mut self, name: &str) -> &mut MemberDecl {
-        self.member(name, MemberKind::Getter)
+    pub fn doc(&mut self, doc: impl Into<String>) -> &mut Self {
+        self.decl.doc = Some(doc.into());
+        self
     }
 
-    /// A read/write property: the getter and the setter share the name.
-    pub fn setter(&mut self, name: &str) -> &mut MemberDecl {
-        self.member(name, MemberKind::Setter)
+    /// The declaration being built.
+    pub fn decl(&mut self) -> &mut UserdataDecl {
+        self.decl
     }
 
-    /// A direct primitive field (boolean, number, integer64, Vec3, nil). Makes the tag policy
-    /// effectively `Required`.
-    pub fn field(&mut self, name: &str) -> &mut MemberDecl {
-        self.member(name, MemberKind::Field)
+    /// `obj:name(...)`.
+    pub fn method<F: Binding<M> + Clone + 'static, M: 'static>(&mut self, name: &str, callable: F) -> &mut MemberDecl {
+        let owned = name.to_owned();
+        self.decl.installers.push(Rc::new(move |ty| {
+            let entry = ty.method_with_entry(&owned, callable.clone())?;
+            Ok(vec![(owned.clone(), MemberKind::Method, entry)])
+        }));
+        self.decl.member(name, MemberKind::Method)
+    }
+
+    /// `obj.name`, read-only, through a bound getter.
+    pub fn getter<G: Binding<MG> + Clone + 'static, MG: 'static>(&mut self, name: &str, getter: G) -> &mut MemberDecl {
+        let owned = name.to_owned();
+        self.decl.installers.push(Rc::new(move |ty| {
+            let entry = ty.property_with_entry(&owned, getter.clone())?;
+            Ok(vec![(owned.clone(), MemberKind::Getter, entry)])
+        }));
+        self.decl.member(name, MemberKind::Getter)
+    }
+
+    /// `obj.name` read and written through a getter/setter pair. The returned declaration is
+    /// the getter's; a signature set on it is the property's type.
+    pub fn property<G, MG, S, MS>(&mut self, name: &str, getter: G, setter: S) -> &mut MemberDecl
+    where
+        G: Binding<MG> + Clone + 'static,
+        MG: 'static,
+        S: Binding<MS> + Clone + 'static,
+        MS: 'static,
+    {
+        let owned = name.to_owned();
+        self.decl.installers.push(Rc::new(move |ty| {
+            let (get, set) = ty.property_rw_with_entries(&owned, getter.clone(), setter.clone())?;
+            Ok(vec![(owned.clone(), MemberKind::Getter, get), (owned.clone(), MemberKind::Setter, set)])
+        }));
+        self.decl.member(name, MemberKind::Setter);
+        let index = self.decl.members.len() - 1;
+        self.decl.member(name, MemberKind::Getter);
+        self.decl.members.swap(index, index + 1);
+        &mut self.decl.members[index]
+    }
+
+    /// A direct primitive field (boolean, number, integer64, Vec3, nil) served by `H`,
+    /// installed as the canonical property too. Makes the tag policy effectively `Required`.
+    pub fn field<H: DirectField<T>>(&mut self, name: &str) -> &mut MemberDecl {
+        let owned = name.to_owned();
+        self.decl.installers.push(Rc::new(move |ty| {
+            let entry = ty.property_with_entry(&owned, |value: &T| H::get(value))?;
+            Ok(vec![(owned.clone(), MemberKind::Field, entry)])
+        }));
+        let for_register = name.to_owned();
+        self.decl.fields.push((
+            name.to_owned(),
+            Rc::new(move |runtime| crate::direct::field::register::<T, H>(runtime, &for_register)),
+        ));
+        self.decl.member(name, MemberKind::Field)
+    }
+
+    /// A metamethod (`__tostring`, `__eq`, `__len`, ...): not a dispatch member.
+    pub fn metamethod<F: Binding<M> + Clone + 'static, M: 'static>(&mut self, name: &str, callable: F) -> &mut Self {
+        let owned = name.to_owned();
+        self.decl.installers.push(Rc::new(move |ty| {
+            ty.metamethod(&owned, callable.clone())?;
+            Ok(Vec::new())
+        }));
+        self
     }
 }
 
-/// A native module the extension provides, `require`d by its path.
-#[derive(Clone, Debug)]
+/// A native module the extension provides, `require`d by its path, with the functions and
+/// constants it declares. Values that need the live VM are added in [`Extension::install`]
+/// through [`InstallContext::module`].
+#[derive(Clone)]
 pub struct ModuleDecl {
     /// The require path, e.g. `@dream/archive`.
     pub path: String,
@@ -183,6 +287,21 @@ pub struct ModuleDecl {
     pub frozen: bool,
     pub doc: Option<String>,
     pub(crate) provider: &'static str,
+    pub(crate) functions: Vec<(String, SharedModuleFunction)>,
+    pub(crate) constants: Vec<(String, CompileConstant)>,
+}
+
+impl std::fmt::Debug for ModuleDecl {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ModuleDecl")
+            .field("path", &self.path)
+            .field("frozen", &self.frozen)
+            .field("doc", &self.doc)
+            .field("provider", &self.provider)
+            .field("functions", &self.functions.iter().map(|(name, _)| name).collect::<Vec<_>>())
+            .field("constants", &self.constants)
+            .finish()
+    }
 }
 
 impl ModuleDecl {
@@ -198,6 +317,24 @@ impl ModuleDecl {
 
     pub fn doc(&mut self, doc: impl Into<String>) -> &mut Self {
         self.doc = Some(doc.into());
+        self
+    }
+
+    /// A module function, bound in every runtime. The callable is `Clone` for the same reason
+    /// userdata members' are (see [`UserdataBuilder`]).
+    pub fn function<F: Binding<M> + Clone + 'static, M: 'static>(&mut self, name: &str, callable: F) -> &mut Self {
+        self.functions.push((
+            name.to_owned(),
+            Rc::new(move |runtime, roots, debug_name| {
+                crate::bind::function(&runtime.stack(), roots, debug_name, callable.clone())
+            }),
+        ));
+        self
+    }
+
+    /// A constant the compiler may fold when the module is a known global library.
+    pub fn constant(&mut self, name: &str, value: CompileConstant) -> &mut Self {
+        self.constants.push((name.to_owned(), value));
         self
     }
 }
@@ -274,34 +411,52 @@ impl ExtensionDescriptor {
 
     /// Declares a native module at `path` (frozen by default).
     pub fn module(&mut self, path: &str) -> &mut ModuleDecl {
-        self.modules.push(ModuleDecl { path: path.to_owned(), frozen: true, doc: None, provider: self.id });
+        self.modules.push(ModuleDecl {
+            path: path.to_owned(),
+            frozen: true,
+            doc: None,
+            provider: self.id,
+            functions: Vec::new(),
+            constants: Vec::new(),
+        });
         self.modules.last_mut().expect("pushed above")
     }
 
-    /// Declares ownership of the userdata type `T` under the stable `key`.
-    pub fn userdata<T: Userdata>(&mut self, key: &str) -> &mut UserdataDecl {
+    /// Declares ownership of the userdata type `T` under the stable `key`, and its members.
+    pub fn userdata<T: Userdata>(&mut self, key: &str) -> UserdataBuilder<'_, T> {
         self.owned.push(UserdataDecl::new::<T>(key, self.id));
-        self.owned.last_mut().expect("pushed above")
+        UserdataBuilder { decl: self.owned.last_mut().expect("pushed above"), _type: std::marker::PhantomData }
     }
 
     /// Declares a [`crate::sequence::Sequence`] over `S` under `key`: a userdata type with
-    /// `toTable`, `#`, `[i]`, and `for`; install it with [`InstallContext::sequence`].
-    pub fn sequence<S: crate::sequence::SequenceSource>(&mut self, key: &str) -> &mut UserdataDecl {
-        let decl = self.userdata::<crate::sequence::Sequence<S>>(key);
-        decl.method("toTable").signature("(self): { any }");
-        decl
+    /// `toTable`, `#`, `[i]`, and `for`, fully bound.
+    pub fn sequence<S: crate::sequence::SequenceSource>(
+        &mut self,
+        key: &str,
+    ) -> UserdataBuilder<'_, crate::sequence::Sequence<S>> {
+        let builder = self.userdata::<crate::sequence::Sequence<S>>(key);
+        builder.decl.installers.push(Rc::new(|ty| {
+            let entry = crate::sequence::configure_sequence_with_entry::<S>(ty)?;
+            Ok(vec![("toTable".to_owned(), MemberKind::Method, entry)])
+        }));
+        builder.decl.member("toTable", MemberKind::Method).signature("(self): { any }");
+        builder
     }
 
-    /// Declares a [`crate::sequence::Stream`] over `S` under `key` (`for` only); install it with
-    /// [`InstallContext::stream`].
-    pub fn stream<S: crate::sequence::StreamSource>(&mut self, key: &str) -> &mut UserdataDecl {
-        self.userdata::<crate::sequence::Stream<S>>(key)
+    /// Declares a [`crate::sequence::Stream`] over `S` under `key` (`for` only), fully bound.
+    pub fn stream<S: crate::sequence::StreamSource>(&mut self, key: &str) -> UserdataBuilder<'_, crate::sequence::Stream<S>> {
+        let builder = self.userdata::<crate::sequence::Stream<S>>(key);
+        builder.decl.installers.push(Rc::new(|ty| {
+            crate::sequence::configure_stream::<S>(ty)?;
+            Ok(Vec::new())
+        }));
+        builder
     }
 
     /// Adds members to a userdata type another extension owns (which this one must `require`).
-    pub fn augment_userdata<T: Userdata>(&mut self, key: &str) -> &mut UserdataDecl {
+    pub fn augment_userdata<T: Userdata>(&mut self, key: &str) -> UserdataBuilder<'_, T> {
         self.augmentations.push(UserdataDecl::new::<T>(key, self.id));
-        self.augmentations.last_mut().expect("pushed above")
+        UserdataBuilder { decl: self.augmentations.last_mut().expect("pushed above"), _type: std::marker::PhantomData }
     }
 
     /// A host service of type `S` this extension reads at install time.
