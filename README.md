@@ -190,6 +190,13 @@ clamp, round, one integer store. Shader semantics: inputs clamp, results round t
 gives channel 0, and the interpreter path computes the same formulas. Measured per call
 (`benches/raster.rs`): `rgba8` 71 ns through the module against 2.6 ns lowered, `lerp` 72 ns
 against 15 ns, `mul` 61 ns against 17 ns, `premultiply` 52 ns against 16 ns.
+`raster::Color16` is the wide form for formats that require 16 bits per channel: red in bits 0
+to 15 through alpha in bits 48 to 63, the little-endian `u64` being an RGBA16 pixel. It fills
+the whole Luau integer and so has **no kind nibble**: any integer is accepted as a `Color16`,
+and nothing at runtime distinguishes it from an RGBA8 color or an id. That is the deliberate
+price of exact interchange. `widen` (`x * 257`) and `narrow` (`round(x / 257)`) convert
+exactly, every method has a `16` form on the receiver and the module, and the lowering is
+shared: `lerp16` 69 ns against 14 ns, `narrow` 48 ns against 3 ns.
 
 `quat::QuatExtension` (`dream.quat`, module `@dream/quat`) is the first packed kind: a unit
 rotation compressed smallest-three into one Luau integer (18 bits per component, exact
