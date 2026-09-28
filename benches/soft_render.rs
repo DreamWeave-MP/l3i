@@ -191,7 +191,7 @@ fn runtime() -> Runtime {
 /// Layer two: the same frames driven from Luau; layer three: single calls.
 fn through_luau(c: &mut Criterion) {
     let runtime = runtime();
-    let cases: [(&str, u64, &str); 8] = [
+    let cases: [(&str, u64, &str); 9] = [
         (
             "panels frame",
             PANELS,
@@ -214,11 +214,18 @@ fn through_luau(c: &mut Criterion) {
              frame:mesh(fanVertices, fanIndices, nil, raster.CLIP_ALL) frame:finish()",
         ),
         ("rgba8 call", 1000, "for i = 1, 1000 do c = raster.rgba8(i % 256, 40, 40, 255) end"),
+        // Arguments hoisted out of the loop, so the number is the bound call itself.
         (
             "offscreen rect call",
             1000,
-            "local frame = renderer:beginFrame(640, 480) \
-             for i = 1, 1000 do frame:rect(vector.create(700, 700), vector.create(701, 701), solid, raster.CLIP_ALL) end",
+            "local frame = renderer:beginFrame(640, 480) local p0, p1, clip = vector.create(700, 700), vector.create(701, 701), raster.CLIP_ALL \
+             for i = 1, 1000 do frame:rect(p0, p1, solid, clip) end",
+        ),
+        (
+            "panels frame, hoisted args",
+            PANELS,
+            "local frame = renderer:beginFrame(640, 480) frame:clear(background) \
+             for _, p in panels do frame:rect(p[1], p[2], p[3], p[4]) end frame:finish()",
         ),
         ("readInto", 1, "renderer:readInto(output)"),
         (
@@ -246,7 +253,9 @@ fn through_luau(c: &mut Criterion) {
         .exec(
             "background = raster.rgb8(17, 20, 28) solid = raster.rgb8(40, 44, 58) \
              glass = soft.premultiply(raster.rgba8(90, 140, 220, 96)) tint = raster.rgb8(220, 224, 230) \
-             output = buffer.create(640 * 480 * 4) target = buffer.create(258 * soft.VERTEX_BYTES) V = soft.vertices()",
+             output = buffer.create(640 * 480 * 4) target = buffer.create(258 * soft.VERTEX_BYTES) V = soft.vertices() \
+             panels = {} for panel = 0, 47 do local x, y = (panel % 8) * 80 + 4, (panel // 8) * 80 + 4 \
+                 table.insert(panels, { vector.create(x, y), vector.create(x + 120, y + 60), if panel % 3 == 0 then solid else glass, raster.CLIP_ALL }) end",
         )
         .unwrap();
     let functions: Vec<(&str, u64, Function)> = cases
@@ -259,7 +268,7 @@ fn through_luau(c: &mut Criterion) {
                     .load_function(&format!(
                         "return function() local renderer, raster, soft, glyphs, texture = renderer, raster, soft, glyphs, texture \
                          local background, solid, glass, tint, output = background, solid, glass, tint, output \
-                         local fanVertices, fanIndices, target, V = fanVertices, fanIndices, target, V {body} return 0 end"
+                         local fanVertices, fanIndices, target, V, panels = fanVertices, fanIndices, target, V, panels {body} return 0 end"
                     ))
                     .unwrap(),
             )
