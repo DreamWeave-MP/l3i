@@ -53,7 +53,8 @@ impl<'v> TableView<'v> {
         // body, which consumes both and leaves one result.
         unsafe {
             if !self.has_metatable(state) {
-                // No metatable means no `__index`: a raw read, which needs no protection.
+                // No metatable means no `__index`: a raw read, which cannot raise. (Interning
+                // the key can allocate, as every host-level string push does.)
                 ffi::lua_pushlstring(state, key.as_ptr().cast(), key.len());
                 ffi::lua_rawget(state, self.index());
                 return Ok(frame.top_value());
@@ -86,8 +87,11 @@ impl<'v> TableView<'v> {
         let state = frame.state();
         // SAFETY: operands (value, table copy, key) on top; the body consumes all three.
         unsafe {
-            if !self.has_metatable(state) && ffi::lua_getreadonly(state, self.index()) == 0 {
-                // No `__newindex` and writable: a raw store, which needs no protection.
+            if !frame.is_host_level() && !self.has_metatable(state) && ffi::lua_getreadonly(state, self.index()) == 0 {
+                // No `__newindex` and writable: a raw store. Inside a native call a raise (the
+                // table growing out of memory) unwinds to Luau like any other, so the operand
+                // shuffle of the raising path is skipped; at host level the store stays under
+                // `protected_call`, since `lua_rawset` can allocate.
                 ffi::lua_pushlstring(state, key.as_ptr().cast(), key.len());
                 ffi::lua_insert(state, -2);
                 ffi::lua_rawset(state, self.index());
