@@ -424,6 +424,7 @@ fn runtime_plans_resolve_slots_from_the_vms_own_tags_and_atoms() {
     assert_eq!(plan.entries().len(), 2);
     assert_eq!(plan.resolve_slot(60, 2000, AccessKind::Index), PLANNED_VALUE_GET);
     assert_eq!(plan.resolve_slot(61, 2000, AccessKind::Index), UNKNOWN_SLOT, "tag 61 is another VM's");
+    assert_eq!(plan.resolve_slot(200, 2000, AccessKind::Index), UNKNOWN_SLOT, "past the table's tag span");
     let plan_b = direct::plan::plan(&b.stack()).unwrap();
     assert_eq!(plan_b.resolve_slot(61, 3000, AccessKind::Index), PLANNED_VALUE_GET);
     // Builder validation.

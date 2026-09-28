@@ -13,7 +13,6 @@ use std::rc::Rc;
 
 use super::registry::UNKNOWN_SLOT;
 use super::{ACCESS_KIND_COUNT, AccessKind, Atom};
-use crate::TAG_LIMIT;
 use crate::error::{Error, Result};
 use crate::runtime::Runtime;
 use crate::stack::Scope;
@@ -32,7 +31,8 @@ pub struct PlanEntry {
 }
 
 /// Slots and the catalogued atom span a plan accepts. Planners allocate both densely; a plan
-/// is a dense table, so a two-member plan with atoms 1 and 30000 would cost megabytes.
+/// is a dense table over the tags it uses times the atom span, so a two-member plan with atoms
+/// 1 and 30000 would cost megabytes.
 pub const MAX_SLOT: u16 = 4096;
 pub const MAX_ATOM_SPAN: usize = 4096;
 
@@ -47,6 +47,9 @@ pub struct DirectPlan {
     slot_keys: Vec<u64>,
     first_atom: Atom,
     atom_count: usize,
+    /// One past the highest tag with an entry: the table covers `0..tag_count`, not every tag
+    /// the VM could hand out (a few hundred bytes per runtime rather than tens of kilobytes).
+    tag_count: usize,
     /// `slots[tag * ACCESS_KIND_COUNT * atom_count + kind * atom_count + (atom - first_atom)]`.
     slots: Vec<u16>,
 }
@@ -61,7 +64,7 @@ fn slot_key(tag: i32, kind: AccessKind, atom: Atom) -> u64 {
 
 impl DirectPlan {
     fn index(&self, tag: i32, kind: AccessKind, atom: Atom) -> Option<usize> {
-        if tag < 0 || tag >= i32::from(TAG_LIMIT) || atom < self.first_atom {
+        if tag < 0 || tag as usize >= self.tag_count || atom < self.first_atom {
             return None;
         }
         let offset = (atom - self.first_atom) as usize;
@@ -218,7 +221,8 @@ impl<'r> DirectPlanBuilder<'r> {
                 "Direct plan atoms span {atom_count} ids (from {first_atom} to {last_atom}); catalogue them densely (at most {MAX_ATOM_SPAN})"
             )));
         }
-        let mut slots = vec![UNKNOWN_SLOT; usize::from(TAG_LIMIT) * ACCESS_KIND_COUNT * atom_count];
+        let tag_count = self.entries.iter().map(|entry| usize::from(entry.tag)).max().map_or(0, |tag| tag + 1);
+        let mut slots = vec![UNKNOWN_SLOT; tag_count * ACCESS_KIND_COUNT * atom_count];
         let max_slot = self.entries.iter().map(|entry| entry.slot).max().unwrap_or(0);
         let mut by_slot = vec![None; usize::from(max_slot) + 1];
         let mut slot_keys = vec![NO_KEY; usize::from(max_slot) + 1];
@@ -226,7 +230,7 @@ impl<'r> DirectPlanBuilder<'r> {
             by_slot[usize::from(entry.slot)] = Some(index as u32);
             slot_keys[usize::from(entry.slot)] = slot_key(i32::from(entry.tag), entry.kind, entry.atom);
         }
-        let mut plan = DirectPlan { entries: self.entries, by_slot, slot_keys, first_atom, atom_count, slots: Vec::new() };
+        let mut plan = DirectPlan { entries: self.entries, by_slot, slot_keys, first_atom, atom_count, tag_count, slots: Vec::new() };
         for entry in &plan.entries {
             let index = plan.index(i32::from(entry.tag), entry.kind, entry.atom).expect("entry atoms lie in range");
             slots[index] = entry.slot;
