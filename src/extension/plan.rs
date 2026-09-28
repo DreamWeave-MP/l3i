@@ -174,7 +174,14 @@ impl RuntimePlanBuilder {
 
     /// Runs every `describe`, resolves the plan, and freezes it.
     pub fn finalize(self) -> Result<Rc<RuntimePlan>> {
-        let RuntimePlanBuilder { policy, extensions, services, pinned_tags } = self;
+        let RuntimePlanBuilder { policy, mut extensions, services, pinned_tags } = self;
+
+        // The network bridge is runtime infrastructure: every plan carries it, whether or not
+        // the host mentioned it, and the policy decides what scripts may do with it.
+        let net = crate::net::extension();
+        if !extensions.iter().any(|extension| extension.id() == net.id()) {
+            extensions.insert(0, Box::new(net));
+        }
 
         // 1. Describe.
         let mut descriptors = Vec::with_capacity(extensions.len());

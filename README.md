@@ -247,7 +247,10 @@ that to a local too. The packed form is storage and transport; long-lived rotati
 ## Networking
 
 dream-net is runtime infrastructure, not a feature: l3i depends on it and owns the Luau bridge,
-extension `dream.net` (`net::extension()`), module `@dream/net`. Scripts build a frozen wire
+extension `dream.net` (`net::extension()`), module `@dream/net`, and every `RuntimePlan`
+carries it whether or not the host names it (naming it is allowed and adds nothing), so no
+runtime lacks the network and the policy's capabilities decide what scripts may do with it.
+Scripts build a frozen wire
 schema from a strict option table (`net.schema{ version, channels, events }`), the host creates
 `dream_net::Server`s in Rust and hands them over as `net::Server` handles (the private key never
 reaches Luau), and scripts may create `net.client{ schema }` only when the policy grants the
