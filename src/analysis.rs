@@ -63,10 +63,22 @@ mod ffi {
     }
 
     #[repr(C)]
+    pub struct db_definition {
+        pub name: *const c_char,
+        pub name_length: usize,
+        pub source: *const c_char,
+        pub source_length: usize,
+    }
+
+    #[repr(C)]
     pub struct db_analysis_options {
         pub solver_mode: c_int,
         pub register_builtins: c_int,
         pub retain_full_type_graphs: c_int,
+        pub definitions: *const db_definition,
+        pub definitions_count: usize,
+        pub diagnostic: Option<db_diagnostic_fn>,
+        pub diagnostic_ctx: *mut c_void,
     }
 
     unsafe extern "C" {
@@ -170,6 +182,15 @@ pub enum Solver {
     New,
 }
 
+/// A definitions file (`.d.luau`) loaded into the global scope: `declare extern type`,
+/// `declare name: T`, `export type`. A runtime plan renders one with `RuntimePlan::type_definitions`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Definitions {
+    /// The package name errors are reported under.
+    pub name: String,
+    pub source: String,
+}
+
 /// Options for [`Analysis::new`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AnalysisOptions {
@@ -178,11 +199,14 @@ pub struct AnalysisOptions {
     pub builtins: bool,
     /// Keep full type information per term (needed for autocomplete-heavy use; costs memory).
     pub retain_full_type_graphs: bool,
+    /// Definition files loaded after the builtins; one that fails to parse or type check fails
+    /// [`Analysis::new`] with its diagnostics in the error text.
+    pub definitions: Vec<Definitions>,
 }
 
 impl Default for AnalysisOptions {
     fn default() -> Self {
-        AnalysisOptions { solver: Solver::New, builtins: true, retain_full_type_graphs: false }
+        AnalysisOptions { solver: Solver::New, builtins: true, retain_full_type_graphs: false, definitions: Vec::new() }
     }
 }
 
@@ -476,6 +500,17 @@ impl Analysis {
             module_config: Some(module_config),
             human_name: Some(human_name),
         };
+        let definitions: Vec<ffi::db_definition> = options
+            .definitions
+            .iter()
+            .map(|d| ffi::db_definition {
+                name: d.name.as_ptr().cast(),
+                name_length: d.name.len(),
+                source: d.source.as_ptr().cast(),
+                source_length: d.source.len(),
+            })
+            .collect();
+        let mut diagnostics: Vec<Diagnostic> = Vec::new();
         let raw_options = ffi::db_analysis_options {
             solver_mode: match options.solver {
                 Solver::Old => 0,
@@ -483,11 +518,23 @@ impl Analysis {
             },
             register_builtins: c_int::from(options.builtins),
             retain_full_type_graphs: c_int::from(options.retain_full_type_graphs),
+            definitions: definitions.as_ptr(),
+            definitions_count: definitions.len(),
+            diagnostic: Some(collect_diagnostic),
+            diagnostic_ctx: (&raw mut diagnostics).cast(),
         };
-        // SAFETY: the shim copies the provider table; the provider Box outlives the frontend.
+        // SAFETY: the shim copies the provider table and reads the definitions during the call;
+        // the provider Box outlives the frontend and the diagnostics Vec outlives the call.
         let raw = unsafe { ffi::db_analysis_create(&raw_provider, &raw_options) };
         if raw.is_null() {
-            return Err(Error::runtime("Unable to create the Luau analysis frontend"));
+            if diagnostics.is_empty() {
+                return Err(Error::runtime("Unable to create the Luau analysis frontend"));
+            }
+            let text: Vec<String> = diagnostics
+                .iter()
+                .map(|d| format!("{}:{}:{}: {}", d.module, d.span.begin_line + 1, d.span.begin_column + 1, d.text))
+                .collect();
+            return Err(Error::runtime(format!("Definitions were rejected by the Luau frontend:\n{}", text.join("\n"))));
         }
         Ok(Analysis { raw, provider })
     }

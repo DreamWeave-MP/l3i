@@ -67,11 +67,26 @@ struct db_source_provider
     int (*human_name)(void* ctx, const char* name, size_t name_length, db_sink sink, void* sink_ctx);
 };
 
+// One definitions file (`.d.luau`: `declare class`, `declare name: T`, `export type`) loaded
+// into the global scope before it is frozen.
+struct db_definition
+{
+    const char* name;
+    size_t name_length;
+    const char* source;
+    size_t source_length;
+};
+
 struct db_analysis_options
 {
     int solver_mode; // 0 old, 1 new
     int register_builtins;
     int retain_full_type_graphs;
+    const db_definition* definitions;
+    size_t definitions_count;
+    // Receives a definitions file's parse and type errors; creation then fails.
+    db_diagnostic_fn diagnostic;
+    void* diagnostic_ctx;
 };
 
 typedef void (*db_completion_fn)(
@@ -197,6 +212,33 @@ db_analysis* db_analysis_create(const db_source_provider* provider, const db_ana
         {
             Luau::registerBuiltinGlobals(*analysis->frontend, analysis->frontend->globals);
             Luau::registerBuiltinGlobals(*analysis->frontend, analysis->frontend->globalsForAutocomplete, true);
+        }
+        for (size_t i = 0; i < options->definitions_count; ++i)
+        {
+            const db_definition& definition = options->definitions[i];
+            std::string name(definition.name, definition.name_length);
+            std::string_view source(definition.source, definition.source_length);
+            Luau::LoadDefinitionFileResult result =
+                analysis->frontend->loadDefinitionFile(analysis->frontend->globals, analysis->frontend->globals.globalScope, source, name, false, false);
+            Luau::LoadDefinitionFileResult forAutocomplete = analysis->frontend->loadDefinitionFile(
+                analysis->frontend->globalsForAutocomplete, analysis->frontend->globalsForAutocomplete.globalScope, source, name, false, true);
+            if (result.success && forAutocomplete.success)
+                continue;
+            if (options->diagnostic != nullptr)
+            {
+                for (const Luau::ParseError& error : result.parseResult.errors)
+                    emit(options->diagnostic, options->diagnostic_ctx, DB_DIAG_PARSE_ERROR, 0, nullptr, name, error.getMessage(), error.getLocation());
+                if (result.module)
+                    for (const Luau::TypeError& error : result.module->errors)
+                        emit(options->diagnostic, options->diagnostic_ctx, DB_DIAG_TYPE_ERROR, error.code(), nullptr, name,
+                            Luau::toString(error, Luau::TypeErrorToStringOptions{analysis->frontend->fileResolver}), error.location);
+                if (result.parseResult.errors.empty() && (!result.module || result.module->errors.empty()))
+                    emitInternal(options->diagnostic, options->diagnostic_ctx, name, "definitions file rejected");
+            }
+            return nullptr;
+        }
+        if (options->register_builtins || options->definitions_count != 0)
+        {
             Luau::freeze(analysis->frontend->globals.globalTypes);
             Luau::freeze(analysis->frontend->globalsForAutocomplete.globalTypes);
         }
