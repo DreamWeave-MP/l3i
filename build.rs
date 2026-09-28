@@ -109,6 +109,12 @@ fn main() {
         base.flag_if_supported("-fexceptions");
         base.flag_if_supported("-fwasm-exceptions");
     }
+    if target.ends_with("-msvc") {
+        // cc passes no /EH flag, and clang-cl refuses try and throw without one (cl only warns).
+        // Luau raises errors as C++ exceptions, out of its extern "C" API too, so /EHs without
+        // the c that would let the compiler assume extern "C" functions never throw.
+        base.flag("/EHs");
+    }
     if let Ok(extra) = env::var("LUAU_CXXFLAGS") {
         assert!(
             !extra.contains("LUA_UTAG_LIMIT"),
