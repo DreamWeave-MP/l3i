@@ -47,7 +47,7 @@ include = [
 
 [build-dependencies]
 # Compiles the vendored Luau tree and the C++ shims.
-cc = "1"
+cc = { version = "1", features = ["parallel"] }
 
 [dev-dependencies]
 criterion = { version = "0.8.2", features = ["html_reports"] }
