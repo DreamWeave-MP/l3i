@@ -8,7 +8,7 @@ else; `L3I_UNVERIFIED_TOOLCHAIN=1` turns the refusal into a warning. This page r
 | Side | Requirement | Where it is set |
 |---|---|---|
 | C++ (Luau, `csrc/`) | `clang++`; `build.rs` adds `-flto=thin` itself | `CXX=clang++` (`.cargo/config.toml` `[env]`) |
-| Rust | `-Clinker-plugin-lto -Clinker=clang -Clink-arg=-fuse-ld=lld` | `.cargo/config.toml` `[target.*] rustflags` |
+| Rust | `-Clinker-plugin-lto -Clinker=clang -Clink-arg=-fuse-ld=lld`, all three checked by `build.rs` | `.cargo/config.toml` `[target.*] rustflags` |
 | Both | clang and rustc on the same LLVM major (`clang++ --version`, `rustc -vV`) | checked by `build.rs` |
 | `cc` crate | `parallel` feature | `Cargo.toml` |
 
@@ -19,8 +19,10 @@ clang is not upstream LLVM; use a Homebrew or nightly LLVM whose major matches.
 
 The lld flag is not optional: without it clang hands the bitcode objects to `ld.bfd`, which
 fails with `bad -plugin-opt option`. `-Clinker-plugin-lto` without a clang-built Luau links fine
-but forfeits the gain; `build.rs` only emits `-flto=thin` when the whole chain is in place, so
-partial configurations are refused rather than silently slow.
+but forfeits the gain. `build.rs` checks every half of the chain (clang++ as the C++ compiler,
+`-Clinker-plugin-lto`, a clang linker, `-fuse-ld=lld`, matching LLVM majors) and only then emits
+`-flto=thin`, so a partial configuration is refused up front with the missing piece named
+instead of failing at the final link or building silently slow.
 
 ## Why: the 2026-09-27 campaign
 

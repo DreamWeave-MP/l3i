@@ -209,11 +209,18 @@ fn toolchain_policy(base: &mut cc::Build) {
     let compiler = base.get_compiler();
     let rustflags = env::var("CARGO_ENCODED_RUSTFLAGS").unwrap_or_default().replace('\u{1f}', " ");
     let plugin_lto = rustflags.contains("linker-plugin-lto");
+    let linker_is_clang = rustflag_value(&rustflags, "linker")
+        .is_some_and(|linker| Path::new(linker).file_name().is_some_and(|name| name.to_string_lossy().starts_with("clang")));
+    let uses_lld = rustflags.contains("-fuse-ld=lld");
 
     let problem = if !compiler.is_like_clang() {
         Some(format!("the C++ compiler is `{}`, not clang", compiler.path().display()))
     } else if !plugin_lto {
         Some("RUSTFLAGS lacks -Clinker-plugin-lto".to_string())
+    } else if !linker_is_clang {
+        Some("RUSTFLAGS lacks -Clinker=clang (the final link must run through clang)".to_string())
+    } else if !uses_lld {
+        Some("RUSTFLAGS lacks -Clink-arg=-fuse-ld=lld (ld.bfd cannot consume the LTO bitcode)".to_string())
     } else {
         match (llvm_major_of_clang(&compiler), llvm_major_of_rustc()) {
             (Some(clang), Some(rustc)) if clang == rustc => None,
@@ -242,6 +249,18 @@ fn toolchain_policy(base: &mut cc::Build) {
              with a warning. TOOLCHAIN.md has the measurements behind this policy."
         ),
     }
+}
+
+/// The value of `-C<name>=<value>` (or `-C <name>=<value>`) in space-separated rustflags.
+fn rustflag_value<'a>(rustflags: &'a str, name: &str) -> Option<&'a str> {
+    let mut words = rustflags.split_whitespace().peekable();
+    while let Some(word) = words.next() {
+        let option = if word == "-C" { words.next()? } else { word.strip_prefix("-C")? };
+        if let Some(value) = option.strip_prefix(name).and_then(|rest| rest.strip_prefix('=')) {
+            return Some(value);
+        }
+    }
+    None
 }
 
 /// The LLVM major of the C++ compiler, from `clang++ --version`.
