@@ -209,7 +209,8 @@ cursor per loop) without materialising it, declared through the planner like any
 `raster::RasterExtension` (`dream.raster`, module `@dream/raster`) provides `raster::Color`
 (kind 3: RGBA8 in the low 32 bits, red in bits 0 to 7, the same four bytes a vertex or a texel
 holds, every `u32` valid) and `raster::ClipRect` (kind 4: four 14-bit pixel coordinates, so at
-most 16383 on an axis, stated rather than hidden), with `rgba8`, `rgb8`, `channels`, `packed`,
+most 16383 on an axis; a deliberate limit of the packed form, not of the renderer, which takes
+`u32` coordinates: a surface past 16K on an axis needs a clip type of its own), with `rgba8`, `rgb8`, `channels`, `packed`,
 `withAlpha`, `lerp`, `mul`, `add`, `scale`, `premultiply`, `clip`, `clipBounds`, and folded
 constants. Channel meaning is the consumer's: the renderer below reads colors as premultiplied.
 Color arithmetic for GUI and shader-style scripts goes through `raster.math()`, a receiver
@@ -267,7 +268,10 @@ drives one network phase per frame. `benches/net.rs` measures the bridge over lo
 With the `soft-render` feature, `soft_render::SoftRenderExtension` (`dream.soft_render`,
 module `@dream/soft-render`, requires `dream.raster`) binds
 [dream-soft-render](https://github.com/DreamWeave-MP/dream-soft-render) as a small software
-rendering device: `soft.renderer()`, `renderer:beginFrame(w, h)`, `frame:clear`, `frame:rect`,
+rendering device. Layering rule: dream-net (runtime infrastructure) and dream-soft-render (an
+experimental rendering primitive whose lowering lives next to the raster kinds) are the two
+explicit l3i integrations, named here so they stay exceptions; every other DreamWeave crate
+owns its l3i extension and depends upward on l3i, never the other way round. The device: `soft.renderer()`, `renderer:beginFrame(w, h)`, `frame:clear`, `frame:rect`,
 `frame:image`, `frame:mesh(vertexBuffer, indexBuffer, texture?, clip)`, `frame:finish()`,
 `renderer:createTexture(w, h, pixels)`, `texture:update(...)`, `renderer:readInto(buffer)`.
 Draws rasterize immediately in call order, as the crate does; colors are `raster` integers the
@@ -396,7 +400,7 @@ way: a hand-written `lua_CFunction` and a typed direct handler. On the pinned Lu
 | bound `() -> f64` | 292 | 73 |
 | bound `(f64, f64) -> f64` | 369 | 89 |
 | bound `(Vector3) -> f64` | 332 | 85 |
-| bound `(Packed<Color>) -> f64` | 353 | 87 |
+| bound `(Packed<Color>) -> f64` | 364 | 89 |
 | typed direct namecall, the VM's leanest method path | 368 | 98 |
 | planned method `() -> f64` | 431 | 107 |
 | planned getter | 397 | 101 |
@@ -404,6 +408,8 @@ way: a hand-written `lua_CFunction` and a typed direct handler. On the pinned Lu
 
 A bound call is within about forty instructions of a bare C function; a planned method is
 within sixty of the typed direct handler. The rest is Luau's own call and return machinery.
+A packed argument pays eleven instructions for the kind registry check (one owner load and a
+type compare) on top of its bit decode.
 
 The same harness reads the L1 data, L1 instruction, last-level cache, data and instruction
 TLB, and branch-miss counters. Every scenario reports fewer than 0.005 of each per call: the
