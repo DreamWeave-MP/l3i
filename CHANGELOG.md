@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- 324ca6e - BREAK: Publish one direct plan per runtime and refuse a second finish
+- 07d5895 - DOCS: Refresh the changelog
 - 3b324c0 - FIX: Anchor the root-level package include patterns so local reference checkouts stay out of the crate
 - 8231e0f - FIX: Require a clang linker and lld in the toolchain check, not only the LTO flag
 - 9434899 - FIX: Keep host-level table stores under protected_call since lua_rawset can allocate
