@@ -47,6 +47,8 @@ mod sandbox;
 mod soft_render;
 mod tagged;
 mod thread;
+#[cfg(all(feature = "analysis", feature = "soft-render"))]
+mod typed_definitions;
 mod untagged;
 mod vector_writer;
 mod watchdog;

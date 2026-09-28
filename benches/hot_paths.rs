@@ -485,13 +485,13 @@ impl l3i::extension::Extension for PlannedExtension {
     fn describe(&self, d: &mut l3i::extension::ExtensionDescriptor) -> Result<()> {
         let mut planned = d.userdata::<Planned>("dream.bench.Planned");
         planned.tag(self.tag);
-        planned.method("get", |p: &Planned| p.value.get());
-        planned.getter("value", |p: &Planned| p.value.get());
-        planned.method("slow", |p: &Planned| p.value.get());
+        planned.method("get", |p: &Planned| p.value.get()).untyped();
+        planned.getter("value", |p: &Planned| p.value.get()).untyped();
+        planned.method("slow", |p: &Planned| p.value.get()).untyped();
         if self.tag != l3i::extension::TagPolicy::Never {
-            planned.field::<PlannedValue>("field");
+            planned.field::<PlannedValue>("field").untyped();
         }
-        d.module("@dream/bench").function("new", |v: f64| l3i::userdata::Owned(Planned { value: Cell::new(v) }));
+        d.module("@dream/bench").function("new", |v: f64| l3i::userdata::Owned(Planned { value: Cell::new(v) })).untyped();
         Ok(())
     }
 }

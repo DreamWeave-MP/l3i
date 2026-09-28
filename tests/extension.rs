@@ -60,7 +60,7 @@ impl Extension for Core {
         let mut counter = d.userdata::<Counter>("dream.tests.Counter");
         counter.tag(self.tag).doc("A counter.");
         counter.method("get", |c: &Counter| c.value.get()).signature("(self): number");
-        counter.method("add", |c: &Counter, n: i64| c.value.set(c.value.get() + n));
+        counter.method("add", |c: &Counter, n: i64| c.value.set(c.value.get() + n)).untyped();
         counter
             .property("twice", |c: &Counter| c.value.get() * 2, |c: &Counter, v: i64| c.value.set(v / 2))
             .signature("number");
@@ -70,7 +70,7 @@ impl Extension for Core {
         }
         d.module("@dream/core")
             .doc("Counters.")
-            .function("new", |n: i64| Owned(Counter { value: Cell::new(n) }))
+            .function("new", |n: i64| Owned(Counter { value: Cell::new(n) })).untyped()
             .constant("ANSWER", CompileConstant::Number(42.0))
             .constant("LIMIT", CompileConstant::Integer(7))
             .constant("NAME", CompileConstant::String("core".to_owned()));
@@ -96,9 +96,9 @@ impl Extension for Tools {
     fn describe(&self, d: &mut ExtensionDescriptor) -> Result<()> {
         d.requires("dream.core");
         let mut counter = d.augment_userdata::<Counter>("dream.tests.Counter");
-        counter.method("double", |c: &Counter| c.value.get() * 2);
-        counter.method("describe", |c: &Counter| format!("counter at {}", c.value.get()));
-        d.module("@dream/tools").function("version", || 2i64);
+        counter.method("double", |c: &Counter| c.value.get() * 2).untyped();
+        counter.method("describe", |c: &Counter| format!("counter at {}", c.value.get())).untyped();
+        d.module("@dream/tools").function("version", || 2i64).untyped();
         Ok(())
     }
 }
@@ -170,7 +170,7 @@ fn per_vm_tags_and_atoms_differ_with_identical_semantics() {
             "dream.aaa"
         }
         fn describe(&self, d: &mut ExtensionDescriptor) -> Result<()> {
-            d.userdata::<Other>("dream.tests.Other").method("aardvark", |_: &Other| 1i64);
+            d.userdata::<Other>("dream.tests.Other").method("aardvark", |_: &Other| 1i64).untyped();
             Ok(())
         }
     }
@@ -193,11 +193,11 @@ fn stale_direct_cache_is_rejected_across_types() {
             "dream.pair"
         }
         fn describe(&self, d: &mut ExtensionDescriptor) -> Result<()> {
-            d.userdata::<Counter>("dream.tests.Counter").tag(TagPolicy::Required).method("get", |c: &Counter| c.value.get());
-            d.userdata::<Other>("dream.tests.Other").tag(TagPolicy::Required).method("get", |_: &Other| -1i64);
+            d.userdata::<Counter>("dream.tests.Counter").tag(TagPolicy::Required).method("get", |c: &Counter| c.value.get()).untyped();
+            d.userdata::<Other>("dream.tests.Other").tag(TagPolicy::Required).method("get", |_: &Other| -1i64).untyped();
             d.module("@dream/pair")
-                .function("counter", |n: i64| Owned(Counter { value: Cell::new(n) }))
-                .function("other", || Owned(Other));
+                .function("counter", |n: i64| Owned(Counter { value: Cell::new(n) })).untyped()
+                .function("other", || Owned(Other)).untyped();
             Ok(())
         }
     }
@@ -234,17 +234,17 @@ fn compiler_metadata_and_type_definitions_follow_composition() {
     runtime.exec("assert(core.ANSWER == 42, 'answer') assert(core.LIMIT == 7i, 'limit') assert(core.NAME == 'core', 'name') assert(core.new(1):get() == 1, 'get')").unwrap();
 
     let definitions = runtime.type_definitions().unwrap();
-    assert!(definitions.contains("declare class dream_tests_Counter"), "{definitions}");
+    assert!(definitions.contains("declare extern type dream_tests_Counter"), "{definitions}");
     assert!(definitions.contains("function get(self): number"), "{definitions}");
     assert!(definitions.contains("function double(self, ...any): any"), "{definitions}");
     assert!(definitions.contains("    twice: number"), "{definitions}");
     assert!(definitions.contains("    value: number"), "{definitions}");
     assert!(definitions.contains("export type Module__dream_core = {"), "{definitions}");
     assert!(definitions.contains("    ANSWER: number,"), "{definitions}");
-    assert!(definitions.contains("    LIMIT: number,"), "{definitions}");
+    assert!(definitions.contains("    LIMIT: integer,"), "{definitions}");
     assert!(definitions.contains("declare core: Module__dream_core"), "{definitions}");
     // The plan alone renders the userdata and module stubs.
-    assert!(plan.type_definitions().contains("declare class dream_tests_Counter"));
+    assert!(plan.type_definitions().contains("declare extern type dream_tests_Counter"));
 }
 
 #[test]
@@ -405,6 +405,32 @@ fn finalization_rejects_bad_compositions() {
     );
     assert!(error.contains("would share the generated class name 'dream_x_y_T'"), "{error}");
 
+    // Types are never accidental: a member with neither a signature nor untyped() fails the plan.
+    struct Unsigned;
+    impl Extension for Unsigned {
+        fn id(&self) -> &'static str {
+            "dream.unsigned"
+        }
+        fn describe(&self, d: &mut ExtensionDescriptor) -> Result<()> {
+            d.userdata::<Other>("dream.tests.Other").method("mystery", |_: &Other| 1i64);
+            Ok(())
+        }
+    }
+    let error = text(RuntimePlan::builder().extension(Unsigned).finalize());
+    assert!(error.contains("member 'mystery' of 'dream.tests.Other' (from 'dream.unsigned') has no signature"), "{error}");
+    struct UnsignedModule;
+    impl Extension for UnsignedModule {
+        fn id(&self) -> &'static str {
+            "dream.unsignedmod"
+        }
+        fn describe(&self, d: &mut ExtensionDescriptor) -> Result<()> {
+            d.module("@dream/unsigned").installed("later");
+            Ok(())
+        }
+    }
+    let error = text(RuntimePlan::builder().extension(UnsignedModule).finalize());
+    assert!(error.contains("member 'later' of module '@dream/unsigned'") && error.contains("no signature"), "{error}");
+
     // Packed kinds: one type per number across the plan, l3i's numbers off limits.
     struct Kinded(&'static str, u8);
     struct KindA;
@@ -472,7 +498,7 @@ fn finalization_rejects_bad_compositions() {
             self.0
         }
         fn describe(&self, d: &mut ExtensionDescriptor) -> Result<()> {
-            d.userdata::<Counter>("dream.tests.Counter").method("get", |c: &Counter| c.value.get());
+            d.userdata::<Counter>("dream.tests.Counter").method("get", |c: &Counter| c.value.get()).untyped();
             Ok(())
         }
     }
@@ -490,14 +516,14 @@ fn finalization_rejects_bad_compositions() {
             match self.0 {
                 0 => {
                     d.requires("dream.core");
-                    d.augment_userdata::<Other>("dream.tests.Counter").method("x", |_: &Other| 0i64);
+                    d.augment_userdata::<Other>("dream.tests.Counter").method("x", |_: &Other| 0i64).untyped();
                 }
                 1 => {
-                    d.augment_userdata::<Counter>("dream.tests.Counter").method("x", |_: &Counter| 0i64);
+                    d.augment_userdata::<Counter>("dream.tests.Counter").method("x", |_: &Counter| 0i64).untyped();
                 }
                 _ => {
                     d.requires("dream.core");
-                    d.augment_userdata::<Counter>("dream.tests.Counter").method("get", |_: &Counter| 0i64);
+                    d.augment_userdata::<Counter>("dream.tests.Counter").method("get", |_: &Counter| 0i64).untyped();
                 }
             }
             Ok(())
@@ -519,8 +545,8 @@ fn finalization_rejects_bad_compositions() {
         }
         fn describe(&self, d: &mut ExtensionDescriptor) -> Result<()> {
             d.requires("dream.core");
-            d.userdata::<Other>("dream.tests.Other").tag(TagPolicy::Required).method("value", |_: &Other| 99i64);
-            d.module("@dream/clash").function("new", || Owned(Other));
+            d.userdata::<Other>("dream.tests.Other").tag(TagPolicy::Required).method("value", |_: &Other| 99i64).untyped();
+            d.module("@dream/clash").function("new", || Owned(Other)).untyped();
             Ok(())
         }
     }
@@ -551,8 +577,8 @@ fn finalization_rejects_bad_compositions() {
                 }
             }
             let mut other = d.userdata::<Other>("dream.tests.Other");
-            other.field::<OtherValue>("value");
-            other.method("value", |_: &Other| 0i64);
+            other.field::<OtherValue>("value").untyped();
+            other.method("value", |_: &Other| 0i64).untyped();
             Ok(())
         }
     }
@@ -586,7 +612,7 @@ fn install_adds_to_declared_modules_and_rejects_duplicates() {
             "dream.late"
         }
         fn describe(&self, d: &mut ExtensionDescriptor) -> Result<()> {
-            d.userdata::<Other>("dream.tests.Other").method("get", |_: &Other| 5i64);
+            d.userdata::<Other>("dream.tests.Other").method("get", |_: &Other| 5i64).untyped();
             let module = d.module("@dream/late");
             module.function("declared", || 1i64).signature("() -> number");
             if self.0 != 3 {
@@ -642,7 +668,7 @@ fn install_adds_to_declared_modules_and_rejects_duplicates() {
             "dream.twice"
         }
         fn describe(&self, d: &mut ExtensionDescriptor) -> Result<()> {
-            d.module("@dream/twice").function("a", || 1i64).installed("a");
+            d.module("@dream/twice").function("a", || 1i64).untyped().installed("a").untyped();
             Ok(())
         }
     }

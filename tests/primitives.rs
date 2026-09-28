@@ -156,10 +156,10 @@ impl Extension for Views {
         d.module("@dream/views")
             .function("numbers", |call: &Call, count: i64| {
                 Sequence::push(call, Numbers((1..=count).map(|n| n * 10).collect())).map(l3i::value::Value::store)?
-            })
+            }).untyped()
             .function("countdown", |call: &Call, from: i64| {
                 Stream::push(call, Countdown(from)).map(l3i::value::Value::store)?
-            });
+            }).untyped();
         Ok(())
     }
 }

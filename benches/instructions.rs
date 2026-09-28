@@ -168,20 +168,20 @@ impl Extension for PlannedExtension {
     fn describe(&self, d: &mut ExtensionDescriptor) -> Result<()> {
         let mut planned = d.userdata::<Planned>("dream.bench.Planned");
         planned.tag(TagPolicy::Required);
-        planned.method("get", |p: &Planned| p.value.get());
-        planned.method("addTwo", |p: &Planned, a: f64, b: f64| p.value.get() + a + b);
-        planned.getter("value", |p: &Planned| p.value.get());
-        planned.field::<PlannedValue>("field");
+        planned.method("get", |p: &Planned| p.value.get()).untyped();
+        planned.method("addTwo", |p: &Planned, a: f64, b: f64| p.value.get() + a + b).untyped();
+        planned.getter("value", |p: &Planned| p.value.get()).untyped();
+        planned.field::<PlannedValue>("field").untyped();
         d.module("@dream/bench")
-            .function("new", |v: f64| Owned(Planned { value: Cell::new(v) }))
-            .function("zero", || 7.0f64)
-            .function("two", |a: f64, b: f64| a + b)
-            .function("vec", |v: Vector3| f64::from(v.x))
-            .function("packed", |c: Packed<Color>| f64::from(c.0.r))
-            .function("integer", |i: Integer| i.0 as f64)
+            .function("new", |v: f64| Owned(Planned { value: Cell::new(v) })).untyped()
+            .function("zero", || 7.0f64).untyped()
+            .function("two", |a: f64, b: f64| a + b).untyped()
+            .function("vec", |v: Vector3| f64::from(v.x)).untyped()
+            .function("packed", |c: Packed<Color>| f64::from(c.0.r)).untyped()
+            .function("integer", |i: Integer| i.0 as f64).untyped()
             .function("four", |a: Vector3, b: Vector3, c: Packed<Color>, d: Packed<ClipRect>| {
                 f64::from(a.x + b.y) + f64::from(c.0.r) + f64::from(d.0.max_x)
-            });
+            }).untyped();
         Ok(())
     }
 }

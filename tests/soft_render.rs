@@ -224,7 +224,7 @@ fn two_runtimes_with_different_tags_draw_the_same_bytes() {
     b.exec(LUAU_SCENE).unwrap();
     let (from_a, from_b) = (bytes_of_global(&a, "out"), bytes_of_global(&b, "out"));
     assert!(from_a.iter().eq(from_b.iter()), "the two runtimes drew different bytes");
-    assert!(a.type_definitions().unwrap().contains("declare class dream_soft_render_Frame"));
+    assert!(a.type_definitions().unwrap().contains("declare extern type dream_soft_render_Frame"));
 }
 
 /// The fan's 258 vertices written three ways must agree byte for byte: five buffer writes per

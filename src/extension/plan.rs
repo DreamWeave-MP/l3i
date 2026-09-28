@@ -6,7 +6,7 @@ use std::rc::Rc;
 
 use super::typedefs::class_name;
 use super::debug_prefix;
-use super::{COMPILER_TYPE_CAPACITY, CompilerTypePolicy, 
+use super::{COMPILER_TYPE_CAPACITY, CompilerTypePolicy, ModuleMemberKind, 
     Extension, ExtensionDescriptor, MemberKind, RuntimePolicy, TagPolicy, UserdataDecl, debug_root,
     validate_extension_id,
 };
@@ -33,6 +33,7 @@ pub struct ResolvedMember {
     /// through a plan slot like a getter (about 33 ns instead of 12) rather than failing the plan.
     pub through_slot: bool,
     pub signature: Option<String>,
+    pub untyped: bool,
     pub doc: Option<String>,
     pub contributor: &'static str,
 }
@@ -207,6 +208,7 @@ impl RuntimePlanBuilder {
 
         // 4. Userdata: owners, then augmentations merged in dependency order.
         let mut userdata = merge_userdata(&descriptors, &order)?;
+        check_signatures(&userdata, &modules)?;
         let mut classes: HashMap<String, &str> = HashMap::new();
         for resolved in &userdata {
             if let Some(other) = classes.insert(class_name(&resolved.key), &resolved.key) {
@@ -279,6 +281,38 @@ fn resolve_packed_kinds(descriptors: &[ExtensionDescriptor], order: &[usize]) ->
     Ok(kinds.into_iter().map(|(kind, _)| kind).collect())
 }
 
+
+/// Every member has a signature or was declared `untyped()`: the generated definitions never
+/// fall back to `any` by accident.
+fn check_signatures(userdata: &[ResolvedUserdata], modules: &[ResolvedModule]) -> Result<()> {
+    for resolved in userdata {
+        for member in &resolved.members {
+            // A property declares a getter and a setter under one name; the type is stated once.
+            let paired = member.kind == MemberKind::Setter
+                && resolved.members.iter().any(|m| {
+                    m.name == member.name && m.kind == MemberKind::Getter && (m.signature.is_some() || m.untyped)
+                });
+            if member.signature.is_none() && !member.untyped && !paired {
+                return Err(Error::logic(format!(
+                    "member '{}' of '{}' (from '{}') has no signature; give it one or declare it untyped()",
+                    member.name, resolved.key, member.contributor
+                )));
+            }
+        }
+    }
+    for module in modules {
+        for member in &module.members {
+            let needs = matches!(member.kind, ModuleMemberKind::Function | ModuleMemberKind::Installed);
+            if needs && member.signature.is_none() && !member.untyped {
+                return Err(Error::logic(format!(
+                    "member '{}' of module '{}' (from '{}') has no signature; give it one or declare it untyped()",
+                    member.name, module.path, module.provider
+                )));
+            }
+        }
+    }
+    Ok(())
+}
 
 /// Ids that fold to one debug prefix (`dream.foo-bar` and `dream.foo_bar`) would name
 /// functions identically; rejected here rather than confusing profiles later.
@@ -649,6 +683,7 @@ fn add_members(resolved: &mut ResolvedUserdata, decl: &UserdataDecl) -> Result<(
             slot: None,
             through_slot: false,
             signature: member.signature.clone(),
+            untyped: member.untyped,
             doc: member.doc.clone(),
             contributor: member.contributor,
         });

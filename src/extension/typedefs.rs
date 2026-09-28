@@ -32,7 +32,7 @@ fn render_userdata(out: &mut String, userdata: &ResolvedUserdata) {
             let _ = writeln!(out, "-- {line}");
         }
     }
-    let _ = writeln!(out, "declare class {}", class_name(&userdata.key));
+    let _ = writeln!(out, "declare extern type {} with", class_name(&userdata.key));
     let mut seen_pairs = std::collections::HashSet::new();
     for member in &userdata.members {
         if let Some(doc) = &member.doc {
@@ -71,7 +71,8 @@ fn constant_type(constant: &CompileConstant) -> &'static str {
     match constant {
         CompileConstant::Nil => "nil",
         CompileConstant::Boolean(_) => "boolean",
-        CompileConstant::Number(_) | CompileConstant::Integer(_) => "number",
+        CompileConstant::Number(_) => "number",
+        CompileConstant::Integer(_) => "integer",
         CompileConstant::Vector(..) => "vector",
         CompileConstant::String(_) => "string",
     }

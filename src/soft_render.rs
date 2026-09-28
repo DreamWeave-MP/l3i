@@ -506,13 +506,13 @@ impl Extension for SoftRenderExtension {
 
         d.module(MODULE)
             .doc("A software rendering device.")
-            .function("renderer", || Owned(Renderer::new()))
-            .function("vertices", || Owned(Vertices))
+            .function("renderer", || Owned(Renderer::new())).signature("() -> dream_soft_render_Renderer")
+            .function("vertices", || Owned(Vertices)).signature("() -> dream_soft_render_Vertices")
             .function("premultiply", |c: Packed<Color>| {
                 let c = c.0;
                 Color::from_packed(dream_soft_render::Color::from_rgba_unmultiplied(c.r, c.g, c.b, c.a).to_packed())
                     .pack()
-            })
+            }).signature("(color: integer) -> integer")
             .constant("MAX_SURFACE_PIXELS", CompileConstant::Number(dream_soft_render::MAX_SURFACE_PIXELS as f64))
             .constant("MAX_TEXTURE_BYTES", CompileConstant::Number(dream_soft_render::MAX_TEXTURE_BYTES as f64))
             .constant("VERTEX_BYTES", CompileConstant::Number(VERTEX_BYTES as f64));

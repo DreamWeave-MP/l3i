@@ -120,17 +120,27 @@ pub enum MemberKind {
 pub struct MemberDecl {
     pub name: String,
     pub kind: MemberKind,
-    /// A Luau type signature for definition output, e.g. `(self, buffer, offset: number) -> number`.
+    /// A Luau type signature for definition output, e.g. `(self, buffer, offset: number): number`.
     pub signature: Option<String>,
+    /// Declared without a signature on purpose; the definitions then say `...any`. A member
+    /// with neither a signature nor this flag fails the plan: types are never accidental.
+    pub untyped: bool,
     pub doc: Option<String>,
     /// The extension that contributed it.
     pub contributor: &'static str,
 }
 
 impl MemberDecl {
-    /// The Luau signature or type for definition output.
+    /// The Luau signature or type for definition output: `(self, x: number): integer` for a
+    /// method, a type for a getter, setter, or field.
     pub fn signature(&mut self, signature: impl Into<String>) -> &mut Self {
         self.signature = Some(signature.into());
+        self
+    }
+
+    /// Deliberately leaves the member without a type in the definitions.
+    pub fn untyped(&mut self) -> &mut Self {
+        self.untyped = true;
         self
     }
 
@@ -194,6 +204,7 @@ impl UserdataDecl {
             name: name.to_owned(),
             kind,
             signature: None,
+            untyped: false,
             doc: None,
             contributor: self.contributor,
         });
@@ -347,8 +358,10 @@ pub enum ModuleMemberKind {
 pub struct ModuleMemberDecl {
     pub name: String,
     pub kind: ModuleMemberKind,
-    /// A Luau type for definition output, e.g. `(path: string) -> Archive`.
+    /// A Luau type for definition output, e.g. `(path: string) -> dream_archive_Archive`.
     pub signature: Option<String>,
+    /// Declared without a type on purpose (see [`MemberDecl::untyped`]).
+    pub untyped: bool,
     pub doc: Option<String>,
     pub(crate) binder: Option<SharedModuleFunction>,
 }
@@ -385,7 +398,7 @@ impl ModuleDecl {
     }
 
     fn push(&mut self, name: &str, kind: ModuleMemberKind, binder: Option<SharedModuleFunction>) -> ModuleMemberBuilder<'_> {
-        self.members.push(ModuleMemberDecl { name: name.to_owned(), kind, signature: None, doc: None, binder });
+        self.members.push(ModuleMemberDecl { name: name.to_owned(), kind, signature: None, untyped: false, doc: None, binder });
         let index = self.members.len() - 1;
         ModuleMemberBuilder { module: self, index }
     }
@@ -426,6 +439,13 @@ impl<'m> ModuleMemberBuilder<'m> {
 
     pub fn doc(self, doc: impl Into<String>) -> Self {
         self.module.members[self.index].doc = Some(doc.into());
+        self
+    }
+
+    /// Deliberately leaves the member without a type in the definitions (`...any`); a function
+    /// or installed member with neither a signature nor this fails the plan.
+    pub fn untyped(self) -> Self {
+        self.module.members[self.index].untyped = true;
         self
     }
 
