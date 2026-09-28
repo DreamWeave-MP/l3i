@@ -152,7 +152,12 @@ each member with its callable (`method("read", |a: &Archive, path: &str| ..)`), 
 capabilities, and memory categories, all without touching a VM. Callables are `Clone` because
 one plan binds them in every runtime it creates. `install` is optional and runs per runtime for
 what needs the live VM or the resolved policy: capability-gated module functions, module values
-that are Lua objects, services, runtime-owned state. `RuntimePlan::builder().policy(..).service(..)
+that are Lua objects, services, runtime-owned state. The planned dispatch costs 40 ns per
+method call and 37 ns per getter on a tagged type (`benches/hot_paths.rs`,
+`extension_dispatch`): Luau's inline cache is validated with one packed-key compare, the plan
+and its member entries are read without a refcount or a borrow flag, and a type's own
+dispatchers vouch for the receiver so the bound member skips its type check.
+`RuntimePlan::builder().policy(..).service(..)
 .extension(..).finalize()` orders extensions by their dependency graph (deterministically),
 merges owners with augmenters into one type per key, assigns tags (pinned, then `Required`,
 then `Preferred` while tags last), assigns atoms densely, lays out direct slots (a direct field
@@ -207,12 +212,15 @@ rotation compressed smallest-three into one Luau integer (18 bits per component,
 identity, 1.6e-5 rad worst case), with `axisAngle`, `fromXYZW`/`toXYZW`, `mul`, `inverse`,
 `slerp`, `rotate`, `angleTo`, the compiler-folded constant `IDENTITY`, `quat::AnimationKey`
 (kind 2: the rotation plus four opaque flag bits, `key`/`keyRotation`/`keyFlags`), and, under `jit`,
-`quat.math()`: a tagged receiver whose `rotate`, `mul`, `key`, `keyRotation`, and `keyFlags`
-lower to IR when the script annotates it (`local Q: dream_quat_Math = quat.math()`): rotate and
-mul at 21 ns and 45 ns per call in native code against 46 ns and 111 ns for an f32 quaternion
-userdata and 99 ns and 150 ns through the binder; key plus keyRotation at 5 ns against 220 ns.
-Only single-result, fixed-arity call sites lower, so bind a nested call's result to a local
-first. The packed form is storage and transport; long-lived rotation state stays
+`quat.math()`: a tagged receiver whose `rotate`, `mul`, `slerp`, `key`, `keyRotation`, and
+`keyFlags` lower to IR when the script annotates it (`local Q: dream_quat_Math = quat.math()`):
+rotate 21 ns and mul 45 ns per call in native code against 46 ns and 111 ns for an f32
+quaternion userdata and 99 ns and 150 ns through the binder; slerp 86 ns against 167 ns and
+214 ns, with polynomial trigonometry (acos to 2e-8, sine to 6e-8) shared by both paths so they
+agree exactly; key plus keyRotation 5 ns against 220 ns. Only single-result, fixed-arity call
+sites lower: bind a nested call's result to a local first, and an argument that is itself an
+`if` expression or an `and`/`or` chain makes the compiler order the call differently, so bind
+that to a local too. The packed form is storage and transport; long-lived rotation state stays
 `quat::Quat` on the host, because re-encoding every blend step accumulates quantisation error.
 
 ## Networking
@@ -248,11 +256,12 @@ when collected, and the extension is a plain domain extension: l3i does not depe
 renderer unless the feature is on. `soft.vertices()` returns a writer whose
 `write(buffer, offset, pos, uv, color)` packs a vertex with one bounds check and returns the
 next offset; under `jit` it lowers to native buffer stores. Measured (`benches/soft_render.rs`,
-640x480): a frame of 48 panels costs 382 µs from Luau against 355 µs native, 3200 glyph quads
-5.0 ms against 4.8 ms, the 256-triangle fan 4.7 ms either way; an offscreen `frame:rect` call
-is 239 ns against 112 ns native, so the binding adds about 130 ns per draw call; writing the
-fan's 258 vertices takes 506 ns per vertex with five `buffer.write*` calls, 330 ns through the
-bound writer, and 70 ns through the lowered writer (cos, sin, and `vector.create` included).
+640x480): a frame of 48 panels costs 363 µs from Luau against 353 µs native, 3200 glyph quads
+5.1 ms against 4.8 ms, the 256-triangle fan 4.7 ms either way; an offscreen `frame:rect` call
+is 213 ns against 102 ns native, of which the bound call itself (the namecall plus its four
+arguments) is 84 ns; writing the fan's 258 vertices takes 506 ns per vertex with five
+`buffer.write*` calls, 330 ns through the bound writer, and 70 ns through the lowered writer
+(cos, sin, and `vector.create` included).
 
 ## Native code generation
 
