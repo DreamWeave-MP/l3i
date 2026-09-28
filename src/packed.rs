@@ -8,7 +8,8 @@
 //! is a discriminator (a 4-bit kind and 4 bits the kind may use for flags), the low 56 bits the
 //! payload. The kind is checked on every read, so untyped script code handing the wrong integer
 //! to a native operation fails with a type error instead of decoding garbage.
-//! [`crate::quat::Quaternion`] is the first kind: a rotation in 56 bits.
+//! [`crate::quat::Quaternion`] and [`crate::quat::AnimationKey`] are the first kinds: a rotation
+//! in 56 bits, with or without four bits of side data.
 
 use crate::convert::{BufferView, FromView, Integer, Push};
 use crate::error::{Error, Result};
@@ -94,7 +95,8 @@ pub const FLAG_BITS: u32 = 4;
 /// A semantic value that lives in one Luau integer: 4-bit kind, 4-bit flags, 56-bit payload.
 pub trait PackedScalar: Sized {
     /// The kind discriminator, `1..=15` (0 is reserved so a plain zero integer never passes).
-    /// Kind 1 is [`crate::quat::Quaternion`]; a host's own kinds are `2..=15`.
+    /// Kinds 1 and 2 are [`crate::quat::Quaternion`] and [`crate::quat::AnimationKey`]; a
+    /// host's own kinds are `3..=15`.
     const KIND: u8;
     /// The name used in type errors, e.g. `Quaternion`.
     const NAME: &'static str;

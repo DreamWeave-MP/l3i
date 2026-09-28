@@ -178,7 +178,8 @@ cursor per loop) without materialising it, declared through the planner like any
 `quat::QuatExtension` (`dream.quat`, module `@dream/quat`) is the first packed kind: a unit
 rotation compressed smallest-three into one Luau integer (18 bits per component, exact
 identity, 1.6e-5 rad worst case), with `axisAngle`, `fromXYZW`/`toXYZW`, `mul`, `inverse`,
-`slerp`, `rotate`, `angleTo`, the compiler-folded constant `IDENTITY`, and, under `jit`,
+`slerp`, `rotate`, `angleTo`, the compiler-folded constant `IDENTITY`, `quat::AnimationKey`
+(kind 2: the rotation plus four opaque flag bits, `key`/`keyRotation`/`keyFlags`), and, under `jit`,
 `quat.math()`: a tagged receiver whose `rotate(q, v)` and `mul(a, b)` lower to IR when the
 script annotates it (`local Q: dream_quat_Math = quat.math()`), at 21 ns and 45 ns per call in
 native code against 46 ns and 111 ns for an f32 quaternion userdata and 99 ns and 150 ns

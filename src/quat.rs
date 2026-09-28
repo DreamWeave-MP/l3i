@@ -1,7 +1,8 @@
 //! Rotations as packed Luau integers: the `dream.quat` extension.
 //!
 //! A unit quaternion is compressed smallest-three into the 56-bit payload of a
-//! [`PackedScalar`] (kind 1): two bits name the largest component, the other three are stored
+//! [`PackedScalar`] ([`Quaternion`], kind 1; [`AnimationKey`], kind 2, adds four flag bits for a
+//! pose or frame key): two bits name the largest component, the other three are stored
 //! as 18-bit lanes over `[-1/√2, 1/√2]`, and the omitted one is rebuilt from the unit norm. The
 //! grid has an exact zero, so the identity and axis-aligned rotations round-trip exactly; a
 //! random rotation comes back within 1.6e-5 rad (mean 5.7e-6). Scripts see one integer: no
@@ -21,6 +22,9 @@
 //! local v = quat.rotate(q, vector.create(1, 0, 0))
 //! local r = quat.mul(q, quat.inverse(q))      -- quat.IDENTITY, a compile-time constant
 //! local x, y, z, w = quat.toXYZW(quat.slerp(q, r, 0.5))
+//! local k = quat.key(q, 5)                      -- an AnimationKey: q plus flag bits 0101
+//! assert(quat.keyFlags(k) == 5 and quat.angleTo(quat.keyRotation(k), q) < 1e-5)
+//! quat.mul(q, k)                                 -- error: expected a packed Quaternion
 //! ```
 //!
 //! With the `jit` feature, `quat.math()` returns a tagged receiver whose `rotate(q, v)` and
@@ -227,6 +231,35 @@ impl Quaternion {
     }
 }
 
+/// The packed scalar kind of a rotation plus four bits of side data (kind 2): a pose key, an
+/// animation frame, a network snapshot, all in one integer. l3i keeps the flag nibble opaque; the
+/// system that produces the keys defines the bits.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AnimationKey {
+    pub rotation: Quat,
+    /// Four bits; higher bits are dropped when packing.
+    pub flags: u8,
+}
+
+impl PackedScalar for AnimationKey {
+    const KIND: u8 = 2;
+    const NAME: &'static str = "AnimationKey";
+    fn pack(&self) -> (u64, u8) {
+        (PackedRotation::encode(self.rotation).0, self.flags & 0xF)
+    }
+    fn unpack(payload: u64, flags: u8) -> Result<Self> {
+        Ok(AnimationKey { rotation: PackedRotation(payload).decode(), flags })
+    }
+}
+
+impl AnimationKey {
+    /// The Luau integer for `rotation` with `flags` (low four bits).
+    #[must_use]
+    pub fn pack(rotation: Quat, flags: u8) -> Packed<AnimationKey> {
+        Packed(AnimationKey { rotation, flags: flags & 0xF })
+    }
+}
+
 fn to_vec3(v: [f64; 3]) -> Vector3 {
     Vector3 { x: v[0] as f32, y: v[1] as f32, z: v[2] as f32 }
 }
@@ -272,7 +305,10 @@ impl Extension for QuatExtension {
             .function("inverse", |q: Packed<Quaternion>| Quaternion::pack(q.0.0.inverse()))?
             .function("slerp", |a: Packed<Quaternion>, b: Packed<Quaternion>, t: f64| Quaternion::pack(a.0.0.slerp(b.0.0, t)))?
             .function("rotate", |q: Packed<Quaternion>, v: Vector3| to_vec3(q.0.0.rotate(from_vec3(v))))?
-            .function("angleTo", |a: Packed<Quaternion>, b: Packed<Quaternion>| a.0.0.angle_to(b.0.0))?;
+            .function("angleTo", |a: Packed<Quaternion>, b: Packed<Quaternion>| a.0.0.angle_to(b.0.0))?
+            .function("key", |q: Packed<Quaternion>, flags: i64| AnimationKey::pack(q.0.0, flags as u8))?
+            .function("keyRotation", |k: Packed<AnimationKey>| Quaternion::pack(k.0.rotation))?
+            .function("keyFlags", |k: Packed<AnimationKey>| i64::from(k.0.flags))?;
         #[cfg(feature = "jit")]
         module.function("math", || crate::userdata::Owned(lowering::Math))?;
         module.finish()?;
@@ -647,6 +683,16 @@ mod tests {
                 assert!((fast[i] - [r.x, r.y, r.z][i]).abs() < 1e-12);
             }
         }
+    }
+
+    #[test]
+    fn animation_keys_are_a_distinct_kind() {
+        let key = AnimationKey::pack(Quat::IDENTITY, 0x19);
+        let back = Packed::<AnimationKey>::from_bits(key.bits()).unwrap();
+        assert_eq!(back.0.flags, 9, "four flag bits");
+        assert_eq!(back.0.rotation, Quat::IDENTITY);
+        assert!(Packed::<Quaternion>::from_bits(key.bits()).is_err());
+        assert!(Packed::<AnimationKey>::from_bits(Quaternion::pack(Quat::IDENTITY).bits()).is_err());
     }
 
     #[test]

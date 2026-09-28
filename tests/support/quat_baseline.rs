@@ -1,6 +1,6 @@
-//! Comparison baselines for the packed quaternion (`l3i::quat`): an f32 quaternion userdata
-//! with the same operations, and a second packed kind (`AnimationKey`) to prove kinds are
-//! distinct. Shared by `tests/quat.rs` and `benches/packed_quat.rs`; not public API.
+//! The comparison baseline for the packed quaternion (`l3i::quat`): an f32 quaternion userdata
+//! with the same operations. Shared by `tests/quat.rs` and `benches/packed_quat.rs`; not
+//! public API.
 
 #![allow(dead_code, clippy::cast_possible_truncation, clippy::cast_precision_loss, clippy::cast_sign_loss)]
 
@@ -9,8 +9,7 @@ use std::cell::Cell;
 use l3i::Result;
 use l3i::convert::Vector3;
 use l3i::extension::{Extension, ExtensionDescriptor, InstallContext, TagPolicy};
-use l3i::packed::{Packed, PackedScalar};
-use l3i::quat::{PackedRotation, Quat, Quaternion};
+use l3i::quat::Quat;
 use l3i::userdata::{Owned, Userdata};
 
 /// A deterministic random unit quaternion.
@@ -28,24 +27,6 @@ pub fn random_quat(rng: &mut u64) -> Quat {
         y: a * (2.0 * std::f64::consts::PI * u2).cos(),
         z: b * (2.0 * std::f64::consts::PI * u3).sin(),
         w: b * (2.0 * std::f64::consts::PI * u3).cos(),
-    }
-}
-
-/// A second packed kind: the same rotation plus four animation flag bits.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct AnimationKey {
-    pub rotation: Quat,
-    pub flags: u8,
-}
-
-impl PackedScalar for AnimationKey {
-    const KIND: u8 = 8;
-    const NAME: &'static str = "AnimationKey";
-    fn pack(&self) -> (u64, u8) {
-        (PackedRotation::encode(self.rotation).0, self.flags & 0xF)
-    }
-    fn unpack(payload: u64, flags: u8) -> Result<Self> {
-        Ok(AnimationKey { rotation: PackedRotation(payload).decode(), flags })
     }
 }
 
@@ -75,7 +56,7 @@ fn from_vec3(v: Vector3) -> [f64; 3] {
 }
 
 /// `@dream/quatud`: the userdata baseline (`axisAngle`, `a:mul(b)`, `a:slerp(b, t)`,
-/// `a:rotate(v)`, `a:angleTo(b)`) and the `AnimationKey` kind (`key`, `keyRotation`, `keyFlags`).
+/// `a:rotate(v)`, `a:angleTo(b)`).
 pub struct QuatBaseline;
 
 impl Extension for QuatBaseline {
@@ -106,12 +87,7 @@ impl Extension for QuatBaseline {
         module
             .function("axisAngle", |axis: Vector3, angle: f64| {
                 Owned(QuatUserdata::from(Quat::from_axis_angle(from_vec3(axis), angle)))
-            })?
-            .function("key", |q: Packed<Quaternion>, flags: i64| {
-                Packed(AnimationKey { rotation: q.0.0, flags: flags as u8 })
-            })?
-            .function("keyRotation", |k: Packed<AnimationKey>| Packed(Quaternion(k.0.rotation)))?
-            .function("keyFlags", |k: Packed<AnimationKey>| i64::from(k.0.flags))?;
+            })?;
         module.finish()?;
         Ok(())
     }

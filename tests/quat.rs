@@ -9,8 +9,8 @@ mod support;
 use l3i::Runtime;
 use l3i::extension::{RuntimePlan, RuntimePolicy};
 use l3i::packed::Packed;
-use l3i::quat::{Quat, QuatExtension, Quaternion};
-use support::{AnimationKey, QuatBaseline};
+use l3i::quat::{AnimationKey, Quat, QuatExtension, Quaternion};
+use support::QuatBaseline;
 
 fn policy() -> RuntimePolicy {
     RuntimePolicy::new().compat_global("@dream/quat", "quat").compat_global("@dream/quatud", "quatud")
@@ -35,16 +35,16 @@ fn packed_quaternions_and_keys_are_distinct_kinds_through_luau() {
              local half = quat.slerp(a, c, 0.5) assert(quat.angleTo(half, quat.axisAngle(vector.create(0, 0, 1), math.pi * 0.75)) < 1e-4, 'slerp') \
              -- A packed quaternion is an integer physically, but not semantically: the wrong kind fails. \
              assert(type(a) == 'number' or type(a) == 'integer') \
-             local key = quatud.key(a, 5) assert(quatud.keyFlags(key) == 5) assert(quat.angleTo(quatud.keyRotation(key), a) < 1e-5) \
+             local key = quat.key(a, 5) assert(quat.keyFlags(key) == 5) assert(quat.angleTo(quat.keyRotation(key), a) < 1e-5) \
              local ok, err = pcall(quat.mul, a, key) assert(not ok and err:find('Quaternion'), err) \
-             local ok2, err2 = pcall(quatud.keyFlags, a) assert(not ok2 and err2:find('AnimationKey'), err2) \
+             local ok2, err2 = pcall(quat.keyFlags, a) assert(not ok2 and err2:find('AnimationKey'), err2) \
              local ok3 = pcall(quat.mul, a, 42i) assert(not ok3) \
              -- The userdata baseline agrees. \
              local ua = quatud.axisAngle(vector.create(0, 0, 1), math.pi / 2) local uc = ua:mul(ua) \
              local uv = uc:rotate(vector.create(1, 0, 0)) assert(math.abs(uv.x + 1) < 1e-4)",
         )
         .unwrap();
-    let key = Packed(AnimationKey { rotation: Quat::IDENTITY, flags: 9 });
+    let key = AnimationKey::pack(Quat::IDENTITY, 9);
     let back = Packed::<AnimationKey>::from_bits(key.bits()).unwrap();
     assert_eq!(back.0.flags, 9);
     assert!(Packed::<Quaternion>::from_bits(key.bits()).is_err());
@@ -106,7 +106,7 @@ fn packed_quaternion_operations_lower_to_native_code() {
                  local m2 = quat.mul(x, b)\n\
                  worst = math.max(worst, quat.angleTo(m1, m2))\n\
              end\n\
-             local key = quatud.key(a, 3)\n\
+             local key = quat.key(a, 3)\n\
              -- Single-result calls so the hook lowers these sites too; the kind check then\n\
              -- exits to the interpreter, whose C method raises the type error.\n\
              local ok, err = pcall(function() local r = Q:mul(a, key) return r end)\n\
