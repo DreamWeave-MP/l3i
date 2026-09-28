@@ -429,8 +429,8 @@ fn typed_variants(c: &mut Criterion) {
     ] {
         runtime.set_global(name, function).unwrap();
     }
-    runtime.set_global("color", &l3i::convert::Integer(l3i::raster::Color::WHITE.pack().bits())).unwrap();
-    runtime.set_global("clip", &l3i::convert::Integer(l3i::raster::ClipRect::ALL.pack().bits())).unwrap();
+    runtime.set_global("color", &l3i::convert::Integer(l3i::raster::Color::WHITE.pack().bits().unwrap())).unwrap();
+    runtime.set_global("clip", &l3i::convert::Integer(l3i::raster::ClipRect::ALL.pack().bits().unwrap())).unwrap();
     runtime.exec("hoisted = vector.create(1, 2, 3)").unwrap();
     let mut group = c.benchmark_group("typed_variants");
     group.throughput(Throughput::Elements(CALLS));

@@ -284,7 +284,7 @@ fn packed_scalars_cross_as_integers_with_a_kind_check() {
              local ok2 = pcall(read, 1.5) assert(not ok2)",
         )
         .unwrap();
-    let bits = Packed(Handle { id: 7, flags: 3 }).bits();
+    let bits = Packed(Handle { id: 7, flags: 3 }).bits().unwrap();
     assert_eq!(Packed::<Handle>::from_bits(bits).unwrap().0, Handle { id: 7, flags: 3 });
     // Through a buffer.
     let store = runtime

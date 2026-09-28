@@ -60,7 +60,7 @@ fn colors_and_clips_are_distinct_packed_kinds() {
     // The Rust side agrees on the bit pattern scripts see.
     let function = runtime.load_function("return function() return raster.rgba8(0x11, 0x22, 0x33, 0x44) end").unwrap();
     let value = function.invoke::<l3i::convert::Integer, _>(&runtime.stack(), ()).unwrap();
-    assert_eq!(value.0, Color::rgba(0x11, 0x22, 0x33, 0x44).pack().bits());
+    assert_eq!(value.0, Color::rgba(0x11, 0x22, 0x33, 0x44).pack().bits().unwrap());
 }
 
 /// The receiver's methods lowered to native code agree with the module functions (the same Rust

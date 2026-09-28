@@ -515,10 +515,10 @@ impl Extension for RasterExtension {
 
         d.module(MODULE)
             .doc("Colors and clip rectangles as packed integers.")
-            .constant("TRANSPARENT", CompileConstant::Integer(Color::TRANSPARENT.pack().bits()))
-            .constant("BLACK", CompileConstant::Integer(Color::BLACK.pack().bits()))
-            .constant("WHITE", CompileConstant::Integer(Color::WHITE.pack().bits()))
-            .constant("CLIP_ALL", CompileConstant::Integer(ClipRect::ALL.pack().bits()))
+            .constant("TRANSPARENT", CompileConstant::Integer(Color::TRANSPARENT.pack().bits()?))
+            .constant("BLACK", CompileConstant::Integer(Color::BLACK.pack().bits()?))
+            .constant("WHITE", CompileConstant::Integer(Color::WHITE.pack().bits()?))
+            .constant("CLIP_ALL", CompileConstant::Integer(ClipRect::ALL.pack().bits()?))
             .constant("CLIP_MAX_COORD", CompileConstant::Number(f64::from(ClipRect::MAX_COORD)))
             .constant("TRANSPARENT16", CompileConstant::Integer(Color16::TRANSPARENT.bits()))
             .constant("BLACK16", CompileConstant::Integer(Color16::BLACK.bits()))
@@ -578,10 +578,10 @@ mod tests {
         c.write_to(&mut bytes).unwrap();
         assert_eq!(bytes, [0x11, 0x22, 0x33, 0x44]);
         assert_eq!(Color::read_from(&bytes).unwrap(), c);
-        let bits = c.pack().bits();
+        let bits = c.pack().bits().unwrap();
         assert_eq!(Packed::<Color>::from_bits(bits).unwrap().0, c);
         assert!(Packed::<ClipRect>::from_bits(bits).is_err(), "a color is not a clip rectangle");
-        assert!(Packed::<Color>::from_bits(crate::packed::encode(3, 0, 1 << 40)).is_err(), "high payload bits");
+        assert!(Packed::<Color>::from_bits(crate::packed::encode(3, 0, 1 << 40).unwrap()).is_err(), "high payload bits");
         assert_eq!(Color::BLACK.lerp(Color::WHITE, 0.5), Color::rgba(128, 128, 128, 255));
         assert_eq!(Color::BLACK.lerp(Color::WHITE, 7.0), Color::WHITE);
         assert_eq!(Color::BLACK.lerp(Color::WHITE, f64::NAN), Color::TRANSPARENT, "NaN yields zero channels");
@@ -629,13 +629,13 @@ mod tests {
     #[test]
     fn clip_rect_packs_four_fields_and_validates() {
         let clip = ClipRect::new(1, 2, 16383, 40).unwrap();
-        let back = Packed::<ClipRect>::from_bits(clip.pack().bits()).unwrap().0;
+        let back = Packed::<ClipRect>::from_bits(clip.pack().bits().unwrap()).unwrap().0;
         assert_eq!(back, clip);
         assert!(ClipRect::new(5, 0, 4, 0).is_err(), "min above max");
         assert!(ClipRect::new(0, 0, 16384, 0).is_err(), "beyond the field");
         assert!(ClipRect::ALL.reaches_limit());
         // A forged payload with min > max fails on unpack, not just on construction.
-        let forged = crate::packed::encode(4, 0, 9 | (3 << 28));
+        let forged = crate::packed::encode(4, 0, 9 | (3 << 28)).unwrap();
         assert!(Packed::<ClipRect>::from_bits(forged).is_err());
     }
 }

@@ -241,8 +241,8 @@ fn runtime() -> Runtime {
         unsafe { frame.push_c_function(raw_add, c"dream.bench.rawAdd".as_ptr()) };
         frame.set_global("raw_add")
     }).unwrap();
-    runtime.set_global("color", &Integer(Color::WHITE.pack().bits())).unwrap();
-    runtime.set_global("clip", &Integer(ClipRect::ALL.pack().bits())).unwrap();
+    runtime.set_global("color", &Integer(Color::WHITE.pack().bits().unwrap())).unwrap();
+    runtime.set_global("clip", &Integer(ClipRect::ALL.pack().bits().unwrap())).unwrap();
     runtime.exec("planned = bench.new(7) hoisted = vector.create(1, 2, 3)").unwrap();
     runtime
 }

@@ -224,13 +224,22 @@ fn unregistered<T: PackedScalar>(shared: Option<&crate::runtime::shared::Shared>
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Packed<T>(pub T);
 
-/// Encodes `payload` and `flags` under `kind` as the integer bit pattern.
+/// Encodes `payload` and `flags` under `kind` as the integer bit pattern. A kind outside
+/// `1..=15`, flags above four bits, or a payload above 56 bits is an error, never truncated:
+/// a kind's `pack` that returns too many bits would otherwise write a valid-looking integer
+/// of another meaning into files and sockets.
 #[inline]
-#[must_use]
-pub fn encode(kind: u8, flags: u8, payload: u64) -> i64 {
-    debug_assert!(kind != 0 && kind < 16 && flags < 16 && payload <= PAYLOAD_MASK);
-    let bits = (u64::from(kind) << 60) | (u64::from(flags) << 56) | (payload & PAYLOAD_MASK);
-    bits as i64
+pub fn encode(kind: u8, flags: u8, payload: u64) -> Result<i64> {
+    if kind == 0 || kind > LAST_KIND {
+        return Err(Error::runtime(format!("packed kind {kind} is outside 1..=15")));
+    }
+    if flags > 0xF {
+        return Err(Error::runtime(format!("packed flags {flags:#x} exceed four bits")));
+    }
+    if payload > PAYLOAD_MASK {
+        return Err(Error::runtime(format!("packed payload {payload:#x} exceeds 56 bits")));
+    }
+    Ok(((u64::from(kind) << 60) | (u64::from(flags) << 56) | payload) as i64)
 }
 
 /// Splits an integer bit pattern into `(kind, flags, payload)`.
@@ -242,8 +251,9 @@ pub fn decode(bits: i64) -> (u8, u8, u64) {
 }
 
 impl<T: PackedScalar> Packed<T> {
-    /// The integer bit pattern of this value.
-    pub fn bits(&self) -> i64 {
+    /// The integer bit pattern of this value; an error if `T::pack` returned more bits than
+    /// its fields hold (see [`encode`]).
+    pub fn bits(&self) -> Result<i64> {
         let (payload, flags) = self.0.pack();
         encode(T::KIND, flags, payload)
     }
@@ -317,7 +327,7 @@ impl<'c, T: PackedScalar> crate::bind::ParamItem<'c> for Packed<T> {
 impl<T: PackedScalar> Push for Packed<T> {
     fn push_into<'s, S: Scope>(&self, scope: &'s S) -> Result<ValueView<'s>> {
         check_registered::<T>(scope.state())?;
-        Integer(self.bits()).push_into(scope)
+        Integer(self.bits()?).push_into(scope)
     }
 }
 
@@ -334,7 +344,7 @@ impl<T: PackedScalar> BufferPack for Packed<T> {
         Packed::from_bits(i64::read_from(bytes)?)
     }
     fn write_to(&self, bytes: &mut [u8]) -> Result<()> {
-        self.bits().write_to(bytes)
+        self.bits()?.write_to(bytes)
     }
 }
 
@@ -359,12 +369,16 @@ mod tests {
     #[test]
     fn round_trips_and_rejects_other_kinds() {
         let packed = Packed(Probe(PAYLOAD_MASK - 5, 9));
-        let bits = packed.bits();
+        let bits = packed.bits().unwrap();
         assert_eq!(decode(bits), (3, 9, PAYLOAD_MASK - 5));
         assert_eq!(Packed::<Probe>::from_bits(bits).unwrap(), packed);
-        let other = encode(4, 0, 1);
+        let other = encode(4, 0, 1).unwrap();
         assert!(Packed::<Probe>::from_bits(other).is_err());
         assert!(Packed::<Probe>::from_bits(0).is_err());
+        // A pack that overflows its fields is an error, never a truncated integer.
+        assert!(Packed(Probe(PAYLOAD_MASK + 1, 0)).bits().unwrap_err().to_string().contains("exceeds 56 bits"));
+        assert!(Packed(Probe(0, 16)).bits().unwrap_err().to_string().contains("exceed four bits"));
+        assert!(encode(0, 0, 0).is_err() && encode(16, 0, 0).is_err());
     }
 
     #[test]
