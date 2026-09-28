@@ -1,6 +1,5 @@
 //! Native code generation (`jit` feature): Luau's code generator with the binder's hooks, the
 //! `writef32x3` lowering, and a userdata field lowering written in Rust.
-#![cfg(feature = "jit")]
 
 use std::cell::Cell;
 use std::sync::atomic::{AtomicU32, Ordering};

@@ -1,5 +1,4 @@
 //! Luau's type checker, linter, autocomplete, and parser through the `analysis` feature.
-#![cfg(feature = "analysis")]
 
 use std::collections::HashMap;
 
