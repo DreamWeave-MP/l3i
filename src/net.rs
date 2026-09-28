@@ -542,12 +542,16 @@ impl Extension for NetExtension {
                 crate::source::CompileConstant::Number(f64::from(dream_net::schema::MAX_EVENT_PAYLOAD)),
             )
             .constant("MAX_CHANNELS", crate::source::CompileConstant::Number(dream_net::schema::MAX_CHANNELS as f64));
+        d.module(MODULE)
+            .installed("client")
+            .signature("(options: { schema: Schema, bind: string? }) -> Client")
+            .doc("A transport client; needs the network.transport capability at call time.");
         d.optional_capability(TRANSPORT_CAPABILITY);
         d.memory_category("dream.net");
         Ok(())
     }
 
-    /// `net.client{}` depends on the runtime's capabilities, so it binds here.
+    /// `net.client{}` depends on the runtime's capabilities, so its declared member binds here.
     fn install(&self, cx: &mut InstallContext<'_>) -> Result<()> {
         let transport_allowed = cx.has_capability(TRANSPORT_CAPABILITY);
         let clock = Rc::clone(&self.clock);

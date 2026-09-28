@@ -263,7 +263,7 @@ fn services_capabilities_state_and_drop_order() {
         fn describe(&self, d: &mut ExtensionDescriptor) -> Result<()> {
             d.service::<Greeting>();
             d.capability("filesystem.read");
-            d.module("@dream/needy");
+            d.module("@dream/needy").installed("greet").signature("() -> string");
             Ok(())
         }
         fn install(&self, cx: &mut InstallContext<'_>) -> Result<()> {
@@ -523,17 +523,25 @@ fn install_adds_to_declared_modules_and_rejects_duplicates() {
         }
         fn describe(&self, d: &mut ExtensionDescriptor) -> Result<()> {
             d.userdata::<Other>("dream.tests.Other").method("get", |_: &Other| 5i64);
-            d.module("@dream/late").function("declared", || 1i64);
+            let module = d.module("@dream/late");
+            module.function("declared", || 1i64).signature("() -> number");
+            if self.0 != 3 {
+                module.installed("installed").signature("() -> number").installed("instance").signature("Other");
+            }
             Ok(())
         }
         fn install(&self, cx: &mut InstallContext<'_>) -> Result<()> {
             match self.0 {
-                // A value that needs the live VM: an instance of a declared type.
+                // Values that need the live VM: an instance of a declared type, a policy-bound function.
                 0 => cx.module("@dream/late")?.function("installed", || 2i64)?.set("instance", &Owned(Other))?,
-                // The same name declared and installed.
+                // A declared function is bound from its declaration; install cannot replace it.
                 1 => cx.module("@dream/late")?.function("declared", || 3i64)?,
                 // A module another extension provides.
-                _ => cx.module("@dream/core")?,
+                2 => cx.module("@dream/core")?,
+                // A member the plan never declared.
+                3 => cx.module("@dream/late")?.function("surprise", || 4i64)?,
+                // Declared for install, never provided.
+                _ => cx.module("@dream/late")?,
             };
             Ok(())
         }
@@ -549,10 +557,33 @@ fn install_adds_to_declared_modules_and_rejects_duplicates() {
     // The module is frozen after install, whoever added the member.
     let error = runtime.exec("require('@dream/late').declared = nil").unwrap_err().to_string();
     assert!(error.contains("readonly"), "{error}");
-    let error = Runtime::from_plan(&RuntimePlan::builder().extension(Late(1)).finalize().unwrap()).err().unwrap().to_string();
-    assert!(error.contains("member 'declared' is set twice"), "{error}");
-    let error = Runtime::from_plan(&RuntimePlan::builder().extension(Late(2)).finalize().unwrap()).err().unwrap().to_string();
+    // The plan knows the whole module shape before any runtime exists.
+    let definitions = plan.type_definitions();
+    assert!(definitions.contains("    declared: () -> number,"), "{definitions}");
+    assert!(definitions.contains("    installed: () -> number,"), "{definitions}");
+    assert!(definitions.contains("    instance: Other,"), "{definitions}");
+    let instantiate = |late: Late| Runtime::from_plan(&RuntimePlan::builder().extension(late).finalize().unwrap()).err().unwrap().to_string();
+    let error = instantiate(Late(1));
+    assert!(error.contains("member 'declared' is bound from its declaration; install cannot replace it"), "{error}");
+    let error = instantiate(Late(2));
     assert!(error.contains("which the plan does not know"), "{error}");
+    let error = instantiate(Late(3));
+    assert!(error.contains("member 'surprise' is not declared"), "{error}");
+    let error = instantiate(Late(4));
+    assert!(error.contains("declares member 'installed' for install, which 'dream.late' did not provide"), "{error}");
+    // Declaring a name twice fails the plan.
+    struct Twice;
+    impl Extension for Twice {
+        fn id(&self) -> &'static str {
+            "dream.twice"
+        }
+        fn describe(&self, d: &mut ExtensionDescriptor) -> Result<()> {
+            d.module("@dream/twice").function("a", || 1i64).installed("a");
+            Ok(())
+        }
+    }
+    let error = RuntimePlan::builder().extension(Twice).finalize().err().unwrap().to_string();
+    assert!(error.contains("module '@dream/twice' declares member 'a' twice"), "{error}");
 }
 
 // ---- compiler type slots ---------------------------------------------------------------------

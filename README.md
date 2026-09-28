@@ -151,12 +151,16 @@ straight into the destination register. `Runtime::install_vector_buffer_writer` 
 
 A native crate exposes its Luau surface as an [`extension::Extension`]: `describe` declares
 identity (`dream.archive`), dependencies, modules (`@dream/archive`, frozen by default) with
-their functions and constants, userdata types under stable string keys with a `TagPolicy` and
-each member with its callable (`method("read", |a: &Archive, path: &str| ..)`), services,
-capabilities, and memory categories, all without touching a VM. Callables are `Clone` because
-one plan binds them in every runtime it creates. `install` is optional and runs per runtime for
-what needs the live VM or the resolved policy: capability-gated module functions, module values
-that are Lua objects, services, runtime-owned state. The planned dispatch costs 429 instructions per
+each member's kind, signature, and doc (`function("open", open).signature("(path: string) ->
+Archive")`, `constant`, or `installed("client")` for a value only a live VM can provide),
+userdata types under stable string keys with a `TagPolicy` and each member with its callable
+(`method("read", |a: &Archive, path: &str| ..)`), services, capabilities, packed kinds, and
+memory categories, all without touching a VM. Callables are `Clone` because one plan binds them
+in every runtime it creates. `install` is optional and runs per runtime for what needs the live
+VM or the resolved policy: it fills the module members declared `installed` (a policy-gated
+function, a userdata instance) and cannot add a name the plan does not know, so the plan's
+type definitions and compiler metadata describe the whole API before any runtime exists;
+services and runtime-owned state live there too. The planned dispatch costs 429 instructions per
 method call against 368 for the VM's own typed direct handler (`benches/instructions.rs`):
 Luau's inline cache and the member entry are one indexed load in a fused slot table, the plan
 is read without a refcount or a borrow flag, a type's own dispatchers vouch for the receiver

@@ -103,8 +103,7 @@ pub struct ResolvedModule {
     pub doc: Option<String>,
     /// The compatibility global the policy exposes it as, if any.
     pub global: Option<String>,
-    pub(crate) functions: Vec<(String, super::install::SharedModuleFunction)>,
-    pub(crate) constants: Vec<(String, crate::source::CompileConstant)>,
+    pub members: Vec<super::ModuleMemberDecl>,
 }
 
 impl std::fmt::Debug for ResolvedModule {
@@ -115,8 +114,7 @@ impl std::fmt::Debug for ResolvedModule {
             .field("provider", &self.provider)
             .field("doc", &self.doc)
             .field("global", &self.global)
-            .field("functions", &self.functions.iter().map(|(name, _)| name).collect::<Vec<_>>())
-            .field("constants", &self.constants)
+            .field("members", &self.members)
             .finish()
     }
 }
@@ -206,14 +204,22 @@ impl RuntimePlanBuilder {
                 }
                 let global =
                     policy.compat_globals.iter().find(|(path, _)| *path == module.path).map(|(_, g)| g.clone());
+                let mut names = HashSet::new();
+                for member in &module.members {
+                    if !names.insert(member.name.as_str()) {
+                        return Err(Error::logic(format!(
+                            "module '{}' declares member '{}' twice",
+                            module.path, member.name
+                        )));
+                    }
+                }
                 modules.push(ResolvedModule {
                     path: module.path.clone(),
                     frozen: module.frozen,
                     provider: module.provider,
                     doc: module.doc.clone(),
                     global,
-                    functions: module.functions.clone(),
-                    constants: module.constants.clone(),
+                    members: module.members.clone(),
                 });
             }
         }

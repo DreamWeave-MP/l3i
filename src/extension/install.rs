@@ -8,7 +8,7 @@ use std::ffi::CString;
 use std::rc::Rc;
 
 use super::plan::{ResolvedModule, ResolvedUserdata, RuntimePlan};
-use super::{MemberKind, debug_prefix};
+use super::{MemberKind, ModuleMemberKind, debug_prefix};
 use crate::bind::{Binding, MemberEntry};
 use crate::convert::Push;
 use crate::direct::field::FieldValue;
@@ -271,8 +271,38 @@ impl<'c> ModuleInstaller<'c> {
         Ok(())
     }
 
-    /// Binds `callable` as the module function `name`.
+    /// Checks that `name` is a member the plan declared for install and not yet provided.
+    fn declared_for_install(&self, name: &str) -> Result<()> {
+        let Some(member) = self.resolved.members.iter().find(|member| member.name == name) else {
+            return Err(Error::logic(format!(
+                "module '{}' member '{name}' is not declared; install fills declared members only (ModuleDecl::installed)",
+                self.resolved.path
+            )));
+        };
+        match member.kind {
+            ModuleMemberKind::Installed => {}
+            ModuleMemberKind::Function => {
+                return Err(Error::logic(format!(
+                    "module '{}' member '{name}' is bound from its declaration; install cannot replace it",
+                    self.resolved.path
+                )));
+            }
+            ModuleMemberKind::Constant(_) => {
+                return Err(Error::logic(format!(
+                    "module '{}' member '{name}' is a declared constant; install cannot replace it",
+                    self.resolved.path
+                )));
+            }
+        }
+        if self.members.iter().any(|(existing, _)| existing == name) {
+            return Err(Error::logic(format!("module '{}' member '{name}' is set twice", self.resolved.path)));
+        }
+        Ok(())
+    }
+
+    /// Binds `callable` as the declared install-time member `name`.
     pub fn function<F: Binding<M>, M>(&mut self, name: &str, callable: F) -> Result<&mut Self> {
+        self.declared_for_install(name)?;
         self.record(name, ModuleMemberInfo::Function)?;
         let stack = self.runtime.stack();
         let debug_name = format!("{}.{name}", self.prefix);
@@ -281,10 +311,18 @@ impl<'c> ModuleInstaller<'c> {
         Ok(self)
     }
 
-    /// A constant the compiler may fold when the module is a known global library.
-    pub fn constant(&mut self, name: &str, value: CompileConstant) -> Result<&mut Self> {
+    /// Any other value for the declared install-time member `name` (a nested table, a userdata
+    /// instance); unknown to the compiler.
+    pub fn set<T: Push + ?Sized>(&mut self, name: &str, value: &T) -> Result<&mut Self> {
+        self.declared_for_install(name)?;
+        self.record(name, ModuleMemberInfo::Unknown)?;
+        self.table.set(&self.runtime.stack(), name, value)?;
+        Ok(self)
+    }
+
+    fn set_constant(&mut self, name: &str, value: &CompileConstant) -> Result<()> {
         let stack = self.runtime.stack();
-        match &value {
+        match value {
             CompileConstant::Nil => self.table.set(&stack, name, &())?,
             CompileConstant::Boolean(b) => self.table.set(&stack, name, b)?,
             CompileConstant::Number(n) => self.table.set(&stack, name, n)?,
@@ -294,15 +332,7 @@ impl<'c> ModuleInstaller<'c> {
             }
             CompileConstant::String(s) => self.table.set(&stack, name, s.as_str())?,
         }
-        self.record(name, ModuleMemberInfo::Constant(value))?;
-        Ok(self)
-    }
-
-    /// Any other value (a nested table, a userdata constructor table); unknown to the compiler.
-    pub fn set<T: Push + ?Sized>(&mut self, name: &str, value: &T) -> Result<&mut Self> {
-        self.record(name, ModuleMemberInfo::Unknown)?;
-        self.table.set(&self.runtime.stack(), name, value)?;
-        Ok(self)
+        self.record(name, ModuleMemberInfo::Constant(value.clone()))
     }
 
     /// Creates the table with the module's declared functions and constants.
@@ -310,14 +340,18 @@ impl<'c> ModuleInstaller<'c> {
         let table = Table::new(&runtime.stack(), 0, 8)?;
         let mut module =
             ModuleInstaller { runtime, plan, resolved, table, members: Vec::new(), prefix: debug_prefix(resolved.provider) };
-        for (name, bind) in &resolved.functions {
-            module.record(name, ModuleMemberInfo::Function)?;
-            let debug_name = format!("{}.{name}", module.prefix);
-            let function = bind(runtime, plan.debug_roots(), &debug_name)?;
-            module.table.set(&runtime.stack(), name, &function)?;
-        }
-        for (name, value) in &resolved.constants {
-            module.constant(name, value.clone())?;
+        for member in &resolved.members {
+            match &member.kind {
+                ModuleMemberKind::Function => {
+                    let bind = member.binder.as_ref().expect("a declared function carries its binder");
+                    module.record(&member.name, ModuleMemberInfo::Function)?;
+                    let debug_name = format!("{}.{}", module.prefix, member.name);
+                    let function = bind(runtime, plan.debug_roots(), &debug_name)?;
+                    module.table.set(&runtime.stack(), &member.name, &function)?;
+                }
+                ModuleMemberKind::Constant(value) => module.set_constant(&member.name, value)?,
+                ModuleMemberKind::Installed => {}
+            }
         }
         Ok(module)
     }
@@ -326,6 +360,14 @@ impl<'c> ModuleInstaller<'c> {
     /// the compatibility global the policy asked for.
     fn finish(self, members: &mut ModuleMembers) -> Result<()> {
         let ModuleInstaller { runtime, resolved, table, members: recorded, .. } = self;
+        for member in &resolved.members {
+            if matches!(member.kind, ModuleMemberKind::Installed) && !recorded.iter().any(|(name, _)| *name == member.name) {
+                return Err(Error::logic(format!(
+                    "module '{}' declares member '{}' for install, which '{}' did not provide",
+                    resolved.path, member.name, resolved.provider
+                )));
+            }
+        }
         if resolved.frozen {
             crate::readonly::make_read_only(runtime, &table)?;
         }

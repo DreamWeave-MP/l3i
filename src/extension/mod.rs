@@ -313,8 +313,7 @@ pub struct ModuleDecl {
     pub frozen: bool,
     pub doc: Option<String>,
     pub(crate) provider: &'static str,
-    pub(crate) functions: Vec<(String, SharedModuleFunction)>,
-    pub(crate) constants: Vec<(String, CompileConstant)>,
+    pub(crate) members: Vec<ModuleMemberDecl>,
 }
 
 impl std::fmt::Debug for ModuleDecl {
@@ -324,9 +323,44 @@ impl std::fmt::Debug for ModuleDecl {
             .field("frozen", &self.frozen)
             .field("doc", &self.doc)
             .field("provider", &self.provider)
-            .field("functions", &self.functions.iter().map(|(name, _)| name).collect::<Vec<_>>())
-            .field("constants", &self.constants)
+            .field("members", &self.members)
             .finish()
+    }
+}
+
+/// What a declared module member is.
+#[derive(Clone, Debug)]
+pub enum ModuleMemberKind {
+    /// A function bound in every runtime from the declared callable.
+    Function,
+    /// A constant the compiler may fold when the module is a known global library.
+    Constant(CompileConstant),
+    /// A member whose value `install` provides per runtime: a function that depends on the
+    /// resolved policy, or a Lua object (a nested table, an instance of a declared type). The
+    /// name and its signature are part of the plan; only the value waits for the VM.
+    Installed,
+}
+
+/// One declared member of a module: its name and kind are the plan's, its signature and doc
+/// feed the type definitions.
+#[derive(Clone)]
+pub struct ModuleMemberDecl {
+    pub name: String,
+    pub kind: ModuleMemberKind,
+    /// A Luau type for definition output, e.g. `(path: string) -> Archive`.
+    pub signature: Option<String>,
+    pub doc: Option<String>,
+    pub(crate) binder: Option<SharedModuleFunction>,
+}
+
+impl std::fmt::Debug for ModuleMemberDecl {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ModuleMemberDecl")
+            .field("name", &self.name)
+            .field("kind", &self.kind)
+            .field("signature", &self.signature)
+            .field("doc", &self.doc)
+            .finish_non_exhaustive()
     }
 }
 
@@ -346,22 +380,70 @@ impl ModuleDecl {
         self
     }
 
+    pub fn members(&self) -> &[ModuleMemberDecl] {
+        &self.members
+    }
+
+    fn push(&mut self, name: &str, kind: ModuleMemberKind, binder: Option<SharedModuleFunction>) -> ModuleMemberBuilder<'_> {
+        self.members.push(ModuleMemberDecl { name: name.to_owned(), kind, signature: None, doc: None, binder });
+        let index = self.members.len() - 1;
+        ModuleMemberBuilder { module: self, index }
+    }
+
     /// A module function, bound in every runtime. The callable is `Clone` for the same reason
     /// userdata members' are (see [`UserdataBuilder`]).
-    pub fn function<F: Binding<M> + Clone + 'static, M: 'static>(&mut self, name: &str, callable: F) -> &mut Self {
-        self.functions.push((
-            name.to_owned(),
-            Rc::new(move |runtime, roots, debug_name| {
-                crate::bind::function(&runtime.stack(), roots, debug_name, callable.clone())
-            }),
-        ));
-        self
+    pub fn function<F: Binding<M> + Clone + 'static, M: 'static>(&mut self, name: &str, callable: F) -> ModuleMemberBuilder<'_> {
+        let binder: SharedModuleFunction = Rc::new(move |runtime, roots, debug_name| {
+            crate::bind::function(&runtime.stack(), roots, debug_name, callable.clone())
+        });
+        self.push(name, ModuleMemberKind::Function, Some(binder))
     }
 
     /// A constant the compiler may fold when the module is a known global library.
-    pub fn constant(&mut self, name: &str, value: CompileConstant) -> &mut Self {
-        self.constants.push((name.to_owned(), value));
+    pub fn constant(&mut self, name: &str, value: CompileConstant) -> ModuleMemberBuilder<'_> {
+        self.push(name, ModuleMemberKind::Constant(value), None)
+    }
+
+    /// A member `install` provides in every runtime (`InstallContext::module(..).function`
+    /// or `.set`); instantiation fails if it does not. The shape is the plan's either way.
+    pub fn installed(&mut self, name: &str) -> ModuleMemberBuilder<'_> {
+        self.push(name, ModuleMemberKind::Installed, None)
+    }
+}
+
+/// The member just declared: takes its signature and doc, and continues the module's chain.
+pub struct ModuleMemberBuilder<'m> {
+    module: &'m mut ModuleDecl,
+    index: usize,
+}
+
+impl<'m> ModuleMemberBuilder<'m> {
+    /// The member's Luau type for definition output.
+    pub fn signature(self, signature: impl Into<String>) -> Self {
+        self.module.members[self.index].signature = Some(signature.into());
         self
+    }
+
+    pub fn doc(self, doc: impl Into<String>) -> Self {
+        self.module.members[self.index].doc = Some(doc.into());
+        self
+    }
+
+    /// The module this member belongs to, to declare more.
+    pub fn module(self) -> &'m mut ModuleDecl {
+        self.module
+    }
+
+    pub fn function<F: Binding<M> + Clone + 'static, M: 'static>(self, name: &str, callable: F) -> ModuleMemberBuilder<'m> {
+        self.module.function(name, callable)
+    }
+
+    pub fn constant(self, name: &str, value: CompileConstant) -> ModuleMemberBuilder<'m> {
+        self.module.constant(name, value)
+    }
+
+    pub fn installed(self, name: &str) -> ModuleMemberBuilder<'m> {
+        self.module.installed(name)
     }
 }
 
@@ -453,14 +535,18 @@ impl ExtensionDescriptor {
     }
 
     /// Declares a native module at `path` (frozen by default).
+    /// The module at `path`, created on first mention: an extension may return to it to
+    /// declare more members.
     pub fn module(&mut self, path: &str) -> &mut ModuleDecl {
+        if let Some(index) = self.modules.iter().position(|module| module.path == path) {
+            return &mut self.modules[index];
+        }
         self.modules.push(ModuleDecl {
             path: path.to_owned(),
             frozen: true,
             doc: None,
             provider: self.id,
-            functions: Vec::new(),
-            constants: Vec::new(),
+            members: Vec::new(),
         });
         self.modules.last_mut().expect("pushed above")
     }
