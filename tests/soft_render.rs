@@ -226,3 +226,119 @@ fn two_runtimes_with_different_tags_draw_the_same_bytes() {
     assert!(from_a.iter().eq(from_b.iter()), "the two runtimes drew different bytes");
     assert!(a.type_definitions().unwrap().contains("declare class dream_soft_render_Frame"));
 }
+
+/// The fan's 258 vertices written three ways must agree byte for byte: five buffer writes per
+/// vertex, the bound `Vertices:write`, and (jit) the natively lowered `Vertices:write`.
+const FAN_WRITER: &str = "
+    local function fill(target, write)
+        local off = 0
+        off = write(target, off, vector.create(320, 240), vector.zero, raster.WHITE)
+        for step = 0, 256 do
+            local angle = step / 256 * 2 * math.pi
+            local shade = step % 256
+            local color = soft.premultiply(raster.rgba8(shade, 255 - shade, 128, 220))
+            off = write(target, off, vector.create(320 + 200 * math.cos(angle), 240 + 180 * math.sin(angle)), vector.zero, color)
+        end
+        return off
+    end
+    local function manual(target, off, pos, uv, color)
+        buffer.writef32(target, off, pos.x) buffer.writef32(target, off + 4, pos.y)
+        buffer.writef32(target, off + 8, uv.x) buffer.writef32(target, off + 12, uv.y)
+        buffer.writeu32(target, off + 16, raster.packed(color))
+        return off + 20
+    end
+    local V = soft.vertices()
+    manualBuffer = buffer.create(258 * soft.VERTEX_BYTES)
+    binderBuffer = buffer.create(258 * soft.VERTEX_BYTES)
+    assert(fill(manualBuffer, manual) == 258 * 20)
+    assert(fill(binderBuffer, function(target, off, pos, uv, color) return V:write(target, off, pos, uv, color) end) == 258 * 20)
+";
+
+#[test]
+fn vertex_writer_matches_manual_buffer_writes() {
+    let runtime = Runtime::from_plan(&plan(RuntimePolicy::new())).unwrap();
+    runtime.exec(FAN_WRITER).unwrap();
+    let (manual, binder) = (bytes_of_global(&runtime, "manualBuffer"), bytes_of_global(&runtime, "binderBuffer"));
+    assert!(manual.iter().eq(binder.iter()), "Vertices:write diverges from five buffer writes");
+    // The written bytes are the renderer's vertex layout.
+    let vertices: Vec<Vertex> =
+        manual.chunks(20).map(|v| unsafe { std::ptr::read_unaligned(v.as_ptr().cast::<Vertex>()) }).collect();
+    assert_eq!(vertices[0], Vertex::new([320.0, 240.0], [0.0, 0.0], Color::WHITE));
+    let errors: &[(&str, &str)] = &[
+        ("local V = soft.vertices() V:write(buffer.create(19), 0, vector.zero, vector.zero, raster.WHITE)", "out of bounds"),
+        ("local V = soft.vertices() V:write(buffer.create(40), 21, vector.zero, vector.zero, raster.WHITE)", "out of bounds"),
+        ("local V = soft.vertices() V:write(buffer.create(40), -1, vector.zero, vector.zero, raster.WHITE)", "out of bounds"),
+        ("local V = soft.vertices() V:write(buffer.create(40), 0, vector.zero, vector.zero, raster.CLIP_ALL)", "Color"),
+    ];
+    for (source, expected) in errors {
+        let error = runtime.exec(source).unwrap_err().to_string();
+        assert!(error.contains(expected), "{source}\n  expected '{expected}', got: {error}");
+    }
+}
+
+#[cfg(feature = "jit")]
+#[test]
+fn vertex_writer_lowers_to_native_stores() {
+    use l3i::extension::NativeCodePolicy;
+    use l3i::native_code::{NativeCodeMode, NativeCodeStatus};
+    use l3i::runtime::{CallContext, MemoryCategory};
+    use l3i::sandbox::{InstanceSpec, SandboxOptions};
+    use l3i::soft_render::lowering::lowered_sites;
+
+    let policy = RuntimePolicy::new().native_code(NativeCodePolicy {
+        mode: NativeCodeMode::Eager,
+        record_counters: true,
+        ..NativeCodePolicy::default()
+    });
+    let runtime = Runtime::from_plan(&plan(policy)).unwrap();
+    let generator = runtime.native_code().expect("built with native code");
+    if !generator.is_available() {
+        eprintln!("no Luau code generator on this platform; skipping");
+        return;
+    }
+    runtime.exec(FAN_WRITER).unwrap();
+    let binder = bytes_of_global(&runtime, "binderBuffer");
+    let sandbox = runtime
+        .sandbox(|_| {}, SandboxOptions { compile_options: runtime.compile_options(), ..SandboxOptions::default() })
+        .unwrap();
+    let before = lowered_sites();
+    let template = sandbox
+        .load_template(
+            &runtime,
+            "vertices.lua",
+            "--!native
+             local V: dream_soft_render_Vertices = soft.vertices()
+             local target = buffer.create(258 * soft.VERTEX_BYTES)
+             local off = 0
+             off = V:write(target, off, vector.create(320, 240), vector.zero, raster.WHITE)
+             for step = 0, 256 do
+                 local angle = step / 256 * 2 * math.pi
+                 local shade = step % 256
+                 local color = soft.premultiply(raster.rgba8(shade, 255 - shade, 128, 220))
+                 off = V:write(target, off, vector.create(320 + 200 * math.cos(angle), 240 + 180 * math.sin(angle)), vector.zero, color)
+             end
+             assert(off == 258 * 20)
+             -- Wrong kind and out of bounds: single-result sites, so they lower and then exit.
+             local ok, err = pcall(function() local r = V:write(target, 0, vector.zero, vector.zero, raster.CLIP_ALL) return r end)
+             assert(not ok and string.find(err, 'Color'), err)
+             local ok2, err2 = pcall(function() local r = V:write(target, 258 * 20 - 19, vector.zero, vector.zero, raster.WHITE) return r end)
+             assert(not ok2 and string.find(err2, 'out of bounds'), err2)
+             return target",
+        )
+        .unwrap();
+    let native = template.native_code().expect("compiled");
+    assert_eq!(native.status, NativeCodeStatus::Success, "{native:?}");
+    assert_eq!(lowered_sites() - before, 4, "two loop sites and two closures lowered");
+    let loader = runtime.load_function("return function(name) error('module ' .. name .. ' not found') end").unwrap();
+    let instance = sandbox
+        .new_instance(&runtime, &InstanceSpec { name: "v", packages: &[], hidden_data: None, loader: &loader })
+        .unwrap();
+    let results = sandbox.run(&runtime, &template, &instance, CallContext { id: 1, category: MemoryCategory(0) }).unwrap();
+    let lowered: Vec<u8> = runtime
+        .stack()
+        .with_frame(|frame| Ok(results[0].push_to(frame)?.read::<BytesView>()?.to_vec()))
+        .unwrap();
+    assert!(lowered.iter().eq(binder.iter()), "the lowered writer diverges from the bound method");
+    let stats = generator.execution_stats(&runtime.stack());
+    assert_eq!(stats.vm_exits_taken, 2, "only the two bad calls exit: {stats:?}");
+}

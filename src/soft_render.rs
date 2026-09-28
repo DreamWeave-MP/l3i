@@ -343,6 +343,37 @@ impl Drop for Texture {
     }
 }
 
+/// The vertex writer (`dream.soft_render.Vertices`, from `soft.vertices()`): one call packs
+/// a vertex into a buffer with a single bounds check, `V:write(buffer, offset, pos, uv,
+/// color)`, and returns the next offset. With `jit` the call lowers to native stores
+/// ([`lowering::VertexWriter`]).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Vertices;
+
+// SAFETY: no payload, no Lua references.
+unsafe impl Userdata for Vertices {
+    const NAME: &'static str = "dream.soft_render.Vertices";
+}
+
+/// The interpreter path of `Vertices:write`, and the oracle its lowering must match. The
+/// offset truncates toward zero like the buffer library's; anything outside the buffer is the
+/// library's "buffer access out of bounds".
+pub fn write_vertex(buffer: BufferView<'_>, offset: f64, pos: Vector3, uv: Vector3, color: Packed<Color>) -> Result<f64> {
+    let offset = if offset.is_finite() && offset >= 0.0 && offset < f64::from(i32::MAX) {
+        offset.trunc() as usize
+    } else {
+        return Err(Error::runtime("buffer access out of bounds"));
+    };
+    let mut bytes = [0u8; VERTEX_BYTES];
+    bytes[0..4].copy_from_slice(&pos.x.to_ne_bytes());
+    bytes[4..8].copy_from_slice(&pos.y.to_ne_bytes());
+    bytes[8..12].copy_from_slice(&uv.x.to_ne_bytes());
+    bytes[12..16].copy_from_slice(&uv.y.to_ne_bytes());
+    bytes[16..20].copy_from_slice(&color.0.to_array());
+    buffer.write(offset, &bytes)?;
+    Ok((offset + VERTEX_BYTES) as f64)
+}
+
 macro_rules! size_field {
     ($name:ident, $ty:ty, $get:expr) => {
         struct $name;
@@ -404,6 +435,14 @@ impl Extension for SoftRenderExtension {
         texture.field("width").signature("number");
         texture.field("height").signature("number");
 
+        let vertices = d.userdata::<Vertices>("dream.soft_render.Vertices");
+        vertices.tag(TagPolicy::Required).doc("Packs vertices into buffers; natively lowered under jit.");
+        vertices
+            .method("write")
+            .signature("(self, buffer: buffer, offset: number, pos: vector, uv: vector, color: integer): number");
+        #[cfg(feature = "jit")]
+        d.native_hooks(lowering::VertexWriter);
+
         d.module(MODULE).doc("A software rendering device.");
         d.memory_category(EXTENSION_ID);
         Ok(())
@@ -450,9 +489,16 @@ impl Extension for SoftRenderExtension {
             .method("free", |t: &Texture| t.free())?
             .field::<TextureWidth>("width")?
             .field::<TextureHeight>("height")?;
+        cx.userdata::<Vertices>("dream.soft_render.Vertices")?.method(
+            "write",
+            |_: &Vertices, buffer: BufferView, offset: f64, pos: Vector3, uv: Vector3, color: Packed<Color>| {
+                write_vertex(buffer, offset, pos, uv, color)
+            },
+        )?;
         let mut module = cx.module(MODULE)?;
         module
             .function("renderer", || Owned(Renderer::new()))?
+            .function("vertices", || Owned(Vertices))?
             .function("premultiply", |c: Packed<Color>| {
                 let c = c.0;
                 Color::from_packed(dream_soft_render::Color::from_rgba_unmultiplied(c.r, c.g, c.b, c.a).to_packed())
@@ -463,5 +509,130 @@ impl Extension for SoftRenderExtension {
             .constant("VERTEX_BYTES", CompileConstant::Number(VERTEX_BYTES as f64))?;
         module.finish()?;
         Ok(())
+    }
+}
+
+/// Native lowering of `Vertices:write` (`jit`): one buffer bounds check, four f32 stores from
+/// the two vectors, and the color's four bytes as two 16-bit stores (the IR has no 64-to-32-bit
+/// integer narrowing, and a 32-bit store through a double would lose bit 31). A wrong tag, a
+/// color of another packed kind, or an offset outside the buffer exits to the interpreter,
+/// whose bound method reports the error.
+#[cfg(feature = "jit")]
+pub mod lowering {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use super::{VERTEX_BYTES, Vertices};
+    use crate::native_code::hooks::{NamecallSite, NativeCodeHooks, NativeContext};
+    use crate::native_code::ir::{IrBuilder, IrCmd, IrCondition, IrOp, bytecode_type};
+    use crate::packed::PackedScalar;
+    use crate::raw::ffi::{LUA_TBUFFER, LUA_TINTEGER, LUA_TNUMBER, LUA_TVECTOR};
+    use crate::raster::Color;
+
+    static LOWERED: AtomicUsize = AtomicUsize::new(0);
+
+    /// How many call sites the hook has lowered in this process (a diagnostic for tests).
+    #[doc(hidden)]
+    pub fn lowered_sites() -> usize {
+        LOWERED.load(Ordering::Relaxed)
+    }
+
+    /// The hook set; [`super::SoftRenderExtension`] registers it.
+    pub struct VertexWriter;
+
+    fn write_f32_pair(build: &mut IrBuilder<'_>, buffer: IrOp, offset: IrOp, at: i32, reg: IrOp, tag: IrOp) {
+        let vector = build.inst(IrCmd::LOAD_TVALUE, &[reg]);
+        for lane in 0..2i32 {
+            let index = build.const_int(lane);
+            let value = build.inst(IrCmd::EXTRACT_VEC, &[vector, index]);
+            let step = build.const_int(at + lane * 4);
+            let destination = build.inst(IrCmd::ADD_INT, &[offset, step]);
+            build.inst(IrCmd::BUFFER_WRITEF32, &[buffer, destination, value, tag]);
+        }
+    }
+
+    impl NativeCodeHooks for VertexWriter {
+        fn userdata_namecall_type(&self, context: &NativeContext<'_>, userdata_type: u8, member: &str) -> u8 {
+            if context.userdata_type_of::<Vertices>() == Some(userdata_type) && member == "write" {
+                bytecode_type::NUMBER
+            } else {
+                bytecode_type::ANY
+            }
+        }
+
+        fn userdata_namecall(
+            &self,
+            context: &NativeContext<'_>,
+            build: &mut IrBuilder<'_>,
+            userdata_type: u8,
+            member: &str,
+            site: NamecallSite,
+        ) -> bool {
+            if context.userdata_type_of::<Vertices>() != Some(userdata_type)
+                || member != "write"
+                || site.params != 6
+                || !matches!(site.results, 0 | 1)
+            {
+                return false;
+            }
+            let Some(tag) = context.tag_of::<Vertices>() else { return false };
+            let exit = build.vm_exit(site.pcpos);
+            let receiver = build.vm_reg(site.source_reg);
+            let pointer = build.inst(IrCmd::LOAD_POINTER, &[receiver]);
+            let tag = build.const_int(i32::from(tag));
+            build.inst(IrCmd::CHECK_USERDATA_TAG, &[pointer, tag, exit]);
+            // ra + 2 onward: buffer, offset, pos, uv, color.
+            let buffer_reg = build.vm_reg(site.arg_res_reg + 2);
+            let offset_reg = build.vm_reg(site.arg_res_reg + 3);
+            let pos_reg = build.vm_reg(site.arg_res_reg + 4);
+            let uv_reg = build.vm_reg(site.arg_res_reg + 5);
+            let color_reg = build.vm_reg(site.arg_res_reg + 6);
+            build.load_and_check_tag(buffer_reg, LUA_TBUFFER as u8, exit);
+            build.load_and_check_tag(offset_reg, LUA_TNUMBER as u8, exit);
+            build.load_and_check_tag(pos_reg, LUA_TVECTOR as u8, exit);
+            build.load_and_check_tag(uv_reg, LUA_TVECTOR as u8, exit);
+            build.load_and_check_tag(color_reg, LUA_TINTEGER as u8, exit);
+
+            let buffer = build.inst(IrCmd::LOAD_POINTER, &[buffer_reg]);
+            let offset_number = build.inst(IrCmd::LOAD_DOUBLE, &[offset_reg]);
+            let offset = build.inst(IrCmd::NUM_TO_INT, &[offset_number]);
+            let zero = build.const_int(0);
+            let size = build.const_int(VERTEX_BYTES as i32);
+            build.inst(IrCmd::CHECK_BUFFER_LEN, &[buffer, offset, zero, size, offset_number, exit]);
+
+            let bits = build.inst(IrCmd::LOAD_INT64, &[color_reg]);
+            let sixty = build.const_int64(60);
+            let fifteen = build.const_int64(15);
+            let kind = build.inst(IrCmd::BITRSHIFT_INT64, &[bits, sixty]);
+            let kind = build.inst(IrCmd::BITAND_INT64, &[kind, fifteen]);
+            let expected = build.const_int64(i64::from(<Color as PackedScalar>::KIND));
+            let equal = build.cond(IrCondition::Equal);
+            build.inst(IrCmd::CHECK_CMP_INT64, &[kind, expected, equal, exit]);
+
+            let buffer_tag = build.const_tag(LUA_TBUFFER as u8);
+            write_f32_pair(build, buffer, offset, 0, pos_reg, buffer_tag);
+            write_f32_pair(build, buffer, offset, 8, uv_reg, buffer_tag);
+            let mask = build.const_int64(0xFFFF);
+            let sixteen = build.const_int64(16);
+            let low = build.inst(IrCmd::BITAND_INT64, &[bits, mask]);
+            let high = build.inst(IrCmd::BITRSHIFT_INT64, &[bits, sixteen]);
+            let high = build.inst(IrCmd::BITAND_INT64, &[high, mask]);
+            for (half, at) in [(low, 16), (high, 18)] {
+                let number = build.inst(IrCmd::INT64_TO_NUM, &[half]);
+                let value = build.inst(IrCmd::NUM_TO_INT, &[number]);
+                let step = build.const_int(at);
+                let destination = build.inst(IrCmd::ADD_INT, &[offset, step]);
+                build.inst(IrCmd::BUFFER_WRITEI16, &[buffer, destination, value, buffer_tag]);
+            }
+            if site.results == 1 {
+                let stride = build.const_double(VERTEX_BYTES as f64);
+                let next = build.inst(IrCmd::ADD_NUM, &[offset_number, stride]);
+                let result = build.vm_reg(site.arg_res_reg);
+                build.inst(IrCmd::STORE_DOUBLE, &[result, next]);
+                let number_tag = build.const_tag(LUA_TNUMBER as u8);
+                build.inst(IrCmd::STORE_TAG, &[result, number_tag]);
+            }
+            LOWERED.fetch_add(1, Ordering::Relaxed);
+            true
+        }
     }
 }
