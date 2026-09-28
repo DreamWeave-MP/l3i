@@ -193,23 +193,30 @@ pub fn builtin_kinds() -> [PackedKind; 4] {
 pub const BUILTIN_KINDS: [u8; 4] = [1, 2, 3, 4];
 
 /// Fails unless `T` is the registered owner of its kind on the VM behind `state`.
-#[inline]
+#[inline(always)]
 fn check_registered<T: PackedScalar>(state: *mut crate::raw::ffi::lua_State) -> Result<()> {
     // SAFETY: `state` comes from a live scope.
-    let registered = unsafe { crate::runtime::shared_for(state) }.and_then(|shared| shared.packed_kind_of(T::KIND));
-    match registered {
-        Some(owner) if owner.type_id == std::any::TypeId::of::<T>() => Ok(()),
-        Some(owner) => Err(Error::logic(format!(
-            "packed kind {} is registered to {} in this runtime, not {}",
+    let shared = unsafe { crate::runtime::shared_for(state) };
+    match shared.and_then(|shared| shared.packed_owner(T::KIND)) {
+        Some(owner) if owner == std::any::TypeId::of::<T>() => Ok(()),
+        _ => Err(unregistered::<T>(shared)),
+    }
+}
+
+#[cold]
+#[inline(never)]
+fn unregistered<T: PackedScalar>(shared: Option<&crate::runtime::shared::Shared>) -> Error {
+    match shared.and_then(|shared| shared.packed_owner_name(T::KIND)) {
+        Some(owner) => Error::logic(format!(
+            "packed kind {} is registered to {owner} in this runtime, not {}",
             T::KIND,
-            owner.name,
             T::NAME
-        ))),
-        None => Err(Error::logic(format!(
+        )),
+        None => Error::logic(format!(
             "packed scalar {} (kind {}) is not registered in this runtime; declare it with ExtensionDescriptor::packed or Runtime::register_packed",
             T::NAME,
             T::KIND
-        ))),
+        )),
     }
 }
 

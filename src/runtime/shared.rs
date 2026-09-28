@@ -127,8 +127,10 @@ pub(crate) struct Shared {
     /// The extension planner's direct members by plan slot, collected during registration and
     /// published once into `slot_table`.
     direct_entries: RefCell<Vec<Option<crate::bind::MemberEntry>>>,
-    /// The packed scalar kinds this VM knows, by kind number (index 0 unused).
-    packed_kinds: [Cell<Option<crate::packed::PackedKind>>; 16],
+    /// The owner of each packed scalar kind this VM knows, by kind number (index 0 unused):
+    /// the type alone on the hot path, the names beside it for messages.
+    packed_owners: [Cell<Option<TypeId>>; 16],
+    packed_names: [Cell<&'static str>; 16],
     /// The bytecode type the compiler gives each Rust type named in this runtime's userdata
     /// type list (`TAGGED_USERDATA_BASE + index`), for native lowering hooks.
     #[cfg(feature = "jit")]
@@ -211,32 +213,42 @@ impl Shared {
             require_navigator: RefCell::new(None),
             untagged: RefCell::new(HashMap::default()),
             direct_entries: RefCell::new(Vec::new()),
-            packed_kinds: std::array::from_fn(|_| Cell::new(None)),
+            packed_owners: std::array::from_fn(|_| Cell::new(None)),
+            packed_names: std::array::from_fn(|_| Cell::new("")),
             slot_table: std::cell::OnceCell::new(),
             #[cfg(feature = "jit")]
             userdata_types: RefCell::new(HashMap::default()),
         }
     }
 
-    /// The registered owner of packed `kind`, if any.
-    #[inline]
-    pub(crate) fn packed_kind_of(&self, kind: u8) -> Option<crate::packed::PackedKind> {
-        self.packed_kinds.get(usize::from(kind)).and_then(Cell::get)
+    /// The registered owner of packed `kind`, if any: the hot check, one load and a compare.
+    #[inline(always)]
+    pub(crate) fn packed_owner(&self, kind: u8) -> Option<TypeId> {
+        self.packed_owners.get(usize::from(kind)).and_then(Cell::get)
+    }
+
+    /// The registered owner's name, for messages.
+    #[cold]
+    pub(crate) fn packed_owner_name(&self, kind: u8) -> Option<&'static str> {
+        self.packed_owner(kind).map(|_| self.packed_names[usize::from(kind)].get())
     }
 
     /// Registers `kind`'s owner; registering the same type again is a no-op, another type on
     /// the same number is refused.
     pub(crate) fn register_packed_kind(&self, kind: crate::packed::PackedKind) -> crate::error::Result<()> {
         kind.validate()?;
-        let slot = &self.packed_kinds[usize::from(kind.kind)];
-        match slot.get() {
-            Some(existing) if existing.type_id == kind.type_id => Ok(()),
-            Some(existing) => Err(crate::error::Error::logic(format!(
+        let index = usize::from(kind.kind);
+        match self.packed_owners[index].get() {
+            Some(existing) if existing == kind.type_id => Ok(()),
+            Some(_) => Err(crate::error::Error::logic(format!(
                 "packed kind {} is already registered to {} in this runtime; {} cannot take it",
-                kind.kind, existing.name, kind.name
+                kind.kind,
+                self.packed_names[index].get(),
+                kind.name
             ))),
             None => {
-                slot.set(Some(kind));
+                self.packed_owners[index].set(Some(kind.type_id));
+                self.packed_names[index].set(kind.name);
                 Ok(())
             }
         }
