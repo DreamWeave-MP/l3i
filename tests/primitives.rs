@@ -4,7 +4,7 @@
 use std::cell::Cell;
 
 use l3i::bind::Call;
-use l3i::convert::{BufferView, BytesView, Integer, Push};
+use l3i::convert::{Bits64, BufferView, BytesView, Exact, Integer, Push};
 use l3i::extension::{Extension, ExtensionDescriptor, RuntimePlan, RuntimePolicy};
 use l3i::options::{FromOptions, Options};
 use l3i::packed::{BufferPack, Packed, PackedScalar};
@@ -176,6 +176,7 @@ fn sequences_index_iterate_measure_and_materialise() {
         runtime
             .exec(
                 "local s = views.numbers(4) assert(#s == 4, 'len') assert(s[1] == 10 and s[4] == 40, 'index') \
+                 assert(s[1.5] == nil and s[2.0] == 20 and s[0] == nil and s[2^70] == nil, 'exact index') \
                  assert(s[5] == nil and s[0] == nil, 'past the end') \
                  local sum = 0 for i, v in s do sum = sum + v assert(s[i] == v) end assert(sum == 100, 'iterate') \
                  local t = s:toTable() assert(#t == 4 and t[2] == 20, 'toTable') assert(s.nothing == nil, 'method miss') \
@@ -186,6 +187,34 @@ fn sequences_index_iterate_measure_and_materialise() {
             )
             .unwrap();
     }
+}
+
+#[test]
+fn exact_integers_never_round_and_bit_patterns_keep_all_sixty_four_bits() {
+    let runtime = Runtime::new().unwrap();
+    let exact = runtime.bind_function("dreamweave.tests.exact", |v: Exact<i64>| v.0 * 2).unwrap();
+    let unsigned = runtime.bind_function("dreamweave.tests.unsigned", |v: Exact<u64>| v.0 == 1u64 << 63).unwrap();
+    let legacy = runtime.bind_function("dreamweave.tests.legacy", |v: i64| v).unwrap();
+    let bits = runtime.bind_function("dreamweave.tests.bits", |b: Bits64| Bits64(b.0 ^ 1)).unwrap();
+    for (name, function) in [("exact", &exact), ("unsigned", &unsigned), ("legacy", &legacy), ("bits", &bits)] {
+        runtime.set_global(name, function).unwrap();
+    }
+    runtime
+        .exec(
+            "assert(exact(3) == 6 and exact(3i) == 6 and exact(-2^53) == -2^54, 'integral numbers and integers') \
+             assert(not pcall(exact, 3.5), 'fraction') assert(not pcall(exact, 1/0), 'infinity') \
+             assert(not pcall(exact, 0/0), 'nan') assert(not pcall(exact, 2^63), 'range') assert(not pcall(exact, 'x')) \
+             assert(unsigned(2^63), 'unsigned range reaches past i64') assert(not pcall(unsigned, -1)) \
+             assert(legacy(3.5) == 4, 'the compatibility conversion still rounds') \
+             assert(bits(-1i) == -2i, 'all sixty-four bits, as a pattern') assert(not pcall(bits, 5), 'a number is not a pattern')",
+        )
+        .unwrap();
+    // The full pattern round-trips through the stack.
+    let all = runtime
+        .stack()
+        .with_frame(|frame| Bits64(u64::MAX).push_into(frame)?.read::<Bits64>())
+        .unwrap();
+    assert_eq!(all, Bits64(u64::MAX));
 }
 
 #[test]

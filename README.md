@@ -190,6 +190,11 @@ The shapes the migration audits asked for, all allocation-free at the boundary:
 scalar helpers), never a safe slice, because a script can pass one buffer to two parameters;
 the zero-copy slices are `unsafe fn bytes_unchecked`/`bytes_mut_unchecked` for trusted code
 that proves nothing writes the buffer meanwhile, the rules `lua_tobuffer` imposes on C;
+`convert::Exact<T>` reads an integer that never rounds (a Luau integer or an integer-valued
+number, in range) for indices, offsets, counts, sizes, and ids, where the plain Rust integer
+conversions keep OpenMW's rounding for compatibility, and `convert::Bits64` carries an opaque
+64-bit pattern (a hash, a peer id) through a Luau integer with no numeric meaning, so a numeric
+`u64` stays within what an integer or an exact number holds and nothing silently reinterprets;
 `packed::BufferPack` reads and writes fixed layouts through a copy in one bounds check, and `packed::PackedScalar` puts a semantic value into one Luau integer (4-bit
 kind, 4 flag bits, 56-bit payload) with the kind checked on every read. Kinds are a registry:
 1 to 4 are l3i's own and fixed for good (a packed integer is a file and wire format), 5 to 15

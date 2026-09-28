@@ -92,7 +92,7 @@ impl Push for Integer {
 /// The payload of an `integer` slot, or `None` for any other type.
 /// A slot read in one call: its type, with the payload for numbers and integers.
 #[derive(Clone, Copy)]
-enum Scalar {
+pub(super) enum Scalar {
     Number(f64),
     Integer(i64),
     Other,
@@ -100,7 +100,7 @@ enum Scalar {
 
 /// The scalar in a directly read slot; strings are never coerced.
 #[inline(always)]
-fn raw_scalar(raw: &RawValue) -> Scalar {
+pub(super) fn raw_scalar(raw: &RawValue) -> Scalar {
     match raw.tag() {
         ffi::LUA_TNUMBER => Scalar::Number(raw.number()),
         ffi::LUA_TINTEGER => Scalar::Integer(raw.integer()),
@@ -110,7 +110,7 @@ fn raw_scalar(raw: &RawValue) -> Scalar {
 
 /// One FFI call classifies the slot and reads a numeric payload; strings are never coerced.
 #[inline]
-fn read_scalar(view: ValueView<'_>) -> Scalar {
+pub(super) fn read_scalar(view: ValueView<'_>) -> Scalar {
     if !view.exists() {
         return Scalar::Other;
     }
@@ -244,7 +244,7 @@ fn rounded_integer<T: TryFrom<i64> + TryFrom<u64>>(number: f64, signed: bool, up
 
 /// A Luau integer that does not fit the requested Rust integer.
 #[cold]
-fn integer_out_of_range(view: &ValueView<'_>, value: i64, target: &str) -> Error {
+pub(super) fn integer_out_of_range(view: &ValueView<'_>, value: i64, target: &str) -> Error {
     Error::runtime(format!("Lua stack index {}: integer {value} is out of range for {target}", view.index()))
 }
 

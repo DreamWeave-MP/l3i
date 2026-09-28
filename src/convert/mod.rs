@@ -17,6 +17,7 @@
 //!   the performance contract, not an afterthought.
 
 mod buffer;
+mod exact;
 mod option;
 pub(crate) mod raw;
 mod scalar;
@@ -30,6 +31,7 @@ use crate::error::Result;
 use crate::stack::{Scope, ValueView};
 
 pub use buffer::{BufferView, BytesView, new_buffer};
+pub use exact::{Bits64, Exact};
 pub use raw::RawValue;
 pub use scalar::Integer;
 pub(crate) use scalar::read_integer64;

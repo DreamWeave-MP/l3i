@@ -39,7 +39,7 @@ use std::rc::Rc;
 
 use dream_soft_render::{SoftwareRenderer, TextureId};
 
-use crate::convert::{BufferView, BytesView, Vector3};
+use crate::convert::{Exact, BufferView, BytesView, Vector3};
 use crate::direct::field::{DirectField, FieldValue};
 use crate::error::{Error, Result};
 use crate::extension::{Extension, ExtensionDescriptor, TagPolicy};
@@ -82,8 +82,8 @@ fn rect(min: Vector3, max: Vector3) -> dream_soft_render::Rect {
     dream_soft_render::Rect::from_min_max(xy(min), xy(max))
 }
 
-fn dimension(name: &str, value: i64) -> Result<usize> {
-    usize::try_from(value).map_err(|_| Error::runtime(format!("dream.soft_render: {name} {value} is negative")))
+fn dimension(name: &str, value: Exact<i64>) -> Result<usize> {
+    usize::try_from(value.0).map_err(|_| Error::runtime(format!("dream.soft_render: {name} {} is negative", value.0)))
 }
 
 /// Reinterprets a buffer's bytes as vertices: the length must be a multiple of
@@ -171,7 +171,7 @@ impl Renderer {
         Ok(body(&mut renderer))
     }
 
-    fn begin_frame(&self, width: i64, height: i64) -> Result<Owned<Frame>> {
+    fn begin_frame(&self, width: Exact<i64>, height: Exact<i64>) -> Result<Owned<Frame>> {
         let (width, height) = (dimension("width", width)?, dimension("height", height)?);
         self.state.borrow_mut()?.begin_frame(width, height).map_err(raster_error)?;
         let generation = self.state.generation.get() + 1;
@@ -179,7 +179,7 @@ impl Renderer {
         Ok(Owned(Frame { state: Rc::clone(&self.state), generation, width, height }))
     }
 
-    fn create_texture(&self, width: i64, height: i64, pixels: BytesView<'_>) -> Result<Owned<Texture>> {
+    fn create_texture(&self, width: Exact<i64>, height: Exact<i64>, pixels: BytesView<'_>) -> Result<Owned<Texture>> {
         let (width, height) = (dimension("width", width)?, dimension("height", height)?);
         let mut renderer = self.state.borrow_mut()?;
         // SAFETY: the renderer is a pure Rust crate holding no Lua handle, so nothing writes the
@@ -191,8 +191,8 @@ impl Renderer {
     }
 
     /// Copies the surface's pixels into `buffer` at `offset` (`width * height * 4` bytes).
-    fn read_into(&self, buffer: BufferView<'_>, offset: Option<i64>) -> Result<f64> {
-        let offset = dimension("offset", offset.unwrap_or(0))?;
+    fn read_into(&self, buffer: BufferView<'_>, offset: Option<Exact<i64>>) -> Result<f64> {
+        let offset = dimension("offset", offset.unwrap_or(Exact(0)))?;
         let renderer = self.state.borrow_mut()?;
         let pixels = &renderer.surface().pixels;
         buffer.write(offset, pixels)?;
@@ -319,7 +319,7 @@ impl Texture {
         Ok(self.id)
     }
 
-    fn update(&self, x: i64, y: i64, width: i64, height: i64, pixels: BytesView<'_>) -> Result<()> {
+    fn update(&self, x: Exact<i64>, y: Exact<i64>, width: Exact<i64>, height: Exact<i64>, pixels: BytesView<'_>) -> Result<()> {
         let id = self.id()?;
         let (x, y) = (dimension("x", x)?, dimension("y", y)?);
         let (width, height) = (dimension("width", width)?, dimension("height", height)?);
@@ -410,15 +410,15 @@ impl Extension for SoftRenderExtension {
         let mut renderer = d.userdata::<Renderer>("dream.soft_render.Renderer");
         renderer.tag(TagPolicy::Preferred).doc("A CPU rasterizer: one surface, a texture store.");
         renderer
-            .method("beginFrame", |r: &Renderer, width: i64, height: i64| r.begin_frame(width, height))
+            .method("beginFrame", |r: &Renderer, width: Exact<i64>, height: Exact<i64>| r.begin_frame(width, height))
             .signature("(self, width: number, height: number): dream_soft_render_Frame");
         renderer
-            .method("createTexture", |r: &Renderer, width: i64, height: i64, pixels: BytesView| {
+            .method("createTexture", |r: &Renderer, width: Exact<i64>, height: Exact<i64>, pixels: BytesView| {
                 r.create_texture(width, height, pixels)
             })
             .signature("(self, width: number, height: number, pixels: buffer | string): dream_soft_render_Texture");
         renderer
-            .method("readInto", |r: &Renderer, buffer: BufferView, offset: Option<i64>| r.read_into(buffer, offset))
+            .method("readInto", |r: &Renderer, buffer: BufferView, offset: Option<Exact<i64>>| r.read_into(buffer, offset))
             .signature("(self, buffer: buffer, offset: number?): number");
         renderer.field::<RendererWidth>("width").signature("number");
         renderer.field::<RendererHeight>("height").signature("number");
@@ -461,7 +461,7 @@ impl Extension for SoftRenderExtension {
         let mut texture = d.userdata::<Texture>("dream.soft_render.Texture");
         texture.tag(TagPolicy::Preferred).doc("Premultiplied RGBA8 pixels in the renderer's store.");
         texture
-            .method("update", |t: &Texture, x: i64, y: i64, width: i64, height: i64, pixels: BytesView| {
+            .method("update", |t: &Texture, x: Exact<i64>, y: Exact<i64>, width: Exact<i64>, height: Exact<i64>, pixels: BytesView| {
                 t.update(x, y, width, height, pixels)
             })
             .signature("(self, x: number, y: number, width: number, height: number, pixels: buffer | string)");

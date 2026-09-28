@@ -33,7 +33,7 @@ use dream_net::{
 };
 
 use crate::bind::{Call, Return};
-use crate::convert::{BufferView, BytesView, Integer, Push};
+use crate::convert::{Bits64, Exact, BufferView, BytesView, Integer, Push};
 use crate::direct::field::{DirectField, FieldValue};
 use crate::error::{Error, Result};
 use crate::extension::{Extension, ExtensionDescriptor, InstallContext, TagPolicy};
@@ -68,13 +68,14 @@ fn peer_to_int(peer: PeerId) -> i64 {
     peer.0 as i64
 }
 
+/// Peer ids are opaque 64-bit patterns (`Bits64`): all bits cross, none are numbers.
 #[inline]
-fn peer_from_int(value: i64) -> PeerId {
-    PeerId(value as u64)
+fn peer_from_int(value: Bits64) -> PeerId {
+    PeerId(value.0)
 }
 
-fn event_from_int(value: i64) -> Result<EventTypeId> {
-    u32::try_from(value).map(EventTypeId).map_err(|_| Error::runtime(format!("event id {value} is out of range")))
+fn event_from_int(value: Exact<i64>) -> Result<EventTypeId> {
+    u32::try_from(value.0).map(EventTypeId).map_err(|_| Error::runtime(format!("event id {} is out of range", value.0)))
 }
 
 fn send_error(error: SendError) -> Error {
@@ -101,12 +102,12 @@ unsafe impl Userdata for NetSchema {
 /// {name, channel, maxPayload, codecVersion?} } }`.
 fn build_schema(call: &Call<'_>, options: ValueView<'_>) -> Result<Owned<NetSchema>> {
     let schema = Options::read(call, options, "net.schema", |o| {
-        let version: i64 = o.required("version")?;
+        let version = o.required::<Exact<i64>>("version")?.0;
         let version = u32::try_from(version).map_err(|_| Error::runtime("net.schema.version: must fit in 32 bits"))?;
         let mut builder = SchemaBuilder::new(version);
-        if let Some(max) = o.optional::<i64>("maxMessagesPerPacket")? {
+        if let Some(max) = o.optional::<Exact<i64>>("maxMessagesPerPacket")? {
             let max =
-                u32::try_from(max).map_err(|_| Error::runtime("net.schema.maxMessagesPerPacket: out of range"))?;
+                u32::try_from(max.0).map_err(|_| Error::runtime("net.schema.maxMessagesPerPacket: out of range"))?;
             builder = builder.max_messages_per_packet(max);
         }
         let channels = Table::from_value(o.required::<crate::value::Value>("channels")?)
@@ -132,8 +133,8 @@ fn build_schema(call: &Call<'_>, options: ValueView<'_>) -> Result<Owned<NetSche
                             )));
                         }
                     };
-                    if let Some(capacity) = c.optional::<i64>("capacity")? {
-                        let capacity = u16::try_from(capacity)
+                    if let Some(capacity) = c.optional::<Exact<i64>>("capacity")? {
+                        let capacity = u16::try_from(capacity.0)
                             .map_err(|_| Error::runtime(format!("{context}.capacity: out of range")))?;
                         config = config.with_capacity(capacity);
                     }
@@ -149,8 +150,8 @@ fn build_schema(call: &Call<'_>, options: ValueView<'_>) -> Result<Owned<NetSche
                             }
                         });
                     }
-                    if let Some(budget) = c.optional::<i64>("packetBudget")? {
-                        let budget = u32::try_from(budget)
+                    if let Some(budget) = c.optional::<Exact<i64>>("packetBudget")? {
+                        let budget = u32::try_from(budget.0)
                             .map_err(|_| Error::runtime(format!("{context}.packetBudget: out of range")))?;
                         config = config.with_packet_budget(budget);
                     }
@@ -170,10 +171,10 @@ fn build_schema(call: &Call<'_>, options: ValueView<'_>) -> Result<Owned<NetSche
                 Options::read(frame, entry, &context, |e| {
                     let name: String = e.required("name")?;
                     let channel: String = e.required("channel")?;
-                    let max_payload: i64 = e.required("maxPayload")?;
+                    let max_payload = e.required::<Exact<i64>>("maxPayload")?.0;
                     let max_payload = u32::try_from(max_payload)
                         .map_err(|_| Error::runtime(format!("{context}.maxPayload: out of range")))?;
-                    let codec = e.optional::<i64>("codecVersion")?;
+                    let codec = e.optional::<Exact<i64>>("codecVersion")?.map(|codec| codec.0);
                     let Some((_, id)) = channel_ids.iter().find(|(n, _)| *n == channel) else {
                         return Err(Error::runtime(format!("{context}.channel: unknown channel '{channel}'")));
                     };
@@ -262,15 +263,15 @@ impl Return for Polled {
 /// The bytes of a send: a buffer or string with an optional `offset, length` range.
 fn payload_range<R>(
     bytes: BytesView<'_>,
-    offset: Option<i64>,
-    length: Option<i64>,
+    offset: Option<Exact<i64>>,
+    length: Option<Exact<i64>>,
     body: impl FnOnce(&[u8]) -> R,
 ) -> Result<R> {
     let total = bytes.len();
     let offset =
-        usize::try_from(offset.unwrap_or(0)).map_err(|_| Error::runtime("dream.net: negative payload offset"))?;
+        usize::try_from(offset.map_or(0, |o| o.0)).map_err(|_| Error::runtime("dream.net: negative payload offset"))?;
     let length = match length {
-        Some(length) => usize::try_from(length).map_err(|_| Error::runtime("dream.net: negative payload length"))?,
+        Some(length) => usize::try_from(length.0).map_err(|_| Error::runtime("dream.net: negative payload length"))?,
         None => {
             total.checked_sub(offset).ok_or_else(|| Error::runtime("dream.net: payload offset exceeds the buffer"))?
         }
@@ -352,7 +353,7 @@ impl Server {
         }
     }
 
-    fn stat(&self, peer: i64, pick: impl Fn(&dream_net::ConnectionStats) -> f32) -> Option<f64> {
+    fn stat(&self, peer: Bits64, pick: impl Fn(&dream_net::ConnectionStats) -> f32) -> Option<f64> {
         self.inner.borrow().stats(peer_from_int(peer)).map(|stats| f64::from(pick(&stats)))
     }
 }
@@ -595,18 +596,18 @@ fn describe_schema(d: &mut ExtensionDescriptor) {
         .method("channelId", |s: &NetSchema, name: &str| s.0.channel_id(name).map(|id| Integer(i64::from(id.0))))
         .signature("(self, name: string): number?");
     schema
-        .method("eventName", |s: &NetSchema, id: i64| -> Option<String> {
-            u32::try_from(id).ok().and_then(|id| s.0.event(EventTypeId(id))).map(|e| e.name.clone())
+        .method("eventName", |s: &NetSchema, id: Exact<i64>| -> Option<String> {
+            u32::try_from(id.0).ok().and_then(|id| s.0.event(EventTypeId(id))).map(|e| e.name.clone())
         })
         .signature("(self, id: number): string?");
     schema
-        .method("channelName", |s: &NetSchema, id: i64| -> Option<String> {
-            u8::try_from(id).ok().and_then(|id| s.0.channel(ChannelId(id))).map(|c| c.name().to_owned())
+        .method("channelName", |s: &NetSchema, id: Exact<i64>| -> Option<String> {
+            u8::try_from(id.0).ok().and_then(|id| s.0.channel(ChannelId(id))).map(|c| c.name().to_owned())
         })
         .signature("(self, id: number): string?");
     schema
-        .method("maxPayload", |s: &NetSchema, id: i64| -> Option<Integer> {
-            u32::try_from(id).ok().and_then(|id| s.0.event(EventTypeId(id))).map(|e| Integer(i64::from(e.max_payload)))
+        .method("maxPayload", |s: &NetSchema, id: Exact<i64>| -> Option<Integer> {
+            u32::try_from(id.0).ok().and_then(|id| s.0.event(EventTypeId(id))).map(|e| Integer(i64::from(e.max_payload)))
         })
         .signature("(self, eventId: number): number?");
     schema
@@ -639,7 +640,7 @@ fn describe_server(d: &mut ExtensionDescriptor) {
     server
         .method(
             "sendEvent",
-            |server: &Server, peer: i64, event: i64, payload: BytesView, offset: Option<i64>, length: Option<i64>| {
+            |server: &Server, peer: Bits64, event: Exact<i64>, payload: BytesView, offset: Option<Exact<i64>>, length: Option<Exact<i64>>| {
                 let event = event_from_int(event)?;
                 payload_range(payload, offset, length, |bytes| {
                     server.inner.borrow_mut().send(peer_from_int(peer), event, bytes)
@@ -651,7 +652,7 @@ fn describe_server(d: &mut ExtensionDescriptor) {
     server
         .method(
             "broadcast",
-            |server: &Server, event: i64, payload: BytesView, offset: Option<i64>, length: Option<i64>| {
+            |server: &Server, event: Exact<i64>, payload: BytesView, offset: Option<Exact<i64>>, length: Option<Exact<i64>>| {
                 let event = event_from_int(event)?;
                 payload_range(payload, offset, length, |bytes| server.inner.borrow_mut().broadcast(event, bytes))?
                     .map(|refused| Integer(refused as i64))
@@ -662,7 +663,7 @@ fn describe_server(d: &mut ExtensionDescriptor) {
     server
         .method(
             "broadcastExcept",
-            |server: &Server, peer: i64, event: i64, payload: BytesView, offset: Option<i64>, length: Option<i64>| {
+            |server: &Server, peer: Bits64, event: Exact<i64>, payload: BytesView, offset: Option<Exact<i64>>, length: Option<Exact<i64>>| {
                 let event = event_from_int(event)?;
                 payload_range(payload, offset, length, |bytes| {
                     server.inner.borrow_mut().broadcast_except(Some(peer_from_int(peer)), event, bytes)
@@ -676,7 +677,7 @@ fn describe_server(d: &mut ExtensionDescriptor) {
         );
     server.method("flush", |server: &Server| server.inner.borrow_mut().flush()).signature("(self)");
     server
-        .method("disconnect", |server: &Server, peer: i64| server.inner.borrow_mut().disconnect(peer_from_int(peer)))
+        .method("disconnect", |server: &Server, peer: Bits64| server.inner.borrow_mut().disconnect(peer_from_int(peer)))
         .signature("(self, peer: number)");
     server.method("disconnectAll", |server: &Server| server.inner.borrow_mut().disconnect_all()).signature("(self)");
     server
@@ -695,33 +696,33 @@ fn describe_server(d: &mut ExtensionDescriptor) {
         })
         .signature("(self): { number }");
     server
-        .method("clientId", |server: &Server, peer: i64| {
+        .method("clientId", |server: &Server, peer: Bits64| {
             server.inner.borrow().client_id(peer_from_int(peer)).map(|id| Integer(id as i64))
         })
         .signature("(self, peer: number): number?");
     server
-        .method("clientAddress", |server: &Server, peer: i64| {
+        .method("clientAddress", |server: &Server, peer: Bits64| {
             server.inner.borrow().client_address(peer_from_int(peer)).map(|a| a.to_string())
         })
         .signature("(self, peer: number): string?");
-    server.method("peerRtt", |server: &Server, peer: i64| server.stat(peer, |s| s.rtt)).signature("(self, peer: number): number?");
+    server.method("peerRtt", |server: &Server, peer: Bits64| server.stat(peer, |s| s.rtt)).signature("(self, peer: number): number?");
     server
-        .method("peerJitter", |server: &Server, peer: i64| server.stat(peer, |s| s.jitter))
+        .method("peerJitter", |server: &Server, peer: Bits64| server.stat(peer, |s| s.jitter))
         .signature("(self, peer: number): number?");
     server
-        .method("peerPacketLoss", |server: &Server, peer: i64| server.stat(peer, |s| s.packet_loss))
+        .method("peerPacketLoss", |server: &Server, peer: Bits64| server.stat(peer, |s| s.packet_loss))
         .signature("(self, peer: number): number?");
     server
-        .method("peerSentKbps", |server: &Server, peer: i64| server.stat(peer, |s| s.sent_kbps))
+        .method("peerSentKbps", |server: &Server, peer: Bits64| server.stat(peer, |s| s.sent_kbps))
         .signature("(self, peer: number): number?");
     server
-        .method("peerReceivedKbps", |server: &Server, peer: i64| server.stat(peer, |s| s.received_kbps))
+        .method("peerReceivedKbps", |server: &Server, peer: Bits64| server.stat(peer, |s| s.received_kbps))
         .signature("(self, peer: number): number?");
     server
-        .method("peerAckedKbps", |server: &Server, peer: i64| server.stat(peer, |s| s.acked_kbps))
+        .method("peerAckedKbps", |server: &Server, peer: Bits64| server.stat(peer, |s| s.acked_kbps))
         .signature("(self, peer: number): number?");
     server
-        .method("counters", |server: &Server, call: &Call, peer: i64| -> Result<Option<Table>> {
+        .method("counters", |server: &Server, call: &Call, peer: Bits64| -> Result<Option<Table>> {
             match server.inner.borrow().counters(peer_from_int(peer)) {
                 Some(counters) => counters_table(call, &counters).map(Some),
                 None => Ok(None),
@@ -769,7 +770,7 @@ fn describe_client(d: &mut ExtensionDescriptor) {
     client
         .method(
             "sendEvent",
-            |client: &NetClient, event: i64, payload: BytesView, offset: Option<i64>, length: Option<i64>| {
+            |client: &NetClient, event: Exact<i64>, payload: BytesView, offset: Option<Exact<i64>>, length: Option<Exact<i64>>| {
                 let event = event_from_int(event)?;
                 payload_range(payload, offset, length, |bytes| client.inner.borrow_mut().send(event, bytes))?
                     .map_err(send_error)
