@@ -30,7 +30,7 @@ pub(crate) type SharedFieldRegistrar = Rc<dyn Fn(&Runtime) -> Result<()>>;
 /// Registers the type (tagged or untagged) with every collected member: `register_type::<T>`.
 pub(crate) type Registrar = fn(&Runtime, &ResolvedUserdata, &[SharedInstaller]) -> Result<()>;
 /// Binds a declared module function in one runtime: `(runtime, debug roots, debug name)`.
-pub(crate) type SharedModuleFunction = Rc<dyn Fn(&Runtime, &[&str], &str) -> Result<Function>>;
+pub(crate) type SharedModuleFunction = Rc<dyn Fn(&Runtime, &[Box<str>], &str) -> Result<Function>>;
 
 /// What the compiler may know about a module member exposed as a global library.
 #[derive(Clone, Debug)]

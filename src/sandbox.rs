@@ -160,7 +160,7 @@ impl Runtime {
         let root = self
             .debug_roots()
             .first()
-            .copied()
+            .map(std::string::ToString::to_string)
             .ok_or_else(|| Error::logic("A sandbox needs at least one debug root for its internal functions"))?;
         if options.neuter_randomseed {
             self.exec("math.randomseed(os.time()); math.randomseed = function() end")?;

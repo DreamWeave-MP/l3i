@@ -37,7 +37,7 @@ enum MemberKind {
 pub struct MetatableBuilder<'s> {
     state: *mut ffi::lua_State,
     metatable: c_int,
-    roots: &'s [&'s str],
+    roots: &'s [Box<str>],
     /// The registered Rust type this metatable belongs to and its storage, when the registrar
     /// says so: members bound here then skip their receiver check on the dispatch paths.
     receiver_type: Option<crate::bind::VerifiedReceiver>,
@@ -67,7 +67,7 @@ pub struct MetatableBuilder<'s> {
 impl<'s> MetatableBuilder<'s> {
     /// Wraps the mutable table at `metatable`. Metatables are protected by default: a missing
     /// `__metatable` field is set to `false`.
-    pub(crate) fn new(frame: &'s Frame<'_>, metatable: c_int, roots: &'s [&'s str]) -> Result<Self> {
+    pub(crate) fn new(frame: &'s Frame<'_>, metatable: c_int, roots: &'s [Box<str>]) -> Result<Self> {
         let state = frame.state();
         // SAFETY: `metatable` is an index the caller pushed within the current frame.
         unsafe {

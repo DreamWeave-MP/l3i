@@ -670,7 +670,7 @@ impl ExtensionDescriptor {
 #[derive(Clone, Debug)]
 pub struct RuntimePolicy {
     /// Extra debug-name roots beside the ones extension identities imply.
-    pub debug_roots: Vec<&'static str>,
+    pub debug_roots: Vec<String>,
     pub standard_libraries: bool,
     /// `luaL_sandbox` after installation: globals read-only, safe environment on.
     pub sandbox: bool,
@@ -786,8 +786,8 @@ impl RuntimePolicy {
         self
     }
 
-    pub fn debug_root(mut self, root: &'static str) -> Self {
-        self.debug_roots.push(root);
+    pub fn debug_root(mut self, root: &str) -> Self {
+        self.debug_roots.push(root.to_owned());
         self
     }
 

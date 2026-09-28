@@ -328,9 +328,9 @@ pub(crate) unsafe fn method_member<F: Binding<M>, M>(
 
 /// Binds `callable` as a Lua function named `debug_name` (validated against `roots` and
 /// retained for the VM's life) and returns it pinned. The stack of `scope` is left as it was.
-pub fn function<F: Binding<M>, M>(
+pub fn function<F: Binding<M>, M, R: AsRef<str>>(
     scope: &impl Scope,
-    roots: &[&str],
+    roots: &[R],
     debug_name: &str,
     callable: F,
 ) -> Result<Function> {

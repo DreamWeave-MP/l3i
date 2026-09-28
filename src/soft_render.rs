@@ -132,13 +132,21 @@ struct State {
     renderer: RefCell<SoftwareRenderer>,
     /// Bumped by `beginFrame` and `finish`; a `Frame` is live while it matches.
     generation: Cell<u64>,
+    /// Textures whose handles were collected while the renderer was borrowed; freed on the
+    /// next borrow, so a transient conflict never leaks a texture.
+    pending_frees: RefCell<Vec<TextureId>>,
 }
 
 impl State {
     fn borrow_mut(&self) -> Result<std::cell::RefMut<'_, SoftwareRenderer>> {
-        self.renderer
+        let mut renderer = self
+            .renderer
             .try_borrow_mut()
-            .map_err(|_| Error::runtime("dream.soft_render: the renderer is already in use by this call"))
+            .map_err(|_| Error::runtime("dream.soft_render: the renderer is already in use by this call"))?;
+        for id in self.pending_frees.borrow_mut().drain(..) {
+            let _ = renderer.free_texture(id);
+        }
+        Ok(renderer)
     }
 }
 
@@ -161,7 +169,13 @@ impl Default for Renderer {
 impl Renderer {
     /// A renderer with an empty surface and no textures.
     pub fn new() -> Renderer {
-        Renderer { state: Rc::new(State { renderer: RefCell::new(SoftwareRenderer::default()), generation: Cell::new(0) }) }
+        Renderer {
+            state: Rc::new(State {
+                renderer: RefCell::new(SoftwareRenderer::default()),
+                generation: Cell::new(0),
+                pending_frees: RefCell::new(Vec::new()),
+            }),
+        }
     }
 
     /// Runs `body` on the underlying renderer, for host code (reading the surface natively,
@@ -329,21 +343,29 @@ impl Texture {
         renderer.update_texture(id, x, y, width, height, bytes).map_err(raster_error)
     }
 
+    /// Frees the texture; the handle is marked freed only once the renderer has let go, so a
+    /// failed attempt (the renderer busy in this call) can be retried and `Drop` still cleans up.
     fn free(&self) -> Result<()> {
         let id = self.id()?;
+        self.state.borrow_mut()?.free_texture(id).map_err(raster_error)?;
         self.freed.set(true);
-        self.state.borrow_mut()?.free_texture(id).map_err(raster_error)
+        Ok(())
     }
 }
 
 impl Drop for Texture {
     fn drop(&mut self) {
-        if !self.freed.get()
-            && let Ok(mut renderer) = self.state.renderer.try_borrow_mut()
-        {
+        if self.freed.get() {
+            return;
+        }
+        match self.state.renderer.try_borrow_mut() {
             // A handle the renderer no longer knows is already gone; nothing to report from a
             // destructor.
-            let _ = renderer.free_texture(self.id);
+            Ok(mut renderer) => {
+                let _ = renderer.free_texture(self.id);
+            }
+            // Collected while the renderer is borrowed: freed on its next use.
+            Err(_) => self.state.pending_frees.borrow_mut().push(self.id),
         }
     }
 }

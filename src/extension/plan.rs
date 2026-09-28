@@ -402,23 +402,19 @@ fn check_services_and_capabilities(
 }
 
 /// The policy's debug roots plus one per extension id family and per userdata type name root.
-fn debug_roots(
-    policy: &RuntimePolicy,
-    descriptors: &[ExtensionDescriptor],
-    userdata: &[ResolvedUserdata],
-) -> Vec<&'static str> {
-    let mut roots: Vec<&'static str> = policy.debug_roots.clone();
-    for descriptor in descriptors {
-        let root = debug_root(descriptor.id());
-        if !roots.iter().any(|existing| *existing == root) {
-            roots.push(Box::leak(root.into_boxed_str()));
+fn debug_roots(policy: &RuntimePolicy, descriptors: &[ExtensionDescriptor], userdata: &[ResolvedUserdata]) -> Vec<Box<str>> {
+    let mut roots: Vec<Box<str>> = policy.debug_roots.iter().map(|root| Box::from(root.as_str())).collect();
+    let mut add = |root: &str| {
+        if !roots.iter().any(|existing| &**existing == root) {
+            roots.push(Box::from(root));
         }
+    };
+    for descriptor in descriptors {
+        add(&debug_root(descriptor.id()));
     }
     for resolved in userdata {
-        if let Some(root) = resolved.type_name.split('.').next()
-            && !roots.contains(&root)
-        {
-            roots.push(Box::leak(root.to_owned().into_boxed_str()));
+        if let Some(root) = resolved.type_name.split('.').next() {
+            add(root);
         }
     }
     roots
@@ -711,7 +707,7 @@ pub struct RuntimePlan {
     pub(crate) atoms: AtomCatalogue,
     pub(crate) categories: BTreeMap<String, MemoryCategory>,
     pub(crate) services: HashMap<TypeId, (&'static str, Rc<dyn Any>)>,
-    pub(crate) debug_roots: Vec<&'static str>,
+    pub(crate) debug_roots: Vec<Box<str>>,
     pub(crate) packed_kinds: Vec<crate::packed::PackedKind>,
 }
 
@@ -781,7 +777,7 @@ impl RuntimePlan {
         &self.packed_kinds
     }
 
-    pub fn debug_roots(&self) -> &[&'static str] {
+    pub fn debug_roots(&self) -> &[Box<str>] {
         &self.debug_roots
     }
 

@@ -213,7 +213,7 @@ unsafe extern "C-unwind" fn read_only_length(state: *mut ffi::lua_State) -> c_in
 
 /// Internal helpers are named under the host's first debug root.
 fn internal_name(runtime: &Runtime, suffix: &str) -> String {
-    format!("{}.internal.{suffix}", runtime.debug_roots().first().copied().unwrap_or("dreamweave"))
+    format!("{}.internal.{suffix}", runtime.debug_roots().first().map_or("dreamweave", AsRef::as_ref))
 }
 
 /// Pushes the shared `pairs`/`ipairs` factory, creating it (and its iterator) on first use.

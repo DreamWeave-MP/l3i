@@ -49,7 +49,7 @@ pub use shared::{CallStats, Limits, MemoryCategory, SampledLocation, Samples};
 
 /// Host choices made before the VM exists.
 pub struct RuntimeBuilder {
-    debug_roots: Vec<&'static str>,
+    debug_roots: Vec<Box<str>>,
     pointer_encoding: bool,
     standard_libraries: bool,
     limits: Limits,
@@ -78,8 +78,8 @@ impl RuntimeBuilder {
 
     /// Root vocabulary for debug names (`openmw`, `string`, `vector` in OpenMW). Every native
     /// function and userdata type registered into the VM must be named under one of these.
-    pub fn debug_roots(mut self, roots: &[&'static str]) -> Self {
-        self.debug_roots = roots.to_vec();
+    pub fn debug_roots<R: AsRef<str>>(mut self, roots: &[R]) -> Self {
+        self.debug_roots = roots.iter().map(|root| Box::from(root.as_ref())).collect();
         self
     }
 
@@ -257,7 +257,7 @@ impl PointerEncodingKey {
 /// first; borrowed views cannot outlive it by construction.
 pub struct Runtime {
     state: *mut ffi::lua_State,
-    debug_roots: Vec<&'static str>,
+    debug_roots: Vec<Box<str>>,
     /// Per-VM state reachable from callbacks through `lua_Callbacks.userdata`.
     shared: Box<Shared>,
     initialization_category: MemoryCategory,
@@ -289,7 +289,7 @@ impl Runtime {
     /// standard libraries opened, no limits, profiler off.
     pub fn builder() -> RuntimeBuilder {
         RuntimeBuilder {
-            debug_roots: vec!["dreamweave"],
+            debug_roots: vec![Box::from("dreamweave")],
             pointer_encoding: true,
             standard_libraries: true,
             limits: Limits::default(),
@@ -414,7 +414,7 @@ impl Runtime {
     }
 
     /// The configured debug-name roots.
-    pub fn debug_roots(&self) -> &[&'static str] {
+    pub fn debug_roots(&self) -> &[Box<str>] {
         &self.debug_roots
     }
 

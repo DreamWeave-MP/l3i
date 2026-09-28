@@ -22,9 +22,9 @@ fn is_identifier_byte(byte: u8) -> bool {
 }
 
 /// True when `name` is `<root>.<ident>(.<ident>)*` for one of `roots`.
-pub fn is_valid_debug_name(name: &str, roots: &[&str]) -> bool {
+pub fn is_valid_debug_name<R: AsRef<str>>(name: &str, roots: &[R]) -> bool {
     let Some((root, rest)) = name.split_once('.') else { return false };
-    if !roots.contains(&root) {
+    if !roots.iter().any(|candidate| candidate.as_ref() == root) {
         return false;
     }
     let mut component_start = true;
@@ -46,10 +46,11 @@ pub fn is_valid_debug_name(name: &str, roots: &[&str]) -> bool {
     !component_start
 }
 
-pub fn require_valid_debug_name(name: &str, roots: &[&str]) -> Result<()> {
+pub fn require_valid_debug_name<R: AsRef<str>>(name: &str, roots: &[R]) -> Result<()> {
     if is_valid_debug_name(name, roots) {
         return Ok(());
     }
+    let roots: Vec<&str> = roots.iter().map(AsRef::as_ref).collect();
     Err(Error::logic(format!("Lua debug name '{name}' must be dot-separated identifiers rooted at one of {roots:?}")))
 }
 
@@ -61,7 +62,7 @@ static DEBUG_NAME_REGISTRY_KEY: u8 = 0;
 ///
 /// # Safety
 /// `state` is a live thread of the VM with `LUA_MINSTACK` free slots.
-pub(crate) unsafe fn retain(state: *mut ffi::lua_State, name: &str, roots: &[&str]) -> Result<*const c_char> {
+pub(crate) unsafe fn retain<R: AsRef<str>>(state: *mut ffi::lua_State, name: &str, roots: &[R]) -> Result<*const c_char> {
     if name.is_empty() {
         return Err(Error::logic("Lua function debug name cannot be empty"));
     }
