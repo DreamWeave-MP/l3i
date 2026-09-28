@@ -85,7 +85,9 @@ fn main() {
     println!("cargo:rustc-env=LUAU_VERSION={LUAU_VERSION}");
 
     let target = env::var("TARGET").unwrap_or_default();
-    let debug = env::var("DEBUG").is_ok_and(|value| value == "true");
+    // Luau's internal assertions follow Rust's debug assertions, not the debuginfo setting: a
+    // release build with symbols (what gets profiled) must not carry an asserting VM.
+    let debug = env::var_os("CARGO_CFG_DEBUG_ASSERTIONS").is_some();
     let jit = env::var_os("CARGO_FEATURE_JIT").is_some();
     let analysis = env::var_os("CARGO_FEATURE_ANALYSIS").is_some();
 
