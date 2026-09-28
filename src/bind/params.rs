@@ -185,7 +185,7 @@ macro_rules! params_impls {
                         // The receiver comes first, with its own type error (including "missing
                         // argument #1" when the call has no receiver at all) and no argument
                         // numbering; only then are the remaining arguments counted.
-                        let receiver = <<$p as Param>::Item<'c> as ParamItem<'c>>::read_slot(call.arg(1))?;
+                        let receiver = <<$p as Param>::Item<'c> as ParamItem<'c>>::read_receiver(call, call.arg(1))?;
                         count_checks(Self::METHOD_REQUIRED, Self::METHOD_MAX, Self::METHOD_TERMINATOR, top - 1, debug_name)?;
                         receiver
                     } else {

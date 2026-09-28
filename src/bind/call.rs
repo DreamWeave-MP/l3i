@@ -10,6 +10,19 @@ use crate::value::Function;
 pub struct Call<'c> {
     stack: Stack<'c>,
     initial_top: c_int,
+    /// What a dispatcher established about the receiver at slot 1 (Luau's direct callback for
+    /// a tag, a metatable's own `__namecall`/`__index`): the `&T` receiver parameter then
+    /// skips its type check.
+    receiver: Option<VerifiedReceiver>,
+}
+
+/// The Rust type the receiver at slot 1 is known to be, and how it is stored.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum VerifiedReceiver {
+    /// A tagged userdata: the payload is the `T` at the userdata address.
+    Tagged(std::any::TypeId),
+    /// An untagged userdata: the payload is a `Storage<T>` at the userdata address.
+    Untagged(std::any::TypeId),
 }
 
 impl<'c> Call<'c> {
@@ -19,7 +32,7 @@ impl<'c> Call<'c> {
         // SAFETY: forwarded from the C entry point; a native call is never host level.
         let stack = unsafe { Stack::from_raw(state, false) };
         let initial_top = stack.top();
-        Call { stack, initial_top }
+        Call { stack, initial_top, receiver: None }
     }
 
     /// A call whose argument count and thread record were read by `l3i_native_enter`.
@@ -31,8 +44,15 @@ impl<'c> Call<'c> {
         state: *mut ffi::lua_State,
         initial_top: c_int,
         record: *const crate::runtime::shared::ThreadRecord,
+        receiver: Option<VerifiedReceiver>,
     ) -> Call<'c> {
-        Call { stack: unsafe { Stack::from_raw_recorded(state, record) }, initial_top }
+        Call { stack: unsafe { Stack::from_raw_recorded(state, record) }, initial_top, receiver }
+    }
+
+    /// What the dispatcher established about the receiver at slot 1, if anything.
+    #[inline(always)]
+    pub(crate) fn verified_receiver(&self) -> Option<VerifiedReceiver> {
+        self.receiver
     }
 
     /// The call-level stack.

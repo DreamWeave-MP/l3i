@@ -136,6 +136,7 @@ pub fn register<T: Userdata>(
 
             let configured = (|| {
                 let mut builder = MetatableBuilder::new(frame, metatable, runtime.debug_roots())?;
+                builder.set_receiver_type::<T>(false);
                 builder.set_type(T::NAME)?;
                 configure(&mut builder)?;
                 builder.finish()?;

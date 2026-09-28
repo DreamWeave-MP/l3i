@@ -42,6 +42,14 @@ pub trait ParamItem<'c>: Sized {
     /// Converts one slot. Only [`ParamKind::Regular`] and the inner type of an optional use it.
     fn read_slot(view: ValueView<'c>) -> Result<Self>;
 
+    /// Converts the receiver slot of a method call; the dispatcher may have established its
+    /// type already ([`Call::verified_receiver`]). Defaults to [`Self::read_slot`].
+    #[inline]
+    fn read_receiver(call: &'c Call<'c>, view: ValueView<'c>) -> Result<Self> {
+        let _ = call;
+        Self::read_slot(view)
+    }
+
     /// True when [`ParamItem::read_slot`] would succeed on `view`.
     fn matches(view: ValueView<'c>) -> bool;
 
@@ -233,6 +241,32 @@ impl<'c, T: Userdata> ParamItem<'c> for &'c T {
     const EXPECTED: &'static str = T::NAME;
     #[inline]
     fn read_slot(view: ValueView<'c>) -> Result<Self> {
+        check_receiver::<T>(view)
+    }
+    #[inline(always)]
+    fn read_receiver(call: &'c Call<'c>, view: ValueView<'c>) -> Result<Self> {
+        use super::VerifiedReceiver;
+        let id = std::any::TypeId::of::<T>();
+        // SAFETY: the dispatcher reached this member through T's own tag or metatable, so the
+        // userdata at slot 1 was created by the matching `push::<T>` with the stated storage;
+        // the view keeps it reachable for the call.
+        match call.verified_receiver() {
+            Some(VerifiedReceiver::Tagged(verified)) if verified == id => {
+                let payload = unsafe { crate::raw::ffi::lua_touserdata(view.state(), view.index()).cast::<T>() };
+                if let Some(payload) = unsafe { payload.as_ref() } {
+                    return Ok(payload);
+                }
+            }
+            Some(VerifiedReceiver::Untagged(verified)) if verified == id => {
+                let storage = unsafe {
+                    crate::raw::ffi::lua_touserdata(view.state(), view.index()).cast::<crate::userdata::Storage<T>>()
+                };
+                if let Some(storage) = unsafe { storage.as_ref() } {
+                    return Ok(storage.get());
+                }
+            }
+            _ => {}
+        }
         check_receiver::<T>(view)
     }
     #[inline]

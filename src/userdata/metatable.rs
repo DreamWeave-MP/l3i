@@ -38,6 +38,9 @@ pub struct MetatableBuilder<'s> {
     state: *mut ffi::lua_State,
     metatable: c_int,
     roots: &'s [&'s str],
+    /// The registered Rust type this metatable belongs to and its storage, when the registrar
+    /// says so: members bound here then skip their receiver check on the dispatch paths.
+    receiver_type: Option<crate::bind::VerifiedReceiver>,
     has_explicit_index: bool,
     has_explicit_newindex: bool,
     has_explicit_len: bool,
@@ -86,6 +89,7 @@ impl<'s> MetatableBuilder<'s> {
                 state,
                 metatable,
                 roots,
+                receiver_type: None,
                 has_explicit_index: false,
                 has_explicit_newindex: false,
                 has_explicit_len: false,
@@ -407,11 +411,23 @@ impl<'s> MetatableBuilder<'s> {
         }
     }
 
+    /// Declares the Rust type whose metatable this is and how its payload is stored; only a
+    /// registrar that created the metatable for `T` may say so, because members then trust
+    /// the receiver's type.
+    pub(crate) fn set_receiver_type<T: 'static>(&mut self, tagged: bool) {
+        let id = std::any::TypeId::of::<T>();
+        self.receiver_type = Some(if tagged {
+            crate::bind::VerifiedReceiver::Tagged(id)
+        } else {
+            crate::bind::VerifiedReceiver::Untagged(id)
+        });
+    }
+
     /// Builds a method-mode closure, pins it, and returns its direct entry.
     fn member_closure<F: Binding<M>, M>(&mut self, debug_name: &str, callable: F) -> Result<(Value, MemberEntry)> {
         let retained = self.retain(debug_name)?;
         unsafe {
-            let entry = crate::bind::method_member(self.state, callable, retained)?;
+            let entry = crate::bind::method_member(self.state, callable, retained, self.receiver_type)?;
             let value = Value::store(crate::stack::ValueView::resolve(self.state, -1))?;
             ffi::lua_pop(self.state, 1);
             Ok((value, entry))

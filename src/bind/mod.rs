@@ -33,6 +33,7 @@ use std::ffi::{c_char, c_int, c_void};
 use std::ptr;
 
 pub use call::Call;
+pub(crate) use call::VerifiedReceiver;
 pub use param::{ArgView, Param, ParamItem, ParamKind, VarArgs};
 pub use params::Params;
 pub use returns::{Break, NilThen, ResultOrError, Return, StackResults, Variadic, Yield};
@@ -160,6 +161,9 @@ struct Context<F> {
     /// The retained debug name, validated once at bind time. Retained names live until the VM
     /// closes, which outlives every call through this context.
     debug_name: &'static str,
+    /// For a member of a registered type: that type and its storage, so a dispatcher that
+    /// vouches for the receiver lets the binding skip its type check.
+    receiver_type: Option<call::VerifiedReceiver>,
 }
 
 /// Runs the callable's `Drop` when Luau frees the closure context. Never touches Lua.
@@ -190,7 +194,7 @@ unsafe fn with_context<F: Binding<M>, M>(
             // SAFETY: upvalue 1 is the context userdata `push_closure` created for this thunk;
             // the thread data slot holds the runtime's record for this thread (or null).
             let context = &*context;
-            let call = Call::from_parts(state, top, record.cast_const().cast());
+            let call = Call::from_parts(state, top, record.cast_const().cast(), None);
             body(&context.callable, &call, context.debug_name)
         })
     }
@@ -244,7 +248,7 @@ unsafe fn direct_method<F: Binding<M>, M>(
             // SAFETY: the entry was built from this context by `method_member`, and the
             // dispatch table that produced the entry keeps the owning closure alive.
             let context = &*context.cast::<Context<F>>();
-            let call = Call::from_parts(state, top, record);
+            let call = Call::from_parts(state, top, record, context.receiver_type);
             context.callable.invoke_method(&call, context.debug_name)
         })
     }
@@ -260,6 +264,7 @@ unsafe fn push_closure<F: Binding<M>, M>(
     callable: F,
     debug_name: *const c_char,
     entry: ffi::lua_CFunction,
+    receiver_type: Option<call::VerifiedReceiver>,
 ) -> Result<*const Context<F>> {
     const { assert_userdata_layout::<Context<F>>() };
     // SAFETY: allocate, then initialise immediately: Luau owns the destructor as soon as
@@ -273,7 +278,7 @@ unsafe fn push_closure<F: Binding<M>, M>(
         if storage.is_null() {
             return Err(Error::runtime("Unable to allocate binding closure context"));
         }
-        ptr::write(storage.cast::<Context<F>>(), Context { callable, debug_name: name });
+        ptr::write(storage.cast::<Context<F>>(), Context { callable, debug_name: name, receiver_type });
         ffi::lua_pushcclosure(state, entry, debug_name, 1);
         Ok(storage.cast_const().cast::<Context<F>>())
     }
@@ -288,7 +293,7 @@ pub(crate) unsafe fn function_closure<F: Binding<M>, M>(
     callable: F,
     debug_name: *const c_char,
 ) -> Result<()> {
-    unsafe { push_closure(state, callable, debug_name, thunk::<F, M>).map(drop) }
+    unsafe { push_closure(state, callable, debug_name, thunk::<F, M>, None).map(drop) }
 }
 
 /// Pushes a method-mode closure and returns its direct entry. `debug_name` must already be
@@ -300,8 +305,9 @@ pub(crate) unsafe fn method_member<F: Binding<M>, M>(
     state: *mut ffi::lua_State,
     callable: F,
     debug_name: *const c_char,
+    receiver_type: Option<call::VerifiedReceiver>,
 ) -> Result<MemberEntry> {
-    let context = unsafe { push_closure(state, callable, debug_name, method_thunk::<F, M>)? };
+    let context = unsafe { push_closure(state, callable, debug_name, method_thunk::<F, M>, receiver_type)? };
     Ok(MemberEntry { invoke: direct_method::<F, M>, context: context.cast::<c_void>() })
 }
 
