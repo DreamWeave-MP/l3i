@@ -215,7 +215,10 @@ impl UserdataDecl {
 /// The typed view of a [`UserdataDecl`] under construction: declares a member and binds its
 /// callable in one call. Callables are `Clone` because a plan instantiates any number of
 /// runtimes and binds each member once per VM; closures that capture nothing, `Rc`s, or
-/// `Clone` data qualify.
+/// `Clone` data qualify. Bluntly: whatever a declared callable captures is shared by every
+/// runtime made from the plan, by construction. An `Rc<RefCell<_>>` captured here is one cell
+/// for all of them. Mutable per-runtime state belongs in `InstallContext::insert_state`, and a
+/// callable reaches it through the call's runtime, never through a capture.
 pub struct UserdataBuilder<'a, T: Userdata> {
     decl: &'a mut UserdataDecl,
     _type: std::marker::PhantomData<T>,
@@ -620,8 +623,9 @@ impl ExtensionDescriptor {
         self
     }
 
-    /// A capability the extension checks at run time (`InstallContext::has_capability`) but
-    /// does not need to install: the runtime plans with or without it.
+    /// A capability the extension checks at install time (`InstallContext::has_capability`,
+    /// which refuses an undeclared name) but does not need to install: the runtime plans with
+    /// or without it.
     pub fn optional_capability(&mut self, name: &str) -> &mut Self {
         self.optional_capabilities.insert(name.to_owned());
         self

@@ -269,13 +269,17 @@ fn services_capabilities_state_and_drop_order() {
         fn describe(&self, d: &mut ExtensionDescriptor) -> Result<()> {
             d.service::<Greeting>();
             d.capability("filesystem.read");
+            d.optional_capability("filesystem.write");
             d.module("@dream/needy").installed("greet").signature("() -> string");
             Ok(())
         }
         fn install(&self, cx: &mut InstallContext<'_>) -> Result<()> {
             let greeting = cx.service::<Greeting>()?;
             cx.require_capability("filesystem.read")?;
-            assert!(!cx.has_capability("filesystem.write"));
+            assert!(cx.has_capability("filesystem.read")?);
+            assert!(!cx.has_capability("filesystem.write")?, "declared optional, not granted");
+            let error = cx.has_capability("filesytem.write").unwrap_err().to_string();
+            assert!(error.contains("checks capability 'filesytem.write' without declaring it"), "{error}");
             let pinned = cx.runtime().load_function("return function() end").unwrap().into_value();
             cx.insert_state(State { pinned, dropped: Rc::clone(&self.dropped) });
             let text = greeting.0.clone();
@@ -440,7 +444,43 @@ fn finalization_rejects_bad_compositions() {
     let error = text(RuntimePlan::builder().extension(Named("dream.named", 1)).finalize());
     assert!(error.contains("member of 'dream.tests.Other' 'bad-name' is not a Luau identifier"), "{error}");
     let error = text(RuntimePlan::builder().extension(Named("dream.named", 2)).finalize());
-    assert!(error.contains("identity '@dream/spaced path' must be non-empty printable ASCII"), "{error}");
+    assert!(error.contains("module path '@dream/spaced path' must be an optional '@'"), "{error}");
+    struct Spelled(u8);
+    struct BadName;
+    // SAFETY: a plain unit type; its NAME is deliberately malformed.
+    unsafe impl Userdata for BadName {
+        const NAME: &'static str = "dream.bad name";
+    }
+    impl Extension for Spelled {
+        fn id(&self) -> &'static str {
+            "dream.spelled"
+        }
+        fn describe(&self, d: &mut ExtensionDescriptor) -> Result<()> {
+            match self.0 {
+                0 => {
+                    d.module("@dream/quo\"te").function("f", || 1i64).signature("() -> number");
+                }
+                1 => {
+                    d.userdata::<Other>("dream/tests/Other").method("get", |_: &Other| 1i64).signature("(self): number");
+                }
+                2 => {
+                    d.userdata::<BadName>("dream.tests.BadName").method("get", |_: &BadName| 1i64).signature("(self): number");
+                }
+                _ => {
+                    d.module("@dream/spelled").function("continue", || 1i64).signature("() -> number");
+                }
+            }
+            Ok(())
+        }
+    }
+    let error = text(RuntimePlan::builder().extension(Spelled(0)).finalize());
+    assert!(error.contains("module path '@dream/quo\"te' must be"), "{error}");
+    let error = text(RuntimePlan::builder().extension(Spelled(1)).finalize());
+    assert!(error.contains("userdata key 'dream/tests/Other' must be"), "{error}");
+    let error = text(RuntimePlan::builder().extension(Spelled(2)).finalize());
+    assert!(error.contains("Luau type name 'dream.bad name', which is not dot-separated identifiers"), "{error}");
+    let error = text(RuntimePlan::builder().extension(Spelled(3)).finalize());
+    assert!(error.contains("'continue' is not a Luau identifier"), "{error}");
     let error = text(RuntimePlan::builder().extension(Named("dream.named", 3)).finalize());
     assert!(error.contains("member of module '@dream/named' 'end' is not a Luau identifier"), "{error}");
     let error = text(
@@ -833,6 +873,7 @@ fn compiler_type_slots_go_to_required_types_first_and_a_required_type_without_on
 
 #[test]
 fn two_extensions_storing_the_same_state_type_keep_their_own() {
+    #[derive(Debug)]
     struct Cache(&'static str);
     struct Keeper(&'static str, &'static str);
     impl Extension for Keeper {
@@ -846,10 +887,38 @@ fn two_extensions_storing_the_same_state_type_keep_their_own() {
             assert!(cx.state::<Cache>().is_none());
             cx.insert_state(Cache(self.1));
             assert_eq!(cx.state::<Cache>().unwrap().0, self.1);
+            assert_eq!(cx.state_of::<Cache>(self.0).unwrap().unwrap().0, self.1, "own state by id");
+            if self.0 == "dream.b" {
+                // Installed after dream.a, but reading its state without declaring the
+                // dependency is refused: order is not a contract, the graph is.
+                let error = cx.state_of::<Cache>("dream.a").unwrap_err().to_string();
+                assert!(error.contains("reads state of 'dream.a' without declaring it"), "{error}");
+            }
             Ok(())
         }
     }
-    let plan = RuntimePlan::builder().extension(Keeper("dream.a", "a's")).extension(Keeper("dream.b", "b's")).finalize().unwrap();
+    struct Reader;
+    impl Extension for Reader {
+        fn id(&self) -> &'static str {
+            "dream.reader"
+        }
+        fn describe(&self, d: &mut ExtensionDescriptor) -> Result<()> {
+            d.requires("dream.a");
+            d.optional("dream.zzz");
+            Ok(())
+        }
+        fn install(&self, cx: &mut InstallContext<'_>) -> Result<()> {
+            assert_eq!(cx.state_of::<Cache>("dream.a")?.unwrap().0, "a's", "a declared dependency's state");
+            assert!(cx.state_of::<Cache>("dream.zzz").is_err(), "an optional dependency absent from the plan");
+            Ok(())
+        }
+    }
+    let plan = RuntimePlan::builder()
+        .extension(Keeper("dream.a", "a's"))
+        .extension(Keeper("dream.b", "b's"))
+        .extension(Reader)
+        .finalize()
+        .unwrap();
     let runtime = Runtime::from_plan(&plan).unwrap();
     assert_eq!(runtime.state_of::<Cache>("dream.a").unwrap().0, "a's");
     assert_eq!(runtime.state_of::<Cache>("dream.b").unwrap().0, "b's");

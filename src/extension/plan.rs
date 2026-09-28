@@ -354,7 +354,7 @@ fn resolve_modules(descriptors: &[ExtensionDescriptor], order: &[usize], policy:
     let mut module_paths = HashSet::new();
     for &index in order {
         for module in descriptors[index].modules() {
-            validate_key(&module.path)?;
+            validate_module_path(&module.path)?;
             if !module_paths.insert(module.path.clone()) {
                 return Err(Error::logic(format!(
                     "module '{}' is provided twice (second time by '{}')",
@@ -604,6 +604,7 @@ fn merge_userdata(descriptors: &[ExtensionDescriptor], order: &[usize]) -> Resul
     for &index in order {
         for decl in descriptors[index].owned_userdata() {
             validate_key(&decl.key)?;
+            validate_type_name(&decl.key, decl.type_name)?;
             if let Some(existing) = by_key.get(&decl.key) {
                 return Err(Error::logic(format!(
                     "userdata '{}' is owned by both '{}' and '{}'",
@@ -682,8 +683,8 @@ fn merge_userdata(descriptors: &[ExtensionDescriptor], order: &[usize]) -> Resul
 /// definitions and in script code.
 fn is_identifier(name: &str) -> bool {
     const RESERVED: &[&str] = &[
-        "and", "break", "do", "else", "elseif", "end", "false", "for", "function", "if", "in", "local", "nil", "not",
-        "or", "repeat", "return", "then", "true", "until", "while",
+        "and", "break", "continue", "do", "else", "elseif", "end", "false", "for", "function", "if", "in", "local",
+        "nil", "not", "or", "repeat", "return", "then", "true", "until", "while",
     ];
     let mut bytes = name.bytes();
     bytes.next().is_some_and(|b| b.is_ascii_alphabetic() || b == b'_')
@@ -699,14 +700,43 @@ fn validate_identifier(what: &str, name: &str) -> Result<()> {
     }
 }
 
-/// A stable key or a module path: printable ASCII, no whitespace, so it reads the same in
-/// errors, definitions, and require paths.
+/// A stable userdata key: ASCII letters, digits, `.`, `_`, and `-`, so it reads the same in
+/// errors and definitions and folds to one class name.
 fn validate_key(key: &str) -> Result<()> {
-    if !key.is_empty() && key.bytes().all(|b| b.is_ascii_graphic()) {
+    if !key.is_empty() && key.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'_' || b == b'-') {
         Ok(())
     } else {
-        Err(Error::logic(format!("identity '{key}' must be non-empty printable ASCII without whitespace")))
+        Err(Error::logic(format!("userdata key '{key}' must be ASCII letters, digits, '.', '_', or '-'")))
     }
+}
+
+/// A module path: an optional leading `@`, then ASCII letters, digits, `/`, `.`, `_`, and `-`.
+/// Nothing that needs escaping inside a Luau string literal, so the definitions gate can spell
+/// `require("<path>")` verbatim.
+fn validate_module_path(path: &str) -> Result<()> {
+    let body = path.strip_prefix('@').unwrap_or(path);
+    let valid = !body.is_empty()
+        && body.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'/' || b == b'.' || b == b'_' || b == b'-');
+    if valid {
+        Ok(())
+    } else {
+        Err(Error::logic(format!(
+            "module path '{path}' must be an optional '@' then ASCII letters, digits, '/', '.', '_', or '-'"
+        )))
+    }
+}
+
+/// `Userdata::NAME` as registration will check it: dot-separated identifiers (the first is the
+/// debug root the plan derives from it), no NUL, so `Runtime::from_plan` has nothing left to
+/// discover.
+fn validate_type_name(key: &str, name: &'static str) -> Result<()> {
+    let root = name.split('.').next().unwrap_or("");
+    if !name.contains('.') || !crate::debug_name::is_valid_debug_name(name, &[root]) {
+        return Err(Error::logic(format!(
+            "userdata '{key}' has the Luau type name '{name}', which is not dot-separated identifiers"
+        )));
+    }
+    Ok(())
 }
 
 fn add_members(resolved: &mut ResolvedUserdata, decl: &UserdataDecl) -> Result<()> {
@@ -960,6 +990,7 @@ impl RuntimePlan {
         let mut script = String::from("--!strict\n");
         for (index, module) in self.modules.iter().enumerate() {
             use std::fmt::Write;
+            // Paths passed `validate_module_path`: nothing in them needs escaping in a literal.
             let _ = writeln!(script, "local m{index} = require(\"{}\")", module.path);
         }
         let definitions = self.type_definitions();

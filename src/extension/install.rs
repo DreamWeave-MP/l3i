@@ -145,9 +145,20 @@ impl<'r> InstallContext<'r> {
         })
     }
 
-    /// Whether the runtime policy grants `capability`.
-    pub fn has_capability(&self, capability: &str) -> bool {
-        self.plan.policy.grants(capability)
+    /// Whether the runtime policy grants `capability`, which this extension must have declared
+    /// (`capability` or `optional_capability` in describe): an undeclared name is a logic error,
+    /// so a misspelling surfaces instead of reading as "not granted".
+    pub fn has_capability(&self, capability: &str) -> Result<bool> {
+        let descriptor = &self.plan.descriptors[self.descriptor_index];
+        let declared = descriptor.capabilities().any(|c| c == capability)
+            || descriptor.optional_capabilities().any(|c| c == capability);
+        if !declared {
+            return Err(Error::logic(format!(
+                "extension '{}' checks capability '{capability}' without declaring it in describe",
+                self.current
+            )));
+        }
+        Ok(self.plan.policy.grants(capability))
     }
 
     /// Fails with a permission error unless the policy grants `capability`, which this
@@ -162,7 +173,7 @@ impl<'r> InstallContext<'r> {
                 self.current
             )));
         }
-        if self.has_capability(capability) {
+        if self.plan.policy.grants(capability) {
             Ok(())
         } else {
             Err(Error::permission(format!("capability '{capability}' is not granted to this runtime")))
@@ -194,9 +205,23 @@ impl<'r> InstallContext<'r> {
         self.runtime.state_for::<S>(Some(self.current))
     }
 
-    /// The state of type `S` that extension `owner` stored (a dependency's, say), if any.
-    pub fn state_of<S: 'static>(&self, owner: &'static str) -> Option<Rc<S>> {
-        self.runtime.state_for::<S>(Some(owner))
+    /// The state of type `S` that extension `owner` stored, if any. `owner` must be this
+    /// extension, a declared `requires`, or a declared `optional` that is in the plan: reading
+    /// another extension's state is a dependency, and the dependency graph, not installation
+    /// order, is what guarantees it was installed first.
+    pub fn state_of<S: 'static>(&self, owner: &'static str) -> Result<Option<Rc<S>>> {
+        let descriptor = &self.plan.descriptors[self.descriptor_index];
+        let declared = owner == self.current
+            || descriptor.dependencies().any(|id| id == owner)
+            || (descriptor.optional_dependencies().any(|id| id == owner)
+                && self.plan.descriptors.iter().any(|d| d.id() == owner));
+        if !declared {
+            return Err(Error::logic(format!(
+                "extension '{}' reads state of '{owner}' without declaring it with requires or optional",
+                self.current
+            )));
+        }
+        Ok(self.runtime.state_for::<S>(Some(owner)))
     }
 }
 

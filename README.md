@@ -160,7 +160,9 @@ member carries a signature or is marked `untyped()`, and a plan with neither fai
 finalize. The vocabulary follows the runtime, where Luau's checker keeps `integer` and
 `number` apart: a packed value, a `Bits64`, or an `Integer` result is `integer`; a count, a
 size, or an `f64` is `number`; a class is its generated name (`dream_net_Client`). Callables
-are `Clone` because one plan binds them in every runtime it creates. `install` is optional and
+are `Clone` because one plan binds them in every runtime it creates, so whatever a callable
+captures is shared by every one of those runtimes by construction; mutable per-runtime state
+belongs in `InstallContext::insert_state`, never in a capture. `install` is optional and
 runs per runtime for what needs the live VM or the resolved policy: it fills the module
 members declared `installed` (a policy-gated function, a userdata instance) and cannot add a
 name the plan does not know, so the plan's type definitions and compiler metadata describe the

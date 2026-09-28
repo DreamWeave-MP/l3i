@@ -551,7 +551,7 @@ impl Extension for NetExtension {
 
     /// `net.client{}` depends on the runtime's capabilities, so its declared member binds here.
     fn install(&self, cx: &mut InstallContext<'_>) -> Result<()> {
-        let transport_allowed = cx.has_capability(TRANSPORT_CAPABILITY);
+        let transport_allowed = cx.has_capability(TRANSPORT_CAPABILITY)?;
         let clock = Rc::clone(&self.clock);
         cx.module(MODULE)?.function("client", move |call: &Call, options: ValueView| -> Result<Owned<NetClient>> {
             if !transport_allowed {
