@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- eed5517 - FEAT: Run the StroggForge library pipeline and daily quality checks with the LLVM toolchain policy
+- 9386c73 - CLEANUP: Format the tree and satisfy pedantic Clippy as the shared CI runs it
+- 41f06bb - FIX: Scan past unrelated rustflags in the toolchain check, exempt docs.rs, and configure the macOS and MSVC targets
+- 1c8bc35 - FIX: Keep a zero-argument call from seeing its own temporaries and make Call::arg below 1 read as none
+- cb2da13 - DOCS: Refresh the changelog
 - 324ca6e - BREAK: Publish one direct plan per runtime and refuse a second finish
 - 07d5895 - DOCS: Refresh the changelog
 - 3b324c0 - FIX: Anchor the root-level package include patterns so local reference checkouts stay out of the crate
