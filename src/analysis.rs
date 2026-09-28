@@ -464,6 +464,10 @@ unsafe extern "C" fn collect_completion(
 impl Analysis {
     /// A frontend over `provider`.
     pub fn new(provider: impl SourceProvider, options: AnalysisOptions) -> Result<Analysis> {
+        // The frontend parses Luau's builtin definitions under the process-wide fast flags; freeze
+        // the policy here too, or a runtime created on another thread meanwhile flips flags under
+        // that parse (Luau then fails its `loadResult.success` assertion).
+        crate::flags::initialize()?;
         let provider: Box<Box<dyn SourceProvider>> = Box::new(Box::new(provider));
         let raw_provider = ffi::db_source_provider {
             ctx: (&*provider as *const Box<dyn SourceProvider>).cast_mut().cast(),
