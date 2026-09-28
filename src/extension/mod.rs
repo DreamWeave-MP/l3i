@@ -358,6 +358,7 @@ pub struct ExtensionDescriptor {
     capabilities: BTreeSet<String>,
     optional_capabilities: BTreeSet<String>,
     memory_categories: BTreeSet<String>,
+    packed: Vec<crate::packed::PackedKind>,
     #[cfg(feature = "jit")]
     native_hooks: Vec<std::rc::Rc<dyn crate::native_code::NativeCodeHooks>>,
 }
@@ -388,9 +389,25 @@ impl ExtensionDescriptor {
             capabilities: BTreeSet::new(),
             optional_capabilities: BTreeSet::new(),
             memory_categories: BTreeSet::new(),
+            packed: Vec::new(),
             #[cfg(feature = "jit")]
             native_hooks: Vec::new(),
         }
+    }
+
+    /// Declares a packed scalar kind this extension's members use, so every runtime from the
+    /// plan registers `T` as the kind's owner and the plan refuses a second type on the same
+    /// number. l3i's own kinds need no declaration.
+    pub fn packed<T: crate::packed::PackedScalar>(&mut self) -> &mut Self {
+        let kind = crate::packed::PackedKind::of::<T>();
+        if !self.packed.contains(&kind) {
+            self.packed.push(kind);
+        }
+        self
+    }
+
+    pub fn packed_kinds(&self) -> &[crate::packed::PackedKind] {
+        &self.packed
     }
 
     pub fn id(&self) -> &'static str {

@@ -127,6 +127,8 @@ pub(crate) struct Shared {
     /// The extension planner's direct members by plan slot, collected during registration and
     /// published once into `slot_table`.
     direct_entries: RefCell<Vec<Option<crate::bind::MemberEntry>>>,
+    /// The packed scalar kinds this VM knows, by kind number (index 0 unused).
+    packed_kinds: [Cell<Option<crate::packed::PackedKind>>; 16],
     /// The bytecode type the compiler gives each Rust type named in this runtime's userdata
     /// type list (`TAGGED_USERDATA_BASE + index`), for native lowering hooks.
     #[cfg(feature = "jit")]
@@ -209,9 +211,34 @@ impl Shared {
             require_navigator: RefCell::new(None),
             untagged: RefCell::new(HashMap::default()),
             direct_entries: RefCell::new(Vec::new()),
+            packed_kinds: std::array::from_fn(|_| Cell::new(None)),
             slot_table: std::cell::OnceCell::new(),
             #[cfg(feature = "jit")]
             userdata_types: RefCell::new(HashMap::default()),
+        }
+    }
+
+    /// The registered owner of packed `kind`, if any.
+    #[inline]
+    pub(crate) fn packed_kind_of(&self, kind: u8) -> Option<crate::packed::PackedKind> {
+        self.packed_kinds.get(usize::from(kind)).and_then(Cell::get)
+    }
+
+    /// Registers `kind`'s owner; registering the same type again is a no-op, another type on
+    /// the same number is refused.
+    pub(crate) fn register_packed_kind(&self, kind: crate::packed::PackedKind) -> crate::error::Result<()> {
+        kind.validate()?;
+        let slot = &self.packed_kinds[usize::from(kind.kind)];
+        match slot.get() {
+            Some(existing) if existing.type_id == kind.type_id => Ok(()),
+            Some(existing) => Err(crate::error::Error::logic(format!(
+                "packed kind {} is already registered to {} in this runtime; {} cannot take it",
+                kind.kind, existing.name, kind.name
+            ))),
+            None => {
+                slot.set(Some(kind));
+                Ok(())
+            }
         }
     }
 

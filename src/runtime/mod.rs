@@ -208,6 +208,9 @@ impl RuntimeBuilder {
         // mirror against this build's API before any binding trusts it.
         // SAFETY: a fresh main thread with a free stack.
         unsafe { crate::convert::raw::self_test(state)? };
+        for kind in crate::packed::builtin_kinds() {
+            runtime.shared().register_packed_kind(kind)?;
+        }
         Ok(runtime)
     }
 }
@@ -505,6 +508,14 @@ impl Runtime {
 
     pub(crate) fn set_plan(&self, plan: Rc<crate::extension::RuntimePlan>) {
         *self.plan.borrow_mut() = Some(plan);
+    }
+
+    /// Registers `T` as the owner of its packed kind on this VM, so `Packed<T>` may cross the
+    /// boundary here. l3i's own kinds are registered at creation; a plan registers the kinds
+    /// its extensions declare. Registering the same type twice is a no-op; another type on the
+    /// same kind number is a logic error.
+    pub fn register_packed<T: crate::packed::PackedScalar>(&self) -> Result<()> {
+        self.shared().register_packed_kind(crate::packed::PackedKind::of::<T>())
     }
 
     /// Stores runtime-owned state by type (one value per type), dropped before the VM closes.

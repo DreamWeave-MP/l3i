@@ -338,6 +338,52 @@ fn finalization_rejects_bad_compositions() {
         RuntimePlan::builder().extension(Bare("zeta", vec![])).extension(Bare("alpha", vec![])).finalize().unwrap();
     assert_eq!(plan.installation_order(), ["alpha", "zeta"]);
 
+    // Packed kinds: one type per number across the plan, l3i's numbers off limits.
+    struct Kinded(&'static str, u8);
+    struct KindA;
+    struct KindB;
+    macro_rules! kind {
+        ($t:ident, $n:expr) => {
+            impl l3i::packed::PackedScalar for $t {
+                const KIND: u8 = $n;
+                const NAME: &'static str = stringify!($t);
+                fn pack(&self) -> (u64, u8) {
+                    (0, 0)
+                }
+                fn unpack(_: u64, _: u8) -> Result<Self> {
+                    Ok($t)
+                }
+            }
+        };
+    }
+    kind!(KindA, 7);
+    kind!(KindB, 7);
+    struct KindLow;
+    kind!(KindLow, 2);
+    impl Extension for Kinded {
+        fn id(&self) -> &'static str {
+            self.0
+        }
+        fn describe(&self, d: &mut ExtensionDescriptor) -> Result<()> {
+            match self.1 {
+                0 => d.packed::<KindA>(),
+                1 => d.packed::<KindB>(),
+                _ => d.packed::<KindLow>(),
+            };
+            Ok(())
+        }
+    }
+    let error = text(RuntimePlan::builder().extension(Kinded("a", 0)).extension(Kinded("b", 1)).finalize());
+    assert!(error.contains("packed kind 7 is declared for KindA by 'a' and for KindB by 'b'"), "{error}");
+    let error = text(RuntimePlan::builder().extension(Kinded("a", 2)).finalize());
+    assert!(error.contains("kind 2, which belongs to l3i (AnimationKey)"), "{error}");
+    let plan = RuntimePlan::builder().extension(Kinded("a", 0)).extension(Kinded("b", 0)).finalize().unwrap();
+    assert_eq!(plan.packed_kinds().len(), 1, "the same type declared twice is one kind");
+    let runtime = Runtime::from_plan(&plan).unwrap();
+    let error = runtime.register_packed::<KindB>().unwrap_err().to_string();
+    assert!(error.contains("already registered to KindA"), "{error}");
+    runtime.register_packed::<KindA>().unwrap();
+
     // Duplicate module.
     struct Dup(&'static str);
     impl Extension for Dup {

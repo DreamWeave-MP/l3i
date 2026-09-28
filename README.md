@@ -185,7 +185,11 @@ scalar helpers), never a safe slice, because a script can pass one buffer to two
 the zero-copy slices are `unsafe fn bytes_unchecked`/`bytes_mut_unchecked` for trusted code
 that proves nothing writes the buffer meanwhile, the rules `lua_tobuffer` imposes on C;
 `packed::BufferPack` reads and writes fixed layouts through a copy in one bounds check, and `packed::PackedScalar` puts a semantic value into one Luau integer (4-bit
-kind, 4 flag bits, 56-bit payload) with the kind checked on every read; `options::Options`
+kind, 4 flag bits, 56-bit payload) with the kind checked on every read. Kinds are a registry:
+1 to 4 are l3i's own and fixed for good (a packed integer is a file and wire format), 5 to 15
+are the application's, declared per extension (`ExtensionDescriptor::packed`) or per runtime
+(`Runtime::register_packed`); a plan with two types on one number does not finalize, and a
+`Packed<T>` crossing a VM where `T` is not the kind's registered owner is a logic error; `options::Options`
 reads camelCase option tables strictly (unknown keys are errors, required keys and field paths
 are named); `sequence::Sequence` and `sequence::Stream` show a Rust collection to scripts as
 `#items`, `items[i]`, `for item in items`, and `items:toTable()` (or `for` only, with a private

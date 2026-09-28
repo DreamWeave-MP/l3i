@@ -436,6 +436,9 @@ fn build_runtime(plan: &Rc<RuntimePlan>) -> Result<Runtime> {
         builder = builder.native_code(options);
     }
     let runtime = builder.build()?;
+    for kind in &plan.packed_kinds {
+        runtime.shared().register_packed_kind(*kind)?;
+    }
     #[cfg(feature = "jit")]
     {
         use crate::native_code::ir::bytecode_type::{TAGGED_USERDATA_BASE, TAGGED_USERDATA_END};

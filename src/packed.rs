@@ -10,6 +10,14 @@
 //! to a native operation fails with a type error instead of decoding garbage.
 //! [`crate::quat::Quaternion`] and [`crate::quat::AnimationKey`] are the first kinds: a rotation
 //! in 56 bits, with or without four bits of side data.
+//!
+//! Kinds are a registry, not a convention. A kind number is what a packed integer means once
+//! it is written to a file or a socket, so the numbers are fixed: `1..=4` are l3i's own and
+//! never change ([`BUILTIN_KINDS`]); `5..=15` are a host's, chosen by the application. Every
+//! runtime carries a table of the kinds it knows, filled from the plan (`ExtensionDescriptor::
+//! packed`) or by [`crate::Runtime::register_packed`], and a `Packed<T>` crossing into or out
+//! of a VM where `T` is not the registered owner of its kind fails with a logic error rather
+//! than decoding another type's bits. A plan with two types on one kind does not finalize.
 
 use crate::convert::{BufferView, FromView, Integer, Push};
 use crate::error::{Error, Result};
@@ -112,11 +120,17 @@ pub const KIND_BITS: u32 = 4;
 /// Bits the kind may use for flags (second nibble from the top).
 pub const FLAG_BITS: u32 = 4;
 
+/// The first kind a host may claim; `1..HOST_KIND_FIRST` are l3i's ([`BUILTIN_KINDS`]).
+pub const HOST_KIND_FIRST: u8 = 5;
+/// The last kind: the discriminator is four bits and 0 is reserved.
+pub const LAST_KIND: u8 = 15;
+
 /// A semantic value that lives in one Luau integer: 4-bit kind, 4-bit flags, 56-bit payload.
-pub trait PackedScalar: Sized {
+pub trait PackedScalar: Sized + 'static {
     /// The kind discriminator, `1..=15` (0 is reserved so a plain zero integer never passes).
     /// Kinds 1 to 4 are [`crate::quat::Quaternion`], [`crate::quat::AnimationKey`],
-    /// [`crate::raster::Color`], and [`crate::raster::ClipRect`]; a host's own kinds are `5..=15`.
+    /// [`crate::raster::Color`], and [`crate::raster::ClipRect`]; a host's own kinds are
+    /// [`HOST_KIND_FIRST`]`..=`[`LAST_KIND`], registered per runtime (see the module docs).
     const KIND: u8;
     /// The name used in type errors, e.g. `Quaternion`.
     const NAME: &'static str;
@@ -124,6 +138,79 @@ pub trait PackedScalar: Sized {
     fn pack(&self) -> (u64, u8);
     /// Rebuilds the value from its payload and flags; the kind has been checked already.
     fn unpack(payload: u64, flags: u8) -> Result<Self>;
+}
+
+/// One registered kind: the number, the Rust type that owns it, and its name for messages.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PackedKind {
+    pub kind: u8,
+    pub type_id: std::any::TypeId,
+    pub name: &'static str,
+}
+
+impl PackedKind {
+    #[must_use]
+    pub fn of<T: PackedScalar>() -> PackedKind {
+        PackedKind { kind: T::KIND, type_id: std::any::TypeId::of::<T>(), name: T::NAME }
+    }
+
+    /// Whether this is one of l3i's own kinds.
+    #[must_use]
+    pub fn is_builtin(&self) -> bool {
+        builtin_kinds().iter().any(|builtin| builtin.type_id == self.type_id)
+    }
+
+    /// Rejects kind numbers no registry accepts: 0, above 15, or one of l3i's for a host type.
+    pub(crate) fn validate(&self) -> Result<()> {
+        if self.kind == 0 || self.kind > LAST_KIND {
+            return Err(Error::logic(format!("packed scalar {} declares kind {}, outside 1..=15", self.name, self.kind)));
+        }
+        if self.kind < HOST_KIND_FIRST && !self.is_builtin() {
+            return Err(Error::logic(format!(
+                "packed scalar {} declares kind {}, which belongs to l3i ({}); host kinds are {HOST_KIND_FIRST}..={LAST_KIND}",
+                self.name,
+                self.kind,
+                builtin_kinds()[usize::from(self.kind) - 1].name
+            )));
+        }
+        Ok(())
+    }
+}
+
+/// l3i's own kinds, in kind order from 1: fixed for good, since packed integers are written
+/// to files and sockets.
+#[must_use]
+pub fn builtin_kinds() -> [PackedKind; 4] {
+    [
+        PackedKind::of::<crate::quat::Quaternion>(),
+        PackedKind::of::<crate::quat::AnimationKey>(),
+        PackedKind::of::<crate::raster::Color>(),
+        PackedKind::of::<crate::raster::ClipRect>(),
+    ]
+}
+
+/// The kind numbers of [`builtin_kinds`], as documentation and as a compile-time anchor.
+pub const BUILTIN_KINDS: [u8; 4] = [1, 2, 3, 4];
+
+/// Fails unless `T` is the registered owner of its kind on the VM behind `state`.
+#[inline]
+fn check_registered<T: PackedScalar>(state: *mut crate::raw::ffi::lua_State) -> Result<()> {
+    // SAFETY: `state` comes from a live scope.
+    let registered = unsafe { crate::runtime::shared_for(state) }.and_then(|shared| shared.packed_kind_of(T::KIND));
+    match registered {
+        Some(owner) if owner.type_id == std::any::TypeId::of::<T>() => Ok(()),
+        Some(owner) => Err(Error::logic(format!(
+            "packed kind {} is registered to {} in this runtime, not {}",
+            T::KIND,
+            owner.name,
+            T::NAME
+        ))),
+        None => Err(Error::logic(format!(
+            "packed scalar {} (kind {}) is not registered in this runtime; declare it with ExtensionDescriptor::packed or Runtime::register_packed",
+            T::NAME,
+            T::KIND
+        ))),
+    }
 }
 
 /// The Luau integer carrying a packed scalar of kind `T`.
@@ -169,6 +256,7 @@ impl<'v, T: PackedScalar> FromView<'v> for Packed<T> {
 
     #[inline]
     fn from_view(view: ValueView<'v>) -> Result<Self> {
+        check_registered::<T>(view.state())?;
         // One read for the tag and the payload; the kind check is on the bits.
         match crate::convert::read_integer64(view) {
             Some(bits) => Packed::from_bits(bits),
@@ -176,6 +264,8 @@ impl<'v, T: PackedScalar> FromView<'v> for Packed<T> {
         }
     }
 
+    /// The bits alone: the registry check is [`crate::bind::ParamItem::read_arg`]'s, which is
+    /// the only caller with the VM at hand.
     #[inline(always)]
     fn from_raw_arg(raw: &crate::convert::RawValue, view: impl FnOnce() -> ValueView<'v>) -> Result<Self> {
         if raw.tag() == crate::raw::ffi::LUA_TINTEGER {
@@ -204,7 +294,10 @@ impl<'c, T: PackedScalar> crate::bind::ParamItem<'c> for Packed<T> {
     #[inline(always)]
     fn read_arg(call: &'c crate::bind::Call<'c>, index: std::ffi::c_int) -> Result<Self> {
         match call.raw_arg(index) {
-            Some(raw) => <Packed<T> as FromView<'c>>::from_raw_arg(raw, || call.arg(index)),
+            Some(raw) => {
+                check_registered::<T>(call.state())?;
+                <Packed<T> as FromView<'c>>::from_raw_arg(raw, || call.arg(index))
+            }
             None => <Packed<T> as FromView<'c>>::from_view(call.arg(index)),
         }
     }
@@ -216,6 +309,7 @@ impl<'c, T: PackedScalar> crate::bind::ParamItem<'c> for Packed<T> {
 
 impl<T: PackedScalar> Push for Packed<T> {
     fn push_into<'s, S: Scope>(&self, scope: &'s S) -> Result<ValueView<'s>> {
+        check_registered::<T>(scope.state())?;
         Integer(self.bits()).push_into(scope)
     }
 }

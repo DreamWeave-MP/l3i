@@ -229,6 +229,7 @@ impl RuntimePlanBuilder {
         let categories = resolve_categories(&descriptors)?;
         check_services_and_capabilities(&descriptors, &services, &policy)?;
         let roots = debug_roots(&policy, &descriptors, &userdata);
+        let packed_kinds = resolve_packed_kinds(&descriptors, &order)?;
 
         Ok(Rc::new(RuntimePlan {
             policy,
@@ -241,8 +242,42 @@ impl RuntimePlanBuilder {
             categories,
             services,
             debug_roots: roots,
+            packed_kinds,
         }))
     }
+}
+
+/// Every declared packed kind, validated: numbers in the host range (or l3i's own types), and
+/// one type per number across the whole plan.
+fn resolve_packed_kinds(descriptors: &[ExtensionDescriptor], order: &[usize]) -> Result<Vec<crate::packed::PackedKind>> {
+    let mut kinds: Vec<(crate::packed::PackedKind, &'static str)> = Vec::new();
+    for &index in order {
+        for kind in descriptors[index].packed_kinds() {
+            kind.validate()?;
+            match kinds.iter().find(|(existing, _)| existing.kind == kind.kind) {
+                Some((existing, _)) if existing.type_id == kind.type_id => {}
+                Some((existing, owner)) => {
+                    return Err(Error::logic(format!(
+                        "packed kind {} is declared for {} by '{owner}' and for {} by '{}'",
+                        kind.kind,
+                        existing.name,
+                        kind.name,
+                        descriptors[index].id()
+                    )));
+                }
+                None => kinds.push((*kind, descriptors[index].id())),
+            }
+        }
+    }
+    for builtin in crate::packed::builtin_kinds() {
+        if let Some((kind, owner)) = kinds.iter().find(|(k, _)| k.kind == builtin.kind && k.type_id != builtin.type_id) {
+            return Err(Error::logic(format!(
+                "packed kind {} belongs to l3i ({}); '{owner}' declares it for {}",
+                builtin.kind, builtin.name, kind.name
+            )));
+        }
+    }
+    Ok(kinds.into_iter().map(|(kind, _)| kind).collect())
 }
 
 /// Atoms for every method, getter, and setter name, densely from 1, written back into the
@@ -619,6 +654,7 @@ pub struct RuntimePlan {
     pub(crate) categories: BTreeMap<String, MemoryCategory>,
     pub(crate) services: HashMap<TypeId, (&'static str, Rc<dyn Any>)>,
     pub(crate) debug_roots: Vec<&'static str>,
+    pub(crate) packed_kinds: Vec<crate::packed::PackedKind>,
 }
 
 impl RuntimePlan {
@@ -680,6 +716,11 @@ impl RuntimePlan {
 
     pub fn service<S: 'static>(&self) -> Option<Rc<S>> {
         self.services.get(&TypeId::of::<S>()).and_then(|(_, service)| Rc::clone(service).downcast::<S>().ok())
+    }
+
+    /// The packed scalar kinds the plan's extensions declared (l3i's own are implicit).
+    pub fn packed_kinds(&self) -> &[crate::packed::PackedKind] {
+        &self.packed_kinds
     }
 
     pub fn debug_roots(&self) -> &[&'static str] {

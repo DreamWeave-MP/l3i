@@ -4,7 +4,7 @@
 use std::cell::Cell;
 
 use l3i::bind::Call;
-use l3i::convert::{BufferView, BytesView, Integer};
+use l3i::convert::{BufferView, BytesView, Integer, Push};
 use l3i::extension::{Extension, ExtensionDescriptor, RuntimePlan, RuntimePolicy};
 use l3i::options::{FromOptions, Options};
 use l3i::packed::{BufferPack, Packed, PackedScalar};
@@ -233,6 +233,15 @@ impl PackedScalar for Handle {
 #[test]
 fn packed_scalars_cross_as_integers_with_a_kind_check() {
     let runtime = Runtime::new().unwrap();
+    // Nothing crosses until the kind is registered on this VM.
+    let unregistered = runtime.bind_function("dreamweave.tests.unregistered", |h: Packed<Handle>| i64::from(h.0.id)).unwrap();
+    runtime.set_global("unregistered", &unregistered).unwrap();
+    let error = runtime.exec("unregistered(5i)").unwrap_err().to_string();
+    assert!(error.contains("Handle (kind 5) is not registered"), "{error}");
+    let error = runtime.stack().with_frame(|frame| Packed(Handle { id: 1, flags: 0 }).push_into(frame).map(|_| ())).unwrap_err().to_string();
+    assert!(error.contains("not registered"), "{error}");
+    runtime.register_packed::<Handle>().unwrap();
+    runtime.register_packed::<Handle>().unwrap();
     let make =
         runtime.bind_function("dreamweave.tests.make", |id: i64| Packed(Handle { id: id as u32, flags: 0xA })).unwrap();
     let read =
@@ -262,6 +271,40 @@ fn packed_scalars_cross_as_integers_with_a_kind_check() {
     runtime.set_global("store", &store).unwrap();
     runtime.set_global("load", &load).unwrap();
     runtime.exec("local b = buffer.create(8) store(b, make(99)) assert(load(b) == 99i)").unwrap();
+
+    // One number, one owner per VM; l3i's own numbers are never a host's.
+    #[derive(Debug)]
+    struct Rival;
+    impl PackedScalar for Rival {
+        const KIND: u8 = 5;
+        const NAME: &'static str = "Rival";
+        fn pack(&self) -> (u64, u8) {
+            (0, 0)
+        }
+        fn unpack(_: u64, _: u8) -> Result<Self> {
+            Ok(Rival)
+        }
+    }
+    let error = runtime.register_packed::<Rival>().unwrap_err().to_string();
+    assert!(error.contains("kind 5 is already registered to Handle"), "{error}");
+    let rival = runtime.bind_function("dreamweave.tests.rival", |_: Packed<Rival>| 0i64).unwrap();
+    runtime.set_global("rival", &rival).unwrap();
+    let error = runtime.exec("rival(make(1))").unwrap_err().to_string();
+    assert!(error.contains("registered to Handle in this runtime, not Rival"), "{error}");
+    #[derive(Debug)]
+    struct Squatter;
+    impl PackedScalar for Squatter {
+        const KIND: u8 = 3;
+        const NAME: &'static str = "Squatter";
+        fn pack(&self) -> (u64, u8) {
+            (0, 0)
+        }
+        fn unpack(_: u64, _: u8) -> Result<Self> {
+            Ok(Squatter)
+        }
+    }
+    let error = runtime.register_packed::<Squatter>().unwrap_err().to_string();
+    assert!(error.contains("kind 3, which belongs to l3i (Color)"), "{error}");
     let mut bytes = [0u8; 8];
     Packed(Handle { id: 1, flags: 0 }).write_to(&mut bytes).unwrap();
     assert_eq!(Packed::<Handle>::read_from(&bytes).unwrap().0.id, 1);
