@@ -342,6 +342,56 @@ fn finalization_rejects_bad_compositions() {
         RuntimePlan::builder().extension(Bare("zeta", vec![])).extension(Bare("alpha", vec![])).finalize().unwrap();
     assert_eq!(plan.installation_order(), ["alpha", "zeta"]);
 
+    // Names that fold to one identifier: debug prefixes, generated class and module type
+    // names; and compat globals, one per module and one module per global.
+    let error = text(RuntimePlan::builder().extension(Bare("dream.a-b", vec![])).extension(Bare("dream.a_b", vec![])).finalize());
+    assert!(error.contains("share the debug prefix 'dream.a_b'"), "{error}");
+    struct Mod(&'static str, &'static str);
+    impl Extension for Mod {
+        fn id(&self) -> &'static str {
+            self.0
+        }
+        fn describe(&self, d: &mut ExtensionDescriptor) -> Result<()> {
+            d.module(self.1);
+            Ok(())
+        }
+    }
+    let error = text(RuntimePlan::builder().extension(Mod("a", "@dream/x-y")).extension(Mod("b", "@dream/x_y")).finalize());
+    assert!(error.contains("would share the generated type name 'Module__dream_x_y'"), "{error}");
+    let error = text(
+        RuntimePlan::builder()
+            .policy(RuntimePolicy::new().compat_global("@dream/a", "g").compat_global("@dream/b", "g"))
+            .extension(Mod("a", "@dream/a"))
+            .extension(Mod("b", "@dream/b"))
+            .finalize(),
+    );
+    assert!(error.contains("compat global 'g' is mapped to both '@dream/a' and '@dream/b'"), "{error}");
+    let error = text(
+        RuntimePlan::builder()
+            .policy(RuntimePolicy::new().compat_global("@dream/a", "g").compat_global("@dream/a", "h"))
+            .extension(Mod("a", "@dream/a"))
+            .finalize(),
+    );
+    assert!(error.contains("module '@dream/a' is exposed as two compat globals"), "{error}");
+    struct Keyed(&'static str, &'static str, bool);
+    impl Extension for Keyed {
+        fn id(&self) -> &'static str {
+            self.0
+        }
+        fn describe(&self, d: &mut ExtensionDescriptor) -> Result<()> {
+            if self.2 {
+                d.userdata::<Counter>(self.1);
+            } else {
+                d.userdata::<Other>(self.1);
+            }
+            Ok(())
+        }
+    }
+    let error = text(
+        RuntimePlan::builder().extension(Keyed("a", "dream.x-y.T", true)).extension(Keyed("b", "dream.x_y.T", false)).finalize(),
+    );
+    assert!(error.contains("would share the generated class name 'dream_x_y_T'"), "{error}");
+
     // Packed kinds: one type per number across the plan, l3i's numbers off limits.
     struct Kinded(&'static str, u8);
     struct KindA;

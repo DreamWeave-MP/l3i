@@ -4,6 +4,8 @@ use std::any::{Any, TypeId};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::rc::Rc;
 
+use super::typedefs::class_name;
+use super::debug_prefix;
 use super::{COMPILER_TYPE_CAPACITY, CompilerTypePolicy, 
     Extension, ExtensionDescriptor, MemberKind, RuntimePolicy, TagPolicy, UserdataDecl, debug_root,
     validate_extension_id,
@@ -188,49 +190,26 @@ impl RuntimePlanBuilder {
             descriptors.push(descriptor);
         }
 
+        check_debug_prefixes(&descriptors)?;
+
         // 2. Dependencies: every `requires` present, no cycles, deterministic order.
         let order = dependency_order(&descriptors)?;
 
-        // 3. Modules: unique paths.
-        let mut modules = Vec::new();
-        let mut module_paths = HashSet::new();
-        for &index in &order {
-            for module in descriptors[index].modules() {
-                if !module_paths.insert(module.path.clone()) {
-                    return Err(Error::logic(format!(
-                        "module '{}' is provided twice (second time by '{}')",
-                        module.path, module.provider
-                    )));
-                }
-                let global =
-                    policy.compat_globals.iter().find(|(path, _)| *path == module.path).map(|(_, g)| g.clone());
-                let mut names = HashSet::new();
-                for member in &module.members {
-                    if !names.insert(member.name.as_str()) {
-                        return Err(Error::logic(format!(
-                            "module '{}' declares member '{}' twice",
-                            module.path, member.name
-                        )));
-                    }
-                }
-                modules.push(ResolvedModule {
-                    path: module.path.clone(),
-                    frozen: module.frozen,
-                    provider: module.provider,
-                    doc: module.doc.clone(),
-                    global,
-                    members: module.members.clone(),
-                });
-            }
-        }
-        for (path, _) in &policy.compat_globals {
-            if !module_paths.contains(path) {
-                return Err(Error::logic(format!("compat global for '{path}', which no extension provides")));
-            }
-        }
+        // 3. Modules: unique paths, unique members, one-to-one compat globals.
+        let modules = resolve_modules(&descriptors, &order, &policy)?;
 
         // 4. Userdata: owners, then augmentations merged in dependency order.
         let mut userdata = merge_userdata(&descriptors, &order)?;
+        let mut classes: HashMap<String, &str> = HashMap::new();
+        for resolved in &userdata {
+            if let Some(other) = classes.insert(class_name(&resolved.key), &resolved.key) {
+                return Err(Error::logic(format!(
+                    "userdata '{other}' and '{}' would share the generated class name '{}'",
+                    resolved.key,
+                    class_name(&resolved.key)
+                )));
+            }
+        }
 
         // 5. Tags: pinned, then Required, then Preferred while tags remain.
         assign_tags(&mut userdata, &pinned_tags, policy.first_tag)?;
@@ -291,6 +270,79 @@ fn resolve_packed_kinds(descriptors: &[ExtensionDescriptor], order: &[usize]) ->
         }
     }
     Ok(kinds.into_iter().map(|(kind, _)| kind).collect())
+}
+
+
+/// Ids that fold to one debug prefix (`dream.foo-bar` and `dream.foo_bar`) would name
+/// functions identically; rejected here rather than confusing profiles later.
+fn check_debug_prefixes(descriptors: &[ExtensionDescriptor]) -> Result<()> {
+    let mut prefixes: HashMap<String, &'static str> = HashMap::new();
+    for descriptor in descriptors {
+        if let Some(other) = prefixes.insert(debug_prefix(descriptor.id()), descriptor.id()) {
+            return Err(Error::logic(format!(
+                "extensions '{other}' and '{}' share the debug prefix '{}'",
+                descriptor.id(),
+                debug_prefix(descriptor.id())
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Modules in installation order: unique paths, unique member names, compat globals one per
+/// module and one module per global, and no two paths folding to one generated type name.
+fn resolve_modules(descriptors: &[ExtensionDescriptor], order: &[usize], policy: &RuntimePolicy) -> Result<Vec<ResolvedModule>> {
+    let mut modules = Vec::new();
+    let mut module_paths = HashSet::new();
+    for &index in order {
+        for module in descriptors[index].modules() {
+            if !module_paths.insert(module.path.clone()) {
+                return Err(Error::logic(format!(
+                    "module '{}' is provided twice (second time by '{}')",
+                    module.path, module.provider
+                )));
+            }
+            let global = policy.compat_globals.iter().find(|(path, _)| *path == module.path).map(|(_, g)| g.clone());
+            let mut names = HashSet::new();
+            for member in &module.members {
+                if !names.insert(member.name.as_str()) {
+                    return Err(Error::logic(format!("module '{}' declares member '{}' twice", module.path, member.name)));
+                }
+            }
+            modules.push(ResolvedModule {
+                path: module.path.clone(),
+                frozen: module.frozen,
+                provider: module.provider,
+                doc: module.doc.clone(),
+                global,
+                members: module.members.clone(),
+            });
+        }
+    }
+    let mut global_paths: HashMap<&str, &str> = HashMap::new();
+    let mut global_names: HashMap<&str, &str> = HashMap::new();
+    for (path, global) in &policy.compat_globals {
+        if !module_paths.contains(path) {
+            return Err(Error::logic(format!("compat global for '{path}', which no extension provides")));
+        }
+        if let Some(other) = global_paths.insert(path, global) {
+            return Err(Error::logic(format!("module '{path}' is exposed as two compat globals, '{other}' and '{global}'")));
+        }
+        if let Some(other) = global_names.insert(global, path) {
+            return Err(Error::logic(format!("compat global '{global}' is mapped to both '{other}' and '{path}'")));
+        }
+    }
+    let mut module_classes: HashMap<String, &str> = HashMap::new();
+    for module in &modules {
+        if let Some(other) = module_classes.insert(class_name(&module.path), &module.path) {
+            return Err(Error::logic(format!(
+                "modules '{other}' and '{}' would share the generated type name 'Module_{}'",
+                module.path,
+                class_name(&module.path)
+            )));
+        }
+    }
+    Ok(modules)
 }
 
 /// Atoms for every method, getter, and setter name, densely from 1, written back into the
