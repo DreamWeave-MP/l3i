@@ -76,6 +76,10 @@ name = "packed_quat"
 harness = false
 
 [[bench]]
+name = "raster"
+harness = false
+
+[[bench]]
 name = "soft_render"
 harness = false
 required-features = ["soft-render"]
