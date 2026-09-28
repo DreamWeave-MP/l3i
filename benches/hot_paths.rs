@@ -297,7 +297,7 @@ fn configure() -> Criterion {
     Criterion::default().measurement_time(Duration::from_secs(2)).warm_up_time(Duration::from_secs(1))
 }
 
-criterion_group! { name = benches; config = configure(); targets = rust_to_luau, luau_to_rust, methods_and_properties, host_side, plan_dispatch, typed_variants }
+criterion_group! { name = benches; config = configure(); targets = rust_to_luau, luau_to_rust, methods_and_properties, host_side, plan_dispatch, extension_dispatch, typed_variants }
 criterion_main!(benches);
 
 // ---- Runtime-resolved plans: cached direct index and namecall at several plan sizes ---------
@@ -427,6 +427,98 @@ fn typed_variants(c: &mut Criterion) {
         ("(f64) -> ()", "unit(i)"),
     ] {
         let function = looped(&runtime, body);
+        let stack = runtime.stack();
+        group.bench_function(name, |b| b.iter(|| function.invoke::<f64, _>(&stack, ()).unwrap()));
+    }
+    group.finish();
+}
+
+// ---- Extension planner: planned direct namecall/index against the generated fallback --------
+
+struct Planned {
+    value: Cell<f64>,
+}
+
+unsafe impl Userdata for Planned {
+    const NAME: &'static str = "dream.bench.Planned";
+}
+
+struct PlannedValue;
+
+impl DirectField<Planned> for PlannedValue {
+    fn get(planned: &Planned) -> FieldValue {
+        FieldValue::Number(planned.value.get())
+    }
+}
+
+/// One extension with a hot method, a hot getter, a direct field, and a cold method.
+struct PlannedExtension {
+    tag: l3i::extension::TagPolicy,
+}
+
+impl l3i::extension::Extension for PlannedExtension {
+    fn id(&self) -> &'static str {
+        "dream.bench"
+    }
+
+    fn describe(&self, d: &mut l3i::extension::ExtensionDescriptor) -> Result<()> {
+        let planned = d.userdata::<Planned>("dream.bench.Planned");
+        planned.tag(self.tag);
+        planned.method("get").direct();
+        planned.getter("value").direct();
+        planned.method("slow");
+        if self.tag != l3i::extension::TagPolicy::Never {
+            planned.field("field");
+        }
+        d.module("@dream/bench");
+        Ok(())
+    }
+
+    fn install(&self, cx: &mut l3i::extension::InstallContext<'_>) -> Result<()> {
+        let mut planned = cx.userdata::<Planned>("dream.bench.Planned")?;
+        planned
+            .method("get", |p: &Planned| p.value.get())?
+            .getter("value", |p: &Planned| p.value.get())?
+            .method("slow", |p: &Planned| p.value.get())?;
+        if self.tag != l3i::extension::TagPolicy::Never {
+            planned.field::<PlannedValue>("field")?;
+        }
+        let mut module = cx.module("@dream/bench")?;
+        module.function("new", |v: f64| l3i::userdata::Owned(Planned { value: Cell::new(v) }))?;
+        module.finish()?;
+        Ok(())
+    }
+}
+
+fn planned_runtime(tag: l3i::extension::TagPolicy) -> Runtime {
+    let plan = l3i::extension::RuntimePlan::builder()
+        .policy(l3i::extension::RuntimePolicy::new().compat_global("@dream/bench", "bench"))
+        .extension(PlannedExtension { tag })
+        .finalize()
+        .unwrap();
+    let runtime = Runtime::from_plan(&plan).unwrap();
+    runtime.exec("planned = bench.new(7)").unwrap();
+    runtime
+}
+
+fn extension_dispatch(c: &mut Criterion) {
+    let mut group = c.benchmark_group("extension_dispatch");
+    group.throughput(Throughput::Elements(CALLS));
+    let cases: [(&str, l3i::extension::TagPolicy, &str); 6] = [
+        ("tagged planned direct namecall", l3i::extension::TagPolicy::Preferred, "s = planned:get()"),
+        ("tagged planned direct index", l3i::extension::TagPolicy::Preferred, "s = planned.value"),
+        ("tagged planned direct field", l3i::extension::TagPolicy::Preferred, "s = planned.field"),
+        ("tagged planned cold namecall", l3i::extension::TagPolicy::Preferred, "s = planned:slow()"),
+        ("untagged planned namecall", l3i::extension::TagPolicy::Never, "s = planned:get()"),
+        ("untagged planned index", l3i::extension::TagPolicy::Never, "s = planned.value"),
+    ];
+    for (name, tag, body) in cases {
+        let runtime = planned_runtime(tag);
+        let function = runtime
+            .load_function(&format!(
+                "return function() local planned = planned local s = 0 for i = 1, {CALLS} do {body} end return s end"
+            ))
+            .unwrap();
         let stack = runtime.stack();
         group.bench_function(name, |b| b.iter(|| function.invoke::<f64, _>(&stack, ()).unwrap()));
     }

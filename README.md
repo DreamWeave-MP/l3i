@@ -142,6 +142,24 @@ metamethod retained as the fallback; `direct::field` registers per-field getters
 straight into the destination register. `Runtime::install_vector_buffer_writer` adds
 `vector:writef32x3(buffer, offset)`.
 
+## Extensions and runtime plans
+
+A native crate exposes its Luau surface as an [`extension::Extension`]: `describe` declares
+identity (`dream.archive`), dependencies, modules (`@dream/archive`, frozen by default),
+userdata types under stable string keys with a `TagPolicy`, member names with a `direct` flag,
+services, capabilities, and memory categories, without touching a VM; `install` supplies the
+callables against the resolved plan. `RuntimePlan::builder().policy(..).service(..)
+.extension(..).finalize()` orders extensions by their dependency graph (deterministically),
+merges owners with augmenters into one type per key, assigns tags (pinned, then `Required`,
+then `Preferred` while tags last), assigns atoms densely, lays out direct slots, resolves memory
+categories, and checks services and capabilities. `Runtime::from_plan(&plan)` then builds a VM,
+installs every extension in order, registers metatables with the merged members, wires the
+planned direct members to one set of generic VM callbacks, freezes modules, registers them for
+`require`, derives compiler-known library metadata for compat globals, and publishes. A plan is
+immutable and instantiates any number of runtimes; each gets its own tags, atoms, and direct
+plan. `Runtime::type_definitions()` renders `.d.luau` text for the final composition, and
+runtime-owned extension state (`InstallContext::insert_state`) drops before the VM closes.
+
 ## Native code generation
 
 With the `jit` feature the crate builds Luau's CodeGen library and a small C++ shim
