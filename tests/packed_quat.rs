@@ -90,3 +90,77 @@ fn packed_quaternions_and_keys_are_distinct_kinds_through_luau() {
     assert_eq!(back.0.flags, 9);
     assert!(l3i::packed::Packed::<Quaternion>::from_bits(key.bits()).is_err());
 }
+
+/// Native lowering: the same operations through the `dream_quat_Math` receiver compile to IR
+/// with no C call, agree with the binder path, and fall back to it on a wrong kind.
+#[cfg(feature = "jit")]
+#[test]
+fn packed_quaternion_operations_lower_to_native_code() {
+    use std::sync::atomic::Ordering;
+
+    use l3i::extension::NativeCodePolicy;
+    use l3i::native_code::{NativeCodeMode, NativeCodeStatus};
+    use l3i::runtime::{CallContext, MemoryCategory};
+    use l3i::sandbox::{InstanceSpec, SandboxOptions};
+    use support::lowering::LOWERED;
+
+    let policy = RuntimePolicy::new()
+        .compat_global("@dream/quat", "quat")
+        .native_code(NativeCodePolicy { mode: NativeCodeMode::Eager, record_counters: true, ..NativeCodePolicy::default() });
+    let plan = RuntimePlan::builder().policy(policy).extension(QuatExtension).finalize().unwrap();
+    assert_eq!(plan.tag_of("dream.quat.Math"), Some(1), "the receiver must be userdata type index 0");
+    let runtime = Runtime::from_plan(&plan).unwrap();
+    let generator = runtime.native_code().expect("built with native code");
+    if !generator.is_available() {
+        eprintln!("no Luau code generator on this platform; skipping");
+        return;
+    }
+    let sandbox = runtime
+        .sandbox(|_| {}, SandboxOptions { compile_options: runtime.compile_options(), ..SandboxOptions::default() })
+        .unwrap();
+    let before = LOWERED.load(Ordering::Relaxed);
+    let template = sandbox
+        .load_template(
+            &runtime,
+            "quat.lua",
+            "--!native\n\
+             local Q: dream_quat_Math = quat.math()\n\
+             local a = quat.axisAngle(vector.create(0, 0, 1), 0.3)\n\
+             local b = quat.axisAngle(vector.create(1, 0, 0), 0.7)\n\
+             local v = vector.create(1, 2, 3)\n\
+             local worst = 0\n\
+             for i = 1, 200 do\n\
+                 local x = quat.axisAngle(vector.create(math.sin(i), math.cos(i * 0.7), 0.5), i * 0.05)\n\
+                 local lowered = Q:rotate(x, v)\n\
+                 local binder = quat.rotate(x, v)\n\
+                 worst = math.max(worst, vector.magnitude(lowered - binder))\n\
+                 local m1 = Q:mul(x, b)\n\
+                 local m2 = quat.mul(x, b)\n\
+                 worst = math.max(worst, quat.angleTo(m1, m2))\n\
+             end\n\
+             local key = quat.key(a, 3)\n\
+             -- Single-result calls so the hook lowers these sites too; the kind check then\n\
+             -- exits to the interpreter, whose C method raises the type error.\n\
+             local ok, err = pcall(function() local r = Q:mul(a, key) return r end)\n\
+             assert(not ok and string.find(err, 'Quaternion'), err)\n\
+             local ok2 = pcall(function() local r = Q:rotate(42i, v) return r end)\n\
+             assert(not ok2)\n\
+             return worst",
+        )
+        .unwrap();
+    let native = template.native_code().expect("compiled");
+    assert_eq!(native.status, NativeCodeStatus::Success, "{native:?}");
+    assert_eq!(LOWERED.load(Ordering::Relaxed) - before, 4, "the hook lowered the two loop sites and the two closures");
+    let loader = runtime.load_function("return function(name) error('module ' .. name .. ' not found') end").unwrap();
+    let instance = sandbox
+        .new_instance(&runtime, &InstanceSpec { name: "q", packages: &[], hidden_data: None, loader: &loader })
+        .unwrap();
+    let results = sandbox.run(&runtime, &template, &instance, CallContext { id: 1, category: MemoryCategory(0) }).unwrap();
+    let worst: f64 = results[0].push_to(&runtime.stack().frame()).map(|v| v.read::<f64>().unwrap()).unwrap();
+    eprintln!("lowered vs binder worst divergence: {worst:.3e}");
+    assert!(worst < 5e-5, "lowered results diverge from the binder: {worst}");
+    let stats = generator.execution_stats(&runtime.stack());
+    assert!(stats.regular_blocks_executed > 0, "{stats:?}");
+    // Exactly the two wrong-kind calls exit; the 400 lowered calls in the loop run natively.
+    assert_eq!(stats.vm_exits_taken, 2, "only the wrong-kind calls exit to the interpreter: {stats:?}");
+}

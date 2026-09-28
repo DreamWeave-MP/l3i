@@ -564,14 +564,22 @@ fn build_runtime(plan: &Rc<RuntimePlan>) -> Result<Runtime> {
     }
     #[cfg(feature = "jit")]
     if let Some(native) = &policy.native_code {
-        let options = crate::native_code::NativeCodeOptions {
+        let mut options = crate::native_code::NativeCodeOptions {
             mode: native.mode,
             max_total_size: native.max_total_size,
             record_counters: native.record_counters,
             nop_padding: native.nop_padding,
-            userdata_types: tagged_in_order(plan).iter().map(|u| u.type_name.to_owned()).collect(),
+            userdata_types: tagged_in_order(plan).iter().map(|u| super::typedefs::class_name(&u.key)).collect(),
             ..Default::default()
         };
+        for hooks in &native.hooks {
+            options.hooks.push(Box::new(Rc::clone(hooks)));
+        }
+        for &index in &plan.order {
+            for hooks in plan.descriptors[index].native_hook_sets() {
+                options.hooks.push(Box::new(Rc::clone(hooks)));
+            }
+        }
         builder = builder.native_code(options);
     }
     let runtime = builder.build()?;
@@ -670,8 +678,16 @@ fn compile_options(plan: &RuntimePlan, members: &Rc<ModuleMembers>) -> CompileOp
     if !known.is_empty() {
         options.library_members = Some(Rc::clone(members) as Rc<dyn LibraryMembers>);
     }
-    options.userdata_types =
-        tagged_in_order(plan).iter().map(|u| CString::new(u.type_name).expect("type names have no NUL")).collect();
+    // Userdata types are named to the compiler by class name (what `.d.luau` declares and what
+    // scripts annotate); with native code on, type information reaches the code generator.
+    options.userdata_types = tagged_in_order(plan)
+        .iter()
+        .map(|u| CString::new(super::typedefs::class_name(&u.key)).expect("class names have no NUL"))
+        .collect();
+    #[cfg(feature = "jit")]
+    if plan.policy.native_code.is_some() {
+        options.type_info_level = 1;
+    }
     options
 }
 

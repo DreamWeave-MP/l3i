@@ -249,7 +249,8 @@ fn compiler_metadata_and_type_definitions_follow_composition() {
     assert_eq!(members.member_type("core", "LIMIT"), Some(10));
     assert_eq!(members.member_type("core", "new"), Some(5));
     assert_eq!(members.member_type("core", "missing"), None);
-    assert_eq!(options.userdata_types, vec![std::ffi::CString::new("dream.tests.Counter").unwrap()]);
+    // Userdata types reach the compiler under the class name scripts annotate, in tag order.
+    assert_eq!(options.userdata_types, vec![std::ffi::CString::new("dream_tests_Counter").unwrap()]);
     // The compat global works and the folded constant reads the same.
     runtime.exec("assert(core.ANSWER == 42, 'answer') assert(core.LIMIT == 7i, 'limit') assert(core.NAME == 'core', 'name') assert(core.new(1):get() == 1, 'get')").unwrap();
 

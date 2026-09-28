@@ -147,6 +147,53 @@ pub trait NativeCodeHooks: 'static {
     }
 }
 
+impl<H: NativeCodeHooks + ?Sized> NativeCodeHooks for std::rc::Rc<H> {
+    fn vector_access_type(&self, member: &str) -> u8 {
+        (**self).vector_access_type(member)
+    }
+    fn vector_namecall_type(&self, member: &str) -> u8 {
+        (**self).vector_namecall_type(member)
+    }
+    fn vector_access(&self, context: &NativeContext<'_>, build: &mut IrBuilder<'_>, member: &str, site: AccessSite) -> bool {
+        (**self).vector_access(context, build, member, site)
+    }
+    fn vector_namecall(&self, context: &NativeContext<'_>, build: &mut IrBuilder<'_>, member: &str, site: NamecallSite) -> bool {
+        (**self).vector_namecall(context, build, member, site)
+    }
+    fn userdata_access_type(&self, userdata_type: u8, member: &str) -> u8 {
+        (**self).userdata_access_type(userdata_type, member)
+    }
+    fn userdata_metamethod_type(&self, lhs_type: u8, rhs_type: u8, method: HostMetamethod) -> u8 {
+        (**self).userdata_metamethod_type(lhs_type, rhs_type, method)
+    }
+    fn userdata_namecall_type(&self, userdata_type: u8, member: &str) -> u8 {
+        (**self).userdata_namecall_type(userdata_type, member)
+    }
+    fn userdata_access(
+        &self,
+        context: &NativeContext<'_>,
+        build: &mut IrBuilder<'_>,
+        userdata_type: u8,
+        member: &str,
+        site: AccessSite,
+    ) -> bool {
+        (**self).userdata_access(context, build, userdata_type, member, site)
+    }
+    fn userdata_metamethod(&self, context: &NativeContext<'_>, build: &mut IrBuilder<'_>, site: MetamethodSite) -> bool {
+        (**self).userdata_metamethod(context, build, site)
+    }
+    fn userdata_namecall(
+        &self,
+        context: &NativeContext<'_>,
+        build: &mut IrBuilder<'_>,
+        userdata_type: u8,
+        member: &str,
+        site: NamecallSite,
+    ) -> bool {
+        (**self).userdata_namecall(context, build, userdata_type, member, site)
+    }
+}
+
 /// Several hook sets asked in order; the first one that claims an operation wins.
 pub(crate) struct HookChain {
     pub(crate) hooks: Vec<Box<dyn NativeCodeHooks>>,

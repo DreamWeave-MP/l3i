@@ -222,7 +222,6 @@ pub struct ServiceRequirement {
 }
 
 /// Everything one extension declares in [`Extension::describe`].
-#[derive(Debug)]
 pub struct ExtensionDescriptor {
     id: &'static str,
     requires: BTreeSet<String>,
@@ -234,6 +233,21 @@ pub struct ExtensionDescriptor {
     capabilities: BTreeSet<String>,
     optional_capabilities: BTreeSet<String>,
     memory_categories: BTreeSet<String>,
+    #[cfg(feature = "jit")]
+    native_hooks: Vec<std::rc::Rc<dyn crate::native_code::NativeCodeHooks>>,
+}
+
+impl std::fmt::Debug for ExtensionDescriptor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ExtensionDescriptor")
+            .field("id", &self.id)
+            .field("requires", &self.requires)
+            .field("modules", &self.modules)
+            .field("owned", &self.owned)
+            .field("augmentations", &self.augmentations)
+            .field("capabilities", &self.capabilities)
+            .finish_non_exhaustive()
+    }
 }
 
 impl ExtensionDescriptor {
@@ -249,6 +263,8 @@ impl ExtensionDescriptor {
             capabilities: BTreeSet::new(),
             optional_capabilities: BTreeSet::new(),
             memory_categories: BTreeSet::new(),
+            #[cfg(feature = "jit")]
+            native_hooks: Vec::new(),
         }
     }
 
@@ -317,6 +333,21 @@ impl ExtensionDescriptor {
     pub fn optional_capability(&mut self, name: &str) -> &mut Self {
         self.optional_capabilities.insert(name.to_owned());
         self
+    }
+
+    /// Native lowering hooks for this extension's types (`jit`). They see the tag and atoms the
+    /// VM being compiled for actually assigned, through `NativeContext`; userdata types are named
+    /// to the compiler by their stable key's class name (`dream.quat.Math` → `dream_quat_Math`),
+    /// which is what scripts annotate.
+    #[cfg(feature = "jit")]
+    pub fn native_hooks(&mut self, hooks: impl crate::native_code::NativeCodeHooks) -> &mut Self {
+        self.native_hooks.push(std::rc::Rc::new(hooks));
+        self
+    }
+
+    #[cfg(feature = "jit")]
+    pub fn native_hook_sets(&self) -> &[std::rc::Rc<dyn crate::native_code::NativeCodeHooks>] {
+        &self.native_hooks
     }
 
     /// A symbolic memory category the planner maps to a Luau category number.
@@ -390,12 +421,25 @@ pub struct RuntimePolicy {
 /// Native code generation settings a plan can reuse for every runtime it creates (the full
 /// [`crate::native_code::NativeCodeOptions`] holds boxed hooks and is built per runtime).
 #[cfg(feature = "jit")]
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct NativeCodePolicy {
     pub mode: crate::native_code::NativeCodeMode,
     pub max_total_size: usize,
     pub record_counters: bool,
     pub nop_padding: bool,
+    /// Host lowering hooks, asked after the defaults and before the extensions' own.
+    pub hooks: Vec<std::rc::Rc<dyn crate::native_code::NativeCodeHooks>>,
+}
+
+#[cfg(feature = "jit")]
+impl std::fmt::Debug for NativeCodePolicy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NativeCodePolicy")
+            .field("mode", &self.mode)
+            .field("max_total_size", &self.max_total_size)
+            .field("hooks", &self.hooks.len())
+            .finish_non_exhaustive()
+    }
 }
 
 #[cfg(feature = "jit")]
@@ -407,6 +451,7 @@ impl Default for NativeCodePolicy {
             max_total_size: defaults.max_total_size,
             record_counters: defaults.record_counters,
             nop_padding: defaults.nop_padding,
+            hooks: Vec::new(),
         }
     }
 }
