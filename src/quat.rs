@@ -28,7 +28,7 @@
 //! ```
 //!
 //! With the `jit` feature, `quat.math()` returns a tagged receiver whose `rotate(q, v)`,
-//! `mul(a, b)`, `key(q, flags)`, `keyRotation(k)`, and `keyFlags(k)` are lowered to IR by
+//! `mul(a, b)`, `slerp(a, b, t)`, `key(q, flags)`, `keyRotation(k)`, and `keyFlags(k)` are lowered to IR by
 //! [`lowering::Lowering`] when the receiver's type is known to the compiler
 //! (`local Q: dream_quat_Math = quat.math()` in a `--!native` script): no C call, the integer is
 //! unpacked with shifts and masks, the arithmetic runs on doubles, and the result is stored as a
@@ -68,7 +68,8 @@ impl Quat {
     #[must_use]
     pub fn normalize(self) -> Quat {
         let n = (self.x * self.x + self.y * self.y + self.z * self.z + self.w * self.w).sqrt();
-        Quat { x: self.x / n, y: self.y / n, z: self.z / n, w: self.w / n }
+        let inv = 1.0 / n;
+        Quat { x: self.x * inv, y: self.y * inv, z: self.z * inv, w: self.w * inv }
     }
 
     /// The inverse of a unit quaternion (its conjugate).
@@ -82,16 +83,20 @@ impl Quat {
         self.x * o.x + self.y * o.y + self.z * o.z + self.w * o.w
     }
 
-    /// Spherical interpolation along the shorter arc, linear (then normalised) when the inputs
-    /// are nearly parallel.
+    /// Spherical interpolation along the shorter arc, `t` clamped to `0..=1`; linear (then
+    /// normalised) when the inputs are nearly parallel. The trigonometry is polynomial
+    /// ([`acos_poly`], [`sin_poly`]) so the native lowering computes exactly this without a
+    /// libm call; the angular error against exact slerp stays below 1e-7 rad, three orders of
+    /// magnitude under the packed form's own quantisation.
     #[must_use]
     pub fn slerp(self, mut o: Quat, t: f64) -> Quat {
+        let t = t.clamp(0.0, 1.0);
         let mut d = self.dot(o);
         if d < 0.0 {
             o = Quat { x: -o.x, y: -o.y, z: -o.z, w: -o.w };
             d = -d;
         }
-        if d > 0.9995 {
+        if d >= 0.9995 {
             return Quat {
                 x: self.x + (o.x - self.x) * t,
                 y: self.y + (o.y - self.y) * t,
@@ -100,14 +105,17 @@ impl Quat {
             }
             .normalize();
         }
-        let theta = d.acos();
-        let (s0, s1) = (((1.0 - t) * theta).sin() / theta.sin(), (t * theta).sin() / theta.sin());
+        let theta = acos_poly(d);
+        let inv_sin_theta = 1.0 / (1.0 - d * d).sqrt();
+        let (s0, s1) = (sin_poly((1.0 - t) * theta) * inv_sin_theta, sin_poly(t * theta) * inv_sin_theta);
+        // The polynomials leave the norm off by up to 1e-8; renormalising costs one sqrt.
         Quat {
             x: s0 * self.x + s1 * o.x,
             y: s0 * self.y + s1 * o.y,
             z: s0 * self.z + s1 * o.z,
             w: s0 * self.w + s1 * o.w,
         }
+        .normalize()
     }
 
     /// Rotates `v`.
@@ -128,6 +136,43 @@ impl Quat {
     pub fn angle_to(self, o: Quat) -> f64 {
         2.0 * self.dot(o).abs().min(1.0).acos()
     }
+}
+
+/// `acos(x)` for `0 <= x <= 1` as `sqrt(1 - x)` times a degree-7 polynomial (Abramowitz and
+/// Stegun 4.4.46), absolute error below 2e-8. Shared with the native lowering.
+pub const ACOS_COEFFICIENTS: [f64; 8] = [
+    1.570_796_305_0,
+    -0.214_598_801_6,
+    0.088_978_987_4,
+    -0.050_174_304_6,
+    0.030_891_881_0,
+    -0.017_088_125_6,
+    0.006_670_090_1,
+    -0.001_262_491_1,
+];
+
+/// `sin(x)` for `0 <= x <= pi/2` as the odd Taylor series through `x^11`, absolute error below
+/// 6e-8 on that range (the packed form quantises at 4e-6). Shared with the native lowering.
+pub const SIN_COEFFICIENTS: [f64; 6] =
+    [1.0, -1.0 / 6.0, 1.0 / 120.0, -1.0 / 5040.0, 1.0 / 362_880.0, -1.0 / 39_916_800.0];
+
+#[must_use]
+pub fn acos_poly(x: f64) -> f64 {
+    let mut poly = ACOS_COEFFICIENTS[7];
+    for c in ACOS_COEFFICIENTS[..7].iter().rev() {
+        poly = poly * x + c;
+    }
+    (1.0 - x).sqrt() * poly
+}
+
+#[must_use]
+pub fn sin_poly(x: f64) -> f64 {
+    let x2 = x * x;
+    let mut poly = SIN_COEFFICIENTS[5];
+    for c in SIN_COEFFICIENTS[..5].iter().rev() {
+        poly = poly * x2 + c;
+    }
+    x * poly
 }
 
 /// The Hamilton product `a * b`: apply `b`, then `a`.
@@ -307,6 +352,11 @@ impl Extension for QuatExtension {
                 .method("mul", |_: &lowering::Math, a: Packed<Quaternion>, b: Packed<Quaternion>| lowering::mul(a, b))
                 .signature("(self, a: number, b: number): number");
             receiver
+                .method("slerp", |_: &lowering::Math, a: Packed<Quaternion>, b: Packed<Quaternion>, t: f64| {
+                    lowering::slerp(a, b, t)
+                })
+                .signature("(self, a: number, b: number, t: number): number");
+            receiver
                 .method("key", |_: &lowering::Math, q: Packed<Quaternion>, flags: i64| AnimationKey::pack(q.0.0, flags as u8))
                 .signature("(self, q: number, flags: number): number");
             receiver
@@ -337,6 +387,7 @@ impl Extension for QuatExtension {
 #[cfg(feature = "jit")]
 #[allow(clippy::many_single_char_names)]
 pub mod lowering {
+    use std::ffi::c_int;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::{AnimationKey, COMPONENT_BITS, COMPONENT_MAX, Quaternion, RANGE};
@@ -373,6 +424,11 @@ pub mod lowering {
     /// The interpreter path of `Math:mul`.
     pub fn mul(a: Packed<Quaternion>, b: Packed<Quaternion>) -> Packed<Quaternion> {
         Packed(Quaternion(a.0.0 * b.0.0))
+    }
+
+    /// The interpreter path of `Math:slerp`.
+    pub fn slerp(a: Packed<Quaternion>, b: Packed<Quaternion>, t: f64) -> Packed<Quaternion> {
+        Packed(Quaternion(a.0.0.slerp(b.0.0, t)))
     }
 
     /// The hook set; [`super::QuatExtension`] registers it.
@@ -435,7 +491,11 @@ pub mod lowering {
     /// the omitted component rebuilt from the unit norm.
     fn decode(build: &mut IrBuilder<'_>, reg: IrOp, exit: IrOp) -> Decoded {
         let bits = checked_bits(build, reg, KIND, exit);
+        decode_bits(build, bits)
+    }
 
+    /// Unpacks already-checked bits.
+    fn decode_bits(build: &mut IrBuilder<'_>, bits: IrOp) -> Decoded {
         let scale = num(build, 2.0 * RANGE / COMPONENT_MAX);
         let offset = num(build, -RANGE);
         let mask = i64c(build, LANE_MASK);
@@ -551,6 +611,110 @@ pub mod lowering {
         out
     }
 
+    /// Horner evaluation of `coefficients` (lowest degree first) at `x`.
+    fn horner(build: &mut IrBuilder<'_>, coefficients: &[f64], x: IrOp) -> IrOp {
+        let mut acc = num(build, coefficients[coefficients.len() - 1]);
+        for c in coefficients[..coefficients.len() - 1].iter().rev() {
+            let c = num(build, *c);
+            let scaled = op(build, IrCmd::MUL_NUM, acc, x);
+            acc = op(build, IrCmd::ADD_NUM, scaled, c);
+        }
+        acc
+    }
+
+    /// [`super::acos_poly`] in IR.
+    fn acos_poly(build: &mut IrBuilder<'_>, x: IrOp) -> IrOp {
+        let poly = horner(build, &super::ACOS_COEFFICIENTS, x);
+        let one = num(build, 1.0);
+        let rest = op(build, IrCmd::SUB_NUM, one, x);
+        let root = build.inst(IrCmd::SQRT_NUM, &[rest]);
+        op(build, IrCmd::MUL_NUM, root, poly)
+    }
+
+    /// [`super::sin_poly`] in IR.
+    fn sin_poly(build: &mut IrBuilder<'_>, x: IrOp) -> IrOp {
+        let x2 = op(build, IrCmd::MUL_NUM, x, x);
+        let poly = horner(build, &super::SIN_COEFFICIENTS, x2);
+        op(build, IrCmd::MUL_NUM, x, poly)
+    }
+
+    /// `Q:slerp(a, b, t)` in one block: both weight sets are computed and the linear pair is
+    /// selected when `max(dot, 0.9995) == dot`, so nothing branches, nothing is decoded twice,
+    /// and no value stays live across a block boundary. The spherical weights are NaN when the
+    /// inputs coincide (sin(theta) is zero) but are never selected then. Same formulas as the
+    /// interpreter's [`super::Quat::slerp`], polynomial trigonometry included.
+    fn lower_slerp(build: &mut IrBuilder<'_>, result: IrOp, a_reg: IrOp, b_reg: IrOp, t_reg: c_int, exit: IrOp) {
+        let t_reg = build.vm_reg(t_reg);
+        let a = decode(build, a_reg, exit);
+        let b = decode(build, b_reg, exit);
+        build.load_and_check_tag(t_reg, LUA_TNUMBER as u8, exit);
+        let t = build.inst(IrCmd::LOAD_DOUBLE, &[t_reg]);
+        let one = num(build, 1.0);
+        let zero = num(build, 0.0);
+        let t = build.inst(IrCmd::MIN_NUM, &[one, t]);
+        let t = build.inst(IrCmd::MAX_NUM, &[zero, t]);
+        let d = product_sum(build, &a, &b);
+        // Take the shorter arc: flip `b` when the dot is negative.
+        let minus_one = num(build, -1.0);
+        let raw_sign = build.inst(IrCmd::SIGN_NUM, &[d]);
+        let sign = build.inst(IrCmd::SELECT_NUM, &[one, minus_one, raw_sign, minus_one]);
+        let dot = build.inst(IrCmd::ABS_NUM, &[d]);
+        // Spherical weights.
+        let theta = acos_poly(build, dot);
+        let dd = op(build, IrCmd::MUL_NUM, dot, dot);
+        let rest = op(build, IrCmd::SUB_NUM, one, dd);
+        let sin_theta = build.inst(IrCmd::SQRT_NUM, &[rest]);
+        let one_minus_t = op(build, IrCmd::SUB_NUM, one, t);
+        let angle0 = op(build, IrCmd::MUL_NUM, one_minus_t, theta);
+        let angle1 = op(build, IrCmd::MUL_NUM, t, theta);
+        let sin0 = sin_poly(build, angle0);
+        let sin1 = sin_poly(build, angle1);
+        let inv_sin_theta = op(build, IrCmd::DIV_NUM, one, sin_theta);
+        let spherical0 = op(build, IrCmd::MUL_NUM, sin0, inv_sin_theta);
+        let spherical1 = op(build, IrCmd::MUL_NUM, sin1, inv_sin_theta);
+        // Nearly parallel: linear weights, selected when max(dot, threshold) == dot.
+        let threshold = num(build, 0.9995);
+        let clamped = build.inst(IrCmd::MAX_NUM, &[dot, threshold]);
+        let s0 = build.inst(IrCmd::SELECT_NUM, &[spherical0, one_minus_t, clamped, dot]);
+        let s1 = build.inst(IrCmd::SELECT_NUM, &[spherical1, t, clamped, dot]);
+        let s1 = op(build, IrCmd::MUL_NUM, s1, sign);
+        let mut r = [a.x, a.y, a.z, a.w];
+        for (slot, (from, to)) in r.iter_mut().zip([(a.x, b.x), (a.y, b.y), (a.z, b.z), (a.w, b.w)]) {
+            let weighted_a = op(build, IrCmd::MUL_NUM, s0, from);
+            let weighted_b = op(build, IrCmd::MUL_NUM, s1, to);
+            *slot = op(build, IrCmd::ADD_NUM, weighted_a, weighted_b);
+        }
+        let unit = normalized(build, r);
+        let bits = encode(build, &unit);
+        store_integer(build, result, bits);
+    }
+
+    /// Four components divided by their norm.
+    fn normalized(build: &mut IrBuilder<'_>, mut r: [IrOp; 4]) -> Decoded {
+        let squares: Vec<IrOp> = r.iter().map(|v| op(build, IrCmd::MUL_NUM, *v, *v)).collect();
+        let sum = op(build, IrCmd::ADD_NUM, squares[0], squares[1]);
+        let sum = op(build, IrCmd::ADD_NUM, sum, squares[2]);
+        let sum = op(build, IrCmd::ADD_NUM, sum, squares[3]);
+        let norm = build.inst(IrCmd::SQRT_NUM, &[sum]);
+        let one = num(build, 1.0);
+        let inv = op(build, IrCmd::DIV_NUM, one, norm);
+        for slot in &mut r {
+            *slot = op(build, IrCmd::MUL_NUM, *slot, inv);
+        }
+        Decoded { x: r[0], y: r[1], z: r[2], w: r[3] }
+    }
+
+    /// The dot product of two decoded rotations.
+    fn product_sum(build: &mut IrBuilder<'_>, a: &Decoded, b: &Decoded) -> IrOp {
+        let xx = op(build, IrCmd::MUL_NUM, a.x, b.x);
+        let yy = op(build, IrCmd::MUL_NUM, a.y, b.y);
+        let zz = op(build, IrCmd::MUL_NUM, a.z, b.z);
+        let ww = op(build, IrCmd::MUL_NUM, a.w, b.w);
+        let sum = op(build, IrCmd::ADD_NUM, xx, yy);
+        let sum = op(build, IrCmd::ADD_NUM, sum, zz);
+        op(build, IrCmd::ADD_NUM, sum, ww)
+    }
+
     /// Hamilton product of two decoded rotations.
     fn product(build: &mut IrBuilder<'_>, a: &Decoded, b: &Decoded) -> Decoded {
         let term = |build: &mut IrBuilder<'_>, terms: [(IrOp, IrOp, bool); 4]| {
@@ -579,7 +743,7 @@ pub mod lowering {
             }
             match member {
                 "rotate" => bytecode_type::VECTOR,
-                "mul" | "key" | "keyRotation" => bytecode_type::INTEGER,
+                "mul" | "slerp" | "key" | "keyRotation" => bytecode_type::INTEGER,
                 "keyFlags" => bytecode_type::NUMBER,
                 _ => bytecode_type::ANY,
             }
@@ -646,6 +810,7 @@ pub mod lowering {
                     let bits = encode(build, &product);
                     store_integer(build, result, bits);
                 }
+                ("slerp", 4) => lower_slerp(build, result, first, second, site.arg_res_reg + 4, exit),
                 ("key", 3) => {
                     // The rotation payload with the low four bits of `flags` and kind 2.
                     let q = checked_bits(build, first, KIND, exit);
@@ -691,6 +856,7 @@ pub mod lowering {
 }
 
 #[cfg(test)]
+#[allow(clippy::many_single_char_names)]
 mod tests {
     use super::*;
 
@@ -728,6 +894,44 @@ mod tests {
         assert!(mean < 1.0e-5, "mean error {mean}");
         assert!(PackedRotation::encode(Quat::IDENTITY).0 < (1 << 56));
         assert!(Quat::IDENTITY.angle_to(PackedRotation::encode(Quat::IDENTITY).decode()) < 1e-9);
+    }
+
+    #[test]
+    fn polynomial_trigonometry_is_accurate_on_its_domain() {
+        let mut worst_acos: f64 = 0.0;
+        let mut worst_sin: f64 = 0.0;
+        for i in 0..=100_000 {
+            let x = f64::from(i) / 100_000.0;
+            worst_acos = worst_acos.max((acos_poly(x) - x.acos()).abs());
+            let angle = x * std::f64::consts::FRAC_PI_2;
+            worst_sin = worst_sin.max((sin_poly(angle) - angle.sin()).abs());
+        }
+        assert!(worst_acos < 3e-8, "acos error {worst_acos:e}");
+        assert!(worst_sin < 6e-8, "sin error {worst_sin:e}");
+        // Slerp against the exact formula.
+        let mut rng = 11u64;
+        let mut worst: f64 = 0.0;
+        for i in 0..2000 {
+            let (a, b) = (random_quat(&mut rng), random_quat(&mut rng));
+            let t = f64::from(i % 101) / 100.0;
+            let exact = {
+                let mut o = b;
+                let mut d = a.dot(o);
+                if d < 0.0 {
+                    o = Quat { x: -o.x, y: -o.y, z: -o.z, w: -o.w };
+                    d = -d;
+                }
+                if d >= 0.9995 {
+                    a.slerp(b, t)
+                } else {
+                    let theta = d.acos();
+                    let (s0, s1) = (((1.0 - t) * theta).sin() / theta.sin(), (t * theta).sin() / theta.sin());
+                    Quat { x: s0 * a.x + s1 * o.x, y: s0 * a.y + s1 * o.y, z: s0 * a.z + s1 * o.z, w: s0 * a.w + s1 * o.w }
+                }
+            };
+            worst = worst.max(a.slerp(b, t).angle_to(exact));
+        }
+        assert!(worst < 5e-7, "slerp error {worst:e}");
     }
 
     #[test]

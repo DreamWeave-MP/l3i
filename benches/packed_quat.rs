@@ -130,6 +130,12 @@ fn lowered(c: &mut Criterion) {
         ("lowered Q:mul (native)", "s = Q:mul(s, b)"),
         ("binder quat.mul (native)", "s = quat.mul(s, b)"),
         ("userdata mul (native, allocates)", "us = us:mul(ub)"),
+        // Alternating targets keep the blend away from either, so the spherical path runs. The
+        // target is bound to a local first: an argument expression with control flow in it makes
+        // the compiler order the call differently and the site does not lower.
+        ("lowered Q:slerp (native)", "local target = if i % 2 == 0 then a else b s = Q:slerp(s, target, 0.3)"),
+        ("binder quat.slerp (native)", "local target = if i % 2 == 0 then a else b s = quat.slerp(s, target, 0.3)"),
+        ("userdata slerp (native, allocates)", "local target = if i % 2 == 0 then ua else ub us = us:slerp(target, 0.3)"),
         ("lowered Q:rotate (native)", "w = Q:rotate(a, w)"),
         ("binder quat.rotate (native)", "w = quat.rotate(a, w)"),
         ("userdata rotate (native)", "w = ua:rotate(w)"),

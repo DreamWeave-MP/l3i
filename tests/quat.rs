@@ -105,6 +105,12 @@ fn packed_quaternion_operations_lower_to_native_code() {
                  local m1 = Q:mul(x, b)\n\
                  local m2 = quat.mul(x, b)\n\
                  worst = math.max(worst, quat.angleTo(m1, m2))\n\
+                 -- slerp: the spherical path at every step, the linear path when nearly parallel.\n\
+                 local far = Q:slerp(x, b, i / 200)\n\
+                 worst = math.max(worst, quat.angleTo(far, quat.slerp(x, b, i / 200)))\n\
+                 local nearby = quat.axisAngle(vector.create(math.sin(i), math.cos(i * 0.7), 0.5), i * 0.05 + 0.001)\n\
+                 local near = Q:slerp(x, nearby, 0.5)\n\
+                 worst = math.max(worst, quat.angleTo(near, quat.slerp(x, nearby, 0.5)))\n\
                  local k1 = Q:key(x, i % 16)\n\
                  local k2 = quat.key(x, i % 16)\n\
                  assert(k1 == k2, 'lowered key differs from the binder')\n\
@@ -125,7 +131,7 @@ fn packed_quaternion_operations_lower_to_native_code() {
         .unwrap();
     let native = template.native_code().expect("compiled");
     assert_eq!(native.status, NativeCodeStatus::Success, "{native:?}");
-    assert_eq!(lowered_sites() - before, 8, "the hook lowered the five loop sites and the three closures");
+    assert_eq!(lowered_sites() - before, 10, "the hook lowered the seven loop sites and the three closures");
     let loader = runtime.load_function("return function(name) error('module ' .. name .. ' not found') end").unwrap();
     let instance = sandbox
         .new_instance(&runtime, &InstanceSpec { name: "q", packages: &[], hidden_data: None, loader: &loader })
@@ -136,6 +142,7 @@ fn packed_quaternion_operations_lower_to_native_code() {
     assert!(worst < 5e-5, "lowered results diverge from the binder: {worst}");
     let stats = generator.execution_stats(&runtime.stack());
     assert!(stats.regular_blocks_executed > 0, "{stats:?}");
-    // Exactly the three wrong-kind calls exit; the 1000 lowered calls in the loop run natively.
+    // Exactly the three wrong-kind calls exit; the 1400 lowered calls in the loop run natively.
     assert_eq!(stats.vm_exits_taken, 3, "only the wrong-kind calls exit to the interpreter: {stats:?}");
 }
+
