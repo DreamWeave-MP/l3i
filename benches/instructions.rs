@@ -1,4 +1,4 @@
-//! Instruction and cycle counts per bound call, from the CPU's own counters
+//! Instruction, cycle, cache-miss, TLB-miss, and branch-miss counts per bound call, from the CPU's own counters
 //! (`perf_event_open` on this process, user space only, no `perf` binary needed).
 //!
 //! Wall time hides in noise past a few nanoseconds; retired instructions do not. Each scenario
@@ -67,8 +67,17 @@ unsafe extern "C" {
 
 const SYS_PERF_EVENT_OPEN: c_long = 298;
 const PERF_TYPE_HARDWARE: u32 = 0;
+const PERF_TYPE_HW_CACHE: u32 = 3;
 const PERF_COUNT_HW_CPU_CYCLES: u64 = 0;
 const PERF_COUNT_HW_INSTRUCTIONS: u64 = 1;
+const PERF_COUNT_HW_BRANCH_MISSES: u64 = 5;
+/// `PERF_TYPE_HW_CACHE` configs: `cache | (op << 8) | (result << 16)` with op READ and result MISS.
+const CACHE_READ_MISS: u64 = 1 << 16;
+const PERF_COUNT_HW_CACHE_L1D: u64 = 0;
+const PERF_COUNT_HW_CACHE_L1I: u64 = 1;
+const PERF_COUNT_HW_CACHE_LL: u64 = 2;
+const PERF_COUNT_HW_CACHE_DTLB: u64 = 3;
+const PERF_COUNT_HW_CACHE_ITLB: u64 = 4;
 const PERF_EVENT_IOC_ENABLE: c_ulong = 0x2400;
 const PERF_EVENT_IOC_DISABLE: c_ulong = 0x2401;
 const PERF_EVENT_IOC_RESET: c_ulong = 0x2403;
@@ -78,9 +87,9 @@ const FLAGS: u64 = 1 | (1 << 5) | (1 << 6);
 struct Counter(c_int);
 
 impl Counter {
-    fn open(config: u64) -> Option<Counter> {
+    fn open(kind: u32, config: u64) -> Option<Counter> {
         let mut attr = PerfEventAttr {
-            kind: PERF_TYPE_HARDWARE,
+            kind,
             size: std::mem::size_of::<PerfEventAttr>() as u32,
             config,
             sample_period: 0,
@@ -247,13 +256,25 @@ fn looped(runtime: &Runtime, body: &str) -> Function {
         .unwrap()
 }
 
+/// Every counter the table reports, in column order. Instructions and cycles are required; a
+/// cache or branch counter the CPU does not expose leaves its column blank.
+const COLUMNS: &[(&str, u32, u64)] = &[
+    ("instructions", PERF_TYPE_HARDWARE, PERF_COUNT_HW_INSTRUCTIONS),
+    ("cycles", PERF_TYPE_HARDWARE, PERF_COUNT_HW_CPU_CYCLES),
+    ("L1D miss", PERF_TYPE_HW_CACHE, PERF_COUNT_HW_CACHE_L1D | CACHE_READ_MISS),
+    ("L1I miss", PERF_TYPE_HW_CACHE, PERF_COUNT_HW_CACHE_L1I | CACHE_READ_MISS),
+    ("LLC miss", PERF_TYPE_HW_CACHE, PERF_COUNT_HW_CACHE_LL | CACHE_READ_MISS),
+    ("dTLB miss", PERF_TYPE_HW_CACHE, PERF_COUNT_HW_CACHE_DTLB | CACHE_READ_MISS),
+    ("iTLB miss", PERF_TYPE_HW_CACHE, PERF_COUNT_HW_CACHE_ITLB | CACHE_READ_MISS),
+    ("branch miss", PERF_TYPE_HARDWARE, PERF_COUNT_HW_BRANCH_MISSES),
+];
+
 fn main() {
-    let (Some(instructions), Some(cycles)) =
-        (Counter::open(PERF_COUNT_HW_INSTRUCTIONS), Counter::open(PERF_COUNT_HW_CPU_CYCLES))
-    else {
+    let counters: Vec<Option<Counter>> = COLUMNS.iter().map(|(_, kind, config)| Counter::open(*kind, *config)).collect();
+    if counters[0].is_none() || counters[1].is_none() {
         eprintln!("perf counters unavailable (perf_event_paranoid > 2, or not Linux); nothing measured");
         return;
-    };
+    }
     let runtime = runtime();
     let scenarios: &[(&str, &str)] = &[
         ("loop only", "s = i"),
@@ -273,29 +294,51 @@ fn main() {
     // `L3I_SCENARIO=<name>` runs one scenario for `L3I_ROUNDS` rounds (a profiling workload).
     let only = std::env::var("L3I_SCENARIO").ok();
     let rounds: usize = std::env::var("L3I_ROUNDS").ok().and_then(|r| r.parse().ok()).unwrap_or(ROUNDS);
-    let mut baseline = (0u64, 0u64);
-    println!("{:<40} {:>14} {:>12}", "scenario", "instructions", "cycles");
+    let mut baseline = vec![0u64; COLUMNS.len()];
+    print!("{:<40}", "scenario");
+    for (label, _, _) in COLUMNS {
+        print!(" {label:>12}");
+    }
+    println!();
     for (name, body) in scenarios {
         if only.as_deref().is_some_and(|only| only != *name && *name != "loop only") {
             continue;
         }
         let function = looped(&runtime, body);
         let stack = runtime.stack();
-        let mut best = (u64::MAX, u64::MAX);
+        // The minimum over the rounds for every counter: the steady state, without the round
+        // that took an interrupt or a page fault.
+        let mut best = vec![u64::MAX; COLUMNS.len()];
         for _ in 0..rounds {
             let mut run = || {
                 function.invoke::<f64, _>(&stack, ()).unwrap();
             };
-            let i = instructions.measure(&mut run);
-            let c = cycles.measure(&mut run);
-            best = (best.0.min(i), best.1.min(c));
+            for (column, counter) in counters.iter().enumerate() {
+                if let Some(counter) = counter {
+                    best[column] = best[column].min(counter.measure(&mut run));
+                }
+            }
         }
-        if *name == "loop only" {
+        let is_baseline = *name == "loop only";
+        print!("{name:<40}");
+        for (column, counter) in counters.iter().enumerate() {
+            if counter.is_none() {
+                print!(" {:>12}", "-");
+                continue;
+            }
+            let total = if is_baseline { best[column] } else { best[column].saturating_sub(baseline[column]) };
+            let per_call = total as f64 / CALLS as f64;
+            if column < 2 {
+                print!(" {per_call:>12.1}");
+            } else {
+                print!(" {per_call:>12.3}");
+            }
+        }
+        if is_baseline {
             baseline = best;
-            println!("{name:<40} {:>14.1} {:>12.1}   (per iteration, subtracted below)", best.0 as f64 / CALLS as f64, best.1 as f64 / CALLS as f64);
-            continue;
+            println!("   (per iteration, subtracted below)");
+        } else {
+            println!();
         }
-        let per_call = |total: u64, base: u64| total.saturating_sub(base) as f64 / CALLS as f64;
-        println!("{name:<40} {:>14.1} {:>12.1}", per_call(best.0, baseline.0), per_call(best.1, baseline.1));
     }
 }
