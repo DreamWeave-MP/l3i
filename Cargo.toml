@@ -13,10 +13,12 @@ links = "luau"
 # The whole package builds from this tree: the Luau submodule (`luau/`, MIT, pinned at the
 # 0.740 release OpenMW pins; only the components the build uses are packaged) plus the binder's
 # C++ additions and shims (`csrc/`). No network at build time, no separate Lua binding crate.
+# Root-level entries are anchored with a leading slash: gitignore semantics would otherwise
+# match a bare "README.md" at any depth, including local reference checkouts.
 include = [
-    "Cargo.toml",
-    "build.rs",
-    ".gitmodules",
+    "/Cargo.toml",
+    "/build.rs",
+    "/.gitmodules",
     "src/**",
     "csrc/**",
     "luau/LICENSE.txt",
@@ -35,14 +37,14 @@ include = [
     "examples/**",
     "benches/**",
     "scripts/**",
-    "README.md",
-    "CHANGELOG.md",
-    "BENCHMARKS.md",
-    "TOOLCHAIN.md",
-    "QUESTIONABLE.md",
-    "LICENSE-MIT",
-    "LICENSE-APACHE",
-    "rustfmt.toml",
+    "/README.md",
+    "/CHANGELOG.md",
+    "/BENCHMARKS.md",
+    "/TOOLCHAIN.md",
+    "/QUESTIONABLE.md",
+    "/LICENSE-MIT",
+    "/LICENSE-APACHE",
+    "/rustfmt.toml",
 ]
 
 [dependencies]
