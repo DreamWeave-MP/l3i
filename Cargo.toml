@@ -38,7 +38,6 @@ include = [
     "benches/**",
     "scripts/**",
     "/README.md",
-    "/CHANGELOG.md",
     "/BENCHMARKS.md",
     "/TOOLCHAIN.md",
     "/QUESTIONABLE.md",
