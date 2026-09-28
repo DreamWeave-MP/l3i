@@ -95,8 +95,8 @@ pub const FLAG_BITS: u32 = 4;
 /// A semantic value that lives in one Luau integer: 4-bit kind, 4-bit flags, 56-bit payload.
 pub trait PackedScalar: Sized {
     /// The kind discriminator, `1..=15` (0 is reserved so a plain zero integer never passes).
-    /// Kinds 1 and 2 are [`crate::quat::Quaternion`] and [`crate::quat::AnimationKey`]; a
-    /// host's own kinds are `3..=15`.
+    /// Kinds 1 to 4 are [`crate::quat::Quaternion`], [`crate::quat::AnimationKey`],
+    /// [`crate::raster::Color`], and [`crate::raster::ClipRect`]; a host's own kinds are `5..=15`.
     const KIND: u8;
     /// The name used in type errors, e.g. `Quaternion`.
     const NAME: &'static str;

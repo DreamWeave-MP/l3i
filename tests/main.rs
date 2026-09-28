@@ -40,6 +40,7 @@ mod native_code;
 mod net;
 mod primitives;
 mod quat;
+mod raster;
 mod require;
 mod sandbox;
 mod tagged;

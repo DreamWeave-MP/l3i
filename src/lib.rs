@@ -76,6 +76,7 @@ pub mod net;
 pub mod options;
 pub mod packed;
 pub mod quat;
+pub mod raster;
 mod raw;
 pub mod readonly;
 pub mod require;
