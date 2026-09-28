@@ -479,7 +479,9 @@ impl Extension for RasterExtension {
     fn describe(&self, d: &mut ExtensionDescriptor) -> Result<()> {
         type C = Packed<Color>;
         let mut math = d.userdata::<Math>("dream.raster.Math");
-        math.tag(crate::extension::TagPolicy::Required).doc("Color arithmetic; natively lowered under jit.");
+        math.tag(crate::extension::TagPolicy::Required)
+            .compiler_type(crate::extension::CompilerTypePolicy::Required)
+            .doc("Color arithmetic; natively lowered under jit.");
         math.method("rgba8", |_: &Math, r: f64, g: f64, b: f64, a: f64| Color::from_numbers(r, g, b, a).pack()).signature("(self, r: number, g: number, b: number, a: number): integer");
         math.method("rgb8", |_: &Math, r: f64, g: f64, b: f64| Color::from_numbers(r, g, b, 255.0).pack()).signature("(self, r: number, g: number, b: number): integer");
         math.method("red", |_: &Math, c: C| f64::from(c.0.r)).signature("(self, color: integer): number");

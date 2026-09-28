@@ -344,7 +344,10 @@ impl Extension for QuatExtension {
         {
             module.function("math", || crate::userdata::Owned(lowering::Math)).signature("() -> dream_quat_Math");
             let mut receiver = d.userdata::<lowering::Math>("dream.quat.Math");
-            receiver.tag(crate::extension::TagPolicy::Required).doc("Natively lowered rotation operations.");
+            receiver
+                .tag(crate::extension::TagPolicy::Required)
+                .compiler_type(crate::extension::CompilerTypePolicy::Required)
+                .doc("Natively lowered rotation operations.");
             receiver
                 .method("rotate", |_: &lowering::Math, q: Packed<Quaternion>, v: Vector3| lowering::rotate(q, v)).signature("(self, q: integer, v: vector): vector");
             receiver

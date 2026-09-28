@@ -492,7 +492,10 @@ impl Extension for SoftRenderExtension {
         texture.field::<TextureHeight>("height").signature("number");
 
         let mut vertices = d.userdata::<Vertices>("dream.soft_render.Vertices");
-        vertices.tag(TagPolicy::Required).doc("Packs vertices into buffers; natively lowered under jit.");
+        vertices
+            .tag(TagPolicy::Required)
+            .compiler_type(crate::extension::CompilerTypePolicy::Required)
+            .doc("Packs vertices into buffers; natively lowered under jit.");
         vertices
             .method(
                 "write",
