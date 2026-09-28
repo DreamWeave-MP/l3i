@@ -351,9 +351,9 @@ fn finalization_rejects_bad_compositions() {
     assert!(plan.modules().iter().any(|m| m.path == "@dream/net"));
     let runtime = Runtime::from_plan(&plan).unwrap();
     runtime.exec("local net = require('@dream/net') assert(type(net.schema) == 'function')").unwrap();
-    // Naming it explicitly is allowed and adds nothing.
-    let plan = RuntimePlan::builder().extension(l3i::net::extension()).finalize().unwrap();
-    assert_eq!(plan.installation_order(), ["dream.net"]);
+    // The id is reserved: nothing can stand in for the bridge.
+    let error = text(RuntimePlan::builder().extension(Bare("dream.net", vec![])).finalize());
+    assert!(error.contains("'dream.net' is reserved for l3i's network bridge"), "{error}");
 
     // Names that fold to one identifier: debug prefixes, generated class and module type
     // names; and compat globals, one per module and one module per global.
@@ -755,6 +755,24 @@ fn compiler_type_slots_go_to_required_types_first_and_a_required_type_without_on
     let runtime = Runtime::from_plan(&plan).unwrap();
     assert_eq!(runtime.compile_options().userdata_types.len(), COMPILER_TYPE_CAPACITY);
     assert_eq!(runtime.compile_options().userdata_types[0].to_str().unwrap(), "dream_zlowered_Hot");
+
+    // The built-ins whose methods lower natively keep their slots behind thirty-four Preferred
+    // types: those declare Required.
+    #[cfg(feature = "jit")]
+    {
+        let plan = RuntimePlan::builder()
+            .extension(Many(TagPolicy::Required, CompilerTypePolicy::Preferred))
+            .extension(l3i::quat::QuatExtension)
+            .extension(l3i::raster::RasterExtension)
+            .finalize()
+            .unwrap();
+        for key in ["dream.quat.Math", "dream.raster.Math"] {
+            let resolved = plan.userdata_by_key(key).unwrap();
+            assert_eq!(resolved.compiler_type, CompilerTypePolicy::Required, "{key}");
+            assert!(resolved.bytecode_type.is_some(), "{key} lost its compiler slot");
+        }
+        assert_eq!(plan.userdata().iter().filter(|u| u.bytecode_type.is_some()).count(), COMPILER_TYPE_CAPACITY);
+    }
 
     // Required needs a tag.
     let error = text(RuntimePlan::builder().extension(Many(TagPolicy::Never, CompilerTypePolicy::Required)).finalize());

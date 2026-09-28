@@ -23,7 +23,7 @@ const EVENTS: u64 = 256;
 
 fn connected_runtime() -> (Runtime, Function) {
     let policy = RuntimePolicy::new().compat_global("@dream/net", "net").capability(net::TRANSPORT_CAPABILITY);
-    let plan = RuntimePlan::builder().policy(policy).extension(net::extension()).finalize().unwrap();
+    let plan = RuntimePlan::builder().policy(policy).finalize().unwrap();
     let runtime = Runtime::from_plan(&plan).unwrap();
     runtime
         .exec(

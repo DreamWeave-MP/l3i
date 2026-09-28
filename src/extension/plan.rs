@@ -177,12 +177,15 @@ impl RuntimePlanBuilder {
     pub fn finalize(self) -> Result<Rc<RuntimePlan>> {
         let RuntimePlanBuilder { policy, mut extensions, services, pinned_tags } = self;
 
-        // The network bridge is runtime infrastructure: every plan carries it, whether or not
-        // the host mentioned it, and the policy decides what scripts may do with it.
-        let net = crate::net::extension();
-        if !extensions.iter().any(|extension| extension.id() == net.id()) {
-            extensions.insert(0, Box::new(net));
+        // The network bridge is runtime infrastructure: every plan carries l3i's own, the id is
+        // reserved so nothing can stand in for it, and the policy decides what scripts may do.
+        if extensions.iter().any(|extension| extension.id() == crate::net::EXTENSION_ID) {
+            return Err(Error::logic(format!(
+                "extension id '{}' is reserved for l3i's network bridge, which every plan carries; do not add one",
+                crate::net::EXTENSION_ID
+            )));
         }
+        extensions.insert(0, Box::new(crate::net::extension()));
 
         // 1. Describe.
         let mut descriptors = Vec::with_capacity(extensions.len());

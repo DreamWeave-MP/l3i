@@ -494,7 +494,7 @@ impl DirectField<NetClient> for ConnectedField {
 // The extension
 // ---------------------------------------------------------------------------------------------
 
-/// The `dream.net` extension for a runtime plan.
+/// The `dream.net` extension: in every runtime plan, added by the planner (the id is reserved).
 pub struct NetExtension {
     clock: Clock,
 }
@@ -517,8 +517,8 @@ impl Default for NetExtension {
     }
 }
 
-/// The extension, for `RuntimePlan::builder().extension(net::extension())`.
-pub fn extension() -> NetExtension {
+/// The bridge every `RuntimePlan` carries; the planner adds it itself.
+pub(crate) fn extension() -> NetExtension {
     NetExtension::new()
 }
 

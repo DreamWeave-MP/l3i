@@ -20,7 +20,7 @@ fn plan(transport: bool) -> std::rc::Rc<RuntimePlan> {
     if transport {
         policy = policy.capability(net::TRANSPORT_CAPABILITY);
     }
-    RuntimePlan::builder().policy(policy).extension(net::extension()).finalize().unwrap()
+    RuntimePlan::builder().policy(policy).finalize().unwrap()
 }
 
 /// The schema the script built, read back for the Rust-side server.
