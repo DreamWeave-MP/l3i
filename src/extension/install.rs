@@ -441,7 +441,7 @@ pub(crate) fn instantiate(plan: &Rc<RuntimePlan>) -> Result<Runtime> {
         module.finish(&mut members)?;
     }
     let members = Rc::new(members);
-    runtime.set_compile_options(compile_options(plan, &members));
+    runtime.install_compile_options(compile_options(plan, &members));
     runtime.set_module_members(members);
     if plan.policy.sandbox {
         runtime.sandbox_globals();

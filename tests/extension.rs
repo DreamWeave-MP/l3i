@@ -312,7 +312,7 @@ fn services_capabilities_state_and_drop_order() {
     let runtime = Runtime::from_plan(&plan).unwrap();
     runtime.exec("assert(require('@dream/needy').greet() == 'hello')").unwrap();
     assert!(runtime.state_of::<State>("dream.needy").is_some());
-    assert!(runtime.extension_state::<State>().is_none(), "an extension's state is not the host's");
+    assert!(runtime.host_state::<State>().is_none(), "an extension's state is not the host's");
     assert!(!dropped.get());
     drop(runtime);
     assert!(dropped.get(), "extension state must drop with the runtime, before lua_close");
@@ -405,6 +405,52 @@ fn finalization_rejects_bad_compositions() {
     );
     assert!(error.contains("would share the generated class name 'dream_x_y_T'"), "{error}");
 
+    // Identities and spellings the generated definitions and the VM would choke on fail here.
+    struct Twin;
+    // SAFETY: a plain unit type; its NAME deliberately repeats Other's.
+    unsafe impl Userdata for Twin {
+        const NAME: &'static str = "dream.tests.Other";
+    }
+    struct Named(&'static str, u8);
+    impl Extension for Named {
+        fn id(&self) -> &'static str {
+            self.0
+        }
+        fn describe(&self, d: &mut ExtensionDescriptor) -> Result<()> {
+            match self.1 {
+                0 => {
+                    d.userdata::<Other>("dream.tests.Other").method("get", |_: &Other| 1i64).signature("(self): number");
+                    d.userdata::<Twin>("dream.tests.Twin").method("get", |_: &Twin| 1i64).signature("(self): number");
+                }
+                1 => {
+                    d.userdata::<Other>("dream.tests.Other").method("bad-name", |_: &Other| 1i64).signature("(self): number");
+                }
+                2 => {
+                    d.module("@dream/spaced path").function("f", || 1i64).signature("() -> number");
+                }
+                _ => {
+                    d.module("@dream/named").function("end", || 1i64).signature("() -> number");
+                }
+            }
+            Ok(())
+        }
+    }
+    let error = text(RuntimePlan::builder().extension(Named("dream.named", 0)).finalize());
+    assert!(error.contains("share the Luau type name 'dream.tests.Other'"), "{error}");
+    let error = text(RuntimePlan::builder().extension(Named("dream.named", 1)).finalize());
+    assert!(error.contains("member of 'dream.tests.Other' 'bad-name' is not a Luau identifier"), "{error}");
+    let error = text(RuntimePlan::builder().extension(Named("dream.named", 2)).finalize());
+    assert!(error.contains("identity '@dream/spaced path' must be non-empty printable ASCII"), "{error}");
+    let error = text(RuntimePlan::builder().extension(Named("dream.named", 3)).finalize());
+    assert!(error.contains("member of module '@dream/named' 'end' is not a Luau identifier"), "{error}");
+    let error = text(
+        RuntimePlan::builder()
+            .policy(RuntimePolicy::new().compat_global("@dream/core", "my core"))
+            .extension(Core::preferred())
+            .finalize(),
+    );
+    assert!(error.contains("compat global 'my core' is not a Luau identifier"), "{error}");
+
     // Types are never accidental: a member with neither a signature nor untyped() fails the plan.
     struct Unsigned;
     impl Extension for Unsigned {
@@ -472,10 +518,13 @@ fn finalization_rejects_bad_compositions() {
     assert!(error.contains("kind 2, which belongs to l3i (AnimationKey)"), "{error}");
     let plan = RuntimePlan::builder().extension(Kinded("a", 0)).extension(Kinded("b", 0)).finalize().unwrap();
     assert_eq!(plan.packed_kinds().len(), 1, "the same type declared twice is one kind");
+    // A planned runtime's kinds are the plan's; a hand-assembled one takes registrations.
     let runtime = Runtime::from_plan(&plan).unwrap();
-    let error = runtime.register_packed::<KindB>().unwrap_err().to_string();
+    assert!(runtime.register_packed::<KindA>().is_err());
+    let plain = Runtime::new().unwrap();
+    plain.register_packed::<KindA>().unwrap();
+    let error = plain.register_packed::<KindB>().unwrap_err().to_string();
     assert!(error.contains("already registered to KindA"), "{error}");
-    runtime.register_packed::<KindA>().unwrap();
 
     // Duplicate module.
     struct Dup(&'static str);
@@ -804,8 +853,22 @@ fn two_extensions_storing_the_same_state_type_keep_their_own() {
     let runtime = Runtime::from_plan(&plan).unwrap();
     assert_eq!(runtime.state_of::<Cache>("dream.a").unwrap().0, "a's");
     assert_eq!(runtime.state_of::<Cache>("dream.b").unwrap().0, "b's");
-    assert!(runtime.extension_state::<Cache>().is_none());
+    assert!(runtime.host_state::<Cache>().is_none());
     runtime.insert_state(Cache("host's"));
-    assert_eq!(runtime.extension_state::<Cache>().unwrap().0, "host's");
+    assert_eq!(runtime.host_state::<Cache>().unwrap().0, "host's");
     assert_eq!(runtime.state_of::<Cache>("dream.a").unwrap().0, "a's");
+}
+
+#[test]
+fn a_planned_runtime_refuses_shape_changes() {
+    let plan = plan_with(Core::preferred(), RuntimePolicy::new());
+    let runtime = Runtime::from_plan(&plan).unwrap();
+    let error = runtime.set_compile_options(runtime.compile_options()).unwrap_err().to_string();
+    assert!(error.contains("cannot replace the compiler options on a runtime made from a plan"), "{error}");
+    let error = runtime.register_packed::<l3i::raster::Color>().unwrap_err().to_string();
+    assert!(error.contains("cannot register a packed kind on a runtime made from a plan"), "{error}");
+    // A hand-assembled runtime keeps both.
+    let plain = Runtime::new().unwrap();
+    plain.set_compile_options(plain.compile_options()).unwrap();
+    plain.register_packed::<l3i::raster::Color>().unwrap();
 }

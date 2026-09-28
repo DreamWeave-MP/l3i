@@ -520,7 +520,19 @@ impl Runtime {
     /// its extensions declare. Registering the same type twice is a no-op; another type on the
     /// same kind number is a logic error.
     pub fn register_packed<T: crate::packed::PackedScalar>(&self) -> Result<()> {
+        self.refuse_if_planned("register a packed kind")?;
         self.shared().register_packed_kind(crate::packed::PackedKind::of::<T>())
+    }
+
+    /// A runtime made from a plan has one immutable shape: its packed kinds, compiler
+    /// metadata, tags, and slots were resolved together and stay that way.
+    fn refuse_if_planned(&self, action: &str) -> Result<()> {
+        if self.plan.borrow().is_some() {
+            return Err(Error::logic(format!(
+                "cannot {action} on a runtime made from a plan; declare it in the plan (the runtime's shape is immutable)"
+            )));
+        }
+        Ok(())
     }
 
     /// Stores host-owned runtime state by type (one value per type in the host's namespace),
@@ -531,7 +543,7 @@ impl Runtime {
     }
 
     /// Host-owned runtime state of type `S`, if stored.
-    pub fn extension_state<S: 'static>(&self) -> Option<Rc<S>> {
+    pub fn host_state<S: 'static>(&self) -> Option<Rc<S>> {
         self.state_for::<S>(None)
     }
 
@@ -556,7 +568,16 @@ impl Runtime {
         self.compile_options.borrow().clone()
     }
 
-    pub fn set_compile_options(&self, options: CompileOptions) {
+    /// Replaces the compiler options of a manually assembled runtime; a runtime made from a
+    /// plan derives them from the plan and refuses.
+    pub fn set_compile_options(&self, options: CompileOptions) -> Result<()> {
+        self.refuse_if_planned("replace the compiler options")?;
+        self.install_compile_options(options);
+        Ok(())
+    }
+
+    /// The planner's own setter: the options derived from the plan.
+    pub(crate) fn install_compile_options(&self, options: CompileOptions) {
         *self.compile_options.borrow_mut() = options;
     }
 
