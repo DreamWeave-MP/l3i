@@ -121,6 +121,10 @@ libraries, the atom catalogue, and:
 - **Memory categories**: `MemoryCategory(u8)`, `total_bytes_in`, per-call switching.
 - **Call scopes**: `Runtime::call_scope(context, kind)` (script call, initialization, host
   interface) with nested self-time accounting.
+- **Collector**: `gc(GcControl::...)` reads the heap size and sets Luau's goal, step
+  multiplier, and step size (the defaults, a 200 percent goal, multiplier 200, and 1 KB
+  steps, are kept), or drives the collector by hand with `Step` and `Collect`; Luau has no
+  `collectgarbage`, so a host that wants collection at frame boundaries steps it there.
 - **Profiler**: `profiler(true)` records call time and allocation activity per context;
   `set_sampled_context` samples one context every 32nd safepoint into `source:line` and
   per-function counters; `gc_step_timed`, `caller_location`, and the pure statistics helpers in
@@ -330,10 +334,13 @@ divergences.
 Luau is a git submodule (`luau/`, pinned at release 0.740, the commit OpenMW pins); clone with
 `--recurse-submodules` or run `git submodule update --init`. `build.rs` compiles it and the
 binder's C++ additions with `cc` (in parallel): `LUAI_MAXCSTACK=8000`, three-component vectors,
-`LUA_UTAG_LIMIT=254`, Luau's internal assertions whenever Rust's debug assertions are on (a
-failed one prints its location before trapping; a release build with debuginfo keeps the
-release VM), CodeGen under `jit`, Analysis under `analysis`; `soft-render` adds the
-dream-soft-render dependency. The binder reads argument slots straight from Luau's 16-byte
+`LUA_UTAG_LIMIT=254`, `-fno-math-errno`, Cargo's optimisation level (`-O3` in release) with
+no `-march` so the binary stays portable, Luau's internal assertions whenever Rust's debug
+assertions are on (a failed one prints its location before trapping; a release build with
+debuginfo keeps the release VM), CodeGen under `jit`, Analysis under `analysis`; `soft-render`
+adds the dream-soft-render dependency. Compiled chunks default to optimisation level 2 and
+debug level 1, and runtime plans turn type information on so native code sees the userdata
+types. The binder reads argument slots straight from Luau's 16-byte
 value layout; `csrc/extra.cpp` pins every offset at compile time and each runtime proves the
 mirror against the API once at creation, so a Luau bump that moves a byte fails at once. No network access at build time and no external Lua crate. Hosts may append
 compiler flags through `LUAU_CXXFLAGS`. Rust 1.88 or newer.
@@ -366,17 +373,30 @@ way: a hand-written `lua_CFunction` and a typed direct handler. On the pinned Lu
 | Per call | Instructions | Cycles |
 |---|---:|---:|
 | hand-written `lua_CFunction (f64, f64)` | 277 | 69 |
-| bound `() -> f64` | 292 | 78 |
-| bound `(f64, f64) -> f64` | 369 | 97 |
-| bound `(Vector3) -> f64` | 332 | 87 |
-| bound `(Packed<Color>) -> f64` | 353 | 93 |
+| bound `() -> f64` | 292 | 73 |
+| bound `(f64, f64) -> f64` | 369 | 89 |
+| bound `(Vector3) -> f64` | 332 | 85 |
+| bound `(Packed<Color>) -> f64` | 353 | 87 |
 | typed direct namecall, the VM's leanest method path | 368 | 98 |
-| planned method `() -> f64` | 429 | 108 |
-| planned getter | 395 | 105 |
-| planned direct field | 78 | 13 |
+| planned method `() -> f64` | 431 | 107 |
+| planned getter | 397 | 101 |
+| planned direct field | 78 | 12 |
 
 A bound call is within about forty instructions of a bare C function; a planned method is
 within sixty of the typed direct handler. The rest is Luau's own call and return machinery.
+
+The same harness reads the L1 data, L1 instruction, last-level cache, data and instruction
+TLB, and branch-miss counters. Every scenario reports fewer than 0.005 of each per call: the
+whole path, Luau's and the binder's, stays in L1 and predicts. The binder's side of a call
+touches four lines of its own, the slot row (rows are 32 bytes, so a row never straddles a
+line), the member's context, the thread record, and the shared block's first line, which
+holds the slot table, the plan, and the profiler switch (`#[repr(C, align(64))]`).
+
+Memory per runtime, after a full collection: a bare VM's heap is 64 KiB, with `dream.quat`
+and `dream.raster` 84 KiB, with `dream.soft_render` as well 96 KiB. The binder's own state is
+a 600-byte shared block, 32 bytes per plan slot, 64 bytes per plan entry, and the dense
+`(tag, kind, atom)` table, sized by the tags and atoms the plan uses (1.4 KB for five tags and
+39 atoms).
 
 ## License
 
