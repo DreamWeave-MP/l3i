@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- 81217aa - FIX: Track StroggForge v46, whose Linux release builder runs the LLVM toolchain policy
+- 2d3f23a - DOCS: Refresh the changelog
 - eed5517 - FEAT: Run the StroggForge library pipeline and daily quality checks with the LLVM toolchain policy
 - 9386c73 - CLEANUP: Format the tree and satisfy pedantic Clippy as the shared CI runs it
 - 41f06bb - FIX: Scan past unrelated rustflags in the toolchain check, exempt docs.rs, and configure the macOS and MSVC targets
