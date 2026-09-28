@@ -278,6 +278,20 @@ impl ExtensionDescriptor {
         self.owned.last_mut().expect("pushed above")
     }
 
+    /// Declares a [`crate::sequence::Sequence`] over `S` under `key`: a userdata type with
+    /// `toTable`, `#`, `[i]`, and `for`; install it with [`InstallContext::sequence`].
+    pub fn sequence<S: crate::sequence::SequenceSource>(&mut self, key: &str) -> &mut UserdataDecl {
+        let decl = self.userdata::<crate::sequence::Sequence<S>>(key);
+        decl.method("toTable").signature("(self): { any }");
+        decl
+    }
+
+    /// Declares a [`crate::sequence::Stream`] over `S` under `key` (`for` only); install it with
+    /// [`InstallContext::stream`].
+    pub fn stream<S: crate::sequence::StreamSource>(&mut self, key: &str) -> &mut UserdataDecl {
+        self.userdata::<crate::sequence::Stream<S>>(key)
+    }
+
     /// Adds members to a userdata type another extension owns (which this one must `require`).
     pub fn augment_userdata<T: Userdata>(&mut self, key: &str) -> &mut UserdataDecl {
         self.augmentations.push(UserdataDecl::new::<T>(key, self.id));

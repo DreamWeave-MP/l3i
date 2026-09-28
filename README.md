@@ -160,6 +160,19 @@ immutable and instantiates any number of runtimes; each gets its own tags, atoms
 plan. `Runtime::type_definitions()` renders `.d.luau` text for the final composition, and
 runtime-owned extension state (`InstallContext::insert_state`) drops before the VM closes.
 
+## Extension primitives
+
+The shapes the migration audits asked for, all allocation-free at the boundary:
+`convert::BytesView` accepts a Lua string or a Luau buffer without normalising;
+`BufferView::with_bytes`/`with_bytes_mut`/`range` give scoped zero-copy slices under the same
+rules `lua_tobuffer` imposes on C; `packed::BufferPack` reads and writes fixed layouts in one
+bounds check, and `packed::PackedScalar` puts a semantic value into one Luau integer (4-bit
+kind, 4 flag bits, 56-bit payload) with the kind checked on every read; `options::Options`
+reads camelCase option tables strictly (unknown keys are errors, required keys and field paths
+are named); `sequence::Sequence` and `sequence::Stream` show a Rust collection to scripts as
+`#items`, `items[i]`, `for item in items`, and `items:toTable()` (or `for` only, with a private
+cursor per loop) without materialising it, declared through the planner like any userdata.
+
 ## Native code generation
 
 With the `jit` feature the crate builds Luau's CodeGen library and a small C++ shim

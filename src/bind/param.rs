@@ -198,6 +198,7 @@ borrowed_params! {
     &'_ str => &'c str, "string";
     &'_ [u8] => &'c [u8], "string";
     BufferView<'_> => BufferView<'c>, "buffer";
+    crate::convert::BytesView<'_> => crate::convert::BytesView<'c>, "string or buffer";
 }
 
 /// A borrowed view of one argument slot: no conversion, no pin, valid for the call.

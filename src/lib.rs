@@ -72,11 +72,14 @@ pub mod module;
 pub mod native;
 #[cfg(feature = "jit")]
 pub mod native_code;
+pub mod options;
+pub mod packed;
 mod raw;
 pub mod readonly;
 pub mod require;
 pub mod runtime;
 pub mod sandbox;
+pub mod sequence;
 pub mod source;
 pub mod stack;
 pub mod thread;

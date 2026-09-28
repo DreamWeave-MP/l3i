@@ -519,7 +519,7 @@ impl MetatableBuilder<'_> {
         Ok(())
     }
 
-    fn install_wrapper(
+    pub(crate) fn install_wrapper(
         &mut self,
         name: &CStr,
         wrapper: ffi::lua_CFunction,

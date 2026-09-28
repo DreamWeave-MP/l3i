@@ -151,6 +151,27 @@ impl<'r> InstallContext<'r> {
         Ok(UserdataInstaller { pending, resolved, contributor: self.current, _type: std::marker::PhantomData })
     }
 
+    /// Installs the sequence type declared with `ExtensionDescriptor::sequence::<S>`.
+    pub fn sequence<S: crate::sequence::SequenceSource>(&mut self, key: &str) -> Result<()> {
+        let mut installer = self.userdata::<crate::sequence::Sequence<S>>(key)?;
+        installer.declared("toTable", MemberKind::Method)?;
+        installer.pending.installers.push(Box::new(|ty| {
+            let entry = crate::sequence::configure_sequence_with_entry::<S>(ty)?;
+            Ok(vec![("toTable".to_owned(), MemberKind::Method, entry)])
+        }));
+        Ok(())
+    }
+
+    /// Installs the stream type declared with `ExtensionDescriptor::stream::<S>`.
+    pub fn stream<S: crate::sequence::StreamSource>(&mut self, key: &str) -> Result<()> {
+        let installer = self.userdata::<crate::sequence::Stream<S>>(key)?;
+        installer.pending.installers.push(Box::new(|ty| {
+            crate::sequence::configure_stream::<S>(ty)?;
+            Ok(Vec::new())
+        }));
+        Ok(())
+    }
+
     /// Starts installing the module at `path`, which this extension declared.
     pub fn module(&mut self, path: &str) -> Result<ModuleInstaller<'_>> {
         let resolved = self.plan.modules.iter().find(|module| module.path == path).ok_or_else(|| {

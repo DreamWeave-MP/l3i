@@ -28,7 +28,7 @@ mod tests;
 use crate::error::Result;
 use crate::stack::{Scope, ValueView};
 
-pub use buffer::{BufferView, new_buffer};
+pub use buffer::{BufferView, BytesView, new_buffer};
 pub use scalar::Integer;
 pub use vector::Vector3;
 

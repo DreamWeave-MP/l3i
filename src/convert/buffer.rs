@@ -138,6 +138,88 @@ impl<'v> FromView<'v> for BufferView<'v> {
     }
 }
 
+impl BufferView<'_> {
+    /// Runs `body` over the buffer's bytes without copying. The slice lives only inside `body`,
+    /// which must not call back into Lua (a script could write the buffer under the slice) and
+    /// must not touch another view of the same buffer mutably: those are the same rules
+    /// `lua_tobuffer` imposes on C, stated once here.
+    #[inline]
+    pub fn with_bytes<R>(&self, body: impl FnOnce(&[u8]) -> R) -> R {
+        // SAFETY: the buffer's storage is stable and at least `len` bytes while the slot that
+        // produced this view keeps it alive; `body` cannot re-enter Lua by contract.
+        let bytes = unsafe { std::slice::from_raw_parts(self.data.cast_const(), self.len) };
+        body(bytes)
+    }
+
+    /// Runs `body` over the buffer's bytes mutably, without copying; see [`Self::with_bytes`]
+    /// for the contract. Takes `&mut self` so two mutable slices cannot come from one view.
+    #[inline]
+    pub fn with_bytes_mut<R>(&mut self, body: impl FnOnce(&mut [u8]) -> R) -> R {
+        // SAFETY: as `with_bytes`; Luau buffers are writable byte storage.
+        let bytes = unsafe { std::slice::from_raw_parts_mut(self.data, self.len) };
+        body(bytes)
+    }
+
+    /// A bounds-checked sub-range as a new view over the same storage.
+    pub fn range(&self, offset: usize, len: usize) -> Result<BufferView<'_>> {
+        self.check(offset, len)?;
+        // SAFETY: the range lies inside the buffer.
+        Ok(BufferView { data: unsafe { self.data.add(offset) }, len, _slot: PhantomData })
+    }
+}
+
+/// Immutable bytes from either a Lua string or a Luau buffer, without normalising: APIs that
+/// accept "some bytes" read them through this and never copy to decide.
+#[derive(Clone, Copy, Debug)]
+pub enum BytesView<'v> {
+    String(&'v [u8]),
+    Buffer(BufferView<'v>),
+}
+
+impl BytesView<'_> {
+    pub fn len(&self) -> usize {
+        match self {
+            BytesView::String(bytes) => bytes.len(),
+            BytesView::Buffer(buffer) => buffer.len(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Runs `body` over the bytes; see [`BufferView::with_bytes`] for the buffer contract.
+    #[inline]
+    pub fn with_bytes<R>(&self, body: impl FnOnce(&[u8]) -> R) -> R {
+        match self {
+            BytesView::String(bytes) => body(bytes),
+            BytesView::Buffer(buffer) => buffer.with_bytes(body),
+        }
+    }
+
+    pub fn to_vec(&self) -> Vec<u8> {
+        self.with_bytes(<[u8]>::to_vec)
+    }
+}
+
+impl<'v> FromView<'v> for BytesView<'v> {
+    const EXPECTED: &'static str = "string or buffer";
+
+    fn from_view(view: ValueView<'v>) -> Result<Self> {
+        if view.is_buffer() {
+            return BufferView::from_view(view).map(BytesView::Buffer);
+        }
+        if view.type_of() == Type::String {
+            return <&[u8]>::from_view(view).map(BytesView::String);
+        }
+        Err(view.type_error(Type::Buffer))
+    }
+
+    fn matches(view: ValueView<'v>) -> bool {
+        view.is_buffer() || view.type_of() == Type::String
+    }
+}
+
 /// Creates a zero-filled buffer of `len` bytes on `scope`.
 pub fn new_buffer<'s, S: Scope>(scope: &'s S, len: usize) -> Result<BufferView<'s>> {
     // SAFETY: lua_newbuffer raises only for out of memory (fatal at host level, propagated in

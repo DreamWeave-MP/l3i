@@ -37,6 +37,7 @@ mod metatable;
 mod module;
 #[cfg(feature = "jit")]
 mod native_code;
+mod primitives;
 mod require;
 mod sandbox;
 mod tagged;
