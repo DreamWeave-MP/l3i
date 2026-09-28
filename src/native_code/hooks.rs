@@ -67,6 +67,14 @@ impl NativeContext<'_> {
     pub fn atom_of(&self, name: &str) -> Option<crate::direct::Atom> {
         self.shared.atom_catalogue().and_then(|catalogue| catalogue.atom_of(name))
     }
+
+    /// The bytecode type the compiler gives `T` in this runtime
+    /// (`bytecode_type::TAGGED_USERDATA_BASE` plus `T`'s index in the runtime's userdata type
+    /// list), or `None` when `T` is not among the types named to the compiler. A hook compares
+    /// the `userdata_type` it receives against this instead of assuming an index.
+    pub fn userdata_type_of<T: crate::userdata::Userdata>(&self) -> Option<u8> {
+        self.shared.userdata_type_of(std::any::TypeId::of::<T>())
+    }
 }
 
 /// Lowering hooks. Every method has a "not mine" default; implement the ones the host lowers.
@@ -102,16 +110,22 @@ pub trait NativeCodeHooks: 'static {
         let _ = (context, build, member, site);
         false
     }
-    fn userdata_access_type(&self, userdata_type: u8, member: &str) -> u8 {
-        let _ = (userdata_type, member);
+    fn userdata_access_type(&self, context: &NativeContext<'_>, userdata_type: u8, member: &str) -> u8 {
+        let _ = (context, userdata_type, member);
         bytecode_type::ANY
     }
-    fn userdata_metamethod_type(&self, lhs_type: u8, rhs_type: u8, method: HostMetamethod) -> u8 {
-        let _ = (lhs_type, rhs_type, method);
+    fn userdata_metamethod_type(
+        &self,
+        context: &NativeContext<'_>,
+        lhs_type: u8,
+        rhs_type: u8,
+        method: HostMetamethod,
+    ) -> u8 {
+        let _ = (context, lhs_type, rhs_type, method);
         bytecode_type::ANY
     }
-    fn userdata_namecall_type(&self, userdata_type: u8, member: &str) -> u8 {
-        let _ = (userdata_type, member);
+    fn userdata_namecall_type(&self, context: &NativeContext<'_>, userdata_type: u8, member: &str) -> u8 {
+        let _ = (context, userdata_type, member);
         bytecode_type::ANY
     }
     fn userdata_access(
@@ -160,14 +174,20 @@ impl<H: NativeCodeHooks + ?Sized> NativeCodeHooks for std::rc::Rc<H> {
     fn vector_namecall(&self, context: &NativeContext<'_>, build: &mut IrBuilder<'_>, member: &str, site: NamecallSite) -> bool {
         (**self).vector_namecall(context, build, member, site)
     }
-    fn userdata_access_type(&self, userdata_type: u8, member: &str) -> u8 {
-        (**self).userdata_access_type(userdata_type, member)
+    fn userdata_access_type(&self, context: &NativeContext<'_>, userdata_type: u8, member: &str) -> u8 {
+        (**self).userdata_access_type(context, userdata_type, member)
     }
-    fn userdata_metamethod_type(&self, lhs_type: u8, rhs_type: u8, method: HostMetamethod) -> u8 {
-        (**self).userdata_metamethod_type(lhs_type, rhs_type, method)
+    fn userdata_metamethod_type(
+        &self,
+        context: &NativeContext<'_>,
+        lhs_type: u8,
+        rhs_type: u8,
+        method: HostMetamethod,
+    ) -> u8 {
+        (**self).userdata_metamethod_type(context, lhs_type, rhs_type, method)
     }
-    fn userdata_namecall_type(&self, userdata_type: u8, member: &str) -> u8 {
-        (**self).userdata_namecall_type(userdata_type, member)
+    fn userdata_namecall_type(&self, context: &NativeContext<'_>, userdata_type: u8, member: &str) -> u8 {
+        (**self).userdata_namecall_type(context, userdata_type, member)
     }
     fn userdata_access(
         &self,
@@ -310,21 +330,21 @@ unsafe extern "C" fn vector_namecall(
 
 unsafe extern "C" fn userdata_access_type(context: *mut c_void, kind: u8, text: *const c_char, length: usize) -> u8 {
     let _guard = crate::raw::trampoline::AbortOnPanic::new();
-    let (chain, member) = unsafe { (chain(context), member(text, length)) };
-    chain.first_type(|hooks| hooks.userdata_access_type(kind, member))
+    let (chain, member, native) = unsafe { (chain(context), member(text, length), native_context(context)) };
+    chain.first_type(|hooks| hooks.userdata_access_type(&native, kind, member))
 }
 
 unsafe extern "C" fn userdata_metamethod_type(context: *mut c_void, lhs: u8, rhs: u8, method: c_int) -> u8 {
     let _guard = crate::raw::trampoline::AbortOnPanic::new();
-    let chain = unsafe { chain(context) };
+    let (chain, native) = unsafe { (chain(context), native_context(context)) };
     let Some(method) = host_metamethod(method) else { return bytecode_type::ANY };
-    chain.first_type(|hooks| hooks.userdata_metamethod_type(lhs, rhs, method))
+    chain.first_type(|hooks| hooks.userdata_metamethod_type(&native, lhs, rhs, method))
 }
 
 unsafe extern "C" fn userdata_namecall_type(context: *mut c_void, kind: u8, text: *const c_char, length: usize) -> u8 {
     let _guard = crate::raw::trampoline::AbortOnPanic::new();
-    let (chain, member) = unsafe { (chain(context), member(text, length)) };
-    chain.first_type(|hooks| hooks.userdata_namecall_type(kind, member))
+    let (chain, member, native) = unsafe { (chain(context), member(text, length), native_context(context)) };
+    chain.first_type(|hooks| hooks.userdata_namecall_type(&native, kind, member))
 }
 
 unsafe extern "C" fn userdata_access(

@@ -594,6 +594,15 @@ fn build_runtime(plan: &Rc<RuntimePlan>) -> Result<Runtime> {
         builder = builder.native_code(options);
     }
     let runtime = builder.build()?;
+    #[cfg(feature = "jit")]
+    {
+        use crate::native_code::ir::bytecode_type::{TAGGED_USERDATA_BASE, TAGGED_USERDATA_END};
+        // Luau encodes at most 32 userdata types; the compiler ignores the rest of the list.
+        let capacity = usize::from(TAGGED_USERDATA_END - TAGGED_USERDATA_BASE);
+        for (index, resolved) in tagged_in_order(plan).into_iter().take(capacity).enumerate() {
+            runtime.shared().set_userdata_type(resolved.type_id, TAGGED_USERDATA_BASE + index as u8);
+        }
+    }
     runtime.set_plan(Rc::clone(plan));
     runtime.install_require(PlanRequire)?;
     Ok(runtime)

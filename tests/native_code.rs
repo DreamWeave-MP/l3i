@@ -57,7 +57,7 @@ unsafe impl Userdata for Point {
 struct PointFields;
 
 impl NativeCodeHooks for PointFields {
-    fn userdata_access_type(&self, userdata_type: u8, member: &str) -> u8 {
+    fn userdata_access_type(&self, _: &NativeContext<'_>, userdata_type: u8, member: &str) -> u8 {
         if userdata_type == bytecode_type::TAGGED_USERDATA_BASE && matches!(member, "x" | "y") {
             bytecode_type::NUMBER
         } else {

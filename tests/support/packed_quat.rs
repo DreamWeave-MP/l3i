@@ -240,6 +240,12 @@ impl Extension for QuatExtension {
     }
 
     fn describe(&self, d: &mut ExtensionDescriptor) -> Result<()> {
+        let ud = d.userdata::<QuatUserdata>("dream.quat.Quat");
+        ud.tag(TagPolicy::Required);
+        ud.method("mul");
+        ud.method("slerp");
+        ud.method("rotate");
+        ud.method("angleTo");
         #[cfg(feature = "jit")]
         {
             let receiver = d.userdata::<lowering::QuatMath>("dream.quat.Math");
@@ -248,12 +254,6 @@ impl Extension for QuatExtension {
             receiver.method("mul");
             d.native_hooks(lowering::PackedQuatLowering);
         }
-        let ud = d.userdata::<QuatUserdata>("dream.quat.Quat");
-        ud.tag(TagPolicy::Required);
-        ud.method("mul");
-        ud.method("slerp");
-        ud.method("rotate");
-        ud.method("angleTo");
         d.module("@dream/quat");
         Ok(())
     }
@@ -505,8 +505,8 @@ pub mod lowering {
     }
 
     impl NativeCodeHooks for PackedQuatLowering {
-        fn userdata_namecall_type(&self, userdata_type: u8, member: &str) -> u8 {
-            if userdata_type != bytecode_type::TAGGED_USERDATA_BASE {
+        fn userdata_namecall_type(&self, context: &NativeContext<'_>, userdata_type: u8, member: &str) -> u8 {
+            if context.userdata_type_of::<QuatMath>() != Some(userdata_type) {
                 return bytecode_type::ANY;
             }
             match member {
@@ -524,8 +524,7 @@ pub mod lowering {
             member: &str,
             site: NamecallSite,
         ) -> bool {
-            // The experiment plans `dream.quat.Math` as the first tagged type (index 0).
-            if userdata_type != bytecode_type::TAGGED_USERDATA_BASE || site.results != 1 {
+            if context.userdata_type_of::<QuatMath>() != Some(userdata_type) || site.results != 1 {
                 return false;
             }
             let Some(tag) = context.tag_of::<QuatMath>() else { return false };

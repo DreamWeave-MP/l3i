@@ -117,6 +117,10 @@ pub(crate) struct Shared {
     /// The extension planner's direct members by plan slot: the bound member each resolved
     /// direct slot runs, so one generic VM callback serves every planned type.
     direct_entries: RefCell<Vec<Option<crate::bind::MemberEntry>>>,
+    /// The bytecode type the compiler gives each Rust type named in this runtime's userdata
+    /// type list (`TAGGED_USERDATA_BASE + index`), for native lowering hooks.
+    #[cfg(feature = "jit")]
+    userdata_types: RefCell<HashMap<TypeId, u8, BuildHasherDefault<TypeIdHasher>>>,
 }
 
 /// An untagged type's registered metatable, as cached at registration.
@@ -186,7 +190,21 @@ impl Shared {
             require_navigator: RefCell::new(None),
             untagged: RefCell::new(HashMap::default()),
             direct_entries: RefCell::new(Vec::new()),
+            #[cfg(feature = "jit")]
+            userdata_types: RefCell::new(HashMap::default()),
         }
+    }
+
+    /// The compiler's bytecode type for the Rust type `id`, if it was named to the compiler.
+    #[cfg(feature = "jit")]
+    pub(crate) fn userdata_type_of(&self, id: TypeId) -> Option<u8> {
+        self.userdata_types.borrow().get(&id).copied()
+    }
+
+    /// Records that `id` is the compiler's userdata type `bytecode_type` in this runtime.
+    #[cfg(feature = "jit")]
+    pub(crate) fn set_userdata_type(&self, id: TypeId, bytecode_type: u8) {
+        self.userdata_types.borrow_mut().insert(id, bytecode_type);
     }
 
     pub(crate) fn require_navigator(&self) -> &crate::require::NavigatorSlot {

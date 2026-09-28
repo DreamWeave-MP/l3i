@@ -107,8 +107,15 @@ fn packed_quaternion_operations_lower_to_native_code() {
     let policy = RuntimePolicy::new()
         .compat_global("@dream/quat", "quat")
         .native_code(NativeCodePolicy { mode: NativeCodeMode::Eager, record_counters: true, ..NativeCodePolicy::default() });
-    let plan = RuntimePlan::builder().policy(policy).extension(QuatExtension).finalize().unwrap();
-    assert_eq!(plan.tag_of("dream.quat.Math"), Some(1), "the receiver must be userdata type index 0");
+    // The userdata type is pinned to tag 1, so the receiver is the second compiler userdata
+    // type and the hook must look its index up rather than assume the first.
+    let plan = RuntimePlan::builder()
+        .policy(policy)
+        .pin_tag("dream.quat.Quat", 1)
+        .extension(QuatExtension)
+        .finalize()
+        .unwrap();
+    assert_eq!(plan.tag_of("dream.quat.Math"), Some(2));
     let runtime = Runtime::from_plan(&plan).unwrap();
     let generator = runtime.native_code().expect("built with native code");
     if !generator.is_available() {
