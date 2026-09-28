@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- 3b324c0 - FIX: Anchor the root-level package include patterns so local reference checkouts stay out of the crate
+- 8231e0f - FIX: Require a clang linker and lld in the toolchain check, not only the LTO flag
+- 9434899 - FIX: Keep host-level table stores under protected_call since lua_rawset can allocate
+- 75a4e13 - FIX: Drop the property key from the generated getter's stack, bound Call::arg to the argument region, and pin generated dispatch across a full collection
+- 3f75896 - DOCS: Regenerate the benchmarks after the dispatch and host-path work and refresh the changelog
 - ab69810 - PERF: Read and write metatable-free tables raw at host level instead of through a protected call
 - 96f8e4a - PERF: Cache untagged metatable identities per VM instead of reading the registry on every receiver check
 - b98b318 - PERF: Run bound members directly from the generated dispatchers instead of through lua_call
