@@ -146,9 +146,9 @@ straight into the destination register. `Runtime::install_vector_buffer_writer` 
 
 A native crate exposes its Luau surface as an [`extension::Extension`]: `describe` declares
 identity (`dream.archive`), dependencies, modules (`@dream/archive`, frozen by default),
-userdata types under stable string keys with a `TagPolicy`, member names with a `direct` flag,
-services, capabilities, and memory categories, without touching a VM; `install` supplies the
-callables against the resolved plan. `RuntimePlan::builder().policy(..).service(..)
+userdata types under stable string keys with a `TagPolicy`, member names, services,
+capabilities, and memory categories, without touching a VM; `install` supplies the callables
+against the resolved plan. `RuntimePlan::builder().policy(..).service(..)
 .extension(..).finalize()` orders extensions by their dependency graph (deterministically),
 merges owners with augmenters into one type per key, assigns tags (pinned, then `Required`,
 then `Preferred` while tags last), assigns atoms densely, lays out direct slots, resolves memory

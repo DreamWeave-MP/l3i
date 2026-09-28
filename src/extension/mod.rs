@@ -2,11 +2,11 @@
 //!
 //! An [`Extension`] is a native crate's Luau surface. It declares what it provides in
 //! [`Extension::describe`] (identity, dependencies, modules, userdata ownership and
-//! augmentation, member names and their hot/direct policy, services, capabilities, memory
-//! categories) without touching a VM, and provides the callables in [`Extension::install`]
+//! augmentation, member names, services, capabilities, memory categories) without touching a
+//! VM, and provides the callables in [`Extension::install`]
 //! against a plan that has already resolved every runtime detail: which extension installs
 //! first, which Luau tag a type gets in *this* VM, which atom a member name gets, which direct
-//! slot a hot member occupies, which numeric memory category a symbolic one maps to.
+//! slot a member occupies, which numeric memory category a symbolic one maps to.
 //!
 //! A [`RuntimePlan`] is finalised once and can instantiate any number of runtimes; each VM gets
 //! its own tags, atoms, and direct plan. Nothing here is process-global. The same Rust type may
@@ -69,7 +69,7 @@ pub enum TagPolicy {
 /// The kind of a declared userdata member.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum MemberKind {
-    /// `obj:name(...)`; reachable by `__namecall` and, when direct, the direct namecall path.
+    /// `obj:name(...)`; reachable by `__namecall` and, on a tagged type, the direct namecall path.
     Method,
     /// `obj.name` read through a bound getter.
     Getter,
@@ -85,9 +85,6 @@ pub enum MemberKind {
 pub struct MemberDecl {
     pub name: String,
     pub kind: MemberKind,
-    /// Declared hot. Every member of a tagged type already dispatches through the plan; this
-    /// marks the ones native lowering and documentation should treat as hot paths.
-    pub direct: bool,
     /// A Luau type signature for definition output, e.g. `(self, buffer, offset: number) -> number`.
     pub signature: Option<String>,
     pub doc: Option<String>,
@@ -96,12 +93,6 @@ pub struct MemberDecl {
 }
 
 impl MemberDecl {
-    /// Marks the member hot (see [`MemberDecl::direct`]).
-    pub fn direct(&mut self) -> &mut Self {
-        self.direct = true;
-        self
-    }
-
     /// The Luau signature or type for definition output.
     pub fn signature(&mut self, signature: impl Into<String>) -> &mut Self {
         self.signature = Some(signature.into());
@@ -156,7 +147,6 @@ impl UserdataDecl {
         self.members.push(MemberDecl {
             name: name.to_owned(),
             kind,
-            direct: false,
             signature: None,
             doc: None,
             contributor: self.contributor,
@@ -177,12 +167,10 @@ impl UserdataDecl {
         self.member(name, MemberKind::Setter)
     }
 
-    /// A direct primitive field (boolean, number, integer64, Vec3, nil). Implies `direct` and
-    /// makes the tag policy effectively `Required`.
+    /// A direct primitive field (boolean, number, integer64, Vec3, nil). Makes the tag policy
+    /// effectively `Required`.
     pub fn field(&mut self, name: &str) -> &mut MemberDecl {
-        let member = self.member(name, MemberKind::Field);
-        member.direct = true;
-        member
+        self.member(name, MemberKind::Field)
     }
 }
 

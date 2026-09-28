@@ -20,7 +20,6 @@ use crate::userdata::RuntimeTag;
 pub struct ResolvedMember {
     pub name: String,
     pub kind: MemberKind,
-    pub direct: bool,
     /// The atom this VM's catalogue gives the member name.
     pub atom: Atom,
     /// The direct plan slot: every method, getter, and setter of a tagged type has one; direct
@@ -248,9 +247,8 @@ fn resolve_atoms(userdata: &mut [ResolvedUserdata]) -> Result<AtomCatalogue> {
 
 /// Direct slots for every method, getter, and setter of a tagged type, densely from 1. Every
 /// bound member of a tagged type dispatches through the plan (a slot lookup is cheaper than the
-/// metamethod fallback for cold members too); `direct` marks the members declared hot, which
-/// native lowering and documentation may treat specially. Direct fields have no slot: Luau
-/// serves them from its own field table.
+/// metamethod fallback for cold members too). Direct fields have no slot: Luau serves them from
+/// its own field table.
 fn assign_slots(userdata: &mut [ResolvedUserdata]) -> Result<()> {
     let mut next_slot: u16 = 1;
     for resolved in userdata.iter_mut() {
@@ -486,7 +484,6 @@ fn add_members(resolved: &mut ResolvedUserdata, decl: &UserdataDecl) -> Result<(
         resolved.members.push(ResolvedMember {
             name: member.name.clone(),
             kind: member.kind,
-            direct: member.direct,
             atom: 0,
             slot: None,
             signature: member.signature.clone(),

@@ -55,8 +55,8 @@ impl Extension for Core {
     fn describe(&self, d: &mut ExtensionDescriptor) -> Result<()> {
         let counter = d.userdata::<Counter>("dream.tests.Counter");
         counter.tag(self.tag).doc("A counter.");
-        counter.method("get").direct().signature("(self): number");
-        counter.method("add").direct();
+        counter.method("get").signature("(self): number");
+        counter.method("add");
         counter.getter("twice").signature("number");
         counter.setter("twice");
         if self.with_field {
@@ -101,7 +101,7 @@ impl Extension for Tools {
     fn describe(&self, d: &mut ExtensionDescriptor) -> Result<()> {
         d.requires("dream.core");
         let counter = d.augment_userdata::<Counter>("dream.tests.Counter");
-        counter.method("double").direct();
+        counter.method("double");
         counter.method("describe");
         d.module("@dream/tools");
         Ok(())
@@ -208,8 +208,8 @@ fn stale_direct_cache_is_rejected_across_types() {
             "dream.pair"
         }
         fn describe(&self, d: &mut ExtensionDescriptor) -> Result<()> {
-            d.userdata::<Counter>("dream.tests.Counter").tag(TagPolicy::Required).method("get").direct();
-            d.userdata::<Other>("dream.tests.Other").tag(TagPolicy::Required).method("get").direct();
+            d.userdata::<Counter>("dream.tests.Counter").tag(TagPolicy::Required).method("get");
+            d.userdata::<Other>("dream.tests.Other").tag(TagPolicy::Required).method("get");
             d.module("@dream/pair");
             Ok(())
         }

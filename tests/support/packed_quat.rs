@@ -244,15 +244,15 @@ impl Extension for QuatExtension {
         {
             let receiver = d.userdata::<lowering::QuatMath>("dream.quat.Math");
             receiver.tag(TagPolicy::Required);
-            receiver.method("rotate").direct();
-            receiver.method("mul").direct();
+            receiver.method("rotate");
+            receiver.method("mul");
             d.native_hooks(lowering::PackedQuatLowering);
         }
         let ud = d.userdata::<QuatUserdata>("dream.quat.Quat");
         ud.tag(TagPolicy::Required);
-        ud.method("mul").direct();
-        ud.method("slerp").direct();
-        ud.method("rotate").direct();
+        ud.method("mul");
+        ud.method("slerp");
+        ud.method("rotate");
         ud.method("angleTo");
         d.module("@dream/quat");
         Ok(())

@@ -538,19 +538,19 @@ impl Extension for NetExtension {
         server
             .tag(TagPolicy::Preferred)
             .doc("The host's transport server; created in Rust, the private key stays there.");
-        server.method("update").direct().signature("(self)");
-        server.method("pollInto").direct().signature("(self, buffer: buffer): (string?, number, ...any)");
-        server.method("sendEvent").direct().signature(
+        server.method("update").signature("(self)");
+        server.method("pollInto").signature("(self, buffer: buffer): (string?, number, ...any)");
+        server.method("sendEvent").signature(
             "(self, peer: number, eventId: number, payload: buffer | string, offset: number?, length: number?)",
         );
         server
             .method("broadcast")
-            .direct()
+            
             .signature("(self, eventId: number, payload: buffer | string, offset: number?, length: number?): number");
         server.method("broadcastExcept").signature(
             "(self, peer: number, eventId: number, payload: buffer | string, offset: number?, length: number?): number",
         );
-        server.method("flush").direct().signature("(self)");
+        server.method("flush").signature("(self)");
         server.method("disconnect").signature("(self, peer: number)");
         server.method("disconnectAll").signature("(self)");
         server.method("peers").signature("(self): { number }");
@@ -574,13 +574,13 @@ impl Extension for NetExtension {
             .doc("A transport client; `net.client{}` needs the network.transport capability.");
         client.method("connect").signature("(self, token: buffer | string)");
         client.method("disconnect").signature("(self)");
-        client.method("update").direct().signature("(self)");
-        client.method("pollInto").direct().signature("(self, buffer: buffer): (string?, number, ...any)");
+        client.method("update").signature("(self)");
+        client.method("pollInto").signature("(self, buffer: buffer): (string?, number, ...any)");
         client
             .method("sendEvent")
-            .direct()
+            
             .signature("(self, eventId: number, payload: buffer | string, offset: number?, length: number?)");
-        client.method("flush").direct().signature("(self)");
+        client.method("flush").signature("(self)");
         client.method("counters").signature("(self): { [string]: number }?");
         client.method("memoryUsage").signature("(self): { [string]: number }");
         client.getter("status").signature("string");

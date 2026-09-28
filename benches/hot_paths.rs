@@ -464,8 +464,8 @@ impl l3i::extension::Extension for PlannedExtension {
     fn describe(&self, d: &mut l3i::extension::ExtensionDescriptor) -> Result<()> {
         let planned = d.userdata::<Planned>("dream.bench.Planned");
         planned.tag(self.tag);
-        planned.method("get").direct();
-        planned.getter("value").direct();
+        planned.method("get");
+        planned.getter("value");
         planned.method("slow");
         if self.tag != l3i::extension::TagPolicy::Never {
             planned.field("field");
