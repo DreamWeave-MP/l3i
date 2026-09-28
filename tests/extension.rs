@@ -139,12 +139,13 @@ fn dependency_order_composition_and_direct_dispatch() {
     assert_eq!(counter.tag, Some(1));
     let names: Vec<&str> = counter.members.iter().map(|m| m.name.as_str()).collect();
     assert_eq!(names, ["get", "add", "twice", "twice", "value", "double", "describe"]);
-    // Direct slots are dense from 1; non-direct members have none.
+    // Every method, getter, and setter of a tagged type has a dense slot; direct fields none.
     let slots: Vec<Option<u16>> = counter.members.iter().map(|m| m.slot).collect();
-    assert_eq!(slots, [Some(1), Some(2), None, None, Some(3), Some(4), None]);
-    // Atoms are dense over sorted names.
+    assert_eq!(slots, [Some(1), Some(2), Some(3), Some(4), None, Some(5), Some(6)]);
+    // Atoms are dense over the sorted member names; direct field names get none.
     assert_eq!(plan.atom_of("add"), Some(1));
-    assert_eq!(plan.atom_of("value"), Some(6));
+    assert_eq!(plan.atom_of("twice"), Some(5));
+    assert_eq!(plan.atom_of("value"), None);
 
     let runtime = Runtime::from_plan(&plan).unwrap();
     runtime.exec(SCRIPT).unwrap();
@@ -438,6 +439,25 @@ fn finalization_rejects_bad_compositions() {
     assert!(error.contains("does not require its owner"), "{error}");
     let error = text(RuntimePlan::builder().extension(Core::preferred()).extension(BadAugment(2)).finalize());
     assert!(error.contains("member 'get' is declared by both"), "{error}");
+
+    // A direct field name shared with another member kind cannot keep its fast path.
+    struct FieldClash;
+    impl Extension for FieldClash {
+        fn id(&self) -> &'static str {
+            "dream.clash"
+        }
+        fn describe(&self, d: &mut ExtensionDescriptor) -> Result<()> {
+            d.requires("dream.core");
+            d.userdata::<Other>("dream.tests.Other").method("value");
+            Ok(())
+        }
+        fn install(&self, cx: &mut InstallContext<'_>) -> Result<()> {
+            cx.userdata::<Other>("dream.tests.Other")?.method("value", |_: &Other| 0i64)?;
+            Ok(())
+        }
+    }
+    let error = text(RuntimePlan::builder().extension(Core::preferred()).extension(FieldClash).finalize());
+    assert!(error.contains("'value' is a direct field on one type"), "{error}");
 
     // Tags: Never with a direct field, and running out of tags for Required types.
     let error = text(RuntimePlan::builder().extension(Core { tag: TagPolicy::Never, with_field: true }).finalize());

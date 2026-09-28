@@ -85,7 +85,8 @@ pub enum MemberKind {
 pub struct MemberDecl {
     pub name: String,
     pub kind: MemberKind,
-    /// Hot: gets an atom-indexed direct slot when the type is tagged.
+    /// Declared hot. Every member of a tagged type already dispatches through the plan; this
+    /// marks the ones native lowering and documentation should treat as hot paths.
     pub direct: bool,
     /// A Luau type signature for definition output, e.g. `(self, buffer, offset: number) -> number`.
     pub signature: Option<String>,
@@ -95,7 +96,7 @@ pub struct MemberDecl {
 }
 
 impl MemberDecl {
-    /// Marks the member hot: a direct slot in tagged runtimes.
+    /// Marks the member hot (see [`MemberDecl::direct`]).
     pub fn direct(&mut self) -> &mut Self {
         self.direct = true;
         self

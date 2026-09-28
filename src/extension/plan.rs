@@ -23,7 +23,8 @@ pub struct ResolvedMember {
     pub direct: bool,
     /// The atom this VM's catalogue gives the member name.
     pub atom: Atom,
-    /// The direct plan slot, when the member is direct and the type is tagged.
+    /// The direct plan slot: every method, getter, and setter of a tagged type has one; direct
+    /// fields and untagged types' members have none.
     pub slot: Option<u16>,
     pub signature: Option<String>,
     pub doc: Option<String>,
@@ -204,13 +205,28 @@ impl RuntimePlanBuilder {
     }
 }
 
-/// Atoms for every member name, densely from 1, written back into the members.
+/// Atoms for every method, getter, and setter name, densely from 1, written back into the
+/// members. Direct field names get no atom: Luau rewrites every `obj.name` whose key has an
+/// atom into the direct-access opcode, which consults the tag's index callback and never the
+/// direct-field table, so an atom would take the field off its fast path. A name therefore
+/// cannot be both a direct field and another member kind anywhere in one plan.
 fn resolve_atoms(userdata: &mut [ResolvedUserdata]) -> Result<AtomCatalogue> {
     let mut names = BTreeSet::new();
+    let mut field_names = BTreeSet::new();
     for resolved in userdata.iter() {
         for member in &resolved.members {
-            names.insert(member.name.clone());
+            if member.kind == MemberKind::Field {
+                field_names.insert(member.name.clone());
+            } else {
+                names.insert(member.name.clone());
+            }
         }
+    }
+    if let Some(clash) = field_names.intersection(&names).next() {
+        return Err(Error::logic(format!(
+            "'{clash}' is a direct field on one type and a method, getter, or setter elsewhere; Luau's atom \
+             rewrite would route the field through the index callback, so rename one of them"
+        )));
     }
     if names.len() > MAX_ATOM_SPAN || names.len() >= usize::from(i16::MAX as u16) {
         return Err(Error::logic(format!(
@@ -222,13 +238,19 @@ fn resolve_atoms(userdata: &mut [ResolvedUserdata]) -> Result<AtomCatalogue> {
     let atom_of: HashMap<&str, Atom> = atoms.iter().map(|(name, atom)| (name.as_str(), *atom)).collect();
     for resolved in userdata.iter_mut() {
         for member in &mut resolved.members {
-            member.atom = atom_of[member.name.as_str()];
+            if member.kind != MemberKind::Field {
+                member.atom = atom_of[member.name.as_str()];
+            }
         }
     }
     AtomCatalogue::try_new(atoms.iter().map(|(name, atom)| (name.clone(), *atom)))
 }
 
-/// Direct slots for tagged types' direct members, densely from 1.
+/// Direct slots for every method, getter, and setter of a tagged type, densely from 1. Every
+/// bound member of a tagged type dispatches through the plan (a slot lookup is cheaper than the
+/// metamethod fallback for cold members too); `direct` marks the members declared hot, which
+/// native lowering and documentation may treat specially. Direct fields have no slot: Luau
+/// serves them from its own field table.
 fn assign_slots(userdata: &mut [ResolvedUserdata]) -> Result<()> {
     let mut next_slot: u16 = 1;
     for resolved in userdata.iter_mut() {
@@ -236,7 +258,7 @@ fn assign_slots(userdata: &mut [ResolvedUserdata]) -> Result<()> {
             continue;
         }
         for member in &mut resolved.members {
-            if !member.direct {
+            if member.kind == MemberKind::Field {
                 continue;
             }
             if next_slot > MAX_SLOT {
