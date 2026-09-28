@@ -52,6 +52,12 @@ impl<'v> TableView<'v> {
         // SAFETY: the table slot exists; operands (table copy, key) sit on top for the raising
         // body, which consumes both and leaves one result.
         unsafe {
+            if !self.has_metatable(state) {
+                // No metatable means no `__index`: a raw read, which needs no protection.
+                ffi::lua_pushlstring(state, key.as_ptr().cast(), key.len());
+                ffi::lua_rawget(state, self.index());
+                return Ok(frame.top_value());
+            }
             ffi::lua_pushvalue(state, self.index());
             ffi::lua_pushlstring(state, key.as_ptr().cast(), key.len());
             frame.raising(2, 1, |state| {
@@ -80,6 +86,13 @@ impl<'v> TableView<'v> {
         let state = frame.state();
         // SAFETY: operands (value, table copy, key) on top; the body consumes all three.
         unsafe {
+            if !self.has_metatable(state) && ffi::lua_getreadonly(state, self.index()) == 0 {
+                // No `__newindex` and writable: a raw store, which needs no protection.
+                ffi::lua_pushlstring(state, key.as_ptr().cast(), key.len());
+                ffi::lua_insert(state, -2);
+                ffi::lua_rawset(state, self.index());
+                return Ok(());
+            }
             ffi::lua_pushvalue(state, self.index());
             ffi::lua_pushlstring(state, key.as_ptr().cast(), key.len());
             frame.raising(3, 0, |state| {
@@ -117,6 +130,10 @@ impl<'v> TableView<'v> {
         let key = checked_raw_integer_key(key)?;
         let state = frame.state();
         unsafe {
+            if !self.has_metatable(state) {
+                ffi::lua_rawgeti(state, self.index(), key);
+                return Ok(frame.top_value());
+            }
             ffi::lua_pushvalue(state, self.index());
             ffi::lua_pushnumber(state, f64::from(key));
             frame.raising(2, 1, |state| {
@@ -126,6 +143,21 @@ impl<'v> TableView<'v> {
             })?;
         }
         Ok(frame.top_value())
+    }
+
+    /// Whether the table has a metatable (and so possibly `__index`/`__newindex`). Balanced.
+    ///
+    /// # Safety
+    /// The table slot exists on a live thread.
+    #[inline]
+    unsafe fn has_metatable(&self, state: *mut ffi::lua_State) -> bool {
+        unsafe {
+            if ffi::lua_getmetatable(state, self.index()) == 0 {
+                return false;
+            }
+            ffi::lua_pop(state, 1);
+            true
+        }
     }
 
     /// `rawget(t, key)` for an integer key. Never raises.
