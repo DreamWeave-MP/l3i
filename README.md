@@ -180,8 +180,16 @@ cursor per loop) without materialising it, declared through the planner like any
 (kind 3: RGBA8 in the low 32 bits, red in bits 0 to 7, the same four bytes a vertex or a texel
 holds, every `u32` valid) and `raster::ClipRect` (kind 4: four 14-bit pixel coordinates, so at
 most 16383 on an axis, stated rather than hidden), with `rgba8`, `rgb8`, `channels`, `packed`,
-`withAlpha`, `lerp`, `clip`, `clipBounds`, and folded constants. Channel meaning is the
-consumer's: the renderer below reads colors as premultiplied and provides the conversion.
+`withAlpha`, `lerp`, `mul`, `add`, `scale`, `premultiply`, `clip`, `clipBounds`, and folded
+constants. Channel meaning is the consumer's: the renderer below reads colors as premultiplied.
+Color arithmetic for GUI and shader-style scripts goes through `raster.math()`, a receiver
+whose methods (`rgba8`, `rgb8`, `red`/`green`/`blue`/`alpha`, `channels`, `withAlpha`, `lerp`,
+`mul`, `add`, `scale`, `premultiply`) lower to native code under `jit` when annotated
+(`local C: dream_raster_Math = raster.math()`): shifts and masks to unpack, double arithmetic,
+clamp, round, one integer store. Shader semantics: inputs clamp, results round to nearest, NaN
+gives channel 0, and the interpreter path computes the same formulas. Measured per call
+(`benches/raster.rs`): `rgba8` 71 ns through the module against 2.6 ns lowered, `lerp` 72 ns
+against 15 ns, `mul` 61 ns against 17 ns, `premultiply` 52 ns against 16 ns.
 
 `quat::QuatExtension` (`dream.quat`, module `@dream/quat`) is the first packed kind: a unit
 rotation compressed smallest-three into one Luau integer (18 bits per component, exact
