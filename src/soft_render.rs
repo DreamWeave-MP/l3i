@@ -188,7 +188,12 @@ impl Renderer {
     fn begin_frame(&self, width: Exact<i64>, height: Exact<i64>) -> Result<Owned<Frame>> {
         let (width, height) = (dimension("width", width)?, dimension("height", height)?);
         self.state.borrow_mut()?.begin_frame(width, height).map_err(raster_error)?;
-        let generation = self.state.generation.get() + 1;
+        let generation = self
+            .state
+            .generation
+            .get()
+            .checked_add(1)
+            .ok_or_else(|| Error::runtime("dream.soft_render: frame generations exhausted"))?;
         self.state.generation.set(generation);
         Ok(Owned(Frame { state: Rc::clone(&self.state), generation, width, height }))
     }
@@ -305,7 +310,7 @@ impl Frame {
 
     fn finish(&self) -> Result<()> {
         self.live()?;
-        self.state.generation.set(self.generation + 1);
+        self.state.generation.set(self.generation.saturating_add(1));
         Ok(())
     }
 }

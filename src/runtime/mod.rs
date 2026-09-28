@@ -163,9 +163,10 @@ impl RuntimeBuilder {
             }
         }
         let shared = Box::new(Shared::new(self.limits, self.profiler));
-        // SAFETY: fresh state; the main thread's record lives until `Drop` frees it after
-        // lua_close, and the `userthread` callback gives every other thread its own. The
-        // callback block belongs to this VM; `shared` is never moved out of its Box.
+        // SAFETY: fresh state; the main thread's record lives until `Drop` detaches it, just
+        // before lua_close (a closed state must not be touched), and the `userthread` callback
+        // gives every other thread its own. The callback block belongs to this VM; `shared` is
+        // never moved out of its Box.
         unsafe {
             shared::attach_thread_record(state);
             let callbacks = ffi::lua_callbacks(state);
