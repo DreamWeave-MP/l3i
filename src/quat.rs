@@ -37,7 +37,7 @@
 //! f32 quaternion userdata (the latter allocating); `key` plus `keyRotation` together take 5 ns
 //! against 220 ns through the binder.
 
-use crate::convert::Vector3;
+use crate::convert::{Exact, Vector3};
 use crate::error::Result;
 use crate::extension::{Extension, ExtensionDescriptor};
 use crate::packed::{Packed, PackedScalar};
@@ -322,6 +322,22 @@ impl AnimationKey {
     }
 }
 
+/// `slerp`'s weight must be finite: a NaN or infinite `t` would flow through the
+/// interpolation into a valid-looking packed integer. Finite values outside `[0, 1]` clamp.
+fn finite_weight(t: f64) -> Result<()> {
+    if t.is_finite() {
+        Ok(())
+    } else {
+        Err(crate::error::Error::runtime("quat.slerp: t must be finite (values outside 0..1 clamp)"))
+    }
+}
+
+/// An animation key's flags: the low four bits of an exact integer, by contract (a fraction
+/// is refused by `Exact`; higher bits are dropped, on the lowered path too).
+fn key_flags(flags: Exact<i64>) -> u8 {
+    (flags.0 & 0xF) as u8
+}
+
 fn to_vec3(v: [f64; 3]) -> Vector3 {
     Vector3 { x: v[0] as f32, y: v[1] as f32, z: v[2] as f32 }
 }
@@ -357,10 +373,13 @@ impl Extension for QuatExtension {
             .function("toXYZW", |q: Packed<Quaternion>| (q.0.0.x, q.0.0.y, q.0.0.z, q.0.0.w)).signature("(q: integer) -> (number, number, number, number)")
             .function("mul", |a: Packed<Quaternion>, b: Packed<Quaternion>| Quaternion::pack(a.0.0 * b.0.0)).signature("(a: integer, b: integer) -> integer")
             .function("inverse", |q: Packed<Quaternion>| Quaternion::pack(q.0.0.inverse())).signature("(q: integer) -> integer")
-            .function("slerp", |a: Packed<Quaternion>, b: Packed<Quaternion>, t: f64| Quaternion::pack(a.0.0.slerp(b.0.0, t))).signature("(a: integer, b: integer, t: number) -> integer")
+            .function("slerp", |a: Packed<Quaternion>, b: Packed<Quaternion>, t: f64| -> Result<Packed<Quaternion>> {
+                finite_weight(t)?;
+                Ok(Quaternion::pack(a.0.0.slerp(b.0.0, t)))
+            }).signature("(a: integer, b: integer, t: number) -> integer")
             .function("rotate", |q: Packed<Quaternion>, v: Vector3| to_vec3(q.0.0.rotate(from_vec3(v)))).signature("(q: integer, v: vector) -> vector")
             .function("angleTo", |a: Packed<Quaternion>, b: Packed<Quaternion>| a.0.0.angle_to(b.0.0)).signature("(a: integer, b: integer) -> number")
-            .function("key", |q: Packed<Quaternion>, flags: i64| AnimationKey::pack(q.0.0, flags as u8)).signature("(q: integer, flags: number) -> integer")
+            .function("key", |q: Packed<Quaternion>, flags: Exact<i64>| AnimationKey::pack(q.0.0, key_flags(flags))).signature("(q: integer, flags: number) -> integer")
             .function("keyRotation", |k: Packed<AnimationKey>| Quaternion::pack(k.0.rotation)).signature("(k: integer) -> integer")
             .function("keyFlags", |k: Packed<AnimationKey>| i64::from(k.0.flags)).signature("(k: integer) -> number");
         #[cfg(feature = "jit")]
@@ -380,7 +399,9 @@ impl Extension for QuatExtension {
                     lowering::slerp(a, b, t)
                 }).signature("(self, a: integer, b: integer, t: number): integer");
             receiver
-                .method("key", |_: &lowering::Math, q: Packed<Quaternion>, flags: i64| AnimationKey::pack(q.0.0, flags as u8)).signature("(self, q: integer, flags: number): integer");
+                .method("key", |_: &lowering::Math, q: Packed<Quaternion>, flags: Exact<i64>| {
+                    AnimationKey::pack(q.0.0, key_flags(flags))
+                }).signature("(self, q: integer, flags: number): integer");
             receiver
                 .method("keyRotation", |_: &lowering::Math, k: Packed<AnimationKey>| Quaternion::pack(k.0.rotation)).signature("(self, k: integer): integer");
             receiver
@@ -413,7 +434,7 @@ pub mod lowering {
     use super::{AnimationKey, COMPONENT_BITS, COMPONENT_MAX, Quaternion, RANGE};
     use crate::convert::Vector3;
     use crate::native_code::hooks::{NamecallSite, NativeCodeHooks, NativeContext};
-    use crate::native_code::ir::{IrBuilder, IrCmd, IrCondition, IrOp, bytecode_type};
+    use crate::native_code::ir::{IrBlockKind, IrBuilder, IrCmd, IrCondition, IrOp, bytecode_type};
     use crate::packed::{Packed, PackedScalar};
     use crate::raw::ffi::{LUA_TINTEGER, LUA_TNUMBER, LUA_TVECTOR};
     use crate::userdata::Userdata;
@@ -446,9 +467,10 @@ pub mod lowering {
         Packed(Quaternion(a.0.0 * b.0.0))
     }
 
-    /// The interpreter path of `Math:slerp`.
-    pub fn slerp(a: Packed<Quaternion>, b: Packed<Quaternion>, t: f64) -> Packed<Quaternion> {
-        Packed(Quaternion(a.0.0.slerp(b.0.0, t)))
+    /// The interpreter path of `Math:slerp`; a non-finite `t` is an error, as on the module.
+    pub fn slerp(a: Packed<Quaternion>, b: Packed<Quaternion>, t: f64) -> crate::error::Result<Packed<Quaternion>> {
+        super::finite_weight(t)?;
+        Ok(Packed(Quaternion(a.0.0.slerp(b.0.0, t))))
     }
 
     /// The hook set; [`super::QuatExtension`] registers it.
@@ -665,9 +687,22 @@ pub mod lowering {
     /// interpreter's [`super::Quat::slerp`], polynomial trigonometry included.
     fn lower_slerp(build: &mut IrBuilder<'_>, result: IrOp, a_reg: IrOp, b_reg: IrOp, t_reg: c_int, exit: IrOp) {
         let t_reg = build.vm_reg(t_reg);
+        // A non-finite weight exits to the binder, which raises: `t - t` is zero exactly for
+        // finite `t` and NaN for NaN or an infinity, and `NotEqual` is true for NaN. A jump
+        // needs blocks for both targets; the bail block is one jump to the VM exit.
+        build.load_and_check_tag(t_reg, LUA_TNUMBER as u8, exit);
+        let weight = build.inst(IrCmd::LOAD_DOUBLE, &[t_reg]);
+        let difference = op(build, IrCmd::SUB_NUM, weight, weight);
+        let zero = num(build, 0.0);
+        let not_equal = build.cond(IrCondition::NotEqual);
+        let bail = build.block(IrBlockKind::Internal);
+        let finite = build.block(IrBlockKind::Internal);
+        build.inst(IrCmd::JUMP_CMP_NUM, &[difference, zero, not_equal, bail, finite]);
+        build.begin_block(bail);
+        build.inst(IrCmd::JUMP, &[exit]);
+        build.begin_block(finite);
         let a = decode(build, a_reg, exit);
         let b = decode(build, b_reg, exit);
-        build.load_and_check_tag(t_reg, LUA_TNUMBER as u8, exit);
         let t = build.inst(IrCmd::LOAD_DOUBLE, &[t_reg]);
         let one = num(build, 1.0);
         let zero = num(build, 0.0);
@@ -832,9 +867,25 @@ pub mod lowering {
                 }
                 ("slerp", 4) => lower_slerp(build, result, first, second, site.arg_res_reg + 4, exit),
                 ("key", 3) => {
+                    // `flags` must be an exact integer, as the binder's `Exact` demands: a number
+                    // that does not survive the round trip through int64 (a fraction, NaN, out
+                    // of range) exits so the binder raises the same error on both paths.
+                    build.load_and_check_tag(second, LUA_TNUMBER as u8, exit);
+                    let number = build.inst(IrCmd::LOAD_DOUBLE, &[second]);
+                    let truncated = build.inst(IrCmd::NUM_TO_INT64, &[number]);
+                    let back = build.inst(IrCmd::INT64_TO_NUM, &[truncated]);
+                    // `NotEqual` is true for NaN as well, which is the exit we want (`Equal` is
+                    // the one condition the number compare does not implement). A jump needs
+                    // blocks for both targets; the bail block is one jump to the VM exit.
+                    let not_equal = build.cond(IrCondition::NotEqual);
+                    let bail = build.block(IrBlockKind::Internal);
+                    let exact = build.block(IrBlockKind::Internal);
+                    build.inst(IrCmd::JUMP_CMP_NUM, &[number, back, not_equal, bail, exact]);
+                    build.begin_block(bail);
+                    build.inst(IrCmd::JUMP, &[exit]);
+                    build.begin_block(exact);
                     // The rotation payload with the low four bits of `flags` and kind 2.
                     let q = checked_bits(build, first, KIND, exit);
-                    build.load_and_check_tag(second, LUA_TNUMBER as u8, exit);
                     let flags = build.inst(IrCmd::LOAD_DOUBLE, &[second]);
                     let flags = build.inst(IrCmd::NUM_TO_INT64, &[flags]);
                     let fifteen = i64c(build, 15);

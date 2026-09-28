@@ -127,12 +127,20 @@ fn packed_quaternion_operations_lower_to_native_code() {
              assert(not ok2)\n\
              local ok3, err3 = pcall(function() local r = Q:keyRotation(a) return r end)\n\
              assert(not ok3 and string.find(err3, 'AnimationKey'), err3)\n\
+             -- A non-finite weight and a fractional flag value exit too, to the binder's errors.\n\
+             local ok4, err4 = pcall(function() local r = Q:slerp(a, b, 0 / 0) return r end)\n\
+             assert(not ok4 and string.find(err4, 'finite'), err4)\n\
+             local nan = tonumber('nan')\n\
+             local ok6, err6 = pcall(function() local r = Q:slerp(a, b, nan) return r end)\n\
+             assert(not ok6 and string.find(err6, 'finite'), err6)\n\
+             local ok5, err5 = pcall(function() local r = Q:key(a, 3.7) return r end)\n\
+             assert(not ok5 and string.find(err5, 'exact'), err5)\n\
              return worst",
         )
         .unwrap();
     let native = template.native_code().expect("compiled");
     assert_eq!(native.status, NativeCodeStatus::Success, "{native:?}");
-    assert_eq!(lowered_sites() - before, 10, "the hook lowered the seven loop sites and the three closures");
+    assert_eq!(lowered_sites() - before, 13, "the hook lowered the seven loop sites and the six closures");
     let loader = runtime.load_function("return function(name) error('module ' .. name .. ' not found') end").unwrap();
     let instance = sandbox
         .new_instance(&runtime, &InstanceSpec { name: "q", packages: &[], hidden_data: None, loader: &loader })
@@ -143,8 +151,9 @@ fn packed_quaternion_operations_lower_to_native_code() {
     assert!(worst < 5e-5, "lowered results diverge from the binder: {worst}");
     let stats = generator.execution_stats(&runtime.stack());
     assert!(stats.regular_blocks_executed > 0, "{stats:?}");
-    // Exactly the three wrong-kind calls exit; the 1400 lowered calls in the loop run natively.
-    assert_eq!(stats.vm_exits_taken, 3, "only the wrong-kind calls exit to the interpreter: {stats:?}");
+    // Exactly the three wrong-kind calls, the two NaN weights (a constant and a runtime one),
+    // and the fractional flags exit; the 1400 lowered calls in the loop run natively.
+    assert_eq!(stats.vm_exits_taken, 6, "only the malformed calls exit to the interpreter: {stats:?}");
 }
 
 
@@ -162,7 +171,18 @@ fn constructors_refuse_malformed_rotations() {
              assert(quat.fromXYZW(0, 0, 0, 2) == quat.IDENTITY, 'a scaled identity normalizes')",
         )
         .unwrap();
+    runtime
+        .exec(
+            "local a = quat.axisAngle(vector.create(0, 0, 1), 0.3) local b = quat.axisAngle(vector.create(1, 0, 0), 0.7) \
+             local ok, err = pcall(quat.slerp, a, b, 0 / 0) assert(not ok and string.find(err, 'finite'), err) \
+             ok, err = pcall(quat.slerp, a, b, 1 / 0) assert(not ok and string.find(err, 'finite'), err) \
+             assert(quat.slerp(a, b, 7) == quat.slerp(a, b, 1), 'finite weights clamp') \
+             ok, err = pcall(quat.key, a, 3.7) assert(not ok and string.find(err, 'exact'), err) \
+             assert(quat.keyFlags(quat.key(a, 0x25)) == 5, 'the low four bits of an exact integer')",
+        )
+        .unwrap();
     assert!(Quat::try_from_axis_angle([0.0, 0.0, 0.0], 1.0).is_none());
     assert!(Quat { x: 0.0, y: 0.0, z: 0.0, w: 0.0 }.try_normalize().is_none());
     assert!(Quat { x: 0.0, y: 0.0, z: 0.0, w: f64::INFINITY }.try_normalize().is_none());
 }
+

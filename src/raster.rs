@@ -45,7 +45,7 @@
 //! `rgb8` are the strict constructors (an integer outside `0..=255` is an error); the receiver's
 //! clamp, so both paths of a lowered call agree by construction.
 
-use crate::convert::{FromView, Integer, Push};
+use crate::convert::{Exact, FromView, Integer, Push};
 use crate::error::{Error, Result};
 use crate::extension::{Extension, ExtensionDescriptor};
 use crate::packed::{BufferPack, Packed, PackedScalar};
@@ -451,11 +451,13 @@ impl PackedScalar for ClipRect {
     }
 }
 
-fn channel(name: &str, value: i64) -> Result<u8> {
-    u8::try_from(value).map_err(|_| Error::runtime(format!("{name} {value} is outside 0..=255")))
+/// A strict integer channel: `Exact` refuses a fraction before this refuses the range.
+fn channel(name: &str, value: Exact<i64>) -> Result<u8> {
+    u8::try_from(value.0).map_err(|_| Error::runtime(format!("{name} {} is outside 0..=255", value.0)))
 }
 
-fn coordinate(name: &str, value: i64) -> Result<u32> {
+fn coordinate(name: &str, value: Exact<i64>) -> Result<u32> {
+    let value = value.0;
     u32::try_from(value)
         .ok()
         .filter(|v| *v <= ClipRect::MAX_COORD)
@@ -523,10 +525,10 @@ impl Extension for RasterExtension {
             .constant("TRANSPARENT16", CompileConstant::Integer(Color16::TRANSPARENT.bits()))
             .constant("BLACK16", CompileConstant::Integer(Color16::BLACK.bits()))
             .constant("WHITE16", CompileConstant::Integer(Color16::WHITE.bits()))
-            .function("rgba8", |r: i64, g: i64, b: i64, a: i64| -> Result<Packed<Color>> {
+            .function("rgba8", |r: Exact<i64>, g: Exact<i64>, b: Exact<i64>, a: Exact<i64>| -> Result<Packed<Color>> {
                 Ok(Color::rgba(channel("rgba8 red", r)?, channel("rgba8 green", g)?, channel("rgba8 blue", b)?, channel("rgba8 alpha", a)?).pack())
             }).signature("(r: number, g: number, b: number, a: number) -> integer")
-            .function("rgb8", |r: i64, g: i64, b: i64| -> Result<Packed<Color>> {
+            .function("rgb8", |r: Exact<i64>, g: Exact<i64>, b: Exact<i64>| -> Result<Packed<Color>> {
                 Ok(Color::rgba(channel("rgb8 red", r)?, channel("rgb8 green", g)?, channel("rgb8 blue", b)?, 255).pack())
             }).signature("(r: number, g: number, b: number) -> integer")
             .function("packed", |c: Packed<Color>| f64::from(c.0.packed())).signature("(color: integer) -> number")
@@ -549,7 +551,7 @@ impl Extension for RasterExtension {
             .function("premultiply16", |c: Color16| c.premultiply()).signature("(color: integer) -> integer")
             .function("widen", |c: Packed<Color>| Color16::widen(c.0)).signature("(color: integer) -> integer")
             .function("narrow", |c: Color16| c.narrow().pack()).signature("(color: integer) -> integer")
-            .function("clip", |min_x: i64, min_y: i64, max_x: i64, max_y: i64| -> Result<Packed<ClipRect>> {
+            .function("clip", |min_x: Exact<i64>, min_y: Exact<i64>, max_x: Exact<i64>, max_y: Exact<i64>| -> Result<Packed<ClipRect>> {
                 Ok(ClipRect::new(
                     coordinate("clip minX", min_x)?,
                     coordinate("clip minY", min_y)?,

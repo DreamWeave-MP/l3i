@@ -164,3 +164,22 @@ fn color_math_lowers_to_native_code() {
     let stats = generator.execution_stats(&runtime.stack());
     assert_eq!(stats.vm_exits_taken, 3, "only the three bad calls exit: {stats:?}");
 }
+
+#[test]
+fn strict_constructors_refuse_fractions() {
+    let plan = RuntimePlan::builder()
+        .policy(RuntimePolicy::new().compat_global("@dream/raster", "raster"))
+        .extension(RasterExtension)
+        .finalize()
+        .unwrap();
+    let runtime = Runtime::from_plan(&plan).unwrap();
+    runtime
+        .exec(
+            "local ok, err = pcall(raster.rgba8, 1.6, 2, 3, 4) assert(not ok and string.find(err, 'exact'), err) \
+             ok, err = pcall(raster.rgb8, 1, 2.5, 3) assert(not ok and string.find(err, 'exact'), err) \
+             ok, err = pcall(raster.clip, 1.7, 0, 3, 3) assert(not ok and string.find(err, 'exact'), err) \
+             assert(raster.rgba8(1, 2, 3, 4) == raster.rgba8(1i, 2i, 3i, 4i), 'integers and integral numbers agree') \
+             ok, err = pcall(raster.rgba8, 256, 0, 0, 0) assert(not ok and string.find(err, '0..=255'), err)",
+        )
+        .unwrap();
+}
