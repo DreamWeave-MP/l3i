@@ -89,7 +89,11 @@ per runtime:
 The same Rust type may be tag 8 in one runtime, 17 in another, and untagged in a third.
 `MetatableBuilder` gives methods, properties, read/write properties, unbound methods,
 metamethods, native method tables, and array/keyed/cursor `__iter` factories, with OpenMW's
-conflict rules and the plain-table → generated `__index`/`__namecall` phase machine.
+conflict rules and the plain-table → generated `__index`/`__namecall` phase machine. The
+generated dispatchers run bound members directly on their own stack instead of `lua_call`ing
+the member closure, so a generated method call or property read costs one Luau call frame,
+not two. Untagged receiver checks compare against a per-VM cached metatable identity rather
+than reading the registry each time.
 
 ## Modules and sandboxes
 
@@ -213,9 +217,11 @@ lines. [TOOLCHAIN.md](TOOLCHAIN.md) has the measurements.
 
 ## Quality
 
-`cargo test` (and `cargo test --features jit`) run the ported C++ test contracts plus the
-runtime, sandbox, watchdog, and native code suites; `cargo clippy --all-targets -- -D warnings`
-is clean. `BENCHMARKS.md` holds the Criterion numbers for the hot paths
+`cargo test` (and `cargo test --all-features`) run the ported C++ test contracts plus the
+runtime, sandbox, watchdog, native code, and analysis suites; `cargo clippy --all-targets --
+-D warnings` is clean. The integration tests under `tests/` link as one binary (each binary
+pays a full link-time codegen under cross-language LTO), so one file's tests run with
+`cargo test <file>::`. `BENCHMARKS.md` holds the Criterion numbers for the hot paths
 (`cargo bench --bench hot_paths`, then `python3 scripts/gen_benchmarks.py`).
 
 ## License

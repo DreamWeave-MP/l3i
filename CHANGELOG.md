@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- ab69810 - PERF: Read and write metatable-free tables raw at host level instead of through a protected call
+- 96f8e4a - PERF: Cache untagged metatable identities per VM instead of reading the registry on every receiver check
+- b98b318 - PERF: Run bound members directly from the generated dispatchers instead of through lua_call
+- 010603b - FIX: Report out-of-range integers with their value and target type, and resolve the rounding bounds at compile time
+- 2692901 - PERF: Link the integration tests as one binary
+- fac8aff - DOCS: Regenerate the benchmarks under the enforced toolchain and refresh the changelog
 - 2ecb9b0 - PERF: Require clang with cross-language thin LTO and lld for every build
 - fc40731 - PERF: Compile the Luau sources in parallel
 - cea40f2 - PERF: Cut the typed binder's per-call cost: bind-time debug names, compile-time argument counts, single-call scalar, vector, and tag reads, one-call native entry, and inlined hot paths
