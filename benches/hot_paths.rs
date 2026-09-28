@@ -177,6 +177,7 @@ fn looped(runtime: &Runtime, body: &str) -> Function {
     runtime
         .load_function(&format!(
             "return function() local direct, plain, untagged, sequence, plain_table = direct, plain, untagged, sequence, plain_table \
+             local hoisted, color, clip = hoisted, color, clip \
              local s = 0 for i = 1, {CALLS} do {body} end return s end"
         ))
         .unwrap()
@@ -404,6 +405,15 @@ fn typed_variants(c: &mut Criterion) {
     let two = runtime.bind_function("dreamweave.bench.two", |a: f64, b: f64| a + b).unwrap();
     let two_i32 = runtime.bind_function("dreamweave.bench.twoInt", |a: i32, b: i32| a + b).unwrap();
     let unit = runtime.bind_function("dreamweave.bench.unit", |_a: f64| ()).unwrap();
+    let vec_x = runtime.bind_function("dreamweave.bench.vecX", |v: Vector3| f64::from(v.x)).unwrap();
+    let packed_red =
+        runtime.bind_function("dreamweave.bench.packedRed", |c: l3i::packed::Packed<l3i::raster::Color>| f64::from(c.0.r)).unwrap();
+    let integer_id = runtime.bind_function("dreamweave.bench.integerId", |i: l3i::convert::Integer| i.0 as f64).unwrap();
+    let four = runtime
+        .bind_function("dreamweave.bench.four", |a: Vector3, b: Vector3, c: l3i::packed::Packed<l3i::raster::Color>, d: l3i::packed::Packed<l3i::raster::ClipRect>| {
+            f64::from(a.x + b.y) + f64::from(c.0.r) + f64::from(d.0.max_x)
+        })
+        .unwrap();
     for (name, function) in [
         ("zero", &zero),
         ("call_only", &call_only),
@@ -412,9 +422,16 @@ fn typed_variants(c: &mut Criterion) {
         ("two", &two),
         ("two_i32", &two_i32),
         ("unit", &unit),
+        ("vec_x", &vec_x),
+        ("packed_red", &packed_red),
+        ("integer_id", &integer_id),
+        ("four", &four),
     ] {
         runtime.set_global(name, function).unwrap();
     }
+    runtime.set_global("color", &l3i::convert::Integer(l3i::raster::Color::WHITE.pack().bits())).unwrap();
+    runtime.set_global("clip", &l3i::convert::Integer(l3i::raster::ClipRect::ALL.pack().bits())).unwrap();
+    runtime.exec("hoisted = vector.create(1, 2, 3)").unwrap();
     let mut group = c.benchmark_group("typed_variants");
     group.throughput(Throughput::Elements(CALLS));
     for (name, body) in [
@@ -425,6 +442,10 @@ fn typed_variants(c: &mut Criterion) {
         ("(f64, f64) -> f64", "s = two(i, 1)"),
         ("(i32, i32) -> i32", "s = two_i32(i, 1)"),
         ("(f64) -> ()", "unit(i)"),
+        ("(Vector3) -> f64, hoisted", "s = vec_x(hoisted)"),
+        ("(Integer) -> f64", "s = integer_id(color)"),
+        ("(Packed<Color>) -> f64", "s = packed_red(color)"),
+        ("(Vector3, Vector3, Packed, Packed) -> f64", "s = four(hoisted, hoisted, color, clip)"),
     ] {
         let function = looped(&runtime, body);
         let stack = runtime.stack();
