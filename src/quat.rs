@@ -65,6 +65,21 @@ impl Quat {
         Quat { x: axis[0] / len * s, y: axis[1] / len * s, z: axis[2] / len * s, w: c }
     }
 
+    /// `from_axis_angle` for a finite, non-zero axis and a finite angle; `None` otherwise (the
+    /// unchecked form divides by zero on a zero axis).
+    #[must_use]
+    pub fn try_from_axis_angle(axis: [f64; 3], angle: f64) -> Option<Quat> {
+        let len2 = axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2];
+        (angle.is_finite() && len2.is_finite() && len2 > 0.0).then(|| Quat::from_axis_angle(axis, angle))
+    }
+
+    /// `normalize` for a finite, non-zero quaternion; `None` otherwise.
+    #[must_use]
+    pub fn try_normalize(self) -> Option<Quat> {
+        let n2 = self.x * self.x + self.y * self.y + self.z * self.z + self.w * self.w;
+        (n2.is_finite() && n2 > 0.0).then(|| self.normalize())
+    }
+
     #[must_use]
     pub fn normalize(self) -> Quat {
         let n = (self.x * self.x + self.y * self.y + self.z * self.z + self.w * self.w).sqrt();
@@ -328,9 +343,17 @@ impl Extension for QuatExtension {
         let module = d.module("@dream/quat");
         module
             .doc("Rotations as packed integers.")
-            .constant("IDENTITY", CompileConstant::Integer(Quaternion::pack(Quat::IDENTITY).bits()))
-            .function("axisAngle", |axis: Vector3, angle: f64| Quaternion::pack(Quat::from_axis_angle(from_vec3(axis), angle))).signature("(axis: vector, angle: number) -> integer")
-            .function("fromXYZW", |x: f64, y: f64, z: f64, w: f64| Quaternion::pack(Quat { x, y, z, w }.normalize())).signature("(x: number, y: number, z: number, w: number) -> integer")
+            .constant("IDENTITY", CompileConstant::Integer(Quaternion::pack(Quat::IDENTITY).bits()?))
+            .function("axisAngle", |axis: Vector3, angle: f64| -> Result<Packed<Quaternion>> {
+                Quat::try_from_axis_angle(from_vec3(axis), angle).map(Quaternion::pack).ok_or_else(|| {
+                    crate::error::Error::runtime("quat.axisAngle: the axis must be finite and non-zero and the angle finite")
+                })
+            }).signature("(axis: vector, angle: number) -> integer")
+            .function("fromXYZW", |x: f64, y: f64, z: f64, w: f64| -> Result<Packed<Quaternion>> {
+                Quat { x, y, z, w }.try_normalize().map(Quaternion::pack).ok_or_else(|| {
+                    crate::error::Error::runtime("quat.fromXYZW: the components must be finite and not all zero")
+                })
+            }).signature("(x: number, y: number, z: number, w: number) -> integer")
             .function("toXYZW", |q: Packed<Quaternion>| (q.0.0.x, q.0.0.y, q.0.0.z, q.0.0.w)).signature("(q: integer) -> (number, number, number, number)")
             .function("mul", |a: Packed<Quaternion>, b: Packed<Quaternion>| Quaternion::pack(a.0.0 * b.0.0)).signature("(a: integer, b: integer) -> integer")
             .function("inverse", |q: Packed<Quaternion>| Quaternion::pack(q.0.0.inverse())).signature("(q: integer) -> integer")
@@ -949,11 +972,11 @@ mod tests {
     #[test]
     fn animation_keys_are_a_distinct_kind() {
         let key = AnimationKey::pack(Quat::IDENTITY, 0x19);
-        let back = Packed::<AnimationKey>::from_bits(key.bits()).unwrap();
+        let back = Packed::<AnimationKey>::from_bits(key.bits().unwrap()).unwrap();
         assert_eq!(back.0.flags, 9, "four flag bits");
         assert_eq!(back.0.rotation, Quat::IDENTITY);
-        assert!(Packed::<Quaternion>::from_bits(key.bits()).is_err());
-        assert!(Packed::<AnimationKey>::from_bits(Quaternion::pack(Quat::IDENTITY).bits()).is_err());
+        assert!(Packed::<Quaternion>::from_bits(key.bits().unwrap()).is_err());
+        assert!(Packed::<AnimationKey>::from_bits(Quaternion::pack(Quat::IDENTITY).bits().unwrap()).is_err());
     }
 
     #[test]

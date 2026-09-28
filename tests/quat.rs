@@ -45,10 +45,10 @@ fn packed_quaternions_and_keys_are_distinct_kinds_through_luau() {
         )
         .unwrap();
     let key = AnimationKey::pack(Quat::IDENTITY, 9);
-    let back = Packed::<AnimationKey>::from_bits(key.bits()).unwrap();
+    let back = Packed::<AnimationKey>::from_bits(key.bits().unwrap()).unwrap();
     assert_eq!(back.0.flags, 9);
-    assert!(Packed::<Quaternion>::from_bits(key.bits()).is_err());
-    assert_eq!(Packed::<Quaternion>::from_bits(Quaternion::pack(Quat::IDENTITY).bits()).unwrap().0.0, Quat::IDENTITY);
+    assert!(Packed::<Quaternion>::from_bits(key.bits().unwrap()).is_err());
+    assert_eq!(Packed::<Quaternion>::from_bits(Quaternion::pack(Quat::IDENTITY).bits().unwrap()).unwrap().0.0, Quat::IDENTITY);
 }
 
 /// Native lowering: the same operations through the `dream_quat_Math` receiver compile to IR
@@ -147,3 +147,22 @@ fn packed_quaternion_operations_lower_to_native_code() {
     assert_eq!(stats.vm_exits_taken, 3, "only the wrong-kind calls exit to the interpreter: {stats:?}");
 }
 
+
+#[test]
+fn constructors_refuse_malformed_rotations() {
+    let plan = RuntimePlan::builder().policy(policy()).extension(QuatExtension).extension(QuatBaseline).finalize().unwrap();
+    let runtime = Runtime::from_plan(&plan).unwrap();
+    runtime
+        .exec(
+            "local ok, err = pcall(quat.axisAngle, vector.create(0, 0, 0), 1) assert(not ok and string.find(err, 'non%-zero'), err) \
+             ok, err = pcall(quat.axisAngle, vector.create(0, 0, 1), 0 / 0) assert(not ok and string.find(err, 'angle finite'), err) \
+             ok, err = pcall(quat.axisAngle, vector.create(1 / 0, 0, 0), 1) assert(not ok, 'non-finite axis') \
+             ok, err = pcall(quat.fromXYZW, 0, 0, 0, 0) assert(not ok and string.find(err, 'not all zero'), err) \
+             ok, err = pcall(quat.fromXYZW, 0 / 0, 0, 0, 1) assert(not ok, 'nan component') \
+             assert(quat.fromXYZW(0, 0, 0, 2) == quat.IDENTITY, 'a scaled identity normalizes')",
+        )
+        .unwrap();
+    assert!(Quat::try_from_axis_angle([0.0, 0.0, 0.0], 1.0).is_none());
+    assert!(Quat { x: 0.0, y: 0.0, z: 0.0, w: 0.0 }.try_normalize().is_none());
+    assert!(Quat { x: 0.0, y: 0.0, z: 0.0, w: f64::INFINITY }.try_normalize().is_none());
+}
