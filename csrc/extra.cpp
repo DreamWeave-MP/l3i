@@ -10,7 +10,29 @@
 
 #include "Luau/Common.h"
 
+#include <stdio.h>
 #include <string.h>
+
+namespace {
+
+// Luau's assertions (enabled by build.rs) call this before trapping; without a handler a failed
+// assertion is a bare SIGILL with no message.
+int reportAssertion(const char* expression, const char* file, int line, const char* function)
+{
+    fprintf(stderr, "l3i: Luau assertion failed: %s (%s:%d, %s)\n", expression, file, line, function);
+    fflush(stderr);
+    return 1;
+}
+
+struct InstallAssertionHandler
+{
+    InstallAssertionHandler()
+    {
+        Luau::assertHandler() = reportAssertion;
+    }
+} installAssertionHandler;
+
+} // namespace
 
 extern "C" {
 
