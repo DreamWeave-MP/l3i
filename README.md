@@ -5,8 +5,9 @@ Luau binder (`components/luau` and `components/lua/bindfunction.hpp`). It owns i
 declares the C API by hand, and puts a safe, scoped layer over it: frame-scoped stack views,
 registry-pinned owned values, a typed function binder that reads arguments straight from stack
 slots, tagged and untagged userdata, Luau's direct userdata access, sandboxed script instances,
-watchdog and profiler plumbing, and (with the `jit` feature) Luau's native code generator with
-lowering hooks written in Rust.
+watchdog and profiler plumbing, (with the `jit` feature) Luau's native code generator with
+lowering hooks written in Rust, and (with the `soft-render` feature) a CPU rasterizer as a
+Luau extension.
 
 No `mlua`. Tags, atoms, type names and debug-name roots are host data: the crate ships the
 mechanism, never a catalogue.
@@ -27,7 +28,7 @@ mechanism, never a catalogue.
 
 ```toml
 [dependencies]
-l3i = { version = "0.1", features = ["jit"] } # jit is optional
+l3i = { version = "0.1", features = ["jit"] } # jit, analysis, and soft-render are optional
 ```
 
 ```rust
@@ -175,6 +176,13 @@ are named); `sequence::Sequence` and `sequence::Stream` show a Rust collection t
 `#items`, `items[i]`, `for item in items`, and `items:toTable()` (or `for` only, with a private
 cursor per loop) without materialising it, declared through the planner like any userdata.
 
+`raster::RasterExtension` (`dream.raster`, module `@dream/raster`) provides `raster::Color`
+(kind 3: RGBA8 in the low 32 bits, red in bits 0 to 7, the same four bytes a vertex or a texel
+holds, every `u32` valid) and `raster::ClipRect` (kind 4: four 14-bit pixel coordinates, so at
+most 16383 on an axis, stated rather than hidden), with `rgba8`, `rgb8`, `channels`, `packed`,
+`withAlpha`, `lerp`, `clip`, `clipBounds`, and folded constants. Channel meaning is the
+consumer's: the renderer below reads colors as premultiplied and provides the conversion.
+
 `quat::QuatExtension` (`dream.quat`, module `@dream/quat`) is the first packed kind: a unit
 rotation compressed smallest-three into one Luau integer (18 bits per component, exact
 identity, 1.6e-5 rad worst case), with `axisAngle`, `fromXYZW`/`toXYZW`, `mul`, `inverse`,
@@ -203,6 +211,30 @@ integer64, sizes and counters plain numbers, connection stats direct fields on t
 per-peer methods on the server. Nothing calls into Luau from inside the transport; the host
 drives one network phase per frame. `benches/net.rs` measures the bridge over localhost UDP.
 
+## Software rendering
+
+With the `soft-render` feature, `soft_render::SoftRenderExtension` (`dream.soft_render`,
+module `@dream/soft-render`, requires `dream.raster`) binds
+[dream-soft-render](https://github.com/DreamWeave-MP/dream-soft-render) as a small software
+rendering device: `soft.renderer()`, `renderer:beginFrame(w, h)`, `frame:clear`, `frame:rect`,
+`frame:image`, `frame:mesh(vertexBuffer, indexBuffer, texture?, clip)`, `frame:finish()`,
+`renderer:createTexture(w, h, pixels)`, `texture:update(...)`, `renderer:readInto(buffer)`.
+Draws rasterize immediately in call order, as the crate does; colors are `raster` integers the
+renderer reads as premultiplied (`soft.premultiply` converts straight alpha); meshes are Luau
+buffers of 20-byte vertices and `u32` indices borrowed for one call and never kept, validated
+for stride and alignment here and for indices and finiteness by the crate. A scene drawn from
+Luau is byte-identical to the same scene drawn from Rust (`tests/soft_render.rs` compares every
+pixel), malformed input is an error in the renderer's own words, textures free their storage
+when collected, and the extension is a plain domain extension: l3i does not depend on the
+renderer unless the feature is on. `soft.vertices()` returns a writer whose
+`write(buffer, offset, pos, uv, color)` packs a vertex with one bounds check and returns the
+next offset; under `jit` it lowers to native buffer stores. Measured (`benches/soft_render.rs`,
+640x480): a frame of 48 panels costs 382 µs from Luau against 355 µs native, 3200 glyph quads
+5.0 ms against 4.8 ms, the 256-triangle fan 4.7 ms either way; an offscreen `frame:rect` call
+is 239 ns against 112 ns native, so the binding adds about 130 ns per draw call; writing the
+fan's 258 vertices takes 506 ns per vertex with five `buffer.write*` calls, 330 ns through the
+bound writer, and 70 ns through the lowered writer (cos, sin, and `vector.create` included).
+
 ## Native code generation
 
 With the `jit` feature the crate builds Luau's CodeGen library and a small C++ shim
@@ -212,8 +244,9 @@ counters, and an `IrBuilder` C ABI. `native_code::NativeCodeHooks` lets hosts wr
 lowering hooks (vector access/namecall, userdata access/metamethod/namecall and their bytecode
 type suggestions) in Rust against `native_code::ir::IrBuilder`, with `IrCmd` generated from
 the headers of the exact Luau build. `VectorBufferWriter` is the default hook set: it lowers
-`vector:writef32x3` to three native f32 stores; `quat::lowering::Lowering` is the larger
-example, unpacking integers and storing vectors with no C call. Hooks learn the VM's real tags
+`vector:writef32x3` to three native f32 stores; `quat::lowering::Lowering` (integer unpacking,
+vector stores, no C call) and `soft_render::lowering::VertexWriter` (one bounds check and five
+buffer stores) are the larger examples. Hooks learn the VM's real tags
 and the compiler's userdata type indices from `NativeContext` (`tag_of`, `userdata_type_of`)
 rather than assuming them; extensions register hook sets with `ExtensionDescriptor::native_hooks`.
 Modes: off, annotated (`--!native`), eager.
@@ -269,8 +302,9 @@ divergences.
 Luau is a git submodule (`luau/`, pinned at release 0.740, the commit OpenMW pins); clone with
 `--recurse-submodules` or run `git submodule update --init`. `build.rs` compiles it and the
 binder's C++ additions with `cc` (in parallel): `LUAI_MAXCSTACK=8000`, three-component vectors,
-`LUA_UTAG_LIMIT=254`, Luau's internal assertions in debug builds, CodeGen under `jit`, Analysis
-under `analysis`. No network access at build time and no external Lua crate. Hosts may append
+`LUA_UTAG_LIMIT=254`, Luau's internal assertions (a failed one prints its location before
+trapping), CodeGen under `jit`, Analysis under `analysis`; `soft-render` adds the
+dream-soft-render dependency. No network access at build time and no external Lua crate. Hosts may append
 compiler flags through `LUAU_CXXFLAGS`. Rust 1.88 or newer.
 
 The toolchain is fixed: **clang++ for the C++ side, lld, and cross-language thin LTO**
@@ -286,7 +320,7 @@ measurements.
 ## Quality
 
 `cargo test` (and `cargo test --all-features`) run the ported C++ test contracts plus the
-runtime, sandbox, watchdog, native code, and analysis suites; `cargo clippy --all-targets --
+runtime, sandbox, watchdog, native code, analysis, and renderer suites; `cargo clippy --all-targets --
 -D warnings` is clean. The integration tests under `tests/` link as one binary (each binary
 pays a full link-time codegen under cross-language LTO), so one file's tests run with
 `cargo test <file>::`. `BENCHMARKS.md` holds the Criterion numbers for the hot paths
