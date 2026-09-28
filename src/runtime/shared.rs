@@ -85,17 +85,29 @@ pub struct Samples {
     pub count: u64,
 }
 
+/// The first cache line is the dispatch path's: the slot table and the plan it validates
+/// against, then the profiler switch every bound call tests. The interrupt hook's fields share
+/// the next line. `repr(C)` keeps that order and the alignment starts the block on a line.
+#[repr(C, align(64))]
 pub(crate) struct Shared {
-    limits: Cell<Limits>,
+    /// The dispatch path's table, one row per plan slot: the packed `(tag, kind, atom)` key
+    /// Luau's cached slot must match and the member to run. One indexed load validates the
+    /// cache and finds the member.
+    slot_table: std::cell::OnceCell<Box<[SlotRow]>>,
+    /// The runtime-resolved direct dispatch plan.
+    direct_plan: crate::direct::plan::DirectPlanSlot,
     profiler: bool,
-    active_calls: RefCell<Vec<ActiveCall>>,
+    // ---- the interrupt hook and the call scopes ----
+    limits: Cell<Limits>,
     deadline: Cell<Option<Deadline>>,
     safepoints_until_poll: Cell<u32>,
-    stats: RefCell<CallStats>,
-    sampled_context: Cell<Option<u64>>,
     safepoints_until_sample: Cell<u32>,
-    samples: RefCell<Samples>,
+    sampled_context: Cell<Option<u64>>,
     stats_frame: Cell<u64>,
+    active_calls: RefCell<Vec<ActiveCall>>,
+    stats: RefCell<CallStats>,
+    samples: RefCell<Samples>,
+    // ---- registration-time state ----
     /// The VM lifetime token: `Value`s hold a `Weak` to it and go inert when it ends.
     lifetime: RefCell<Option<Rc<()>>>,
     /// This VM's atom catalogue, read by `useratom`.
@@ -107,8 +119,6 @@ pub(crate) struct Shared {
     hooks: crate::debug::HookSlot,
     /// The embedder half of cross-heap GC marking.
     embedder_gc: crate::memory::EmbedderGcSlot,
-    /// The runtime-resolved direct dispatch plan.
-    direct_plan: crate::direct::plan::DirectPlanSlot,
     /// The host's require navigator.
     require_navigator: crate::require::NavigatorSlot,
     /// Registered untagged userdata metatables by Rust type: the identity the receiver check
@@ -117,18 +127,16 @@ pub(crate) struct Shared {
     /// The extension planner's direct members by plan slot, collected during registration and
     /// published once into `slot_table`.
     direct_entries: RefCell<Vec<Option<crate::bind::MemberEntry>>>,
-    /// The dispatch path's table, one row per plan slot: the packed `(tag, kind, atom)` key
-    /// Luau's cached slot must match and the member to run. One indexed load validates the
-    /// cache and finds the member.
-    slot_table: std::cell::OnceCell<Box<[SlotRow]>>,
     /// The bytecode type the compiler gives each Rust type named in this runtime's userdata
     /// type list (`TAGGED_USERDATA_BASE + index`), for native lowering hooks.
     #[cfg(feature = "jit")]
     userdata_types: RefCell<HashMap<TypeId, u8, BuildHasherDefault<TypeIdHasher>>>,
 }
 
-/// One row of the dispatch path's slot table.
+/// One row of the dispatch path's slot table. Padded to 32 bytes so a row never straddles a
+/// cache line: a hit reads one line, and a type's neighbouring members share it.
 #[derive(Clone, Copy)]
+#[repr(C, align(32))]
 pub(crate) struct SlotRow {
     pub(crate) key: u64,
     pub(crate) entry: Option<crate::bind::MemberEntry>,
