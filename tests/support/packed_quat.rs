@@ -120,7 +120,9 @@ pub struct PackedRotation(pub u64);
 impl PackedRotation {
     pub fn encode(q: Quat) -> PackedRotation {
         // Skip the normalisation when the input is already unit (the common case); the sqrt and
-        // four divisions were a third of the encode cost.
+        // four divisions were a third of the encode cost. A branch-free four-lane variant and an
+        // f32 variant were both measured slower (the latter through a software fma), so this
+        // stays scalar: the floor is the three float-to-integer conversions.
         let norm2 = q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w;
         let q = if (norm2 - 1.0).abs() < 1e-9 { q } else { q.normalize() };
         let c = [q.x, q.y, q.z, q.w];

@@ -13,7 +13,9 @@ mod support;
 
 use std::time::Duration;
 
-use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_main};
+use std::hint::black_box;
+
+use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use l3i::Runtime;
 use l3i::extension::{RuntimePlan, RuntimePolicy};
 use support::{PackedRotation, QuatExtension, random_quat};
