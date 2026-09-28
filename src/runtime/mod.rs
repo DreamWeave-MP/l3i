@@ -155,8 +155,8 @@ impl RuntimeBuilder {
                     state,
                     crate::memory::cage_callback,
                     (&**cage as *const Box<dyn crate::memory::BufferCage>).cast_mut().cast(),
-                )
-            };
+                );
+            }
         }
         let shared = Box::new(Shared::new(self.limits, self.profiler));
         // SAFETY: fresh state; the main thread's record lives until `Drop` frees it after

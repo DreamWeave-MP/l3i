@@ -145,8 +145,8 @@ impl Default for CompileOptions {
     }
 }
 
-fn c_ptr(value: &Option<CString>) -> *const c_char {
-    value.as_ref().map_or(ptr::null(), |s| s.as_ptr())
+fn c_ptr(value: Option<&CString>) -> *const c_char {
+    value.map_or(ptr::null(), |s| s.as_ptr())
 }
 
 /// NUL-terminated array of C strings, or null when empty (Luau treats null as "none").
@@ -185,9 +185,9 @@ pub(crate) fn compile_raw(source: &str, options: &CompileOptions) -> Result<Vec<
         debugLevel: c_int::from(options.debug_level),
         typeInfoLevel: c_int::from(options.type_info_level),
         coverageLevel: c_int::from(options.coverage_level),
-        vectorLib: c_ptr(&options.vector_lib),
-        vectorCtor: c_ptr(&options.vector_ctor),
-        vectorType: c_ptr(&options.vector_type),
+        vectorLib: c_ptr(options.vector_lib.as_ref()),
+        vectorCtor: c_ptr(options.vector_ctor.as_ref()),
+        vectorType: c_ptr(options.vector_type.as_ref()),
         vectorPrecision: 0,
         mutableGlobals: c_array(&options.mutable_globals, &mut mutable_globals),
         userdataTypes: c_array(&options.userdata_types, &mut userdata_types),
@@ -206,7 +206,7 @@ pub(crate) fn compile_raw(source: &str, options: &CompileOptions) -> Result<Vec<
     // SAFETY: every pointer in `raw` outlives this call (the CStrings and the pointer arrays
     // are locals of this function). luau_compile never raises; it reports failure in-band.
     if with_members {
-        ACTIVE_MEMBERS.with(|active| *active.borrow_mut() = options.library_members.clone());
+        ACTIVE_MEMBERS.with(|active| active.borrow_mut().clone_from(&options.library_members));
     }
     let bytecode = unsafe { ffi::luau_compile(source.as_ptr().cast(), source.len(), &mut raw, &mut size) };
     if with_members {

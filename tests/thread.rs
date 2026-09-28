@@ -2,6 +2,7 @@
 
 use l3i::Runtime;
 use l3i::bind::{Break, Yield};
+use l3i::source::CompileOptions;
 use l3i::thread::{CoroutineStatus, Resume, ThreadStatus};
 use l3i::value::Value;
 
@@ -104,7 +105,7 @@ fn thread_data_and_sandboxed_globals() {
                     frame,
                     "=sandboxed",
                     "shared_value = 2 new_value = 3 return shared_value",
-                    &Default::default(),
+                    &CompileOptions::default(),
                 )?;
                 l3i::value::Function::from_value(Value::store(chunk)?)
             })

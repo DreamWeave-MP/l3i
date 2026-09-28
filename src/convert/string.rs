@@ -83,6 +83,8 @@ fn push_bytes<'s, S: Scope>(scope: &'s S, bytes: &[u8]) -> Result<ValueView<'s>>
     Ok(scope.top_value())
 }
 
+// Keeps the `push_only` shape the Push impls forward to.
+#[allow(clippy::unnecessary_wraps)]
 fn push_bytes_only<S: Scope>(scope: &S, bytes: &[u8]) -> Result<()> {
     // SAFETY: lua_pushlstring copies `bytes.len()` bytes; an empty slice's pointer is not read.
     unsafe { ffi::lua_pushlstring(scope.state(), bytes.as_ptr().cast(), bytes.len()) };

@@ -119,6 +119,7 @@ fn for_each_and_nested_lookups_do_not_corrupt_iteration() {
         })
         .unwrap();
     assert_eq!(frame.len(), before);
+    #[allow(clippy::redundant_closure_for_method_calls)] // a method path cannot generalise over the view lifetime
     let error = table.with_field(&frame, "one", |value| value.read::<String>()).unwrap_err();
     assert!(error.to_string().ends_with("expected string, got number"));
     assert_eq!(frame.len(), before);

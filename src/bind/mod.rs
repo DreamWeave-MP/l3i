@@ -198,12 +198,12 @@ unsafe fn with_context<F: Binding<M>, M>(
 
 /// The C closure every function binding runs through.
 unsafe extern "C-unwind" fn thunk<F: Binding<M>, M>(state: *mut ffi::lua_State) -> c_int {
-    unsafe { with_context::<F, M>(state, |callable, call, name| callable.invoke(call, name)) }
+    unsafe { with_context::<F, M>(state, F::invoke) }
 }
 
 /// The C closure every method binding runs through.
 unsafe extern "C-unwind" fn method_thunk<F: Binding<M>, M>(state: *mut ffi::lua_State) -> c_int {
-    unsafe { with_context::<F, M>(state, |callable, call, name| callable.invoke_method(call, name)) }
+    unsafe { with_context::<F, M>(state, F::invoke_method) }
 }
 
 /// A direct entry to a bound method: the generated `__index`/`__namecall`/`__newindex`

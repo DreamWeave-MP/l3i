@@ -137,8 +137,8 @@ pub(crate) const fn const_str_eq(a: &str, b: &str) -> bool {
 /// The Luau callback: no Lua API, no panics; one hash lookup in the calling VM's catalogue.
 unsafe extern "C" fn user_atom(state: *mut ffi::lua_State, text: *const c_char, length: usize) -> i16 {
     // SAFETY: Luau passes a live thread and the string's bytes and length.
-    let catalogue =
-        unsafe { crate::runtime::shared::shared_of(state).as_ref() }.and_then(|shared| shared.atom_catalogue());
+    let catalogue = unsafe { crate::runtime::shared::shared_of(state).as_ref() }
+        .and_then(crate::runtime::shared::Shared::atom_catalogue);
     let Some(catalogue) = catalogue else { return UNKNOWN_ATOM };
     let bytes = unsafe { std::slice::from_raw_parts(text.cast::<u8>(), length) };
     catalogue.atom_of_bytes(bytes).unwrap_or(UNKNOWN_ATOM)

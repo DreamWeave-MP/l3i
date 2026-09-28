@@ -382,8 +382,9 @@ pub(crate) unsafe fn attach_thread_record(state: *mut ffi::lua_State) {
     unsafe { ffi::lua_setthreaddata(state, record.cast()) };
 }
 
-/// Frees `state`'s record, if any. Called when Luau destroys the thread and for the main thread
-/// after `lua_close`.
+/// Frees `state`'s record, if any. Called when Luau destroys a coroutine thread, and for the
+/// main thread by `Runtime::drop` just before `lua_close` (the record must not outlive the
+/// stacks that reference it, and `lua_close` must not run the callback on a freed record).
 ///
 /// # Safety
 /// `state` is the thread being destroyed; nothing uses its record afterwards.
@@ -531,6 +532,8 @@ struct LuaFrameInfo {
 ///
 /// # Safety
 /// `state` is live; called from the host or from a safepoint of `state`.
+// Outer None: no frame at `level`; inner None: the frame exists but has no source info.
+#[allow(clippy::option_option)]
 unsafe fn lua_frame_info(state: *mut ffi::lua_State, level: c_int, what: &CStr) -> Option<Option<LuaFrameInfo>> {
     let mut ar = std::mem::MaybeUninit::<ffi::lua_Debug>::zeroed();
     // SAFETY: lua_getinfo fills the requested fields; pointers reference ar.ssbuf or interned

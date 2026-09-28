@@ -139,7 +139,7 @@ fn the_sampler_attributes_safepoints_to_the_sampled_context_only() {
     assert!(samples.functions.contains_key("load_function:1"), "{:?}", samples.functions.keys());
     assert_eq!(samples.functions["load_function:1"].function, "inner");
     assert!(samples.functions.contains_key("load_function:6"));
-    assert!(samples.lines.values().map(|l| l.samples).sum::<u64>() == samples.count);
+    assert_eq!(samples.lines.values().map(|l| l.samples).sum::<u64>(), samples.count);
     runtime.set_sampled_context(None);
     assert_eq!(runtime.samples(), l3i::runtime::Samples::default());
 }

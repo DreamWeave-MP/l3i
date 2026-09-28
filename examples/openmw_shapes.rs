@@ -8,6 +8,28 @@
 //! `LuauModule`, a sandboxed script instance, and a bound function crossing a coroutine
 //! boundary (called from inside `coroutine.wrap`, raising through it).
 
+// The shared CI runs `-W clippy::pedantic -D warnings`; tests compare floats exactly on purpose
+// and read like the C++ contracts they port.
+#![allow(
+    clippy::float_cmp,
+    clippy::doc_markdown,
+    clippy::must_use_candidate,
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss,
+    clippy::cast_lossless,
+    clippy::borrow_as_ptr,
+    clippy::ref_as_ptr,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal,
+    clippy::items_after_statements,
+    clippy::needless_pass_by_value
+)]
+
 use std::cell::{Cell, RefCell};
 use std::ptr::NonNull;
 use std::rc::Rc;
@@ -154,7 +176,7 @@ fn main() {
 
     runtime
         .exec(
-            r#"
+            r"
             local v = shapes.vec3(3, 4, 0)
             assert(v.x == 3 and v.y == 4 and v.z == 0)          -- x is a direct field, y/z generated getters
             v.y = 0                                              -- generated setter
@@ -189,7 +211,7 @@ fn main() {
             local failing = coroutine.wrap(function() return shapes.vec3('x', 0, 0) end)
             ok, err = pcall(failing)
             assert(not ok and err:find('bad argument #1'), err)
-            "#,
+            ",
         )
         .unwrap();
     assert_eq!(world.ticks.get(), 2, "the engine object saw both ticks");

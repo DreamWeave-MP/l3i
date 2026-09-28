@@ -404,7 +404,7 @@ impl NativeCodeGen {
         let compile_context = hooks::CompileContext { chain: &self.hooks, shared };
         let table = HookChain::table(&compile_context);
         let options = ffi::db_compilation_options {
-            flags: if self.mode == NativeCodeMode::Annotated { 1 } else { 0 },
+            flags: c_uint::from(self.mode == NativeCodeMode::Annotated),
             record_counters: self.record_counters,
             nop_padding: self.nop_padding,
             userdata_types: self.userdata_type_pointers.as_ptr(),
@@ -558,10 +558,10 @@ pub fn module_id(bytecode: &[u8]) -> ModuleId {
         let mut k2 = u64::from_le_bytes(bytecode[at + 8..at + 16].try_into().unwrap());
         k1 = k1.wrapping_mul(C1).rotate_left(31).wrapping_mul(C2);
         h1 ^= k1;
-        h1 = h1.rotate_left(27).wrapping_add(h2).wrapping_mul(5).wrapping_add(0x52dce729);
+        h1 = h1.rotate_left(27).wrapping_add(h2).wrapping_mul(5).wrapping_add(0x52dc_e729);
         k2 = k2.wrapping_mul(C2).rotate_left(33).wrapping_mul(C1);
         h2 ^= k2;
-        h2 = h2.rotate_left(31).wrapping_add(h1).wrapping_mul(5).wrapping_add(0x38495ab5);
+        h2 = h2.rotate_left(31).wrapping_add(h1).wrapping_mul(5).wrapping_add(0x3849_5ab5);
     }
     let tail = &bytecode[blocks * 16..];
     let (mut k1, mut k2) = (0u64, 0u64);

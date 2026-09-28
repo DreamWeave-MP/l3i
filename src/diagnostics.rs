@@ -127,7 +127,10 @@ pub fn escape_diagnostic(text: &str) -> String {
             '\n' => out.push_str("\\n"),
             '\r' => out.push_str("\\r"),
             '\t' => out.push_str("\\t"),
-            c if (c as u32) < 0x20 || c as u32 == 0x7F => out.push_str(&format!("\\x{:02x}", c as u32)),
+            c if (c as u32) < 0x20 || c as u32 == 0x7F => {
+                use std::fmt::Write;
+                write!(out, "\\x{:02x}", c as u32).expect("writing to a String cannot fail");
+            }
             c => out.push(c),
         }
     }

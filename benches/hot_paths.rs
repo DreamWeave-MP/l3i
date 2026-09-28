@@ -3,6 +3,29 @@
 //! Luau→Rust paths run a Lua loop of `CALLS` iterations per sample so the per-call cost is the
 //! reported time divided by `CALLS` (Criterion's throughput shows it as elements/second).
 
+// The shared CI runs `-W clippy::pedantic -D warnings`; tests compare floats exactly on purpose
+// and read like the C++ contracts they port.
+#![allow(
+    clippy::float_cmp,
+    clippy::doc_markdown,
+    clippy::must_use_candidate,
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss,
+    clippy::cast_lossless,
+    clippy::borrow_as_ptr,
+    clippy::ref_as_ptr,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unreadable_literal,
+    clippy::items_after_statements,
+    clippy::needless_pass_by_value,
+    clippy::semicolon_if_nothing_returned
+)]
+
 use std::cell::Cell;
 use std::ffi::c_int;
 use std::time::Duration;

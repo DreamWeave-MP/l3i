@@ -37,7 +37,7 @@ fn luau_sandbox_freezes_globals_and_threads_get_writable_proxies() {
     let chunk: Function = thread
         .with_stack(&runtime.stack(), |stack| {
             stack.with_frame(|frame| {
-                let chunk = runtime.load(frame, "=t", "shared = 5 return shared", &Default::default())?;
+                let chunk = runtime.load(frame, "=t", "shared = 5 return shared", &CompileOptions::default())?;
                 Function::from_value(Value::store(chunk)?)
             })
         })
@@ -149,8 +149,13 @@ fn chunks_load_into_a_given_environment() {
     let result: i32 = runtime
         .stack()
         .with_frame(|frame| {
-            let chunk =
-                runtime.load_with_env(frame, "=env", "answer = seed + 1 return answer", &Default::default(), &env)?;
+            let chunk = runtime.load_with_env(
+                frame,
+                "=env",
+                "answer = seed + 1 return answer",
+                &CompileOptions::default(),
+                &env,
+            )?;
             chunk.as_function()?.invoke::<i32, ()>(frame, ())
         })
         .unwrap();

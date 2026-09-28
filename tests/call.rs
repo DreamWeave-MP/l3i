@@ -2,6 +2,7 @@
 
 use l3i::call::CallResults;
 use l3i::convert::Integer;
+use l3i::source::CompileOptions;
 use l3i::stack::Type;
 use l3i::value::{Function, Value};
 use l3i::{Error, Runtime};
@@ -168,7 +169,7 @@ fn compiled_source_can_be_invoked_through_a_view() {
     let runtime = Runtime::new().unwrap();
     let stack = runtime.stack();
     let frame = stack.frame();
-    let chunk = runtime.load(&frame, "=value-test", "return 6 * 7", &Default::default()).unwrap();
+    let chunk = runtime.load(&frame, "=value-test", "return 6 * 7", &CompileOptions::default()).unwrap();
     assert_eq!(chunk.as_function().unwrap().invoke::<i32, ()>(&frame, ()).unwrap(), 42);
     assert_eq!(<() as CallResults>::COUNT, 0);
     assert!(frame.push_number(1.0).as_function().is_err());

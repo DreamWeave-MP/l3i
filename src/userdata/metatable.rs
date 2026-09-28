@@ -104,6 +104,8 @@ impl<'s> MetatableBuilder<'s> {
     }
 
     /// Called by the owning registration once configuration ends; releases builder pins.
+    // Consumes the builder and keeps the fallible shape registration code expects.
+    #[allow(clippy::unnecessary_wraps, clippy::unused_self)]
     pub(crate) fn finish(self) -> Result<()> {
         Ok(())
     }

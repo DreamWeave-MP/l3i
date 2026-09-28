@@ -13,8 +13,8 @@ use super::metatable::MetatableBuilder;
 use super::{StableRef, Storage, Userdata, assert_userdata_layout, type_key};
 use crate::error::{Error, Result};
 use crate::raw::ffi;
-use crate::runtime::shared::{UntaggedIdentity, shared_of};
 use crate::runtime::Runtime;
+use crate::runtime::shared::{UntaggedIdentity, shared_of};
 use crate::stack::{Frame, Scope, ValueView};
 
 static PRIVATE_REGISTRY_KEY: u8 = 0;
@@ -160,7 +160,9 @@ pub fn register<T: Userdata>(
                 let reference = ffi::lua_ref(state, -1);
                 ffi::lua_pop(state, 1);
                 let pointer = ffi::lua_topointer(state, metatable);
-                runtime.shared().set_untagged_identity(std::any::TypeId::of::<T>(), UntaggedIdentity { pointer, reference });
+                runtime
+                    .shared()
+                    .set_untagged_identity(std::any::TypeId::of::<T>(), UntaggedIdentity { pointer, reference });
                 Ok(())
             })();
             if let Err(error) = configured {

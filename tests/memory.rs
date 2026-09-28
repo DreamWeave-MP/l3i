@@ -56,7 +56,7 @@ fn dumps_write_files() {
     runtime.gc_dump(&heap, Some(&[c"shared", c"scripts"])).unwrap();
     assert!(std::fs::metadata(&memory).unwrap().len() > 0);
     let heap_text = std::fs::read_to_string(&heap).unwrap();
-    assert!(heap_text.contains("objects") || heap_text.contains("{"), "{}", &heap_text[..heap_text.len().min(200)]);
+    assert!(heap_text.contains("objects") || heap_text.contains('{'), "{}", &heap_text[..heap_text.len().min(200)]);
     std::fs::remove_dir_all(&dir).unwrap();
     assert!(runtime.memory_dump(&dir.join("missing").join("x")).is_err());
 }
@@ -198,11 +198,11 @@ impl BufferCage for CountingCage {
                 return std::ptr::null_mut();
             }
             let fresh = alloc(layout(new_size));
-            if !ptr.is_null() {
+            if ptr.is_null() {
+                self.allocations.set(self.allocations.get() + 1);
+            } else {
                 std::ptr::copy_nonoverlapping(ptr.cast::<u8>(), fresh, old_size.min(new_size));
                 dealloc(ptr.cast(), layout(old_size));
-            } else {
-                self.allocations.set(self.allocations.get() + 1);
             }
             fresh.cast()
         }

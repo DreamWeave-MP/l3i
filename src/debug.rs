@@ -450,7 +450,9 @@ unsafe extern "C-unwind" fn on_debug_step(state: *mut ffi::lua_State, ar: *mut f
 
 unsafe extern "C-unwind" fn on_debug_interrupt(state: *mut ffi::lua_State, ar: *mut ffi::lua_Debug) {
     unsafe {
-        debug_event(state, ar, |hooks, stack, info, interrupted| hooks.debug_interrupt(stack, info, interrupted.cast()))
+        debug_event(state, ar, |hooks, stack, info, interrupted| {
+            hooks.debug_interrupt(stack, info, interrupted.cast())
+        });
     }
 }
 
@@ -459,7 +461,7 @@ unsafe extern "C-unwind" fn on_debug_protected_error(state: *mut ffi::lua_State)
         with_hooks(state, |hooks| {
             let stack = Stack::from_raw(state, false);
             hooks.debug_protected_error(&stack);
-        })
+        });
     }
 }
 

@@ -145,7 +145,12 @@ mod tests {
             frame.push_table(0, 0).unwrap();
             frame.push_table(0, 1).unwrap();
             runtime
-                .load(&frame, "=index", "return function() error('from __index', 0) end", &Default::default())
+                .load(
+                    &frame,
+                    "=index",
+                    "return function() error('from __index', 0) end",
+                    &crate::source::CompileOptions::default(),
+                )
                 .unwrap();
             // The chunk only returns a closure; it cannot raise.
             ffi::lua_call(state, 0, 1);

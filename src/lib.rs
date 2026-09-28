@@ -14,6 +14,46 @@
 //! binding's Rust frames to Luau's `pcall`; a Rust panic inside a native call aborts. Host-level
 //! code never sees a Luau raise: operations that can raise run under `lua_pcall` there.
 
+// Pedantic Clippy policy. The shared CI runs `-W clippy::pedantic -D warnings`; the groups
+// below are deliberate in an FFI binder, each for the stated reason. Everything else pedantic
+// flags is fixed or justified at the site.
+#![allow(
+    // Every `Result` is a Luau error or a host logic error; the module docs say which raises.
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    // A binder API is mostly accessors; `#[must_use]` on each would be noise.
+    clippy::must_use_candidate,
+    clippy::return_self_not_must_use,
+    // OpenMW, Luau, and C++ identifiers appear in prose.
+    clippy::doc_markdown,
+    // The hot paths in BENCHMARKS.md were measured with these; see PERF commits.
+    clippy::inline_always,
+    // FFI call sites take `&x as *const T` everywhere.
+    clippy::borrow_as_ptr,
+    clippy::ref_as_ptr,
+    // Luau's C API is `c_int`/`size_t`-shaped; conversions are bounded where it matters.
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss,
+    clippy::cast_lossless,
+    // View and frame lifetimes are spelled out on purpose.
+    clippy::needless_lifetimes,
+    clippy::elidable_lifetime_names,
+    // Argument tuples and pinned values are moved into calls by design.
+    clippy::needless_pass_by_value,
+    // Exact float round-trips are part of the conversion contract (and its tests).
+    clippy::float_cmp,
+    // Inner `ffi` modules mirror C headers with `use super::*`.
+    clippy::wildcard_imports,
+    // Style choices: local callbacks next to their use, explicit match arms per Luau type.
+    clippy::items_after_statements,
+    clippy::single_match_else,
+    clippy::match_same_arms,
+    clippy::similar_names,
+    clippy::struct_excessive_bools
+)]
+
 #[cfg(feature = "analysis")]
 pub mod analysis;
 pub mod bind;

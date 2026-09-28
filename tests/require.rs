@@ -8,6 +8,7 @@ use std::rc::Rc;
 use l3i::Runtime;
 use l3i::bind::Call;
 use l3i::require::{Load, Navigate, RequireNavigator};
+use l3i::source::CompileOptions;
 use l3i::stack::Scope;
 
 /// Modules live at `/`-separated paths; the navigator position is a path stack.
@@ -54,7 +55,7 @@ impl RequireNavigator for Memory {
         self.loads.set(self.loads.get() + 1);
         let source =
             self.modules.get(loadname).ok_or_else(|| l3i::Error::runtime(format!("no module at {loadname}")))?;
-        let bytecode = l3i::source::compile(source, &Default::default())?;
+        let bytecode = l3i::source::compile(source, &CompileOptions::default())?;
         let name = std::ffi::CString::new(chunkname).unwrap();
         let state = call.state();
         let top = call.stack().top();
@@ -92,7 +93,7 @@ fn require_resolves_relative_paths_through_the_navigator_and_caches_results() {
                 frame,
                 "@app/main",
                 "local greet = require('../lib/greet') return greet.four + require('../lib/math').twice(5)",
-                &Default::default(),
+                &CompileOptions::default(),
             )?;
             chunk.as_function()?.invoke::<i32, ()>(frame, ())
         })
@@ -117,8 +118,12 @@ fn require_resolves_relative_paths_through_the_navigator_and_caches_results() {
     runtime
         .stack()
         .with_frame(|frame| {
-            let chunk =
-                runtime.load(frame, "@app/other", "return require('../lib/math').twice(1)", &Default::default())?;
+            let chunk = runtime.load(
+                frame,
+                "@app/other",
+                "return require('../lib/math').twice(1)",
+                &CompileOptions::default(),
+            )?;
             chunk.as_function()?.invoke::<i32, ()>(frame, ())
         })
         .unwrap();
@@ -128,7 +133,7 @@ fn require_resolves_relative_paths_through_the_navigator_and_caches_results() {
         .stack()
         .with_frame(|frame| {
             let chunk =
-                runtime.load(frame, "@app/other", "return require('../lib/greet').four", &Default::default())?;
+                runtime.load(frame, "@app/other", "return require('../lib/greet').four", &CompileOptions::default())?;
             chunk.as_function()?.invoke::<i32, ()>(frame, ())
         })
         .unwrap();
@@ -137,7 +142,7 @@ fn require_resolves_relative_paths_through_the_navigator_and_caches_results() {
     let error = runtime
         .stack()
         .with_frame(|frame| {
-            let chunk = runtime.load(frame, "@app/main", "return require('./nothing')", &Default::default())?;
+            let chunk = runtime.load(frame, "@app/main", "return require('./nothing')", &CompileOptions::default())?;
             chunk.as_function()?.invoke::<i32, ()>(frame, ())
         })
         .unwrap_err()

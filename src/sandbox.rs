@@ -35,7 +35,7 @@ const EXCLUDED_GLOBALS: [&str; 7] = ["_G", "getfenv", "setfenv", "newproxy", "ge
 /// The prelude: the generators every instance is built from. Runs once in the real globals with
 /// the log sink, the raw metamethod reader, and the native `pairs`/`ipairs` as arguments;
 /// leaks no globals.
-const PRELUDE: &str = r#"
+const PRELUDE: &str = r"
 local writeToLog, rawMetamethod, nativePairs, nativeIpairs = ...
 local function printToLog(...)
     local t = {}
@@ -74,7 +74,7 @@ local function compatIterator(native, legacyName)
     end
 end
 return printGen, requireGen, getSafeMetatable, compatIterator(nativePairs, '__pairs'), compatIterator(nativeIpairs, '__ipairs')
-"#;
+";
 
 /// Host choices for a sandbox.
 #[derive(Clone, Debug)]

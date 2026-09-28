@@ -233,6 +233,8 @@ impl<'v> TableView<'v> {
 
     /// `t[key]` converted to `T` inside a nested frame.
     pub fn get_as<T: for<'a> FromView<'a>>(&self, frame: &Frame<'_>, key: &str) -> Result<T> {
+        // A method path cannot generalise over the view lifetime; the closure is the HRTB.
+        #[allow(clippy::redundant_closure_for_method_calls)]
         self.with_field(frame, key, |value| value.read::<T>())
     }
 
