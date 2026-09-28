@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- 2ecb9b0 - PERF: Require clang with cross-language thin LTO and lld for every build
+- fc40731 - PERF: Compile the Luau sources in parallel
+- cea40f2 - PERF: Cut the typed binder's per-call cost: bind-time debug names, compile-time argument counts, single-call scalar, vector, and tag reads, one-call native entry, and inlined hot paths
+- 3c517d9 - DOCS: Regenerate the changelog
 - 1b525fa - DOCS: Describe runtime dispatch plans, the new modules, and the C API coverage in the README
 - a182b43 - PERF: Benchmark runtime plan dispatch at several plan sizes and refresh the numbers
 - 71ad563 - FIX: Free the main thread record before lua_close, own the VM through every builder error path, make plan cache hits O(1) with density caps, and report parser failures
