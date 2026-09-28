@@ -180,10 +180,12 @@ rotation compressed smallest-three into one Luau integer (18 bits per component,
 identity, 1.6e-5 rad worst case), with `axisAngle`, `fromXYZW`/`toXYZW`, `mul`, `inverse`,
 `slerp`, `rotate`, `angleTo`, the compiler-folded constant `IDENTITY`, `quat::AnimationKey`
 (kind 2: the rotation plus four opaque flag bits, `key`/`keyRotation`/`keyFlags`), and, under `jit`,
-`quat.math()`: a tagged receiver whose `rotate(q, v)` and `mul(a, b)` lower to IR when the
-script annotates it (`local Q: dream_quat_Math = quat.math()`), at 21 ns and 45 ns per call in
-native code against 46 ns and 111 ns for an f32 quaternion userdata and 99 ns and 150 ns
-through the binder. The packed form is storage and transport; long-lived rotation state stays
+`quat.math()`: a tagged receiver whose `rotate`, `mul`, `key`, `keyRotation`, and `keyFlags`
+lower to IR when the script annotates it (`local Q: dream_quat_Math = quat.math()`): rotate and
+mul at 21 ns and 45 ns per call in native code against 46 ns and 111 ns for an f32 quaternion
+userdata and 99 ns and 150 ns through the binder; key plus keyRotation at 5 ns against 220 ns.
+Only single-result, fixed-arity call sites lower, so bind a nested call's result to a local
+first. The packed form is storage and transport; long-lived rotation state stays
 `quat::Quat` on the host, because re-encoding every blend step accumulates quantisation error.
 
 ## Networking

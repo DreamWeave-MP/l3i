@@ -27,13 +27,15 @@
 //! quat.mul(q, k)                                 -- error: expected a packed Quaternion
 //! ```
 //!
-//! With the `jit` feature, `quat.math()` returns a tagged receiver whose `rotate(q, v)` and
-//! `mul(a, b)` are lowered to IR by [`lowering::Lowering`] when the receiver's type is known to
-//! the compiler (`local Q: dream_quat_Math = quat.math()` in a `--!native` script): no C call, the
-//! integer is unpacked with shifts and masks, the arithmetic runs on doubles, and the result is
-//! stored as a vector or a fresh packed integer. Measured per call inside native code: rotate
+//! With the `jit` feature, `quat.math()` returns a tagged receiver whose `rotate(q, v)`,
+//! `mul(a, b)`, `key(q, flags)`, `keyRotation(k)`, and `keyFlags(k)` are lowered to IR by
+//! [`lowering::Lowering`] when the receiver's type is known to the compiler
+//! (`local Q: dream_quat_Math = quat.math()` in a `--!native` script): no C call, the integer is
+//! unpacked with shifts and masks, the arithmetic runs on doubles, and the result is stored as a
+//! vector, a number, or a fresh packed integer. Measured per call inside native code: rotate
 //! 21 ns and mul 45 ns, against 99 ns and 150 ns through the binder and 46 ns and 111 ns for an
-//! f32 quaternion userdata (the latter allocating).
+//! f32 quaternion userdata (the latter allocating); `key` plus `keyRotation` together take 5 ns
+//! against 220 ns through the binder.
 
 use crate::convert::Vector3;
 use crate::error::Result;
@@ -285,6 +287,9 @@ impl Extension for QuatExtension {
             receiver.tag(crate::extension::TagPolicy::Required).doc("Natively lowered rotation operations.");
             receiver.method("rotate").signature("(self, q: number, v: vector): vector");
             receiver.method("mul").signature("(self, a: number, b: number): number");
+            receiver.method("key").signature("(self, q: number, flags: number): number");
+            receiver.method("keyRotation").signature("(self, k: number): number");
+            receiver.method("keyFlags").signature("(self, k: number): number");
             d.native_hooks(lowering::Lowering);
         }
         Ok(())
@@ -294,7 +299,10 @@ impl Extension for QuatExtension {
         #[cfg(feature = "jit")]
         cx.userdata::<lowering::Math>("dream.quat.Math")?
             .method("rotate", |_: &lowering::Math, q: Packed<Quaternion>, v: Vector3| lowering::rotate(q, v))?
-            .method("mul", |_: &lowering::Math, a: Packed<Quaternion>, b: Packed<Quaternion>| lowering::mul(a, b))?;
+            .method("mul", |_: &lowering::Math, a: Packed<Quaternion>, b: Packed<Quaternion>| lowering::mul(a, b))?
+            .method("key", |_: &lowering::Math, q: Packed<Quaternion>, flags: i64| AnimationKey::pack(q.0.0, flags as u8))?
+            .method("keyRotation", |_: &lowering::Math, k: Packed<AnimationKey>| Quaternion::pack(k.0.rotation))?
+            .method("keyFlags", |_: &lowering::Math, k: Packed<AnimationKey>| i64::from(k.0.flags))?;
         let mut module = cx.module("@dream/quat")?;
         module
             .constant("IDENTITY", CompileConstant::Integer(Quaternion::pack(Quat::IDENTITY).bits()))?
@@ -318,24 +326,28 @@ impl Extension for QuatExtension {
 
 /// Native lowering of the packed operations (`jit`).
 ///
-/// [`Math`] is a payload-free tagged receiver: `Q:rotate(q, v)` and `Q:mul(a, b)` are ordinary
-/// bound methods on the interpreter path and lowered through
+/// [`Math`] is a payload-free tagged receiver: `Q:rotate(q, v)`, `Q:mul(a, b)`, `Q:key(q, flags)`,
+/// `Q:keyRotation(k)`, and `Q:keyFlags(k)` are ordinary bound methods on the interpreter path
+/// and lowered through
 /// [`NativeCodeHooks::userdata_namecall`] when the compiler knows the receiver's type. The
 /// lowering checks the receiver's tag, the operands' integer tags and packed kinds (a mismatch
 /// exits to the interpreter, whose C method raises the type error), and writes a vector or a
 /// packed integer straight into the result register. It matches the interpreter path to the
-/// `acos` noise floor.
+/// `acos` noise floor. Only single-result, fixed-arity call sites lower: `return Q:mul(a, b)`
+/// and `Q:keyRotation(Q:key(q, 3))` (a call nested as the last argument is a multiple-results
+/// call, which gives the outer call a dynamic argument count) run through the bound method
+/// instead. Bind the inner result to a local first.
 #[cfg(feature = "jit")]
 #[allow(clippy::many_single_char_names)]
 pub mod lowering {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use super::{COMPONENT_BITS, COMPONENT_MAX, Quaternion, RANGE};
+    use super::{AnimationKey, COMPONENT_BITS, COMPONENT_MAX, Quaternion, RANGE};
     use crate::convert::Vector3;
     use crate::native_code::hooks::{NamecallSite, NativeCodeHooks, NativeContext};
     use crate::native_code::ir::{IrBuilder, IrCmd, IrCondition, IrOp, bytecode_type};
     use crate::packed::{Packed, PackedScalar};
-    use crate::raw::ffi::{LUA_TINTEGER, LUA_TVECTOR};
+    use crate::raw::ffi::{LUA_TINTEGER, LUA_TNUMBER, LUA_TVECTOR};
     use crate::userdata::Userdata;
 
     /// The receiver `quat.math()` returns (`dream.quat.Math`, class `dream_quat_Math` in annotations).
@@ -370,7 +382,10 @@ pub mod lowering {
     pub struct Lowering;
 
     const KIND: i64 = <Quaternion as PackedScalar>::KIND as i64;
+    const KEY_KIND: i64 = <AnimationKey as PackedScalar>::KIND as i64;
     const LANE_MASK: i64 = (1 << COMPONENT_BITS) - 1;
+    const PAYLOAD_MASK: i64 = crate::packed::PAYLOAD_MASK as i64;
+    const FLAG_SHIFT: i64 = crate::packed::PAYLOAD_BITS as i64;
 
     /// A decoded rotation as four double IR values.
     struct Decoded {
@@ -398,18 +413,31 @@ pub mod lowering {
         build.inst(IrCmd::SELECT_NUM, &[else_value, then_value, l, which])
     }
 
-    /// Checks the register holds a packed `Quaternion` and unpacks it: three 18-bit lanes and
-    /// the omitted component rebuilt from the unit norm.
-    fn decode(build: &mut IrBuilder<'_>, reg: IrOp, exit: IrOp) -> Decoded {
+    /// Checks the register holds an integer of packed kind `expected_kind` and loads its bits;
+    /// anything else exits to the interpreter.
+    fn checked_bits(build: &mut IrBuilder<'_>, reg: IrOp, expected_kind: i64, exit: IrOp) -> IrOp {
         build.load_and_check_tag(reg, LUA_TINTEGER as u8, exit);
         let bits = build.inst(IrCmd::LOAD_INT64, &[reg]);
         let sixty = i64c(build, 60);
         let fifteen = i64c(build, 15);
         let kind = op(build, IrCmd::BITRSHIFT_INT64, bits, sixty);
         let kind = op(build, IrCmd::BITAND_INT64, kind, fifteen);
-        let expected = i64c(build, KIND);
+        let expected = i64c(build, expected_kind);
         let equal = build.cond(IrCondition::Equal);
         build.inst(IrCmd::CHECK_CMP_INT64, &[kind, expected, equal, exit]);
+        bits
+    }
+
+    fn store_integer(build: &mut IrBuilder<'_>, result: IrOp, bits: IrOp) {
+        build.inst(IrCmd::STORE_INT64, &[result, bits]);
+        let integer_tag = build.const_tag(LUA_TINTEGER as u8);
+        build.inst(IrCmd::STORE_TAG, &[result, integer_tag]);
+    }
+
+    /// Checks the register holds a packed `Quaternion` and unpacks it: three 18-bit lanes and
+    /// the omitted component rebuilt from the unit norm.
+    fn decode(build: &mut IrBuilder<'_>, reg: IrOp, exit: IrOp) -> Decoded {
+        let bits = checked_bits(build, reg, KIND, exit);
 
         let scale = num(build, 2.0 * RANGE / COMPONENT_MAX);
         let offset = num(build, -RANGE);
@@ -554,7 +582,8 @@ pub mod lowering {
             }
             match member {
                 "rotate" => bytecode_type::VECTOR,
-                "mul" => bytecode_type::INTEGER,
+                "mul" | "key" | "keyRotation" => bytecode_type::INTEGER,
+                "keyFlags" => bytecode_type::NUMBER,
                 _ => bytecode_type::ANY,
             }
         }
@@ -618,9 +647,43 @@ pub mod lowering {
                     let b = decode(build, second, exit);
                     let product = product(build, &a, &b);
                     let bits = encode(build, &product);
-                    build.inst(IrCmd::STORE_INT64, &[result, bits]);
-                    let integer_tag = build.const_tag(LUA_TINTEGER as u8);
-                    build.inst(IrCmd::STORE_TAG, &[result, integer_tag]);
+                    store_integer(build, result, bits);
+                }
+                ("key", 3) => {
+                    // The rotation payload with the low four bits of `flags` and kind 2.
+                    let q = checked_bits(build, first, KIND, exit);
+                    build.load_and_check_tag(second, LUA_TNUMBER as u8, exit);
+                    let flags = build.inst(IrCmd::LOAD_DOUBLE, &[second]);
+                    let flags = build.inst(IrCmd::NUM_TO_INT64, &[flags]);
+                    let fifteen = i64c(build, 15);
+                    let flags = op(build, IrCmd::BITAND_INT64, flags, fifteen);
+                    let shift = i64c(build, FLAG_SHIFT);
+                    let flags = op(build, IrCmd::BITLSHIFT_INT64, flags, shift);
+                    let payload_mask = i64c(build, PAYLOAD_MASK);
+                    let payload = op(build, IrCmd::BITAND_INT64, q, payload_mask);
+                    let bits = op(build, IrCmd::BITOR_INT64, payload, flags);
+                    let kind = i64c(build, KEY_KIND << 60);
+                    let bits = op(build, IrCmd::BITOR_INT64, bits, kind);
+                    store_integer(build, result, bits);
+                }
+                ("keyRotation", 2) => {
+                    let k = checked_bits(build, first, KEY_KIND, exit);
+                    let payload_mask = i64c(build, PAYLOAD_MASK);
+                    let payload = op(build, IrCmd::BITAND_INT64, k, payload_mask);
+                    let kind = i64c(build, KIND << 60);
+                    let bits = op(build, IrCmd::BITOR_INT64, payload, kind);
+                    store_integer(build, result, bits);
+                }
+                ("keyFlags", 2) => {
+                    let k = checked_bits(build, first, KEY_KIND, exit);
+                    let shift = i64c(build, FLAG_SHIFT);
+                    let flags = op(build, IrCmd::BITRSHIFT_INT64, k, shift);
+                    let fifteen = i64c(build, 15);
+                    let flags = op(build, IrCmd::BITAND_INT64, flags, fifteen);
+                    let flags = build.inst(IrCmd::INT64_TO_NUM, &[flags]);
+                    build.inst(IrCmd::STORE_DOUBLE, &[result, flags]);
+                    let number_tag = build.const_tag(LUA_TNUMBER as u8);
+                    build.inst(IrCmd::STORE_TAG, &[result, number_tag]);
                 }
                 _ => return false,
             }

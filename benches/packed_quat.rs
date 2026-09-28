@@ -133,6 +133,10 @@ fn lowered(c: &mut Criterion) {
         ("lowered Q:rotate (native)", "w = Q:rotate(a, w)"),
         ("binder quat.rotate (native)", "w = quat.rotate(a, w)"),
         ("userdata rotate (native)", "w = ua:rotate(w)"),
+        // Two statements: a call nested as the last argument is a multiple-results call, and
+        // the outer call then has a dynamic argument count, so neither site would be lowered.
+        ("lowered Q:key + Q:keyRotation (native)", "local k = Q:key(s, 3) s = Q:keyRotation(k)"),
+        ("binder quat.key + quat.keyRotation (native)", "local k = quat.key(s, 3) s = quat.keyRotation(k)"),
     ];
     let mut group = c.benchmark_group("packed_quat_lowered");
     group.throughput(Throughput::Elements(CALLS));

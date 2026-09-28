@@ -105,6 +105,11 @@ fn packed_quaternion_operations_lower_to_native_code() {
                  local m1 = Q:mul(x, b)\n\
                  local m2 = quat.mul(x, b)\n\
                  worst = math.max(worst, quat.angleTo(m1, m2))\n\
+                 local k1 = Q:key(x, i % 16)\n\
+                 local k2 = quat.key(x, i % 16)\n\
+                 assert(k1 == k2, 'lowered key differs from the binder')\n\
+                 assert(Q:keyFlags(k1) == i % 16, 'lowered keyFlags')\n\
+                 assert(Q:keyRotation(k1) == quat.keyRotation(k2), 'lowered keyRotation')\n\
              end\n\
              local key = quat.key(a, 3)\n\
              -- Single-result calls so the hook lowers these sites too; the kind check then\n\
@@ -113,12 +118,14 @@ fn packed_quaternion_operations_lower_to_native_code() {
              assert(not ok and string.find(err, 'Quaternion'), err)\n\
              local ok2 = pcall(function() local r = Q:rotate(42i, v) return r end)\n\
              assert(not ok2)\n\
+             local ok3, err3 = pcall(function() local r = Q:keyRotation(a) return r end)\n\
+             assert(not ok3 and string.find(err3, 'AnimationKey'), err3)\n\
              return worst",
         )
         .unwrap();
     let native = template.native_code().expect("compiled");
     assert_eq!(native.status, NativeCodeStatus::Success, "{native:?}");
-    assert_eq!(lowered_sites() - before, 4, "the hook lowered the two loop sites and the two closures");
+    assert_eq!(lowered_sites() - before, 8, "the hook lowered the five loop sites and the three closures");
     let loader = runtime.load_function("return function(name) error('module ' .. name .. ' not found') end").unwrap();
     let instance = sandbox
         .new_instance(&runtime, &InstanceSpec { name: "q", packages: &[], hidden_data: None, loader: &loader })
@@ -129,6 +136,6 @@ fn packed_quaternion_operations_lower_to_native_code() {
     assert!(worst < 5e-5, "lowered results diverge from the binder: {worst}");
     let stats = generator.execution_stats(&runtime.stack());
     assert!(stats.regular_blocks_executed > 0, "{stats:?}");
-    // Exactly the two wrong-kind calls exit; the 400 lowered calls in the loop run natively.
-    assert_eq!(stats.vm_exits_taken, 2, "only the wrong-kind calls exit to the interpreter: {stats:?}");
+    // Exactly the three wrong-kind calls exit; the 1000 lowered calls in the loop run natively.
+    assert_eq!(stats.vm_exits_taken, 3, "only the wrong-kind calls exit to the interpreter: {stats:?}");
 }
