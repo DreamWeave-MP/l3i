@@ -40,12 +40,23 @@ pub const MAX_ATOM_SPAN: usize = 4096;
 #[derive(Debug)]
 pub struct DirectPlan {
     entries: Vec<PlanEntry>,
-    /// Entry index per slot id, for the O(1) cache-hit check.
+    /// Entry index per slot id.
     by_slot: Vec<Option<u32>>,
+    /// `(tag, kind, atom)` packed per slot id (`NO_KEY` for unused slots): the cache-hit check
+    /// is one load and one compare.
+    slot_keys: Vec<u64>,
     first_atom: Atom,
     atom_count: usize,
     /// `slots[tag * ACCESS_KIND_COUNT * atom_count + kind * atom_count + (atom - first_atom)]`.
     slots: Vec<u16>,
+}
+
+const NO_KEY: u64 = u64::MAX;
+
+/// The packed identity of one `(tag, kind, atom)` triple.
+#[inline(always)]
+fn slot_key(tag: i32, kind: AccessKind, atom: Atom) -> u64 {
+    ((tag as u32 as u64) << 40) | ((kind as u64) << 32) | (atom as u32 as u64)
 }
 
 impl DirectPlan {
@@ -76,9 +87,9 @@ impl DirectPlan {
 
     /// True when `cached` names exactly `(tag, atom, kind)` in this plan: the cache-hit test for
     /// callbacks that know the receiver's tag but not its Rust type (the extension planner's).
-    #[inline]
+    #[inline(always)]
     pub fn cached_slot_matches_tag(&self, cached: u16, tag: i32, atom: Atom, kind: AccessKind) -> bool {
-        self.entry(cached).is_some_and(|entry| i32::from(entry.tag) == tag && entry.atom == atom && entry.kind == kind)
+        self.slot_keys.get(usize::from(cached)).is_some_and(|key| *key == slot_key(tag, kind, atom))
     }
 
     /// True when `cached` names exactly `(T, atom, kind)` in this plan: the cache-hit test, with
@@ -185,7 +196,7 @@ impl<'r> DirectPlanBuilder<'r> {
     /// one plan: the slot numbers are the host's dispatch protocol and Luau's inline caches
     /// hold them, so a plan published to a VM is immutable and a second `finish` is refused.
     pub fn finish(self) -> Result<Rc<DirectPlan>> {
-        if self.runtime.shared().direct_plan().borrow().is_some() {
+        if self.runtime.shared().direct_plan().get().is_some() {
             return Err(Error::logic("This runtime already has a direct plan; plans are published once per VM"));
         }
         let first_atom = self.entries.iter().map(|entry| entry.atom).min().unwrap_or(0);
@@ -199,17 +210,19 @@ impl<'r> DirectPlanBuilder<'r> {
         let mut slots = vec![UNKNOWN_SLOT; usize::from(TAG_LIMIT) * ACCESS_KIND_COUNT * atom_count];
         let max_slot = self.entries.iter().map(|entry| entry.slot).max().unwrap_or(0);
         let mut by_slot = vec![None; usize::from(max_slot) + 1];
+        let mut slot_keys = vec![NO_KEY; usize::from(max_slot) + 1];
         for (index, entry) in self.entries.iter().enumerate() {
             by_slot[usize::from(entry.slot)] = Some(index as u32);
+            slot_keys[usize::from(entry.slot)] = slot_key(i32::from(entry.tag), entry.kind, entry.atom);
         }
-        let mut plan = DirectPlan { entries: self.entries, by_slot, first_atom, atom_count, slots: Vec::new() };
+        let mut plan = DirectPlan { entries: self.entries, by_slot, slot_keys, first_atom, atom_count, slots: Vec::new() };
         for entry in &plan.entries {
             let index = plan.index(i32::from(entry.tag), entry.kind, entry.atom).expect("entry atoms lie in range");
             slots[index] = entry.slot;
         }
         plan.slots = slots;
         let plan = Rc::new(plan);
-        *self.runtime.shared().direct_plan().borrow_mut() = Some(Rc::clone(&plan));
+        let _ = self.runtime.shared().direct_plan().set(Rc::clone(&plan));
         Ok(plan)
     }
 }
@@ -223,7 +236,8 @@ impl std::fmt::Debug for DirectPlanBuilder<'_> {
 /// The plan installed on `scope`'s VM, if any. Cheap: one shared-block read and an `Rc` clone.
 pub fn plan(scope: &impl Scope) -> Option<Rc<DirectPlan>> {
     // SAFETY: a scope proves its thread is live.
-    unsafe { crate::runtime::shared_for(scope.state()) }.and_then(|shared| shared.direct_plan().borrow().clone())
+    unsafe { crate::runtime::shared_for(scope.state()) }.and_then(|shared| shared.direct_plan().get().cloned())
 }
 
-pub(crate) type DirectPlanSlot = std::cell::RefCell<Option<Rc<DirectPlan>>>;
+/// Set once when a plan is published; read without a borrow flag or a refcount on every call.
+pub(crate) type DirectPlanSlot = std::cell::OnceCell<Rc<DirectPlan>>;

@@ -508,6 +508,7 @@ fn register_direct(runtime: &Runtime, plan: &RuntimePlan) -> Result<()> {
     for resolved in plan.userdata.iter().filter(|u| u.has_direct_slots()) {
         super::dispatch::register(runtime, resolved)?;
     }
+    runtime.shared().publish_direct_entries();
     Ok(())
 }
 

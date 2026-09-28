@@ -43,9 +43,9 @@ unsafe fn resolve(plan: &DirectPlan, slot: *mut u16, tag: c_int, atom: Atom, kin
 /// # Safety
 /// `state` is a live thread.
 #[inline(always)]
-unsafe fn planned(state: *mut ffi::lua_State) -> Option<(&'static Shared, std::rc::Rc<DirectPlan>)> {
+unsafe fn planned(state: *mut ffi::lua_State) -> Option<(&'static Shared, &'static DirectPlan)> {
     let shared = unsafe { crate::runtime::shared_for(state) }?;
-    let plan = shared.direct_plan().borrow().clone()?;
+    let plan = shared.direct_plan().get()?;
     Some((shared, plan))
 }
 
@@ -139,7 +139,7 @@ unsafe extern "C-unwind" fn namecall(
         trampoline::enter(state, || {
             let top = ffi::lua_gettop(state);
             let Some((shared, plan)) = planned(state) else { return namecall_fallback(state, utag, top) };
-            let resolved = resolve(&plan, slot, utag, atom as Atom, AccessKind::Namecall);
+            let resolved = resolve(plan, slot, utag, atom as Atom, AccessKind::Namecall);
             match shared.direct_entry(resolved) {
                 Some(entry) if resolved != UNKNOWN_SLOT => Ok(entry.call(state, top)),
                 _ => namecall_fallback(state, utag, top),
@@ -159,7 +159,7 @@ unsafe extern "C-unwind" fn index(
     unsafe {
         trampoline::enter(state, || {
             let Some((shared, plan)) = planned(state) else { return index_fallback(state, utag) };
-            let resolved = resolve(&plan, slot, utag, atom as Atom, AccessKind::Index);
+            let resolved = resolve(plan, slot, utag, atom as Atom, AccessKind::Index);
             match shared.direct_entry(resolved) {
                 Some(entry) if resolved != UNKNOWN_SLOT => {
                     // The getter takes the receiver alone; the key leaves the stack so result
@@ -190,7 +190,7 @@ unsafe extern "C-unwind" fn newindex(
     unsafe {
         trampoline::enter(state, || {
             let Some((shared, plan)) = planned(state) else { return newindex_fallback(state, utag) };
-            let resolved = resolve(&plan, slot, utag, atom as Atom, AccessKind::NewIndex);
+            let resolved = resolve(plan, slot, utag, atom as Atom, AccessKind::NewIndex);
             match shared.direct_entry(resolved) {
                 Some(entry) if resolved != UNKNOWN_SLOT => {
                     ffi::lua_remove(state, 2);

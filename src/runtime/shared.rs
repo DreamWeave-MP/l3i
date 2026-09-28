@@ -115,8 +115,10 @@ pub(crate) struct Shared {
     /// compares against and a registry reference for attaching the metatable on push.
     untagged: RefCell<HashMap<TypeId, UntaggedIdentity, BuildHasherDefault<TypeIdHasher>>>,
     /// The extension planner's direct members by plan slot: the bound member each resolved
-    /// direct slot runs, so one generic VM callback serves every planned type.
+    /// direct slot runs, so one generic VM callback serves every planned type. Collected here
+    /// during registration, then published once as a plain slice for the dispatch path.
     direct_entries: RefCell<Vec<Option<crate::bind::MemberEntry>>>,
+    published_entries: std::cell::OnceCell<Box<[Option<crate::bind::MemberEntry>]>>,
     /// The bytecode type the compiler gives each Rust type named in this runtime's userdata
     /// type list (`TAGGED_USERDATA_BASE + index`), for native lowering hooks.
     #[cfg(feature = "jit")]
@@ -186,10 +188,11 @@ impl Shared {
             tags: TagPlan::new(),
             hooks: crate::debug::HookSlot::new(),
             embedder_gc: RefCell::new(None),
-            direct_plan: RefCell::new(None),
+            direct_plan: std::cell::OnceCell::new(),
             require_navigator: RefCell::new(None),
             untagged: RefCell::new(HashMap::default()),
             direct_entries: RefCell::new(Vec::new()),
+            published_entries: std::cell::OnceCell::new(),
             #[cfg(feature = "jit")]
             userdata_types: RefCell::new(HashMap::default()),
         }
@@ -223,10 +226,14 @@ impl Shared {
         &self.hooks
     }
 
-    /// The planned direct member at `slot`, if any.
+    /// The planned direct member at `slot`, if any: a plain slice read once the entries are
+    /// published (the dispatch path), the collection under construction before that.
     #[inline]
     pub(crate) fn direct_entry(&self, slot: u16) -> Option<crate::bind::MemberEntry> {
-        self.direct_entries.borrow().get(usize::from(slot)).copied().flatten()
+        match self.published_entries.get() {
+            Some(entries) => entries.get(usize::from(slot)).copied().flatten(),
+            None => self.direct_entries.borrow().get(usize::from(slot)).copied().flatten(),
+        }
     }
 
     /// Records the member the planned direct `slot` runs.
@@ -237,6 +244,12 @@ impl Shared {
             entries.resize(index + 1, None);
         }
         entries[index] = Some(entry);
+    }
+
+    /// Freezes the recorded entries into the slice the dispatch path reads (once per VM).
+    pub(crate) fn publish_direct_entries(&self) {
+        let entries = std::mem::take(&mut *self.direct_entries.borrow_mut());
+        let _ = self.published_entries.set(entries.into_boxed_slice());
     }
 
     /// The registered untagged metatable of the Rust type `id`, if any.
