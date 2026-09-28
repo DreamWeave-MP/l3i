@@ -441,7 +441,8 @@ fn finalization_rejects_bad_compositions() {
     let error = text(RuntimePlan::builder().extension(Core::preferred()).extension(BadAugment(2)).finalize());
     assert!(error.contains("member 'get' is declared by both"), "{error}");
 
-    // A direct field name shared with another member kind cannot keep its fast path.
+    // A direct field name that is a method elsewhere keeps working: the planner gives the name an
+    // atom and serves the field through a plan slot instead of Luau's field table.
     struct FieldClash;
     impl Extension for FieldClash {
         fn id(&self) -> &'static str {
@@ -449,16 +450,49 @@ fn finalization_rejects_bad_compositions() {
         }
         fn describe(&self, d: &mut ExtensionDescriptor) -> Result<()> {
             d.requires("dream.core");
-            d.userdata::<Other>("dream.tests.Other").method("value");
+            d.userdata::<Other>("dream.tests.Other").tag(TagPolicy::Required).method("value");
+            d.module("@dream/clash");
             Ok(())
         }
         fn install(&self, cx: &mut InstallContext<'_>) -> Result<()> {
-            cx.userdata::<Other>("dream.tests.Other")?.method("value", |_: &Other| 0i64)?;
+            cx.userdata::<Other>("dream.tests.Other")?.method("value", |_: &Other| 99i64)?;
+            let mut module = cx.module("@dream/clash")?;
+            module.function("new", || Owned(Other))?;
+            module.finish()?;
             Ok(())
         }
     }
-    let error = text(RuntimePlan::builder().extension(Core::preferred()).extension(FieldClash).finalize());
-    assert!(error.contains("'value' is a direct field on one type"), "{error}");
+    let plan = RuntimePlan::builder().extension(Core::preferred()).extension(FieldClash).finalize().unwrap();
+    let field = plan.userdata_by_key("dream.tests.Counter").unwrap().member("value").unwrap();
+    assert!(field.through_slot && field.slot.is_some() && plan.atom_of("value").is_some(), "{field:?}");
+    assert!(!plan.userdata_by_key("dream.tests.Other").unwrap().member("value").unwrap().through_slot);
+    let runtime = Runtime::from_plan(&plan).unwrap();
+    runtime
+        .exec(
+            "local core = require('@dream/core') local clash = require('@dream/clash') \
+             local c = core.new(4) local o = clash.new() \
+             for _ = 1, 3 do assert(c.value == 4i, 'field through slot') assert(o:value() == 99, 'method') end \
+             c:add(1) assert(c.value == 5i, 'field after add')",
+        )
+        .unwrap();
+    // On one type the two meanings would share a key.
+    struct SameTypeClash;
+    impl Extension for SameTypeClash {
+        fn id(&self) -> &'static str {
+            "dream.sameclash"
+        }
+        fn describe(&self, d: &mut ExtensionDescriptor) -> Result<()> {
+            let other = d.userdata::<Other>("dream.tests.Other");
+            other.field("value");
+            other.method("value");
+            Ok(())
+        }
+        fn install(&self, _: &mut InstallContext<'_>) -> Result<()> {
+            Ok(())
+        }
+    }
+    let error = text(RuntimePlan::builder().extension(SameTypeClash).finalize());
+    assert!(error.contains("is declared twice by 'dream.sameclash' (as Field and Method)"), "{error}");
 
     // Tags: Never with a direct field, and running out of tags for Required types.
     let error = text(RuntimePlan::builder().extension(Core { tag: TagPolicy::Never, with_field: true }).finalize());

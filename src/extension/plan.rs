@@ -23,8 +23,13 @@ pub struct ResolvedMember {
     /// The atom this VM's catalogue gives the member name.
     pub atom: Atom,
     /// The direct plan slot: every method, getter, and setter of a tagged type has one; direct
-    /// fields and untagged types' members have none.
+    /// fields (unless `through_slot`) and untagged types' members have none.
     pub slot: Option<u16>,
+    /// A direct field whose name is also a method, getter, or setter somewhere else in the plan.
+    /// Luau rewrites every `obj.name` whose key has an atom into the direct-access opcode, which
+    /// consults the tag's index callback and never Luau's field table, so such a field is served
+    /// through a plan slot like a getter (about 33 ns instead of 12) rather than failing the plan.
+    pub through_slot: bool,
     pub signature: Option<String>,
     pub doc: Option<String>,
     pub contributor: &'static str,
@@ -207,8 +212,10 @@ impl RuntimePlanBuilder {
 /// Atoms for every method, getter, and setter name, densely from 1, written back into the
 /// members. Direct field names get no atom: Luau rewrites every `obj.name` whose key has an
 /// atom into the direct-access opcode, which consults the tag's index callback and never the
-/// direct-field table, so an atom would take the field off its fast path. A name therefore
-/// cannot be both a direct field and another member kind anywhere in one plan.
+/// direct-field table, so an atom would take the field off its fast path. A field whose name is
+/// another member kind on a *different* type keeps the name and is served through a plan slot
+/// instead (`ResolvedMember::through_slot`); on the same type the two would be one key with two
+/// meanings, which `add_members` has already rejected.
 fn resolve_atoms(userdata: &mut [ResolvedUserdata]) -> Result<AtomCatalogue> {
     let mut names = BTreeSet::new();
     let mut field_names = BTreeSet::new();
@@ -221,11 +228,13 @@ fn resolve_atoms(userdata: &mut [ResolvedUserdata]) -> Result<AtomCatalogue> {
             }
         }
     }
-    if let Some(clash) = field_names.intersection(&names).next() {
-        return Err(Error::logic(format!(
-            "'{clash}' is a direct field on one type and a method, getter, or setter elsewhere; Luau's atom \
-             rewrite would route the field through the index callback, so rename one of them"
-        )));
+    let through_slot: BTreeSet<&String> = field_names.intersection(&names).collect();
+    for resolved in userdata.iter_mut() {
+        for member in &mut resolved.members {
+            if member.kind == MemberKind::Field && through_slot.contains(&member.name) {
+                member.through_slot = true;
+            }
+        }
     }
     if names.len() > MAX_ATOM_SPAN || names.len() >= usize::from(i16::MAX as u16) {
         return Err(Error::logic(format!(
@@ -237,7 +246,7 @@ fn resolve_atoms(userdata: &mut [ResolvedUserdata]) -> Result<AtomCatalogue> {
     let atom_of: HashMap<&str, Atom> = atoms.iter().map(|(name, atom)| (name.as_str(), *atom)).collect();
     for resolved in userdata.iter_mut() {
         for member in &mut resolved.members {
-            if member.kind != MemberKind::Field {
+            if member.kind != MemberKind::Field || member.through_slot {
                 member.atom = atom_of[member.name.as_str()];
             }
         }
@@ -247,8 +256,8 @@ fn resolve_atoms(userdata: &mut [ResolvedUserdata]) -> Result<AtomCatalogue> {
 
 /// Direct slots for every method, getter, and setter of a tagged type, densely from 1. Every
 /// bound member of a tagged type dispatches through the plan (a slot lookup is cheaper than the
-/// metamethod fallback for cold members too). Direct fields have no slot: Luau serves them from
-/// its own field table.
+/// metamethod fallback for cold members too). Direct fields have no slot unless their name is
+/// an atom elsewhere: Luau serves the others from its own field table.
 fn assign_slots(userdata: &mut [ResolvedUserdata]) -> Result<()> {
     let mut next_slot: u16 = 1;
     for resolved in userdata.iter_mut() {
@@ -256,7 +265,7 @@ fn assign_slots(userdata: &mut [ResolvedUserdata]) -> Result<()> {
             continue;
         }
         for member in &mut resolved.members {
-            if member.kind == MemberKind::Field {
+            if member.kind == MemberKind::Field && !member.through_slot {
                 continue;
             }
             if next_slot > MAX_SLOT {
@@ -471,6 +480,12 @@ fn add_members(resolved: &mut ResolvedUserdata, decl: &UserdataDecl) -> Result<(
                 (existing.kind, member.kind),
                 (MemberKind::Getter, MemberKind::Setter) | (MemberKind::Setter, MemberKind::Getter)
             );
+            if !pair && existing.contributor == member.contributor {
+                return Err(Error::logic(format!(
+                    "userdata '{}' member '{}' is declared twice by '{}' (as {:?} and {:?})",
+                    resolved.key, member.name, member.contributor, existing.kind, member.kind
+                )));
+            }
             if !pair {
                 return Err(Error::logic(format!(
                     "userdata '{}' member '{}' is declared by both '{}' and '{}'",
@@ -486,6 +501,7 @@ fn add_members(resolved: &mut ResolvedUserdata, decl: &UserdataDecl) -> Result<(
             kind: member.kind,
             atom: 0,
             slot: None,
+            through_slot: false,
             signature: member.signature.clone(),
             doc: member.doc.clone(),
             contributor: member.contributor,

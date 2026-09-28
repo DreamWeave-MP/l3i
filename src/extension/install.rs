@@ -24,8 +24,9 @@ use crate::value::{Function, Table};
 type MemberInstaller = Box<dyn FnOnce(&mut MetatableBuilder<'_>) -> Result<Vec<(String, MemberKind, MemberEntry)>>>;
 /// Registers the type (tagged or untagged) with every collected member.
 type Registrar = Box<dyn FnOnce(&Runtime, &ResolvedUserdata, Vec<MemberInstaller>) -> Result<()>>;
-/// Registers a direct primitive field after the metatable exists.
-type FieldRegistrar = Box<dyn FnOnce(&Runtime) -> Result<()>>;
+/// Registers a direct primitive field after the metatable exists, unless the plan serves that
+/// field through its slot.
+type FieldRegistrar = (String, Box<dyn FnOnce(&Runtime) -> Result<()>>);
 
 #[derive(Default)]
 struct PendingUserdata {
@@ -331,7 +332,8 @@ impl<T: Userdata> UserdataInstaller<'_, T> {
     }
 
     /// The handler for a declared direct primitive field: installed as the canonical property
-    /// and, once the metatable exists, as Luau's direct field getter.
+    /// and, once the metatable exists, as Luau's direct field getter (or, when the plan resolved
+    /// the field `through_slot`, bound to its plan slot like a getter).
     pub fn field<H: DirectField<T>>(&mut self, name: &str) -> Result<&mut Self> {
         self.declared(name, MemberKind::Field)?;
         let owned = name.to_owned();
@@ -340,7 +342,10 @@ impl<T: Userdata> UserdataInstaller<'_, T> {
             let entry = ty.property_with_entry(&for_property, |value: &T| H::get(value))?;
             Ok(vec![(for_property, MemberKind::Field, entry)])
         }));
-        self.pending.fields.push(Box::new(move |runtime| crate::direct::field::register::<T, H>(runtime, &owned)));
+        let for_register = owned.clone();
+        self.pending
+            .fields
+            .push((owned, Box::new(move |runtime| crate::direct::field::register::<T, H>(runtime, &for_register))));
         Ok(self)
     }
 
@@ -533,8 +538,14 @@ pub(crate) fn instantiate(plan: &Rc<RuntimePlan>) -> Result<Runtime> {
     register_direct(&runtime, plan)?;
     for resolved in &plan.userdata {
         if let Some(pending_type) = pending.userdata.remove(&resolved.type_id) {
-            for register_field in pending_type.fields {
-                register_field(&runtime)?;
+            for (name, register_field) in pending_type.fields {
+                let served_by_slot = resolved
+                    .members
+                    .iter()
+                    .any(|member| member.kind == MemberKind::Field && member.name == name && member.through_slot);
+                if !served_by_slot {
+                    register_field(&runtime)?;
+                }
             }
         }
     }
