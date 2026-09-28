@@ -164,7 +164,9 @@ so the bound member skips its type check, and one panic guard covers the whole c
 `RuntimePlan::builder().policy(..).service(..)
 .extension(..).finalize()` orders extensions by their dependency graph (deterministically),
 merges owners with augmenters into one type per key, assigns tags (pinned, then `Required`,
-then `Preferred` while tags last), assigns atoms densely, lays out direct slots (a direct field
+then `Preferred` while tags last), allocates Luau's 32 compiler userdata type slots the same
+way (`CompilerTypePolicy`: a type whose methods lower natively declares `Required` and the plan
+fails rather than leave that path interpreted), assigns atoms densely, lays out direct slots (a direct field
 whose name is a method or property elsewhere in the plan is served through a slot instead of
 Luau's field table, since the atom rewrite would bypass that table), resolves memory
 categories, and checks services and capabilities. `Runtime::from_plan(&plan)` then builds a VM,

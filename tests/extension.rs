@@ -4,7 +4,10 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use l3i::direct::field::{DirectField, FieldValue};
-use l3i::extension::{Extension, ExtensionDescriptor, InstallContext, RuntimePlan, RuntimePolicy, TagPolicy};
+use l3i::extension::{
+    COMPILER_TYPE_CAPACITY, CompilerTypePolicy, Extension, ExtensionDescriptor, InstallContext, RuntimePlan,
+    RuntimePolicy, TagPolicy,
+};
 use l3i::runtime::MemoryCategory;
 use l3i::source::CompileConstant;
 use l3i::userdata::{Owned, Userdata};
@@ -550,4 +553,90 @@ fn install_adds_to_declared_modules_and_rejects_duplicates() {
     assert!(error.contains("member 'declared' is set twice"), "{error}");
     let error = Runtime::from_plan(&RuntimePlan::builder().extension(Late(2)).finalize().unwrap()).err().unwrap().to_string();
     assert!(error.contains("which the plan does not know"), "{error}");
+}
+
+// ---- compiler type slots ---------------------------------------------------------------------
+
+macro_rules! slot_types {
+    ($($t:ident),*) => {
+        $(
+            struct $t;
+            // SAFETY: plain unit types.
+            unsafe impl Userdata for $t {
+                const NAME: &'static str = concat!("dream.slots.", stringify!($t));
+            }
+        )*
+        /// Declares every slot type with `tag` and `compiler_type`.
+        fn declare_slot_types(d: &mut ExtensionDescriptor, tag: TagPolicy, compiler_type: CompilerTypePolicy) {
+            $(
+                d.userdata::<$t>(concat!("dream.slots.", stringify!($t))).tag(tag).compiler_type(compiler_type);
+            )*
+        }
+    };
+}
+
+slot_types!(S0, S1, S2, S3, S4, S5, S6, S7, S8, S9, S10, S11, S12, S13, S14, S15, S16, S17, S18, S19, S20, S21, S22, S23, S24, S25, S26, S27, S28, S29, S30, S31, S32, S33);
+
+struct Hot;
+// SAFETY: a plain unit type.
+unsafe impl Userdata for Hot {
+    const NAME: &'static str = "dream.zlowered.Hot";
+}
+
+#[test]
+fn compiler_type_slots_go_to_required_types_first_and_a_required_type_without_one_fails_the_plan() {
+    struct Many(TagPolicy, CompilerTypePolicy);
+    impl Extension for Many {
+        fn id(&self) -> &'static str {
+            "dream.slots"
+        }
+        fn describe(&self, d: &mut ExtensionDescriptor) -> Result<()> {
+            declare_slot_types(d, self.0, self.1);
+            Ok(())
+        }
+    }
+    struct Lowered;
+    impl Extension for Lowered {
+        fn id(&self) -> &'static str {
+            "dream.zlowered"
+        }
+        fn describe(&self, d: &mut ExtensionDescriptor) -> Result<()> {
+            d.userdata::<Hot>("dream.zlowered.Hot").tag(TagPolicy::Required).compiler_type(CompilerTypePolicy::Required);
+            Ok(())
+        }
+    }
+    let text = |result: std::result::Result<Rc<RuntimePlan>, Error>| result.err().unwrap().to_string();
+
+    // Thirty-four Required types: the thirty-third in tag order (tags follow the keys' order,
+    // where "S8" sorts after "S33") fails the plan instead of silently losing its compiler type.
+    let error = text(RuntimePlan::builder().extension(Many(TagPolicy::Required, CompilerTypePolicy::Required)).finalize());
+    assert!(error.contains("no compiler type slot left for 'dream.slots.S8'"), "{error}");
+
+    // Preferred types take what is left, in tag order, and the rest go without.
+    let plan = RuntimePlan::builder().extension(Many(TagPolicy::Required, CompilerTypePolicy::Preferred)).finalize().unwrap();
+    let typed: Vec<&str> = plan.userdata().iter().filter(|u| u.bytecode_type.is_some()).map(|u| u.key.as_str()).collect();
+    assert_eq!(typed.len(), COMPILER_TYPE_CAPACITY);
+    assert_eq!(plan.userdata_by_key("dream.slots.S0").unwrap().bytecode_type, Some(64));
+    assert_eq!(plan.userdata_by_key("dream.slots.S8").unwrap().bytecode_type, None);
+
+    // A Required type declared after thirty-four Preferred ones still gets the first slot.
+    let plan = RuntimePlan::builder()
+        .extension(Many(TagPolicy::Required, CompilerTypePolicy::Preferred))
+        .extension(Lowered)
+        .finalize()
+        .unwrap();
+    let hot = plan.userdata_by_key("dream.zlowered.Hot").unwrap();
+    assert!(hot.tag.unwrap() > plan.userdata_by_key("dream.slots.S9").unwrap().tag.unwrap(), "keyed last, tagged last");
+    assert_eq!(hot.bytecode_type, Some(64));
+    assert_eq!(plan.userdata().iter().filter(|u| u.bytecode_type.is_some()).count(), COMPILER_TYPE_CAPACITY);
+    let runtime = Runtime::from_plan(&plan).unwrap();
+    assert_eq!(runtime.compile_options().userdata_types.len(), COMPILER_TYPE_CAPACITY);
+    assert_eq!(runtime.compile_options().userdata_types[0].to_str().unwrap(), "dream_zlowered_Hot");
+
+    // Required needs a tag.
+    let error = text(RuntimePlan::builder().extension(Many(TagPolicy::Never, CompilerTypePolicy::Required)).finalize());
+    assert!(error.contains("requires a compiler type slot, which needs a tag"), "{error}");
+    // Never is never named.
+    let plan = RuntimePlan::builder().extension(Many(TagPolicy::Required, CompilerTypePolicy::Never)).finalize().unwrap();
+    assert!(plan.userdata().iter().all(|u| u.bytecode_type.is_none()));
 }

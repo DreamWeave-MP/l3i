@@ -84,6 +84,23 @@ pub enum TagPolicy {
     Never,
 }
 
+/// Whether a type takes one of the compiler's userdata type slots. Luau's compiler and code
+/// generator know at most [`COMPILER_TYPE_CAPACITY`] userdata types per VM; a type whose
+/// methods lower natively needs one, and a plan that cannot give a `Required` type its slot
+/// does not finalize rather than silently leaving that path interpreted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CompilerTypePolicy {
+    /// The type needs a compiler slot (native lowering); it also needs a tag.
+    Required,
+    /// Take a slot while slots last, after every `Required` type.
+    Preferred,
+    /// Never name the type to the compiler.
+    Never,
+}
+
+/// How many userdata types Luau's compiler and code generator can tell apart per VM.
+pub const COMPILER_TYPE_CAPACITY: usize = 32;
+
 /// The kind of a declared userdata member.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum MemberKind {
@@ -133,6 +150,7 @@ pub struct UserdataDecl {
     /// `T::NAME`, the metatable `__type`.
     pub type_name: &'static str,
     pub tag: TagPolicy,
+    pub compiler_type: CompilerTypePolicy,
     pub members: Vec<MemberDecl>,
     pub doc: Option<String>,
     contributor: &'static str,
@@ -161,6 +179,7 @@ impl UserdataDecl {
             type_id: TypeId::of::<T>(),
             type_name: T::NAME,
             tag: TagPolicy::Preferred,
+            compiler_type: CompilerTypePolicy::Preferred,
             members: Vec::new(),
             doc: None,
             contributor,
@@ -195,6 +214,13 @@ impl<T: Userdata> UserdataBuilder<'_, T> {
     /// The tag policy (owner only; augmentations inherit the owner's).
     pub fn tag(&mut self, policy: TagPolicy) -> &mut Self {
         self.decl.tag = policy;
+        self
+    }
+
+    /// The compiler type slot policy (owner only). A type with native lowering declares
+    /// `Required`, and the plan fails rather than compile that lowering away.
+    pub fn compiler_type(&mut self, policy: CompilerTypePolicy) -> &mut Self {
+        self.decl.compiler_type = policy;
         self
     }
 

@@ -422,7 +422,7 @@ fn build_runtime(plan: &Rc<RuntimePlan>) -> Result<Runtime> {
             max_total_size: native.max_total_size,
             record_counters: native.record_counters,
             nop_padding: native.nop_padding,
-            userdata_types: tagged_in_order(plan).iter().map(|u| super::typedefs::class_name(&u.key)).collect(),
+            userdata_types: compiler_typed(plan).iter().map(|u| super::typedefs::class_name(&u.key)).collect(),
             ..Default::default()
         };
         for hooks in &native.hooks {
@@ -442,10 +442,11 @@ fn build_runtime(plan: &Rc<RuntimePlan>) -> Result<Runtime> {
     #[cfg(feature = "jit")]
     {
         use crate::native_code::ir::bytecode_type::{TAGGED_USERDATA_BASE, TAGGED_USERDATA_END};
-        // Luau encodes at most 32 userdata types; the compiler ignores the rest of the list.
-        let capacity = usize::from(TAGGED_USERDATA_END - TAGGED_USERDATA_BASE);
-        for (index, resolved) in tagged_in_order(plan).into_iter().take(capacity).enumerate() {
-            runtime.shared().set_userdata_type(resolved.type_id, TAGGED_USERDATA_BASE + index as u8);
+        const _: () = assert!(TAGGED_USERDATA_BASE == super::plan::COMPILER_TYPE_BASE);
+        const _: () = assert!((TAGGED_USERDATA_END - TAGGED_USERDATA_BASE) as usize == super::COMPILER_TYPE_CAPACITY);
+        for resolved in compiler_typed(plan) {
+            let bytecode_type = resolved.bytecode_type.expect("compiler_typed filters on the slot");
+            runtime.shared().set_userdata_type(resolved.type_id, bytecode_type);
         }
     }
     runtime.set_plan(Rc::clone(plan));
@@ -453,11 +454,12 @@ fn build_runtime(plan: &Rc<RuntimePlan>) -> Result<Runtime> {
     Ok(runtime)
 }
 
-/// Tagged types by tag: the compiler's and the code generator's userdata type order.
-fn tagged_in_order(plan: &RuntimePlan) -> Vec<&ResolvedUserdata> {
-    let mut tagged: Vec<&ResolvedUserdata> = plan.userdata.iter().filter(|u| u.tag.is_some()).collect();
-    tagged.sort_by_key(|u| u.tag);
-    tagged
+/// The types the plan gave compiler slots, in slot order: the list named to the compiler, whose
+/// position is the bytecode type.
+fn compiler_typed(plan: &RuntimePlan) -> Vec<&ResolvedUserdata> {
+    let mut typed: Vec<&ResolvedUserdata> = plan.userdata.iter().filter(|u| u.bytecode_type.is_some()).collect();
+    typed.sort_by_key(|u| u.bytecode_type);
+    typed
 }
 
 /// Runs every extension's `install` in dependency order.
@@ -529,7 +531,7 @@ fn compile_options(plan: &RuntimePlan, members: &Rc<ModuleMembers>) -> CompileOp
     }
     // Userdata types are named to the compiler by class name (what `.d.luau` declares and what
     // scripts annotate); with native code on, type information reaches the code generator.
-    options.userdata_types = tagged_in_order(plan)
+    options.userdata_types = compiler_typed(plan)
         .iter()
         .map(|u| CString::new(super::typedefs::class_name(&u.key)).expect("class names have no NUL"))
         .collect();

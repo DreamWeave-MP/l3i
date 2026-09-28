@@ -4,7 +4,7 @@ use std::any::{Any, TypeId};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::rc::Rc;
 
-use super::{
+use super::{COMPILER_TYPE_CAPACITY, CompilerTypePolicy, 
     Extension, ExtensionDescriptor, MemberKind, RuntimePolicy, TagPolicy, UserdataDecl, debug_root,
     validate_extension_id,
 };
@@ -56,6 +56,11 @@ pub struct ResolvedUserdata {
     pub policy: TagPolicy,
     /// The tag this VM assigned, or `None` for the canonical untagged metatable.
     pub tag: Option<RuntimeTag>,
+    pub compiler_type: CompilerTypePolicy,
+    /// The bytecode type the compiler and the code generator use for this type
+    /// (`TAGGED_USERDATA_BASE + slot`), when the plan gave it one of the
+    /// [`COMPILER_TYPE_CAPACITY`] slots.
+    pub bytecode_type: Option<u8>,
     pub members: Vec<ResolvedMember>,
     pub doc: Option<String>,
     pub(crate) installers: Vec<super::install::SharedInstaller>,
@@ -223,6 +228,8 @@ impl RuntimePlanBuilder {
 
         // 5. Tags: pinned, then Required, then Preferred while tags remain.
         assign_tags(&mut userdata, &pinned_tags, policy.first_tag)?;
+        // 6. Compiler type slots: Required, then Preferred, in tag order, while slots remain.
+        assign_compiler_types(&mut userdata)?;
 
         let atom_catalogue = resolve_atoms(&mut userdata)?;
         assign_slots(&mut userdata)?;
@@ -502,6 +509,8 @@ fn merge_userdata(descriptors: &[ExtensionDescriptor], order: &[usize]) -> Resul
                 owner: descriptors[index].id(),
                 policy: decl.tag,
                 tag: None,
+                compiler_type: decl.compiler_type,
+                bytecode_type: None,
                 members: Vec::new(),
                 doc: decl.doc.clone(),
                 installers: Vec::new(),
@@ -641,6 +650,49 @@ fn assign_tags(
     }
     Ok(())
 }
+
+/// Luau's compiler distinguishes [`COMPILER_TYPE_CAPACITY`] userdata types, by position in the
+/// list a plan names to it. `Required` types take the first slots (a type whose methods lower
+/// natively must not lose its slot to thirty-two structurally earlier types), then `Preferred`
+/// types while slots remain; a `Required` type without a tag or without a slot fails the plan.
+fn assign_compiler_types(userdata: &mut [ResolvedUserdata]) -> Result<()> {
+    let mut order: Vec<usize> = (0..userdata.len()).collect();
+    order.sort_by_key(|&i| (userdata[i].tag.is_none(), userdata[i].tag, userdata[i].key.clone()));
+    let mut next: u8 = 0;
+    for policy in [CompilerTypePolicy::Required, CompilerTypePolicy::Preferred] {
+        for &i in &order {
+            let resolved = &mut userdata[i];
+            if resolved.compiler_type != policy {
+                continue;
+            }
+            if resolved.tag.is_none() {
+                if policy == CompilerTypePolicy::Required {
+                    return Err(Error::logic(format!(
+                        "'{}' requires a compiler type slot, which needs a tag (declare TagPolicy::Required)",
+                        resolved.key
+                    )));
+                }
+                continue;
+            }
+            if usize::from(next) >= COMPILER_TYPE_CAPACITY {
+                if policy == CompilerTypePolicy::Required {
+                    return Err(Error::logic(format!(
+                        "no compiler type slot left for '{}', which requires one: Luau distinguishes {COMPILER_TYPE_CAPACITY} userdata types per VM",
+                        resolved.key
+                    )));
+                }
+                break;
+            }
+            resolved.bytecode_type = Some(COMPILER_TYPE_BASE + next);
+            next += 1;
+        }
+    }
+    Ok(())
+}
+
+/// `LuauBytecodeType::LBC_TYPE_TAGGED_USERDATA_BASE`; `native_code::ir::bytecode_type` pins it
+/// against Luau's header when native code is built.
+pub(crate) const COMPILER_TYPE_BASE: u8 = 64;
 
 /// An immutable, reusable description of one runtime composition.
 pub struct RuntimePlan {
