@@ -340,6 +340,7 @@ fn resolve_modules(descriptors: &[ExtensionDescriptor], order: &[usize], policy:
     let mut module_paths = HashSet::new();
     for &index in order {
         for module in descriptors[index].modules() {
+            validate_key(&module.path)?;
             if !module_paths.insert(module.path.clone()) {
                 return Err(Error::logic(format!(
                     "module '{}' is provided twice (second time by '{}')",
@@ -349,6 +350,7 @@ fn resolve_modules(descriptors: &[ExtensionDescriptor], order: &[usize], policy:
             let global = policy.compat_globals.iter().find(|(path, _)| *path == module.path).map(|(_, g)| g.clone());
             let mut names = HashSet::new();
             for member in &module.members {
+                validate_identifier(&format!("member of module '{}'", module.path), &member.name)?;
                 if !names.insert(member.name.as_str()) {
                     return Err(Error::logic(format!("module '{}' declares member '{}' twice", module.path, member.name)));
                 }
@@ -366,6 +368,7 @@ fn resolve_modules(descriptors: &[ExtensionDescriptor], order: &[usize], policy:
     let mut global_paths: HashMap<&str, &str> = HashMap::new();
     let mut global_names: HashMap<&str, &str> = HashMap::new();
     for (path, global) in &policy.compat_globals {
+        validate_identifier("compat global", global)?;
         if !module_paths.contains(path) {
             return Err(Error::logic(format!("compat global for '{path}', which no extension provides")));
         }
@@ -583,8 +586,10 @@ fn describe_cycle(
 fn merge_userdata(descriptors: &[ExtensionDescriptor], order: &[usize]) -> Result<Vec<ResolvedUserdata>> {
     let mut by_key: BTreeMap<String, ResolvedUserdata> = BTreeMap::new();
     let mut owner_of_type: HashMap<TypeId, String> = HashMap::new();
+    let mut key_of_name: HashMap<&'static str, String> = HashMap::new();
     for &index in order {
         for decl in descriptors[index].owned_userdata() {
+            validate_key(&decl.key)?;
             if let Some(existing) = by_key.get(&decl.key) {
                 return Err(Error::logic(format!(
                     "userdata '{}' is owned by both '{}' and '{}'",
@@ -597,6 +602,12 @@ fn merge_userdata(descriptors: &[ExtensionDescriptor], order: &[usize]) -> Resul
                 return Err(Error::logic(format!(
                     "Rust type {} is registered under two keys, '{other_key}' and '{}'",
                     decl.type_name, decl.key
+                )));
+            }
+            if let Some(other_key) = key_of_name.insert(decl.type_name, decl.key.clone()) {
+                return Err(Error::logic(format!(
+                    "userdata '{other_key}' and '{}' share the Luau type name '{}' (Userdata::NAME); registration would fail",
+                    decl.key, decl.type_name
                 )));
             }
             owner_of_type.insert(decl.type_id, decl.key.clone());
@@ -653,10 +664,42 @@ fn merge_userdata(descriptors: &[ExtensionDescriptor], order: &[usize]) -> Resul
     Ok(by_key.into_values().collect())
 }
 
+/// A Luau identifier: what a member, a global, or a class field is spelled as in the generated
+/// definitions and in script code.
+fn is_identifier(name: &str) -> bool {
+    const RESERVED: &[&str] = &[
+        "and", "break", "do", "else", "elseif", "end", "false", "for", "function", "if", "in", "local", "nil", "not",
+        "or", "repeat", "return", "then", "true", "until", "while",
+    ];
+    let mut bytes = name.bytes();
+    bytes.next().is_some_and(|b| b.is_ascii_alphabetic() || b == b'_')
+        && bytes.all(|b| b.is_ascii_alphanumeric() || b == b'_')
+        && !RESERVED.contains(&name)
+}
+
+fn validate_identifier(what: &str, name: &str) -> Result<()> {
+    if is_identifier(name) {
+        Ok(())
+    } else {
+        Err(Error::logic(format!("{what} '{name}' is not a Luau identifier")))
+    }
+}
+
+/// A stable key or a module path: printable ASCII, no whitespace, so it reads the same in
+/// errors, definitions, and require paths.
+fn validate_key(key: &str) -> Result<()> {
+    if !key.is_empty() && key.bytes().all(|b| b.is_ascii_graphic()) {
+        Ok(())
+    } else {
+        Err(Error::logic(format!("identity '{key}' must be non-empty printable ASCII without whitespace")))
+    }
+}
+
 fn add_members(resolved: &mut ResolvedUserdata, decl: &UserdataDecl) -> Result<()> {
     resolved.installers.extend(decl.installers.iter().cloned());
     resolved.fields.extend(decl.fields.iter().cloned());
     for member in &decl.members {
+        validate_identifier(&format!("member of '{}'", resolved.key), &member.name)?;
         if let Some(existing) = resolved.members.iter().find(|m| m.name == member.name) {
             // A getter and a setter of one name are a pair; anything else collides.
             let pair = matches!(
