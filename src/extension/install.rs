@@ -224,7 +224,9 @@ impl<'r> InstallContext<'r> {
     /// Fails with a permission error unless the policy grants `capability`, which this
     /// extension must also have declared.
     pub fn require_capability(&self, capability: &str) -> Result<()> {
-        let declared = self.plan.descriptors[self.descriptor_index].capabilities().any(|c| c == capability);
+        let descriptor = &self.plan.descriptors[self.descriptor_index];
+        let declared = descriptor.capabilities().any(|c| c == capability)
+            || descriptor.optional_capabilities().any(|c| c == capability);
         if !declared {
             return Err(Error::logic(format!(
                 "extension '{}' checks capability '{capability}' without declaring it in describe",

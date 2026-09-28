@@ -173,6 +173,21 @@ are named); `sequence::Sequence` and `sequence::Stream` show a Rust collection t
 `#items`, `items[i]`, `for item in items`, and `items:toTable()` (or `for` only, with a private
 cursor per loop) without materialising it, declared through the planner like any userdata.
 
+## Networking
+
+dream-net is runtime infrastructure, not a feature: l3i depends on it and owns the Luau bridge,
+extension `dream.net` (`net::extension()`), module `@dream/net`. Scripts build a frozen wire
+schema from a strict option table (`net.schema{ version, channels, events }`), the host creates
+`dream_net::Server`s in Rust and hands them over as `net::Server` handles (the private key never
+reaches Luau), and scripts may create `net.client{ schema }` only when the policy grants the
+`network.transport` capability. The hot calls are `update()` (reading a host-installed clock, so
+scripts cannot spoof transport time), `pollInto(buffer)` returning `kind, peer, a, b, c` with one
+payload copy into the caller's buffer and no allocation, `sendEvent(peer, eventId, bytes,
+offset?, length?)` copying out of a buffer or string before it returns, and `flush()`. Ids are
+integer64, sizes and counters plain numbers, connection stats direct fields on the client and
+per-peer methods on the server. Nothing calls into Luau from inside the transport; the host
+drives one network phase per frame. `benches/net.rs` measures the bridge over localhost UDP.
+
 ## Native code generation
 
 With the `jit` feature the crate builds Luau's CodeGen library and a small C++ shim

@@ -36,7 +36,7 @@ pub struct Options<'a, 'f> {
     seen: BTreeSet<String>,
 }
 
-impl Options<'_, '_> {
+impl<'f> Options<'_, 'f> {
     /// Reads the table at `view` with `body`, then rejects keys `body` never consumed.
     pub fn read<R>(
         scope: &impl Scope,
@@ -73,6 +73,12 @@ impl Options<'_, '_> {
     /// The diagnostic path of this table.
     pub fn context(&self) -> &str {
         &self.context
+    }
+
+    /// The frame the reader works on: open nested frames from here, never from the scope
+    /// `read` was given (that scope already has this frame open).
+    pub fn frame(&self) -> &Frame<'f> {
+        self.frame
     }
 
     /// Whether the table has `key` (consumes nothing).

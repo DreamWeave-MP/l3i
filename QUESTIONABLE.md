@@ -5,6 +5,15 @@ Luau integer, was replaced on 2026-09-27 by `integer <value> is out of range for
 `number <value> is out of range for <type>` for a rounded Lua number), since the accidental
 wording told the caller nothing.
 
+# Luau facts the ecosystem builds on
+
+- **Luau 0.740 integers (`42i`) compare with `==` only.** `<`, `<=`, `>`, `>=` between two
+  integers raise `attempt to compare integer <= integer`; ordering goes through the `integer`
+  library (`lt`, `le`, ...). An integer never equals a number (`42i ~= 42`). l3i therefore
+  pushes identities (peer, event, channel, client ids, hashes, handles, packed scalars) as
+  integers and everything scripts threshold or count (sizes, counters, lengths) as plain
+  numbers. `i64`/`u64` conversions push numbers; `convert::Integer` pushes an integer.
+
 # Deliberate divergences
 
 - **Bound callables are `Fn`, not `FnMut`.** The C++ binder accepted mutable lambdas; a binding

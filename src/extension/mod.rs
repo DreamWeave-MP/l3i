@@ -232,6 +232,7 @@ pub struct ExtensionDescriptor {
     augmentations: Vec<UserdataDecl>,
     services: Vec<ServiceRequirement>,
     capabilities: BTreeSet<String>,
+    optional_capabilities: BTreeSet<String>,
     memory_categories: BTreeSet<String>,
 }
 
@@ -246,6 +247,7 @@ impl ExtensionDescriptor {
             augmentations: Vec::new(),
             services: Vec::new(),
             capabilities: BTreeSet::new(),
+            optional_capabilities: BTreeSet::new(),
             memory_categories: BTreeSet::new(),
         }
     }
@@ -310,6 +312,13 @@ impl ExtensionDescriptor {
         self
     }
 
+    /// A capability the extension checks at run time (`InstallContext::has_capability`) but
+    /// does not need to install: the runtime plans with or without it.
+    pub fn optional_capability(&mut self, name: &str) -> &mut Self {
+        self.optional_capabilities.insert(name.to_owned());
+        self
+    }
+
     /// A symbolic memory category the planner maps to a Luau category number.
     pub fn memory_category(&mut self, name: &str) -> &mut Self {
         self.memory_categories.insert(name.to_owned());
@@ -342,6 +351,10 @@ impl ExtensionDescriptor {
 
     pub fn capabilities(&self) -> impl Iterator<Item = &str> {
         self.capabilities.iter().map(String::as_str)
+    }
+
+    pub fn optional_capabilities(&self) -> impl Iterator<Item = &str> {
+        self.optional_capabilities.iter().map(String::as_str)
     }
 
     pub fn memory_categories(&self) -> impl Iterator<Item = &str> {

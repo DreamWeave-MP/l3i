@@ -47,6 +47,8 @@ include = [
 ]
 
 [dependencies]
+# Networking is runtime infrastructure, not a feature: l3i owns the Luau bridge to dream-net.
+dream-net = "=1.0.0"
 
 [build-dependencies]
 # Compiles the vendored Luau tree and the C++ shims.
@@ -61,6 +63,10 @@ path = "tests/main.rs"
 
 [[bench]]
 name = "hot_paths"
+harness = false
+
+[[bench]]
+name = "net"
 harness = false
 
 [features]

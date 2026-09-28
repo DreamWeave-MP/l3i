@@ -72,6 +72,7 @@ pub mod module;
 pub mod native;
 #[cfg(feature = "jit")]
 pub mod native_code;
+pub mod net;
 pub mod options;
 pub mod packed;
 mod raw;
