@@ -189,9 +189,18 @@ plan, and its shape is frozen: a planned runtime refuses `register_packed` and
 types sharing one `Userdata::NAME` and any member, global, key, or path spelled in a way the
 generated definitions or the VM would choke on, so `Runtime::from_plan` has nothing left to
 discover. `RuntimePlan::type_definitions()` renders the `.d.luau` for the composition in
-Luau's `declare extern type` grammar; `tests/typed_definitions.rs` loads it into l3i's own
-analysis frontend and type checks strict scripts against every built-in module, so the declared
-API and the runtime cannot drift apart. Runtime-owned extension state drops before the VM
+Luau's `declare extern type` grammar, and `RuntimePlan::analysis_sources(inner)` serves each
+module's canonical path (`require("@dream/quat")`) to the analysis frontend as a strict stub
+returning the module's declared type. `RuntimePlan::check_definitions()` (feature `analysis`)
+is the gate every extension crate's tests run: it loads the definitions into Luau's frontend
+and type checks a strict script requiring every module, so a signature string that is not
+Luau, or one naming a type that does not exist, fails with the frontend's diagnostics attributed
+to the declaration. `tests/typed_definitions.rs` runs that gate and strict scripts against every
+built-in module through `require`, with no compatibility global, so the declared API and the
+runtime cannot drift apart. One distinction to keep: the compiler's known-library metadata
+(folded constants, member types) reaches only modules exposed as compatibility globals, since
+Luau's mechanism keys on a global name; a module reached through `require` is typed by the
+analyzer but not folded by the compiler. Runtime-owned extension state drops before the VM
 closes.
 
 ## Extension primitives
@@ -204,7 +213,8 @@ the zero-copy slices are `unsafe fn bytes_unchecked`/`bytes_mut_unchecked` for t
 that proves nothing writes the buffer meanwhile, the rules `lua_tobuffer` imposes on C;
 `convert::Exact<T>` reads an integer that never rounds (a Luau integer or an integer-valued
 number, in range) for indices, offsets, counts, sizes, and ids, where the plain Rust integer
-conversions keep OpenMW's rounding for compatibility, and `convert::Bits64` carries an opaque
+conversions keep OpenMW's rounding for compatibility; it is input only, results use a plain
+Rust integer (an exact `number`), `Integer` (a Luau `integer`), or `Bits64`, which carries an opaque
 64-bit pattern (a hash, a peer id) through a Luau integer with no numeric meaning, so a numeric
 `u64` stays within what an integer or an exact number holds and nothing silently reinterprets;
 `packed::BufferPack` reads and writes fixed layouts through a copy in one bounds check, and `packed::PackedScalar` puts a semantic value into one Luau integer (4-bit
@@ -244,7 +254,9 @@ exactly, every method has a `16` form on the receiver and the module, and the lo
 shared: `lerp16` 69 ns against 14 ns, `narrow` 48 ns against 3 ns.
 
 `quat::QuatExtension` (`dream.quat`, module `@dream/quat`; `axisAngle` and `fromXYZW` refuse a
-zero or non-finite axis, angle, or quaternion) is the first packed kind: a unit
+zero or non-finite axis, angle, or quaternion, `slerp` refuses a non-finite weight on the bound
+and the lowered path alike, and `key` takes the low four bits of an exact integer) is the first
+packed kind: a unit
 rotation compressed smallest-three into one Luau integer (18 bits per component, exact
 identity, 1.6e-5 rad worst case), with `axisAngle`, `fromXYZW`/`toXYZW`, `mul`, `inverse`,
 `slerp`, `rotate`, `angleTo`, the compiler-folded constant `IDENTITY`, `quat::AnimationKey`
@@ -270,8 +282,9 @@ Scripts build a frozen wire
 schema from a strict option table (`net.schema{ version, channels, events }`), the host creates
 `dream_net::Server`s in Rust and hands them over as `net::Server` handles (the private key never
 reaches Luau), and scripts may create `net.client{ schema }` only when the policy grants the
-`network.transport` capability. The hot calls are `update()` (reading a host-installed clock, so
-scripts cannot spoof transport time), `pollInto(buffer)` returning `kind, peer, a, b, c` with one
+`network.transport` capability. The hot calls are `update()` (reading the plan's clock, a
+monotonic one by default or the host's through `RuntimePlanBuilder::network_clock`, so scripts
+cannot spoof transport time and simulations can drive it), `pollInto(buffer)` returning `kind, peer, a, b, c` with one
 payload copy into the caller's buffer and no allocation, `sendEvent(peer, eventId, bytes,
 offset?, length?)` copying out of a buffer or string before it returns, and `flush()`. Ids are
 integer64, sizes and counters plain numbers, connection stats direct fields on the client and
@@ -343,9 +356,10 @@ same on every target and needs nothing outside the checkout.
   proxy requires, registered modules, and cyclic-require placeholders.
 - `native_code` (`jit`): also assembly and IR dumps for any target and the perf log.
 - `analysis` (feature): Luau's type checker, linter, autocomplete, and parser over a
-  `SourceProvider`, with diagnostics, spans, per-module strictness, AST JSON, and definition
+  `SourceProvider`, with diagnostics, spans, per-module strictness, AST JSON, definition
   files (`AnalysisOptions::definitions`, a plan's `.d.luau` for one) whose own errors fail
-  `Analysis::new` with their text.
+  `Analysis::new` with their text (`new_reporting` for them as values), and `PlanSources`,
+  the provider that resolves a plan's module paths to typed stubs.
 
 Every function in `lua.h`, `lualib.h`, `luacode.h`, `luacodegen.h`, `luajitinliner.h`, and
 `Require.h` is declared in `raw::ffi`; the only exception is the varargs `lua_pushvfstring`.
