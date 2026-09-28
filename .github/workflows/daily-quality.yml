@@ -1,0 +1,42 @@
+name: Daily Rust Quality Checks
+
+on:
+  workflow_dispatch:
+  schedule:
+    # GitHub cron is UTC. 15:00 UTC is 9 AM Central Standard Time.
+    - cron: '0 15 * * *'
+
+permissions:
+  contents: read
+
+jobs:
+  fmt:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Run rustfmt
+        run: cargo fmt --all --check
+
+  clippy:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: true
+      - uses: dtolnay/rust-toolchain@stable
+      # Clippy runs the build script, which refuses a toolchain without a matching clang and lld.
+      - uses: DreamWeave-MP/StroggForge/.github/actions/setup-llvm@v45
+      - name: Run Clippy
+        run: cargo clippy --workspace --all-targets --all-features -- -W clippy::pedantic -D warnings
+
+  audit:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Generate Cargo.lock
+        run: cargo generate-lockfile
+      - uses: taiki-e/install-action@cargo-audit
+      - name: Run Cargo audit
+        run: cargo audit
