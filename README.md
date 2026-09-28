@@ -152,15 +152,20 @@ straight into the destination register. `Runtime::install_vector_buffer_writer` 
 A native crate exposes its Luau surface as an [`extension::Extension`]: `describe` declares
 identity (`dream.archive`), dependencies, modules (`@dream/archive`, frozen by default) with
 each member's kind, signature, and doc (`function("open", open).signature("(path: string) ->
-Archive")`, `constant`, or `installed("client")` for a value only a live VM can provide),
-userdata types under stable string keys with a `TagPolicy` and each member with its callable
-(`method("read", |a: &Archive, path: &str| ..)`), services, capabilities, packed kinds, and
-memory categories, all without touching a VM. Callables are `Clone` because one plan binds them
-in every runtime it creates. `install` is optional and runs per runtime for what needs the live
-VM or the resolved policy: it fills the module members declared `installed` (a policy-gated
-function, a userdata instance) and cannot add a name the plan does not know, so the plan's
-type definitions and compiler metadata describe the whole API before any runtime exists;
-services and runtime-owned state live there too. The planned dispatch costs 429 instructions per
+dream_archive_Archive")`, `constant`, or `installed("client")` for a value only a live VM can
+provide), userdata types under stable string keys with a `TagPolicy` and each member with its
+callable (`method("read", |a: &Archive, path: &str| ..)`), services, capabilities, packed
+kinds, and memory categories, all without touching a VM. Types are never accidental: every
+member carries a signature or is marked `untyped()`, and a plan with neither fails to
+finalize. The vocabulary follows the runtime, where Luau's checker keeps `integer` and
+`number` apart: a packed value, a `Bits64`, or an `Integer` result is `integer`; a count, a
+size, or an `f64` is `number`; a class is its generated name (`dream_net_Client`). Callables
+are `Clone` because one plan binds them in every runtime it creates. `install` is optional and
+runs per runtime for what needs the live VM or the resolved policy: it fills the module
+members declared `installed` (a policy-gated function, a userdata instance) and cannot add a
+name the plan does not know, so the plan's type definitions and compiler metadata describe the
+whole API before any runtime exists; services and runtime-owned state live there too
+(`InstallContext::insert_state` is per extension, `Runtime::host_state` the host's own). The planned dispatch costs 429 instructions per
 method call against 368 for the VM's own typed direct handler (`benches/instructions.rs`):
 Luau's inline cache and the member entry are one indexed load in a fused slot table, the plan
 is read without a refcount or a borrow flag, a type's own dispatchers vouch for the receiver
@@ -179,8 +184,15 @@ generic VM callbacks, opens the declared modules, runs every extension's `instal
 freezes modules, registers them for `require`, derives compiler-known library metadata for
 compat globals, and publishes. A plan is
 immutable and instantiates any number of runtimes; each gets its own tags, atoms, and direct
-plan. `Runtime::type_definitions()` renders `.d.luau` text for the final composition, and
-runtime-owned extension state (`InstallContext::insert_state`) drops before the VM closes.
+plan, and its shape is frozen: a planned runtime refuses `register_packed` and
+`set_compile_options`, which stay for hand-assembled runtimes. Finalize also rejects two Rust
+types sharing one `Userdata::NAME` and any member, global, key, or path spelled in a way the
+generated definitions or the VM would choke on, so `Runtime::from_plan` has nothing left to
+discover. `RuntimePlan::type_definitions()` renders the `.d.luau` for the composition in
+Luau's `declare extern type` grammar; `tests/typed_definitions.rs` loads it into l3i's own
+analysis frontend and type checks strict scripts against every built-in module, so the declared
+API and the runtime cannot drift apart. Runtime-owned extension state drops before the VM
+closes.
 
 ## Extension primitives
 
@@ -200,7 +212,9 @@ kind, 4 flag bits, 56-bit payload) with the kind checked on every read. Kinds ar
 1 to 4 are l3i's own and fixed for good (a packed integer is a file and wire format), 5 to 15
 are the application's, declared per extension (`ExtensionDescriptor::packed`) or per runtime
 (`Runtime::register_packed`); a plan with two types on one number does not finalize, and a
-`Packed<T>` crossing a VM where `T` is not the kind's registered owner is a logic error; `options::Options`
+`Packed<T>` crossing a VM where `T` is not the kind's registered owner is a logic error, and
+an encoding whose kind, flags, or payload overflow its fields is an error rather than a
+truncated integer; `options::Options`
 reads camelCase option tables strictly (unknown keys are errors, required keys and field paths
 are named); `sequence::Sequence` and `sequence::Stream` show a Rust collection to scripts as
 `#items`, `items[i]`, `for item in items`, and `items:toTable()` (or `for` only, with a private
@@ -229,7 +243,8 @@ price of exact interchange. `widen` (`x * 257`) and `narrow` (`round(x / 257)`) 
 exactly, every method has a `16` form on the receiver and the module, and the lowering is
 shared: `lerp16` 69 ns against 14 ns, `narrow` 48 ns against 3 ns.
 
-`quat::QuatExtension` (`dream.quat`, module `@dream/quat`) is the first packed kind: a unit
+`quat::QuatExtension` (`dream.quat`, module `@dream/quat`; `axisAngle` and `fromXYZW` refuse a
+zero or non-finite axis, angle, or quaternion) is the first packed kind: a unit
 rotation compressed smallest-three into one Luau integer (18 bits per component, exact
 identity, 1.6e-5 rad worst case), with `axisAngle`, `fromXYZW`/`toXYZW`, `mul`, `inverse`,
 `slerp`, `rotate`, `angleTo`, the compiler-folded constant `IDENTITY`, `quat::AnimationKey`
@@ -248,9 +263,9 @@ that to a local too. The packed form is storage and transport; long-lived rotati
 ## Networking
 
 dream-net is runtime infrastructure, not a feature: l3i depends on it and owns the Luau bridge,
-extension `dream.net` (`net::extension()`), module `@dream/net`, and every `RuntimePlan`
-carries it whether or not the host names it (naming it is allowed and adds nothing), so no
-runtime lacks the network and the policy's capabilities decide what scripts may do with it.
+extension `dream.net`, module `@dream/net`, and every `RuntimePlan` carries l3i's own bridge:
+the planner adds it, the id is reserved (an extension claiming `dream.net` fails the plan), so
+no runtime lacks the network and the policy's capabilities decide what scripts may do with it.
 Scripts build a frozen wire
 schema from a strict option table (`net.schema{ version, channels, events }`), the host creates
 `dream_net::Server`s in Rust and hands them over as `net::Server` handles (the private key never
@@ -328,7 +343,9 @@ same on every target and needs nothing outside the checkout.
   proxy requires, registered modules, and cyclic-require placeholders.
 - `native_code` (`jit`): also assembly and IR dumps for any target and the perf log.
 - `analysis` (feature): Luau's type checker, linter, autocomplete, and parser over a
-  `SourceProvider`, with diagnostics, spans, per-module strictness, and AST JSON.
+  `SourceProvider`, with diagnostics, spans, per-module strictness, AST JSON, and definition
+  files (`AnalysisOptions::definitions`, a plan's `.d.luau` for one) whose own errors fail
+  `Analysis::new` with their text.
 
 Every function in `lua.h`, `lualib.h`, `luacode.h`, `luacodegen.h`, `luajitinliner.h`, and
 `Require.h` is declared in `raw::ffi`; the only exception is the varargs `lua_pushvfstring`.
