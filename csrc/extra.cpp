@@ -174,6 +174,14 @@ void* l3i_native_enter(lua_State* L, int* top, void** threaddata)
     return uvalue(uv)->data;
 }
 
+// One call for the generated and planned dispatchers: the argument count and the thread's data
+// slot (the binder's per-thread record). Replaces lua_gettop + lua_getthreaddata.
+int l3i_direct_enter(lua_State* L, void** threaddata)
+{
+    *threaddata = L->userdata;
+    return lua_gettop(L);
+}
+
 // One call for vector reads: copies the components and returns 1, or returns 0 for any other
 // type without touching `out`.
 int l3i_read_vector(lua_State* L, int idx, float* out)

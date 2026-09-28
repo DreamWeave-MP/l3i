@@ -234,6 +234,15 @@ impl MemberEntry {
             (self.invoke)(state, self.context, top, record)
         }
     }
+
+    /// [`Self::call`] with the thread record the dispatcher already fetched.
+    ///
+    /// # Safety
+    /// As [`Self::call`]; `record` is this thread's data slot.
+    #[inline(always)]
+    pub(crate) unsafe fn call_recorded(self, state: *mut ffi::lua_State, top: c_int, record: *const c_void) -> c_int {
+        unsafe { (self.invoke)(state, self.context, top, record.cast::<ThreadRecord>()) }
+    }
 }
 
 /// The type-erased body behind [`MemberEntry`] for a method-mode binding.

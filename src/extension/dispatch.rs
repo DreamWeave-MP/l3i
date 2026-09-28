@@ -137,11 +137,12 @@ unsafe extern "C-unwind" fn namecall(
 ) -> c_int {
     unsafe {
         trampoline::enter(state, || {
-            let top = ffi::lua_gettop(state);
+            let mut record: *mut c_void = std::ptr::null_mut();
+            let top = ffi::l3i_direct_enter(state, &mut record);
             let Some((shared, plan)) = planned(state) else { return namecall_fallback(state, utag, top) };
             let resolved = resolve(plan, slot, utag, atom as Atom, AccessKind::Namecall);
             match shared.direct_entry(resolved) {
-                Some(entry) if resolved != UNKNOWN_SLOT => Ok(entry.call(state, top)),
+                Some(entry) if resolved != UNKNOWN_SLOT => Ok(entry.call_recorded(state, top, record)),
                 _ => namecall_fallback(state, utag, top),
             }
         })
@@ -165,7 +166,8 @@ unsafe extern "C-unwind" fn index(
                     // The getter takes the receiver alone; the key leaves the stack so result
                     // counting sees only what the getter pushes.
                     ffi::lua_remove(state, 2);
-                    let pushed = entry.call(state, 1);
+                    let record = ffi::lua_getthreaddata(state);
+                    let pushed = entry.call_recorded(state, 1, record);
                     if pushed == 0 {
                         ffi::lua_pushnil(state);
                     } else if pushed > 1 {

@@ -55,7 +55,8 @@ pub(crate) unsafe extern "C-unwind" fn namecall(state: *mut ffi::lua_State) -> c
         if name.is_null() {
             diagnostics::raise_at_caller(state, "attempt to call a non-callable object");
         }
-        let top = ffi::lua_gettop(state);
+        let mut record: *mut std::ffi::c_void = std::ptr::null_mut();
+        let top = ffi::l3i_direct_enter(state, &mut record);
         let kind = if atom >= 0 {
             ffi::lua_rawgeti(state, ffi::lua_upvalueindex(3), atom)
         } else {
@@ -63,7 +64,7 @@ pub(crate) unsafe extern "C-unwind" fn namecall(state: *mut ffi::lua_State) -> c
             ffi::lua_rawget(state, ffi::lua_upvalueindex(1))
         };
         match kind {
-            ffi::LUA_TUSERDATA => pop_entry(state).call(state, top),
+            ffi::LUA_TUSERDATA => pop_entry(state).call_recorded(state, top, record),
             ffi::LUA_TFUNCTION => {
                 ffi::lua_insert(state, 1);
                 let _lua_call = crate::runtime::shared::LuaCall::enter(state);
