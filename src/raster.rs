@@ -27,19 +27,30 @@
 //! local x0, y0, x1, y1 = raster.clipBounds(clip)
 //! ```
 //!
+//! [`Color16`] is the wide form for formats that require 16 bits per channel: red in bits
+//! 0..15 through alpha in bits 48..63, so the little-endian `u64` is an RGBA16 pixel. It uses
+//! the whole Luau integer and therefore carries **no kind nibble**: every integer is accepted
+//! as a `Color16`, and nothing at runtime can tell an RGBA8 color, a clip rectangle, or an id
+//! from one. That is the deliberate price of exact interchange; scripts keep the two color
+//! widths apart, and `widen`/`narrow` convert (`x * 257` up, `round(x / 257)` down, both
+//! exact round trips).
+//!
 //! Color arithmetic for GUI and shader-style code lives on the [`Math`] receiver, `raster.math()`,
 //! whose methods lower to native code under `jit` when the script annotates it
 //! (`local C: dream_raster_Math = raster.math()`): `rgba8`, `rgb8`, `red`/`green`/`blue`/`alpha`,
 //! `channels`, `withAlpha`, `lerp`, `mul` (modulate), `add` (saturating), `scale` (the color
-//! channels by a factor), and `premultiply`. Shader semantics throughout: inputs clamp to their
+//! channels by a factor), and `premultiply`, each also in a `16` form for [`Color16`], plus
+//! `widen` and `narrow`. Shader semantics throughout: inputs clamp to their
 //! range, results round to nearest, and a NaN input yields channel 0. The module's `rgba8` and
 //! `rgb8` are the strict constructors (an integer outside `0..=255` is an error); the receiver's
 //! clamp, so both paths of a lowered call agree by construction.
 
+use crate::convert::{FromView, Integer, Push};
 use crate::error::{Error, Result};
 use crate::extension::{Extension, ExtensionDescriptor, InstallContext};
 use crate::packed::{BufferPack, Packed, PackedScalar};
 use crate::source::CompileConstant;
+use crate::stack::{Scope, Type, ValueView};
 
 /// An RGBA8 color. Channel meaning (straight or premultiplied) belongs to the consumer.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -149,6 +160,177 @@ impl Color {
         let a = f64::from(self.a);
         let pre = |c: u8| ((f64::from(c) * a + 127.0) / 255.0).trunc() as u8;
         Color { r: pre(self.r), g: pre(self.g), b: pre(self.b), a: self.a }
+    }
+}
+
+/// An RGBA16 color occupying a whole Luau integer, with no kind nibble (see the module docs).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct Color16 {
+    pub r: u16,
+    pub g: u16,
+    pub b: u16,
+    pub a: u16,
+}
+
+impl Color16 {
+    pub const TRANSPARENT: Color16 = Color16::rgba(0, 0, 0, 0);
+    pub const BLACK: Color16 = Color16::rgba(0, 0, 0, u16::MAX);
+    pub const WHITE: Color16 = Color16::rgba(u16::MAX, u16::MAX, u16::MAX, u16::MAX);
+    /// The scale between the two widths: `255 * 257 == 65535`.
+    pub const WIDEN: f64 = 257.0;
+
+    #[must_use]
+    pub const fn rgba(r: u16, g: u16, b: u16, a: u16) -> Color16 {
+        Color16 { r, g, b, a }
+    }
+
+    /// The fixed 64-bit layout: red in bits 0..15, green 16..31, blue 32..47, alpha 48..63.
+    #[must_use]
+    pub const fn packed(self) -> u64 {
+        (self.r as u64) | ((self.g as u64) << 16) | ((self.b as u64) << 32) | ((self.a as u64) << 48)
+    }
+
+    /// The color with the [`Color16::packed`] layout `bits`. Every `u64` is a color.
+    #[must_use]
+    pub const fn from_packed(bits: u64) -> Color16 {
+        Color16 { r: bits as u16, g: (bits >> 16) as u16, b: (bits >> 32) as u16, a: (bits >> 48) as u16 }
+    }
+
+    /// The Luau integer holding this color (the same bits, signed).
+    #[must_use]
+    pub const fn bits(self) -> i64 {
+        self.packed() as i64
+    }
+
+    /// A channel value from a number: clamped to `0..=65535`, rounded to nearest, NaN to 0.
+    #[must_use]
+    pub fn channel(value: f64) -> u16 {
+        (value.clamp(0.0, 65535.0) + 0.5) as u16
+    }
+
+    #[must_use]
+    pub fn from_numbers(r: f64, g: f64, b: f64, a: f64) -> Color16 {
+        Color16 { r: Self::channel(r), g: Self::channel(g), b: Self::channel(b), a: Self::channel(a) }
+    }
+
+    fn map(self, other: Color16, f: impl Fn(f64, f64) -> f64) -> Color16 {
+        Color16::from_numbers(
+            f(f64::from(self.r), f64::from(other.r)),
+            f(f64::from(self.g), f64::from(other.g)),
+            f(f64::from(self.b), f64::from(other.b)),
+            f(f64::from(self.a), f64::from(other.a)),
+        )
+    }
+
+    #[must_use]
+    pub fn with_alpha(self, a: f64) -> Color16 {
+        Color16 { a: Self::channel(a), ..self }
+    }
+
+    #[must_use]
+    pub fn lerp(self, other: Color16, t: f64) -> Color16 {
+        let t = t.clamp(0.0, 1.0);
+        self.map(other, |a, b| a + (b - a) * t)
+    }
+
+    /// Per-channel modulation, `a * b / 65535`.
+    #[must_use]
+    pub fn modulate(self, other: Color16) -> Color16 {
+        self.map(other, |a, b| a * b / 65535.0)
+    }
+
+    #[must_use]
+    pub fn saturating_add(self, other: Color16) -> Color16 {
+        self.map(other, |a, b| a + b)
+    }
+
+    #[must_use]
+    pub fn scale(self, factor: f64) -> Color16 {
+        Color16 {
+            r: Self::channel(f64::from(self.r) * factor),
+            g: Self::channel(f64::from(self.g) * factor),
+            b: Self::channel(f64::from(self.b) * factor),
+            a: self.a,
+        }
+    }
+
+    /// Straight alpha to premultiplied: `(c * a + 32767) / 65535` in integer arithmetic.
+    #[must_use]
+    pub fn premultiply(self) -> Color16 {
+        let a = f64::from(self.a);
+        let pre = |c: u16| ((f64::from(c) * a + 32767.0) / 65535.0).trunc() as u16;
+        Color16 { r: pre(self.r), g: pre(self.g), b: pre(self.b), a: self.a }
+    }
+
+    /// The RGBA8 color scaled up exactly (`x * 257`).
+    #[must_use]
+    pub fn widen(color: Color) -> Color16 {
+        let up = |c: u8| u16::from(c) * 257;
+        Color16 { r: up(color.r), g: up(color.g), b: up(color.b), a: up(color.a) }
+    }
+
+    /// The nearest RGBA8 color (`round(x / 257)`); `narrow(widen(c)) == c`.
+    #[must_use]
+    pub fn narrow(self) -> Color {
+        let down = |c: u16| Color::channel(f64::from(c) / Self::WIDEN);
+        Color { r: down(self.r), g: down(self.g), b: down(self.b), a: down(self.a) }
+    }
+}
+
+impl<'v> FromView<'v> for Color16 {
+    const EXPECTED: &'static str = "integer";
+
+    fn from_view(view: ValueView<'v>) -> Result<Self> {
+        if view.type_of() != Type::Integer {
+            return Err(view.type_error(Type::Integer));
+        }
+        let Integer(bits) = Integer::from_view(view)?;
+        Ok(Color16::from_packed(bits as u64))
+    }
+
+    fn matches(view: ValueView<'v>) -> bool {
+        view.type_of() == Type::Integer
+    }
+}
+
+impl crate::bind::Param for Color16 {
+    type Item<'c> = Color16;
+}
+
+impl<'c> crate::bind::ParamItem<'c> for Color16 {
+    const KIND: crate::bind::ParamKind = crate::bind::ParamKind::Regular;
+    const EXPECTED: &'static str = "integer";
+    #[inline]
+    fn read_slot(view: ValueView<'c>) -> Result<Self> {
+        <Color16 as FromView<'c>>::from_view(view)
+    }
+    #[inline]
+    fn matches(view: ValueView<'c>) -> bool {
+        <Color16 as FromView<'c>>::matches(view)
+    }
+}
+
+impl Push for Color16 {
+    fn push_into<'s, S: Scope>(&self, scope: &'s S) -> Result<ValueView<'s>> {
+        Integer(self.bits()).push_into(scope)
+    }
+}
+
+impl crate::bind::Return for Color16 {
+    fn push_results(self, call: &crate::bind::Call<'_>) -> Result<std::ffi::c_int> {
+        self.push_into(call)?;
+        Ok(1)
+    }
+}
+
+/// Eight bytes, little-endian: an RGBA16 pixel.
+impl BufferPack for Color16 {
+    const SIZE: usize = 8;
+    fn read_from(bytes: &[u8]) -> Result<Self> {
+        u64::read_from(bytes).map(Color16::from_packed)
+    }
+    fn write_to(&self, bytes: &mut [u8]) -> Result<()> {
+        self.packed().write_to(bytes)
     }
 }
 
@@ -292,6 +474,20 @@ impl Extension for RasterExtension {
         math.method("add").signature("(self, a: number, b: number): number");
         math.method("scale").signature("(self, color: number, factor: number): number");
         math.method("premultiply").signature("(self, color: number): number");
+        math.method("rgba16").signature("(self, r: number, g: number, b: number, a: number): number");
+        math.method("rgb16").signature("(self, r: number, g: number, b: number): number");
+        for channel in ["red16", "green16", "blue16", "alpha16"] {
+            math.method(channel).signature("(self, color: number): number");
+        }
+        math.method("channels16").signature("(self, color: number): (number, number, number, number)");
+        math.method("withAlpha16").signature("(self, color: number, a: number): number");
+        math.method("lerp16").signature("(self, a: number, b: number, t: number): number");
+        math.method("mul16").signature("(self, a: number, b: number): number");
+        math.method("add16").signature("(self, a: number, b: number): number");
+        math.method("scale16").signature("(self, color: number, factor: number): number");
+        math.method("premultiply16").signature("(self, color: number): number");
+        math.method("widen").signature("(self, color: number): number");
+        math.method("narrow").signature("(self, color: number): number");
         #[cfg(feature = "jit")]
         d.native_hooks(lowering::ColorMath);
         d.module(MODULE).doc("Colors and clip rectangles as packed integers.");
@@ -313,7 +509,22 @@ impl Extension for RasterExtension {
             .method("mul", |_: &Math, a: C, b: C| a.0.modulate(b.0).pack())?
             .method("add", |_: &Math, a: C, b: C| a.0.saturating_add(b.0).pack())?
             .method("scale", |_: &Math, c: C, factor: f64| c.0.scale(factor).pack())?
-            .method("premultiply", |_: &Math, c: C| c.0.premultiply().pack())?;
+            .method("premultiply", |_: &Math, c: C| c.0.premultiply().pack())?
+            .method("rgba16", |_: &Math, r: f64, g: f64, b: f64, a: f64| Color16::from_numbers(r, g, b, a))?
+            .method("rgb16", |_: &Math, r: f64, g: f64, b: f64| Color16::from_numbers(r, g, b, 65535.0))?
+            .method("red16", |_: &Math, c: Color16| f64::from(c.r))?
+            .method("green16", |_: &Math, c: Color16| f64::from(c.g))?
+            .method("blue16", |_: &Math, c: Color16| f64::from(c.b))?
+            .method("alpha16", |_: &Math, c: Color16| f64::from(c.a))?
+            .method("channels16", |_: &Math, c: Color16| (f64::from(c.r), f64::from(c.g), f64::from(c.b), f64::from(c.a)))?
+            .method("withAlpha16", |_: &Math, c: Color16, a: f64| c.with_alpha(a))?
+            .method("lerp16", |_: &Math, a: Color16, b: Color16, t: f64| a.lerp(b, t))?
+            .method("mul16", |_: &Math, a: Color16, b: Color16| a.modulate(b))?
+            .method("add16", |_: &Math, a: Color16, b: Color16| a.saturating_add(b))?
+            .method("scale16", |_: &Math, c: Color16, factor: f64| c.scale(factor))?
+            .method("premultiply16", |_: &Math, c: Color16| c.premultiply())?
+            .method("widen", |_: &Math, c: C| Color16::widen(c.0))?
+            .method("narrow", |_: &Math, c: Color16| c.narrow().pack())?;
         let mut module = cx.module(MODULE)?;
         module
             .constant("TRANSPARENT", CompileConstant::Integer(Color::TRANSPARENT.pack().bits()))?
@@ -338,6 +549,20 @@ impl Extension for RasterExtension {
             .function("scale", |c: Packed<Color>, factor: f64| c.0.scale(factor).pack())?
             .function("premultiply", |c: Packed<Color>| c.0.premultiply().pack())?
             .function("math", || crate::userdata::Owned(Math))?
+            .constant("TRANSPARENT16", CompileConstant::Integer(Color16::TRANSPARENT.bits()))?
+            .constant("BLACK16", CompileConstant::Integer(Color16::BLACK.bits()))?
+            .constant("WHITE16", CompileConstant::Integer(Color16::WHITE.bits()))?
+            .function("rgba16", |r: f64, g: f64, b: f64, a: f64| Color16::from_numbers(r, g, b, a))?
+            .function("rgb16", |r: f64, g: f64, b: f64| Color16::from_numbers(r, g, b, 65535.0))?
+            .function("channels16", |c: Color16| (f64::from(c.r), f64::from(c.g), f64::from(c.b), f64::from(c.a)))?
+            .function("withAlpha16", |c: Color16, a: f64| c.with_alpha(a))?
+            .function("lerp16", |a: Color16, b: Color16, t: f64| a.lerp(b, t))?
+            .function("mul16", |a: Color16, b: Color16| a.modulate(b))?
+            .function("add16", |a: Color16, b: Color16| a.saturating_add(b))?
+            .function("scale16", |c: Color16, factor: f64| c.scale(factor))?
+            .function("premultiply16", |c: Color16| c.premultiply())?
+            .function("widen", |c: Packed<Color>| Color16::widen(c.0))?
+            .function("narrow", |c: Color16| c.narrow().pack())?
             .function("clip", |min_x: i64, min_y: i64, max_x: i64, max_y: i64| -> Result<Packed<ClipRect>> {
                 Ok(ClipRect::new(
                     coordinate("clip minX", min_x)?,
@@ -382,6 +607,30 @@ mod tests {
     }
 
     #[test]
+    fn color16_layout_and_conversions_are_exact() {
+        let c = Color16::rgba(0x1111, 0x2222, 0x3333, 0x8444);
+        assert_eq!(c.packed(), 0x8444_3333_2222_1111);
+        assert_eq!(Color16::from_packed(c.packed()), c);
+        assert!(c.bits() < 0, "alpha above 0x7FFF makes a negative Luau integer, which is fine");
+        let mut bytes = [0u8; 8];
+        c.write_to(&mut bytes).unwrap();
+        assert_eq!(bytes, [0x11, 0x11, 0x22, 0x22, 0x33, 0x33, 0x44, 0x84]);
+        for v in 0..=255u8 {
+            let narrow = Color16::widen(Color::rgba(v, 0, 255 - v, v)).narrow();
+            assert_eq!(narrow, Color::rgba(v, 0, 255 - v, v));
+        }
+        assert_eq!(Color16::widen(Color::WHITE), Color16::WHITE);
+        assert_eq!(Color16::BLACK.lerp(Color16::WHITE, 0.5), Color16::rgba(32768, 32768, 32768, 65535));
+        assert_eq!(Color16::from_numbers(-1.0, 65535.4, 65534.5, f64::NAN), Color16::rgba(0, 65535, 65535, 0));
+        for c in [0u32, 1, 255, 256, 32767, 32768, 65534, 65535] {
+            for a in [0u32, 1, 128, 255, 256, 32767, 32768, 65535] {
+                let expected = ((c * a + 32767) / 65535) as u16;
+                assert_eq!(Color16::rgba(c as u16, 0, 0, a as u16).premultiply().r, expected, "c {c} a {a}");
+            }
+        }
+    }
+
+    #[test]
     fn premultiply_matches_integer_rounding_everywhere() {
         for c in 0..=255u16 {
             for a in 0..=255u16 {
@@ -408,15 +657,17 @@ mod tests {
 
 /// Native lowering of the [`Math`] receiver (`jit`): a color is unpacked with shifts and masks
 /// into four doubles, the arithmetic runs on doubles, and the result is clamped, rounded, and
-/// packed into one integer store. Every operand is tag- and kind-checked; a mismatch exits to
-/// the interpreter, whose bound method raises the type error. `min(255, v)` and `max(0, v)` are
+/// packed into one integer store. The 8-bit form is tag- and kind-checked; the 16-bit form is
+/// tag-checked only, since it has no kind (any integer is a `Color16`). A mismatch exits to the
+/// interpreter, whose bound method raises the type error. `min(max, v)` and `max(0, v)` are
 /// emitted with the constant first so a NaN comes through as NaN on every target and converts
-/// to channel 0, as [`Color::channel`] does.
+/// to channel 0, as [`Color::channel`] does. Every value defined here is consumed: an unused
+/// value stays live and trips Luau's no-spills assertion at the next call.
 #[cfg(feature = "jit")]
 pub mod lowering {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use super::{Color, Math};
+    use super::{Color, Color16, Math};
     use crate::native_code::hooks::{NamecallSite, NativeCodeHooks, NativeContext};
     use crate::native_code::ir::{IrBuilder, IrCmd, IrCondition, IrOp, bytecode_type};
     use crate::packed::PackedScalar;
@@ -433,20 +684,38 @@ pub mod lowering {
     /// The hook set; [`super::RasterExtension`] registers it.
     pub struct ColorMath;
 
-    const KIND: i64 = <Color as PackedScalar>::KIND as i64;
-    const SHIFTS: [i64; 4] = [0, 8, 16, 24];
+    /// One channel width.
+    #[derive(Clone, Copy)]
+    struct Format {
+        bits: i64,
+        max: f64,
+        /// The packed kind to check, or none for the raw 16-bit form.
+        kind: Option<i64>,
+    }
 
-    /// Checks the register holds a packed `Color` and returns its bits.
-    fn checked_color(build: &mut IrBuilder<'_>, reg: IrOp, exit: IrOp) -> IrOp {
+    const RGBA8: Format = Format { bits: 8, max: 255.0, kind: Some(<Color as PackedScalar>::KIND as i64) };
+    const RGBA16: Format = Format { bits: 16, max: 65535.0, kind: None };
+
+    impl Format {
+        fn shift(self, lane: usize) -> i64 {
+            self.bits * lane as i64
+        }
+    }
+
+    /// Checks the register holds an integer (and, for the 8-bit form, a packed `Color`) and
+    /// returns its bits.
+    fn checked(build: &mut IrBuilder<'_>, reg: IrOp, exit: IrOp, format: Format) -> IrOp {
         build.load_and_check_tag(reg, LUA_TINTEGER as u8, exit);
         let bits = build.inst(IrCmd::LOAD_INT64, &[reg]);
-        let sixty = build.const_int64(60);
-        let fifteen = build.const_int64(15);
-        let kind = build.inst(IrCmd::BITRSHIFT_INT64, &[bits, sixty]);
-        let kind = build.inst(IrCmd::BITAND_INT64, &[kind, fifteen]);
-        let expected = build.const_int64(KIND);
-        let equal = build.cond(IrCondition::Equal);
-        build.inst(IrCmd::CHECK_CMP_INT64, &[kind, expected, equal, exit]);
+        if let Some(kind) = format.kind {
+            let sixty = build.const_int64(60);
+            let fifteen = build.const_int64(15);
+            let actual = build.inst(IrCmd::BITRSHIFT_INT64, &[bits, sixty]);
+            let actual = build.inst(IrCmd::BITAND_INT64, &[actual, fifteen]);
+            let expected = build.const_int64(kind);
+            let equal = build.cond(IrCondition::Equal);
+            build.inst(IrCmd::CHECK_CMP_INT64, &[actual, expected, equal, exit]);
+        }
         bits
     }
 
@@ -455,11 +724,10 @@ pub mod lowering {
         build.inst(IrCmd::LOAD_DOUBLE, &[reg])
     }
 
-    /// One channel of `bits` as a double. Every value a lowering defines must be consumed: an
-    /// unused value stays live and trips Luau's no-spills assertion at the next call, so
-    /// callers unpack only the lanes they use.
-    fn lane(build: &mut IrBuilder<'_>, bits: IrOp, shift: i64) -> IrOp {
-        let mask = build.const_int64(255);
+    /// One channel of `bits` as a double.
+    fn lane(build: &mut IrBuilder<'_>, bits: IrOp, index: usize, format: Format) -> IrOp {
+        let mask = build.const_int64(format.max as i64);
+        let shift = format.shift(index);
         let lane = if shift == 0 {
             bits
         } else {
@@ -470,14 +738,13 @@ pub mod lowering {
         build.inst(IrCmd::INT64_TO_NUM, &[lane])
     }
 
-    /// The four channels of `bits` as doubles.
-    fn unpack(build: &mut IrBuilder<'_>, bits: IrOp) -> [IrOp; 4] {
-        SHIFTS.map(|shift| lane(build, bits, shift))
+    fn unpack(build: &mut IrBuilder<'_>, bits: IrOp, format: Format) -> [IrOp; 4] {
+        [0, 1, 2, 3].map(|index| lane(build, bits, index, format))
     }
 
     /// One channel from a double: clamp, round (or truncate), convert, mask.
-    fn channel(build: &mut IrBuilder<'_>, value: IrOp, round: bool) -> IrOp {
-        let top = build.const_double(255.0);
+    fn channel(build: &mut IrBuilder<'_>, value: IrOp, round: bool, format: Format) -> IrOp {
+        let top = build.const_double(format.max);
         let zero = build.const_double(0.0);
         let value = build.inst(IrCmd::MIN_NUM, &[top, value]);
         let value = build.inst(IrCmd::MAX_NUM, &[zero, value]);
@@ -488,15 +755,16 @@ pub mod lowering {
             value
         };
         let value = build.inst(IrCmd::NUM_TO_INT64, &[value]);
-        let mask = build.const_int64(255);
+        let mask = build.const_int64(format.max as i64);
         build.inst(IrCmd::BITAND_INT64, &[value, mask])
     }
 
-    /// Packs four channel doubles into a `Color` integer.
-    fn pack(build: &mut IrBuilder<'_>, channels: [IrOp; 4], round: bool) -> IrOp {
+    /// Packs four channel doubles into a color integer of `format`.
+    fn pack(build: &mut IrBuilder<'_>, channels: [IrOp; 4], round: bool, format: Format) -> IrOp {
         let mut bits: Option<IrOp> = None;
-        for (value, shift) in channels.into_iter().zip(SHIFTS) {
-            let lane = channel(build, value, round);
+        for (index, value) in channels.into_iter().enumerate() {
+            let lane = channel(build, value, round, format);
+            let shift = format.shift(index);
             let lane = if shift == 0 {
                 lane
             } else {
@@ -508,9 +776,14 @@ pub mod lowering {
                 Some(bits) => build.inst(IrCmd::BITOR_INT64, &[bits, lane]),
             });
         }
-        let kind = build.const_int64(KIND << 60);
         let bits = bits.expect("four channels");
-        build.inst(IrCmd::BITOR_INT64, &[bits, kind])
+        match format.kind {
+            Some(kind) => {
+                let kind = build.const_int64(kind << 60);
+                build.inst(IrCmd::BITOR_INT64, &[bits, kind])
+            }
+            None => bits,
+        }
     }
 
     fn store_integer(build: &mut IrBuilder<'_>, result: IrOp, bits: IrOp) {
@@ -525,14 +798,31 @@ pub mod lowering {
         build.inst(IrCmd::STORE_TAG, &[result, tag]);
     }
 
-    /// The result count each method produces.
-    fn results_of(member: &str) -> Option<i32> {
-        Some(match member {
+    /// The base operation, its width, and its result count.
+    fn classify(member: &str) -> Option<(&str, Format, i32)> {
+        if let Some(base) = ["widen", "narrow"].into_iter().find(|m| *m == member) {
+            return Some((base, RGBA8, 1));
+        }
+        let (base, format) = match member.strip_suffix("16") {
+            Some(base) => (base, RGBA16),
+            None => (member, RGBA8),
+        };
+        let results = match base {
             "channels" => 4,
-            "rgba8" | "rgb8" | "red" | "green" | "blue" | "alpha" | "withAlpha" | "lerp" | "mul" | "add" | "scale"
-            | "premultiply" => 1,
+            "rgba8" | "rgba" | "rgb8" | "rgb" | "red" | "green" | "blue" | "alpha" | "withAlpha" | "lerp" | "mul" | "add"
+            | "scale" | "premultiply" => 1,
             _ => return None,
-        })
+        };
+        // `rgba16`/`rgb16` strip to `rgba`/`rgb`; `rgba8`/`rgb8` keep their digit.
+        let base = match base {
+            "rgba8" => "rgba",
+            "rgb8" => "rgb",
+            other => other,
+        };
+        if matches!(base, "rgba" | "rgb") && member.ends_with('8') == (format.bits == 16) {
+            return None;
+        }
+        Some((base, format, results))
     }
 
     impl NativeCodeHooks for ColorMath {
@@ -540,11 +830,10 @@ pub mod lowering {
             if context.userdata_type_of::<Math>() != Some(userdata_type) {
                 return bytecode_type::ANY;
             }
-            match member {
-                "red" | "green" | "blue" | "alpha" => bytecode_type::NUMBER,
-                "channels" => bytecode_type::ANY,
-                _ if results_of(member).is_some() => bytecode_type::INTEGER,
-                _ => bytecode_type::ANY,
+            match classify(member) {
+                Some(("red" | "green" | "blue" | "alpha", _, _)) => bytecode_type::NUMBER,
+                Some(("channels", _, _)) | None => bytecode_type::ANY,
+                Some(_) => bytecode_type::INTEGER,
             }
         }
 
@@ -560,7 +849,7 @@ pub mod lowering {
             if context.userdata_type_of::<Math>() != Some(userdata_type) {
                 return false;
             }
-            let Some(results) = results_of(member) else { return false };
+            let Some((base, format, results)) = classify(member) else { return false };
             if site.results != results {
                 return false;
             }
@@ -572,30 +861,30 @@ pub mod lowering {
             build.inst(IrCmd::CHECK_USERDATA_TAG, &[pointer, tag, exit]);
             let result = build.vm_reg(site.arg_res_reg);
             let arg = |build: &mut IrBuilder<'_>, index: i32| build.vm_reg(site.arg_res_reg + 2 + index);
-            match (member, site.params) {
-                ("rgba8", 5) | ("rgb8", 4) => {
+            match (base, site.params) {
+                ("rgba", 5) | ("rgb", 4) => {
                     let mut channels = [result; 4];
                     for (i, slot) in channels.iter_mut().enumerate().take(site.params as usize - 1) {
                         let reg = arg(build, i as i32);
                         *slot = number(build, reg, exit);
                     }
-                    if member == "rgb8" {
-                        channels[3] = build.const_double(255.0);
+                    if base == "rgb" {
+                        channels[3] = build.const_double(format.max);
                     }
-                    let bits = pack(build, channels, true);
+                    let bits = pack(build, channels, true, format);
                     store_integer(build, result, bits);
                 }
                 ("red" | "green" | "blue" | "alpha", 2) => {
                     let reg = arg(build, 0);
-                    let bits = checked_color(build, reg, exit);
-                    let index = ["red", "green", "blue", "alpha"].iter().position(|m| *m == member).expect("matched");
-                    let value = lane(build, bits, SHIFTS[index]);
+                    let bits = checked(build, reg, exit, format);
+                    let index = ["red", "green", "blue", "alpha"].iter().position(|m| *m == base).expect("matched");
+                    let value = lane(build, bits, index, format);
                     store_number(build, result, value);
                 }
                 ("channels", 2) => {
                     let reg = arg(build, 0);
-                    let bits = checked_color(build, reg, exit);
-                    let channels = unpack(build, bits);
+                    let bits = checked(build, reg, exit, format);
+                    let channels = unpack(build, bits, format);
                     for (i, value) in channels.into_iter().enumerate() {
                         let slot = build.vm_reg(site.arg_res_reg + i as i32);
                         store_number(build, slot, value);
@@ -603,78 +892,101 @@ pub mod lowering {
                 }
                 ("withAlpha", 3) => {
                     let (c_reg, a_reg) = (arg(build, 0), arg(build, 1));
-                    let bits = checked_color(build, c_reg, exit);
+                    let bits = checked(build, c_reg, exit, format);
                     let alpha = number(build, a_reg, exit);
-                    let channels = [lane(build, bits, 0), lane(build, bits, 8), lane(build, bits, 16), alpha];
-                    let bits = pack(build, channels, true);
+                    let channels =
+                        [lane(build, bits, 0, format), lane(build, bits, 1, format), lane(build, bits, 2, format), alpha];
+                    let bits = pack(build, channels, true, format);
                     store_integer(build, result, bits);
                 }
                 ("lerp", 4) => {
                     let (a_reg, b_reg, t_reg) = (arg(build, 0), arg(build, 1), arg(build, 2));
-                    let a = checked_color(build, a_reg, exit);
-                    let b = checked_color(build, b_reg, exit);
+                    let a = checked(build, a_reg, exit, format);
+                    let b = checked(build, b_reg, exit, format);
                     let t = number(build, t_reg, exit);
                     let one = build.const_double(1.0);
                     let zero = build.const_double(0.0);
                     let t = build.inst(IrCmd::MIN_NUM, &[one, t]);
                     let t = build.inst(IrCmd::MAX_NUM, &[zero, t]);
-                    let (a, b) = (unpack(build, a), unpack(build, b));
+                    let (a, b) = (unpack(build, a, format), unpack(build, b, format));
                     let mut out = [result; 4];
                     for i in 0..4 {
                         let delta = build.inst(IrCmd::SUB_NUM, &[b[i], a[i]]);
                         let step = build.inst(IrCmd::MUL_NUM, &[delta, t]);
                         out[i] = build.inst(IrCmd::ADD_NUM, &[a[i], step]);
                     }
-                    let bits = pack(build, out, true);
+                    let bits = pack(build, out, true, format);
                     store_integer(build, result, bits);
                 }
                 ("mul" | "add", 3) => {
                     let (a_reg, b_reg) = (arg(build, 0), arg(build, 1));
-                    let a = checked_color(build, a_reg, exit);
-                    let b = checked_color(build, b_reg, exit);
-                    let (a, b) = (unpack(build, a), unpack(build, b));
+                    let a = checked(build, a_reg, exit, format);
+                    let b = checked(build, b_reg, exit, format);
+                    let (a, b) = (unpack(build, a, format), unpack(build, b, format));
                     let mut out = [result; 4];
-                    let top = build.const_double(255.0);
+                    let top = build.const_double(format.max);
                     for i in 0..4 {
-                        out[i] = if member == "mul" {
-                            // `a * b / 255`, the division as the interpreter computes it.
+                        out[i] = if base == "mul" {
+                            // `a * b / max`, the division as the interpreter computes it.
                             let product = build.inst(IrCmd::MUL_NUM, &[a[i], b[i]]);
                             build.inst(IrCmd::DIV_NUM, &[product, top])
                         } else {
                             build.inst(IrCmd::ADD_NUM, &[a[i], b[i]])
                         };
                     }
-                    let bits = pack(build, out, true);
+                    let bits = pack(build, out, true, format);
                     store_integer(build, result, bits);
                 }
                 ("scale", 3) => {
                     let (c_reg, f_reg) = (arg(build, 0), arg(build, 1));
-                    let bits = checked_color(build, c_reg, exit);
+                    let bits = checked(build, c_reg, exit, format);
                     let factor = number(build, f_reg, exit);
-                    let channels = unpack(build, bits);
-                    let mut out = channels;
+                    let mut out = unpack(build, bits, format);
                     for slot in out.iter_mut().take(3) {
                         *slot = build.inst(IrCmd::MUL_NUM, &[*slot, factor]);
                     }
-                    // Alpha passes through: it is already an exact channel, so rounding is a no-op.
-                    let bits = pack(build, out, true);
+                    // Alpha passes through: already an exact channel, so rounding is a no-op.
+                    let bits = pack(build, out, true, format);
                     store_integer(build, result, bits);
                 }
                 ("premultiply", 2) => {
                     let reg = arg(build, 0);
-                    let bits = checked_color(build, reg, exit);
-                    let channels = unpack(build, bits);
+                    let bits = checked(build, reg, exit, format);
+                    let channels = unpack(build, bits, format);
                     let alpha = channels[3];
-                    let bias = build.const_double(127.0);
-                    let top = build.const_double(255.0);
+                    let bias = build.const_double((format.max - 1.0) / 2.0);
+                    let top = build.const_double(format.max);
                     let mut out = channels;
                     for slot in out.iter_mut().take(3) {
                         let scaled = build.inst(IrCmd::MUL_NUM, &[*slot, alpha]);
                         let biased = build.inst(IrCmd::ADD_NUM, &[scaled, bias]);
                         *slot = build.inst(IrCmd::DIV_NUM, &[biased, top]);
                     }
-                    // Truncating conversion: `(c * a + 127) / 255` in integer arithmetic.
-                    let bits = pack(build, out, false);
+                    // Truncating conversion: `(c * a + bias) / max` in integer arithmetic.
+                    let bits = pack(build, out, false, format);
+                    store_integer(build, result, bits);
+                }
+                ("widen", 2) => {
+                    let reg = arg(build, 0);
+                    let bits = checked(build, reg, exit, RGBA8);
+                    let factor = build.const_double(Color16::WIDEN);
+                    let mut out = unpack(build, bits, RGBA8);
+                    for slot in &mut out {
+                        *slot = build.inst(IrCmd::MUL_NUM, &[*slot, factor]);
+                    }
+                    // Exact integers: no rounding needed.
+                    let bits = pack(build, out, false, RGBA16);
+                    store_integer(build, result, bits);
+                }
+                ("narrow", 2) => {
+                    let reg = arg(build, 0);
+                    let bits = checked(build, reg, exit, RGBA16);
+                    let factor = build.const_double(Color16::WIDEN);
+                    let mut out = unpack(build, bits, RGBA16);
+                    for slot in &mut out {
+                        *slot = build.inst(IrCmd::DIV_NUM, &[*slot, factor]);
+                    }
+                    let bits = pack(build, out, true, RGBA8);
                     store_integer(build, result, bits);
                 }
                 _ => return false,

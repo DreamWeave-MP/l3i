@@ -24,6 +24,8 @@ fn module_functions(c: &mut Criterion) {
         ("lerp", "c = raster.lerp(c, w, 0.25)"),
         ("mul", "c = raster.mul(c, w)"),
         ("premultiply", "c = raster.premultiply(c)"),
+        ("lerp16", "c16 = raster.lerp16(c16, w16, 0.25)"),
+        ("narrow", "c = raster.narrow(c16)"),
     ];
     let mut group = c.benchmark_group("raster_module");
     group.throughput(Throughput::Elements(CALLS));
@@ -31,6 +33,7 @@ fn module_functions(c: &mut Criterion) {
         let function = runtime
             .load_function(&format!(
                 "return function() local raster = raster local c, w = raster.rgba8(10, 20, 30, 200), raster.rgba8(200, 100, 50, 128) \
+                 local c16, w16 = raster.widen(c), raster.widen(w) \
                  for i = 1, {CALLS} do {body} end return 0 end"
             ))
             .unwrap();
@@ -68,6 +71,8 @@ fn lowered(c: &mut Criterion) {
         ("lerp (native lowered)", "c = M:lerp(c, w, 0.25)"),
         ("mul (native lowered)", "c = M:mul(c, w)"),
         ("premultiply (native lowered)", "c = M:premultiply(c)"),
+        ("lerp16 (native lowered)", "c16 = M:lerp16(c16, w16, 0.25)"),
+        ("narrow (native lowered)", "c = M:narrow(c16)"),
         ("rgba8 (native, module)", "c = raster.rgba8(i % 256, 40, 40, 255)"),
         ("lerp (native, module)", "c = raster.lerp(c, w, 0.25)"),
     ];
@@ -80,8 +85,8 @@ fn lowered(c: &mut Criterion) {
                 "bench.lua",
                 &format!(
                     "--!native\nlocal M: dream_raster_Math = raster.math()\n\
-                     local w = raster.rgba8(200, 100, 50, 128)\n\
-                     return function() local c = raster.rgba8(10, 20, 30, 200) for i = 1, {CALLS} do {body} end return 0 end"
+                     local w = raster.rgba8(200, 100, 50, 128) local w16 = raster.widen(w)\n\
+                     return function() local c = raster.rgba8(10, 20, 30, 200) local c16 = raster.widen(c) for i = 1, {CALLS} do {body} end return 0 end"
                 ),
             )
             .unwrap();

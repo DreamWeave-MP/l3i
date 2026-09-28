@@ -28,6 +28,18 @@ fn colors_and_clips_are_distinct_packed_kinds() {
              assert(M:lerp(raster.BLACK, raster.WHITE, 0 / 0) == raster.TRANSPARENT, 'NaN gives zero channels') \
              local r2, g2, b2, a2 = M:channels(c) assert(r2 == 0x11 and a2 == 0x44, 'math channels') \
              assert(M:red(c) == 0x11 and M:alpha(c) == 0x44, 'math getters') \
+             -- The wide form: exact 16-bit channels in the whole integer, no kind nibble. \
+             local w = raster.rgba16(0x1111, 0x2222, 0x3333, 0x8444) \
+             local wr, wg, wb, wa = raster.channels16(w) assert(wr == 0x1111 and wa == 0x8444, 'channels16') \
+             assert(raster.widen(c) == raster.rgba16(0x11 * 257, 0x22 * 257, 0x33 * 257, 0x44 * 257), 'widen') \
+             assert(raster.narrow(raster.widen(c)) == c, 'narrow round trip') \
+             assert(raster.narrow(w) == raster.rgba8(17, 34, 51, 132), 'narrow rounds') \
+             assert(raster.lerp16(raster.BLACK16, raster.WHITE16, 0.5) == raster.rgba16(32768, 32768, 32768, 65535), 'lerp16') \
+             assert(M:mul16(raster.WHITE16, w) == w and M:add16(w, w) == raster.rgba16(0x2222, 0x4444, 0x6666, 65535), 'mul16 add16') \
+             assert(M:premultiply16(raster.rgba16(65535, 32768, 1, 32768)) == raster.rgba16(32768, 16384, 1, 32768), 'premultiply16') \
+             assert(M:widen(c) == raster.widen(c) and M:narrow(w) == raster.narrow(w), 'math conversions') \
+             -- No kind: an RGBA8 color is accepted as a Color16 and read as its bits, by design. \
+             assert(raster.channels16(c) ~= nil, 'no kind check on the wide form') \
              assert(raster.WHITE == raster.rgba8(255, 255, 255, 255), 'folded constant') \
              -- The four bytes of a color in a buffer are r, g, b, a: the pixel layout. \
              local buf = buffer.create(4) buffer.writeu32(buf, 0, raster.packed(c)) assert(raster.packed(c) == 0x44332211, 'packed') \
@@ -108,6 +120,23 @@ fn color_math_lowers_to_native_code() {
                      assert(M:scale(a, f) == raster.scale(a, f), 'scale')
                      assert(M:lerp(a, b, f) == raster.lerp(a, b, f), 'lerp factor')
                  end
+                 -- The wide form through the same grid: widen, arithmetic, narrow back.
+                 local wa, wb = M:widen(a), M:widen(b)
+                 assert(wa == raster.widen(a) and M:narrow(wa) == raster.narrow(wa), 'widen narrow')
+                 assert(M:lerp16(wa, wb, 0.3) == raster.lerp16(wa, wb, 0.3), 'lerp16')
+                 assert(M:mul16(wa, wb) == raster.mul16(wa, wb), 'mul16')
+                 assert(M:add16(wa, wb) == raster.add16(wa, wb), 'add16')
+                 assert(M:premultiply16(wa) == raster.premultiply16(wa), 'premultiply16')
+                 assert(M:withAlpha16(wa, i * 300) == raster.withAlpha16(wa, i * 300), 'withAlpha16')
+                 assert(M:rgba16(r1 * 300, g1 * 300, b1 * 300, a1 * 300) == raster.rgba16(r1 * 300, g1 * 300, b1 * 300, a1 * 300), 'rgba16')
+                 assert(M:rgb16(r1 * 257, g1 * 257, b1 * 257) == raster.rgb16(r1 * 257, g1 * 257, b1 * 257), 'rgb16')
+                 local r16, g16, b16, a16 = M:channels16(wa)
+                 local r17, g17, b17, a17 = raster.channels16(wa)
+                 assert(r16 == r17 and g16 == g17 and b16 == b17 and a16 == a17, 'channels16')
+                 assert(M:red16(wa) == r17 and M:alpha16(wa) == a17, 'getters16')
+                 for _, f in factors do
+                     assert(M:scale16(wa, f) == raster.scale16(wa, f), 'scale16')
+                 end
                  checks += 1
              end
              -- Wrong kinds exit to the interpreter, whose method raises the type error.
@@ -116,13 +145,15 @@ fn color_math_lowers_to_native_code() {
              assert(not ok and string.find(err, 'Color'), err)
              local ok2 = pcall(function() local r = M:mul(colors[1], 42i) return r end)
              assert(not ok2)
+             local ok3, err3 = pcall(function() local r = M:lerp16(colors[1], colors[2], 'x') return r end)
+             assert(not ok3 and string.find(err3, 'number'), err3)
              return checks",
         )
         .unwrap();
     let native = template.native_code().expect("compiled");
     assert_eq!(native.status, NativeCodeStatus::Success, "{native:?}");
     let sites = lowered_sites() - before;
-    assert!(sites >= 15, "expected every receiver call site to lower, got {sites}");
+    assert!(sites >= 30, "expected every receiver call site to lower, got {sites}");
     let loader = runtime.load_function("return function(name) error('module ' .. name .. ' not found') end").unwrap();
     let instance = sandbox
         .new_instance(&runtime, &InstanceSpec { name: "c", packages: &[], hidden_data: None, loader: &loader })
@@ -131,5 +162,5 @@ fn color_math_lowers_to_native_code() {
     let checks: f64 = runtime.stack().with_frame(|frame| results[0].push_to(frame)?.read::<f64>()).unwrap();
     assert_eq!(checks as usize, 17 * 17);
     let stats = generator.execution_stats(&runtime.stack());
-    assert_eq!(stats.vm_exits_taken, 2, "only the two wrong-kind calls exit: {stats:?}");
+    assert_eq!(stats.vm_exits_taken, 3, "only the three bad calls exit: {stats:?}");
 }
