@@ -1,12 +1,9 @@
 # Questionable semantics carried over from the C++ binder
 
-The port reproduces the C++ binder's observable behaviour. Where that behaviour looks
-accidental, it is listed here rather than silently corrected. Each entry names the source and
-the test that pins it.
-
-- **Luau integers report `expected integer, got integer` when out of range.**
-  `ValueView::as<Integral>()` used `LUA_TINTEGER` as the expected type for both non-integral
-  numbers and out-of-range integers. Ported as-is (`convert::scalar`).
+None remain. The last one, the C++ binder's `expected integer, got integer` for an out-of-range
+Luau integer, was replaced on 2026-09-27 by `integer <value> is out of range for <type>` (and
+`number <value> is out of range for <type>` for a rounded Lua number), since the accidental
+wording told the caller nothing.
 
 # Deliberate divergences
 

@@ -33,7 +33,7 @@ fn integers_convert_by_range_and_numbers_by_rounding() {
         assert!(!negative.is::<u8>());
         assert_eq!(
             negative.read::<u8>().unwrap_err(),
-            Error::runtime(format!("Lua stack index {}: expected integer, got integer", negative.index()))
+            Error::runtime(format!("Lua stack index {}: integer -1 is out of range for u8", negative.index()))
         );
         let too_large = frame.push(&Integer(256)).unwrap();
         assert!(!too_large.is::<u8>());
@@ -49,14 +49,16 @@ fn integers_convert_by_range_and_numbers_by_rounding() {
         for value in [-129.5, -128.5, 127.5, 128.5] {
             let invalid = frame.push_number(value);
             assert!(!invalid.is::<i8>(), "{value}");
-            assert!(invalid.read::<i8>().unwrap_err().to_string().ends_with("expected integer, got number"));
+            let error = invalid.read::<i8>().unwrap_err().to_string();
+            assert!(error.ends_with(&format!("number {value} is out of range for i8")), "{error}");
         }
         for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, 1e300] {
             let invalid = frame.push_number(value);
             assert!(!invalid.is::<i32>(), "{value}");
             let error = invalid.read::<i32>().unwrap_err().to_string();
-            assert!(error.ends_with("expected integer, got number"), "{error}");
-            assert!(invalid.read::<i64>().unwrap_err().to_string().ends_with("expected integer, got number"));
+            assert!(error.ends_with(&format!("number {value} is out of range for i32")), "{error}");
+            let error = invalid.read::<i64>().unwrap_err().to_string();
+            assert!(error.ends_with(&format!("number {value} is out of range for i64")), "{error}");
         }
 
         let two_63 = 2f64.powi(63);

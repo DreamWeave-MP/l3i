@@ -143,10 +143,11 @@ macro_rules! integer_conversions {
             #[inline(always)]
             fn from_view(view: ValueView<'v>) -> Result<$t> {
                 match read_scalar(view) {
-                    Scalar::Integer(raw) => <$t>::try_from(raw).map_err(|_| view.type_error(Type::Integer)),
-                    Scalar::Number(number) => {
-                        rounded_integer::<$t>(number, $signed, $digits).ok_or_else(|| view.type_error(Type::Integer))
+                    Scalar::Integer(raw) => {
+                        <$t>::try_from(raw).map_err(|_| integer_out_of_range(&view, raw, stringify!($t)))
                     }
+                    Scalar::Number(number) => rounded_integer::<$t>(number, $signed, const { power_of_two($digits) })
+                        .ok_or_else(|| number_out_of_range(&view, number, stringify!($t))),
                     Scalar::Other => Err(view.type_error(Type::Number)),
                 }
             }
@@ -155,7 +156,8 @@ macro_rules! integer_conversions {
             fn matches(view: ValueView<'v>) -> bool {
                 match view.type_of() {
                     Type::Integer => read_integer64(view).is_some_and(|raw| <$t>::try_from(raw).is_ok()),
-                    Type::Number => read_number(view).is_some_and(|n| rounded_integer::<$t>(n, $signed, $digits).is_some()),
+                    Type::Number => read_number(view)
+                        .is_some_and(|n| rounded_integer::<$t>(n, $signed, const { power_of_two($digits) }).is_some()),
                     _ => false,
                 }
             }
@@ -183,20 +185,41 @@ macro_rules! integer_conversions {
     )*};
 }
 
-/// Rounds half away from zero and accepts the result only inside `[-2^digits, 2^digits)`
-/// (signed) or `[0, 2^digits)` (unsigned); the C++ `tryGetRoundedIntegerNumber`.
-fn rounded_integer<T: TryFrom<i128>>(number: f64, signed: bool, digits: u32) -> Option<T> {
-    if !number.is_finite() {
-        return None;
-    }
+/// `2^digits` as an f64, exact for every width used here.
+const fn power_of_two(digits: u32) -> f64 {
+    (1u128 << digits) as f64
+}
+
+/// Rounds half away from zero and accepts the result only inside `[-upper, upper)` (signed) or
+/// `[0, upper)` (unsigned), `upper` being `2^digits`; the C++ `tryGetRoundedIntegerNumber`.
+/// NaN fails both comparisons and infinities fail the upper one.
+#[inline(always)]
+fn rounded_integer<T: TryFrom<i64> + TryFrom<u64>>(number: f64, signed: bool, upper: f64) -> Option<T> {
     let rounded = number.round();
-    let upper = 2f64.powi(digits as i32);
-    let in_range = if signed { rounded >= -upper && rounded < upper } else { rounded >= 0.0 && rounded < upper };
-    if !in_range {
-        return None;
+    if signed {
+        if !(rounded >= -upper && rounded < upper) {
+            return None;
+        }
+        // The bound guarantees the value fits in i64 and in T.
+        T::try_from(rounded as i64).ok()
+    } else {
+        if !(rounded >= 0.0 && rounded < upper) {
+            return None;
+        }
+        T::try_from(rounded as u64).ok()
     }
-    // The bound guarantees the value fits in i128 and in T.
-    T::try_from(rounded as i128).ok()
+}
+
+/// A Luau integer that does not fit the requested Rust integer.
+#[cold]
+fn integer_out_of_range(view: &ValueView<'_>, value: i64, target: &str) -> Error {
+    Error::runtime(format!("Lua stack index {}: integer {value} is out of range for {target}", view.index()))
+}
+
+/// A Lua number that, rounded, does not fit the requested Rust integer (or is not finite).
+#[cold]
+fn number_out_of_range(view: &ValueView<'_>, value: f64, target: &str) -> Error {
+    Error::runtime(format!("Lua stack index {}: number {value} is out of range for {target}", view.index()))
 }
 
 integer_conversions! {
