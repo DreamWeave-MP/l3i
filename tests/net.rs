@@ -200,3 +200,25 @@ fn events_flow_both_ways_over_localhost() {
     runtime.exec("client:disconnect() assert(client.status == 'disconnected')").unwrap();
     let _ = Error::LuaErrorOnStack;
 }
+
+#[test]
+fn the_plan_supplies_the_transport_clock() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+    let now = Rc::new(Cell::new(10.0f64));
+    let reads = Rc::new(Cell::new(0u32));
+    let clock: net::Clock = {
+        let (now, reads) = (Rc::clone(&now), Rc::clone(&reads));
+        Rc::new(move || {
+            reads.set(reads.get() + 1);
+            now.get()
+        })
+    };
+    let policy = RuntimePolicy::new().compat_global("@dream/net", "net").capability(net::TRANSPORT_CAPABILITY);
+    let plan = RuntimePlan::builder().policy(policy).network_clock(clock).finalize().unwrap();
+    let runtime = Runtime::from_plan(&plan).unwrap();
+    runtime.exec(&format!("{SCHEMA} client = net.client({{ schema = schema }}) client:update()")).unwrap();
+    assert!(reads.get() > 0, "the client read the plan's clock");
+    now.set(11.0);
+    runtime.exec("client:update()").unwrap();
+}

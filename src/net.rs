@@ -11,8 +11,9 @@
 //! - payloads are Luau buffers (or strings on send); `pollInto` copies one received payload
 //!   into a caller-owned buffer and `sendEvent` copies out of one before returning, so no Lua
 //!   memory is ever retained by the transport;
-//! - the transport clock is host-controlled: `update()` reads a clock the host installed, so a
-//!   script cannot spoof time;
+//! - the transport clock is the plan's: `update()` reads a monotonic clock started with the
+//!   bridge, or the clock the host gave `RuntimePlanBuilder::network_clock`, so a script cannot
+//!   spoof time;
 //! - the server private key never reaches Luau: servers are created by the host in Rust and
 //!   handed to scripts as [`Server`] handles; clients may be created from Luau only when the
 //!   runtime policy grants the `network.transport` capability;
@@ -505,8 +506,8 @@ impl NetExtension {
         NetExtension { clock: monotonic_clock() }
     }
 
-    /// With the host's clock (seconds, monotonic).
-    pub fn with_clock(clock: Clock) -> Self {
+    /// With the plan's clock (`RuntimePlanBuilder::network_clock`).
+    pub(crate) fn with_clock(clock: Clock) -> Self {
         NetExtension { clock }
     }
 }
@@ -517,10 +518,6 @@ impl Default for NetExtension {
     }
 }
 
-/// The bridge every `RuntimePlan` carries; the planner adds it itself.
-pub(crate) fn extension() -> NetExtension {
-    NetExtension::new()
-}
 
 impl Extension for NetExtension {
     fn id(&self) -> &'static str {

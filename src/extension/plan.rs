@@ -128,6 +128,7 @@ pub struct RuntimePlanBuilder {
     extensions: Vec<Box<dyn Extension>>,
     services: HashMap<TypeId, (&'static str, Rc<dyn Any>)>,
     pinned_tags: BTreeMap<String, RuntimeTag>,
+    network_clock: Option<crate::net::Clock>,
 }
 
 impl Default for RuntimePlanBuilder {
@@ -143,6 +144,7 @@ impl RuntimePlanBuilder {
             extensions: Vec::new(),
             services: HashMap::new(),
             pinned_tags: BTreeMap::new(),
+            network_clock: None,
         }
     }
 
@@ -163,6 +165,14 @@ impl RuntimePlanBuilder {
         self
     }
 
+    /// The transport clock (seconds, monotonic) the network bridge reads in every runtime from
+    /// this plan, instead of a monotonic clock started at creation: deterministic simulation
+    /// and tests drive time themselves. Scripts never see or set it.
+    pub fn network_clock(mut self, clock: crate::net::Clock) -> Self {
+        self.network_clock = Some(clock);
+        self
+    }
+
     pub fn extension(mut self, extension: impl Extension) -> Self {
         self.extensions.push(Box::new(extension));
         self
@@ -175,7 +185,7 @@ impl RuntimePlanBuilder {
 
     /// Runs every `describe`, resolves the plan, and freezes it.
     pub fn finalize(self) -> Result<Rc<RuntimePlan>> {
-        let RuntimePlanBuilder { policy, mut extensions, services, pinned_tags } = self;
+        let RuntimePlanBuilder { policy, mut extensions, services, pinned_tags, network_clock } = self;
 
         // The network bridge is runtime infrastructure: every plan carries l3i's own, the id is
         // reserved so nothing can stand in for it, and the policy decides what scripts may do.
@@ -185,7 +195,11 @@ impl RuntimePlanBuilder {
                 crate::net::EXTENSION_ID
             )));
         }
-        extensions.insert(0, Box::new(crate::net::extension()));
+        let bridge = match network_clock {
+            Some(clock) => crate::net::NetExtension::with_clock(clock),
+            None => crate::net::NetExtension::new(),
+        };
+        extensions.insert(0, Box::new(bridge));
 
         // 1. Describe.
         let mut descriptors = Vec::with_capacity(extensions.len());
