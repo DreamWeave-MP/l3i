@@ -134,11 +134,11 @@ impl PackedRotation {
         }
         let sign = if c[largest] < 0.0 { -1.0 } else { 1.0 };
         let mut bits = largest as u64;
-        for i in 0..4 {
+        for (i, component) in c.iter().enumerate() {
             if i == largest {
                 continue;
             }
-            let normalized = ((c[i] * sign / RANGE).clamp(-1.0, 1.0) + 1.0) * 0.5;
+            let normalized = (component * sign / RANGE).clamp(-1.0, 1.0).midpoint(1.0);
             // `normalized` is in [0, 1]: adding one half and truncating rounds to nearest without
             // the `round` library call.
             let quantized = (normalized * COMPONENT_MAX + 0.5) as u64;
@@ -158,11 +158,11 @@ impl PackedRotation {
         let largest = (bits & 3) as usize;
         let mut c = [0.0f64; 4];
         let mut slot = 0;
-        for i in 0..4 {
+        for (i, component) in c.iter_mut().enumerate() {
             if i == largest {
                 continue;
             }
-            c[i] = values[slot];
+            *component = values[slot];
             slot += 1;
         }
         c[largest] = (1.0 - values.iter().map(|v| v * v).sum::<f64>()).max(0.0).sqrt();
