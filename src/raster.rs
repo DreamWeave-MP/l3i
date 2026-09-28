@@ -280,16 +280,16 @@ impl Color16 {
 impl<'v> FromView<'v> for Color16 {
     const EXPECTED: &'static str = "integer";
 
+    #[inline]
     fn from_view(view: ValueView<'v>) -> Result<Self> {
-        if view.type_of() != Type::Integer {
-            return Err(view.type_error(Type::Integer));
+        match crate::convert::read_integer64(view) {
+            Some(bits) => Ok(Color16::from_packed(bits as u64)),
+            None => Err(view.type_error(Type::Integer)),
         }
-        let Integer(bits) = Integer::from_view(view)?;
-        Ok(Color16::from_packed(bits as u64))
     }
 
     fn matches(view: ValueView<'v>) -> bool {
-        view.type_of() == Type::Integer
+        crate::convert::read_integer64(view).is_some()
     }
 }
 

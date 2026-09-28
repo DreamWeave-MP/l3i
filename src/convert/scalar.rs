@@ -106,7 +106,7 @@ fn read_scalar(view: ValueView<'_>) -> Scalar {
 
 /// The payload of a slot the caller has already matched as `Type::Integer`.
 #[inline]
-fn read_integer64(view: ValueView<'_>) -> Option<i64> {
+pub(crate) fn read_integer64(view: ValueView<'_>) -> Option<i64> {
     match read_scalar(view) {
         Scalar::Integer(value) => Some(value),
         _ => None,

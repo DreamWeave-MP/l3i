@@ -147,16 +147,17 @@ impl<T: PackedScalar> Packed<T> {
 impl<'v, T: PackedScalar> FromView<'v> for Packed<T> {
     const EXPECTED: &'static str = T::NAME;
 
+    #[inline]
     fn from_view(view: ValueView<'v>) -> Result<Self> {
-        if view.type_of() != Type::Integer {
-            return Err(view.type_error(Type::Integer));
+        // One read for the tag and the payload; the kind check is on the bits.
+        match crate::convert::read_integer64(view) {
+            Some(bits) => Packed::from_bits(bits),
+            None => Err(view.type_error(Type::Integer)),
         }
-        let Integer(bits) = Integer::from_view(view)?;
-        Packed::from_bits(bits)
     }
 
     fn matches(view: ValueView<'v>) -> bool {
-        view.type_of() == Type::Integer && Integer::from_view(view).is_ok_and(|Integer(bits)| decode(bits).0 == T::KIND)
+        crate::convert::read_integer64(view).is_some_and(|bits| decode(bits).0 == T::KIND)
     }
 }
 
