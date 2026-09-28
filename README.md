@@ -133,7 +133,9 @@ userdata when the key has an *atom*. Each runtime carries its own `AtomCatalogue
 (`RuntimeBuilder::atom_catalogue`). `direct::plan::DirectPlan` is the normal path: built per
 runtime from the tags and atoms that VM actually assigned, it maps `(tag, kind, atom)` to the
 host's slot ids and validates Luau's per-instruction cache in O(1) before trusting it, so one
-handler serves a type that is tag 8 in one VM and tag 17 in another. `direct::Registry` is the
+handler serves a type that is tag 8 in one VM and tag 17 in another. A runtime publishes one
+plan: `finish` refuses a second, because the slot ids are the host's dispatch protocol and
+Luau's inline caches hold them. `direct::Registry` is the
 static alternative for hosts whose identities really are compile-time constants. `DirectAccess`
 handlers run on both the direct path and the ordinary metamethod path with the original
 metamethod retained as the fallback; `direct::field` registers per-field getters that write

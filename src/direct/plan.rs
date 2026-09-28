@@ -149,8 +149,13 @@ impl<'r> DirectPlanBuilder<'r> {
         Ok(self)
     }
 
-    /// Builds the dense table and installs the plan as the runtime's (replacing any earlier one).
+    /// Builds the dense table and installs the plan as the runtime's. A runtime takes exactly
+    /// one plan: the slot numbers are the host's dispatch protocol and Luau's inline caches
+    /// hold them, so a plan published to a VM is immutable and a second `finish` is refused.
     pub fn finish(self) -> Result<Rc<DirectPlan>> {
+        if self.runtime.shared().direct_plan().borrow().is_some() {
+            return Err(Error::logic("This runtime already has a direct plan; plans are published once per VM"));
+        }
         let first_atom = self.entries.iter().map(|entry| entry.atom).min().unwrap_or(0);
         let last_atom = self.entries.iter().map(|entry| entry.atom).max().unwrap_or(-1);
         let atom_count = if last_atom < first_atom { 0 } else { (last_atom - first_atom) as usize + 1 };

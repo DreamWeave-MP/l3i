@@ -454,4 +454,13 @@ fn runtime_plans_resolve_slots_from_the_vms_own_tags_and_atoms() {
         .finish()
         .unwrap_err();
     assert!(error.to_string().contains("catalogue them densely"), "{error}");
+
+    // A published plan is immutable: the runtime refuses a second one.
+    let sealed = Runtime::builder().atom_catalogue(AtomCatalogue::try_new([("value", 1)]).unwrap()).build().unwrap();
+    tagged::register::<Planned>(&sealed, 60, |ty| ty.property("value", |p: &Planned| p.value.get())).unwrap();
+    direct::plan::DirectPlanBuilder::new(&sealed).slot::<Planned>(AccessKind::Index, "value", 1).unwrap().finish().unwrap();
+    let error =
+        direct::plan::DirectPlanBuilder::new(&sealed).slot::<Planned>(AccessKind::Index, "value", 2).unwrap().finish().unwrap_err();
+    assert_eq!(error, Error::logic("This runtime already has a direct plan; plans are published once per VM"));
+    assert_eq!(direct::plan::plan(&sealed.stack()).unwrap().resolve_slot(60, 1, AccessKind::Index), 1);
 }
