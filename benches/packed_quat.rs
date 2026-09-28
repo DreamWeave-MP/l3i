@@ -1,5 +1,5 @@
-//! Packed quaternion experiment: an integer64 rotation against an f32 quaternion userdata,
-//! both through the binder, plus the raw encode/decode cost.
+//! Packed quaternions (`l3i::quat`): an integer64 rotation against an f32 quaternion userdata,
+//! both through the binder, the raw encode/decode cost, and (jit) the natively lowered receiver.
 
 #![allow(
     clippy::cast_possible_truncation,
@@ -8,7 +8,7 @@
     clippy::missing_panics_doc
 )]
 
-#[path = "../tests/support/packed_quat.rs"]
+#[path = "../tests/support/quat_baseline.rs"]
 mod support;
 
 use std::time::Duration;
@@ -18,9 +18,14 @@ use std::hint::black_box;
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use l3i::Runtime;
 use l3i::extension::{RuntimePlan, RuntimePolicy};
-use support::{PackedRotation, QuatExtension, random_quat};
+use l3i::quat::{PackedRotation, QuatExtension};
+use support::{QuatBaseline, random_quat};
 
 const CALLS: u64 = 1000;
+
+fn policy() -> RuntimePolicy {
+    RuntimePolicy::new().compat_global("@dream/quat", "quat").compat_global("@dream/quatud", "quatud")
+}
 
 fn raw(c: &mut Criterion) {
     let mut rng = 42u64;
@@ -45,14 +50,14 @@ fn raw(c: &mut Criterion) {
     group.bench_function("f64 mul (reference)", |b| {
         b.iter(|| {
             for pair in quats.windows(2) {
-                black_box(pair[0].mul(pair[1]));
+                black_box(pair[0] * pair[1]);
             }
         })
     });
     group.bench_function("decode, mul, encode", |b| {
         b.iter(|| {
             for pair in packed.windows(2) {
-                black_box(PackedRotation::encode(pair[0].decode().mul(pair[1].decode())));
+                black_box(PackedRotation::encode(pair[0].decode() * pair[1].decode()));
             }
         })
     });
@@ -60,16 +65,13 @@ fn raw(c: &mut Criterion) {
 }
 
 fn through_luau(c: &mut Criterion) {
-    let plan = RuntimePlan::builder()
-        .policy(RuntimePolicy::new().compat_global("@dream/quat", "quat"))
-        .extension(QuatExtension)
-        .finalize()
-        .unwrap();
+    let plan =
+        RuntimePlan::builder().policy(policy()).extension(QuatExtension).extension(QuatBaseline).finalize().unwrap();
     let runtime = Runtime::from_plan(&plan).unwrap();
     runtime
         .exec(
             "a = quat.axisAngle(vector.create(0, 0, 1), 0.3) b = quat.axisAngle(vector.create(1, 0, 0), 0.7) \
-             ua = quat.udAxisAngle(vector.create(0, 0, 1), 0.3) ub = quat.udAxisAngle(vector.create(1, 0, 0), 0.7) \
+             ua = quatud.axisAngle(vector.create(0, 0, 1), 0.3) ub = quatud.axisAngle(vector.create(1, 0, 0), 0.7) \
              v = vector.create(1, 2, 3)",
         )
         .unwrap();
@@ -108,10 +110,9 @@ fn lowered(c: &mut Criterion) {
     use l3i::sandbox::{InstanceSpec, SandboxOptions};
     use l3i::value::Function;
 
-    let policy = RuntimePolicy::new()
-        .compat_global("@dream/quat", "quat")
-        .native_code(NativeCodePolicy { mode: NativeCodeMode::Eager, ..NativeCodePolicy::default() });
-    let plan = RuntimePlan::builder().policy(policy).extension(QuatExtension).finalize().unwrap();
+    let policy = policy().native_code(NativeCodePolicy { mode: NativeCodeMode::Eager, ..NativeCodePolicy::default() });
+    let plan =
+        RuntimePlan::builder().policy(policy).extension(QuatExtension).extension(QuatBaseline).finalize().unwrap();
     let runtime = Runtime::from_plan(&plan).unwrap();
     if !runtime.native_code().is_some_and(l3i::native_code::NativeCodeGen::is_available) {
         return;
@@ -143,7 +144,7 @@ fn lowered(c: &mut Criterion) {
                 &format!(
                     "--!native\nlocal Q: dream_quat_Math = quat.math()\n\
                      local a = quat.axisAngle(vector.create(0, 0, 1), 0.3) local b = quat.axisAngle(vector.create(1, 0, 0), 0.7)\n\
-                     local ua = quat.udAxisAngle(vector.create(0, 0, 1), 0.3) local ub = quat.udAxisAngle(vector.create(1, 0, 0), 0.7)\n\
+                     local ua = quatud.axisAngle(vector.create(0, 0, 1), 0.3) local ub = quatud.axisAngle(vector.create(1, 0, 0), 0.7)\n\
                      local v = vector.create(1, 2, 3)\n\
                      return function() local s, us, w = a, ua, v for i = 1, {CALLS} do {body} end return 0 end"
                 ),

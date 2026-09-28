@@ -38,8 +38,8 @@ mod module;
 #[cfg(feature = "jit")]
 mod native_code;
 mod net;
-mod packed_quat;
 mod primitives;
+mod quat;
 mod require;
 mod sandbox;
 mod tagged;

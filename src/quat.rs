@@ -1,20 +1,45 @@
-//! The packed-quaternion experiment (architecture §28.1): smallest-three compression into the
-//! 56-bit payload of an l3i packed scalar, beside an f32 quaternion userdata for comparison.
-//! Shared by `tests/packed_quat.rs` and `benches/packed_quat.rs`; not public API.
+//! Rotations as packed Luau integers: the `dream.quat` extension.
+//!
+//! A unit quaternion is compressed smallest-three into the 56-bit payload of a
+//! [`PackedScalar`] (kind 1): two bits name the largest component, the other three are stored
+//! as 18-bit lanes over `[-1/√2, 1/√2]`, and the omitted one is rebuilt from the unit norm. The
+//! grid has an exact zero, so the identity and axis-aligned rotations round-trip exactly; a
+//! random rotation comes back within 1.6e-5 rad (mean 5.7e-6). Scripts see one integer: no
+//! allocation, no GC object, table keys and buffer fields for free, and a type error rather than
+//! garbage when an integer of another kind is passed where a rotation is expected.
+//!
+//! The packed form is storage and transport, never the live accumulator: re-encoding after
+//! every blend step random-walks (1.7e-3 rad over 100k slerp steps in the experiment), while
+//! packing an f64 state each step stays within one quantisation step. Keep long-lived rotation
+//! state as [`Quat`] on the host and pack what scripts, saves, and the wire see.
+//!
+//! Script surface, module `@dream/quat`:
+//!
+//! ```lua
+//! local quat = require('@dream/quat')
+//! local q = quat.axisAngle(vector.create(0, 0, 1), math.pi / 2)
+//! local v = quat.rotate(q, vector.create(1, 0, 0))
+//! local r = quat.mul(q, quat.inverse(q))      -- quat.IDENTITY, a compile-time constant
+//! local x, y, z, w = quat.toXYZW(quat.slerp(q, r, 0.5))
+//! ```
+//!
+//! With the `jit` feature, `quat.math()` returns a tagged receiver whose `rotate(q, v)` and
+//! `mul(a, b)` are lowered to IR by [`lowering::Lowering`] when the receiver's type is known to
+//! the compiler (`local Q: dream_quat_Math = quat.math()` in a `--!native` script): no C call, the
+//! integer is unpacked with shifts and masks, the arithmetic runs on doubles, and the result is
+//! stored as a vector or a fresh packed integer. Measured per call inside native code: rotate
+//! 21 ns and mul 45 ns, against 99 ns and 150 ns through the binder and 46 ns and 111 ns for an
+//! f32 quaternion userdata (the latter allocating).
 
-#![allow(dead_code, clippy::cast_possible_truncation, clippy::cast_precision_loss, clippy::cast_sign_loss)]
+use crate::convert::Vector3;
+use crate::error::Result;
+use crate::extension::{Extension, ExtensionDescriptor, InstallContext};
+use crate::packed::{Packed, PackedScalar};
+use crate::source::CompileConstant;
 
-use std::cell::Cell;
-
-use l3i::Result;
-use l3i::bind::Call;
-use l3i::convert::Vector3;
-use l3i::extension::{Extension, ExtensionDescriptor, InstallContext, TagPolicy};
-use l3i::packed::{Packed, PackedScalar};
-use l3i::userdata::{Owned, Userdata};
-
-/// A unit quaternion in f64, the reference representation.
+/// A unit quaternion in f64: the reference representation and the host's accumulator.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[allow(clippy::many_single_char_names)]
 pub struct Quat {
     pub x: f64,
     pub y: f64,
@@ -22,33 +47,38 @@ pub struct Quat {
     pub w: f64,
 }
 
+#[allow(clippy::many_single_char_names)]
 impl Quat {
     pub const IDENTITY: Quat = Quat { x: 0.0, y: 0.0, z: 0.0, w: 1.0 };
 
+    /// The rotation of `angle` radians about `axis` (any non-zero length).
+    #[must_use]
     pub fn from_axis_angle(axis: [f64; 3], angle: f64) -> Quat {
         let len = (axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2]).sqrt();
         let (s, c) = (angle / 2.0).sin_cos();
         Quat { x: axis[0] / len * s, y: axis[1] / len * s, z: axis[2] / len * s, w: c }
     }
 
+    #[must_use]
     pub fn normalize(self) -> Quat {
         let n = (self.x * self.x + self.y * self.y + self.z * self.z + self.w * self.w).sqrt();
         Quat { x: self.x / n, y: self.y / n, z: self.z / n, w: self.w / n }
     }
 
-    pub fn mul(self, o: Quat) -> Quat {
-        Quat {
-            x: self.w * o.x + self.x * o.w + self.y * o.z - self.z * o.y,
-            y: self.w * o.y - self.x * o.z + self.y * o.w + self.z * o.x,
-            z: self.w * o.z + self.x * o.y - self.y * o.x + self.z * o.w,
-            w: self.w * o.w - self.x * o.x - self.y * o.y - self.z * o.z,
-        }
+    /// The inverse of a unit quaternion (its conjugate).
+    #[must_use]
+    pub fn inverse(self) -> Quat {
+        Quat { x: -self.x, y: -self.y, z: -self.z, w: self.w }
     }
 
+    #[must_use]
     pub fn dot(self, o: Quat) -> f64 {
         self.x * o.x + self.y * o.y + self.z * o.z + self.w * o.w
     }
 
+    /// Spherical interpolation along the shorter arc, linear (then normalised) when the inputs
+    /// are nearly parallel.
+    #[must_use]
     pub fn slerp(self, mut o: Quat, t: f64) -> Quat {
         let mut d = self.dot(o);
         if d < 0.0 {
@@ -74,55 +104,59 @@ impl Quat {
         }
     }
 
+    /// Rotates `v`.
+    #[must_use]
     pub fn rotate(self, v: [f64; 3]) -> [f64; 3] {
-        let q = Quat { x: v[0], y: v[1], z: v[2], w: 0.0 };
-        let inv = Quat { x: -self.x, y: -self.y, z: -self.z, w: self.w };
-        let r = self.mul(q).mul(inv);
-        [r.x, r.y, r.z]
+        // v' = v + w t + q × t with t = 2 (q × v): 18 multiplies, no second product.
+        let (qx, qy, qz) = (self.x, self.y, self.z);
+        let t = [2.0 * (qy * v[2] - qz * v[1]), 2.0 * (qz * v[0] - qx * v[2]), 2.0 * (qx * v[1] - qy * v[0])];
+        [
+            v[0] + self.w * t[0] + (qy * t[2] - qz * t[1]),
+            v[1] + self.w * t[1] + (qz * t[0] - qx * t[2]),
+            v[2] + self.w * t[2] + (qx * t[1] - qy * t[0]),
+        ]
     }
 
     /// The rotation angle between two unit quaternions, in radians.
+    #[must_use]
     pub fn angle_to(self, o: Quat) -> f64 {
         2.0 * self.dot(o).abs().min(1.0).acos()
     }
 }
 
-/// A deterministic random unit quaternion.
-pub fn random_quat(rng: &mut u64) -> Quat {
-    let mut next = || {
-        *rng ^= *rng << 13;
-        *rng ^= *rng >> 7;
-        *rng ^= *rng << 17;
-        (*rng >> 11) as f64 / (1u64 << 53) as f64
-    };
-    let (u1, u2, u3) = (next(), next(), next());
-    let (a, b) = ((1.0 - u1).sqrt(), u1.sqrt());
-    Quat {
-        x: a * (2.0 * std::f64::consts::PI * u2).sin(),
-        y: a * (2.0 * std::f64::consts::PI * u2).cos(),
-        z: b * (2.0 * std::f64::consts::PI * u3).sin(),
-        w: b * (2.0 * std::f64::consts::PI * u3).cos(),
+/// The Hamilton product `a * b`: apply `b`, then `a`.
+impl std::ops::Mul for Quat {
+    type Output = Quat;
+    fn mul(self, o: Quat) -> Quat {
+        Quat {
+            x: self.w * o.x + self.x * o.w + self.y * o.z - self.z * o.y,
+            y: self.w * o.y - self.x * o.z + self.y * o.w + self.z * o.x,
+            z: self.w * o.z + self.x * o.y - self.y * o.x + self.z * o.w,
+            w: self.w * o.w - self.x * o.x - self.y * o.y - self.z * o.z,
+        }
     }
 }
 
 // ---- smallest-three packing ------------------------------------------------------------------
 
+/// Bits per stored component.
 pub const COMPONENT_BITS: u32 = 18;
-/// One fewer level than the bit width allows, so the grid has an exact zero (identity and
-/// axis-aligned rotations round-trip exactly).
+/// One fewer level than the bit width allows, so the grid has an exact zero.
 pub const COMPONENT_MAX: f64 = ((1u64 << COMPONENT_BITS) - 2) as f64;
+/// The magnitude bound of a non-largest component of a unit quaternion.
 pub const RANGE: f64 = std::f64::consts::FRAC_1_SQRT_2;
 
 /// A rotation packed into 56 bits: 2 bits for the omitted (largest) component, 3 × 18 bits.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct PackedRotation(pub u64);
 
 impl PackedRotation {
+    /// Packs `q`, normalising first only when it is not already unit.
+    #[must_use]
     pub fn encode(q: Quat) -> PackedRotation {
-        // Skip the normalisation when the input is already unit (the common case); the sqrt and
-        // four divisions were a third of the encode cost. A branch-free four-lane variant and an
-        // f32 variant were both measured slower (the latter through a software fma), so this
-        // stays scalar: the floor is the three float-to-integer conversions.
+        // Measured: a branch-free four-lane variant and an f32 variant were both slower (the
+        // latter through a software fma), so this stays scalar; the floor is the three
+        // float-to-integer conversions.
         let norm2 = q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w;
         let q = if (norm2 - 1.0).abs() < 1e-9 { q } else { q.normalize() };
         let c = [q.x, q.y, q.z, q.w];
@@ -139,14 +173,14 @@ impl PackedRotation {
                 continue;
             }
             let normalized = (component * sign / RANGE).clamp(-1.0, 1.0).midpoint(1.0);
-            // `normalized` is in [0, 1]: adding one half and truncating rounds to nearest without
-            // the `round` library call.
+            // `normalized` is in [0, 1]: adding one half and truncating rounds to nearest.
             let quantized = (normalized * COMPONENT_MAX + 0.5) as u64;
             bits = (bits << COMPONENT_BITS) | quantized;
         }
         PackedRotation(bits)
     }
 
+    #[must_use]
     pub fn decode(self) -> Quat {
         let mut bits = self.0;
         let mut values = [0.0f64; 3];
@@ -170,12 +204,12 @@ impl PackedRotation {
     }
 }
 
-/// The packed scalar kind `Quaternion`: rotation only, flags always zero.
+/// The packed scalar kind of a rotation (kind 1, flags always zero).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Quaternion(pub Quat);
 
 impl PackedScalar for Quaternion {
-    const KIND: u8 = 7;
+    const KIND: u8 = 1;
     const NAME: &'static str = "Quaternion";
     fn pack(&self) -> (u64, u8) {
         (PackedRotation::encode(self.0).0, 0)
@@ -185,40 +219,11 @@ impl PackedScalar for Quaternion {
     }
 }
 
-/// The packed scalar kind `AnimationKey`: the same rotation plus four animation flag bits.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct AnimationKey {
-    pub rotation: Quat,
-    pub flags: u8,
-}
-
-impl PackedScalar for AnimationKey {
-    const KIND: u8 = 8;
-    const NAME: &'static str = "AnimationKey";
-    fn pack(&self) -> (u64, u8) {
-        (PackedRotation::encode(self.rotation).0, self.flags & 0xF)
-    }
-    fn unpack(payload: u64, flags: u8) -> Result<Self> {
-        Ok(AnimationKey { rotation: PackedRotation(payload).decode(), flags })
-    }
-}
-
-// ---- the userdata baseline ------------------------------------------------------------------
-
-/// An f32 quaternion as inline tagged userdata: the representation the packed one competes with.
-pub struct QuatUserdata(pub Cell<[f32; 4]>);
-
-unsafe impl Userdata for QuatUserdata {
-    const NAME: &'static str = "dream.quat.Quat";
-}
-
-impl QuatUserdata {
-    pub fn get(&self) -> Quat {
-        let c = self.0.get();
-        Quat { x: f64::from(c[0]), y: f64::from(c[1]), z: f64::from(c[2]), w: f64::from(c[3]) }
-    }
-    pub fn from(q: Quat) -> QuatUserdata {
-        QuatUserdata(Cell::new([q.x as f32, q.y as f32, q.z as f32, q.w as f32]))
+impl Quaternion {
+    /// The Luau integer for `q`.
+    #[must_use]
+    pub fn pack(q: Quat) -> Packed<Quaternion> {
+        Packed(Quaternion(q))
     }
 }
 
@@ -230,8 +235,8 @@ fn from_vec3(v: Vector3) -> [f64; 3] {
     [f64::from(v.x), f64::from(v.y), f64::from(v.z)]
 }
 
-/// `@dream/quat`: the same operations over both representations, so a script can call
-/// `quat.mul(a, b)` on packed integers and `a:mul(b)` on userdata.
+/// The `dream.quat` extension: module `@dream/quat` and, with `jit`, the `dream.quat.Math`
+/// receiver whose operations lower to native code.
 pub struct QuatExtension;
 
 impl Extension for QuatExtension {
@@ -240,114 +245,95 @@ impl Extension for QuatExtension {
     }
 
     fn describe(&self, d: &mut ExtensionDescriptor) -> Result<()> {
-        let ud = d.userdata::<QuatUserdata>("dream.quat.Quat");
-        ud.tag(TagPolicy::Required);
-        ud.method("mul");
-        ud.method("slerp");
-        ud.method("rotate");
-        ud.method("angleTo");
+        d.module("@dream/quat").doc("Rotations as packed integers.");
         #[cfg(feature = "jit")]
         {
-            let receiver = d.userdata::<lowering::QuatMath>("dream.quat.Math");
-            receiver.tag(TagPolicy::Required);
-            receiver.method("rotate");
-            receiver.method("mul");
-            d.native_hooks(lowering::PackedQuatLowering);
+            let receiver = d.userdata::<lowering::Math>("dream.quat.Math");
+            receiver.tag(crate::extension::TagPolicy::Required).doc("Natively lowered rotation operations.");
+            receiver.method("rotate").signature("(self, q: number, v: vector): vector");
+            receiver.method("mul").signature("(self, a: number, b: number): number");
+            d.native_hooks(lowering::Lowering);
         }
-        d.module("@dream/quat");
         Ok(())
     }
 
     fn install(&self, cx: &mut InstallContext<'_>) -> Result<()> {
         #[cfg(feature = "jit")]
-        cx.userdata::<lowering::QuatMath>("dream.quat.Math")?
-            .method("rotate", |_: &lowering::QuatMath, q: Packed<Quaternion>, v: Vector3| lowering::rotate(q, v))?
-            .method("mul", |_: &lowering::QuatMath, a: Packed<Quaternion>, b: Packed<Quaternion>| lowering::mul(a, b))?;
-        cx.userdata::<QuatUserdata>("dream.quat.Quat")?
-            .method("mul", |a: &QuatUserdata, b: &QuatUserdata| Owned(QuatUserdata::from(a.get().mul(b.get()))))?
-            .method("slerp", |a: &QuatUserdata, b: &QuatUserdata, t: f64| {
-                Owned(QuatUserdata::from(a.get().slerp(b.get(), t)))
-            })?
-            .method("rotate", |a: &QuatUserdata, v: Vector3| to_vec3(a.get().rotate(from_vec3(v))))?
-            .method("angleTo", |a: &QuatUserdata, b: &QuatUserdata| a.get().angle_to(b.get()))?;
+        cx.userdata::<lowering::Math>("dream.quat.Math")?
+            .method("rotate", |_: &lowering::Math, q: Packed<Quaternion>, v: Vector3| lowering::rotate(q, v))?
+            .method("mul", |_: &lowering::Math, a: Packed<Quaternion>, b: Packed<Quaternion>| lowering::mul(a, b))?;
         let mut module = cx.module("@dream/quat")?;
         module
-            .function("axisAngle", |axis: Vector3, angle: f64| {
-                Packed(Quaternion(Quat::from_axis_angle(from_vec3(axis), angle)))
-            })?
-            .function("mul", |a: Packed<Quaternion>, b: Packed<Quaternion>| Packed(Quaternion(a.0.0.mul(b.0.0))))?
-            .function("slerp", |a: Packed<Quaternion>, b: Packed<Quaternion>, t: f64| {
-                Packed(Quaternion(a.0.0.slerp(b.0.0, t)))
-            })?
+            .constant("IDENTITY", CompileConstant::Integer(Quaternion::pack(Quat::IDENTITY).bits()))?
+            .function("axisAngle", |axis: Vector3, angle: f64| Quaternion::pack(Quat::from_axis_angle(from_vec3(axis), angle)))?
+            .function("fromXYZW", |x: f64, y: f64, z: f64, w: f64| Quaternion::pack(Quat { x, y, z, w }.normalize()))?
+            .function("toXYZW", |q: Packed<Quaternion>| (q.0.0.x, q.0.0.y, q.0.0.z, q.0.0.w))?
+            .function("mul", |a: Packed<Quaternion>, b: Packed<Quaternion>| Quaternion::pack(a.0.0 * b.0.0))?
+            .function("inverse", |q: Packed<Quaternion>| Quaternion::pack(q.0.0.inverse()))?
+            .function("slerp", |a: Packed<Quaternion>, b: Packed<Quaternion>, t: f64| Quaternion::pack(a.0.0.slerp(b.0.0, t)))?
             .function("rotate", |q: Packed<Quaternion>, v: Vector3| to_vec3(q.0.0.rotate(from_vec3(v))))?
-            .function("angleTo", |a: Packed<Quaternion>, b: Packed<Quaternion>| a.0.0.angle_to(b.0.0))?
-            .function("key", |q: Packed<Quaternion>, flags: i64| {
-                Packed(AnimationKey { rotation: q.0.0, flags: flags as u8 })
-            })?
-            .function("keyRotation", |k: Packed<AnimationKey>| Packed(Quaternion(k.0.rotation)))?
-            .function("keyFlags", |k: Packed<AnimationKey>| i64::from(k.0.flags))?
-            .function("udAxisAngle", |axis: Vector3, angle: f64| {
-                Owned(QuatUserdata::from(Quat::from_axis_angle(from_vec3(axis), angle)))
-            })?
-            .function("udMul", |a: &QuatUserdata, b: &QuatUserdata| Owned(QuatUserdata::from(a.get().mul(b.get()))))?
-            .function("udSlerp", |a: &QuatUserdata, b: &QuatUserdata, t: f64| {
-                Owned(QuatUserdata::from(a.get().slerp(b.get(), t)))
-            })?
-            .function("udRotate", |a: &QuatUserdata, v: Vector3| to_vec3(a.get().rotate(from_vec3(v))))?;
+            .function("angleTo", |a: Packed<Quaternion>, b: Packed<Quaternion>| a.0.0.angle_to(b.0.0))?;
         #[cfg(feature = "jit")]
-        module.function("math", || Owned(lowering::QuatMath))?;
+        module.function("math", || crate::userdata::Owned(lowering::Math))?;
         module.finish()?;
         Ok(())
     }
 }
 
-/// A `Call`-free helper for tests: the identity of the experiment's tag.
-pub fn _unused(_: &Call<'_>) {}
-
-// ---- native lowering (jit) -------------------------------------------------------------------
-
-/// The lowering half of the experiment: a tagged receiver whose methods take packed integers,
-/// so `Q:rotate(q, v)` and `Q:mul(a, b)` can be lowered through the userdata namecall hook into
-/// pure IR (integer unpacking, double math, vector or integer store) with no C call.
+/// Native lowering of the packed operations (`jit`).
+///
+/// [`Math`] is a payload-free tagged receiver: `Q:rotate(q, v)` and `Q:mul(a, b)` are ordinary
+/// bound methods on the interpreter path and lowered through
+/// [`NativeCodeHooks::userdata_namecall`] when the compiler knows the receiver's type. The
+/// lowering checks the receiver's tag, the operands' integer tags and packed kinds (a mismatch
+/// exits to the interpreter, whose C method raises the type error), and writes a vector or a
+/// packed integer straight into the result register. It matches the interpreter path to the
+/// `acos` noise floor.
 #[cfg(feature = "jit")]
-// Quaternion algebra reads best with the conventional single letters.
 #[allow(clippy::many_single_char_names)]
 pub mod lowering {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use l3i::convert::Vector3;
-    use l3i::ffi::{LUA_TINTEGER, LUA_TVECTOR};
-    use l3i::native_code::hooks::{NamecallSite, NativeCodeHooks, NativeContext};
-    use l3i::native_code::ir::{IrBuilder, IrCmd, IrCondition, IrOp, bytecode_type};
-    use l3i::packed::Packed;
-    use l3i::userdata::Userdata;
+    use super::{COMPONENT_BITS, COMPONENT_MAX, Quaternion, RANGE};
+    use crate::convert::Vector3;
+    use crate::native_code::hooks::{NamecallSite, NativeCodeHooks, NativeContext};
+    use crate::native_code::ir::{IrBuilder, IrCmd, IrCondition, IrOp, bytecode_type};
+    use crate::packed::{Packed, PackedScalar};
+    use crate::raw::ffi::{LUA_TINTEGER, LUA_TVECTOR};
+    use crate::userdata::Userdata;
 
-    use super::{COMPONENT_BITS, COMPONENT_MAX, Quat, Quaternion, RANGE};
-
-    /// The receiver: a payload-free tagged userdata (`dream.quat.Math`, class `dream_quat_Math`).
-    pub struct QuatMath;
+    /// The receiver `quat.math()` returns (`dream.quat.Math`, class `dream_quat_Math` in annotations).
+    #[derive(Clone, Copy, Debug, Default)]
+    pub struct Math;
 
     // SAFETY: no payload, no Lua references.
-    unsafe impl Userdata for QuatMath {
+    unsafe impl Userdata for Math {
         const NAME: &'static str = "dream.quat.Math";
     }
 
-    /// How many call sites the hook lowered.
-    pub static LOWERED: AtomicUsize = AtomicUsize::new(0);
+    static LOWERED: AtomicUsize = AtomicUsize::new(0);
 
-    /// The interpreter fallbacks (the semantic oracle) the lowering must match.
+    /// How many call sites the hook has lowered in this process (a diagnostic for tests).
+    #[doc(hidden)]
+    pub fn lowered_sites() -> usize {
+        LOWERED.load(Ordering::Relaxed)
+    }
+
+    /// The interpreter path of `Math:rotate`, the oracle the lowering must match.
     pub fn rotate(q: Packed<Quaternion>, v: Vector3) -> Vector3 {
         let r = q.0.0.rotate([f64::from(v.x), f64::from(v.y), f64::from(v.z)]);
         Vector3 { x: r[0] as f32, y: r[1] as f32, z: r[2] as f32 }
     }
 
+    /// The interpreter path of `Math:mul`.
     pub fn mul(a: Packed<Quaternion>, b: Packed<Quaternion>) -> Packed<Quaternion> {
-        Packed(Quaternion(a.0.0.mul(b.0.0)))
+        Packed(Quaternion(a.0.0 * b.0.0))
     }
 
-    pub struct PackedQuatLowering;
+    /// The hook set; [`super::QuatExtension`] registers it.
+    pub struct Lowering;
 
-    const KIND: i64 = <Quaternion as l3i::packed::PackedScalar>::KIND as i64;
+    const KIND: i64 = <Quaternion as PackedScalar>::KIND as i64;
     const LANE_MASK: i64 = (1 << COMPONENT_BITS) - 1;
 
     /// A decoded rotation as four double IR values.
@@ -504,9 +490,30 @@ pub mod lowering {
         out
     }
 
-    impl NativeCodeHooks for PackedQuatLowering {
+    /// Hamilton product of two decoded rotations.
+    fn product(build: &mut IrBuilder<'_>, a: &Decoded, b: &Decoded) -> Decoded {
+        let term = |build: &mut IrBuilder<'_>, terms: [(IrOp, IrOp, bool); 4]| {
+            let mut acc: Option<IrOp> = None;
+            for (l, r, negative) in terms {
+                let product = op(build, IrCmd::MUL_NUM, l, r);
+                acc = Some(match acc {
+                    None => product,
+                    Some(acc) => op(build, if negative { IrCmd::SUB_NUM } else { IrCmd::ADD_NUM }, acc, product),
+                });
+            }
+            acc.expect("four terms")
+        };
+        Decoded {
+            x: term(build, [(a.w, b.x, false), (a.x, b.w, false), (a.y, b.z, false), (a.z, b.y, true)]),
+            y: term(build, [(a.w, b.y, false), (a.x, b.z, true), (a.y, b.w, false), (a.z, b.x, false)]),
+            z: term(build, [(a.w, b.z, false), (a.x, b.y, false), (a.y, b.x, true), (a.z, b.w, false)]),
+            w: term(build, [(a.w, b.w, false), (a.x, b.x, true), (a.y, b.y, true), (a.z, b.z, true)]),
+        }
+    }
+
+    impl NativeCodeHooks for Lowering {
         fn userdata_namecall_type(&self, context: &NativeContext<'_>, userdata_type: u8, member: &str) -> u8 {
-            if context.userdata_type_of::<QuatMath>() != Some(userdata_type) {
+            if context.userdata_type_of::<Math>() != Some(userdata_type) {
                 return bytecode_type::ANY;
             }
             match member {
@@ -524,32 +531,33 @@ pub mod lowering {
             member: &str,
             site: NamecallSite,
         ) -> bool {
-            if context.userdata_type_of::<QuatMath>() != Some(userdata_type) || site.results != 1 {
+            // Single-result sites only: `return Q:mul(...)` asks for LUA_MULTRET.
+            if context.userdata_type_of::<Math>() != Some(userdata_type) || site.results != 1 {
                 return false;
             }
-            let Some(tag) = context.tag_of::<QuatMath>() else { return false };
+            let Some(tag) = context.tag_of::<Math>() else { return false };
             let exit = build.vm_exit(site.pcpos);
             let receiver = build.vm_reg(site.source_reg);
             let pointer = build.inst(IrCmd::LOAD_POINTER, &[receiver]);
             let tag = build.const_int(i32::from(tag));
             build.inst(IrCmd::CHECK_USERDATA_TAG, &[pointer, tag, exit]);
+            // ra is the function slot, ra + 1 the receiver copy the skipped NAMECALL would have
+            // made; arguments start at ra + 2. `params` counts the receiver.
             let result = build.vm_reg(site.arg_res_reg);
+            let first = build.vm_reg(site.arg_res_reg + 2);
+            let second = build.vm_reg(site.arg_res_reg + 3);
             match (member, site.params) {
                 ("rotate", 3) => {
-                    // ra is the function slot, ra + 1 the receiver copy the skipped NAMECALL
-                    // would have made; arguments start at ra + 2.
-                    let q_reg = build.vm_reg(site.arg_res_reg + 2);
-                    let v_reg = build.vm_reg(site.arg_res_reg + 3);
-                    let q = decode(build, q_reg, exit);
-                    build.load_and_check_tag(v_reg, LUA_TVECTOR as u8, exit);
-                    let vector = build.inst(IrCmd::LOAD_TVALUE, &[v_reg]);
+                    let q = decode(build, first, exit);
+                    build.load_and_check_tag(second, LUA_TVECTOR as u8, exit);
+                    let vector = build.inst(IrCmd::LOAD_TVALUE, &[second]);
                     let mut v = [q.x; 3];
                     for (i, slot) in v.iter_mut().enumerate() {
                         let index = build.const_int(i32::try_from(i).expect("three lanes"));
                         let component = build.inst(IrCmd::EXTRACT_VEC, &[vector, index]);
                         *slot = build.inst(IrCmd::FLOAT_TO_NUM, &[component]);
                     }
-                    // v' = v + w * t + qv x t, with t = 2 (qv x v).
+                    // v' = v + w t + q × t, with t = 2 (q × v).
                     let qv = [q.x, q.y, q.z];
                     let t = cross(build, qv, v);
                     let two = num(build, 2.0);
@@ -570,26 +578,10 @@ pub mod lowering {
                     build.inst(IrCmd::STORE_VECTOR, &[result, out[0], out[1], out[2], vector_tag]);
                 }
                 ("mul", 3) => {
-                    let a_reg = build.vm_reg(site.arg_res_reg + 2);
-                    let b_reg = build.vm_reg(site.arg_res_reg + 3);
-                    let a = decode(build, a_reg, exit);
-                    let b = decode(build, b_reg, exit);
-                    let product = |build: &mut IrBuilder<'_>, terms: [(IrOp, IrOp, bool); 4]| {
-                        let mut acc: Option<IrOp> = None;
-                        for (l, r, negative) in terms {
-                            let term = op(build, IrCmd::MUL_NUM, l, r);
-                            acc = Some(match acc {
-                                None => term,
-                                Some(acc) => op(build, if negative { IrCmd::SUB_NUM } else { IrCmd::ADD_NUM }, acc, term),
-                            });
-                        }
-                        acc.expect("four terms")
-                    };
-                    let x = product(build, [(a.w, b.x, false), (a.x, b.w, false), (a.y, b.z, false), (a.z, b.y, true)]);
-                    let y = product(build, [(a.w, b.y, false), (a.x, b.z, true), (a.y, b.w, false), (a.z, b.x, false)]);
-                    let z = product(build, [(a.w, b.z, false), (a.x, b.y, false), (a.y, b.x, true), (a.z, b.w, false)]);
-                    let w = product(build, [(a.w, b.w, false), (a.x, b.x, true), (a.y, b.y, true), (a.z, b.z, true)]);
-                    let bits = encode(build, &Decoded { x, y, z, w });
+                    let a = decode(build, first, exit);
+                    let b = decode(build, second, exit);
+                    let product = product(build, &a, &b);
+                    let bits = encode(build, &product);
                     build.inst(IrCmd::STORE_INT64, &[result, bits]);
                     let integer_tag = build.const_tag(LUA_TINTEGER as u8);
                     build.inst(IrCmd::STORE_TAG, &[result, integer_tag]);
@@ -600,9 +592,78 @@ pub mod lowering {
             true
         }
     }
+}
 
-    /// Reference decode of the lowering's own lane layout, for tests.
-    pub fn reference_decode(bits: i64) -> Quat {
-        super::PackedRotation((bits as u64) & l3i::packed::PAYLOAD_MASK).decode()
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn random_quat(rng: &mut u64) -> Quat {
+        let mut next = || {
+            *rng ^= *rng << 13;
+            *rng ^= *rng >> 7;
+            *rng ^= *rng << 17;
+            (*rng >> 11) as f64 / (1u64 << 53) as f64
+        };
+        let (u1, u2, u3) = (next(), next(), next());
+        let (a, b) = ((1.0 - u1).sqrt(), u1.sqrt());
+        Quat {
+            x: a * (2.0 * std::f64::consts::PI * u2).sin(),
+            y: a * (2.0 * std::f64::consts::PI * u2).cos(),
+            z: b * (2.0 * std::f64::consts::PI * u3).sin(),
+            w: b * (2.0 * std::f64::consts::PI * u3).cos(),
+        }
+    }
+
+    #[test]
+    fn smallest_three_precision_over_random_rotations() {
+        let mut rng = 0x9E37_79B9_7F4A_7C15u64;
+        let (mut max_error, mut total) = (0.0f64, 0.0f64);
+        const N: usize = 100_000;
+        for _ in 0..N {
+            let q = random_quat(&mut rng);
+            let back = PackedRotation::encode(q).decode();
+            let error = q.angle_to(back);
+            max_error = max_error.max(error);
+            total += error;
+        }
+        assert!(max_error < 2.0e-5, "max error {max_error}");
+        let mean = total / N as f64;
+        assert!(mean < 1.0e-5, "mean error {mean}");
+        assert!(PackedRotation::encode(Quat::IDENTITY).0 < (1 << 56));
+        assert!(Quat::IDENTITY.angle_to(PackedRotation::encode(Quat::IDENTITY).decode()) < 1e-9);
+    }
+
+    #[test]
+    fn rotate_matches_the_double_product() {
+        let mut rng = 7u64;
+        for _ in 0..1000 {
+            let q = random_quat(&mut rng);
+            let v = [1.0, -2.0, 0.5];
+            let p = Quat { x: v[0], y: v[1], z: v[2], w: 0.0 };
+            let r = q * p * q.inverse();
+            let fast = q.rotate(v);
+            for i in 0..3 {
+                assert!((fast[i] - [r.x, r.y, r.z][i]).abs() < 1e-12);
+            }
+        }
+    }
+
+    #[test]
+    fn packed_form_is_storage_not_an_accumulator() {
+        let mut rng = 0xDEAD_BEEF_CAFE_F00Du64;
+        let target = random_quat(&mut rng);
+        let mut reference = Quat::IDENTITY;
+        let mut chained = PackedRotation::encode(Quat::IDENTITY);
+        let (mut worst_chained, mut worst_snapshot) = (0.0f64, 0.0f64);
+        for step in 0..20_000 {
+            let t = 0.001 + 0.004 * ((step % 100) as f64 / 100.0);
+            reference = reference.slerp(target, t).normalize();
+            chained = PackedRotation::encode(chained.decode().slerp(target, t));
+            worst_chained = worst_chained.max(reference.angle_to(chained.decode()));
+            worst_snapshot = worst_snapshot.max(reference.angle_to(PackedRotation::encode(reference).decode()));
+        }
+        assert!(worst_snapshot < 2.0e-5, "snapshot error {worst_snapshot}");
+        assert!(worst_chained > worst_snapshot * 10.0, "expected the chained form to accumulate; got {worst_chained}");
     }
 }

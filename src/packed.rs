@@ -4,12 +4,11 @@
 //! domain type states its byte size and how to read and write itself, and l3i owns the safe
 //! crossing into and out of Luau buffers (bounds checked, one copy, no per-field calls).
 //!
-//! [`PackedScalar`] is the substrate for the packed-quaternion experiment (§28.1): a value that
-//! physically occupies one Luau integer. The top byte is a discriminator (a 4-bit kind and 4
-//! bits the kind may use for flags), the low 56 bits the payload. The kind is checked on every
-//! read, so untyped script code handing the wrong integer to a native operation fails with a
-//! type error instead of decoding garbage. This module deliberately does not define a public
-//! quaternion type: the experiment decides whether one ships.
+//! [`PackedScalar`] (§28.1) is a value that physically occupies one Luau integer. The top byte
+//! is a discriminator (a 4-bit kind and 4 bits the kind may use for flags), the low 56 bits the
+//! payload. The kind is checked on every read, so untyped script code handing the wrong integer
+//! to a native operation fails with a type error instead of decoding garbage.
+//! [`crate::quat::Quaternion`] is the first kind: a rotation in 56 bits.
 
 use crate::convert::{BufferView, FromView, Integer, Push};
 use crate::error::{Error, Result};
@@ -95,6 +94,7 @@ pub const FLAG_BITS: u32 = 4;
 /// A semantic value that lives in one Luau integer: 4-bit kind, 4-bit flags, 56-bit payload.
 pub trait PackedScalar: Sized {
     /// The kind discriminator, `1..=15` (0 is reserved so a plain zero integer never passes).
+    /// Kind 1 is [`crate::quat::Quaternion`]; a host's own kinds are `2..=15`.
     const KIND: u8;
     /// The name used in type errors, e.g. `Quaternion`.
     const NAME: &'static str;

@@ -151,7 +151,9 @@ capabilities, and memory categories, without touching a VM; `install` supplies t
 against the resolved plan. `RuntimePlan::builder().policy(..).service(..)
 .extension(..).finalize()` orders extensions by their dependency graph (deterministically),
 merges owners with augmenters into one type per key, assigns tags (pinned, then `Required`,
-then `Preferred` while tags last), assigns atoms densely, lays out direct slots, resolves memory
+then `Preferred` while tags last), assigns atoms densely, lays out direct slots (a direct field
+whose name is a method or property elsewhere in the plan is served through a slot instead of
+Luau's field table, since the atom rewrite would bypass that table), resolves memory
 categories, and checks services and capabilities. `Runtime::from_plan(&plan)` then builds a VM,
 installs every extension in order, registers metatables with the merged members, wires the
 planned direct members to one set of generic VM callbacks, freezes modules, registers them for
@@ -172,6 +174,16 @@ reads camelCase option tables strictly (unknown keys are errors, required keys a
 are named); `sequence::Sequence` and `sequence::Stream` show a Rust collection to scripts as
 `#items`, `items[i]`, `for item in items`, and `items:toTable()` (or `for` only, with a private
 cursor per loop) without materialising it, declared through the planner like any userdata.
+
+`quat::QuatExtension` (`dream.quat`, module `@dream/quat`) is the first packed kind: a unit
+rotation compressed smallest-three into one Luau integer (18 bits per component, exact
+identity, 1.6e-5 rad worst case), with `axisAngle`, `fromXYZW`/`toXYZW`, `mul`, `inverse`,
+`slerp`, `rotate`, `angleTo`, the compiler-folded constant `IDENTITY`, and, under `jit`,
+`quat.math()`: a tagged receiver whose `rotate(q, v)` and `mul(a, b)` lower to IR when the
+script annotates it (`local Q: dream_quat_Math = quat.math()`), at 21 ns and 45 ns per call in
+native code against 46 ns and 111 ns for an f32 quaternion userdata and 99 ns and 150 ns
+through the binder. The packed form is storage and transport; long-lived rotation state stays
+`quat::Quat` on the host, because re-encoding every blend step accumulates quantisation error.
 
 ## Networking
 
@@ -197,7 +209,11 @@ counters, and an `IrBuilder` C ABI. `native_code::NativeCodeHooks` lets hosts wr
 lowering hooks (vector access/namecall, userdata access/metamethod/namecall and their bytecode
 type suggestions) in Rust against `native_code::ir::IrBuilder`, with `IrCmd` generated from
 the headers of the exact Luau build. `VectorBufferWriter` is the default hook set: it lowers
-`vector:writef32x3` to three native f32 stores. Modes: off, annotated (`--!native`), eager.
+`vector:writef32x3` to three native f32 stores; `quat::lowering::Lowering` is the larger
+example, unpacking integers and storing vectors with no C call. Hooks learn the VM's real tags
+and the compiler's userdata type indices from `NativeContext` (`tag_of`, `userdata_type_of`)
+rather than assuming them; extensions register hook sets with `ExtensionDescriptor::native_hooks`.
+Modes: off, annotated (`--!native`), eager.
 
 Everything the shim needs is in the tree: Luau is the `luau/` submodule, so the build is the
 same on every target and needs nothing outside the checkout.

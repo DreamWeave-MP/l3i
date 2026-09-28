@@ -75,6 +75,7 @@ pub mod native_code;
 pub mod net;
 pub mod options;
 pub mod packed;
+pub mod quat;
 mod raw;
 pub mod readonly;
 pub mod require;
