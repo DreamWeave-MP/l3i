@@ -4,7 +4,8 @@
 //! from zero, so `640.4` reads as `640`. That is compatibility, not a good contract for a
 //! structural value: an index, an offset, a count, a size, a schema version, an id. [`Exact`]
 //! accepts a Luau integer or a number whose fractional part is exactly zero, both in range,
-//! and rejects everything else. [`Bits64`] carries all 64 bits of an opaque value (a hash, a
+//! and rejects everything else. It is input only: for results the vocabulary is a plain Rust
+//! integer (an exact Lua `number`), [`super::Integer`] (a Luau `integer`), or [`Bits64`]. [`Bits64`] carries all 64 bits of an opaque value (a hash, a
 //! peer id) through a Luau integer as a bit pattern; numerically it may look negative to a
 //! script, which is the deal for opaque ids, and a numeric `u64` stays limited to what an
 //! integer or an exact number can hold.
@@ -15,8 +16,8 @@ use crate::error::{Error, Result};
 use crate::raw::ffi;
 use crate::stack::{Scope, Type, ValueView};
 
-/// An integer parameter or result that never rounds: a Luau integer in range, or a number
-/// with a zero fractional part in range.
+/// An integer parameter that never rounds: a Luau integer in range, or a number with a zero
+/// fractional part in range. Input only; it has no push form.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
 pub struct Exact<T>(pub T);
 
@@ -90,16 +91,6 @@ macro_rules! exact_integers {
             }
         }
 
-        impl Push for Exact<$t> {
-            #[inline]
-            fn push_into<'s, S: Scope>(&self, scope: &'s S) -> Result<ValueView<'s>> {
-                self.0.push_into(scope)
-            }
-            #[inline]
-            fn push_only<S: Scope>(&self, scope: &S) -> Result<()> {
-                self.0.push_only(scope)
-            }
-        }
     )*};
 }
 
