@@ -36,6 +36,39 @@ fn nil(runtime: &Runtime) -> Value {
 }
 
 #[test]
+fn arguments_never_alias_values_pushed_above_them() {
+    // Zero arguments is a real argument count, not "ask Luau": a temporary pushed into slot 1
+    // must not become argument 1. Observations come back as values, since a panic inside a
+    // native call aborts the process.
+    let runtime = Runtime::new().unwrap();
+    let probe = runtime
+        .bind_function(NAME, |call: &Call| {
+            call.stack().push(&7i32).unwrap();
+            format!(
+                "{} {} {} {}",
+                call.argument_count(),
+                call.arg(1).type_of() == Type::None,
+                call.arg(0).type_of() == Type::None,
+                call.arg(-1).type_of() == Type::None
+            )
+        })
+        .unwrap();
+    assert_eq!(call::<String, _>(&runtime, &probe, ()).unwrap(), "0 true true true");
+    let with_arguments = runtime
+        .bind_function(NAME, |first: i32, call: &Call| {
+            call.stack().push(&(first + 1)).unwrap();
+            format!(
+                "{} {} {}",
+                call.argument_count(),
+                call.arg(1).type_of() == Type::Number,
+                call.arg(2).type_of() == Type::None
+            )
+        })
+        .unwrap();
+    assert_eq!(call::<String, _>(&runtime, &with_arguments, (4,)).unwrap(), "1 true true");
+}
+
+#[test]
 fn required_arguments_and_count_diagnostics() {
     let runtime = Runtime::new().unwrap();
     let add = runtime.bind_function(NAME, |a: i32, b: f64| a as f64 + b).unwrap();

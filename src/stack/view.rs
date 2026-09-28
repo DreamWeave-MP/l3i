@@ -72,8 +72,8 @@ pub struct ValueView<'v> {
     state: *mut ffi::lua_State,
     /// Absolute index, a pseudo-index, or 0 for "no value".
     index: c_int,
-    /// A stack height the slot is known to lie within (argument views), or 0 when `exists`
-    /// must ask Luau.
+    /// The argument count of the native call the slot belongs to (argument views; 0 is a real
+    /// count, meaning no slot is an argument), or -1 when `exists` must ask Luau.
     known_top: c_int,
     _scope: PhantomData<&'v ()>,
 }
@@ -92,7 +92,7 @@ impl<'v> ValueView<'v> {
             let absolute = unsafe { ffi::lua_gettop(state) } + index + 1;
             if absolute > 0 { absolute } else { 0 }
         };
-        ValueView { state, index, known_top: 0, _scope: PhantomData }
+        ValueView { state, index, known_top: -1, _scope: PhantomData }
     }
 
     /// A view of argument slot `index` on a native call whose argument count is `top`: the
@@ -102,6 +102,12 @@ impl<'v> ValueView<'v> {
     pub(crate) fn within(state: *mut ffi::lua_State, index: c_int, top: c_int) -> Self {
         debug_assert!(index >= 1 && top >= 0);
         ValueView { state, index, known_top: top, _scope: PhantomData }
+    }
+
+    /// A view that reads as none.
+    #[inline(always)]
+    pub(crate) fn none(state: *mut ffi::lua_State) -> Self {
+        ValueView { state, index: 0, known_top: -1, _scope: PhantomData }
     }
 
     #[inline(always)]
@@ -121,8 +127,9 @@ impl<'v> ValueView<'v> {
         if self.index <= ffi::LUA_REGISTRYINDEX {
             return true;
         }
-        if self.known_top > 0 {
-            // Arguments of a running native call cannot be popped from under it.
+        if self.known_top >= 0 {
+            // Arguments of a running native call cannot be popped from under it, and nothing
+            // pushed above them becomes one.
             return self.index > 0 && self.index <= self.known_top;
         }
         // SAFETY: state is live for 'v.

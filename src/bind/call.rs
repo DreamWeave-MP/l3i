@@ -52,14 +52,15 @@ impl<'c> Call<'c> {
         self.initial_top
     }
 
-    /// Argument `index` (1-based). Beyond `argument_count` the view reads as none, whatever
-    /// temporaries or results the callable has pushed above the arguments since.
+    /// Argument `index` (1-based). Beyond `argument_count`, or below 1, the view reads as none,
+    /// whatever temporaries or results the callable has pushed above the arguments since.
+    /// Other slots are reached through [`Call::stack`].
     #[inline(always)]
     pub fn arg(&self, index: c_int) -> ValueView<'_> {
         if index >= 1 {
             return ValueView::within(self.stack.state(), index, self.initial_top);
         }
-        self.stack.at(index)
+        ValueView::none(self.stack.state())
     }
 
     /// Upvalue `index` of the running C closure (1-based; the binder owns upvalue 1).
