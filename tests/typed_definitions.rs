@@ -1,5 +1,6 @@
-//! The plan's generated `.d.luau` is checked by Luau's own frontend, and typed scripts against
-//! every built-in module pass a strict type check: the declared API and the runtime agree.
+//! The plan's generated `.d.luau` is checked by Luau's own frontend, and strict scripts that
+//! `require` every built-in module by its canonical path type check against the plan's stubs:
+//! the declared API and the runtime agree, with no compatibility global in sight.
 
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -28,13 +29,8 @@ impl SourceProvider for Scripts {
 }
 
 fn plan() -> Rc<RuntimePlan> {
-    let policy = RuntimePolicy::new()
-        .compat_global("@dream/quat", "quat")
-        .compat_global("@dream/raster", "raster")
-        .compat_global("@dream/soft-render", "soft")
-        .compat_global("@dream/net", "net");
     RuntimePlan::builder()
-        .policy(policy)
+        .policy(RuntimePolicy::new())
         .extension(QuatExtension)
         .extension(RasterExtension)
         .extension(SoftRenderExtension)
@@ -46,6 +42,7 @@ const SCRIPTS: &[(&str, &str)] = &[
     (
         "quat_script",
         "--!strict\n\
+         local quat = require('@dream/quat')\n\
          local q: integer = quat.axisAngle(vector.create(0, 0, 1), 1.0)\n\
          local r: vector = quat.rotate(q, vector.create(1, 0, 0))\n\
          local m: integer = quat.mul(q, quat.IDENTITY)\n\
@@ -62,6 +59,7 @@ const SCRIPTS: &[(&str, &str)] = &[
     (
         "raster_script",
         "--!strict\n\
+         local raster = require('@dream/raster')\n\
          local c: integer = raster.rgba8(1, 2, 3, 4)\n\
          local d: integer = raster.lerp(c, raster.WHITE, 0.5)\n\
          local r, g, b, a = raster.channels(d)\n\
@@ -77,6 +75,8 @@ const SCRIPTS: &[(&str, &str)] = &[
     (
         "soft_script",
         "--!strict\n\
+         local raster = require('@dream/raster')\n\
+         local soft = require('@dream/soft-render')\n\
          local renderer = soft.renderer()\n\
          local frame = renderer:beginFrame(64, 48)\n\
          frame:clear(raster.BLACK)\n\
@@ -95,6 +95,7 @@ const SCRIPTS: &[(&str, &str)] = &[
     (
         "net_script",
         "--!strict\n\
+         local net = require('@dream/net')\n\
          local schema = net.schema({ version = 1, channels = { { name = 'state', delivery = 'unreliable' } }, events = { { name = 'ping', channel = 'state', maxPayload = 8 } } })\n\
          local id: integer = schema:eventId('ping') or 0i\n\
          local name: string = schema:eventName(id) or ''\n\
@@ -120,7 +121,8 @@ fn the_generated_definitions_type_check_and_typed_scripts_pass_strict_mode() {
     for fallback in ["(self, ...any): any", "(...any) -> ...any", ": any,\n", ": any\n"] {
         assert!(!definitions.contains(fallback), "every built-in member is typed ({fallback:?} found):\n{definitions}");
     }
-    let scripts = Scripts(SCRIPTS.iter().copied().collect());
+    assert!(!definitions.contains("declare quat"), "no compatibility global is declared:\n{definitions}");
+    let scripts = plan.analysis_sources(Scripts(SCRIPTS.iter().copied().collect()));
     let options =
         AnalysisOptions { definitions: vec![Definitions { name: "dream.d.luau".to_owned(), source: definitions.clone() }], ..Default::default() };
     let analysis = match Analysis::new(scripts, options) {
@@ -136,6 +138,26 @@ fn the_generated_definitions_type_check_and_typed_scripts_pass_strict_mode() {
             .collect();
         assert!(report.is_clean(), "{}\n---\n{definitions}", text.join("\n"));
     }
+    // The reusable gate every extension crate runs: the same proof, from the plan alone.
+    plan.check_definitions().unwrap();
+    // A signature that is not Luau, or that names a type that does not exist, fails that gate
+    // with the frontend's diagnostics rather than finalizing quietly.
+    struct Broken(&'static str);
+    impl l3i::extension::Extension for Broken {
+        fn id(&self) -> &'static str {
+            "dream.broken"
+        }
+        fn describe(&self, d: &mut l3i::extension::ExtensionDescriptor) -> l3i::Result<()> {
+            d.module("@dream/broken").function("f", || 1i64).signature(self.0);
+            Ok(())
+        }
+    }
+    let broken = RuntimePlan::builder().extension(Broken("(foo: Completely Broken Syntax")).finalize().unwrap();
+    let error = broken.check_definitions().unwrap_err().to_string();
+    assert!(error.contains("declared types do not check") && error.contains("@dream/broken"), "{error}");
+    let missing = RuntimePlan::builder().extension(Broken("() -> NoSuchType")).finalize().unwrap();
+    let error = missing.check_definitions().unwrap_err().to_string();
+    assert!(error.contains("NoSuchType"), "{error}");
     // The definitions are also what a runtime built from the plan reports.
     let runtime = l3i::Runtime::from_plan(&plan).unwrap();
     assert_eq!(runtime.type_definitions().as_deref(), Some(definitions.as_str()));

@@ -174,6 +174,51 @@ pub trait SourceProvider: 'static {
     }
 }
 
+/// A provider that serves a runtime plan's modules as typed stubs and everything else from an
+/// inner provider, so `require("@dream/...")` in a checked script resolves to the plan's
+/// declared types. Made by `RuntimePlan::analysis_sources`.
+pub struct PlanSources<P: SourceProvider> {
+    plan: std::rc::Rc<crate::extension::RuntimePlan>,
+    inner: P,
+}
+
+impl<P: SourceProvider> PlanSources<P> {
+    pub fn new(plan: std::rc::Rc<crate::extension::RuntimePlan>, inner: P) -> Self {
+        PlanSources { plan, inner }
+    }
+
+    pub fn inner(&self) -> &P {
+        &self.inner
+    }
+}
+
+impl<P: SourceProvider> SourceProvider for PlanSources<P> {
+    fn read_source(&self, name: &str) -> Option<SourceCode> {
+        match self.plan.module_stub(name) {
+            Some(text) => Some(SourceCode { text, is_script: false }),
+            None => self.inner.read_source(name),
+        }
+    }
+    fn resolve_module(&self, requirer: &str, required: &str) -> Option<String> {
+        if self.plan.module_stub(required).is_some() {
+            return Some(required.to_owned());
+        }
+        self.inner.resolve_module(requirer, required)
+    }
+    fn module_config(&self, name: &str) -> ModuleConfig {
+        if self.plan.module_stub(name).is_some() {
+            return ModuleConfig { mode: Mode::Strict, ..ModuleConfig::default() };
+        }
+        self.inner.module_config(name)
+    }
+    fn human_name(&self, name: &str) -> Option<String> {
+        if self.plan.module_stub(name).is_some() {
+            return Some(format!("{name} (l3i module stub)"));
+        }
+        self.inner.human_name(name)
+    }
+}
+
 /// Which constraint solver Luau uses.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum Solver {
@@ -486,12 +531,40 @@ unsafe extern "C" fn collect_completion(
 }
 
 impl Analysis {
-    /// A frontend over `provider`.
+    /// A frontend over `provider`; a rejected definitions file is an error carrying its
+    /// diagnostics as text (see [`Self::new_reporting`] for them as values).
     pub fn new(provider: impl SourceProvider, options: AnalysisOptions) -> Result<Analysis> {
+        Self::new_reporting(provider, options).map_err(|diagnostics| {
+            if diagnostics.is_empty() {
+                return Error::runtime("Unable to create the Luau analysis frontend");
+            }
+            let text: Vec<String> = diagnostics
+                .iter()
+                .map(|d| format!("{}:{}:{}: {}", d.module, d.span.begin_line + 1, d.span.begin_column + 1, d.text))
+                .collect();
+            Error::runtime(format!("Definitions were rejected by the Luau frontend:\n{}", text.join("\n")))
+        })
+    }
+
+    /// [`Self::new`], with a rejected definitions file's diagnostics as values (empty when the
+    /// frontend itself could not be created).
+    pub fn new_reporting(
+        provider: impl SourceProvider,
+        options: AnalysisOptions,
+    ) -> std::result::Result<Analysis, Vec<Diagnostic>> {
         // The frontend parses Luau's builtin definitions under the process-wide fast flags; freeze
         // the policy here too, or a runtime created on another thread meanwhile flips flags under
         // that parse (Luau then fails its `loadResult.success` assertion).
-        crate::flags::initialize()?;
+        crate::flags::initialize().map_err(|error| {
+            vec![Diagnostic {
+                kind: DiagnosticKind::Internal,
+                code: 0,
+                name: String::new(),
+                module: String::new(),
+                text: error.to_string(),
+                span: Span::default(),
+            }]
+        })?;
         let provider: Box<Box<dyn SourceProvider>> = Box::new(Box::new(provider));
         let raw_provider = ffi::db_source_provider {
             ctx: (&*provider as *const Box<dyn SourceProvider>).cast_mut().cast(),
@@ -527,14 +600,7 @@ impl Analysis {
         // the provider Box outlives the frontend and the diagnostics Vec outlives the call.
         let raw = unsafe { ffi::db_analysis_create(&raw_provider, &raw_options) };
         if raw.is_null() {
-            if diagnostics.is_empty() {
-                return Err(Error::runtime("Unable to create the Luau analysis frontend"));
-            }
-            let text: Vec<String> = diagnostics
-                .iter()
-                .map(|d| format!("{}:{}:{}: {}", d.module, d.span.begin_line + 1, d.span.begin_column + 1, d.text))
-                .collect();
-            return Err(Error::runtime(format!("Definitions were rejected by the Luau frontend:\n{}", text.join("\n"))));
+            return Err(diagnostics);
         }
         Ok(Analysis { raw, provider })
     }

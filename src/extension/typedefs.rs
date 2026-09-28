@@ -99,28 +99,47 @@ pub(crate) fn render_with(plan: &RuntimePlan, members: Option<&ModuleMembers>) -
                 let _ = writeln!(out, "-- {line}");
             }
         }
-        let _ = writeln!(out, "export type {type_name} = {{");
-        for member in &module.members {
-            if let Some(doc) = &member.doc {
-                for line in doc.lines() {
-                    let _ = writeln!(out, "    -- {line}");
-                }
-            }
-            let ty = match (&member.signature, &member.kind) {
-                (Some(signature), _) => signature.clone(),
-                (None, ModuleMemberKind::Function) => "(...any) -> ...any".to_owned(),
-                (None, ModuleMemberKind::Constant(constant)) => constant_type(constant).to_owned(),
-                (None, ModuleMemberKind::Installed) => "any".to_owned(),
-            };
-            let _ = writeln!(out, "    {}: {ty},", member.name);
-        }
-        let _ = writeln!(out, "}}");
+        let _ = writeln!(out, "export type {type_name} = {}", module_type(module));
         if let Some(global) = &module.global {
             let _ = writeln!(out, "declare {global}: {type_name}");
         }
         out.push('\n');
     }
     out
+}
+
+/// The Luau type of a module's table: every declared member with its signature, docs as
+/// comments. Shared by the definitions file and the module stubs the analyzer requires.
+pub(crate) fn module_type(module: &super::plan::ResolvedModule) -> String {
+    use std::fmt::Write;
+    let mut out = String::from("{\n");
+    for member in &module.members {
+        if let Some(doc) = &member.doc {
+            for line in doc.lines() {
+                let _ = writeln!(out, "    -- {line}");
+            }
+        }
+        let ty = match (&member.signature, &member.kind) {
+            (Some(signature), _) => signature.clone(),
+            (None, ModuleMemberKind::Function) => "(...any) -> ...any".to_owned(),
+            (None, ModuleMemberKind::Constant(constant)) => constant_type(constant).to_owned(),
+            (None, ModuleMemberKind::Installed) => "any".to_owned(),
+        };
+        let _ = writeln!(out, "    {}: {ty},", member.name);
+    }
+    out.push('}');
+    out
+}
+
+/// The source the analyzer reads for `require("<module path>")`: a module whose returned
+/// value has the module's declared type, so canonical requires type check against the plan.
+pub(crate) fn module_stub(module: &super::plan::ResolvedModule) -> String {
+    format!(
+        "--!strict\n-- l3i stub for {} (provided by {}); the runtime module has this shape.\nlocal module: {} = (nil :: any)\nreturn module\n",
+        module.path,
+        module.provider,
+        module_type(module)
+    )
 }
 
 pub(crate) fn render(plan: &RuntimePlan) -> String {

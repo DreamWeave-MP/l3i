@@ -912,6 +912,75 @@ impl RuntimePlan {
         self.services.get(&TypeId::of::<S>()).and_then(|(_, service)| Rc::clone(service).downcast::<S>().ok())
     }
 
+    /// The analysis stub for the module at `path` (`require("@dream/quat")` in a checked
+    /// script resolves to it): a strict module returning a value of the module's declared type.
+    /// `None` for a path the plan does not provide.
+    pub fn module_stub(&self, path: &str) -> Option<String> {
+        self.modules.iter().find(|module| module.path == path).map(super::typedefs::module_stub)
+    }
+
+    /// A source provider for the analysis frontend that serves this plan's modules as stubs
+    /// (see [`Self::module_stub`]) and everything else from `inner`.
+    #[cfg(feature = "analysis")]
+    pub fn analysis_sources<P: crate::analysis::SourceProvider>(self: &Rc<Self>, inner: P) -> crate::analysis::PlanSources<P> {
+        crate::analysis::PlanSources::new(Rc::clone(self), inner)
+    }
+
+    /// Proves the plan's declared types with Luau's own frontend: the definitions parse and
+    /// type check, and a strict script requiring every module type checks against the stubs.
+    /// A signature string that is not Luau, or a type it names that does not exist, fails here
+    /// with the frontend's diagnostics. Every extension crate's test suite should compose its
+    /// extension into a plan and call this.
+    #[cfg(feature = "analysis")]
+    pub fn check_definitions(self: &Rc<Self>) -> Result<()> {
+        use crate::analysis::{Analysis, AnalysisOptions, Definitions, Mode, ModuleConfig, SourceCode, SourceProvider};
+        struct Probe(String);
+        impl SourceProvider for Probe {
+            fn read_source(&self, name: &str) -> Option<SourceCode> {
+                (name == "l3i.check_definitions").then(|| SourceCode { text: self.0.clone(), is_script: true })
+            }
+            fn module_config(&self, _: &str) -> ModuleConfig {
+                ModuleConfig { mode: Mode::Strict, ..ModuleConfig::default() }
+            }
+        }
+        let mut script = String::from("--!strict\n");
+        for (index, module) in self.modules.iter().enumerate() {
+            use std::fmt::Write;
+            let _ = writeln!(script, "local m{index} = require(\"{}\")", module.path);
+        }
+        let definitions = self.type_definitions();
+        // Which declaration a definitions line belongs to: the nearest preceding header
+        // comment the renderer wrote for a type or a module, plus the line itself.
+        let describe = |d: &crate::analysis::Diagnostic| {
+            let line = d.span.begin_line as usize;
+            let lines: Vec<&str> = definitions.lines().collect();
+            let owner = lines[..line.min(lines.len())]
+                .iter()
+                .rev()
+                .find(|l| l.starts_with("-- module ") || l.contains("(owned by "))
+                .map(|l| l.trim_start_matches("-- ").to_owned())
+                .unwrap_or_default();
+            let text = lines.get(line).map_or("", |l| l.trim());
+            format!("{}:{}:{}: {} [{owner}: {text}]", d.module, line + 1, d.span.begin_column + 1, d.text)
+        };
+        let options = AnalysisOptions {
+            definitions: vec![Definitions { name: "l3i.plan.d.luau".to_owned(), source: definitions.clone() }],
+            ..AnalysisOptions::default()
+        };
+        let diagnostics = match Analysis::new_reporting(self.analysis_sources(Probe(script)), options) {
+            Ok(analysis) => analysis.check("l3i.check_definitions", false).diagnostics,
+            Err(diagnostics) if diagnostics.is_empty() => {
+                return Err(Error::runtime("Unable to create the Luau analysis frontend"));
+            }
+            Err(diagnostics) => diagnostics,
+        };
+        if diagnostics.is_empty() {
+            return Ok(());
+        }
+        let text: Vec<String> = diagnostics.iter().map(describe).collect();
+        Err(Error::logic(format!("The plan's declared types do not check:\n{}", text.join("\n"))))
+    }
+
     /// The packed scalar kinds the plan's extensions declared (l3i's own are implicit).
     pub fn packed_kinds(&self) -> &[crate::packed::PackedKind] {
         &self.packed_kinds
