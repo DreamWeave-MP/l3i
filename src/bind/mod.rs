@@ -84,6 +84,7 @@ macro_rules! binding_impls {
             }
 
             #[allow(non_snake_case, unused_variables)]
+            #[inline(always)]
             fn invoke(&self, call: &Call<'_>, debug_name: &str) -> Result<c_int> {
                 let ($($m,)*) = <($($p,)*) as Params>::materialize(call, debug_name)?;
                 let result = self($($m,)*);
@@ -91,6 +92,7 @@ macro_rules! binding_impls {
             }
 
             #[allow(non_snake_case, unused_variables)]
+            #[inline(always)]
             fn invoke_method(&self, call: &Call<'_>, debug_name: &str) -> Result<c_int> {
                 let ($($m,)*) = <($($p,)*) as Params>::materialize_method(call, debug_name)?;
                 let result = self($($m,)*);
@@ -154,7 +156,9 @@ overload_impls! {
 #[repr(C)]
 struct Context<F> {
     callable: F,
-    debug_name: *const c_char,
+    /// The retained debug name, validated once at bind time. Retained names live until the VM
+    /// closes, which outlives every call through this context.
+    debug_name: &'static str,
 }
 
 /// Runs the callable's `Drop` when Luau frees the closure context. Never touches Lua.
@@ -168,21 +172,25 @@ unsafe extern "C" fn destroy_context<F>(_: *mut ffi::lua_State, userdata: *mut c
 }
 
 /// Reads the context from upvalue 1 and runs `body` with it under the trampoline.
+#[inline(always)]
 unsafe fn with_context<F: Binding<M>, M>(
     state: *mut ffi::lua_State,
     body: impl FnOnce(&F, &Call<'_>, &str) -> Result<c_int>,
 ) -> c_int {
     unsafe {
         trampoline::enter(state, || {
-            let context = ffi::lua_touserdata(state, ffi::lua_upvalueindex(1)).cast::<Context<F>>();
+            // One FFI call reads the argument count, the thread record, and upvalue 1.
+            let mut top: c_int = 0;
+            let mut record: *mut c_void = ptr::null_mut();
+            let context = ffi::l3i_native_enter(state, &mut top, &mut record).cast::<Context<F>>();
             if context.is_null() {
                 return Err(Error::logic("Invalid native Lua binding context"));
             }
-            // SAFETY: upvalue 1 is the context userdata `push_closure` created for this thunk.
+            // SAFETY: upvalue 1 is the context userdata `push_closure` created for this thunk;
+            // the thread data slot holds the runtime's record for this thread (or null).
             let context = &*context;
-            let debug_name = std::ffi::CStr::from_ptr(context.debug_name).to_str().unwrap_or("?");
-            let call = Call::from_raw(state);
-            body(&context.callable, &call, debug_name)
+            let call = Call::from_parts(state, top, record.cast_const().cast());
+            body(&context.callable, &call, context.debug_name)
         })
     }
 }
@@ -211,11 +219,15 @@ unsafe fn push_closure<F: Binding<M>, M>(
     // SAFETY: allocate, then initialise immediately: Luau owns the destructor as soon as
     // lua_newuserdatadtor returns, and the destructor only runs on a fully written Context.
     unsafe {
+        // SAFETY (name): `debug_name` is a retained, NUL-terminated, valid-UTF-8 string that the
+        // VM's registry keeps alive until lua_close; the context is freed before that.
+        let name: &'static str =
+            std::ffi::CStr::from_ptr(debug_name).to_str().map_err(|_| Error::logic("Debug name is not UTF-8"))?;
         let storage = ffi::lua_newuserdatadtor(state, std::mem::size_of::<Context<F>>(), destroy_context::<F>);
         if storage.is_null() {
             return Err(Error::runtime("Unable to allocate binding closure context"));
         }
-        ptr::write(storage.cast::<Context<F>>(), Context { callable, debug_name });
+        ptr::write(storage.cast::<Context<F>>(), Context { callable, debug_name: name });
         ffi::lua_pushcclosure(state, entry, debug_name, 1);
     }
     Ok(())

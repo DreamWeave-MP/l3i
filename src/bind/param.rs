@@ -57,6 +57,7 @@ pub trait ParamItem<'c>: Sized {
     }
 
     /// Converts the argument(s) at `cursor`, advancing it and the diagnostic position.
+    #[inline(always)]
     fn materialize(
         call: &'c Call<'c>,
         cursor: &mut c_int,
@@ -94,10 +95,12 @@ macro_rules! impl_param_from_view {
             const KIND: $crate::bind::ParamKind = $crate::bind::ParamKind::Regular;
             const EXPECTED: &'static str = <$t as $crate::convert::FromView<'c>>::EXPECTED;
 
+            #[inline(always)]
             fn read_slot(view: $crate::stack::ValueView<'c>) -> $crate::Result<Self> {
                 <$t as $crate::convert::FromView<'c>>::from_view(view)
             }
 
+            #[inline]
             fn matches(view: $crate::stack::ValueView<'c>) -> bool {
                 <$t as $crate::convert::FromView<'c>>::matches(view)
             }
@@ -133,12 +136,14 @@ impl Param for Table {
 impl<'c> ParamItem<'c> for Table {
     const KIND: ParamKind = ParamKind::Regular;
     const EXPECTED: &'static str = "table";
+    #[inline]
     fn read_slot(view: ValueView<'c>) -> Result<Self> {
         if !view.is_table() {
             return Err(view.type_error(Type::Table));
         }
         Table::from_value(Value::store(view)?)
     }
+    #[inline]
     fn matches(view: ValueView<'c>) -> bool {
         view.is_table()
     }
@@ -151,12 +156,14 @@ impl Param for Function {
 impl<'c> ParamItem<'c> for Function {
     const KIND: ParamKind = ParamKind::Regular;
     const EXPECTED: &'static str = "function";
+    #[inline]
     fn read_slot(view: ValueView<'c>) -> Result<Self> {
         if !view.is_function() {
             return Err(view.type_error(Type::Function));
         }
         Function::from_value(Value::store(view)?)
     }
+    #[inline]
     fn matches(view: ValueView<'c>) -> bool {
         view.is_function()
     }
@@ -175,9 +182,11 @@ macro_rules! borrowed_params {
         impl<'c> ParamItem<'c> for $item {
             const KIND: ParamKind = ParamKind::Regular;
             const EXPECTED: &'static str = $expected;
+            #[inline]
             fn read_slot(view: ValueView<'c>) -> Result<Self> {
                 <$item as FromView<'c>>::from_view(view)
             }
+            #[inline]
             fn matches(view: ValueView<'c>) -> bool {
                 <$item as FromView<'c>>::matches(view)
             }
@@ -199,6 +208,7 @@ impl Param for ValueView<'_> {
 impl<'c> ParamItem<'c> for ValueView<'c> {
     const KIND: ParamKind = ParamKind::Regular;
     const EXPECTED: &'static str = "any value";
+    #[inline]
     fn read_slot(view: ValueView<'c>) -> Result<Self> {
         if view.type_of() == Type::None {
             return Err(Error::logic("Cannot read a nonexistent Lua stack value"));
@@ -206,6 +216,7 @@ impl<'c> ParamItem<'c> for ValueView<'c> {
         Ok(view)
     }
     /// Any present value, including nil.
+    #[inline]
     fn matches(view: ValueView<'c>) -> bool {
         view.type_of() != Type::None
     }
@@ -219,9 +230,11 @@ impl<T: Userdata> Param for &'_ T {
 impl<'c, T: Userdata> ParamItem<'c> for &'c T {
     const KIND: ParamKind = ParamKind::Regular;
     const EXPECTED: &'static str = T::NAME;
+    #[inline]
     fn read_slot(view: ValueView<'c>) -> Result<Self> {
         check_receiver::<T>(view)
     }
+    #[inline]
     fn matches(view: ValueView<'c>) -> bool {
         receiver::<T>(view).is_some()
     }
@@ -238,15 +251,18 @@ impl Param for &'_ Call<'_> {
 impl<'c> ParamItem<'c> for &'c Call<'c> {
     const KIND: ParamKind = ParamKind::Injected;
     const EXPECTED: &'static str = "<injected>";
+    #[inline]
     fn read_slot(_: ValueView<'c>) -> Result<Self> {
         Err(Error::logic("An injected parameter has no argument slot"))
     }
+    #[inline]
     fn matches(_: ValueView<'c>) -> bool {
         false
     }
     fn probe(_: &'c Call<'c>, _: &mut c_int, _: c_int, _: bool) -> bool {
         true
     }
+    #[inline(always)]
     fn materialize(call: &'c Call<'c>, _: &mut c_int, _: c_int, _: &mut c_int, _: &str, _: bool) -> Result<Self> {
         Ok(call)
     }
@@ -293,6 +309,7 @@ impl<'c, T: ParamItem<'c>> ParamItem<'c> for Option<T> {
     const EXPECTED: &'static str = T::EXPECTED;
 
     /// Used when this optional is itself the element type of `VarArgs`.
+    #[inline]
     fn read_slot(view: ValueView<'c>) -> Result<Self> {
         if view.is_nil() {
             return Ok(None);
@@ -300,6 +317,7 @@ impl<'c, T: ParamItem<'c>> ParamItem<'c> for Option<T> {
         T::read_slot(view).map(Some)
     }
 
+    #[inline]
     fn matches(view: ValueView<'c>) -> bool {
         view.is_nil() || T::matches(view)
     }
@@ -314,6 +332,7 @@ impl<'c, T: ParamItem<'c>> ParamItem<'c> for Option<T> {
 
     /// A middle optional is omitted only when a following required parameter can consume the
     /// current value; matching optionals stay greedy and nil is the explicit way to skip one.
+    #[inline(always)]
     fn materialize(
         call: &'c Call<'c>,
         cursor: &mut c_int,
@@ -361,9 +380,11 @@ impl<'c, T: ParamItem<'c>> ParamItem<'c> for VarArgs<T> {
     const KIND: ParamKind = ParamKind::VarArgs;
     const EXPECTED: &'static str = T::EXPECTED;
 
+    #[inline]
     fn read_slot(_: ValueView<'c>) -> Result<Self> {
         Err(Error::logic("VarArgs consumes the remaining arguments, not one slot"))
     }
+    #[inline]
     fn matches(_: ValueView<'c>) -> bool {
         false
     }
@@ -381,6 +402,7 @@ impl<'c, T: ParamItem<'c>> ParamItem<'c> for VarArgs<T> {
         true
     }
 
+    #[inline(always)]
     fn materialize(
         call: &'c Call<'c>,
         cursor: &mut c_int,
@@ -450,9 +472,11 @@ impl Param for ArgView<'_> {
 impl<'c> ParamItem<'c> for ArgView<'c> {
     const KIND: ParamKind = ParamKind::ArgView;
     const EXPECTED: &'static str = "<arguments>";
+    #[inline]
     fn read_slot(_: ValueView<'c>) -> Result<Self> {
         Err(Error::logic("ArgView borrows the remaining arguments, not one slot"))
     }
+    #[inline]
     fn matches(_: ValueView<'c>) -> bool {
         false
     }
@@ -460,6 +484,7 @@ impl<'c> ParamItem<'c> for ArgView<'c> {
         *cursor = top + 1;
         true
     }
+    #[inline(always)]
     fn materialize(
         call: &'c Call<'c>,
         cursor: &mut c_int,

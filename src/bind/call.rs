@@ -22,12 +22,27 @@ impl<'c> Call<'c> {
         Call { stack, initial_top }
     }
 
+    /// A call whose argument count and thread record were read by `l3i_native_enter`.
+    ///
+    /// # Safety
+    /// As `from_raw`.
+    #[inline]
+    pub(crate) unsafe fn from_parts(
+        state: *mut ffi::lua_State,
+        initial_top: c_int,
+        record: *const crate::runtime::shared::ThreadRecord,
+    ) -> Call<'c> {
+        Call { stack: unsafe { Stack::from_raw_recorded(state, record) }, initial_top }
+    }
+
     /// The call-level stack.
+    #[inline(always)]
     pub fn stack(&self) -> &Stack<'c> {
         &self.stack
     }
 
     /// Number of arguments the caller passed.
+    #[inline(always)]
     pub fn argument_count(&self) -> c_int {
         self.initial_top
     }
@@ -38,7 +53,11 @@ impl<'c> Call<'c> {
     }
 
     /// Argument `index` (1-based). Beyond `argument_count` the view reads as none.
+    #[inline(always)]
     pub fn arg(&self, index: c_int) -> ValueView<'_> {
+        if index >= 1 && index <= self.initial_top {
+            return ValueView::within(self.stack.state(), index, self.initial_top);
+        }
         self.stack.at(index)
     }
 

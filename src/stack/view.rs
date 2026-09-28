@@ -25,6 +25,7 @@ pub enum Type {
 }
 
 impl Type {
+    #[inline(always)]
     pub(crate) fn from_raw(raw: c_int) -> Type {
         match raw {
             ffi::LUA_TNIL => Type::Nil,
@@ -71,6 +72,9 @@ pub struct ValueView<'v> {
     state: *mut ffi::lua_State,
     /// Absolute index, a pseudo-index, or 0 for "no value".
     index: c_int,
+    /// A stack height the slot is known to lie within (argument views), or 0 when `exists`
+    /// must ask Luau.
+    known_top: c_int,
     _scope: PhantomData<&'v ()>,
 }
 
@@ -79,6 +83,7 @@ impl<'v> ValueView<'v> {
     /// (a positive index above the top still names its argument position for diagnostics, and
     /// reads as [`Type::None`]), negative ones are made absolute against the current top, and
     /// an out-of-range negative index becomes 0.
+    #[inline(always)]
     pub(crate) fn resolve(state: *mut ffi::lua_State, index: c_int) -> Self {
         let index = if index <= ffi::LUA_REGISTRYINDEX || index >= 0 {
             index
@@ -87,30 +92,43 @@ impl<'v> ValueView<'v> {
             let absolute = unsafe { ffi::lua_gettop(state) } + index + 1;
             if absolute > 0 { absolute } else { 0 }
         };
-        ValueView { state, index, _scope: PhantomData }
+        ValueView { state, index, known_top: 0, _scope: PhantomData }
     }
 
-    #[inline]
+    /// A view of argument slot `index` on a native call whose argument count is `top`: the
+    /// slot's existence is settled without asking Luau.
+    #[inline(always)]
+    pub(crate) fn within(state: *mut ffi::lua_State, index: c_int, top: c_int) -> Self {
+        debug_assert!(index >= 1 && index <= top);
+        ValueView { state, index, known_top: top, _scope: PhantomData }
+    }
+
+    #[inline(always)]
     pub(crate) fn state(&self) -> *mut ffi::lua_State {
         self.state
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn index(&self) -> c_int {
         self.index
     }
 
     /// True when the slot still exists. A view left behind by an out-of-order frame drop
     /// stops existing instead of aliasing whatever Luau puts there next.
-    #[inline]
+    #[inline(always)]
     pub(crate) fn exists(&self) -> bool {
         if self.index <= ffi::LUA_REGISTRYINDEX {
             return true;
+        }
+        if self.known_top > 0 {
+            // Arguments of a running native call cannot be popped from under it.
+            return self.index > 0 && self.index <= self.known_top;
         }
         // SAFETY: state is live for 'v.
         self.index > 0 && self.index <= unsafe { ffi::lua_gettop(self.state) }
     }
 
+    #[inline(always)]
     pub fn type_of(&self) -> Type {
         if !self.exists() {
             return Type::None;

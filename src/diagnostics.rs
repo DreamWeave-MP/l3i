@@ -66,6 +66,7 @@ pub(crate) unsafe fn raise_at_caller(state: *mut ffi::lua_State, message: &str) 
 }
 
 /// `luaT_objtypename`: `__type` from the metatable when present, else the basic type name.
+#[cold]
 pub fn object_type_name(value: ValueView<'_>) -> String {
     // SAFETY: luaL_typename accepts any acceptable index, including none.
     unsafe { CStr::from_ptr(ffi::luaL_typename(value.state(), value.index())).to_string_lossy().into_owned() }
@@ -74,11 +75,13 @@ pub fn object_type_name(value: ValueView<'_>) -> String {
 /// The message `luaL_typeerror(L, narg, expected)` would raise for `value`, including the
 /// caller location prefix `luaL_error` adds. Argument numbering is the raw stack position;
 /// method binders adjust before calling.
+#[cold]
 pub fn type_error(value: ValueView<'_>, expected: &str) -> Error {
     type_error_at(value, value.index(), expected)
 }
 
 /// [`type_error`] with an explicit argument number.
+#[cold]
 pub fn type_error_at(value: ValueView<'_>, position: c_int, expected: &str) -> Error {
     let state = value.state();
     // SAFETY: the view proves the state is live and we are inside a native call.
@@ -100,6 +103,7 @@ pub fn type_error_at(value: ValueView<'_>, position: c_int, expected: &str) -> E
 }
 
 /// UTF-8-safe bounded truncation for diagnostic text (`truncateDiagnostic`).
+#[cold]
 pub fn truncate_diagnostic(text: &str, max_length: usize) -> String {
     if text.len() <= max_length {
         return text.to_owned();
@@ -113,6 +117,7 @@ pub fn truncate_diagnostic(text: &str, max_length: usize) -> String {
 
 /// Escapes quotes, backslashes, and control bytes; multibyte UTF-8 passes through
 /// (`escapeDiagnostic`).
+#[cold]
 pub fn escape_diagnostic(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     for c in text.chars() {
@@ -131,6 +136,7 @@ pub fn escape_diagnostic(text: &str) -> String {
 
 /// Non-executing description of a value for error messages (`describeLuaValue`): booleans,
 /// numbers, and (truncated, escaped) strings by content, everything else as `<type>`.
+#[cold]
 pub fn describe_value(value: ValueView<'_>, max_length: usize) -> String {
     let state = value.state();
     // SAFETY: every accessor is guarded by the matching type test and the view proved the slot.

@@ -52,11 +52,12 @@ pub(crate) unsafe fn type_matches_tag<T: Userdata>(state: *mut ffi::lua_State, u
 #[inline]
 pub(crate) unsafe fn payload_ptr<T: Userdata>(state: *mut ffi::lua_State, index: c_int) -> *mut T {
     unsafe {
-        let tag = ffi::lua_userdatatag(state, index);
-        if tag <= 0 || !type_matches_tag::<T>(state, tag) {
+        let mut tag: c_int = 0;
+        let data = ffi::l3i_touserdata_tag(state, index, &mut tag);
+        if data.is_null() || tag <= 0 || !type_matches_tag::<T>(state, tag) {
             return ptr::null_mut();
         }
-        ffi::lua_touserdata(state, index).cast::<T>()
+        data.cast::<T>()
     }
 }
 

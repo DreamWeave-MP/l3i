@@ -15,6 +15,7 @@ pub trait Return {
 }
 
 impl Return for () {
+    #[inline]
     fn push_results(self, _: &Call<'_>) -> Result<c_int> {
         Ok(0)
     }
@@ -23,8 +24,9 @@ impl Return for () {
 macro_rules! single_returns {
     ($($t:ty),* $(,)?) => {$(
         impl Return for $t {
+            #[inline]
             fn push_results(self, call: &Call<'_>) -> Result<c_int> {
-                call.push(&self)?;
+                Push::push_only(&self, call)?;
                 Ok(1)
             }
         }
@@ -57,6 +59,7 @@ single_returns!(
 
 /// `None` is one nil result; `Some` pushes the inner value's results.
 impl<T: Return> Return for Option<T> {
+    #[inline]
     fn push_results(self, call: &Call<'_>) -> Result<c_int> {
         match self {
             Some(value) => value.push_results(call),
@@ -70,6 +73,7 @@ impl<T: Return> Return for Option<T> {
 
 /// `Err` is raised as the Lua error; `Ok` pushes the inner results.
 impl<T: Return> Return for Result<T> {
+    #[inline]
     fn push_results(self, call: &Call<'_>) -> Result<c_int> {
         self?.push_results(call)
     }
@@ -79,6 +83,7 @@ macro_rules! tuple_returns {
     ($(($($name:ident),+) = $count:literal;)*) => {$(
         impl<$($name: Push),+> Return for ($($name,)+) {
             #[allow(non_snake_case)]
+            #[inline]
             fn push_results(self, call: &Call<'_>) -> Result<c_int> {
                 let ($($name,)+) = self;
                 $( call.push(&$name)?; )+
@@ -101,6 +106,7 @@ tuple_returns! {
 pub struct Variadic<T>(pub Vec<T>);
 
 impl<T: Push> Return for Variadic<T> {
+    #[inline]
     fn push_results(self, call: &Call<'_>) -> Result<c_int> {
         call.stack().check(c_int::try_from(self.0.len()).unwrap_or(c_int::MAX))?;
         for item in &self.0 {
@@ -118,6 +124,7 @@ pub enum ResultOrError<T> {
 }
 
 impl<T: Push> Return for ResultOrError<T> {
+    #[inline]
     fn push_results(self, call: &Call<'_>) -> Result<c_int> {
         match self {
             ResultOrError::Success(value) => {
@@ -150,6 +157,7 @@ impl<T> NilThen<T> {
 }
 
 impl<T: Push> Return for NilThen<T> {
+    #[inline]
     fn push_results(self, call: &Call<'_>) -> Result<c_int> {
         if !self.success {
             call.push(&())?;
@@ -164,6 +172,7 @@ impl<T: Push> Return for NilThen<T> {
 pub struct StackResults;
 
 impl Return for StackResults {
+    #[inline]
     fn push_results(self, call: &Call<'_>) -> Result<c_int> {
         Ok(call.result_count())
     }
@@ -175,6 +184,7 @@ impl Return for StackResults {
 pub struct Yield<T: Return>(pub T);
 
 impl<T: Return> Return for Yield<T> {
+    #[inline]
     fn push_results(self, call: &Call<'_>) -> Result<c_int> {
         let count = self.0.push_results(call)?;
         // SAFETY: the results are on the stack; lua_yield records them and returns the value the
@@ -188,6 +198,7 @@ impl<T: Return> Return for Yield<T> {
 pub struct Break;
 
 impl Return for Break {
+    #[inline]
     fn push_results(self, call: &Call<'_>) -> Result<c_int> {
         // SAFETY: lua_break only records the request and returns the C function's return value.
         Ok(unsafe { crate::raw::ffi::lua_break(call.state()) })

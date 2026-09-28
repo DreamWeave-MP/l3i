@@ -37,24 +37,27 @@ impl From<Vector3> for [f32; 3] {
 impl<'v> FromView<'v> for Vector3 {
     const EXPECTED: &'static str = "vector";
 
+    #[inline]
     fn from_view(view: ValueView<'v>) -> crate::error::Result<Vector3> {
-        if !view.is_vector() {
+        if !view.exists() {
             return Err(view.type_error(Type::Vector));
         }
-        // SAFETY: the slot holds a vector; lua_tovector points at LUA_VECTOR_SIZE floats that
-        // live inside the TValue for as long as the slot does.
-        unsafe {
-            let components = ffi::lua_tovector(view.state(), view.index());
-            Ok(Vector3 { x: *components, y: *components.add(1), z: *components.add(2) })
+        let mut components = [0f32; 3];
+        // SAFETY: the slot exists; the helper writes three floats only for a vector.
+        if unsafe { ffi::l3i_read_vector(view.state(), view.index(), components.as_mut_ptr()) } == 0 {
+            return Err(view.type_error(Type::Vector));
         }
+        Ok(Vector3 { x: components[0], y: components[1], z: components[2] })
     }
 
+    #[inline]
     fn matches(view: ValueView<'v>) -> bool {
         view.is_vector()
     }
 }
 
 impl Push for Vector3 {
+    #[inline]
     fn push_into<'s, S: Scope>(&self, scope: &'s S) -> crate::error::Result<ValueView<'s>> {
         unsafe { ffi::lua_pushvector(scope.state(), self.x, self.y, self.z) };
         Ok(scope.top_value())

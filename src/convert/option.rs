@@ -7,6 +7,7 @@ impl<'v, T: FromView<'v>> FromView<'v> for Option<T> {
 
     /// Nil is `None`; anything else must convert as `T`. A nonexistent slot is not nil here:
     /// absence is the argument binder's concern, which handles absent/nil/mismatch itself.
+    #[inline]
     fn from_view(view: ValueView<'v>) -> Result<Self> {
         if view.is_nil() {
             return Ok(None);
@@ -14,12 +15,14 @@ impl<'v, T: FromView<'v>> FromView<'v> for Option<T> {
         T::from_view(view).map(Some)
     }
 
+    #[inline]
     fn matches(view: ValueView<'v>) -> bool {
         view.is_nil() || T::matches(view)
     }
 }
 
 impl<T: Push> Push for Option<T> {
+    #[inline]
     fn push_into<'s, S: Scope>(&self, scope: &'s S) -> Result<ValueView<'s>> {
         match self {
             Some(value) => value.push_into(scope),

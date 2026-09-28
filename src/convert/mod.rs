@@ -44,6 +44,7 @@ pub trait FromView<'v>: Sized {
     /// True when `from_view` would succeed. Used only for overload resolution and optional
     /// argument disambiguation; the default runs the conversion and discards the result, and
     /// scalar types override it with a cheaper check.
+    #[inline]
     fn matches(view: ValueView<'v>) -> bool {
         Self::from_view(view).is_ok()
     }
@@ -52,25 +53,35 @@ pub trait FromView<'v>: Sized {
 /// A Rust type that can be pushed onto a scope as one Lua value.
 pub trait Push {
     fn push_into<'s, S: Scope>(&self, scope: &'s S) -> Result<ValueView<'s>>;
+
+    /// Pushes without producing a view of the slot; the hot return path uses this so scalar
+    /// results cost one `lua_push*` and nothing else.
+    #[inline]
+    fn push_only<S: Scope>(&self, scope: &S) -> Result<()> {
+        self.push_into(scope).map(|_| ())
+    }
 }
 
 impl<'v> FromView<'v> for ValueView<'v> {
     const EXPECTED: &'static str = "any value";
 
     /// Borrows the slot itself; a nonexistent slot is an error, nil is a value.
+    #[inline]
     fn from_view(view: ValueView<'v>) -> Result<Self> {
-        if view.type_of() == crate::stack::Type::None {
+        if !view.exists() {
             return Err(crate::error::Error::logic("Cannot read a nonexistent Lua stack value"));
         }
         Ok(view)
     }
 
+    #[inline]
     fn matches(view: ValueView<'v>) -> bool {
         view.type_of() != crate::stack::Type::None
     }
 }
 
 impl Push for ValueView<'_> {
+    #[inline]
     fn push_into<'s, S: Scope>(&self, scope: &'s S) -> Result<ValueView<'s>> {
         crate::stack::push_copy(scope.state(), *self)?;
         Ok(scope.top_value())
@@ -78,24 +89,28 @@ impl Push for ValueView<'_> {
 }
 
 impl<T: Push + ?Sized> Push for &T {
+    #[inline]
     fn push_into<'s, S: Scope>(&self, scope: &'s S) -> Result<ValueView<'s>> {
         (**self).push_into(scope)
     }
 }
 
 impl Push for crate::value::Value {
+    #[inline]
     fn push_into<'s, S: Scope>(&self, scope: &'s S) -> Result<ValueView<'s>> {
         self.push_to_scope(scope)
     }
 }
 
 impl Push for crate::value::Table {
+    #[inline]
     fn push_into<'s, S: Scope>(&self, scope: &'s S) -> Result<ValueView<'s>> {
         self.value().push_to_scope(scope)
     }
 }
 
 impl Push for crate::value::Function {
+    #[inline]
     fn push_into<'s, S: Scope>(&self, scope: &'s S) -> Result<ValueView<'s>> {
         self.value().push_to_scope(scope)
     }
@@ -104,10 +119,12 @@ impl Push for crate::value::Function {
 impl<'v> FromView<'v> for crate::value::Value {
     const EXPECTED: &'static str = "any value";
 
+    #[inline]
     fn from_view(view: ValueView<'v>) -> Result<Self> {
         crate::value::Value::store(view)
     }
 
+    #[inline]
     fn matches(view: ValueView<'v>) -> bool {
         view.type_of() != crate::stack::Type::None && view.index() != crate::raw::ffi::LUA_REGISTRYINDEX
     }

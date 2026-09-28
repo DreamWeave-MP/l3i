@@ -274,7 +274,7 @@ fn configure() -> Criterion {
     Criterion::default().measurement_time(Duration::from_secs(2)).warm_up_time(Duration::from_secs(1))
 }
 
-criterion_group! { name = benches; config = configure(); targets = rust_to_luau, luau_to_rust, methods_and_properties, host_side, plan_dispatch }
+criterion_group! { name = benches; config = configure(); targets = rust_to_luau, luau_to_rust, methods_and_properties, host_side, plan_dispatch, typed_variants }
 criterion_main!(benches);
 
 // ---- Runtime-resolved plans: cached direct index and namecall at several plan sizes ---------
@@ -366,6 +366,46 @@ fn plan_dispatch(c: &mut Criterion) {
         group.bench_function(format!("cached direct namecall, {members} members"), |b| {
             b.iter(|| namecall.invoke::<f64, _>(&stack, ()).unwrap())
         });
+    }
+    group.finish();
+}
+
+// ---- Diagnostic: where the typed binder's per-argument cost lives -------------------------
+
+fn typed_variants(c: &mut Criterion) {
+    let runtime = Runtime::new().unwrap();
+    let zero = runtime.bind_function("dreamweave.bench.zero", || 1.0f64).unwrap();
+    let call_only = runtime.bind_function("dreamweave.bench.callOnly", |_: &Call| 1.0f64).unwrap();
+    let one = runtime.bind_function("dreamweave.bench.one", |a: f64| a).unwrap();
+    let view = runtime.bind_function("dreamweave.bench.view", |_: l3i::stack::ValueView| 1.0f64).unwrap();
+    let two = runtime.bind_function("dreamweave.bench.two", |a: f64, b: f64| a + b).unwrap();
+    let two_i32 = runtime.bind_function("dreamweave.bench.twoInt", |a: i32, b: i32| a + b).unwrap();
+    let unit = runtime.bind_function("dreamweave.bench.unit", |_a: f64| ()).unwrap();
+    for (name, function) in [
+        ("zero", &zero),
+        ("call_only", &call_only),
+        ("one", &one),
+        ("view", &view),
+        ("two", &two),
+        ("two_i32", &two_i32),
+        ("unit", &unit),
+    ] {
+        runtime.set_global(name, function).unwrap();
+    }
+    let mut group = c.benchmark_group("typed_variants");
+    group.throughput(Throughput::Elements(CALLS));
+    for (name, body) in [
+        ("() -> f64", "s = zero()"),
+        ("(&Call) -> f64", "s = call_only()"),
+        ("(f64) -> f64", "s = one(i)"),
+        ("(ValueView) -> f64", "s = view(i)"),
+        ("(f64, f64) -> f64", "s = two(i, 1)"),
+        ("(i32, i32) -> i32", "s = two_i32(i, 1)"),
+        ("(f64) -> ()", "unit(i)"),
+    ] {
+        let function = looped(&runtime, body);
+        let stack = runtime.stack();
+        group.bench_function(name, |b| b.iter(|| function.invoke::<f64, _>(&stack, ()).unwrap()));
     }
     group.finish();
 }

@@ -134,6 +134,22 @@ impl<'vm> Stack<'vm> {
         unsafe { Self::new(state, host_level, false) }
     }
 
+    /// [`Stack::from_raw`] for a native call whose thread record the caller already read.
+    ///
+    /// # Safety
+    /// As `from_raw`; `record` is null or `state`'s own thread record.
+    #[inline]
+    pub(crate) unsafe fn from_raw_recorded(
+        state: *mut ffi::lua_State,
+        record: *const crate::runtime::shared::ThreadRecord,
+    ) -> Self {
+        // SAFETY: the record belongs to this thread and outlives the call.
+        if let Some(record) = unsafe { record.as_ref() } {
+            record.register_stack(false);
+        }
+        Stack { state, host_level: false, child_open: Cell::new(false), record, _vm: PhantomData }
+    }
+
     /// The root stack of a runtime-owned thread (the main thread or a coroutine).
     ///
     /// # Safety
@@ -164,13 +180,14 @@ impl<'vm> Stack<'vm> {
         self.host_level
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn top(&self) -> c_int {
         // SAFETY: state is live for 'vm.
         unsafe { ffi::lua_gettop(self.state) }
     }
 
     /// The raw thread pointer, for VM identity checks.
+    #[inline(always)]
     pub(crate) fn state_ptr(&self) -> *mut ffi::lua_State {
         self.state
     }

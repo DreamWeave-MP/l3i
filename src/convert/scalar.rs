@@ -12,6 +12,7 @@ use crate::stack::{Scope, Type, ValueView};
 impl<'v> FromView<'v> for bool {
     const EXPECTED: &'static str = "boolean";
 
+    #[inline(always)]
     fn from_view(view: ValueView<'v>) -> Result<bool> {
         if !view.is_boolean() {
             return Err(view.type_error(Type::Boolean));
@@ -20,15 +21,22 @@ impl<'v> FromView<'v> for bool {
         Ok(unsafe { ffi::lua_toboolean(view.state(), view.index()) } != 0)
     }
 
+    #[inline]
     fn matches(view: ValueView<'v>) -> bool {
         view.is_boolean()
     }
 }
 
 impl Push for bool {
+    #[inline]
     fn push_into<'s, S: Scope>(&self, scope: &'s S) -> Result<ValueView<'s>> {
-        unsafe { ffi::lua_pushboolean(scope.state(), c_int::from(*self)) };
+        self.push_only(scope)?;
         Ok(scope.top_value())
+    }
+    #[inline]
+    fn push_only<S: Scope>(&self, scope: &S) -> Result<()> {
+        unsafe { ffi::lua_pushboolean(scope.state(), c_int::from(*self)) };
+        Ok(())
     }
 }
 
@@ -44,44 +52,74 @@ pub struct Integer(pub i64);
 impl<'v> FromView<'v> for Integer {
     const EXPECTED: &'static str = "integer";
 
+    #[inline(always)]
     fn from_view(view: ValueView<'v>) -> Result<Integer> {
-        match read_integer64(view) {
-            Some(value) => Ok(Integer(value)),
-            None => Err(view.type_error(Type::Integer)),
+        match read_scalar(view) {
+            Scalar::Integer(value) => Ok(Integer(value)),
+            _ => Err(view.type_error(Type::Integer)),
         }
     }
 
+    #[inline]
     fn matches(view: ValueView<'v>) -> bool {
         view.is_integer()
     }
 }
 
 impl Push for Integer {
-    fn push_into<'s, S: Scope>(&self, scope: &'s S) -> Result<ValueView<'s>> {
+    #[inline]
+    fn push_only<S: Scope>(&self, scope: &S) -> Result<()> {
         unsafe { ffi::lua_pushinteger64(scope.state(), self.0) };
+        Ok(())
+    }
+    #[inline]
+    fn push_into<'s, S: Scope>(&self, scope: &'s S) -> Result<ValueView<'s>> {
+        self.push_only(scope)?;
         Ok(scope.top_value())
     }
 }
 
 /// The payload of an `integer` slot, or `None` for any other type.
-fn read_integer64(view: ValueView<'_>) -> Option<i64> {
-    if !view.is_integer() {
-        return None;
-    }
-    let mut is_integer = 0;
-    // SAFETY: the view proved the slot exists.
-    let value = unsafe { ffi::lua_tointeger64(view.state(), view.index(), &mut is_integer) };
-    (is_integer != 0).then_some(value)
+/// A slot read in one call: its type, with the payload for numbers and integers.
+#[derive(Clone, Copy)]
+enum Scalar {
+    Number(f64),
+    Integer(i64),
+    Other,
 }
 
-/// The payload of a `number` slot, or `None` for any other type.
-fn read_number(view: ValueView<'_>) -> Option<f64> {
-    if view.type_of() != Type::Number {
-        return None;
+/// One FFI call classifies the slot and reads a numeric payload; strings are never coerced.
+#[inline]
+fn read_scalar(view: ValueView<'_>) -> Scalar {
+    if !view.exists() {
+        return Scalar::Other;
     }
-    let mut is_number = 0;
-    let value = unsafe { ffi::lua_tonumberx(view.state(), view.index(), &mut is_number) };
-    (is_number != 0).then_some(value)
+    let mut number = 0.0f64;
+    let mut integer = 0i64;
+    // SAFETY: the slot exists on a live thread; the helper writes only the matching output.
+    match unsafe { ffi::l3i_read_scalar(view.state(), view.index(), &mut number, &mut integer) } {
+        ffi::LUA_TNUMBER => Scalar::Number(number),
+        ffi::LUA_TINTEGER => Scalar::Integer(integer),
+        _ => Scalar::Other,
+    }
+}
+
+/// The payload of a slot the caller has already matched as `Type::Integer`.
+#[inline]
+fn read_integer64(view: ValueView<'_>) -> Option<i64> {
+    match read_scalar(view) {
+        Scalar::Integer(value) => Some(value),
+        _ => None,
+    }
+}
+
+/// The payload of a slot the caller has already matched as `Type::Number`.
+#[inline]
+fn read_number(view: ValueView<'_>) -> Option<f64> {
+    match read_scalar(view) {
+        Scalar::Number(value) => Some(value),
+        _ => None,
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -102,20 +140,18 @@ macro_rules! integer_conversions {
         impl<'v> FromView<'v> for $t {
             const EXPECTED: &'static str = "number";
 
+            #[inline(always)]
             fn from_view(view: ValueView<'v>) -> Result<$t> {
-                match view.type_of() {
-                    Type::Integer => {
-                        let raw = read_integer64(view).ok_or_else(|| view.type_error(Type::Integer))?;
-                        <$t>::try_from(raw).map_err(|_| view.type_error(Type::Integer))
-                    }
-                    Type::Number => {
-                        let number = read_number(view).ok_or_else(|| view.type_error(Type::Integer))?;
+                match read_scalar(view) {
+                    Scalar::Integer(raw) => <$t>::try_from(raw).map_err(|_| view.type_error(Type::Integer)),
+                    Scalar::Number(number) => {
                         rounded_integer::<$t>(number, $signed, $digits).ok_or_else(|| view.type_error(Type::Integer))
                     }
-                    _ => Err(view.type_error(Type::Number)),
+                    Scalar::Other => Err(view.type_error(Type::Number)),
                 }
             }
 
+            #[inline]
             fn matches(view: ValueView<'v>) -> bool {
                 match view.type_of() {
                     Type::Integer => read_integer64(view).is_some_and(|raw| <$t>::try_from(raw).is_ok()),
@@ -128,14 +164,20 @@ macro_rules! integer_conversions {
         impl Push for $t {
             /// Pushes a Lua `number`; values an f64 cannot hold exactly are an error rather than
             /// a silently rounded result.
+            #[inline]
             fn push_into<'s, S: Scope>(&self, scope: &'s S) -> Result<ValueView<'s>> {
+                self.push_only(scope)?;
+                Ok(scope.top_value())
+            }
+            #[inline]
+            fn push_only<S: Scope>(&self, scope: &S) -> Result<()> {
                 #[allow(unused_comparisons)]
                 let magnitude: u64 = if *self < 0 { (*self as i128).unsigned_abs() as u64 } else { *self as u64 };
                 if !exactly_representable_as_f64(magnitude) {
                     return Err(Error::runtime("Integer cannot be represented exactly as a Lua number"));
                 }
                 unsafe { ffi::lua_pushnumber(scope.state(), *self as f64) };
-                Ok(scope.top_value())
+                Ok(())
             }
         }
     )*};
@@ -177,20 +219,28 @@ integer_conversions! {
 impl<'v> FromView<'v> for f64 {
     const EXPECTED: &'static str = "number";
 
+    #[inline(always)]
     fn from_view(view: ValueView<'v>) -> Result<f64> {
-        match view.type_of() {
-            Type::Integer => read_integer64(view).map(|i| i as f64).ok_or_else(|| view.type_error(Type::Number)),
-            Type::Number => read_number(view).ok_or_else(|| view.type_error(Type::Number)),
-            _ => Err(view.type_error(Type::Number)),
+        match read_scalar(view) {
+            Scalar::Number(value) => Ok(value),
+            Scalar::Integer(value) => Ok(value as f64),
+            Scalar::Other => Err(view.type_error(Type::Number)),
         }
     }
 
+    #[inline]
     fn matches(view: ValueView<'v>) -> bool {
         view.is_number()
     }
 }
 
 impl Push for f64 {
+    #[inline]
+    fn push_only<S: Scope>(&self, scope: &S) -> Result<()> {
+        unsafe { ffi::lua_pushnumber(scope.state(), *self) };
+        Ok(())
+    }
+    #[inline]
     fn push_into<'s, S: Scope>(&self, scope: &'s S) -> Result<ValueView<'s>> {
         unsafe { ffi::lua_pushnumber(scope.state(), *self) };
         Ok(scope.top_value())
@@ -203,17 +253,20 @@ impl<'v> FromView<'v> for f32 {
     /// Finite values outside the f32 range are rejected; NaN and infinities pass through. A
     /// Luau integer converts in one step (i64 to f32), as the C++ `static_cast` did, rather than
     /// rounding twice through f64.
+    #[inline(always)]
     fn from_view(view: ValueView<'v>) -> Result<f32> {
-        if view.is_integer() {
-            return read_integer64(view).map(|i| i as f32).ok_or_else(|| view.type_error(Type::Number));
-        }
-        let value = f64::from_view(view)?;
+        let value = match read_scalar(view) {
+            Scalar::Integer(value) => return Ok(value as f32),
+            Scalar::Number(value) => value,
+            Scalar::Other => return Err(view.type_error(Type::Number)),
+        };
         if value.is_finite() && (value < -f64::from(f32::MAX) || value > f64::from(f32::MAX)) {
             return Err(Error::runtime("Lua number does not fit destination floating-point type"));
         }
         Ok(value as f32)
     }
 
+    #[inline]
     fn matches(view: ValueView<'v>) -> bool {
         match view.type_of() {
             Type::Integer => true,
@@ -225,6 +278,12 @@ impl<'v> FromView<'v> for f32 {
 }
 
 impl Push for f32 {
+    #[inline]
+    fn push_only<S: Scope>(&self, scope: &S) -> Result<()> {
+        unsafe { ffi::lua_pushnumber(scope.state(), f64::from(*self)) };
+        Ok(())
+    }
+    #[inline]
     fn push_into<'s, S: Scope>(&self, scope: &'s S) -> Result<ValueView<'s>> {
         unsafe { ffi::lua_pushnumber(scope.state(), f64::from(*self)) };
         Ok(scope.top_value())
@@ -237,6 +296,7 @@ impl Push for f32 {
 
 impl Push for () {
     /// Unit pushes nil, the counterpart of `Option::None`.
+    #[inline]
     fn push_into<'s, S: Scope>(&self, scope: &'s S) -> Result<ValueView<'s>> {
         unsafe { ffi::lua_pushnil(scope.state()) };
         Ok(scope.top_value())

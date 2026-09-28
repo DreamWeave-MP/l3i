@@ -24,10 +24,12 @@ fn string_bytes<'v>(view: ValueView<'v>) -> Result<&'v [u8]> {
 impl<'v> FromView<'v> for &'v [u8] {
     const EXPECTED: &'static str = "string";
 
+    #[inline]
     fn from_view(view: ValueView<'v>) -> Result<Self> {
         string_bytes(view)
     }
 
+    #[inline]
     fn matches(view: ValueView<'v>) -> bool {
         view.is_string()
     }
@@ -37,10 +39,12 @@ impl<'v> FromView<'v> for &'v str {
     const EXPECTED: &'static str = "string";
 
     /// Borrowed; a string that is not valid UTF-8 is an error, never a lossy copy.
+    #[inline]
     fn from_view(view: ValueView<'v>) -> Result<Self> {
         std::str::from_utf8(string_bytes(view)?).map_err(|_| Error::runtime("Lua string is not valid UTF-8"))
     }
 
+    #[inline]
     fn matches(view: ValueView<'v>) -> bool {
         string_bytes(view).is_ok_and(|bytes| std::str::from_utf8(bytes).is_ok())
     }
@@ -49,10 +53,12 @@ impl<'v> FromView<'v> for &'v str {
 impl<'v> FromView<'v> for String {
     const EXPECTED: &'static str = "string";
 
+    #[inline]
     fn from_view(view: ValueView<'v>) -> Result<Self> {
         <&str>::from_view(view).map(str::to_owned)
     }
 
+    #[inline]
     fn matches(view: ValueView<'v>) -> bool {
         <&str>::matches(view)
     }
@@ -61,40 +67,59 @@ impl<'v> FromView<'v> for String {
 impl<'v> FromView<'v> for Vec<u8> {
     const EXPECTED: &'static str = "string";
 
+    #[inline]
     fn from_view(view: ValueView<'v>) -> Result<Self> {
         string_bytes(view).map(<[u8]>::to_vec)
     }
 
+    #[inline]
     fn matches(view: ValueView<'v>) -> bool {
         view.is_string()
     }
 }
 
 fn push_bytes<'s, S: Scope>(scope: &'s S, bytes: &[u8]) -> Result<ValueView<'s>> {
-    // SAFETY: lua_pushlstring copies `bytes.len()` bytes; an empty slice's pointer is not read.
-    unsafe { ffi::lua_pushlstring(scope.state(), bytes.as_ptr().cast(), bytes.len()) };
+    push_bytes_only(scope, bytes)?;
     Ok(scope.top_value())
 }
 
+fn push_bytes_only<S: Scope>(scope: &S, bytes: &[u8]) -> Result<()> {
+    // SAFETY: lua_pushlstring copies `bytes.len()` bytes; an empty slice's pointer is not read.
+    unsafe { ffi::lua_pushlstring(scope.state(), bytes.as_ptr().cast(), bytes.len()) };
+    Ok(())
+}
+
 impl Push for str {
+    #[inline]
     fn push_into<'s, S: Scope>(&self, scope: &'s S) -> Result<ValueView<'s>> {
         push_bytes(scope, self.as_bytes())
+    }
+    #[inline]
+    fn push_only<S: Scope>(&self, scope: &S) -> Result<()> {
+        push_bytes_only(scope, self.as_bytes())
     }
 }
 
 impl Push for String {
+    #[inline]
     fn push_into<'s, S: Scope>(&self, scope: &'s S) -> Result<ValueView<'s>> {
         push_bytes(scope, self.as_bytes())
+    }
+    #[inline]
+    fn push_only<S: Scope>(&self, scope: &S) -> Result<()> {
+        push_bytes_only(scope, self.as_bytes())
     }
 }
 
 impl Push for [u8] {
+    #[inline]
     fn push_into<'s, S: Scope>(&self, scope: &'s S) -> Result<ValueView<'s>> {
         push_bytes(scope, self)
     }
 }
 
 impl Push for Vec<u8> {
+    #[inline]
     fn push_into<'s, S: Scope>(&self, scope: &'s S) -> Result<ValueView<'s>> {
         push_bytes(scope, self)
     }
