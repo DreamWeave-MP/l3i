@@ -152,11 +152,11 @@ each member with its callable (`method("read", |a: &Archive, path: &str| ..)`), 
 capabilities, and memory categories, all without touching a VM. Callables are `Clone` because
 one plan binds them in every runtime it creates. `install` is optional and runs per runtime for
 what needs the live VM or the resolved policy: capability-gated module functions, module values
-that are Lua objects, services, runtime-owned state. The planned dispatch costs 40 ns per
-method call and 37 ns per getter on a tagged type (`benches/hot_paths.rs`,
-`extension_dispatch`): Luau's inline cache is validated with one packed-key compare, the plan
-and its member entries are read without a refcount or a borrow flag, and a type's own
-dispatchers vouch for the receiver so the bound member skips its type check.
+that are Lua objects, services, runtime-owned state. The planned dispatch costs 429 instructions per
+method call against 368 for the VM's own typed direct handler (`benches/instructions.rs`):
+Luau's inline cache and the member entry are one indexed load in a fused slot table, the plan
+is read without a refcount or a borrow flag, a type's own dispatchers vouch for the receiver
+so the bound member skips its type check, and one panic guard covers the whole call.
 `RuntimePlan::builder().policy(..).service(..)
 .extension(..).finalize()` orders extensions by their dependency graph (deterministically),
 merges owners with augmenters into one type per key, assigns tags (pinned, then `Required`,
@@ -330,9 +330,12 @@ divergences.
 Luau is a git submodule (`luau/`, pinned at release 0.740, the commit OpenMW pins); clone with
 `--recurse-submodules` or run `git submodule update --init`. `build.rs` compiles it and the
 binder's C++ additions with `cc` (in parallel): `LUAI_MAXCSTACK=8000`, three-component vectors,
-`LUA_UTAG_LIMIT=254`, Luau's internal assertions (a failed one prints its location before
-trapping), CodeGen under `jit`, Analysis under `analysis`; `soft-render` adds the
-dream-soft-render dependency. No network access at build time and no external Lua crate. Hosts may append
+`LUA_UTAG_LIMIT=254`, Luau's internal assertions whenever Rust's debug assertions are on (a
+failed one prints its location before trapping; a release build with debuginfo keeps the
+release VM), CodeGen under `jit`, Analysis under `analysis`; `soft-render` adds the
+dream-soft-render dependency. The binder reads argument slots straight from Luau's 16-byte
+value layout; `csrc/extra.cpp` pins every offset at compile time and each runtime proves the
+mirror against the API once at creation, so a Luau bump that moves a byte fails at once. No network access at build time and no external Lua crate. Hosts may append
 compiler flags through `LUAU_CXXFLAGS`. Rust 1.88 or newer.
 
 The toolchain is fixed: **clang++ for the C++ side, lld, and cross-language thin LTO**
@@ -353,6 +356,27 @@ runtime, sandbox, watchdog, native code, analysis, and renderer suites; `cargo c
 pays a full link-time codegen under cross-language LTO), so one file's tests run with
 `cargo test <file>::`. `BENCHMARKS.md` holds the Criterion numbers for the hot paths
 (`cargo bench --bench hot_paths`, then `python3 scripts/gen_benchmarks.py`).
+
+Past a few nanoseconds wall time is noise, so the binder's own cost is tracked in retired
+instructions and cycles per call, read from the CPU's counters by `cargo bench --bench
+instructions` (Linux, `perf_event_paranoid` at 2 or lower, no `perf` binary needed). The loop
+is subtracted, the minimum over seven rounds is reported, and the floors are measured the same
+way: a hand-written `lua_CFunction` and a typed direct handler. On the pinned Luau 0.740:
+
+| Per call | Instructions | Cycles |
+|---|---:|---:|
+| hand-written `lua_CFunction (f64, f64)` | 277 | 69 |
+| bound `() -> f64` | 292 | 78 |
+| bound `(f64, f64) -> f64` | 369 | 97 |
+| bound `(Vector3) -> f64` | 332 | 87 |
+| bound `(Packed<Color>) -> f64` | 353 | 93 |
+| typed direct namecall, the VM's leanest method path | 368 | 98 |
+| planned method `() -> f64` | 429 | 108 |
+| planned getter | 395 | 105 |
+| planned direct field | 78 | 13 |
+
+A bound call is within about forty instructions of a bare C function; a planned method is
+within sixty of the typed direct handler. The rest is Luau's own call and return machinery.
 
 ## License
 
