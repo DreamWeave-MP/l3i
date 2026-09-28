@@ -114,15 +114,24 @@ pub(crate) struct Shared {
     /// Registered untagged userdata metatables by Rust type: the identity the receiver check
     /// compares against and a registry reference for attaching the metatable on push.
     untagged: RefCell<HashMap<TypeId, UntaggedIdentity, BuildHasherDefault<TypeIdHasher>>>,
-    /// The extension planner's direct members by plan slot: the bound member each resolved
-    /// direct slot runs, so one generic VM callback serves every planned type. Collected here
-    /// during registration, then published once as a plain slice for the dispatch path.
+    /// The extension planner's direct members by plan slot, collected during registration and
+    /// published once into `slot_table`.
     direct_entries: RefCell<Vec<Option<crate::bind::MemberEntry>>>,
-    published_entries: std::cell::OnceCell<Box<[Option<crate::bind::MemberEntry>]>>,
+    /// The dispatch path's table, one row per plan slot: the packed `(tag, kind, atom)` key
+    /// Luau's cached slot must match and the member to run. One indexed load validates the
+    /// cache and finds the member.
+    slot_table: std::cell::OnceCell<Box<[SlotRow]>>,
     /// The bytecode type the compiler gives each Rust type named in this runtime's userdata
     /// type list (`TAGGED_USERDATA_BASE + index`), for native lowering hooks.
     #[cfg(feature = "jit")]
     userdata_types: RefCell<HashMap<TypeId, u8, BuildHasherDefault<TypeIdHasher>>>,
+}
+
+/// One row of the dispatch path's slot table.
+#[derive(Clone, Copy)]
+pub(crate) struct SlotRow {
+    pub(crate) key: u64,
+    pub(crate) entry: Option<crate::bind::MemberEntry>,
 }
 
 /// An untagged type's registered metatable, as cached at registration.
@@ -192,7 +201,7 @@ impl Shared {
             require_navigator: RefCell::new(None),
             untagged: RefCell::new(HashMap::default()),
             direct_entries: RefCell::new(Vec::new()),
-            published_entries: std::cell::OnceCell::new(),
+            slot_table: std::cell::OnceCell::new(),
             #[cfg(feature = "jit")]
             userdata_types: RefCell::new(HashMap::default()),
         }
@@ -226,16 +235,6 @@ impl Shared {
         &self.hooks
     }
 
-    /// The planned direct member at `slot`, if any: a plain slice read once the entries are
-    /// published (the dispatch path), the collection under construction before that.
-    #[inline]
-    pub(crate) fn direct_entry(&self, slot: u16) -> Option<crate::bind::MemberEntry> {
-        match self.published_entries.get() {
-            Some(entries) => entries.get(usize::from(slot)).copied().flatten(),
-            None => self.direct_entries.borrow().get(usize::from(slot)).copied().flatten(),
-        }
-    }
-
     /// Records the member the planned direct `slot` runs.
     pub(crate) fn set_direct_entry(&self, slot: u16, entry: crate::bind::MemberEntry) {
         let mut entries = self.direct_entries.borrow_mut();
@@ -246,10 +245,25 @@ impl Shared {
         entries[index] = Some(entry);
     }
 
-    /// Freezes the recorded entries into the slice the dispatch path reads (once per VM).
+    /// Freezes the recorded entries, fused with the published plan's slot keys, into
+    /// [`Self::slot_table`] (once per VM).
     pub(crate) fn publish_direct_entries(&self) {
         let entries = std::mem::take(&mut *self.direct_entries.borrow_mut());
-        let _ = self.published_entries.set(entries.into_boxed_slice());
+        let rows: Vec<SlotRow> = entries
+            .iter()
+            .enumerate()
+            .map(|(slot, entry)| SlotRow {
+                key: self.direct_plan.get().map_or(crate::direct::plan::NO_KEY, |plan| plan.slot_key_of(slot)),
+                entry: *entry,
+            })
+            .collect();
+        let _ = self.slot_table.set(rows.into_boxed_slice());
+    }
+
+    /// The fused slot table, once published.
+    #[inline(always)]
+    pub(crate) fn slot_table(&self) -> Option<&[SlotRow]> {
+        self.slot_table.get().map(|rows| &**rows)
     }
 
     /// The registered untagged metatable of the Rust type `id`, if any.

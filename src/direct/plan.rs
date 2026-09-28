@@ -51,7 +51,7 @@ pub struct DirectPlan {
     slots: Vec<u16>,
 }
 
-const NO_KEY: u64 = u64::MAX;
+pub(crate) const NO_KEY: u64 = u64::MAX;
 
 /// The packed identity of one `(tag, kind, atom)` triple.
 #[inline(always)]
@@ -83,6 +83,17 @@ impl DirectPlan {
     #[inline]
     fn entry(&self, slot: u16) -> Option<&PlanEntry> {
         self.by_slot.get(usize::from(slot)).copied().flatten().map(|index| &self.entries[index as usize])
+    }
+
+    /// The packed key of `slot`, or [`NO_KEY`] for an unused slot id.
+    pub(crate) fn slot_key_of(&self, slot: usize) -> u64 {
+        self.slot_keys.get(slot).copied().unwrap_or(NO_KEY)
+    }
+
+    /// The packed key of `(tag, atom, kind)`, for comparing against a slot row.
+    #[inline(always)]
+    pub(crate) fn key(tag: i32, atom: Atom, kind: AccessKind) -> u64 {
+        slot_key(tag, kind, atom)
     }
 
     /// True when `cached` names exactly `(tag, atom, kind)` in this plan: the cache-hit test for

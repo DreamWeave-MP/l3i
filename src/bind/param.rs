@@ -42,12 +42,19 @@ pub trait ParamItem<'c>: Sized {
     /// Converts one slot. Only [`ParamKind::Regular`] and the inner type of an optional use it.
     fn read_slot(view: ValueView<'c>) -> Result<Self>;
 
+    /// Converts argument `index` of `call`; types with a direct read use the slot's raw value
+    /// when the call exposes it. Defaults to [`Self::read_slot`] on the argument view.
+    #[inline]
+    fn read_arg(call: &'c Call<'c>, index: c_int) -> Result<Self> {
+        Self::read_slot(call.arg(index))
+    }
+
     /// Converts the receiver slot of a method call; the dispatcher may have established its
-    /// type already ([`Call::verified_receiver`]). Defaults to [`Self::read_slot`].
+    /// type already ([`Call::verified_receiver`]). Defaults to [`Self::read_arg`].
     #[inline]
     fn read_receiver(call: &'c Call<'c>, view: ValueView<'c>) -> Result<Self> {
-        let _ = call;
-        Self::read_slot(view)
+        let _ = view;
+        Self::read_arg(call, 1)
     }
 
     /// True when [`ParamItem::read_slot`] would succeed on `view`.
@@ -79,7 +86,7 @@ pub trait ParamItem<'c>: Sized {
         if *cursor > top {
             return Err(diagnostics::missing_argument(debug_name, *position, Self::EXPECTED));
         }
-        let value = Self::read_slot(call.arg(*cursor))
+        let value = Self::read_arg(call, *cursor)
             .map_err(|cause| diagnostics::bad_argument(debug_name, *position, Self::EXPECTED, &cause))?;
         *cursor += 1;
         Ok(value)
@@ -106,6 +113,14 @@ macro_rules! impl_param_from_view {
             #[inline(always)]
             fn read_slot(view: $crate::stack::ValueView<'c>) -> $crate::Result<Self> {
                 <$t as $crate::convert::FromView<'c>>::from_view(view)
+            }
+
+            #[inline(always)]
+            fn read_arg(call: &'c $crate::bind::Call<'c>, index: ::std::ffi::c_int) -> $crate::Result<Self> {
+                match call.raw_arg(index) {
+                    Some(raw) => <$t as $crate::convert::FromView<'c>>::from_raw_arg(raw, || call.arg(index)),
+                    None => <$t as $crate::convert::FromView<'c>>::from_view(call.arg(index)),
+                }
             }
 
             #[inline]
@@ -248,24 +263,20 @@ impl<'c, T: Userdata> ParamItem<'c> for &'c T {
         use super::VerifiedReceiver;
         let id = std::any::TypeId::of::<T>();
         // SAFETY: the dispatcher reached this member through T's own tag or metatable, so the
-        // userdata at slot 1 was created by the matching `push::<T>` with the stated storage;
-        // the view keeps it reachable for the call.
-        match call.verified_receiver() {
-            Some(VerifiedReceiver::Tagged(verified)) if verified == id => {
-                let payload = unsafe { crate::raw::ffi::lua_touserdata(view.state(), view.index()).cast::<T>() };
-                if let Some(payload) = unsafe { payload.as_ref() } {
-                    return Ok(payload);
+        // userdata at slot 1 was created by the matching `push::<T>` with the stated storage,
+        // and the raw slot is that userdata; the view keeps it reachable for the call.
+        if let Some(raw) = call.raw_arg(1) {
+            match call.verified_receiver() {
+                Some(VerifiedReceiver::Tagged(verified)) if verified == id => {
+                    let (_, data) = unsafe { raw.userdata() };
+                    return Ok(unsafe { &*data.cast::<T>() });
                 }
-            }
-            Some(VerifiedReceiver::Untagged(verified)) if verified == id => {
-                let storage = unsafe {
-                    crate::raw::ffi::lua_touserdata(view.state(), view.index()).cast::<crate::userdata::Storage<T>>()
-                };
-                if let Some(storage) = unsafe { storage.as_ref() } {
-                    return Ok(storage.get());
+                Some(VerifiedReceiver::Untagged(verified)) if verified == id => {
+                    let (_, data) = unsafe { raw.userdata() };
+                    return Ok(unsafe { &*data.cast::<crate::userdata::Storage<T>>() }.get());
                 }
+                _ => {}
             }
-            _ => {}
         }
         check_receiver::<T>(view)
     }

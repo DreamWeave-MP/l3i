@@ -19,34 +19,47 @@ use crate::raw::{ffi, trampoline};
 use crate::runtime::Runtime;
 use crate::runtime::shared::Shared;
 
-/// The slot for `(tag, atom, kind)`, consulting and refreshing Luau's cache word.
+/// The member for `(tag, atom, kind)`: Luau's cache word is validated against the fused slot
+/// table with one indexed load; a miss resolves through the plan and refreshes the word.
 ///
 /// # Safety
 /// `slot` is Luau's cache word for the instruction or null.
 #[inline(always)]
-unsafe fn resolve(plan: &DirectPlan, slot: *mut u16, tag: c_int, atom: Atom, kind: AccessKind) -> u16 {
+unsafe fn member(
+    shared: &Shared,
+    slot: *mut u16,
+    tag: c_int,
+    atom: Atom,
+    kind: AccessKind,
+) -> Option<crate::bind::MemberEntry> {
+    let rows = shared.slot_table()?;
+    let key = DirectPlan::key(tag, atom, kind);
     unsafe {
-        let cached = if slot.is_null() { UNKNOWN_SLOT } else { *slot };
-        if cached != UNKNOWN_SLOT && plan.cached_slot_matches_tag(cached, tag, atom, kind) {
-            return cached;
+        if !slot.is_null()
+            && let Some(row) = rows.get(usize::from(*slot))
+            && row.key == key
+        {
+            return row.entry;
         }
+        let plan = shared.direct_plan().get()?;
         let resolved = plan.resolve_slot(tag, atom, kind);
         if !slot.is_null() {
             *slot = resolved;
         }
-        resolved
+        if resolved == UNKNOWN_SLOT {
+            return None;
+        }
+        rows.get(usize::from(resolved)).and_then(|row| row.entry)
     }
 }
 
-/// The VM's shared block and its direct plan, or `None` when the state has no runtime plan.
+/// The VM's shared block, or `None` when the state has none.
 ///
 /// # Safety
 /// `state` is a live thread.
 #[inline(always)]
-unsafe fn planned(state: *mut ffi::lua_State) -> Option<(&'static Shared, &'static DirectPlan)> {
-    let shared = unsafe { crate::runtime::shared_for(state) }?;
-    let plan = shared.direct_plan().get()?;
-    Some((shared, plan))
+unsafe fn planned(state: *mut ffi::lua_State) -> Option<&'static Shared> {
+    unsafe { crate::runtime::shared_for(state) }
 }
 
 /// Pushes the metatable metamethod `name` of userdata tag `tag`, or nil.
@@ -138,12 +151,12 @@ unsafe extern "C-unwind" fn namecall(
     unsafe {
         trampoline::enter(state, || {
             let mut record: *mut c_void = std::ptr::null_mut();
-            let top = ffi::l3i_direct_enter(state, &mut record);
-            let Some((shared, plan)) = planned(state) else { return namecall_fallback(state, utag, top) };
-            let resolved = resolve(plan, slot, utag, atom as Atom, AccessKind::Namecall);
-            match shared.direct_entry(resolved) {
-                Some(entry) if resolved != UNKNOWN_SLOT => Ok(entry.call_recorded(state, top, record)),
-                _ => namecall_fallback(state, utag, top),
+            let mut base: *const crate::convert::RawValue = std::ptr::null();
+            let top = ffi::l3i_direct_enter(state, &mut record, &mut base);
+            let Some(shared) = planned(state) else { return namecall_fallback(state, utag, top) };
+            match member(shared, slot, utag, atom as Atom, AccessKind::Namecall) {
+                Some(entry) => Ok(entry.call_recorded(state, top, record, base)),
+                None => namecall_fallback(state, utag, top),
             }
         })
     }
@@ -159,15 +172,16 @@ unsafe extern "C-unwind" fn index(
 ) {
     unsafe {
         trampoline::enter(state, || {
-            let Some((shared, plan)) = planned(state) else { return index_fallback(state, utag) };
-            let resolved = resolve(plan, slot, utag, atom as Atom, AccessKind::Index);
-            match shared.direct_entry(resolved) {
-                Some(entry) if resolved != UNKNOWN_SLOT => {
+            let Some(shared) = planned(state) else { return index_fallback(state, utag) };
+            match member(shared, slot, utag, atom as Atom, AccessKind::Index) {
+                Some(entry) => {
                     // The getter takes the receiver alone; the key leaves the stack so result
                     // counting sees only what the getter pushes.
                     ffi::lua_remove(state, 2);
-                    let record = ffi::lua_getthreaddata(state);
-                    let pushed = entry.call_recorded(state, 1, record);
+                    let mut record: *mut c_void = std::ptr::null_mut();
+                    let mut base: *const crate::convert::RawValue = std::ptr::null();
+                    ffi::l3i_direct_enter(state, &mut record, &mut base);
+                    let pushed = entry.call_recorded(state, 1, record, base);
                     if pushed == 0 {
                         ffi::lua_pushnil(state);
                     } else if pushed > 1 {
@@ -175,7 +189,7 @@ unsafe extern "C-unwind" fn index(
                     }
                     Ok(1)
                 }
-                _ => index_fallback(state, utag),
+                None => index_fallback(state, utag),
             }
         });
     }
@@ -191,15 +205,17 @@ unsafe extern "C-unwind" fn newindex(
 ) {
     unsafe {
         trampoline::enter(state, || {
-            let Some((shared, plan)) = planned(state) else { return newindex_fallback(state, utag) };
-            let resolved = resolve(plan, slot, utag, atom as Atom, AccessKind::NewIndex);
-            match shared.direct_entry(resolved) {
-                Some(entry) if resolved != UNKNOWN_SLOT => {
+            let Some(shared) = planned(state) else { return newindex_fallback(state, utag) };
+            match member(shared, slot, utag, atom as Atom, AccessKind::NewIndex) {
+                Some(entry) => {
                     ffi::lua_remove(state, 2);
-                    entry.call(state, 2);
+                    let mut record: *mut c_void = std::ptr::null_mut();
+                    let mut base: *const crate::convert::RawValue = std::ptr::null();
+                    ffi::l3i_direct_enter(state, &mut record, &mut base);
+                    entry.call_recorded(state, 2, record, base);
                     Ok(0)
                 }
-                _ => newindex_fallback(state, utag),
+                None => newindex_fallback(state, utag),
             }
         });
     }

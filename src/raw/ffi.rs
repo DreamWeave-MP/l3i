@@ -574,9 +574,20 @@ unsafe extern "C" {
     pub fn lua_getmetatablepointer(L: *mut lua_State, objindex: c_int) -> *const c_void;
     pub fn l3i_read_scalar(L: *mut lua_State, idx: c_int, number: *mut f64, integer: *mut i64) -> c_int;
     pub fn l3i_touserdata_tag(L: *mut lua_State, idx: c_int, tag: *mut c_int) -> *mut c_void;
-    pub fn l3i_native_enter(L: *mut lua_State, top: *mut c_int, threaddata: *mut *mut c_void) -> *mut c_void;
+    pub fn l3i_native_enter(
+        L: *mut lua_State,
+        top: *mut c_int,
+        threaddata: *mut *mut c_void,
+        base: *mut *const crate::convert::RawValue,
+    ) -> *mut c_void;
+    pub fn l3i_call_base(L: *mut lua_State) -> *const crate::convert::RawValue;
+    pub fn l3i_stack_slot(L: *mut lua_State, idx: c_int) -> *const crate::convert::RawValue;
     pub fn l3i_read_vector(L: *mut lua_State, idx: c_int, out: *mut f32) -> c_int;
-    pub fn l3i_direct_enter(L: *mut lua_State, threaddata: *mut *mut c_void) -> c_int;
+    pub fn l3i_direct_enter(
+        L: *mut lua_State,
+        threaddata: *mut *mut c_void,
+        base: *mut *const crate::convert::RawValue,
+    ) -> c_int;
     pub fn lua_gcdump(L: *mut lua_State, file: *mut c_void, categoryName: Option<lua_CategoryName>);
 
     // C runtime, for the heap dump files.

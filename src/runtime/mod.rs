@@ -204,6 +204,10 @@ impl RuntimeBuilder {
         if self.standard_libraries {
             runtime.open_standard_libraries();
         }
+        // The binder reads argument slots through a mirror of Luau's value layout; prove the
+        // mirror against this build's API before any binding trusts it.
+        // SAFETY: a fresh main thread with a free stack.
+        unsafe { crate::convert::raw::self_test(state)? };
         Ok(runtime)
     }
 }

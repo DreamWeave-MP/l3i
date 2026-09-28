@@ -187,14 +187,15 @@ unsafe fn with_context<F: Binding<M>, M>(
             // One FFI call reads the argument count, the thread record, and upvalue 1.
             let mut top: c_int = 0;
             let mut record: *mut c_void = ptr::null_mut();
-            let context = ffi::l3i_native_enter(state, &mut top, &mut record).cast::<Context<F>>();
+            let mut base: *const crate::convert::RawValue = ptr::null();
+            let context = ffi::l3i_native_enter(state, &mut top, &mut record, &mut base).cast::<Context<F>>();
             if context.is_null() {
                 return Err(Error::logic("Invalid native Lua binding context"));
             }
             // SAFETY: upvalue 1 is the context userdata `push_closure` created for this thunk;
             // the thread data slot holds the runtime's record for this thread (or null).
             let context = &*context;
-            let call = Call::from_parts(state, top, record.cast_const().cast(), None);
+            let call = Call::from_parts(state, top, record.cast_const().cast(), None, base);
             body(&context.callable, &call, context.debug_name)
         })
     }
@@ -217,49 +218,54 @@ unsafe extern "C-unwind" fn method_thunk<F: Binding<M>, M>(state: *mut ffi::lua_
 #[derive(Clone, Copy)]
 #[repr(C)]
 pub(crate) struct MemberEntry {
-    invoke: unsafe fn(*mut ffi::lua_State, *const c_void, c_int, *const ThreadRecord) -> c_int,
+    invoke: unsafe fn(*mut ffi::lua_State, *const c_void, c_int, *const ThreadRecord, *const crate::convert::RawValue) -> c_int,
     context: *const c_void,
 }
 
 impl MemberEntry {
     /// Runs the member with the receiver at slot 1 and `top` arguments on the stack, pushing
-    /// its results and returning their count. Errors raise through Luau like any native call.
+    /// its results and returning their count; `record` and `base` come from `l3i_direct_enter`.
+    /// Errors raise through Luau like any native call.
     ///
     /// # Safety
-    /// `state` is the running thread of a native call with `top` values on its stack.
+    /// `state` is the running thread of a native call with `top` values on its stack, under a
+    /// panic guard; `record` is this thread's data slot and `base` the first argument.
     #[inline(always)]
-    pub(crate) unsafe fn call(self, state: *mut ffi::lua_State, top: c_int) -> c_int {
-        unsafe {
-            let record = ffi::lua_getthreaddata(state).cast_const().cast::<ThreadRecord>();
-            (self.invoke)(state, self.context, top, record)
-        }
-    }
-
-    /// [`Self::call`] with the thread record the dispatcher already fetched.
-    ///
-    /// # Safety
-    /// As [`Self::call`]; `record` is this thread's data slot.
-    #[inline(always)]
-    pub(crate) unsafe fn call_recorded(self, state: *mut ffi::lua_State, top: c_int, record: *const c_void) -> c_int {
-        unsafe { (self.invoke)(state, self.context, top, record.cast::<ThreadRecord>()) }
+    pub(crate) unsafe fn call_recorded(
+        self,
+        state: *mut ffi::lua_State,
+        top: c_int,
+        record: *const c_void,
+        base: *const crate::convert::RawValue,
+    ) -> c_int {
+        unsafe { (self.invoke)(state, self.context, top, record.cast::<ThreadRecord>(), base) }
     }
 }
 
-/// The type-erased body behind [`MemberEntry`] for a method-mode binding.
+/// The type-erased body behind [`MemberEntry`] for a method-mode binding. Runs inside the
+/// dispatcher's own panic guard (every dispatcher that holds a `MemberEntry` installs one), so
+/// it adds none of its own: one guard per call, not two.
 unsafe fn direct_method<F: Binding<M>, M>(
     state: *mut ffi::lua_State,
     context: *const c_void,
     top: c_int,
     record: *const ThreadRecord,
+    base: *const crate::convert::RawValue,
 ) -> c_int {
     unsafe {
-        trampoline::enter(state, || {
-            // SAFETY: the entry was built from this context by `method_member`, and the
-            // dispatch table that produced the entry keeps the owning closure alive.
-            let context = &*context.cast::<Context<F>>();
-            let call = Call::from_parts(state, top, record, context.receiver_type);
-            context.callable.invoke_method(&call, context.debug_name)
-        })
+        // SAFETY: the entry was built from this context by `method_member`, and the dispatch
+        // table that produced the entry keeps the owning closure alive.
+        let context = &*context.cast::<Context<F>>();
+        let call = Call::from_parts(state, top, record, context.receiver_type, base);
+        match context.callable.invoke_method(&call, context.debug_name) {
+            Ok(results) => results,
+            Err(error) => {
+                // The call frame (and its thread-record registration) must be gone before the
+                // raise unwinds through this frame.
+                drop(call);
+                trampoline::raise(state, error)
+            }
+        }
     }
 }
 

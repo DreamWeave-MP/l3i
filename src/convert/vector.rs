@@ -50,6 +50,16 @@ impl<'v> FromView<'v> for Vector3 {
         Ok(Vector3 { x: components[0], y: components[1], z: components[2] })
     }
 
+    #[inline(always)]
+    fn from_raw_arg(raw: &super::RawValue, view: impl FnOnce() -> ValueView<'v>) -> crate::error::Result<Vector3> {
+        if raw.tag() == ffi::LUA_TVECTOR {
+            let [x, y, z] = raw.vector();
+            Ok(Vector3 { x, y, z })
+        } else {
+            Err(view().type_error(Type::Vector))
+        }
+    }
+
     #[inline]
     fn matches(view: ValueView<'v>) -> bool {
         view.is_vector()

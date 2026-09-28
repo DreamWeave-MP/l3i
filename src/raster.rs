@@ -288,6 +288,15 @@ impl<'v> FromView<'v> for Color16 {
         }
     }
 
+    #[inline(always)]
+    fn from_raw_arg(raw: &crate::convert::RawValue, view: impl FnOnce() -> ValueView<'v>) -> Result<Self> {
+        if raw.tag() == crate::raw::ffi::LUA_TINTEGER {
+            Ok(Color16::from_packed(raw.integer() as u64))
+        } else {
+            Err(view().type_error(Type::Integer))
+        }
+    }
+
     fn matches(view: ValueView<'v>) -> bool {
         crate::convert::read_integer64(view).is_some()
     }
@@ -303,6 +312,13 @@ impl<'c> crate::bind::ParamItem<'c> for Color16 {
     #[inline]
     fn read_slot(view: ValueView<'c>) -> Result<Self> {
         <Color16 as FromView<'c>>::from_view(view)
+    }
+    #[inline(always)]
+    fn read_arg(call: &'c crate::bind::Call<'c>, index: std::ffi::c_int) -> Result<Self> {
+        match call.raw_arg(index) {
+            Some(raw) => <Color16 as FromView<'c>>::from_raw_arg(raw, || call.arg(index)),
+            None => <Color16 as FromView<'c>>::from_view(call.arg(index)),
+        }
     }
     #[inline]
     fn matches(view: ValueView<'c>) -> bool {

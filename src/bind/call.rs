@@ -14,6 +14,10 @@ pub struct Call<'c> {
     /// a tag, a metatable's own `__namecall`/`__index`): the `&T` receiver parameter then
     /// skips its type check.
     receiver: Option<VerifiedReceiver>,
+    /// The first argument slot (`L->base`), read once on entry; argument reads go through it
+    /// directly. Valid for the arguments only, and only until something grows the stack, which
+    /// is why it is read at materialisation and never kept in a view.
+    base: *const crate::convert::RawValue,
 }
 
 /// The Rust type the receiver at slot 1 is known to be, and how it is stored.
@@ -32,7 +36,8 @@ impl<'c> Call<'c> {
         // SAFETY: forwarded from the C entry point; a native call is never host level.
         let stack = unsafe { Stack::from_raw(state, false) };
         let initial_top = stack.top();
-        Call { stack, initial_top, receiver: None }
+        let base = unsafe { ffi::l3i_call_base(state) };
+        Call { stack, initial_top, receiver: None, base }
     }
 
     /// A call whose argument count and thread record were read by `l3i_native_enter`.
@@ -45,8 +50,20 @@ impl<'c> Call<'c> {
         initial_top: c_int,
         record: *const crate::runtime::shared::ThreadRecord,
         receiver: Option<VerifiedReceiver>,
+        base: *const crate::convert::RawValue,
     ) -> Call<'c> {
-        Call { stack: unsafe { Stack::from_raw_recorded(state, record) }, initial_top, receiver }
+        Call { stack: unsafe { Stack::from_raw_recorded(state, record) }, initial_top, receiver, base }
+    }
+
+    /// Argument `index` (1-based) as the raw slot, when within the arguments the caller passed.
+    #[inline(always)]
+    pub(crate) fn raw_arg(&self, index: c_int) -> Option<&crate::convert::RawValue> {
+        if self.base.is_null() || index < 1 || index > self.initial_top {
+            return None;
+        }
+        // SAFETY: `base` is this call's first argument slot and `initial_top` slots follow it;
+        // nothing has grown the stack between entry and argument materialisation.
+        Some(unsafe { &*self.base.add(index as usize - 1) })
     }
 
     /// What the dispatcher established about the receiver at slot 1, if anything.

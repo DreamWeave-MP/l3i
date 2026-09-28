@@ -1,6 +1,6 @@
 use std::ffi::c_int;
 
-use super::{FromView, Push};
+use super::{FromView, RawValue, Push};
 use crate::error::{Error, Result};
 use crate::raw::ffi;
 use crate::stack::{Scope, Type, ValueView};
@@ -19,6 +19,11 @@ impl<'v> FromView<'v> for bool {
         }
         // SAFETY: the view proved the slot exists.
         Ok(unsafe { ffi::lua_toboolean(view.state(), view.index()) } != 0)
+    }
+
+    #[inline(always)]
+    fn from_raw_arg(raw: &RawValue, view: impl FnOnce() -> ValueView<'v>) -> Result<bool> {
+        if raw.tag() == ffi::LUA_TBOOLEAN { Ok(raw.boolean()) } else { Err(view().type_error(Type::Boolean)) }
     }
 
     #[inline]
@@ -60,6 +65,11 @@ impl<'v> FromView<'v> for Integer {
         }
     }
 
+    #[inline(always)]
+    fn from_raw_arg(raw: &RawValue, view: impl FnOnce() -> ValueView<'v>) -> Result<Integer> {
+        if raw.tag() == ffi::LUA_TINTEGER { Ok(Integer(raw.integer())) } else { Err(view().type_error(Type::Integer)) }
+    }
+
     #[inline]
     fn matches(view: ValueView<'v>) -> bool {
         view.is_integer()
@@ -86,6 +96,16 @@ enum Scalar {
     Number(f64),
     Integer(i64),
     Other,
+}
+
+/// The scalar in a directly read slot; strings are never coerced.
+#[inline(always)]
+fn raw_scalar(raw: &RawValue) -> Scalar {
+    match raw.tag() {
+        ffi::LUA_TNUMBER => Scalar::Number(raw.number()),
+        ffi::LUA_TINTEGER => Scalar::Integer(raw.integer()),
+        _ => Scalar::Other,
+    }
 }
 
 /// One FFI call classifies the slot and reads a numeric payload; strings are never coerced.
@@ -149,6 +169,18 @@ macro_rules! integer_conversions {
                     Scalar::Number(number) => rounded_integer::<$t>(number, $signed, const { power_of_two($digits) })
                         .ok_or_else(|| number_out_of_range(&view, number, stringify!($t))),
                     Scalar::Other => Err(view.type_error(Type::Number)),
+                }
+            }
+
+            #[inline(always)]
+            fn from_raw_arg(raw: &RawValue, view: impl FnOnce() -> ValueView<'v>) -> Result<$t> {
+                match raw_scalar(raw) {
+                    Scalar::Integer(raw) => {
+                        <$t>::try_from(raw).map_err(|_| integer_out_of_range(&view(), raw, stringify!($t)))
+                    }
+                    Scalar::Number(number) => rounded_integer::<$t>(number, $signed, const { power_of_two($digits) })
+                        .ok_or_else(|| number_out_of_range(&view(), number, stringify!($t))),
+                    Scalar::Other => Err(view().type_error(Type::Number)),
                 }
             }
 
@@ -251,6 +283,15 @@ impl<'v> FromView<'v> for f64 {
         }
     }
 
+    #[inline(always)]
+    fn from_raw_arg(raw: &RawValue, view: impl FnOnce() -> ValueView<'v>) -> Result<f64> {
+        match raw_scalar(raw) {
+            Scalar::Number(value) => Ok(value),
+            Scalar::Integer(value) => Ok(value as f64),
+            Scalar::Other => Err(view().type_error(Type::Number)),
+        }
+    }
+
     #[inline]
     fn matches(view: ValueView<'v>) -> bool {
         view.is_number()
@@ -270,6 +311,19 @@ impl Push for f64 {
     }
 }
 
+#[inline(always)]
+fn f32_from_scalar<'v>(scalar: Scalar, view: impl FnOnce() -> ValueView<'v>) -> Result<f32> {
+    let value = match scalar {
+        Scalar::Integer(value) => return Ok(value as f32),
+        Scalar::Number(value) => value,
+        Scalar::Other => return Err(view().type_error(Type::Number)),
+    };
+    if value.is_finite() && (value < -f64::from(f32::MAX) || value > f64::from(f32::MAX)) {
+        return Err(Error::runtime("Lua number does not fit destination floating-point type"));
+    }
+    Ok(value as f32)
+}
+
 impl<'v> FromView<'v> for f32 {
     const EXPECTED: &'static str = "number";
 
@@ -278,15 +332,12 @@ impl<'v> FromView<'v> for f32 {
     /// rounding twice through f64.
     #[inline(always)]
     fn from_view(view: ValueView<'v>) -> Result<f32> {
-        let value = match read_scalar(view) {
-            Scalar::Integer(value) => return Ok(value as f32),
-            Scalar::Number(value) => value,
-            Scalar::Other => return Err(view.type_error(Type::Number)),
-        };
-        if value.is_finite() && (value < -f64::from(f32::MAX) || value > f64::from(f32::MAX)) {
-            return Err(Error::runtime("Lua number does not fit destination floating-point type"));
-        }
-        Ok(value as f32)
+        f32_from_scalar(read_scalar(view), || view)
+    }
+
+    #[inline(always)]
+    fn from_raw_arg(raw: &RawValue, view: impl FnOnce() -> ValueView<'v>) -> Result<f32> {
+        f32_from_scalar(raw_scalar(raw), view)
     }
 
     #[inline]

@@ -18,6 +18,7 @@
 
 mod buffer;
 mod option;
+pub(crate) mod raw;
 mod scalar;
 mod string;
 mod vector;
@@ -29,6 +30,7 @@ use crate::error::Result;
 use crate::stack::{Scope, ValueView};
 
 pub use buffer::{BufferView, BytesView, new_buffer};
+pub use raw::RawValue;
 pub use scalar::Integer;
 pub(crate) use scalar::read_integer64;
 pub use vector::Vector3;
@@ -41,6 +43,16 @@ pub trait FromView<'v>: Sized {
     /// Converts, or returns the type/range error. This is the only conversion ordinary binding
     /// performs; it must not be preceded by [`FromView::matches`].
     fn from_view(view: ValueView<'v>) -> Result<Self>;
+
+    /// [`FromView::from_view`] for an argument slot the binder can read directly (`raw` is
+    /// that slot; `view` produces the same slot's view, for errors and for the fallback, only
+    /// when asked). Types with a cheap direct read override this; the default converts
+    /// through the API.
+    #[inline]
+    fn from_raw_arg(raw: &RawValue, view: impl FnOnce() -> ValueView<'v>) -> Result<Self> {
+        let _ = raw;
+        Self::from_view(view())
+    }
 
     /// True when `from_view` would succeed. Used only for overload resolution and optional
     /// argument disambiguation; the default runs the conversion and discards the result, and

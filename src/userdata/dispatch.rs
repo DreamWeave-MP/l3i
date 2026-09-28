@@ -13,6 +13,7 @@ use std::ffi::{CStr, c_int};
 use crate::bind::MemberEntry;
 use crate::diagnostics;
 use crate::raw::ffi;
+use crate::raw::trampoline::AbortOnPanic;
 
 /// The entry stored in the userdata on top of the stack, popped.
 ///
@@ -31,6 +32,8 @@ unsafe fn pop_entry(state: *mut ffi::lua_State) -> MemberEntry {
 /// getter entries (upvalue 2 keeps the getter closures alive). A method is returned; a getter
 /// runs directly with the receiver as its only argument; anything else reads as nil.
 pub(crate) unsafe extern "C-unwind" fn index(state: *mut ffi::lua_State) -> c_int {
+    // A bound getter runs through the member entry under this guard (see `direct_method`).
+    let _guard = AbortOnPanic::new();
     unsafe {
         ffi::lua_pushvalue(state, 2);
         if ffi::lua_rawget(state, ffi::lua_upvalueindex(1)) == ffi::LUA_TUSERDATA {
@@ -39,7 +42,10 @@ pub(crate) unsafe extern "C-unwind" fn index(state: *mut ffi::lua_State) -> c_in
             // stack: `Call::result_count` and `StackResults` count everything above the
             // arguments, and a hidden slot there would be counted as a result.
             ffi::lua_remove(state, 2);
-            return entry.call(state, 1);
+            let mut record: *mut std::ffi::c_void = std::ptr::null_mut();
+            let mut base: *const crate::convert::RawValue = std::ptr::null();
+            ffi::l3i_direct_enter(state, &mut record, &mut base);
+            return entry.call_recorded(state, 1, record, base);
         }
         // A method function, or nil for a miss: either is the answer.
         1
@@ -49,6 +55,7 @@ pub(crate) unsafe extern "C-unwind" fn index(state: *mut ffi::lua_State) -> c_in
 /// `__namecall`: upvalue 1 maps method names to entries or functions, upvalue 2 is the type
 /// name, upvalue 3 maps Luau atoms to the same. Names with an atom resolve without re-hashing.
 pub(crate) unsafe extern "C-unwind" fn namecall(state: *mut ffi::lua_State) -> c_int {
+    let _guard = AbortOnPanic::new();
     unsafe {
         let mut atom: c_int = -1;
         let name = ffi::lua_namecallatom(state, &mut atom);
@@ -56,7 +63,8 @@ pub(crate) unsafe extern "C-unwind" fn namecall(state: *mut ffi::lua_State) -> c
             diagnostics::raise_at_caller(state, "attempt to call a non-callable object");
         }
         let mut record: *mut std::ffi::c_void = std::ptr::null_mut();
-        let top = ffi::l3i_direct_enter(state, &mut record);
+        let mut base: *const crate::convert::RawValue = std::ptr::null();
+        let top = ffi::l3i_direct_enter(state, &mut record, &mut base);
         let kind = if atom >= 0 {
             ffi::lua_rawgeti(state, ffi::lua_upvalueindex(3), atom)
         } else {
@@ -64,7 +72,7 @@ pub(crate) unsafe extern "C-unwind" fn namecall(state: *mut ffi::lua_State) -> c
             ffi::lua_rawget(state, ffi::lua_upvalueindex(1))
         };
         match kind {
-            ffi::LUA_TUSERDATA => pop_entry(state).call_recorded(state, top, record),
+            ffi::LUA_TUSERDATA => pop_entry(state).call_recorded(state, top, record, base),
             ffi::LUA_TFUNCTION => {
                 ffi::lua_insert(state, 1);
                 let _lua_call = crate::runtime::shared::LuaCall::enter(state);
@@ -83,6 +91,7 @@ pub(crate) unsafe extern "C-unwind" fn namecall(state: *mut ffi::lua_State) -> c
 /// `__newindex`: upvalue 1 maps property names to setter entries, upvalue 2 is the type name
 /// (upvalue 3 keeps the setter closures alive). Misses are read-only errors.
 pub(crate) unsafe extern "C-unwind" fn newindex(state: *mut ffi::lua_State) -> c_int {
+    let _guard = AbortOnPanic::new();
     unsafe {
         ffi::lua_pushvalue(state, 2);
         match ffi::lua_rawget(state, ffi::lua_upvalueindex(1)) {
@@ -90,7 +99,10 @@ pub(crate) unsafe extern "C-unwind" fn newindex(state: *mut ffi::lua_State) -> c
                 let entry = pop_entry(state);
                 // Stack: receiver, key, value. The setter takes the receiver and the value.
                 ffi::lua_remove(state, 2);
-                entry.call(state, 2);
+                let mut record: *mut std::ffi::c_void = std::ptr::null_mut();
+                let mut base: *const crate::convert::RawValue = std::ptr::null();
+                ffi::l3i_direct_enter(state, &mut record, &mut base);
+                entry.call_recorded(state, 2, record, base);
                 return 0;
             }
             ffi::LUA_TFUNCTION => {

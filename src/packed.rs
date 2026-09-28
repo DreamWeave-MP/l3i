@@ -156,6 +156,15 @@ impl<'v, T: PackedScalar> FromView<'v> for Packed<T> {
         }
     }
 
+    #[inline(always)]
+    fn from_raw_arg(raw: &crate::convert::RawValue, view: impl FnOnce() -> ValueView<'v>) -> Result<Self> {
+        if raw.tag() == crate::raw::ffi::LUA_TINTEGER {
+            Packed::from_bits(raw.integer())
+        } else {
+            Err(view().type_error(Type::Integer))
+        }
+    }
+
     fn matches(view: ValueView<'v>) -> bool {
         crate::convert::read_integer64(view).is_some_and(|bits| decode(bits).0 == T::KIND)
     }
@@ -171,6 +180,13 @@ impl<'c, T: PackedScalar> crate::bind::ParamItem<'c> for Packed<T> {
     #[inline]
     fn read_slot(view: ValueView<'c>) -> Result<Self> {
         <Packed<T> as FromView<'c>>::from_view(view)
+    }
+    #[inline(always)]
+    fn read_arg(call: &'c crate::bind::Call<'c>, index: std::ffi::c_int) -> Result<Self> {
+        match call.raw_arg(index) {
+            Some(raw) => <Packed<T> as FromView<'c>>::from_raw_arg(raw, || call.arg(index)),
+            None => <Packed<T> as FromView<'c>>::from_view(call.arg(index)),
+        }
     }
     #[inline]
     fn matches(view: ValueView<'c>) -> bool {

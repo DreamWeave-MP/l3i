@@ -164,21 +164,49 @@ extern "C" {
 // Everything a bound function's entry needs in one call: the argument count, the thread's data
 // slot (the binder's per-thread record), and upvalue 1 (the closure context userdata payload,
 // or null). Replaces lua_gettop + lua_getthreaddata + lua_touserdata(lua_upvalueindex(1)).
-void* l3i_native_enter(lua_State* L, int* top, void** threaddata)
+void* l3i_native_enter(lua_State* L, int* top, void** threaddata, const TValue** base)
 {
-    *top = lua_gettop(L);
+    *top = int(L->top - L->base);
     *threaddata = L->userdata;
-    const TValue* uv = luaA_toobject(L, lua_upvalueindex(1));
-    if (uv == nullptr || !ttisuserdata(uv))
+    *base = L->base;
+    // Upvalue 1 straight from the running C closure: the pseudo-index route (pseudo2addr) was
+    // a twentieth of a bound call.
+    Closure* cl = curr_func(L);
+    const TValue* uv = &cl->c.upvals[0];
+    if (!ttisuserdata(uv))
         return nullptr;
     return uvalue(uv)->data;
 }
 
-// One call for the generated and planned dispatchers: the argument count and the thread's data
-// slot (the binder's per-thread record). Replaces lua_gettop + lua_getthreaddata.
-int l3i_direct_enter(lua_State* L, void** threaddata)
+// The binder reads argument slots straight from Luau's TValue layout (src/convert/raw.rs mirrors
+// it). These pin the layout of this exact Luau build; a bump that moves a byte fails here.
+static_assert(sizeof(TValue) == 16, "l3i mirrors a 16-byte TValue");
+static_assert(offsetof(TValue, value) == 0, "l3i mirrors the value union at offset 0");
+static_assert(offsetof(TValue, extra) == 8, "l3i mirrors extra at offset 8");
+static_assert(offsetof(TValue, tt) == 12, "l3i mirrors the tag at offset 12");
+static_assert(LUA_VECTOR_SIZE == 3, "l3i mirrors three-component vectors");
+static_assert(offsetof(Udata, tag) == 3, "l3i mirrors the userdata tag at offset 3");
+static_assert(offsetof(Udata, data) == 16, "l3i mirrors the userdata payload at offset 16");
+
+// The running call's first argument slot (`L->base`): the first argument of a C function, the
+// receiver of a direct userdata callback. Valid until something grows the stack.
+const TValue* l3i_call_base(lua_State* L)
+{
+    return L->base;
+}
+
+// The slot at `idx` for the layout self-test, or null.
+const TValue* l3i_stack_slot(lua_State* L, int idx)
+{
+    return luaA_toobject(L, idx);
+}
+
+// One call for the generated and planned dispatchers: the argument count, the thread's data
+// slot (the binder's per-thread record), and the first argument slot.
+int l3i_direct_enter(lua_State* L, void** threaddata, const TValue** base)
 {
     *threaddata = L->userdata;
+    *base = L->base;
     return lua_gettop(L);
 }
 
