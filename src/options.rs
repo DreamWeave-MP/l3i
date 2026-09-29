@@ -36,6 +36,16 @@ pub struct Options<'a, 'f> {
     seen: BTreeSet<String>,
 }
 
+/// `Lua stack index N: <rest>` without its slot, otherwise the text unchanged.
+fn strip_slot_prefix(text: &str) -> &str {
+    let Some(rest) = text.strip_prefix("Lua stack index ") else { return text };
+    let digits = rest.trim_start_matches(|c: char| c.is_ascii_digit());
+    if digits.len() == rest.len() {
+        return text;
+    }
+    digits.strip_prefix(": ").unwrap_or(text)
+}
+
 impl<'f> Options<'_, 'f> {
     /// Reads the table at `view` with `body`, then rejects keys `body` never consumed.
     pub fn read<R>(
@@ -184,7 +194,7 @@ impl<'f> Options<'_, 'f> {
         body: impl FnOnce(&Frame<'_>, TableView<'_>) -> Result<R>,
     ) -> Result<R> {
         if !value.is_table() {
-            return Err(self.field_error(key, &value.type_error(Type::Table)));
+            return Err(value.field_type_error(&format!("{}.{key}", self.context), "table"));
         }
         let table = value.as_table().map_err(|cause| self.field_error(key, &cause))?;
         body(step, table).map_err(|cause| self.field_error(key, &cause))
@@ -233,16 +243,19 @@ impl<'f> Options<'_, 'f> {
         T::from_view(value).map_err(|cause| self.field_error(key, &cause))
     }
 
-    /// `cause` under this reader's context and `key`, unless it already starts with that path
-    /// (a `field_type_error` spelled with the full path, or a nested reader's own context), so
-    /// a walked table's element errors read `ini.importMaps.dataDirs[2]: expected a string, got
-    /// number` and a nested reader never doubles its segment.
+    /// `cause` under this reader's context and `key`. A cause that already starts with that path
+    /// (a `field_type_error` spelled with the full path, a nested reader's own context) is kept
+    /// as is, so element errors read `ini.importMaps.dataDirs[2]: expected a string, got number`
+    /// and a nested reader never doubles its segment. A cause that names a stack slot (a slot
+    /// conversion's `Lua stack index N: expected string, got number`) loses the slot: a field
+    /// error names the field, which is what the script author wrote.
     fn field_error(&self, key: &str, cause: &Error) -> Error {
         let text = cause.to_string();
         let path = format!("{}.{key}", self.context);
         if text.starts_with(&path) {
             return Error::runtime(text);
         }
+        let text = strip_slot_prefix(&text);
         Error::runtime(format!("{path}: {text}"))
     }
 

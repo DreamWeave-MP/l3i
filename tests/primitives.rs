@@ -361,9 +361,9 @@ fn options_lend_borrowed_strings_and_bytes_and_read_tables_and_eval_reads_chunk_
     runtime.set_global("opts", &opts).unwrap();
     assert_eq!(runtime.eval::<f64>("return opts({ name = 'abc', raw = '\\0\\1', extra = {} })").unwrap(), 6.0);
     let error = runtime.eval::<f64>("return opts({ name = 7 })").unwrap_err().to_string();
-    assert!(error.contains("opts.name"), "{error}");
+    assert!(error.contains("opts.name: expected string, got number"), "{error}");
     let error = runtime.eval::<f64>("return opts({ name = 'x', extra = 5 })").unwrap_err().to_string();
-    assert!(error.contains("opts.extra") && error.contains("table"), "{error}");
+    assert!(error.contains("opts.extra: expected table, got number"), "{error}");
     let (a, b): (f64, String) = runtime.eval("return 1 + 1, 'two'").unwrap();
     assert_eq!((a, b.as_str()), (2.0, "two"));
     runtime.eval::<()>("local _ = 1").unwrap();
@@ -405,7 +405,7 @@ fn table_options_walk_in_place_and_type_errors_carry_a_path_or_an_expectation() 
     let error = runtime.eval::<String>("return dirs({ dirs = { 'a', 7 } })").unwrap_err().to_string();
     assert!(error.contains("scan.dirs: dirs[2]: expected a string, got number"), "{error}");
     let error = runtime.eval::<String>("return dirs({ dirs = 'nope' })").unwrap_err().to_string();
-    assert!(error.contains("scan.dirs: Lua stack index") && error.contains("expected table, got string"), "{error}");
+    assert!(error.contains("scan.dirs: expected table, got string"), "field errors never name a stack slot: {error}");
     // An error that already carries the field's path is not prefixed again: a full-path field
     // error reads flat, and a nested reader inside the body keeps one segment per level.
     let nested = runtime
