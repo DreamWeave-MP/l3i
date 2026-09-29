@@ -186,6 +186,42 @@ impl<'f> Options<'_, 'f> {
         self.walk_table(key, &step, value, body).map(Some)
     }
 
+    /// [`Self::required_table`] with the expectation in the option's own words for the
+    /// non-table case (`"an array of strings"`), everything else the same.
+    pub fn required_table_expecting<R>(
+        &mut self,
+        key: &str,
+        expected: &str,
+        body: impl FnOnce(&Frame<'_>, TableView<'_>) -> Result<R>,
+    ) -> Result<R> {
+        self.take(key);
+        if !self.keys.contains(key) {
+            return Err(Error::runtime(format!("{}: missing required option '{key}'", self.context)));
+        }
+        let step = self.frame.frame();
+        let value = self.table.raw_get(&step, key)?;
+        self.walk_table_expecting(key, expected, &step, value, body)
+    }
+
+    /// [`Self::optional_table`] with the expectation in the option's own words.
+    pub fn optional_table_expecting<R>(
+        &mut self,
+        key: &str,
+        expected: &str,
+        body: impl FnOnce(&Frame<'_>, TableView<'_>) -> Result<R>,
+    ) -> Result<Option<R>> {
+        self.take(key);
+        if !self.keys.contains(key) {
+            return Ok(None);
+        }
+        let step = self.frame.frame();
+        let value = self.table.raw_get(&step, key)?;
+        if value.type_of() == Type::Nil {
+            return Ok(None);
+        }
+        self.walk_table_expecting(key, expected, &step, value, body).map(Some)
+    }
+
     fn walk_table<R>(
         &self,
         key: &str,
@@ -193,8 +229,19 @@ impl<'f> Options<'_, 'f> {
         value: ValueView<'_>,
         body: impl FnOnce(&Frame<'_>, TableView<'_>) -> Result<R>,
     ) -> Result<R> {
+        self.walk_table_expecting(key, "table", step, value, body)
+    }
+
+    fn walk_table_expecting<R>(
+        &self,
+        key: &str,
+        expected: &str,
+        step: &Frame<'_>,
+        value: ValueView<'_>,
+        body: impl FnOnce(&Frame<'_>, TableView<'_>) -> Result<R>,
+    ) -> Result<R> {
         if !value.is_table() {
-            return Err(value.field_type_error(&format!("{}.{key}", self.context), "table"));
+            return Err(value.field_type_error(&format!("{}.{key}", self.context), expected));
         }
         let table = value.as_table().map_err(|cause| self.field_error(key, &cause))?;
         body(step, table).map_err(|cause| self.field_error(key, &cause))

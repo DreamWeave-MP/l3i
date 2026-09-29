@@ -221,6 +221,11 @@ closes.
 - `Frame::check(n)` reserves stack for a bulk push (`n` is a `usize` count); the type-error
   constructors on `ValueView` cover a type, a union in words, and a context prefix (a field path
   or an API name) without the slot index.
+- A `with_required`/`with_optional` body sees the value's slot and nothing else: it can read a
+  scalar or a borrowed string, not walk a table (no frame is reachable there). Tables go through
+  `required_table`/`optional_table`, or the `_expecting` forms when the non-table case should
+  read in the option's own words (`optional_table_expecting("dataDirs", "an array of strings",
+  ..)`).
 - Inside `required_table`'s body, an error comes back prefixed with the reader's context and
   key (`add.inputs: ...`) unless it already starts with that path: a `field_type_error` spelled
   with the full path reads flat (`ini.importMaps.dataDirs[2]: expected a string, got number`),

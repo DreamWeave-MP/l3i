@@ -391,7 +391,7 @@ fn table_options_walk_in_place_and_type_errors_carry_a_path_or_an_expectation() 
                     })?;
                     Ok(names)
                 })?;
-                let extra = o.optional_table("extra", |frame, table| table.len(frame))?;
+                let extra = o.optional_table_expecting("extra", "an array", |frame, table| table.len(frame))?;
                 Ok(format!("{names}:{total}:{}", extra.unwrap_or(0)))
             })
         })
@@ -406,6 +406,8 @@ fn table_options_walk_in_place_and_type_errors_carry_a_path_or_an_expectation() 
     assert!(error.contains("scan.dirs: dirs[2]: expected a string, got number"), "{error}");
     let error = runtime.eval::<String>("return dirs({ dirs = 'nope' })").unwrap_err().to_string();
     assert!(error.contains("scan.dirs: expected table, got string"), "field errors never name a stack slot: {error}");
+    let error = runtime.eval::<String>("return dirs({ dirs = {}, extra = 'x' })").unwrap_err().to_string();
+    assert!(error.contains("scan.extra: expected an array, got string"), "the option's own words: {error}");
     // An error that already carries the field's path is not prefixed again: a full-path field
     // error reads flat, and a nested reader inside the body keeps one segment per level.
     let nested = runtime
