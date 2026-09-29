@@ -560,8 +560,9 @@ function start(hero) {
   dust.frustumCulled = false;
   scene.add(dust);
 
-  // Layout: the moon sits in the hero's empty right column on wide screens and in the top right
-  // corner on narrow ones, sized from the hero itself.
+  // Layout: the moon sits in the hero's empty right column when there is one, and in the top
+  // right corner, above the text, when the column would land on the text. The text column's own
+  // width decides, not a breakpoint, so a landscape phone and a narrow window get the corner.
   let width = 1;
   let height = 1;
   let narrow = false;
@@ -569,7 +570,13 @@ function start(hero) {
   function layout() {
     width = Math.max(hero.clientWidth, 1);
     height = Math.max(hero.clientHeight, 1);
-    narrow = width < 761;
+    const column = hero.querySelector('.dw-hero__grid > div');
+    const textRight = column ? column.getBoundingClientRect().right - canvas.getBoundingClientRect().left : width;
+    const shell = Math.min(width, pageWidth);
+    const wideCentre = width / 2 + shell / 2 - 14 * rem;
+    const wideRadius = Math.min(height * 0.34, 10.5 * rem);
+    narrow = width < 761 || wideCentre - wideRadius < textRight + rem;
+    hero.classList.toggle('l3i-hero--corner', narrow);
     const pixels = width * height;
     const ratio = Math.min(window.devicePixelRatio || 1, pixels > 1.6e6 ? 1 : 1.25);
     renderer.setPixelRatio(ratio);
@@ -594,10 +601,9 @@ function start(hero) {
       centreY = 2.6 * rem;
       radiusPx = Math.min(width * 0.13, 4.4 * rem);
     } else {
-      const shell = Math.min(width, pageWidth);
-      centreX = width / 2 + shell / 2 - 14 * rem;
+      centreX = wideCentre;
       centreY = height * 0.5;
-      radiusPx = Math.min(height * 0.34, 10.5 * rem);
+      radiusPx = wideRadius;
     }
     moonOnScreen.x = centreX;
     moonOnScreen.y = centreY;
