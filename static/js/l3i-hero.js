@@ -2,10 +2,11 @@
 //
 // Three layers, back to front. A full-screen shader draws stars and a volumetric purple mist, two
 // domain-warped noise fields drifting at different speeds, lit by the moon's position on screen.
-// A sphere with a procedural surface (maria from fractal noise, craters from a cellular field,
-// bump-mapped by finite differences) is the moon, lit by a sun that swings slowly across it so the
-// terminator moves, with a specular highlight, purple earthshine on the dark side, a fresnel rim
-// and an additive halo. Dust rises through the moonlight as point sprites.
+// A sphere is the moon: its surface (maria from fractal noise, craters from three cellular
+// lattices, grain) is baked once into an equirectangular texture, and each frame reads the height
+// for a bump-mapped normal, lit by a sun that swings slowly across it so the terminator moves,
+// with a specular highlight, purple earthshine on the dark side, a fresnel rim and an additive
+// halo. Dust rises through the moonlight as point sprites.
 //
 // The palette is read from the site's CSS tokens, so sass/brand.sass stays the single owner of
 // the colours. The canvas is inert until the hero is on screen, stops when the tab is hidden, caps
@@ -172,40 +173,24 @@ const SKY_FRAGMENT = /* glsl */ `
   }
 `;
 
-// The moon's surface.
-const MOON_VERTEX = /* glsl */ `
-  varying vec3 vNormal;
-  varying vec3 vObject;
-  varying vec3 vTangent1;
-  varying vec3 vTangent2;
+// The moon's surface is baked once into an equirectangular texture: height, the maria mask
+// and the grain, one expensive pass per texel instead of per pixel per frame. The bake carries
+// the crater lattices; the surface shader below only reads the texture.
+const BAKE_VERTEX = /* glsl */ `
+  varying vec2 vUv;
   void main() {
-    vObject = position;
-    mat3 toWorld = mat3(modelMatrix);
-    vNormal = normalize(toWorld * normal);
-    // A tangent frame per vertex, in object space; the fragment samples the height field along
-    // it and tilts the world normal by the same directions in world space.
-    vec3 t1 = normalize(cross(normal, abs(normal.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0)));
-    vec3 t2 = cross(normal, t1);
-    vTangent1 = normalize(toWorld * t1);
-    vTangent2 = normalize(toWorld * t2);
-    gl_Position = projectionMatrix * viewMatrix * modelMatrix * vec4(position, 1.0);
+    vUv = uv;
+    gl_Position = vec4(position.xy, 0.0, 1.0);
   }
 `;
 
-const MOON_FRAGMENT = /* glsl */ `
+const BAKE_FRAGMENT = /* glsl */ `
   precision highp float;
-  varying vec3 vNormal;
-  varying vec3 vObject;
-  varying vec3 vTangent1;
-  varying vec3 vTangent2;
-  uniform vec3 uLight;
-  uniform vec3 uAccent;
-  uniform vec3 uShadow;
-  uniform vec3 uLit;
-  uniform vec3 uMaria;
+  varying vec2 vUv;
   ${NOISE}
 
-  // A bowl per cell of a jittered lattice: a pit, a raised rim, a flat floor for the wide ones.
+  // A bowl per cell of a jittered lattice: a flat floor, a wall from a quarter of the way out,
+  // a low raised rim outside it.
   float craters(vec3 p, float scale, float density) {
     vec3 q = p * scale;
     vec3 i = floor(q);
@@ -219,7 +204,6 @@ const MOON_FRAGMENT = /* glsl */ `
           float radius = 0.22 + 0.33 * hash31(c + 3.3);
           float d = length(c + o - q) / radius;
           if (d < 1.2) {
-            // A flat floor, a wall from a third of the way out, a low raised rim outside it.
             float bowl = -0.16 * (1.0 - smoothstep(0.25, 1.0, d));
             float rim = 0.07 * smoothstep(0.7, 1.0, d) * smoothstep(1.2, 1.0, d);
             h += bowl + rim;
@@ -240,38 +224,78 @@ const MOON_FRAGMENT = /* glsl */ `
   }
 
   void main() {
-    vec3 n = normalize(vNormal);
-    vec3 op = normalize(vObject);
+    float lon = (vUv.x - 0.5) * 6.2831853;
+    float lat = (vUv.y - 0.5) * 3.14159265;
+    vec3 p = vec3(cos(lat) * cos(lon), sin(lat), cos(lat) * sin(lon));
+    float h = height(p);
+    float maria = smoothstep(0.44, 0.58, fbm3(p * 1.6 + 2.0));
+    float grain = fbm3Coarse(p * 6.0);
+    // Height in -1..1 stored as 0..1, so a byte target holds it too.
+    gl_FragColor = vec4(h * 0.5 + 0.5, maria, grain, 1.0);
+  }
+`;
 
-    // Bump mapping by finite differences of the height field in the tangent plane.
-    vec3 t1 = normalize(cross(op, abs(op.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0)));
-    vec3 t2 = cross(op, t1);
-    float e = 0.02;
-    float h0 = height(op);
-    float h1 = height(normalize(op + t1 * e));
-    float h2 = height(normalize(op + t2 * e));
-    vec3 wt1 = normalize(vTangent1);
-    vec3 wt2 = normalize(vTangent2);
-    float strength = 0.55;
-    vec3 bumped = normalize(n - (wt1 * (h1 - h0) + wt2 * (h2 - h0)) * (strength / e));
+const MOON_VERTEX = /* glsl */ `
+  varying vec3 vObject;
+  void main() {
+    vObject = position;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }
+`;
 
-    // Maria: the dark plains, where the low-frequency field is low.
-    float maria = smoothstep(0.44, 0.58, fbm3(op * 1.6 + 2.0));
+const MOON_FRAGMENT = /* glsl */ `
+  precision highp float;
+  varying vec3 vObject;
+  uniform sampler2D uSurface;
+  uniform vec2 uTexel;
+  uniform vec3 uLight;  // in object space
+  uniform vec3 uView;   // in object space
+  uniform vec3 uAccent;
+  uniform vec3 uShadow;
+  uniform vec3 uLit;
+  uniform vec3 uMaria;
+
+  vec2 equirect(vec3 p) {
+    return vec2(atan(p.z, p.x) / 6.2831853 + 0.5, asin(clamp(p.y, -1.0, 1.0)) / 3.14159265 + 0.5);
+  }
+  float heightAt(vec2 uv) {
+    return texture2D(uSurface, uv).r * 2.0 - 1.0;
+  }
+
+  void main() {
+    vec3 n = normalize(vObject);
+    vec2 uv = equirect(n);
+    vec4 surface = texture2D(uSurface, uv);
+    float h0 = surface.r * 2.0 - 1.0;
+    float maria = surface.g;
+    float grain = surface.b;
+
+    // The normal from the height field's slopes along the texture's axes, scaled by the arc
+    // each texel spans: shorter along a parallel near the poles.
+    float du = uTexel.x * 2.0;
+    float dv = uTexel.y * 2.0;
+    float hx = heightAt(uv + vec2(du, 0.0)) - heightAt(uv - vec2(du, 0.0));
+    float hy = heightAt(uv + vec2(0.0, dv)) - heightAt(uv - vec2(0.0, dv));
+    float cosLat = max(sqrt(max(1.0 - n.y * n.y, 0.0)), 0.05);
+    float sx = hx / (2.0 * du * 6.2831853 * cosLat);
+    float sy = hy / (2.0 * dv * 3.14159265);
+    vec3 east = normalize(vec3(-n.z, 0.0, n.x));
+    vec3 north = cross(east, n);
+    vec3 bumped = normalize(n - (east * sx + north * sy) * 0.55);
+
     vec3 albedo = mix(uLit, uMaria, maria * 0.85);
-    albedo *= 0.88 + 0.24 * fbm3Coarse(op * 6.0);
+    albedo *= 0.88 + 0.24 * grain;
+    // Crater floors sit in shadow, rims catch the light.
+    albedo *= 0.78 + 0.35 * clamp(h0 * 0.8 + 0.6, 0.0, 1.0);
 
-    // The camera is orthographic and looks down -z, so every fragment is seen along +z.
-    vec3 view = vec3(0.0, 0.0, 1.0);
     vec3 light = normalize(uLight);
+    vec3 view = normalize(uView);
     float diffuse = max(dot(bumped, light), 0.0);
     float wrap = max((dot(bumped, light) + 0.25) / 1.25, 0.0);
     float terminator = smoothstep(-0.12, 0.22, dot(n, light));
     vec3 halfway = normalize(light + view);
     float spec = pow(max(dot(n, halfway), 0.0), 24.0) * 0.22 * terminator;
     float fresnel = pow(1.0 - max(dot(n, view), 0.0), 3.5);
-
-    // Crater floors sit in shadow, rims catch the light.
-    albedo *= 0.78 + 0.35 * clamp(h0 * 0.8 + 0.6, 0.0, 1.0);
 
     // Earthshine: the dark side glows faintly purple, from the sky it hangs in.
     vec3 ambient = uShadow + uAccent * 0.14 * (0.5 + 0.5 * dot(n, vec3(0.0, -0.4, 0.9)));
@@ -425,15 +449,47 @@ function start(hero) {
   const moonGroup = new THREE.Group();
   scene.add(moonGroup);
 
+  // Bake the surface: 2048 by 1024 texels, half floats where the platform renders to them
+  // (WebGL2 with float colour buffers), bytes otherwise; the height is stored in 0..1 either way.
+  const halfFloat = renderer.extensions.has('EXT_color_buffer_float') || renderer.extensions.has('EXT_color_buffer_half_float');
+  const bakeSize = new THREE.Vector2(2048, 1024);
+  const surface = new THREE.WebGLRenderTarget(bakeSize.x, bakeSize.y, {
+    type: halfFloat ? THREE.HalfFloatType : THREE.UnsignedByteType,
+    format: THREE.RGBAFormat,
+    minFilter: THREE.LinearFilter,
+    magFilter: THREE.LinearFilter,
+    wrapS: THREE.RepeatWrapping,
+    wrapT: THREE.ClampToEdgeWrapping,
+    depthBuffer: false,
+    stencilBuffer: false,
+  });
+  {
+    const bakeScene = new THREE.Scene();
+    const bakeQuad = new THREE.Mesh(
+      new THREE.PlaneGeometry(2, 2),
+      new THREE.ShaderMaterial({ vertexShader: BAKE_VERTEX, fragmentShader: BAKE_FRAGMENT, depthTest: false, depthWrite: false }),
+    );
+    bakeQuad.frustumCulled = false;
+    bakeScene.add(bakeQuad);
+    renderer.setRenderTarget(surface);
+    renderer.render(bakeScene, camera);
+    renderer.setRenderTarget(null);
+    bakeQuad.geometry.dispose();
+    bakeQuad.material.dispose();
+  }
+
   const moonUniforms = {
+    uSurface: { value: surface.texture },
+    uTexel: { value: new THREE.Vector2(1 / bakeSize.x, 1 / bakeSize.y) },
     uLight: { value: new THREE.Vector3(-1.2, 0.55, 0.6) },
+    uView: { value: new THREE.Vector3(0, 0, 1) },
     uAccent: { value: accent },
     uShadow: { value: shadow },
     uLit: { value: litStone },
     uMaria: { value: maria },
   };
   const moon = new THREE.Mesh(
-    new THREE.SphereGeometry(1, 128, 96),
+    new THREE.SphereGeometry(1, 96, 72),
     new THREE.ShaderMaterial({ vertexShader: MOON_VERTEX, fragmentShader: MOON_FRAGMENT, uniforms: moonUniforms }),
   );
   moonGroup.add(moon);
@@ -633,6 +689,8 @@ function start(hero) {
   canvas.addEventListener('pointerup', release);
   canvas.addEventListener('pointercancel', release);
 
+  const lightWorld = new THREE.Vector3();
+  const worldRotation = new THREE.Quaternion();
   const clock = new THREE.Clock();
   let elapsed = 0;
   function frame(delta) {
@@ -645,7 +703,7 @@ function start(hero) {
     // The sun swings across the moon over about two minutes, always from the camera's side, so
     // the terminator wanders without the disc ever going dark.
     const angle = -1.05 + 0.4 * Math.sin(elapsed * 0.05);
-    moonUniforms.uLight.value.set(Math.sin(angle) * 1.4, 0.55 + 0.2 * Math.cos(elapsed * 0.033), Math.cos(angle) + 0.15);
+    lightWorld.set(Math.sin(angle) * 1.4, 0.55 + 0.2 * Math.cos(elapsed * 0.033), Math.cos(angle) + 0.15);
     // Inertia after a drag decays over about a second and a half; the moon's own spin carries
     // on underneath either way.
     if (!drag.active && (drag.vx !== 0 || drag.vy !== 0)) {
@@ -662,6 +720,10 @@ function start(hero) {
     spin += delta * 0.035;
     spinRotation.setFromAxisAngle(axisY, spin);
     moon.quaternion.copy(dragRotation).multiply(tilt).multiply(spinRotation);
+    // The surface shader lights in object space, where the sphere's normal is exact.
+    moon.getWorldQuaternion(worldRotation).invert();
+    moonUniforms.uLight.value.copy(lightWorld).applyQuaternion(worldRotation);
+    moonUniforms.uView.value.set(0, 0, 1).applyQuaternion(worldRotation);
     moonGroup.rotation.x = eased.y * 0.05;
     moonGroup.rotation.y = eased.x * 0.06;
     const pulse = 0.5 + 0.5 * Math.sin(elapsed * 0.7);
