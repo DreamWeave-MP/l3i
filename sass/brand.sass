@@ -106,6 +106,17 @@
   > *
     pointer-events: auto
 
+  // On a phone the moon hangs behind the text column, whose kicker, title and summary hold no
+  // links: a touch on them reaches the moon. The strip, the command and the buttons keep theirs.
+  @media (max-width: 760px)
+    > div
+      pointer-events: none
+
+      .dw-strip,
+      .dw-command,
+      .dw-actions
+        pointer-events: auto
+
 .dw-hero__title
   font-size: clamp(3rem, 6vw, 5.2rem)
   letter-spacing: .01em
