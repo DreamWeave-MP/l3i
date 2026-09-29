@@ -101,6 +101,21 @@ pub enum CompilerTypePolicy {
 /// How many userdata types Luau's compiler and code generator can tell apart per VM.
 pub const COMPILER_TYPE_CAPACITY: usize = 32;
 
+/// What a sequence or stream view is, for the generated definitions: `#`, `[i]`, and `for`
+/// are declared with the element type (`any` until `item_type` names it).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ViewDecl {
+    pub kind: ViewKind,
+    /// The Luau type of one element.
+    pub item: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ViewKind {
+    Sequence,
+    Stream,
+}
+
 /// The kind of a declared userdata member.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum MemberKind {
@@ -163,6 +178,8 @@ pub struct UserdataDecl {
     pub compiler_type: CompilerTypePolicy,
     pub members: Vec<MemberDecl>,
     pub doc: Option<String>,
+    /// Set for sequence and stream views.
+    pub view: Option<ViewDecl>,
     contributor: &'static str,
     pub(crate) installers: Vec<SharedInstaller>,
     pub(crate) fields: Vec<(String, SharedFieldRegistrar)>,
@@ -192,6 +209,7 @@ impl UserdataDecl {
             compiler_type: CompilerTypePolicy::Preferred,
             members: Vec::new(),
             doc: None,
+            view: None,
             contributor,
             installers: Vec::new(),
             fields: Vec::new(),
@@ -222,6 +240,30 @@ impl UserdataDecl {
 pub struct UserdataBuilder<'a, T: Userdata> {
     decl: &'a mut UserdataDecl,
     _type: std::marker::PhantomData<T>,
+}
+
+impl<S: crate::sequence::SequenceSource> UserdataBuilder<'_, crate::sequence::Sequence<S>> {
+    /// The Luau type of one element (`integer`, `dream_archive_Entry`, ...): the definitions
+    /// then declare `#`, `[i]`, `for`, and `toTable` with it instead of `any`.
+    pub fn item_type(&mut self, ty: &str) -> &mut Self {
+        if let Some(view) = &mut self.decl.view {
+            ty.clone_into(&mut view.item);
+        }
+        if let Some(member) = self.decl.members.iter_mut().find(|m| m.name == "toTable") {
+            member.signature = Some(format!("(self): {{ {ty} }}"));
+        }
+        self
+    }
+}
+
+impl<S: crate::sequence::StreamSource> UserdataBuilder<'_, crate::sequence::Stream<S>> {
+    /// The Luau type of one element, so `for` over the stream is typed.
+    pub fn item_type(&mut self, ty: &str) -> &mut Self {
+        if let Some(view) = &mut self.decl.view {
+            ty.clone_into(&mut view.item);
+        }
+        self
+    }
 }
 
 impl<T: Userdata> UserdataBuilder<'_, T> {
@@ -612,6 +654,7 @@ impl ExtensionDescriptor {
             Ok(vec![("toTable".to_owned(), MemberKind::Method, entry)])
         }));
         builder.decl.member("toTable", MemberKind::Method).signature("(self): { any }");
+        builder.decl.view = Some(ViewDecl { kind: ViewKind::Sequence, item: "any".to_owned() });
         builder
     }
 
@@ -625,6 +668,7 @@ impl ExtensionDescriptor {
             crate::sequence::configure_stream::<S>(ty)?;
             Ok(Vec::new())
         }));
+        builder.decl.view = Some(ViewDecl { kind: ViewKind::Stream, item: "any".to_owned() });
         builder
     }
 

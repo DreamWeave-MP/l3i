@@ -66,6 +66,8 @@ pub struct ResolvedUserdata {
     pub bytecode_type: Option<u8>,
     pub members: Vec<ResolvedMember>,
     pub doc: Option<String>,
+    /// Set for sequence and stream views (the owner's declaration).
+    pub view: Option<super::ViewDecl>,
     pub(crate) installers: Vec<super::install::SharedInstaller>,
     pub(crate) fields: Vec<(String, super::install::SharedFieldRegistrar)>,
     pub(crate) registrar: super::install::Registrar,
@@ -653,6 +655,7 @@ fn merge_userdata(descriptors: &[ExtensionDescriptor], order: &[usize]) -> Resul
                 bytecode_type: None,
                 members: Vec::new(),
                 doc: decl.doc.clone(),
+                view: decl.view.clone(),
                 installers: Vec::new(),
                 fields: Vec::new(),
                 registrar: decl.registrar,

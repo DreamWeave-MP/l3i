@@ -171,3 +171,144 @@ fn the_generated_definitions_type_check_and_typed_scripts_pass_strict_mode() {
     let error = Analysis::new(Scripts(HashMap::new()), broken).err().unwrap().to_string();
     assert!(error.contains("broken.d.luau:1") && error.contains("Nope"), "{error}");
 }
+
+// ---- views, forward references, owned rows ----------------------------------------------------
+
+struct Numbers(Vec<i64>);
+
+impl l3i::sequence::SequenceSource for Numbers {
+    const NAME: &'static str = "dream.views.Numbers";
+    type Item = l3i::convert::Integer;
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+    fn get(&self, index: usize) -> Option<Self::Item> {
+        self.0.get(index).map(|n| l3i::convert::Integer(*n))
+    }
+}
+
+/// A row that is deliberately not `Clone`: the sequence moves it into each userdata.
+struct Row {
+    name: String,
+}
+
+// SAFETY: plain Rust data.
+unsafe impl l3i::userdata::Userdata for Row {
+    const NAME: &'static str = "dream.views.Row";
+}
+
+struct Rows(Vec<String>);
+
+impl l3i::sequence::SequenceSource for Rows {
+    const NAME: &'static str = "dream.views.Rows";
+    type Item = l3i::userdata::Owned<Row>;
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+    fn get(&self, index: usize) -> Option<Self::Item> {
+        self.0.get(index).map(|name| l3i::userdata::Owned(Row { name: name.clone() }))
+    }
+}
+
+struct Countdown(i64);
+
+impl l3i::sequence::StreamSource for Countdown {
+    const NAME: &'static str = "dream.views.Countdown";
+    type Item = f64;
+    type Cursor = std::cell::Cell<i64>;
+    fn open(&self) -> Self::Cursor {
+        std::cell::Cell::new(self.0)
+    }
+    fn next(cursor: &Self::Cursor) -> Option<Self::Item> {
+        let value = cursor.get();
+        if value <= 0 {
+            return None;
+        }
+        cursor.set(value - 1);
+        Some(value as f64)
+    }
+}
+
+struct Views;
+
+impl l3i::extension::Extension for Views {
+    fn id(&self) -> &'static str {
+        "dream.views"
+    }
+    fn describe(&self, d: &mut l3i::extension::ExtensionDescriptor) -> l3i::Result<()> {
+        d.sequence::<Numbers>("dream.views.Numbers").item_type("integer");
+        d.sequence::<Rows>("dream.views.Rows").item_type("dream_views_Row");
+        d.stream::<Countdown>("dream.views.Countdown").item_type("number");
+        d.userdata::<Row>("dream.views.Row").getter("name", |r: &Row| r.name.clone()).signature("string");
+        d.module("@dream/views")
+            .function("numbers", |call: &l3i::bind::Call, count: l3i::convert::Exact<i64>| {
+                l3i::sequence::Sequence::push(call, Numbers((1..=count.0).map(|n| n * 10).collect()))
+                    .map(l3i::value::Value::store)?
+            })
+            .signature("(count: number) -> dream_views_Numbers")
+            .function("rows", |call: &l3i::bind::Call| {
+                l3i::sequence::Sequence::push(call, Rows(vec!["a".into(), "b".into()])).map(l3i::value::Value::store)?
+            })
+            .signature("() -> dream_views_Rows")
+            .function("countdown", |call: &l3i::bind::Call, from: l3i::convert::Exact<i64>| {
+                l3i::sequence::Stream::push(call, Countdown(from.0)).map(l3i::value::Value::store)?
+            })
+            .signature("(from: number) -> dream_views_Countdown");
+        // A parent module whose member is typed as a module declared after it (a forward
+        // reference in plan order): the renderer orders the definitions by reference.
+        d.module("@dream/parent").function("child", || 1i64).signature("() -> Module__dream_parent_child");
+        d.module("@dream/parent/child").function("leaf", || 2i64).signature("() -> number");
+        Ok(())
+    }
+}
+
+const VIEW_SCRIPT: &str = "--!strict\n\
+    local views = require('@dream/views')\n\
+    local s = views.numbers(3)\n\
+    local n: number = #s\n\
+    local first: integer? = s[1]\n\
+    local sum: number = 0\n\
+    for i, v in s do local x: integer = v sum += i end\n\
+    local t: { integer } = s:toTable()\n\
+    local rows = views.rows()\n\
+    local names = ''\n\
+    for _, r in rows do local name: string = r.name names ..= name end\n\
+    local c = views.countdown(3)\n\
+    local total: number = 0\n\
+    for _, v in c do total += v end\n\
+    return n, first, sum, #t, names, total\n";
+
+#[test]
+fn views_are_typed_forward_module_references_resolve_and_owned_rows_need_no_clone() {
+    let plan = RuntimePlan::builder().extension(Views).finalize().unwrap();
+    let definitions = plan.type_definitions();
+    assert!(definitions.contains("    [number]: integer?"), "{definitions}");
+    assert!(
+        definitions.contains("function __iter(self): (({}, number) -> (number?, dream_views_Row), {}, number)"),
+        "{definitions}"
+    );
+    assert!(definitions.contains("    function toTable(self): { integer }"), "{definitions}");
+    let child = definitions.find("export type Module__dream_parent_child").unwrap();
+    let parent = definitions.find("export type Module__dream_parent =").unwrap();
+    assert!(child < parent, "the referenced module is declared first:\n{definitions}");
+    plan.check_definitions().unwrap();
+    // The strict script type checks through the stubs...
+    let scripts = plan.analysis_sources(Scripts([("view_script", VIEW_SCRIPT)].into_iter().collect()));
+    let options = AnalysisOptions {
+        definitions: vec![Definitions { name: "views.d.luau".to_owned(), source: definitions.clone() }],
+        ..Default::default()
+    };
+    let analysis = Analysis::new(scripts, options).unwrap_or_else(|e| panic!("{e}\n{definitions}"));
+    let report = analysis.check("view_script", false);
+    let text: Vec<String> = report
+        .diagnostics
+        .iter()
+        .map(|d| format!("{}:{}: {}", d.span.begin_line + 1, d.span.begin_column + 1, d.text))
+        .collect();
+    assert!(report.is_clean(), "{}", text.join("\n"));
+    // ...and runs with the same answers on the VM.
+    let runtime = l3i::Runtime::from_plan(&plan).unwrap();
+    let (n, first, sum, len, names, total): (f64, l3i::convert::Integer, f64, f64, String, f64) =
+        runtime.eval(VIEW_SCRIPT).unwrap();
+    assert_eq!((n, first.0, sum, len, names.as_str(), total), (3.0, 10, 6.0, 3.0, "ab", 6.0));
+}

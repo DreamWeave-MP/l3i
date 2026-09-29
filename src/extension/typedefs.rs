@@ -3,7 +3,7 @@
 
 use super::install::ModuleMembers;
 use super::plan::RuntimePlan;
-use super::{MemberKind, ModuleMemberKind, ResolvedUserdata};
+use super::{MemberKind, ModuleMemberKind, ResolvedUserdata, ViewKind};
 use crate::source::CompileConstant;
 
 /// A Luau identifier for a stable key: non-identifier characters become `_`.
@@ -64,7 +64,41 @@ fn render_userdata(out: &mut String, userdata: &ResolvedUserdata) {
             }
         }
     }
+    if let Some(view) = &userdata.view {
+        // What the checker needs for `#v`, `v[i]`, and `for _, x in v` on an extern type: an
+        // indexer and the metamethods as functions (`__index` as a function does not count).
+        let item = &view.item;
+        if view.kind == ViewKind::Sequence {
+            let _ = writeln!(out, "    function __len(self): number");
+            let _ = writeln!(out, "    [number]: {item}?");
+        }
+        let _ = writeln!(out, "    function __iter(self): (({{}}, number) -> (number?, {item}), {{}}, number)");
+    }
     let _ = writeln!(out, "end\n");
+}
+
+/// Modules in an order where a type referenced by another module's signature is declared
+/// first: a definitions file has no forward references between exported types. Cycles keep
+/// the plan's order.
+fn module_order(plan: &RuntimePlan) -> Vec<usize> {
+    let names: Vec<String> = plan.modules.iter().map(|m| format!("Module_{}", class_name(&m.path))).collect();
+    let mut remaining: Vec<usize> = (0..plan.modules.len()).collect();
+    let mut order = Vec::with_capacity(remaining.len());
+    while !remaining.is_empty() {
+        let position = remaining.iter().position(|&i| {
+            let module = &plan.modules[i];
+            !remaining.iter().any(|&j| {
+                j != i
+                    && module
+                        .members
+                        .iter()
+                        .any(|m| m.signature.as_deref().is_some_and(|s| s.contains(names[j].as_str())))
+            })
+        });
+        let next = position.unwrap_or(0);
+        order.push(remaining.remove(next));
+    }
+    order
 }
 
 fn constant_type(constant: &CompileConstant) -> &'static str {
@@ -91,7 +125,8 @@ pub(crate) fn render_with(plan: &RuntimePlan, members: Option<&ModuleMembers>) -
     for userdata in &plan.userdata {
         render_userdata(&mut out, userdata);
     }
-    for module in &plan.modules {
+    for index in module_order(plan) {
+        let module = &plan.modules[index];
         let type_name = format!("Module_{}", class_name(&module.path));
         let _ = writeln!(out, "-- module {} (provided by {})", module.path, module.provider);
         if let Some(doc) = &module.doc {

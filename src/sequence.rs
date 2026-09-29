@@ -11,7 +11,7 @@
 
 use std::ffi::c_int;
 
-use crate::bind::{ArgView, Call};
+use crate::bind::{ArgView, Call, Return};
 use crate::convert::Push;
 use crate::error::Result;
 use crate::raw::{ffi, trampoline};
@@ -26,7 +26,7 @@ pub trait SequenceSource: 'static {
     /// The userdata type name (`__type`), a debug name such as `dream.archive.Entries`.
     const NAME: &'static str;
     /// What one element becomes in Luau.
-    type Item: Push;
+    type Item: SequenceItem;
     fn len(&self) -> usize;
     fn is_empty(&self) -> bool {
         self.len() == 0
@@ -47,7 +47,7 @@ unsafe impl<S: SequenceSource> Userdata for Sequence<S> {
 /// A collection consumed through a per-loop cursor.
 pub trait StreamSource: 'static {
     const NAME: &'static str;
-    type Item: Push;
+    type Item: SequenceItem;
     /// Per-loop iteration state (interior mutability inside).
     type Cursor: 'static;
     fn open(&self) -> Self::Cursor;
@@ -61,6 +61,84 @@ pub struct Stream<S>(pub S);
 // SAFETY: as `Sequence<S>`.
 unsafe impl<S: StreamSource> Userdata for Stream<S> {
     const NAME: &'static str = S::NAME;
+}
+
+/// An element a sequence or stream hands to Lua, pushed by value: every `Push` type qualifies,
+/// and so does [`Owned<T>`](crate::userdata::Owned) for any registered `T`, which moves the
+/// row into a fresh userdata without needing `Clone`.
+pub trait SequenceItem {
+    fn push_item<S: Scope>(self, scope: &S) -> Result<()>;
+}
+
+macro_rules! sequence_items {
+    ($($t:ty),* $(,)?) => {$(
+        impl SequenceItem for $t {
+            #[inline]
+            fn push_item<S: Scope>(self, scope: &S) -> Result<()> {
+                Push::push_only(&self, scope)
+            }
+        }
+    )*};
+}
+
+sequence_items!(
+    bool,
+    i8,
+    i16,
+    i32,
+    i64,
+    isize,
+    u8,
+    u16,
+    u32,
+    u64,
+    usize,
+    f32,
+    f64,
+    String,
+    &'static str,
+    Vec<u8>,
+    crate::convert::Integer,
+    crate::convert::Bits64,
+    crate::convert::Vector3,
+    crate::value::Value,
+    Table,
+    crate::value::Function,
+);
+
+impl<T: crate::packed::PackedScalar> SequenceItem for crate::packed::Packed<T> {
+    #[inline]
+    fn push_item<S: Scope>(self, scope: &S) -> Result<()> {
+        Push::push_only(&self, scope)
+    }
+}
+
+impl<T: Userdata> SequenceItem for crate::userdata::Owned<T> {
+    #[inline]
+    fn push_item<S: Scope>(self, scope: &S) -> Result<()> {
+        crate::userdata::push_owned(scope, self.0).map(drop)
+    }
+}
+
+impl<T: SequenceItem> SequenceItem for Option<T> {
+    #[inline]
+    fn push_item<S: Scope>(self, scope: &S) -> Result<()> {
+        match self {
+            Some(item) => item.push_item(scope),
+            None => Push::push_only(&(), scope),
+        }
+    }
+}
+
+/// One step of a view's iterator: the next control value and the element, pushed by value.
+pub struct IterStep<T: SequenceItem>(pub i64, pub T);
+
+impl<T: SequenceItem> Return for IterStep<T> {
+    fn push_results(self, call: &Call<'_>) -> Result<c_int> {
+        Push::push_only(&self.0, call)?;
+        self.1.push_item(call)?;
+        Ok(2)
+    }
 }
 
 /// `__index` for sequences: an integer key reads the element (nil past the end); anything else
@@ -81,7 +159,7 @@ unsafe extern "C-unwind" fn sequence_index<S: SequenceSource>(state: *mut ffi::l
                     .and_then(|i| sequence.0.get(i))
                 {
                     Some(item) => {
-                        item.push_into(&call)?;
+                        item.push_item(&call)?;
                     }
                     None => ffi::lua_pushnil(state),
                 }
@@ -106,9 +184,9 @@ pub(crate) fn configure_sequence_with_entry<S: SequenceSource>(
 ) -> Result<crate::bind::MemberEntry> {
     let entry = ty.method_with_entry("toTable", |sequence: &Sequence<S>, call: &Call| to_table::<S>(call, sequence))?;
     ty.metamethod("__len", |sequence: &Sequence<S>, _operand: ArgView| sequence.0.len() as i64)?;
-    ty.array_iterator(|sequence: &Sequence<S>, control: i64| -> Option<(i64, S::Item)> {
+    ty.array_iterator(|sequence: &Sequence<S>, control: i64| -> Option<IterStep<S::Item>> {
         let index = usize::try_from(control).ok()?;
-        sequence.0.get(index).map(|item| (control + 1, item))
+        sequence.0.get(index).map(|item| IterStep(control + 1, item))
     })?;
     let type_name = ty.type_name()?;
     ty.install_wrapper(c"__index", sequence_index::<S>, &format!("{type_name}.__index"), true)?;
@@ -123,7 +201,7 @@ fn to_table<S: SequenceSource>(scope: &impl Scope, sequence: &Sequence<S>) -> Re
         let view = table.push_to(frame)?;
         for index in 0..len {
             if let Some(item) = sequence.0.get(index) {
-                item.push_into(frame)?;
+                item.push_item(frame)?;
                 view.raw_set_index(frame, (index + 1) as i64)?;
             }
         }
@@ -136,8 +214,8 @@ fn to_table<S: SequenceSource>(scope: &impl Scope, sequence: &Sequence<S>) -> Re
 pub fn configure_stream<S: StreamSource>(ty: &mut MetatableBuilder<'_>) -> Result<()> {
     ty.cursor_iterator(
         |call: &Call<'_>| Ok(crate::userdata::check_receiver::<Stream<S>>(call.arg(1))?.0.open()),
-        |cursor: Cursor<'_, S::Cursor>, control: Option<i64>| -> Option<(i64, S::Item)> {
-            S::next(&cursor).map(|item| (control.unwrap_or(0) + 1, item))
+        |cursor: Cursor<'_, S::Cursor>, control: Option<i64>| -> Option<IterStep<S::Item>> {
+            S::next(&cursor).map(|item| IterStep(control.unwrap_or(0) + 1, item))
         },
     )
 }
