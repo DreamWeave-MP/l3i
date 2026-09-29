@@ -12,6 +12,9 @@ Luau extension.
 No `mlua`. Tags, atoms, type names and debug-name roots are host data: the crate ships the
 mechanism, never a catalogue.
 
+The site, <https://DreamWeave-MP.github.io/l3i/>, has the guide, the built-in extensions, the
+Rust API by module, and the benchmarks; this file is the same material in one page.
+
 - [Quick start](#quick-start)
 - [The three tiers](#the-three-tiers)
 - [Userdata](#userdata)
@@ -28,7 +31,7 @@ mechanism, never a catalogue.
 
 ```toml
 [dependencies]
-l3i = { version = "0.1", features = ["jit"] } # jit, analysis, and soft-render are optional
+l3i = { version = "1", features = ["jit"] } # jit, analysis, and soft-render are optional
 ```
 
 ```rust
