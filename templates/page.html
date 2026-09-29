@@ -65,7 +65,17 @@
 {%- endblock content %}
 
 {#- l3i: the project page's hero is drawn live by static/js/l3i-hero.js (three.js, vendored under
-    static/js/vendor/). Articles and docs keep the template's script alone. -#}
+    static/js/vendor/). Articles and docs keep the template's script alone. The module graph is
+    three deep, so the head preloads all of it at once instead of discovering one file per hop. -#}
+{%- block extra_head %}
+{{ super() }}
+{%- if project %}
+<link rel="modulepreload" href="{{ get_url(path='js/l3i-hero.js', trailing_slash=false) | safe }}">
+<link rel="modulepreload" href="{{ get_url(path='js/vendor/three.module.min.js', trailing_slash=false) | safe }}">
+<link rel="modulepreload" href="{{ get_url(path='js/vendor/three.core.min.js', trailing_slash=false) | safe }}">
+{%- endif %}
+{%- endblock extra_head %}
+
 {%- block extra_body %}
 {{ super() }}
 {%- if project %}
