@@ -37,6 +37,9 @@ github_username = "DreamWeave-MP"
 github_project = "l3i"
 
 logo_text = "l3i"
+# The header spells it with the 3 in the accent, like the hero; see sass/brand.sass. The brand is a
+# flex row, so the name stays one item.
+logo_html = '<span>l<span class="l3i-three">3</span>i</span>'
 footer_text = "l3i · MIT OR Apache-2.0 · Luau is Roblox's, MIT · a port of the OpenMW Luau binder, not affiliated with the OpenMW project"
 # The moon over the mist: the site's own mark, drawn in sass/brand.sass and static/js/l3i-hero.js.
 favicon = "img/l3i.svg"
