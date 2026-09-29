@@ -63,3 +63,12 @@
 </div>
 {%- endif %}
 {%- endblock content %}
+
+{#- l3i: the project page's hero is drawn live by static/js/l3i-hero.js (three.js, vendored under
+    static/js/vendor/). Articles and docs keep the template's script alone. -#}
+{%- block extra_body %}
+{{ super() }}
+{%- if project %}
+<script type="module" src="{{ get_url(path='js/l3i-hero.js', trailing_slash=false) | safe }}"></script>
+{%- endif %}
+{%- endblock extra_body %}

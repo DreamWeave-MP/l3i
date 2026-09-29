@@ -1,10 +1,166 @@
-// Your branding. This file is yours: the template never changes it, and it loads last.
-//
-// Recolor everything by overriding tokens, for example:
-//
-// :root
-//   --dw-accent: #7fded0
-//   --dw-font-display: "Oxanium", var(--dw-font-mono)
-//
-// Token names are in sass/_tokens.sass. Prefer tokens over new selectors: they keep the
-// template's components, docs and diagrams consistent with each other.
+// l3i. This file belongs to l3i: the template never changes it, and it loads last. Everything
+// here is built from the template's tokens (sass/_tokens.sass), so the docs, the API reference
+// and the project page stay one site.
+
+// Night, not dusk: the purple palette pushed toward black, with the accent as moonlight.
+[data-palette="purple"]
+  --dw-accent: #c9a4ff
+  --dw-bg-0: #0a0710
+  --dw-bg-1: #100b19
+  --dw-bg-2: #171022
+  --dw-bg-3: #20162f
+  --dw-line: #2c1f44
+  --dw-line-strong: #46306a
+  --dw-code-bg: #120c1c
+  --dw-code-inline-bg: #1c1329
+
+::selection
+  background: color-mix(in oklab, var(--dw-accent) 34%, transparent)
+
+// The hero is a night sky. static/js/l3i-hero.js draws it live with three.js: a volumetric purple
+// mist, a moon lit by a slowly turning sun, dust rising through the moonlight. Without JavaScript,
+// or without WebGL, the two pseudo-elements below draw a still of the same scene, so the page
+// never opens on a flat gradient.
+.dw-hero
+  position: relative
+  overflow: hidden
+  isolation: isolate
+  padding: 3.4rem 0 2.8rem
+  border-bottom-color: color-mix(in oklab, var(--dw-accent) 30%, var(--dw-line))
+  background: linear-gradient(180deg, #120b1f, var(--dw-bg-0))
+
+  @media (min-width: 761px)
+    min-height: 32rem
+    display: grid
+    align-items: center
+
+  // The still mist: four soft clouds and a horizon glow.
+  &::before
+    content: ""
+    position: absolute
+    inset: 0
+    z-index: -2
+    background: radial-gradient(ellipse 60% 70% at 78% 110%, rgb(126 74 214 / 34%), transparent 65%), radial-gradient(ellipse 45% 55% at 22% 105%, rgb(88 44 160 / 30%), transparent 70%), radial-gradient(ellipse 70% 40% at 55% 100%, rgb(201 164 255 / 12%), transparent 70%), radial-gradient(ellipse 35% 45% at 88% 25%, rgb(201 164 255 / 10%), transparent 70%)
+    pointer-events: none
+
+  // The still moon: lit from the upper left, a purple rim, a halo into the mist.
+  &::after
+    content: ""
+    position: absolute
+    z-index: -1
+    top: 50%
+    right: max(3rem, calc((100vw - var(--dw-width-page)) / 2 + 6rem))
+    width: 15rem
+    aspect-ratio: 1
+    transform: translateY(-52%)
+    border-radius: 50%
+    background: radial-gradient(circle at 36% 30%, #f6efff 0, #d8bfff 22%, #a778ea 48%, #4a2680 72%, #1d1030 100%)
+    box-shadow: 0 0 40px 6px color-mix(in oklab, var(--dw-accent) 45%, transparent), 0 0 140px 30px color-mix(in oklab, var(--dw-accent) 22%, transparent), inset -18px -22px 48px rgb(10 5 20 / 65%)
+    pointer-events: none
+
+  @media (max-width: 760px)
+    &::after
+      top: 1.5rem
+      right: -3rem
+      width: 10rem
+      transform: none
+      opacity: .8
+
+  // The live scene replaces the still.
+  &.l3i-hero--live::before,
+  &.l3i-hero--live::after
+    display: none
+
+  @media (forced-colors: active)
+    &::before,
+    &::after,
+    .l3i-sky
+      display: none
+
+.l3i-sky
+  position: absolute
+  inset: 0
+  z-index: -1
+  display: block
+  width: 100%
+  height: 100%
+  pointer-events: none
+
+// The text sits on the sky, so it carries its own contrast.
+.dw-hero__grid
+  position: relative
+  z-index: 1
+
+.dw-hero__title
+  font-size: clamp(3rem, 6vw, 5.2rem)
+  letter-spacing: .01em
+  background: linear-gradient(100deg, #ffffff 0%, var(--dw-text) 35%, var(--dw-accent) 80%, #f0e4ff 100%)
+  background-clip: text
+  -webkit-background-clip: text
+  color: transparent
+  filter: drop-shadow(0 0 22px color-mix(in oklab, var(--dw-accent) 35%, transparent))
+
+  @media (forced-colors: active)
+    background: none
+    color: CanvasText
+    filter: none
+
+.dw-hero__summary
+  max-width: 58ch
+  font-size: 1.14rem
+  color: var(--dw-text)
+  text-shadow: 0 1px 0 rgb(0 0 0 / 60%), 0 0 24px rgb(10 5 20 / 90%)
+
+.dw-hero .dw-kicker
+  text-shadow: 0 1px 0 rgb(0 0 0 / 50%)
+
+// The status strip, the cargo add line and the buttons: glass over the sky.
+.dw-hero .dw-strip,
+.dw-hero .dw-command
+  background: color-mix(in oklab, var(--dw-bg-1) 72%, transparent)
+  backdrop-filter: blur(10px) saturate(1.2)
+  -webkit-backdrop-filter: blur(10px) saturate(1.2)
+  border: 1px solid color-mix(in oklab, var(--dw-accent) 22%, transparent)
+  border-radius: var(--dw-radius)
+
+.dw-hero .dw-strip
+  padding: .6rem .9rem
+
+.dw-hero .dw-command
+  box-shadow: 0 0 0 1px rgb(0 0 0 / 30%), 0 12px 40px rgb(0 0 0 / 35%)
+
+.dw-hero .dw-button
+  background: color-mix(in oklab, var(--dw-bg-1) 78%, transparent)
+  backdrop-filter: blur(8px)
+  -webkit-backdrop-filter: blur(8px)
+
+  &:hover
+    box-shadow: 0 0 0 1px var(--dw-accent-line), 0 0 24px color-mix(in oklab, var(--dw-accent) 30%, transparent)
+
+// The header's lower edge is the moon's own light, thin and fading at both ends.
+.dw-header
+  border-bottom-color: transparent
+  background-image: linear-gradient(90deg, transparent, color-mix(in oklab, var(--dw-accent) 55%, transparent) 25%, color-mix(in oklab, var(--dw-accent) 55%, transparent) 75%, transparent)
+  background-size: 100% 1px
+  background-position: bottom
+  background-repeat: no-repeat
+
+// The feature grid on the overview: cards catch a little of the moonlight on hover.
+.dw-features > ul > li
+  transition: border-color .2s ease, box-shadow .2s ease, transform .2s ease
+
+  &:hover
+    border-color: var(--dw-accent-line)
+    box-shadow: 0 0 0 1px color-mix(in oklab, var(--dw-accent) 25%, transparent), 0 14px 40px rgb(0 0 0 / 35%)
+    transform: translateY(-2px)
+
+// Docs ------------------------------------------------------------------------------------
+
+// A signature line is the page's unit of truth: it gets the accent's edge.
+.docs-api-signature
+  border-left: 2px solid var(--dw-accent)
+  background: linear-gradient(90deg, var(--dw-accent-soft), var(--dw-code-bg) 60%)
+
+// Tables of numbers read right-aligned; the docs' benchmark tables lean on this.
+.docs-article table td:not(:first-child):has(> code:only-child)
+  font-variant-numeric: tabular-nums
