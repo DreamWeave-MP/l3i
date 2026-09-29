@@ -1,0 +1,248 @@
++++
+title = "Native code generation"
+description = "Luau's code generator behind the jit feature: modes and budgets, lowering hooks written in Rust against the IR builder, how hooks learn a VM's real tags, which call sites lower, and how to read the counters and dumps."
+weight = 95
+
+[extra]
+kind = "guide"
++++
+
+With the `jit` feature the crate builds Luau's CodeGen library and a small C++ shim,
+`csrc/codegen.cpp`, that exposes the C++-only parts of `Luau/CodeGen.h`: shared code contexts
+with a size budget, `compile` with `CompilationOptions`, the userdata remapper, block counters,
+and an `IrBuilder` C ABI. Everything the shim needs is in the tree, so the build is the same on
+every target; the feature is refused on emscripten. Everything Rust-side lives in
+`l3i::native_code`.
+
+## One generator per runtime
+
+`NativeCodeGen` owns a shared Luau code generation context with a hard size budget, the immutable
+compilation options, and a registry of compiled modules keyed by a 128-bit MurmurHash3 of their
+bytecode (`native_code::module_id`), so identical scripts share native code and a hash collision
+is reported as `IdentityCollision` rather than aliased.
+
+| Mode | Compiles |
+|---|---|
+| `NativeCodeMode::Off` | Nothing; `compile` reports `Skipped` |
+| `NativeCodeMode::Annotated` | Modules marked `--!native` (the default) |
+| `NativeCodeMode::Eager` | Every module |
+
+A plan sets it through the policy:
+
+```rust
+use l3i::extension::{NativeCodePolicy, RuntimePolicy};
+use l3i::native_code::NativeCodeMode;
+
+let policy = RuntimePolicy::new().native_code(NativeCodePolicy {
+    mode: NativeCodeMode::Annotated,
+    record_counters: false,
+    ..NativeCodePolicy::default()
+});
+```
+
+`NativeCodePolicy` has `mode`, `max_total_size` (32 MiB by default, in 4 MiB blocks, clamped to
+at least one block), `record_counters`, `nop_padding`, and `hooks`, the host's own hook sets,
+asked after the defaults and before the extensions'. A hand-assembled runtime passes a
+`NativeCodeOptions` to `Runtime::builder().native_code(..)` instead, and names its userdata types
+itself with `.userdata_types([..])`; a planned runtime derives that list from the plan.
+
+`Runtime::native_code()` returns the generator. `is_available()` says whether the platform has a
+code generator; the tests skip when it does not. Compilation happens where chunks are loaded: a
+`Sandbox::load_template` compiles the template and `Template::native_code()` reports the
+`NativeCodeResult` with its `status` (`Success`, `NothingToCompile`, `NotNativeModule`,
+`CodeGenOverflowInstructionLimit`, `AllocationFailed`, and the rest of Luau's outcomes), `stats`
+(`native_code_size_bytes`, `functions_compiled`, `functions_bound`) and `module_id`. A module that
+ran out of code space is not retried (`AllocationRetrySkipped`).
+
+## Lowering hooks in Rust
+
+{{ api_signature(value="trait NativeCodeHooks: 'static") }}
+
+Luau asks two kinds of question while compiling a function: what bytecode type an operation on a
+vector or an annotated userdata produces, so the rest of the function specialises on it, and
+whether the host wants to lower the operation to IR itself. `NativeCodeHooks` answers both in
+Rust, with a "not mine" default for every method.
+
+| Hook | Answers for |
+|---|---|
+| `vector_access_type(member)`, `vector_access(context, build, member, AccessSite)` | `v.member` on a vector |
+| `vector_namecall_type(member)`, `vector_namecall(context, build, member, NamecallSite)` | `v:member(..)` on a vector |
+| `userdata_access_type(context, type, member)`, `userdata_access(..)` | `u.member` on an annotated userdata |
+| `userdata_metamethod_type(context, lhs, rhs, method)`, `userdata_metamethod(context, build, MetamethodSite)` | An arithmetic, comparison, length or concat metamethod on userdata operands |
+| `userdata_namecall_type(context, type, member)`, `userdata_namecall(..)` | `u:member(..)` on an annotated userdata |
+
+A `*_type` answer of `bytecode_type::ANY` and a lowering answer of `false` mean "not mine", and
+Luau falls back to its generic path. Several hook sets are asked in order and the first that
+claims an operation wins. Lowering must obey Luau's contract for the hook: check tags, take VM
+exits to `site.pcpos` on failure, read operands before writing results. Hooks run inside the code
+generator, with no Lua API and no panics (a panic aborts the process).
+
+`NamecallSite` carries `arg_res_reg` (the function slot; the receiver copy is at `+1`, the
+arguments start at `+2`, and the results land from `arg_res_reg`), `source_reg` (the receiver),
+`params` (the argument count including the receiver), `results` (or `LUA_MULTRET`, -1) and
+`pcpos`. `AccessSite` carries `result_reg`, `source_reg` and `pcpos`.
+
+### The IR builder
+
+`native_code::ir::IrBuilder` is Luau's builder for the function being compiled, valid for one hook
+invocation. `IrCmd`, `IrCondition`, `IrBlockKind` and `HostMetamethod` are generated by `build.rs`
+from `Luau/IrData.h` and `Luau/CodeGenOptions.h` of the exact Luau build, so a Luau bump that
+renumbers the IR cannot silently desynchronise this layer. Operands are `IrOp` values, opaque
+32-bit handles.
+
+| Method | Gives |
+|---|---|
+| `inst(cmd, &[ops])` | Appends an instruction with up to eight operands and returns its result |
+| `const_int`, `const_int64`, `const_uint`, `const_double`, `const_tag`, `const_import`, `undef` | Constants |
+| `cond(IrCondition)` | A comparison condition operand |
+| `vm_reg(index)`, `vm_const(index)`, `vm_upvalue(index)` | VM locations |
+| `vm_exit(pcpos)` | The exit guards take when a check fails |
+| `load_and_check_tag(location, tag, fallback)` | Loads a tag and branches unless it matches |
+| `block(kind)`, `begin_block(block)`, `block_at_inst`, `fallback_block`, `in_terminated_block()` | Control flow |
+
+`bytecode_type` holds the answers a `*_type` hook may give (`NIL`, `NUMBER`, `VECTOR`, `INTEGER`,
+`ANY`, ...) and `TAGGED_USERDATA_BASE`, 64: an annotated userdata type at index `i` of the
+compilation's type list reaches the hooks as `64 + i`.
+
+### Tags come from the VM
+
+{{ api_signature(value="struct NativeContext<'a> { fn tag_of<T: Userdata>(&self) -> Option<RuntimeTag>; fn atom_of(&self, name: &str) -> Option<Atom>; fn userdata_type_of<T: Userdata>(&self) -> Option<u8> }") }}
+
+Every lowering method receives the `NativeContext` of the VM the code is compiled for. A hook
+takes the tag it checks from `tag_of::<T>()` and compares the `userdata_type` it receives against
+`userdata_type_of::<T>()` rather than assuming an index, so the same hook serves a type that is
+tag 8 in one VM and tag 17 in another, and keeps working when another type is pinned ahead of it
+in the compiler's list.
+
+A field lowering from `tests/native_code.rs`, the shape OpenMW uses for its vector types but
+authored in Rust:
+
+```rust
+use l3i::ffi::{LUA_TNUMBER, LUA_TUSERDATA};
+use l3i::native_code::hooks::{AccessSite, NativeCodeHooks, NativeContext};
+use l3i::native_code::ir::{IrBuilder, IrCmd, bytecode_type};
+
+#[repr(C)]
+struct Point {
+    x: f32,
+    y: f32,
+}
+
+struct PointFields;
+
+impl NativeCodeHooks for PointFields {
+    fn userdata_access_type(&self, context: &NativeContext<'_>, userdata_type: u8, member: &str) -> u8 {
+        if context.userdata_type_of::<Point>() == Some(userdata_type) && matches!(member, "x" | "y") {
+            bytecode_type::NUMBER
+        } else {
+            bytecode_type::ANY
+        }
+    }
+
+    fn userdata_access(
+        &self,
+        context: &NativeContext<'_>,
+        build: &mut IrBuilder<'_>,
+        userdata_type: u8,
+        member: &str,
+        site: AccessSite,
+    ) -> bool {
+        if context.userdata_type_of::<Point>() != Some(userdata_type) {
+            return false;
+        }
+        let Some(point_tag) = context.tag_of::<Point>() else { return false };
+        let offset = match member {
+            "x" => 0,
+            "y" => 4,
+            _ => return false,
+        };
+        let source = build.vm_reg(site.source_reg);
+        let userdata = build.inst(IrCmd::LOAD_POINTER, &[source]);
+        let tag = build.const_int(i32::from(point_tag));
+        let exit = build.vm_exit(site.pcpos);
+        build.inst(IrCmd::CHECK_USERDATA_TAG, &[userdata, tag, exit]);
+        let at = build.const_int(offset);
+        let userdata_tag = build.const_tag(LUA_TUSERDATA as u8);
+        let value = build.inst(IrCmd::BUFFER_READF32, &[userdata, at, userdata_tag]);
+        let number = build.inst(IrCmd::FLOAT_TO_NUM, &[value]);
+        let result = build.vm_reg(site.result_reg);
+        build.inst(IrCmd::STORE_DOUBLE, &[result, number]);
+        let number_tag = build.const_tag(LUA_TNUMBER as u8);
+        build.inst(IrCmd::STORE_TAG, &[result, number_tag]);
+        true
+    }
+}
+```
+
+A script that annotates the parameter, `local function len(p: Point): number return
+math.sqrt(p.x * p.x + p.y * p.y) end`, reaches the hook; a wrong tag at the same site exits to
+the interpreter, which reports the ordinary `attempt to index number` error.
+
+### Registering hooks
+
+An extension registers its hook sets with `ExtensionDescriptor::native_hooks(hooks)`, and the
+plan installs them in every runtime it creates, after the defaults and the policy's own. The
+userdata types its hooks lower declare `CompilerTypePolicy::Required` so they keep one of the 32
+compiler slots, and they are named to the compiler by their class name
+(`dream.quat.Math` as `dream_quat_Math`), which is what scripts annotate. A planned runtime turns
+type information on in its compile options so native code sees the userdata types.
+
+The hook sets in the crate:
+
+| Hook set | Lowers |
+|---|---|
+| `native_code::vector_buffer::VectorBufferWriter` | `vector:writef32x3(buffer, offset)` to three native f32 stores; part of the default hook set. Its interpreter half, `Runtime::install_vector_buffer_writer()`, installs the `__namecall` shim on Luau's vector metatable with exactly the semantics of three `buffer.writef32` calls, and is where a failed guard lands |
+| `quat::lowering::Lowering` | `dream_quat_Math`'s `rotate`, `mul`, `slerp`, `key`, `keyRotation`, `keyFlags`: integer unpacking, double arithmetic, vector or integer stores, no C call |
+| `raster::lowering::ColorMath` | `dream_raster_Math`'s color arithmetic in both widths |
+| `soft_render::lowering::VertexWriter` | `dream_soft_render_Vertices:write`: one bounds check and six buffer stores |
+
+## Which call sites lower
+
+Only single-result, fixed-arity call sites lower. `return Q:mul(a, b)` asks for `LUA_MULTRET`,
+and a call nested as the last argument (`Q:keyRotation(Q:key(q, 3))`) is a multiple-results call
+that gives the outer call a dynamic argument count; both run through the bound method instead.
+Bind the inner result to a local first. An argument that is itself an `if` expression or an
+`and`/`or` chain makes the compiler order the call differently, so bind that to a local too.
+
+```luau
+--!native
+local quat = require("@dream/quat")
+local Q: dream_quat_Math = quat.math()
+local k = Q:key(q, 3)           -- lowers
+local back = Q:keyRotation(k)   -- lowers
+return Q:mul(back, q)           -- multiple results: the bound method runs
+```
+
+The bound method is always the oracle: a lowered call that hits a guard, a wrong tag, an integer
+of another packed kind, a non-finite weight, an offset outside the buffer, exits to the
+interpreter, whose bound method raises the same error the script would have seen without native
+code.
+
+## Counters and dumps
+
+With `record_counters` on, `NativeCodeGen::execution_stats(&scope)` sums Luau's block counters
+over every retained module into an `ExecutionStats { regular_blocks_executed, vm_exits_taken }`.
+The tests use `vm_exits_taken` as the proof that only the malformed calls left native code: the
+quaternion suite lowers thirteen sites and takes exactly six exits, one per bad call.
+
+`NativeCodeGen::assembly(&scope, index, AssemblyOptions)` returns the assembly and, with
+`include_ir`, the IR Luau generates for the closure at `index` and its nested functions, with
+this generator's hooks and userdata types in effect and without installing the code.
+`AssemblyTarget` selects `Host`, `A64`, `A64NoFeatures`, `X64Windows` or `X64SystemV`, so a
+lowering can be inspected for a machine the host is not running on.
+
+```rust
+use l3i::native_code::{AssemblyOptions, AssemblyTarget};
+
+let text = runtime.stack().with_frame(|frame| {
+    let view = function.push_to(frame)?;
+    generator.assembly(frame, view.index(), AssemblyOptions { include_ir: true, ..AssemblyOptions::default() })
+})?;
+```
+
+`native_code::set_perf_log(|entry| ..)` installs the process-wide perf log: every function
+compiled natively afterwards, in any runtime, is reported as a `PerfEntry` with its address, size
+and symbol, for profiler symbolisation. `clear_perf_log()` removes it.
+`set_native_execution_enabled(&scope, bool)` turns native execution on or off for the whole VM,
+and `disable_native_execution_for_function(&scope, level)` for one running Lua function, for
+example from a bound function that detected a problem.
