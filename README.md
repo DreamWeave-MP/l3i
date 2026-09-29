@@ -205,6 +205,26 @@ Luau's mechanism keys on a global name; a module reached through `require` is ty
 analyzer but not folded by the compiler. Runtime-owned extension state drops before the VM
 closes.
 
+### Rules the first extensions ran into
+
+- Direct fields carry nil, booleans, numbers, integers, and vectors: Luau's direct-field API has
+  no string setter, so a text field is a getter. Return borrowed text from a getter with
+  `call.push(&text)?` and `StackResults`; a `Return` type cannot borrow from the arguments.
+- Module types in the definitions are ordered by reference, so a member may name a module
+  declared later in the plan (`() -> Module__dream_archive_ba2`).
+- `Runtime::eval::<R>(source)` runs a chunk and reads what it returns (`f64`, a tuple, `()`),
+  the shape a benchmark harness wants; `load_function` stays for chunks that return a closure.
+  A harness must not hold `Runtime::stack()` across `load_function` or `eval`, which lease the
+  root stack themselves.
+- One frame per scope: inside a bound function, read the arguments before opening a frame, or
+  open it from the call; a second frame on the same scope panics with that message.
+- `Frame::check(n)` reserves stack for a bulk push; `ValueView::type_error(Type)` is the error a
+  hand-written conversion raises.
+- Cargo has no optional dev-dependencies, so a crate that tests its plan with
+  `check_definitions` (feature `analysis`) either pays the analysis build on every `cargo test`
+  or declares l3i as an optional normal dependency with a test feature, `luau-analysis =
+  ["luau", "l3i/analysis"]`, and runs its typed tests with `--features luau-analysis`.
+
 ## Extension primitives
 
 The shapes the migration audits asked for, all allocation-free at the boundary:
@@ -228,9 +248,19 @@ are the application's, declared per extension (`ExtensionDescriptor::packed`) or
 an encoding whose kind, flags, or payload overflow its fields is an error rather than a
 truncated integer; `options::Options`
 reads camelCase option tables strictly (unknown keys are errors, required keys and field paths
-are named); `sequence::Sequence` and `sequence::Stream` show a Rust collection to scripts as
-`#items`, `items[i]`, `for item in items`, and `items:toTable()` (or `for` only, with a private
-cursor per loop) without materialising it, declared through the planner like any userdata.
+are named), by value through `required`/`optional` and borrowed through `required_str`,
+`required_bytes`, and `with_required` (the value's slot handed to a closure, so `&str`, `&[u8]`,
+and `BufferView` cost no copy), with `Table` and `Function` readable as values;
+`sequence::Sequence` and `sequence::Stream` show a Rust collection to scripts as `#items`,
+`items[i]`, `for item in items`, and `items:toTable()` (or `for` only, with a private cursor per
+loop) without materialising it, declared through the planner like any userdata. A view's
+declaration names its element type (`d.sequence::<Rows>(key).item_type("dream_vfs_Entry")`), and
+the definitions then declare the length, the indexer, and the iterator with it, so a strict
+script can measure, index, and iterate a view; elements are pushed by value
+(`sequence::SequenceItem`), so a row served as `Owned<T>` needs no `Clone`. Indexing a view reads
+the receiver and the key straight from Luau's value layout; the rest of its cost is Luau's own
+`__index` dispatch (547 instructions against 431 for a planned method), since the VM has no
+integer-key direct path for userdata.
 
 `raster::RasterExtension` (`dream.raster`, module `@dream/raster`) provides `raster::Color`
 (kind 3: RGBA8 in the low 32 bits, red in bits 0 to 7, the same four bytes a vertex or a texel
@@ -441,6 +471,8 @@ way: a hand-written `lua_CFunction` and a typed direct handler. On the pinned Lu
 | planned method `() -> f64` | 431 | 107 |
 | planned getter | 397 | 101 |
 | planned direct field | 78 | 12 |
+| planned sequence `[i]` | 547 | 148 |
+| planned sequence `#` | 563 | 148 |
 
 A bound call is within about forty instructions of a bare C function; a planned method is
 within sixty of the typed direct handler. The rest is Luau's own call and return machinery.
