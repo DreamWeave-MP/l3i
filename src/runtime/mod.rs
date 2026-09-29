@@ -6,7 +6,7 @@
 //! allocation callbacks when a limit or the profiler asks for them, then the standard
 //! libraries. Every step is a builder choice so nothing is entrenched by the constructor.
 
-mod call_scope;
+pub(crate) mod call_scope;
 pub mod profiler;
 pub(crate) mod shared;
 
@@ -162,7 +162,7 @@ impl RuntimeBuilder {
                 );
             }
         }
-        let shared = Box::new(Shared::new(self.limits, self.profiler));
+        let shared = Box::new(Shared::new(self.limits, self.profiler, self.initialization_category));
         // SAFETY: fresh state; the main thread's record lives until `Drop` detaches it, just
         // before lua_close (a closed state must not be touched), and the `userthread` callback
         // gives every other thread its own. The callback block belongs to this VM; `shared` is
@@ -178,14 +178,10 @@ impl RuntimeBuilder {
         }
         // From here on the Runtime owns the state: every later step that can fail returns
         // through `?` and `Runtime::drop` closes the VM and frees the records.
-        #[allow(unused_mut)]
-        let mut runtime = Runtime {
+        let runtime = Runtime {
             state,
             debug_roots: self.debug_roots,
             shared,
-            initialization_category: self.initialization_category,
-            #[cfg(feature = "jit")]
-            native_code: None,
             buffer_cage,
             plan: RefCell::new(None),
             states: RefCell::new(HashMap::new()),
@@ -196,7 +192,7 @@ impl RuntimeBuilder {
         // before any function is loaded, which nothing below this point does before it.
         #[cfg(feature = "jit")]
         if let Some(options) = self.native_code {
-            runtime.native_code = Some(unsafe { crate::native_code::NativeCodeGen::create(state, options) }?);
+            runtime.shared.set_native_code(unsafe { crate::native_code::NativeCodeGen::create(state, options) }?);
         }
         runtime.update_interrupt_hook();
         if let Some(catalogue) = self.atom_catalogue {
@@ -259,13 +255,10 @@ impl PointerEncodingKey {
 pub struct Runtime {
     state: *mut ffi::lua_State,
     debug_roots: Vec<Box<str>>,
-    /// Per-VM state reachable from callbacks through `lua_Callbacks.userdata`.
+    /// Per-VM state reachable from callbacks through `lua_Callbacks.userdata`; it also holds the
+    /// native code generator, dropped with it after `lua_close` (the `Drop` body closes the VM
+    /// first), as Luau requires for shared code contexts.
     shared: Box<Shared>,
-    initialization_category: MemoryCategory,
-    /// Dropped after `lua_close` (the `Drop` body closes the VM first), as Luau requires for
-    /// shared code contexts.
-    #[cfg(feature = "jit")]
-    native_code: Option<crate::native_code::NativeCodeGen>,
     /// Boxed twice so the pointer Luau holds stays valid while the runtime moves; kept only to
     /// outlive `lua_close`.
     #[allow(dead_code, clippy::box_collection)]
@@ -306,13 +299,13 @@ impl Runtime {
     /// The call context for initialization work: [`INITIALIZATION_CONTEXT`] in the configured
     /// initialization category.
     pub fn initialization_context(&self) -> CallContext {
-        CallContext { id: INITIALIZATION_CONTEXT, category: self.initialization_category }
+        CallContext { id: INITIALIZATION_CONTEXT, category: self.shared.initialization_category() }
     }
 
     /// The native code generator, when the runtime was built with one (`jit` feature).
     #[cfg(feature = "jit")]
     pub fn native_code(&self) -> Option<&crate::native_code::NativeCodeGen> {
-        self.native_code.as_ref()
+        self.shared.native_code()
     }
 
     pub(crate) fn shared(&self) -> &Shared {

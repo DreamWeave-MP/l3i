@@ -7,10 +7,12 @@
 //! previous category and deadline. A scope is a no-op when neither the profiler nor a limit
 //! needs it.
 
+use std::ffi::c_int;
 use std::time::Instant;
 
 use super::Runtime;
 use super::shared::{ActiveCall, Deadline, MemoryCategory, Shared};
+use crate::raw::ffi;
 
 /// What kind of call a scope wraps; only the ordinary script call is timed and time-limited.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -33,7 +35,9 @@ pub struct CallContext {
 
 /// An active script call; see the module docs.
 pub struct CallScope<'r> {
-    runtime: &'r Runtime,
+    shared: &'r Shared,
+    /// The VM's main thread, whose memory category the scope switches.
+    state: *mut ffi::lua_State,
     active: bool,
     context: CallContext,
     started: Option<Instant>,
@@ -44,14 +48,27 @@ pub struct CallScope<'r> {
 impl Runtime {
     /// Opens a call scope for `context`. Scopes must nest strictly.
     pub fn call_scope(&self, context: CallContext, kind: CallKind) -> CallScope<'_> {
-        let shared: &Shared = self.shared();
+        open_scope(self.shared(), self.state, context, kind)
+    }
+}
+
+/// Opens a call scope on the VM whose shared block is `shared` and whose main thread is
+/// `state`: what `Runtime::call_scope` does, reachable from any thread of the VM.
+pub(crate) fn open_scope<'r>(
+    shared: &'r Shared,
+    state: *mut ffi::lua_State,
+    context: CallContext,
+    kind: CallKind,
+) -> CallScope<'r> {
+    {
         let limits = shared.limits();
         let profiler = shared.profiler_enabled();
         let watchdog_needed =
             limits.memory_bytes != 0 || (kind != CallKind::Initialization && !limits.execution_time.is_zero());
         if !profiler && !watchdog_needed {
             return CallScope {
-                runtime: self,
+                shared,
+                state,
                 active: false,
                 context,
                 started: None,
@@ -63,7 +80,8 @@ impl Runtime {
         let mut calls = shared.active_calls().borrow_mut();
         let previous_category = calls.last().map_or(MemoryCategory(0), |call| call.category);
         if profiler {
-            self.set_memory_category(context.category);
+            // SAFETY: `state` is the live main thread of the VM `shared` belongs to.
+            unsafe { ffi::lua_setmemcat(state, c_int::from(context.category.0)) };
         }
         let was_outermost = calls.is_empty();
         calls.push(ActiveCall { context: context.id, category: context.category, nested_ms: 0.0, allocated_bytes: 0 });
@@ -82,7 +100,7 @@ impl Runtime {
         if was_outermost && watchdog_needed {
             shared.reset_watchdog_poll();
         }
-        CallScope { runtime: self, active: true, context, started, previous_deadline, previous_category }
+        CallScope { shared, state, active: true, context, started, previous_deadline, previous_category }
     }
 }
 
@@ -91,7 +109,7 @@ impl Drop for CallScope<'_> {
         if !self.active {
             return;
         }
-        let shared = self.runtime.shared();
+        let shared = self.shared;
         let (context, nested_ms, allocated) = {
             let calls = shared.active_calls().borrow();
             let innermost = calls.last().expect("a scope is open");
@@ -119,7 +137,8 @@ impl Drop for CallScope<'_> {
             shared.add_allocation_activity(context, allocated);
         }
         if shared.profiler_enabled() {
-            self.runtime.set_memory_category(self.previous_category);
+            // SAFETY: as at open; the scope never outlives the runtime it borrows `shared` from.
+            unsafe { ffi::lua_setmemcat(self.state, c_int::from(self.previous_category.0)) };
         }
         shared.deadline().set(self.previous_deadline);
     }

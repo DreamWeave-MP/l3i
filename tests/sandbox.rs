@@ -174,7 +174,6 @@ fn a_rust_require_loader_can_instantiate_templates_from_inside_the_call() {
     // `require('util')` compiles the module source on demand, on the calling scope, while the
     // host's root stack is suspended inside the script call.
     let loader = {
-        let captured = Rc::clone(&runtime);
         let sandbox = Rc::clone(&sandbox);
         runtime
             .bind_function(
@@ -186,7 +185,6 @@ fn a_rust_require_loader_can_instantiate_templates_from_inside_the_call() {
                     let env = l3i::value::Table::from_value(env)?;
                     let template = sandbox.load_template_in(
                         call,
-                        &captured,
                         "util.lua",
                         "return function(name) return { twice = function(x) return x * 2 end, name = name } end",
                     )?;

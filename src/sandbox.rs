@@ -23,7 +23,7 @@ use crate::error::{Error, Result};
 use crate::raw::protect::pop_error;
 use crate::raw::{ffi, trampoline};
 use crate::readonly;
-use crate::runtime::{CallContext, CallKind, Runtime};
+use crate::runtime::{CallContext, CallKind, INITIALIZATION_CONTEXT, Runtime};
 use crate::source::{CompileOptions, compile_raw};
 use crate::stack::{Frame, Scope};
 use crate::value::{Function, Table, Value};
@@ -387,23 +387,28 @@ impl Sandbox {
     /// stack; from inside a bound function (a `require` loader, say) use
     /// [`Sandbox::load_template_in`] with the call's scope.
     pub fn load_template(&self, runtime: &Runtime, chunk_name: &str, source: &str) -> Result<Template> {
-        self.load_template_in(&runtime.stack(), runtime, chunk_name, source)
+        self.load_template_in(&runtime.stack(), chunk_name, source)
     }
 
     /// [`Sandbox::load_template`] on an existing scope of this runtime's VM.
-    pub fn load_template_in(
-        &self,
-        scope: &impl Scope,
-        runtime: &Runtime,
-        chunk_name: &str,
-        source: &str,
-    ) -> Result<Template> {
+    pub fn load_template_in(&self, scope: &impl Scope, chunk_name: &str, source: &str) -> Result<Template> {
         if source.as_bytes().starts_with(b"\x1bLua") {
             return Err(Error::runtime(format!("Binary Lua/Luau chunks are not supported: {chunk_name}")));
         }
         let name = CString::new(chunk_name).map_err(|_| Error::logic("Chunk name cannot contain NUL"))?;
         let bytecode = compile_raw(source, &self.compile_options)?;
-        let _scope = runtime.call_scope(runtime.initialization_context(), CallKind::Initialization);
+        // Everything the load needs from the runtime, the initialization context and the native
+        // code generator, lives in the VM's shared block, so a thread of the VM is enough: a
+        // `require` loader running inside a call has one and needs no handle to the `Runtime`.
+        let state = scope.state();
+        // SAFETY: the scope's thread is live for the call, and the runtime owning it outlives
+        // every scope on it.
+        let shared = unsafe { crate::runtime::shared_for(state) }
+            .ok_or_else(|| Error::logic("Templates load only on a VM made by l3i::Runtime"))?;
+        // SAFETY: `state` is a live thread of the VM.
+        let main = unsafe { ffi::lua_mainthread(state) };
+        let context = CallContext { id: INITIALIZATION_CONTEXT, category: shared.initialization_category() };
+        let _scope = crate::runtime::call_scope::open_scope(shared, main, context, CallKind::Initialization);
         scope.with_frame(|frame| {
             let thread = self.loader_thread.push_to(frame)?;
             let state = frame.state();
@@ -421,7 +426,7 @@ impl Sandbox {
                 }
             }
             #[cfg(feature = "jit")]
-            let native = match runtime.native_code() {
+            let native = match shared.native_code() {
                 Some(generator) => Some(generator.compile(frame, -1, &bytecode)?),
                 None => None,
             };

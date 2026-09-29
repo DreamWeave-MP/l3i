@@ -135,6 +135,13 @@ pub(crate) struct Shared {
     /// type list (`TAGGED_USERDATA_BASE + index`), for native lowering hooks.
     #[cfg(feature = "jit")]
     userdata_types: RefCell<HashMap<TypeId, u8, BuildHasherDefault<TypeIdHasher>>>,
+    /// The memory category initialization work (sandboxes, templates) is charged to.
+    initialization_category: MemoryCategory,
+    /// The native code generator, when the runtime was built with one. It lives here, with the
+    /// VM, so template loading needs only a thread of the VM; the block is a `Runtime` field and
+    /// drops after `lua_close`, as Luau requires for shared code contexts.
+    #[cfg(feature = "jit")]
+    native_code: std::cell::OnceCell<crate::native_code::NativeCodeGen>,
 }
 
 /// One row of the dispatch path's slot table. Padded to 32 bytes so a row never straddles a
@@ -192,10 +199,13 @@ impl TagPlan {
 }
 
 impl Shared {
-    pub(crate) fn new(limits: Limits, profiler: bool) -> Shared {
+    pub(crate) fn new(limits: Limits, profiler: bool, initialization_category: MemoryCategory) -> Shared {
         Shared {
             limits: Cell::new(limits),
             profiler,
+            initialization_category,
+            #[cfg(feature = "jit")]
+            native_code: std::cell::OnceCell::new(),
             active_calls: RefCell::new(Vec::new()),
             deadline: Cell::new(None),
             safepoints_until_poll: Cell::new(0),
@@ -255,6 +265,21 @@ impl Shared {
     }
 
     /// The compiler's bytecode type for the Rust type `id`, if it was named to the compiler.
+    pub(crate) fn initialization_category(&self) -> MemoryCategory {
+        self.initialization_category
+    }
+
+    #[cfg(feature = "jit")]
+    pub(crate) fn native_code(&self) -> Option<&crate::native_code::NativeCodeGen> {
+        self.native_code.get()
+    }
+
+    /// Installs the generator; once, at build time.
+    #[cfg(feature = "jit")]
+    pub(crate) fn set_native_code(&self, generator: crate::native_code::NativeCodeGen) {
+        assert!(self.native_code.set(generator).is_ok(), "the native code generator is installed once");
+    }
+
     #[cfg(feature = "jit")]
     pub(crate) fn userdata_type_of(&self, id: TypeId) -> Option<u8> {
         self.userdata_types.borrow().get(&id).copied()
