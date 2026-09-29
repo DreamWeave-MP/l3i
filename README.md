@@ -218,8 +218,8 @@ closes.
   root stack themselves.
 - One frame per scope: inside a bound function, read the arguments before opening a frame, or
   open it from the call; a second frame on the same scope panics with that message.
-- `Frame::check(n)` reserves stack for a bulk push; `ValueView::type_error(Type)` is the error a
-  hand-written conversion raises.
+- `Frame::check(n)` reserves stack for a bulk push (`n` is a `usize` count); the type-error
+  constructors on `ValueView` cover a type, a union in words, and a field path.
 - Cargo has no optional dev-dependencies, so a crate that tests its plan with
   `check_definitions` (feature `analysis`) either pays the analysis build on every `cargo test`
   or declares l3i as an optional normal dependency with a test feature, `luau-analysis =
@@ -250,7 +250,13 @@ truncated integer; `options::Options`
 reads camelCase option tables strictly (unknown keys are errors, required keys and field paths
 are named), by value through `required`/`optional` and borrowed through `required_str`,
 `required_bytes`, and `with_required` (the value's slot handed to a closure, so `&str`, `&[u8]`,
-and `BufferView` cost no copy), with `Table` and `Function` readable as values;
+and `BufferView` cost no copy), with `Table` and `Function` readable as values and a table
+option walked in place through `required_table(key, |frame, table| ..)` with nothing pinned;
+`TableView::for_each_array` (and `for_each`) visit elements with one element on the stack at a
+time and no frame per element, so a walk over twenty thousand entries never nears Luau's stack
+limit; a conversion by hand raises `ValueView::type_error(Type)`, `type_error_expecting("an
+entry handle or an archive path")` for a union, or `field_type_error("dirs[2]", "a string")`
+for a value reached through a path;
 `sequence::Sequence` and `sequence::Stream` show a Rust collection to scripts as `#items`,
 `items[i]`, `for item in items`, and `items:toTable()` (or `for` only, with a private cursor per
 loop) without materialising it, declared through the planner like any userdata. A view's

@@ -115,7 +115,8 @@ impl<'p> Frame<'p> {
     /// If a nested frame opened from this one is still alive.
     /// Ensures `extra` free slots on the stack (`lua_checkstack`), for bulk pushes into this
     /// frame without a per-element frame.
-    pub fn check(&self, extra: c_int) -> Result<()> {
+    pub fn check(&self, extra: usize) -> Result<()> {
+        let extra = c_int::try_from(extra).map_err(|_| Error::runtime("Lua error: stack overflow"))?;
         // SAFETY: the frame's state is live for its lifetime.
         if unsafe { ffi::lua_checkstack(self.state, extra) } == 0 {
             return Err(Error::runtime("Lua error: stack overflow"));

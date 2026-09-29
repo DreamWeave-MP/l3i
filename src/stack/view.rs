@@ -194,11 +194,19 @@ impl<'v> ValueView<'v> {
     /// The type error a conversion raises for this slot ("bad argument"-style, naming the
     /// expected type and what was found), for extensions that convert by hand.
     pub fn type_error(&self, expected: Type) -> Error {
-        Error::runtime(format!(
-            "Lua stack index {}: expected {}, got {}",
-            self.index,
-            expected.name(),
-            self.type_of().name()
-        ))
+        self.type_error_expecting(expected.name())
+    }
+
+    /// [`Self::type_error`] with the expectation in words, for a union or a domain type:
+    /// `expecting("an entry handle or an archive path")`.
+    pub fn type_error_expecting(&self, expected: &str) -> Error {
+        Error::runtime(format!("Lua stack index {}: expected {}, got {}", self.index, expected, self.type_of().name()))
+    }
+
+    /// A type error for a value reached through a path rather than an argument slot, worded
+    /// as `<path>: expected <expected>, got <found>`: `field_type_error("importMaps.dataDirs[2]",
+    /// "a string")`.
+    pub fn field_type_error(&self, path: &str, expected: &str) -> Error {
+        Error::runtime(format!("{path}: expected {expected}, got {}", self.type_of().name()))
     }
 }

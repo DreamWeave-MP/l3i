@@ -274,17 +274,46 @@ impl<'v> TableView<'v> {
         mut visitor: impl FnMut(&Frame<'_>, ValueView<'_>, ValueView<'_>) -> Result<()>,
     ) -> Result<()> {
         self.require_live(frame)?;
-        let state = frame.state();
+        let step = frame.frame();
+        let state = step.state();
         let mut iterator: c_int = 0;
         loop {
-            let step = frame.frame();
-            // SAFETY: the table slot exists; rawiter pushes key and value (two slots) on success.
+            // SAFETY: the table slot exists; rawiter pushes key and value (two slots) on
+            // success, and settop drops them with whatever the visitor pushed, so one frame
+            // serves the whole walk.
+            let floor = unsafe { ffi::lua_gettop(state) };
             iterator = unsafe { ffi::lua_rawiter(state, self.index(), iterator) };
             if iterator < 0 {
                 return Ok(());
             }
             visitor(&step, step.at(-2), step.at(-1))?;
+            unsafe { ffi::lua_settop(state, floor) };
         }
+    }
+
+    /// Visits the array part in order (`t[1]`, `t[2]`, ... up to `rawlen`), pushing one element at
+    /// a time and popping it after `visitor` returns, so the stack never holds more than one
+    /// element and no frame is opened per element. `visitor` may push temporaries; they are
+    /// dropped with the element.
+    pub fn for_each_array(
+        &self,
+        frame: &Frame<'_>,
+        mut visitor: impl FnMut(&Frame<'_>, i64, ValueView<'_>) -> Result<()>,
+    ) -> Result<()> {
+        self.require_live(frame)?;
+        let step = frame.frame();
+        let state = step.state();
+        // SAFETY: the table slot exists; every iteration pushes one value and settop drops it
+        // together with whatever the visitor pushed, so the frame's floor is never crossed.
+        let len = self.raw_len();
+        for index in 1..=len {
+            let key = checked_raw_integer_key(index as i64)?;
+            let floor = unsafe { ffi::lua_gettop(state) };
+            unsafe { ffi::lua_rawgeti(state, self.index(), key) };
+            visitor(&step, index as i64, step.top_value())?;
+            unsafe { ffi::lua_settop(state, floor) };
+        }
+        Ok(())
     }
 
     /// True when `predicate` accepts some key. Iteration stops at the first match.

@@ -109,7 +109,7 @@ pub struct Variadic<T>(pub Vec<T>);
 impl<T: Push> Return for Variadic<T> {
     #[inline]
     fn push_results(self, call: &Call<'_>) -> Result<c_int> {
-        call.stack().check(c_int::try_from(self.0.len()).unwrap_or(c_int::MAX))?;
+        call.stack().check(self.0.len())?;
         for item in &self.0 {
             call.push(item)?;
         }

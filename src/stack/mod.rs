@@ -215,7 +215,8 @@ impl<'vm> Stack<'vm> {
     }
 
     /// Ensures `extra` free slots, as `lua_checkstack`.
-    pub fn check(&self, extra: c_int) -> Result<()> {
+    pub fn check(&self, extra: usize) -> Result<()> {
+        let extra = c_int::try_from(extra).map_err(|_| Error::runtime("Lua error: stack overflow"))?;
         if unsafe { ffi::lua_checkstack(self.state, extra) } == 0 {
             return Err(Error::runtime("Lua error: stack overflow"));
         }

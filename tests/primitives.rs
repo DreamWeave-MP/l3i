@@ -368,3 +368,78 @@ fn options_lend_borrowed_strings_and_bytes_and_read_tables_and_eval_reads_chunk_
     assert_eq!((a, b.as_str()), (2.0, "two"));
     runtime.eval::<()>("local _ = 1").unwrap();
 }
+
+#[test]
+fn table_options_walk_in_place_and_type_errors_carry_a_path_or_an_expectation() {
+    use l3i::stack::{Type, ValueView};
+    let runtime = Runtime::new().unwrap();
+    // `dirs` is walked through the reader's frame with one element on the stack at a time; a
+    // wrong element names its path; a wrong field names the field.
+    let read = runtime
+        .bind_function("dreamweave.tests.dirs", |call: &Call, options: ValueView| {
+            Options::read(call, options, "scan", |o| {
+                let mut total = 0usize;
+                let names = o.required_table("dirs", |frame, dirs| {
+                    let mut names = String::new();
+                    dirs.for_each_array(frame, |_, index, value| {
+                        let text = value
+                            .read::<&str>()
+                            .map_err(|_| value.field_type_error(&format!("dirs[{index}]"), "a string"))?;
+                        names.push_str(text);
+                        total += 1;
+                        Ok(())
+                    })?;
+                    Ok(names)
+                })?;
+                let extra = o.optional_table("extra", |frame, table| table.len(frame))?;
+                Ok(format!("{names}:{total}:{}", extra.unwrap_or(0)))
+            })
+        })
+        .unwrap();
+    runtime.set_global("dirs", &read).unwrap();
+    assert_eq!(
+        runtime.eval::<String>("return dirs({ dirs = { 'a', 'b', 'c' }, extra = { 1, 2 } })").unwrap(),
+        "abc:3:2"
+    );
+    assert_eq!(runtime.eval::<String>("return dirs({ dirs = {} })").unwrap(), ":0:0");
+    let error = runtime.eval::<String>("return dirs({ dirs = { 'a', 7 } })").unwrap_err().to_string();
+    assert!(error.contains("scan.dirs: dirs[2]: expected a string, got number"), "{error}");
+    let error = runtime.eval::<String>("return dirs({ dirs = 'nope' })").unwrap_err().to_string();
+    assert!(error.contains("scan.dirs: Lua stack index") && error.contains("expected table, got string"), "{error}");
+    // A union expectation in words, and a stack check that takes a count.
+    let union = runtime
+        .bind_function("dreamweave.tests.union", |call: &Call, value: ValueView| -> l3i::Result<f64> {
+            if value.type_of() == Type::Number {
+                return Ok(1.0);
+            }
+            if value.type_of() == Type::String {
+                call.stack().check(3usize)?;
+                return Ok(2.0);
+            }
+            Err(value.type_error_expecting("an entry handle or an archive path"))
+        })
+        .unwrap();
+    runtime.set_global("union", &union).unwrap();
+    assert_eq!(runtime.eval::<f64>("return union(1) + union('x')").unwrap(), 3.0);
+    let error = runtime.eval::<f64>("return union(true)").unwrap_err().to_string();
+    assert!(error.contains("expected an entry handle or an archive path, got boolean"), "{error}");
+    // Walking a large array keeps the stack flat: far more elements than Luau's C stack limit.
+    let big = runtime
+        .bind_function("dreamweave.tests.big", |call: &Call, options: ValueView| {
+            Options::read(call, options, "big", |o| {
+                o.required_table("items", |frame, items| {
+                    let mut sum = 0i64;
+                    items.for_each_array(frame, |frame, _, value| {
+                        // The visitor may push temporaries; they go with the element.
+                        1i64.push_into(frame)?;
+                        sum += value.read::<i64>()?;
+                        Ok(())
+                    })?;
+                    Ok(sum)
+                })
+            })
+        })
+        .unwrap();
+    runtime.set_global("big", &big).unwrap();
+    assert_eq!(runtime.eval::<f64>("local t = table.create(20000, 1) return big({ items = t })").unwrap(), 20000.0);
+}
