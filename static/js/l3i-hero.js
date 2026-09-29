@@ -436,7 +436,6 @@ function start(hero) {
     new THREE.SphereGeometry(1, 128, 96),
     new THREE.ShaderMaterial({ vertexShader: MOON_VERTEX, fragmentShader: MOON_FRAGMENT, uniforms: moonUniforms }),
   );
-  moon.rotation.z = 0.25;
   moonGroup.add(moon);
 
   const haloUniforms = { uAccent: { value: accent }, uPulse: { value: 0 } };
@@ -510,6 +509,7 @@ function start(hero) {
   let width = 1;
   let height = 1;
   let narrow = false;
+  const moonOnScreen = { x: 0, y: 0, radius: 1 };
   function layout() {
     width = Math.max(hero.clientWidth, 1);
     height = Math.max(hero.clientHeight, 1);
@@ -543,6 +543,9 @@ function start(hero) {
       centreY = height * 0.5;
       radiusPx = Math.min(height * 0.34, 10.5 * rem);
     }
+    moonOnScreen.x = centreX;
+    moonOnScreen.y = centreY;
+    moonOnScreen.radius = radiusPx;
     const worldRadius = (radiusPx / height) * 2 * halfHeight;
     const nx = (centreX / width) * 2 - 1;
     const ny = 1 - (centreY / height) * 2;
@@ -564,6 +567,72 @@ function start(hero) {
     }, { passive: true });
   }
 
+  // The render loop, defined below; a drag wakes it.
+  let resume = () => {};
+
+  // Drag the moon: the disc follows the pointer about the screen's axes and keeps turning
+  // after release, the spin decaying, while the slow rotation of its own carries on beneath.
+  const dragRotation = new THREE.Quaternion();
+  const spinRotation = new THREE.Quaternion();
+  const tilt = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), 0.25);
+  const turn = new THREE.Quaternion();
+  const axisX = new THREE.Vector3(1, 0, 0);
+  const axisY = new THREE.Vector3(0, 1, 0);
+  const drag = { active: false, id: -1, lastX: 0, lastY: 0, vx: 0, vy: 0 };
+  let spin = 0;
+  function overMoon(event) {
+    const box = canvas.getBoundingClientRect();
+    const dx = event.clientX - box.left - moonOnScreen.x;
+    const dy = event.clientY - box.top - moonOnScreen.y;
+    return dx * dx + dy * dy <= moonOnScreen.radius * moonOnScreen.radius;
+  }
+  function rotateBy(dx, dy) {
+    const perPixel = 1.6 / moonOnScreen.radius;
+    turn.setFromAxisAngle(axisY, dx * perPixel);
+    dragRotation.premultiply(turn);
+    turn.setFromAxisAngle(axisX, dy * perPixel);
+    dragRotation.premultiply(turn);
+  }
+  canvas.addEventListener('pointermove', (event) => {
+    if (drag.active) return;
+    canvas.style.cursor = overMoon(event) ? 'grab' : '';
+  });
+  canvas.addEventListener('pointerdown', (event) => {
+    if (!event.isPrimary || !overMoon(event)) return;
+    drag.active = true;
+    drag.id = event.pointerId;
+    drag.lastX = event.clientX;
+    drag.lastY = event.clientY;
+    drag.vx = 0;
+    drag.vy = 0;
+    canvas.setPointerCapture(event.pointerId);
+    canvas.style.cursor = 'grabbing';
+    event.preventDefault();
+    resume();
+  });
+  canvas.addEventListener('pointermove', (event) => {
+    if (!drag.active || event.pointerId !== drag.id) return;
+    const dx = event.clientX - drag.lastX;
+    const dy = event.clientY - drag.lastY;
+    drag.lastX = event.clientX;
+    drag.lastY = event.clientY;
+    drag.vx = dx;
+    drag.vy = dy;
+    rotateBy(dx, dy);
+    if (reduced) frame(0);
+  });
+  function release(event) {
+    if (!drag.active || event.pointerId !== drag.id) return;
+    drag.active = false;
+    canvas.style.cursor = overMoon(event) ? 'grab' : '';
+    if (reduced) {
+      drag.vx = 0;
+      drag.vy = 0;
+    }
+  }
+  canvas.addEventListener('pointerup', release);
+  canvas.addEventListener('pointercancel', release);
+
   const clock = new THREE.Clock();
   let elapsed = 0;
   function frame(delta) {
@@ -577,7 +646,22 @@ function start(hero) {
     // the terminator wanders without the disc ever going dark.
     const angle = -1.05 + 0.4 * Math.sin(elapsed * 0.05);
     moonUniforms.uLight.value.set(Math.sin(angle) * 1.4, 0.55 + 0.2 * Math.cos(elapsed * 0.033), Math.cos(angle) + 0.15);
-    moon.rotation.y = elapsed * 0.035;
+    // Inertia after a drag decays over about a second and a half; the moon's own spin carries
+    // on underneath either way.
+    if (!drag.active && (drag.vx !== 0 || drag.vy !== 0)) {
+      const decay = Math.exp(-delta * 2.2);
+      drag.vx *= decay;
+      drag.vy *= decay;
+      if (Math.abs(drag.vx) + Math.abs(drag.vy) < 0.02) {
+        drag.vx = 0;
+        drag.vy = 0;
+      } else {
+        rotateBy(drag.vx * delta * 60, drag.vy * delta * 60);
+      }
+    }
+    spin += delta * 0.035;
+    spinRotation.setFromAxisAngle(axisY, spin);
+    moon.quaternion.copy(dragRotation).multiply(tilt).multiply(spinRotation);
     moonGroup.rotation.x = eased.y * 0.05;
     moonGroup.rotation.y = eased.x * 0.06;
     const pulse = 0.5 + 0.5 * Math.sin(elapsed * 0.7);
@@ -587,14 +671,14 @@ function start(hero) {
     renderer.render(scene, camera);
   }
 
+  let visible = true;
+  let running = false;
   if (reduced) {
     frame(0);
     frame(0);
+    resume = () => {};
     return;
   }
-
-  let visible = true;
-  let running = false;
   function tick() {
     if (!visible || document.hidden) {
       running = false;
@@ -603,7 +687,7 @@ function start(hero) {
     frame(Math.min(clock.getDelta(), 0.1));
     requestAnimationFrame(tick);
   }
-  function resume() {
+  resume = function () {
     if (running || !visible || document.hidden) return;
     running = true;
     clock.getDelta();

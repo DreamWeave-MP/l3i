@@ -84,12 +84,19 @@
   display: block
   width: 100%
   height: 100%
-  pointer-events: none
+  // The text sits above the canvas and keeps its own events; the canvas takes the rest, so the
+  // moon can be dragged. Vertical touches still scroll the page.
+  touch-action: pan-y
 
-// The text sits on the sky, so it carries its own contrast.
+// The text sits on the sky, so it carries its own contrast. The grid's box spans the whole
+// shell, so it hands the pointer through to the canvas where it holds nothing.
 .dw-hero__grid
   position: relative
   z-index: 1
+  pointer-events: none
+
+  > *
+    pointer-events: auto
 
 .dw-hero__title
   font-size: clamp(3rem, 6vw, 5.2rem)
