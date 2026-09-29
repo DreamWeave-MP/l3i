@@ -15,13 +15,13 @@ is a deliberate change that re-audits the hand-declared C API.
 
 ## Rust and dependencies
 
-- **Rust 1.88** or newer, declared as `rust-version` and checked in CI. Edition 2024.
+- **Rust 1.92** or newer, declared as `rust-version` and checked in CI. Edition 2024. The optional `dream-soft-render` dependency declares the same.
 - `unsafe` is used, at the FFI boundary and in the value-layout reads; every block states the invariant it relies on (see [Safety](@/docs/safety.md)).
 - Three optional features, `jit`, `analysis` and `soft-render`, all off by default (see [Building](@/docs/building.md)).
 
 | Dependency | Version | For |
 |---|---|---|
-| `dream-net` | `=1.0.0` | The `dream.net` bridge every plan carries |
+| `dream-net` | `=1.1.0` | The `dream.net` bridge every plan carries |
 | `dream-soft-render` | `=1.0.0`, optional (`soft-render`) | The `dream.soft_render` extension |
 | `cc` | `1`, `parallel` feature, build only | Compiling the Luau submodule and `csrc/` |
 | `criterion` | `0.8.2`, dev only | The benchmarks |
@@ -42,7 +42,7 @@ Every push to `main`, every pull request and every tag runs
 [StroggForge](https://github.com/DreamWeave-MP/StroggForge)'s library workflow, whose
 `setup-llvm` step gives every job that compiles a clang and lld whose LLVM major matches the
 active rustc: the tests on Windows, Linux and macOS; `rustfmt`; Clippy; a check against Rust
-1.88 (`msrv: auto`); and a dry run of the crates.io publish. A tag runs the Criterion hot paths
+1.92 (`msrv: auto`); and a dry run of the crates.io publish. A tag runs the Criterion hot paths
 and attaches them to its GitHub release as `BENCHMARKS.md`; publishing to crates.io is off until
 the first release.
 

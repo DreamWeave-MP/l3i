@@ -470,7 +470,7 @@ debug level 1, and runtime plans turn type information on so native code sees th
 types. The binder reads argument slots straight from Luau's 16-byte
 value layout; `csrc/extra.cpp` pins every offset at compile time and each runtime proves the
 mirror against the API once at creation, so a Luau bump that moves a byte fails at once. No network access at build time and no external Lua crate. Hosts may append
-compiler flags through `LUAU_CXXFLAGS`. Rust 1.88 or newer.
+compiler flags through `LUAU_CXXFLAGS`. Rust 1.92 or newer.
 
 The toolchain is fixed: **clang++ for the C++ side, lld, and cross-language thin LTO**
 (`-Clinker-plugin-lto -Clinker=clang -Clink-arg=-fuse-ld=lld`), with clang and rustc on the

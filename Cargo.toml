@@ -9,7 +9,7 @@ repository = "https://github.com/DreamWeave-MP/l3i"
 homepage = "https://DreamWeave-MP.github.io/l3i/"
 documentation = "https://DreamWeave-MP.github.io/l3i/docs/"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.92"
 keywords = ["luau", "lua", "bindings", "gamedev"]
 categories = ["api-bindings", "game-development"]
 links = "luau"
@@ -51,7 +51,8 @@ include = [
 
 [dependencies]
 # Networking is runtime infrastructure, not a feature: l3i owns the Luau bridge to dream-net.
-dream-net = "=1.0.0"
+# Pinned exactly: the transport's wire behaviour is part of what a runtime promises.
+dream-net = "=1.1.0"
 # The CPU rasterizer is a domain extension, behind the `soft-render` feature.
 dream-soft-render = { version = "=1.0.0", optional = true }
 

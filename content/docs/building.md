@@ -9,7 +9,7 @@ kind = "guide"
 
 l3i owns its Luau build. Luau is the `luau/` git submodule, pinned at release 0.740, the commit
 OpenMW pins; `build.rs` compiles it and the binder's C++ additions with `cc`, in parallel, from
-the checkout alone. There is no network access at build time and no external Lua crate. Rust 1.88
+the checkout alone. There is no network access at build time and no external Lua crate. Rust 1.92
 or newer, edition 2024.
 
 ```sh

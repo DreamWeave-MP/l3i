@@ -14,7 +14,7 @@ kind = "tutorial"
 l3i = { version = "1", features = ["jit"] }
 ```
 
-The crate's name in code is `l3i`. It needs Rust 1.88 or newer and edition 2024. Three features
+The crate's name in code is `l3i`. It needs Rust 1.92 or newer and edition 2024. Three features
 are optional:
 
 | Feature | Adds |
