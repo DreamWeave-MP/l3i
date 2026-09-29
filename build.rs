@@ -220,9 +220,15 @@ fn toolchain_policy(base: &mut cc::Build) {
     println!("cargo:rerun-if-env-changed=DOCS_RS");
     println!("cargo:rerun-if-env-changed=CXX");
     println!("cargo:rerun-if-env-changed=CARGO_ENCODED_RUSTFLAGS");
+    println!("cargo:rerun-if-env-changed=CARGO_CFG_TARGET_OS");
     let compiler = base.get_compiler();
     let rustflags = env::var("CARGO_ENCODED_RUSTFLAGS").unwrap_or_default().replace('\u{1f}', " ");
-    let plugin_lto = rustflags.contains("linker-plugin-lto");
+    // Apple targets cannot take -Clinker-plugin-lto: rustc hands the linker GNU `-plugin-opt`
+    // arguments that ld64.lld rejects. There the policy is clang, lld, and matching LLVM majors,
+    // without the cross-language half (vetted in dream-ini's CI); the C++ side is built as plain
+    // objects so the link never depends on bitcode support.
+    let apple = env::var("CARGO_CFG_TARGET_OS").is_ok_and(|os| os == "macos" || os == "ios");
+    let plugin_lto = apple || rustflags.contains("linker-plugin-lto");
     // The linker must consume LLVM bitcode: clang driving lld (GNU and Apple targets), or
     // lld-link itself (MSVC targets, where clang-cl compiles and rustc links with lld-link).
     let linker = rustflag_value(&rustflags, "linker")
@@ -253,6 +259,7 @@ fn toolchain_policy(base: &mut cc::Build) {
     };
 
     match problem {
+        None if apple => {}
         None => {
             // Bitcode objects, so the linker's LTO sees Luau and the Rust thunks as one module.
             base.flag("-flto=thin");
@@ -270,8 +277,8 @@ fn toolchain_policy(base: &mut cc::Build) {
         Some(problem) => panic!(
             "l3i builds only with the verified toolchain ({problem}).\n\
              Required: clang++ as the C++ compiler (CXX=clang++), lld, and RUSTFLAGS containing\n\
-             `-Clinker-plugin-lto -Clinker=clang -Clink-arg=-fuse-ld=lld`, with clang and rustc on the\n\
-             same LLVM major. This repository's .cargo/config.toml sets them; a dependent crate adds the\n\
+             `-Clinker-plugin-lto -Clinker=clang -Clink-arg=-fuse-ld=lld` (without the plugin flag on\n\
+             Apple targets, where ld64.lld rejects it), with clang and rustc on the same LLVM major. This repository's .cargo/config.toml sets them; a dependent crate adds the\n\
              same lines to its own .cargo/config.toml. Set L3I_UNVERIFIED_TOOLCHAIN=1 to build anyway\n\
              with a warning. TOOLCHAIN.md has the measurements behind this policy."
         ),

@@ -15,9 +15,14 @@ else; `L3I_UNVERIFIED_TOOLCHAIN=1` turns the refusal into a warning. This page r
 
 Two exemptions: `L3I_UNVERIFIED_TOOLCHAIN=1` turns the refusal into a warning, and docs.rs (which
 sets `DOCS_RS`) is exempt automatically, since it only renders documentation and cannot be handed
-a linker configuration. Linux is the measured configuration below. The macOS entries (Homebrew
-or release LLVM, `clang` driving `ld64.lld`) and the Windows entries follow the same shape and
-are what CI runs; they were not part of the measurement.
+a linker configuration. Linux is the measured configuration below. The Windows entries follow
+the same shape and are what CI runs; they were not part of the measurement. Apple targets are
+the vetted exception: `-Clinker-plugin-lto` is left out because rustc passes that flag's GNU
+`-plugin-opt` arguments to the linker and `ld64.lld` rejects them (found in dream-ini's CI).
+There `clang` still drives `ld64.lld` and rustc's own release thin LTO covers the Rust side, but
+the cross-language inlining measured below is forfeited, and `build.rs` builds Luau as plain
+objects rather than bitcode; macOS pays a few percent on the binder's hot paths, which is the
+price of keeping the platform.
 
 A crate that depends on l3i copies the `[env]` and `rustflags` lines into its own
 `.cargo/config.toml`: Cargo does not inherit a dependency's config. Fedora: `dnf install clang
