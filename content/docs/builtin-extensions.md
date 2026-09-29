@@ -468,14 +468,17 @@ end
 |---|---|
 | `inflate(source, { format?, maxSize? }?)` | DEFLATE: `zlib` (default), `raw` or `gzip`; the gzip trailer's CRC and size are checked |
 | `deflate(source, { format?, level? }?)` | Levels 0 to 10, default 6 |
-| `lz4Decompress(source, decompressedSize)`, `lz4Compress(source)` | LZ4 blocks; the block format carries no size, so the caller supplies it |
+| `lz4Decompress(source, decompressedSize, { maxSize? }?)`, `lz4Compress(source)` | LZ4 blocks; the block format carries no size, so the caller supplies it, and `maxSize` caps what the caller may ask for |
 | `lz4FrameDecompress(source, { maxSize? }?)`, `lz4FrameCompress(source)` | LZ4 frames |
 | `zstdDecompress(source, { maxSize? }?)` | Zstandard, decoding only (pure Rust has no encoder) |
 | `lzmaDecompress(source, { format?, maxSize? }?)` | `.lzma` (default) or `xz`, decoding only |
 
-Every decoder takes `maxSize`, the most it will produce (default 1 GiB), so a hostile stream
-cannot grow memory without bound; exceeding it is an error, never a truncated result. All of it is
-pure Rust: `miniz_oxide`, `lz4_flex`, `ruzstd`, `lzma-rs`.
+Every decoder takes `maxSize`, the most it will produce (default 1 GiB), and enforces it while
+producing, never only afterwards: DEFLATE and zstd through their libraries' limits, LZMA and XZ
+through a sink that refuses the byte that would exceed the cap, LZ4 blocks by refusing a
+`decompressedSize` past it before anything is allocated. That matters because the decoder's
+heap is Rust's, outside Luau's memory limit. Exceeding the cap is an error, never a truncated
+result. All of it is pure Rust: `miniz_oxide`, `lz4_flex`, `ruzstd`, `lzma-rs`.
 
 ### Digests (`bytes-digests`)
 

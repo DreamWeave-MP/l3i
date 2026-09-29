@@ -1,9 +1,11 @@
 //! Compression codecs (feature `bytes-codecs`): DEFLATE in zlib, raw and gzip framing, LZ4
 //! blocks and frames, and zstd and LZMA/XZ decoding, all pure Rust.
 //!
-//! Decoders take an optional `maxSize`, the most they will produce (default 1 GiB), so a
-//! hostile stream cannot grow memory without bound; a stream that exceeds it is an error, not
-//! a truncated result. Encoders take a `level` where the format has one.
+//! Decoders take an optional `maxSize`, the most they will produce (default 1 GiB), and every
+//! one of them enforces it while producing, never only after: a hostile stream cannot grow the
+//! Rust heap past the cap, which matters because that heap sits outside Luau's memory limit. A
+//! stream that exceeds it is an error, not a truncated result. Encoders take a `level` where
+//! the format has one.
 
 use std::io::Read;
 
@@ -75,6 +77,27 @@ fn max_size_option(call: &Call<'_>, options: Option<ValueView<'_>>, what: &str) 
 
 fn too_large(what: &str, max: usize) -> Error {
     Error::runtime(format!("{what}: output exceeds maxSize ({max} bytes)"))
+}
+
+/// A `Write` sink that refuses to grow past its cap, for decoders that write into a `Write`:
+/// the check happens on every write, so the vector never exceeds the cap even transiently.
+struct CappedVec {
+    bytes: Vec<u8>,
+    max: usize,
+}
+
+impl std::io::Write for CappedVec {
+    fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
+        if self.bytes.len() + data.len() > self.max {
+            return Err(std::io::Error::other(format!("output exceeds maxSize ({} bytes)", self.max)));
+        }
+        self.bytes.extend_from_slice(data);
+        Ok(data.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
 }
 
 /// The DEFLATE payload inside a gzip member, and its trailer.
@@ -173,9 +196,20 @@ fn deflate(call: &Call<'_>, source: BytesView<'_>, options: Option<ValueView<'_>
     Ok(NewBuffer(out))
 }
 
-fn lz4_decompress(source: BytesView<'_>, size: Exact<i64>) -> Result<NewBuffer> {
+fn lz4_decompress(
+    call: &Call<'_>,
+    source: BytesView<'_>,
+    size: Exact<i64>,
+    options: Option<ValueView<'_>>,
+) -> Result<NewBuffer> {
     const WHAT: &str = "bytes.lz4Decompress";
+    let max = max_size_option(call, options, WHAT)?;
     let size = usize::try_from(size.0).map_err(|_| Error::runtime(format!("{WHAT}: negative decompressedSize")))?;
+    // The block format carries no size, so the caller's word is the allocation: cap it before
+    // a single byte is reserved.
+    if size > max {
+        return Err(Error::runtime(format!("{WHAT}: decompressedSize {size} exceeds maxSize ({max} bytes)")));
+    }
     // SAFETY: as `inflate`.
     let data = unsafe { bytes(&source) };
     lz4_flex::block::decompress(data, size).map(NewBuffer).map_err(|error| Error::runtime(format!("{WHAT}: {error}")))
@@ -248,7 +282,9 @@ fn lzma_decompress(call: &Call<'_>, source: BytesView<'_>, options: Option<Value
     };
     // SAFETY: as `inflate`.
     let mut data = unsafe { bytes(&source) };
-    let mut out = Vec::new();
+    // The sink refuses every byte past the cap, so the heap never holds more than `max` even
+    // mid-stream; `memlimit` bounds the decoder's own dictionary as well.
+    let mut out = CappedVec { bytes: Vec::new(), max };
     let options = lzma_rs::decompress::Options {
         memlimit: Some(max),
         unpacked_size: lzma_rs::decompress::UnpackedSize::ReadFromHeader,
@@ -259,11 +295,14 @@ fn lzma_decompress(call: &Call<'_>, source: BytesView<'_>, options: Option<Value
     } else {
         lzma_rs::lzma_decompress_with_options(&mut data, &mut out, &options)
     };
-    result.map_err(|error| Error::runtime(format!("{WHAT}: {error}")))?;
-    if out.len() > max {
-        return Err(too_large(WHAT, max));
-    }
-    Ok(NewBuffer(out))
+    result.map_err(|error| {
+        if error.to_string().contains("exceeds maxSize") {
+            too_large(WHAT, max)
+        } else {
+            Error::runtime(format!("{WHAT}: {error}"))
+        }
+    })?;
+    Ok(NewBuffer(out.bytes))
 }
 
 pub(crate) fn describe(module: &mut ModuleDecl) {
@@ -275,8 +314,8 @@ pub(crate) fn describe(module: &mut ModuleDecl) {
         .signature("(source: buffer | string, options: { format: string?, level: number? }?) -> buffer")
         .doc("DEFLATE encoding: format zlib (default), raw or gzip; level 0 to 10, default 6.")
         .function("lz4Decompress", lz4_decompress)
-        .signature("(source: buffer | string, decompressedSize: number) -> buffer")
-        .doc("An LZ4 block; the format does not record its size, so the caller supplies it.")
+        .signature("(source: buffer | string, decompressedSize: number, options: { maxSize: number? }?) -> buffer")
+        .doc("An LZ4 block; the format does not record its size, so the caller supplies it, capped by maxSize.")
         .function("lz4Compress", lz4_compress)
         .signature("(source: buffer | string) -> buffer")
         .doc("An LZ4 block, without a size prefix.")

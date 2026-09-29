@@ -157,6 +157,10 @@ fn codecs_round_trip_and_decode_foreign_fixtures() {
              local ok4, err4 = pcall(bytes.inflate, big, { format = 'bzip2' }) assert(not ok4 and err4:find('not zlib, raw or gzip'), err4) \
              local ok5, err5 = pcall(bytes.deflate, big, { level = 11 }) assert(not ok5 and err5:find('outside 0..=10'), err5) \
              local ok6, err6 = pcall(bytes.lz4Decompress, block, 10) assert(not ok6 and err6:find('bytes.lz4Decompress'), err6) \
+             -- Caps hold while producing: a block size past maxSize allocates nothing, an LZMA stream stops at the byte that would exceed it. \
+             local ok9, err9 = pcall(bytes.lz4Decompress, block, #big, { maxSize = 100 }) assert(not ok9 and err9:find('decompressedSize %d+ exceeds maxSize'), err9) \
+             local ok10, err10 = pcall(bytes.lzmaDecompress, hex('5d00008000ffffffffffffffff00341949ee8de9185b6a698b936424a433162674d2afbdc1f189fffff8116000'), { maxSize = 100 }) assert(not ok10 and err10:find('bytes.lzmaDecompress: output exceeds maxSize'), err10) \
+             local ok11, err11 = pcall(bytes.lzmaDecompress, hex('fd377a585a0000016922de360200210116000000742fe5a3e0008f001a5d00341949ee8de9185b6a698b936424a433162674d2afbdb10e200000000084c8873b00013290010000000e325de33e300d8b020000000001595a'), { format = 'xz', maxSize = 100 }) assert(not ok11 and err11:find('bytes.lzmaDecompress: output exceeds maxSize'), err11) \
              local ok7, err7 = pcall(bytes.zstdDecompress, 'garbage') assert(not ok7 and err7:find('bytes.zstdDecompress'), err7) \
              local ok8, err8 = pcall(bytes.deflate, big, { format = 'zlib', bogus = 1 }) assert(not ok8 and err8:find('bogus'), err8)",
         )
