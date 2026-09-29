@@ -370,3 +370,13 @@
     height: 1.6rem
     transform: translateX(-50%)
     background: linear-gradient(180deg, var(--dw-accent-line), var(--dw-accent))
+
+// The feature grid: four to a row, wider, then two, then one.
+.dw-features > ul
+  grid-template-columns: repeat(4, minmax(0, 1fr))
+
+  @media (max-width: 1000px)
+    grid-template-columns: repeat(2, minmax(0, 1fr))
+
+  @media (max-width: 560px)
+    grid-template-columns: minmax(0, 1fr)
