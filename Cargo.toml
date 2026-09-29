@@ -43,7 +43,6 @@ include = [
     "/README.md",
     "/BENCHMARKS.md",
     "/TOOLCHAIN.md",
-    "/QUESTIONABLE.md",
     "/LICENSE-MIT",
     "/LICENSE-APACHE",
     "/rustfmt.toml",
@@ -60,8 +59,8 @@ dream-soft-render = { version = "=1.0.0", optional = true }
 memchr = { version = "2", optional = true }
 # `bytes-codecs`: pure-Rust inflate/deflate, LZ4, zstd and LZMA/XZ decoding; the gzip framing's
 # CRC comes from crc32fast, which the digests share.
-miniz_oxide = { version = "0.8", optional = true }
-lz4_flex = { version = "0.11", optional = true }
+miniz_oxide = { version = "0.9", optional = true }
+lz4_flex = { version = "0.14", optional = true }
 ruzstd = { version = "0.9", optional = true }
 lzma-rs = { version = "0.3", optional = true }
 crc32fast = { version = "1", optional = true }
@@ -69,9 +68,9 @@ crc32fast = { version = "1", optional = true }
 # intrinsics compiled by cc, not a library).
 adler2 = { version = "2", optional = true }
 xxhash-rust = { version = "0.8", optional = true, features = ["xxh32", "xxh64", "xxh3"] }
-md-5 = { version = "0.10", optional = true }
-sha1 = { version = "0.10", optional = true }
-sha2 = { version = "0.10", optional = true }
+md-5 = { version = "0.11", optional = true }
+sha1 = { version = "0.11", optional = true }
+sha2 = { version = "0.11", optional = true }
 blake3 = { version = "1", optional = true }
 # `bytes-text`: every WHATWG encoding, for the codepages old formats were written in.
 encoding_rs = { version = "0.8", optional = true }

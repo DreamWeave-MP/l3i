@@ -17,8 +17,8 @@
 //! The closure is moved into a Lua-owned userdata (upvalue 1 of the C closure) and dropped by
 //! the collector, so captures must not touch the Lua API in `Drop` and must be `'static`.
 //! Bound closures are `Fn`, not `FnMut`: a binding can re-enter itself through Lua, so state
-//! lives in `Cell`/`RefCell` captures instead. (The C++ binder allowed mutable callables; see
-//! QUESTIONABLE.md.)
+//! lives in `Cell`/`RefCell` captures instead. (The C++ binder allowed mutable callables; the
+//! safety model on the site lists this among the deliberate divergences.)
 
 mod call;
 mod diagnostics;
