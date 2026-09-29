@@ -114,6 +114,51 @@ impl<'f> Options<'_, 'f> {
     }
 
     /// An optional field with a default.
+    /// Reads the required option `key` through `body`, which sees the value's slot directly:
+    /// borrowed conversions (`view.read::<&str>()`, `&[u8]`, `BufferView`) work here, where the
+    /// by-value readers cannot name their lifetime.
+    pub fn with_required<R>(&mut self, key: &str, body: impl FnOnce(ValueView<'_>) -> Result<R>) -> Result<R> {
+        self.take(key);
+        if !self.keys.contains(key) {
+            return Err(Error::runtime(format!("{}: missing required option '{key}'", self.context)));
+        }
+        let step = self.frame.frame();
+        let value = self.table.raw_get(&step, key)?;
+        body(value).map_err(|cause| self.field_error(key, &cause))
+    }
+
+    /// [`Self::with_required`] for an optional key: `None` when absent or nil.
+    pub fn with_optional<R>(&mut self, key: &str, body: impl FnOnce(ValueView<'_>) -> Result<R>) -> Result<Option<R>> {
+        self.take(key);
+        if !self.keys.contains(key) {
+            return Ok(None);
+        }
+        let step = self.frame.frame();
+        let value = self.table.raw_get(&step, key)?;
+        if value.type_of() == Type::Nil {
+            return Ok(None);
+        }
+        body(value).map(Some).map_err(|cause| self.field_error(key, &cause))
+    }
+
+    /// The required string option `key`, borrowed for `body`: no copy.
+    pub fn required_str<R>(&mut self, key: &str, body: impl FnOnce(&str) -> Result<R>) -> Result<R> {
+        self.with_required(key, |value| body(value.read::<&str>()?))
+    }
+
+    pub fn optional_str<R>(&mut self, key: &str, body: impl FnOnce(&str) -> Result<R>) -> Result<Option<R>> {
+        self.with_optional(key, |value| body(value.read::<&str>()?))
+    }
+
+    /// The required string option `key` as bytes (any Lua string, UTF-8 or not), borrowed.
+    pub fn required_bytes<R>(&mut self, key: &str, body: impl FnOnce(&[u8]) -> Result<R>) -> Result<R> {
+        self.with_required(key, |value| body(value.read::<&[u8]>()?))
+    }
+
+    pub fn optional_bytes<R>(&mut self, key: &str, body: impl FnOnce(&[u8]) -> Result<R>) -> Result<Option<R>> {
+        self.with_optional(key, |value| body(value.read::<&[u8]>()?))
+    }
+
     pub fn or<T: for<'v> FromView<'v>>(&mut self, key: &str, default: T) -> Result<T> {
         Ok(self.optional(key)?.unwrap_or(default))
     }

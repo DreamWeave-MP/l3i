@@ -342,3 +342,29 @@ fn packed_scalars_cross_as_integers_with_a_kind_check() {
     Packed(Handle { id: 1, flags: 0 }).write_to(&mut bytes).unwrap();
     assert_eq!(Packed::<Handle>::read_from(&bytes).unwrap().0.id, 1);
 }
+
+#[test]
+fn options_lend_borrowed_strings_and_bytes_and_read_tables_and_eval_reads_chunk_results() {
+    use l3i::stack::ValueView;
+    let runtime = Runtime::new().unwrap();
+    let opts = runtime
+        .bind_function("dreamweave.tests.opts", |call: &Call, options: ValueView| {
+            Options::read(call, options, "opts", |o| {
+                let name_len = o.required_str("name", |s| Ok(s.len()))?;
+                let raw = o.optional_bytes("raw", |b| Ok(b.to_vec()))?.unwrap_or_default();
+                let extra: Option<l3i::value::Table> = o.optional("extra")?;
+                let owner = o.optional_str("owner", |s| Ok(s.to_owned()))?;
+                Ok(name_len as i64 + raw.len() as i64 + i64::from(extra.is_some()) + i64::from(owner.is_some()))
+            })
+        })
+        .unwrap();
+    runtime.set_global("opts", &opts).unwrap();
+    assert_eq!(runtime.eval::<f64>("return opts({ name = 'abc', raw = '\\0\\1', extra = {} })").unwrap(), 6.0);
+    let error = runtime.eval::<f64>("return opts({ name = 7 })").unwrap_err().to_string();
+    assert!(error.contains("opts.name"), "{error}");
+    let error = runtime.eval::<f64>("return opts({ name = 'x', extra = 5 })").unwrap_err().to_string();
+    assert!(error.contains("opts.extra") && error.contains("table"), "{error}");
+    let (a, b): (f64, String) = runtime.eval("return 1 + 1, 'two'").unwrap();
+    assert_eq!((a, b.as_str()), (2.0, "two"));
+    runtime.eval::<()>("local _ = 1").unwrap();
+}

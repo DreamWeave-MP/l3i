@@ -191,7 +191,9 @@ impl<'v> ValueView<'v> {
     }
 
     /// `Lua stack index N: expected <type>, got <type>`, the C++ `luaValueTypeError` wording.
-    pub(crate) fn type_error(&self, expected: Type) -> Error {
+    /// The type error a conversion raises for this slot ("bad argument"-style, naming the
+    /// expected type and what was found), for extensions that convert by hand.
+    pub fn type_error(&self, expected: Type) -> Error {
         Error::runtime(format!(
             "Lua stack index {}: expected {}, got {}",
             self.index,

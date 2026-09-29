@@ -611,6 +611,17 @@ impl Runtime {
         })
     }
 
+    /// Compiles and runs `source` on the main thread and reads what the chunk returns:
+    /// `runtime.eval::<f64>("return 1 + 1")`, a tuple for several results, `()` for none.
+    pub fn eval<R: crate::call::CallResults>(&self, source: &str) -> Result<R> {
+        let options = self.compile_options();
+        let stack = self.stack();
+        stack.with_frame(|frame| {
+            let chunk = self.load(frame, "=eval", source, &options)?;
+            chunk.as_function()?.invoke::<R, ()>(frame, ())
+        })
+    }
+
     /// Compiles and runs `source` on the main thread, discarding results.
     pub fn exec(&self, source: &str) -> Result<()> {
         let options = self.compile_options();

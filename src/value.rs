@@ -207,6 +207,38 @@ impl Value {
     }
 }
 
+impl<'v> crate::convert::FromView<'v> for Table {
+    const EXPECTED: &'static str = "table";
+
+    /// Pins the table in the slot (a registry reference); any other type is a type error.
+    fn from_view(view: crate::stack::ValueView<'v>) -> crate::error::Result<Self> {
+        if !view.is_table() {
+            return Err(view.type_error(crate::stack::Type::Table));
+        }
+        Table::from_value(Value::store(view)?)
+    }
+
+    fn matches(view: crate::stack::ValueView<'v>) -> bool {
+        view.is_table()
+    }
+}
+
+impl<'v> crate::convert::FromView<'v> for Function {
+    const EXPECTED: &'static str = "function";
+
+    /// Pins the function in the slot; any other type is a type error.
+    fn from_view(view: crate::stack::ValueView<'v>) -> crate::error::Result<Self> {
+        if view.type_of() != crate::stack::Type::Function {
+            return Err(view.type_error(crate::stack::Type::Function));
+        }
+        Function::from_value(Value::store(view)?)
+    }
+
+    fn matches(view: crate::stack::ValueView<'v>) -> bool {
+        view.type_of() == crate::stack::Type::Function
+    }
+}
+
 impl Clone for Value {
     /// An independent pin of the same value.
     fn clone(&self) -> Value {

@@ -27,7 +27,7 @@ impl<'p> Frame<'p> {
     pub(super) fn open(state: *mut ffi::lua_State, host_level: bool, parent_child_open: &'p Cell<bool>) -> Self {
         assert!(
             !parent_child_open.replace(true),
-            "a frame is already open on this scope; open nested frames from the innermost frame"
+            "a frame is already open on this scope; open nested frames from the innermost frame (inside a bound function, read the arguments before opening a frame, or open the frame from the call itself)"
         );
         // SAFETY: state is live for the parent's lifetime.
         let floor = unsafe { ffi::lua_gettop(state) };
@@ -113,6 +113,16 @@ impl<'p> Frame<'p> {
     ///
     /// # Panics
     /// If a nested frame opened from this one is still alive.
+    /// Ensures `extra` free slots on the stack (`lua_checkstack`), for bulk pushes into this
+    /// frame without a per-element frame.
+    pub fn check(&self, extra: c_int) -> Result<()> {
+        // SAFETY: the frame's state is live for its lifetime.
+        if unsafe { ffi::lua_checkstack(self.state, extra) } == 0 {
+            return Err(Error::runtime("Lua error: stack overflow"));
+        }
+        Ok(())
+    }
+
     pub fn frame(&self) -> Frame<'_> {
         Frame::open(self.state, self.host_level, &self.child_open)
     }
