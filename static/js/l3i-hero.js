@@ -125,7 +125,7 @@ const SKY_FRAGMENT = /* glsl */ `
     float stars = 0.0;
     for (int layer = 0; layer < 3; layer++) {
       float scale = 90.0 + 70.0 * float(layer);
-      vec2 g = (p + uDrift * (0.6 + 0.3 * float(layer))) * scale + float(layer) * 31.7;
+      vec2 g = (p + uDrift * (0.12 + 0.06 * float(layer))) * scale + float(layer) * 31.7;
       vec2 cell = floor(g);
       vec2 f = fract(g) - 0.5;
       float h = hash21(cell + float(layer) * 7.3);
@@ -568,9 +568,9 @@ function start(hero) {
   let elapsed = 0;
   function frame(delta) {
     elapsed += delta;
-    eased.lerp(pointer, 1 - Math.exp(-delta * 3));
+    eased.lerp(pointer, 1 - Math.exp(-delta * 1.4));
     sky.material.uniforms.uTime.value = elapsed;
-    sky.material.uniforms.uDrift.value.set(eased.x * 0.03, -eased.y * 0.02);
+    sky.material.uniforms.uDrift.value.set(eased.x * 0.02, -eased.y * 0.014);
     dustUniforms.uTime.value = elapsed;
 
     // The sun swings across the moon over about two minutes, always from the camera's side, so
