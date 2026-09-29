@@ -15,7 +15,7 @@ use crate::bind::{ArgView, Call, Return};
 use crate::convert::Push;
 use crate::error::Result;
 use crate::raw::{ffi, trampoline};
-use crate::stack::{Scope, Type, ValueView};
+use crate::stack::{Scope, ValueView};
 use crate::userdata::Userdata;
 use crate::userdata::iterator::Cursor;
 use crate::userdata::metatable::MetatableBuilder;
@@ -142,25 +142,31 @@ impl<T: SequenceItem> Return for IterStep<T> {
 }
 
 /// `__index` for sequences: an integer key reads the element (nil past the end); anything else
-/// goes to the methods table kept as upvalue 1.
+/// goes to the methods table kept as upvalue 1. The receiver and the key are read straight from
+/// Luau's value layout: a tagged receiver is one tag-to-type compare, the key one tag test.
 unsafe extern "C-unwind" fn sequence_index<S: SequenceSource>(state: *mut ffi::lua_State) -> c_int {
     unsafe {
         trampoline::enter(state, || {
-            let key = ValueView::resolve(state, 2);
-            if key.type_of() == Type::Number || key.type_of() == Type::Integer {
-                let call = Call::from_raw(state);
-                let sequence = crate::userdata::check_receiver::<Sequence<S>>(call.arg(1))?;
+            let call = Call::from_raw(state);
+            if let (Some(receiver), Some(key)) = (call.raw_arg(1), call.raw_arg(2))
+                && (key.tag() == ffi::LUA_TINTEGER || key.tag() == ffi::LUA_TNUMBER)
+            {
+                let sequence: &Sequence<S> = match tagged_payload::<Sequence<S>>(state, receiver) {
+                    Some(sequence) => sequence,
+                    None => crate::userdata::check_receiver::<Sequence<S>>(call.arg(1))?,
+                };
                 // An exact integer key selects an element; a fractional or out-of-range number is
                 // no element (nil), as in a table, never a rounded neighbour.
-                let index = key.read::<crate::convert::Exact<i64>>().ok().map(|index| index.0);
+                let index =
+                    <crate::convert::Exact<i64> as crate::convert::FromView<'_>>::from_raw_arg(key, || call.arg(2))
+                        .ok()
+                        .map(|index| index.0);
                 match index
                     .and_then(|i| i.checked_sub(1))
                     .and_then(|i| usize::try_from(i).ok())
                     .and_then(|i| sequence.0.get(i))
                 {
-                    Some(item) => {
-                        item.push_item(&call)?;
-                    }
+                    Some(item) => item.push_item(&call)?,
                     None => ffi::lua_pushnil(state),
                 }
                 return Ok(1);
@@ -170,6 +176,31 @@ unsafe extern "C-unwind" fn sequence_index<S: SequenceSource>(state: *mut ffi::l
             Ok(1)
         })
     }
+}
+
+/// The payload of `raw` when it is a userdata carrying the tag this VM gave `T`: no API call,
+/// one array read and a `TypeId` compare. `None` for anything else (an untagged `T` included;
+/// the caller falls back to the full receiver check).
+///
+/// # Safety
+/// `raw` is a live slot of `state`.
+unsafe fn tagged_payload<'a, T: Userdata>(state: *mut ffi::lua_State, raw: &crate::convert::RawValue) -> Option<&'a T> {
+    if raw.tag() != ffi::LUA_TUSERDATA {
+        return None;
+    }
+    // SAFETY: the tag says userdata.
+    let (tag, data) = unsafe { raw.userdata() };
+    if tag == 0 {
+        return None;
+    }
+    // SAFETY: a live state (forwarded contract).
+    let shared = unsafe { crate::runtime::shared_for(state) }?;
+    if shared.type_of_tag(c_int::from(tag)) != Some(std::any::TypeId::of::<T>()) {
+        return None;
+    }
+    // SAFETY: a tagged userdata of this VM's tag for `T` holds a `T` at its data pointer, for
+    // as long as the slot keeps it alive.
+    Some(unsafe { &*data.cast::<T>() })
 }
 
 /// Configures `ty` (whose `__type` is `S::NAME`) as a sequence: `toTable`, `__len`, `__iter`,

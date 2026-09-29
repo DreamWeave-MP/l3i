@@ -159,6 +159,19 @@ impl DirectField<Planned> for PlannedValue {
     }
 }
 
+struct Nums(Vec<i64>);
+
+impl l3i::sequence::SequenceSource for Nums {
+    const NAME: &'static str = "dream.bench.Nums";
+    type Item = Integer;
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+    fn get(&self, index: usize) -> Option<Self::Item> {
+        self.0.get(index).map(|n| Integer(*n))
+    }
+}
+
 struct PlannedExtension;
 
 impl Extension for PlannedExtension {
@@ -173,8 +186,14 @@ impl Extension for PlannedExtension {
         planned.method("addTwo", |p: &Planned, a: f64, b: f64| p.value.get() + a + b).untyped();
         planned.getter("value", |p: &Planned| p.value.get()).untyped();
         planned.field::<PlannedValue>("field").untyped();
+        d.sequence::<Nums>("dream.bench.Nums").tag(TagPolicy::Preferred).item_type("integer");
         d.module("@dream/bench")
             .function("new", |v: f64| Owned(Planned { value: Cell::new(v) }))
+            .untyped()
+            .function("nums", |call: &Call, n: f64| {
+                l3i::sequence::Sequence::push(call, Nums((0..n as i64).collect())).map(l3i::value::Value::store)?
+            })
+            .untyped()
             .untyped()
             .function("zero", || 7.0f64)
             .untyped()
@@ -257,14 +276,14 @@ fn runtime() -> Runtime {
         .unwrap();
     runtime.set_global("color", &Integer(Color::WHITE.pack().bits().unwrap())).unwrap();
     runtime.set_global("clip", &Integer(ClipRect::ALL.pack().bits().unwrap())).unwrap();
-    runtime.exec("planned = bench.new(7) hoisted = vector.create(1, 2, 3)").unwrap();
+    runtime.exec("planned = bench.new(7) hoisted = vector.create(1, 2, 3) seq = bench.nums(16)").unwrap();
     runtime
 }
 
 fn looped(runtime: &Runtime, body: &str) -> Function {
     runtime
         .load_function(&format!(
-            "return function() local bench, planned, hoisted, color, clip, raw_add, direct = bench, planned, hoisted, color, clip, raw_add, direct \
+            "return function() local bench, planned, hoisted, color, clip, raw_add, direct, seq = bench, planned, hoisted, color, clip, raw_add, direct, seq \
              local s = 0 for i = 1, {CALLS} do {body} end return s end"
         ))
         .unwrap()
@@ -305,6 +324,8 @@ fn main() {
         ("planned method (f64, f64) -> f64", "s = planned:addTwo(i, 1)"),
         ("planned getter", "s = planned.value"),
         ("planned direct field", "s = planned.field"),
+        ("planned sequence [i]", "s = seq[7]"),
+        ("planned sequence #", "s = #seq"),
     ];
     // `L3I_SCENARIO=<name>` runs one scenario for `L3I_ROUNDS` rounds (a profiling workload).
     let only = std::env::var("L3I_SCENARIO").ok();
