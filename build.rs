@@ -239,8 +239,10 @@ fn toolchain_policy(base: &mut cc::Build) {
     let linker_is_lld_link = linker == "lld-link";
     let uses_lld = linker_is_lld_link || rustflags.contains("-fuse-ld=lld");
 
-    let problem = if !compiler.is_like_clang() {
-        Some(format!("the C++ compiler is `{}`, not clang", compiler.path().display()))
+    // clang-cl is clang with the MSVC driver, which is what the MSVC targets use to compile.
+    let compiler_is_clang = compiler.is_like_clang() || compiler.is_like_clang_cl();
+    let problem = if !compiler_is_clang {
+        Some(format!("the C++ compiler is `{}`, not clang or clang-cl", compiler.path().display()))
     } else if !plugin_lto {
         Some("RUSTFLAGS lacks -Clinker-plugin-lto".to_string())
     } else if !(linker_is_clang || linker_is_lld_link) {
