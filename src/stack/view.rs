@@ -211,4 +211,9 @@ impl<'v> ValueView<'v> {
     pub fn field_type_error(&self, context: &str, expected: &str) -> Error {
         Error::runtime(format!("{context}: expected {expected}, got {}", self.type_of().name()))
     }
+
+    /// [`Self::field_type_error`] with Luau's own name for the expected type, for uniform wording.
+    pub fn field_type_error_of(&self, context: &str, expected: Type) -> Error {
+        self.field_type_error(context, expected.name())
+    }
 }

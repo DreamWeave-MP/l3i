@@ -221,9 +221,10 @@ closes.
 - `Frame::check(n)` reserves stack for a bulk push (`n` is a `usize` count); the type-error
   constructors on `ValueView` cover a type, a union in words, and a context prefix (a field path
   or an API name) without the slot index.
-- Inside `required_table`'s body, every error comes back prefixed with the reader's context and
-  key (`add.inputs: ...`), so a validator shared between option and argument paths takes a
-  field-relative path (`inputs[2]`), never the full context, or the prefix appears twice.
+- Inside `required_table`'s body, an error comes back prefixed with the reader's context and
+  key (`add.inputs: ...`) unless it already starts with that path: a `field_type_error` spelled
+  with the full path reads flat (`ini.importMaps.dataDirs[2]: expected a string, got number`),
+  and a nested `Options::read` under the field's context keeps one segment per level.
 - Cargo has no optional dev-dependencies, so a crate that tests its plan with
   `check_definitions` (feature `analysis`) either pays the analysis build on every `cargo test`
   or declares l3i as an optional normal dependency with a test feature, `luau-analysis =

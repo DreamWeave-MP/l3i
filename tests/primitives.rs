@@ -406,6 +406,37 @@ fn table_options_walk_in_place_and_type_errors_carry_a_path_or_an_expectation() 
     assert!(error.contains("scan.dirs: dirs[2]: expected a string, got number"), "{error}");
     let error = runtime.eval::<String>("return dirs({ dirs = 'nope' })").unwrap_err().to_string();
     assert!(error.contains("scan.dirs: Lua stack index") && error.contains("expected table, got string"), "{error}");
+    // An error that already carries the field's path is not prefixed again: a full-path field
+    // error reads flat, and a nested reader inside the body keeps one segment per level.
+    let nested = runtime
+        .bind_function("dreamweave.tests.nested", |call: &Call, options: ValueView| {
+            Options::read(call, options, "scan", |o| {
+                let context = format!("{}.rows", o.context());
+                o.required_table("rows", |frame, rows| {
+                    let mut kinds = String::new();
+                    rows.for_each_array(frame, |frame, index, row| {
+                        if row.type_of() != Type::Table {
+                            return Err(row.field_type_error_of(&format!("{context}[{index}]"), Type::Table));
+                        }
+                        Options::read(frame, row, &format!("{context}[{index}]"), |r| {
+                            r.required_str("kind", |kind| {
+                                kinds.push_str(kind);
+                                Ok(())
+                            })
+                        })
+                    })?;
+                    Ok(kinds)
+                })
+            })
+        })
+        .unwrap();
+    runtime.set_global("nested", &nested).unwrap();
+    assert_eq!(runtime.eval::<String>("return nested({ rows = { { kind = 'a' }, { kind = 'b' } } })").unwrap(), "ab");
+    let error = runtime.eval::<String>("return nested({ rows = { { kind = 'a' }, { } } })").unwrap_err().to_string();
+    assert!(error.contains("scan.rows[2]: missing required option 'kind'"), "{error}");
+    assert!(!error.contains("scan.rows: scan.rows"), "no doubled segment: {error}");
+    let error = runtime.eval::<String>("return nested({ rows = { 5 } })").unwrap_err().to_string();
+    assert!(error.contains("scan.rows[1]: expected table, got number") && !error.contains("rows: scan"), "{error}");
     // A union expectation in words, and a stack check that takes a count.
     let union = runtime
         .bind_function("dreamweave.tests.union", |call: &Call, value: ValueView| -> l3i::Result<f64> {

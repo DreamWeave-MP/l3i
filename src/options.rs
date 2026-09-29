@@ -233,8 +233,17 @@ impl<'f> Options<'_, 'f> {
         T::from_view(value).map_err(|cause| self.field_error(key, &cause))
     }
 
+    /// `cause` under this reader's context and `key`, unless it already starts with that path
+    /// (a `field_type_error` spelled with the full path, or a nested reader's own context), so
+    /// a walked table's element errors read `ini.importMaps.dataDirs[2]: expected a string, got
+    /// number` and a nested reader never doubles its segment.
     fn field_error(&self, key: &str, cause: &Error) -> Error {
-        Error::runtime(format!("{}.{key}: {cause}", self.context))
+        let text = cause.to_string();
+        let path = format!("{}.{key}", self.context);
+        if text.starts_with(&path) {
+            return Error::runtime(text);
+        }
+        Error::runtime(format!("{path}: {text}"))
     }
 
     /// Fails when the table holds keys nothing asked for, naming them and the known ones.
