@@ -203,10 +203,12 @@ impl<'v> ValueView<'v> {
         Error::runtime(format!("Lua stack index {}: expected {}, got {}", self.index, expected, self.type_of().name()))
     }
 
-    /// A type error for a value reached through a path rather than an argument slot, worded
-    /// as `<path>: expected <expected>, got <found>`: `field_type_error("importMaps.dataDirs[2]",
-    /// "a string")`.
-    pub fn field_type_error(&self, path: &str, expected: &str) -> Error {
-        Error::runtime(format!("{path}: expected {expected}, got {}", self.type_of().name()))
+    /// A type error worded as `<context>: expected <expected>, got <found>`, without the slot
+    /// index: `context` is a field path for a value reached through a table
+    /// (`field_type_error("importMaps.dataDirs[2]", "a string")`) or an API name for an
+    /// argument whose message should read as the operation's (`field_type_error("archive:extract",
+    /// "an archive path or an entry handle")`).
+    pub fn field_type_error(&self, context: &str, expected: &str) -> Error {
+        Error::runtime(format!("{context}: expected {expected}, got {}", self.type_of().name()))
     }
 }

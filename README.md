@@ -219,7 +219,11 @@ closes.
 - One frame per scope: inside a bound function, read the arguments before opening a frame, or
   open it from the call; a second frame on the same scope panics with that message.
 - `Frame::check(n)` reserves stack for a bulk push (`n` is a `usize` count); the type-error
-  constructors on `ValueView` cover a type, a union in words, and a field path.
+  constructors on `ValueView` cover a type, a union in words, and a context prefix (a field path
+  or an API name) without the slot index.
+- Inside `required_table`'s body, every error comes back prefixed with the reader's context and
+  key (`add.inputs: ...`), so a validator shared between option and argument paths takes a
+  field-relative path (`inputs[2]`), never the full context, or the prefix appears twice.
 - Cargo has no optional dev-dependencies, so a crate that tests its plan with
   `check_definitions` (feature `analysis`) either pays the analysis build on every `cargo test`
   or declares l3i as an optional normal dependency with a test feature, `luau-analysis =
