@@ -567,7 +567,9 @@ function start(hero, art) {
 
   // Layout: the moon sits in the hero's empty right column when there is one, and in the top
   // right corner, above the text, when the column would land on the text. The text column's own
-  // width decides, not a breakpoint, so a landscape phone and a narrow window get the corner.
+  // width decides, not a breakpoint, so a landscape phone and a narrow window get the corner. The
+  // status strip runs across the hero's foot, under both columns: the moon hangs in the band above
+  // it, so the strip's glass never cuts the disc.
   let width = 1;
   let height = 1;
   let narrow = false;
@@ -575,11 +577,14 @@ function start(hero, art) {
   function layout() {
     width = Math.max(hero.clientWidth, 1);
     height = Math.max(hero.clientHeight, 1);
+    const origin = canvas.getBoundingClientRect();
     const column = hero.querySelector('.dw-hero__text, .dw-hero__grid > div');
-    const textRight = column ? column.getBoundingClientRect().right - canvas.getBoundingClientRect().left : width;
+    const textRight = column ? column.getBoundingClientRect().right - origin.left : width;
+    const strip = hero.querySelector('.dw-hero__grid > .dw-strip');
+    const band = strip ? Math.min(Math.max(strip.getBoundingClientRect().top - origin.top, height * 0.5), height) : height;
     const shell = Math.min(width, pageWidth);
     const wideCentre = width / 2 + shell / 2 - 14 * rem;
-    const wideRadius = Math.min(height * 0.34, 10.5 * rem);
+    const wideRadius = Math.min(height * 0.34, band * 0.42, 10.5 * rem);
     narrow = width < 761 || wideCentre - wideRadius < textRight + rem;
     hero.classList.toggle('l3i-hero--corner', narrow);
     const pixels = width * height;
@@ -607,7 +612,7 @@ function start(hero, art) {
       radiusPx = Math.min(width * 0.13, 4.4 * rem);
     } else {
       centreX = wideCentre;
-      centreY = height * 0.5;
+      centreY = band * 0.5;
       radiusPx = wideRadius;
     }
     moonOnScreen.x = centreX;

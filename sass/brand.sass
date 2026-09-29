@@ -43,12 +43,13 @@
     background: radial-gradient(ellipse 60% 70% at 78% 110%, rgb(126 74 214 / 34%), transparent 65%), radial-gradient(ellipse 45% 55% at 22% 105%, rgb(88 44 160 / 30%), transparent 70%), radial-gradient(ellipse 70% 40% at 55% 100%, rgb(201 164 255 / 12%), transparent 70%), radial-gradient(ellipse 35% 45% at 88% 25%, rgb(201 164 255 / 10%), transparent 70%)
     pointer-events: none
 
-  // The still moon: lit from the upper left, a purple rim, a halo into the mist.
+  // The still moon: lit from the upper left, a purple rim, a halo into the mist. It hangs where the
+  // live one does, centred in the band above the status strip.
   &::after
     content: ""
     position: absolute
     z-index: -2
-    top: 50%
+    top: calc(50% - 3.6rem)
     right: max(3rem, calc((100vw - var(--dw-width-page)) / 2 + 6rem))
     width: 15rem
     aspect-ratio: 1
@@ -108,14 +109,20 @@
 
   // When the moon sits in the corner (the script sets l3i-hero--corner) it hangs behind the text
   // column, whose kicker, title and summary hold no links: a touch on them reaches the moon. The
-  // strip, the command and the buttons keep theirs.
-  .l3i-hero--corner & > div
+  // command and the buttons keep theirs, and so does the strip, which runs beneath the column.
+  .l3i-hero--corner & > .dw-hero__text
     pointer-events: none
 
-    .dw-strip,
     .dw-command,
     .dw-actions
       pointer-events: auto
+
+// Without a picture the template gives the text the hero's whole width. On a wide screen the moon
+// stands where the picture would, so the text keeps the picture's column free for it and the strip
+// runs under both, as it runs under a picture.
+@media (min-width: 1001px)
+  .dw-hero__grid--text
+    grid-template-columns: minmax(0, 1fr) minmax(0, 26rem)
 
 .dw-hero__title
   font-size: clamp(3rem, 6vw, 5.2rem)
@@ -158,10 +165,6 @@
   backdrop-filter: blur(10px) saturate(1.2)
   -webkit-backdrop-filter: blur(10px) saturate(1.2)
   border: 1px solid color-mix(in oklab, var(--dw-accent) 22%, transparent)
-  border-radius: var(--dw-radius)
-
-.dw-hero .dw-strip
-  padding: .6rem .9rem
 
 .dw-hero .dw-command
   box-shadow: 0 0 0 1px rgb(0 0 0 / 30%), 0 12px 40px rgb(0 0 0 / 35%)
