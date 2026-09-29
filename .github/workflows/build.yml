@@ -31,8 +31,9 @@ jobs:
       # Criterion hot paths (benches/hot_paths.rs) into BENCHMARKS.md on the release.
       generate_benchmarks: true
 
-      # Not on crates.io yet. Flip to true (and add CARGO_REGISTRY_TOKEN) for the first release.
-      cargo_publish: false
+      # A bare version tag publishes that version to crates.io (CARGO_REGISTRY_TOKEN); every other
+      # push dry-runs the publish.
+      cargo_publish: true
 
       # StroggForge records each version crates.io has in content/home/mod.lock and deploys this
       # site, in place of the rustdoc Pages.
