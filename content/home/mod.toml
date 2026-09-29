@@ -74,4 +74,6 @@ added = [
     "`@dream/bytes` (`bytes`) for parsing foreign file formats in script: searching, record strings, varints, big-endian, 24-bit and half-float reads with a receiver lowered to native code, and behind their own features the codecs (DEFLATE, LZ4, zstd, LZMA), the digests (CRC-32 to BLAKE3) and the text codepages, all pure Rust.",
     "Watchdog limits, memory categories, call scopes, collector control and the profiler plumbing OpenMW's engine needs, and every function in `lua.h`, `lualib.h`, `luacode.h`, `luacodegen.h`, `luajitinliner.h` and `Require.h` declared by hand.",
     "The clang, lld and cross-language thin LTO toolchain, enforced by `build.rs` and measured in TOOLCHAIN.md: a bound call within forty instructions of a bare C function.",
+    "Templates load from any thread of the VM: `Sandbox::load_template_in` takes only the scope, so a `require` loader captures the sandbox and nothing else.",
+    "Rust 1.92, clang and lld; dream-net 1.1.0.",
 ]
