@@ -10,8 +10,9 @@
 //
 // The palette is read from the site's CSS tokens, so sass/brand.sass stays the single owner of
 // the colours. The canvas is inert until the hero is on screen, stops when the tab is hidden, caps
-// the device pixel ratio, and under prefers-reduced-motion draws one frame and stops. Without
-// WebGL nothing is added: sass/brand.sass draws a still of the same scene.
+// the device pixel ratio, and under prefers-reduced-motion draws one frame and stops. The still
+// that sass/brand.sass draws stays until the first frame is on the canvas, which fades in over
+// it. Without WebGL nothing is added and the still remains.
 
 import * as THREE from './vendor/three.module.min.js';
 
@@ -395,7 +396,6 @@ function start(hero) {
   canvas.className = 'l3i-sky';
   canvas.setAttribute('aria-hidden', 'true');
   hero.prepend(canvas);
-  hero.classList.add('l3i-hero--live');
 
   const accent = cssColor('--dw-accent', '#c9a4ff');
   const bg0 = cssColor('--dw-bg-0', '#0a0710');
@@ -693,6 +693,7 @@ function start(hero) {
   const worldRotation = new THREE.Quaternion();
   const clock = new THREE.Clock();
   let elapsed = 0;
+  let framesDrawn = 0;
   function frame(delta) {
     elapsed += delta;
     eased.lerp(pointer, 1 - Math.exp(-delta * 1.4));
@@ -731,6 +732,11 @@ function start(hero) {
     coronaUniforms.uPulse.value = pulse;
     corona.quaternion.copy(camera.quaternion);
     renderer.render(scene, camera);
+    framesDrawn += 1;
+    if (framesDrawn === 1) {
+      canvas.classList.add('is-ready');
+      setTimeout(() => hero.classList.add('l3i-hero--live'), 1000);
+    }
   }
 
   let visible = true;

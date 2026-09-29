@@ -39,7 +39,7 @@
     content: ""
     position: absolute
     inset: 0
-    z-index: -2
+    z-index: -3
     background: radial-gradient(ellipse 60% 70% at 78% 110%, rgb(126 74 214 / 34%), transparent 65%), radial-gradient(ellipse 45% 55% at 22% 105%, rgb(88 44 160 / 30%), transparent 70%), radial-gradient(ellipse 70% 40% at 55% 100%, rgb(201 164 255 / 12%), transparent 70%), radial-gradient(ellipse 35% 45% at 88% 25%, rgb(201 164 255 / 10%), transparent 70%)
     pointer-events: none
 
@@ -47,7 +47,7 @@
   &::after
     content: ""
     position: absolute
-    z-index: -1
+    z-index: -2
     top: 50%
     right: max(3rem, calc((100vw - var(--dw-width-page)) / 2 + 6rem))
     width: 15rem
@@ -66,7 +66,7 @@
       transform: none
       opacity: .8
 
-  // The live scene replaces the still.
+  // The live scene fades in over the still, and the still leaves once it is covered.
   &.l3i-hero--live::before,
   &.l3i-hero--live::after
     display: none
@@ -84,6 +84,14 @@
   display: block
   width: 100%
   height: 100%
+  opacity: 0
+  transition: opacity .9s ease
+
+  &.is-ready
+    opacity: 1
+
+  @media (prefers-reduced-motion: reduce)
+    transition: none
   // The text sits above the canvas and keeps its own events; the canvas takes the rest, so the
   // moon can be dragged. Vertical touches still scroll the page.
   touch-action: pan-y
