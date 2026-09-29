@@ -100,10 +100,21 @@
   color: transparent
   filter: drop-shadow(0 0 22px color-mix(in oklab, var(--dw-accent) 35%, transparent))
 
+  // The 3 is the accent, as it is in the handle the name comes from.
+  .l3i-three
+    background: linear-gradient(160deg, #e6d2ff 0%, var(--dw-accent) 45%, #8a4ee8 100%)
+    background-clip: text
+    -webkit-background-clip: text
+    color: transparent
+
   @media (forced-colors: active)
     background: none
     color: CanvasText
     filter: none
+
+    .l3i-three
+      background: none
+      color: CanvasText
 
 .dw-hero__summary
   max-width: 58ch

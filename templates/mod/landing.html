@@ -24,7 +24,9 @@
                 {%- endif %}
                 <span>{{ dw_macros::status(state=project.status) }}</span>
             </p>
-            <h1 class="dw-hero__title">{{ page.title }}</h1>
+            {#- l3i: a page may spell its title with markup (the accent on the 3) through
+                extra.title_html; the document title and every other use stay page.title. -#}
+            <h1 class="dw-hero__title">{% if page.extra.title_html %}{{ page.extra.title_html | safe }}{% else %}{{ page.title }}{% endif %}</h1>
             {%- if project.summary %}<p class="dw-hero__summary">{{ project.summary }}</p>{% endif %}
 
             <dl class="dw-strip" aria-label="Project status">

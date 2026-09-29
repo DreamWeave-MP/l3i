@@ -7,6 +7,8 @@ tags = ["Rust", "Luau", "Bindings", "Game development", "Native code"]
 
 [extra]
 sections = ["overview", "install", "compatibility", "releases", "credits"]
+# The hero spells the name with the 3 in the accent, as the handle it comes from is spelled.
+title_html = 'l<span class="l3i-three">3</span>i'
 +++
 
 A game engine that scripts in Luau needs three things from its binder. Scripts must reach engine
