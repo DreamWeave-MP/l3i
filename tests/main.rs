@@ -26,6 +26,8 @@
 
 #[cfg(feature = "analysis")]
 mod analysis;
+#[cfg(feature = "bytes")]
+mod bytes;
 mod call;
 mod debug;
 mod direct;

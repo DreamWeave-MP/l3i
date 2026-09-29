@@ -55,6 +55,26 @@ dream-net = "=1.0.0"
 # The CPU rasterizer is a domain extension, behind the `soft-render` feature.
 dream-soft-render = { version = "=1.0.0", optional = true }
 
+# `@dream/bytes` (feature `bytes`): searching through memchr's SIMD finders.
+memchr = { version = "2", optional = true }
+# `bytes-codecs`: pure-Rust inflate/deflate, LZ4, zstd and LZMA/XZ decoding; the gzip framing's
+# CRC comes from crc32fast, which the digests share.
+miniz_oxide = { version = "0.8", optional = true }
+lz4_flex = { version = "0.11", optional = true }
+ruzstd = { version = "0.9", optional = true }
+lzma-rs = { version = "0.3", optional = true }
+crc32fast = { version = "1", optional = true }
+# `bytes-digests`: checksums and cryptographic digests, all Rust (BLAKE3's SIMD kernels are
+# intrinsics compiled by cc, not a library).
+adler2 = { version = "2", optional = true }
+xxhash-rust = { version = "0.8", optional = true, features = ["xxh32", "xxh64", "xxh3"] }
+md-5 = { version = "0.10", optional = true }
+sha1 = { version = "0.10", optional = true }
+sha2 = { version = "0.10", optional = true }
+blake3 = { version = "1", optional = true }
+# `bytes-text`: every WHATWG encoding, for the codepages old formats were written in.
+encoding_rs = { version = "0.8", optional = true }
+
 [build-dependencies]
 # Compiles the vendored Luau tree and the C++ shims.
 cc = { version = "1", features = ["parallel"] }
@@ -100,3 +120,12 @@ jit = []
 analysis = []
 # dream-soft-render as the `dream.soft-render` extension (`soft_render`).
 soft-render = ["dep:dream-soft-render"]
+# The `@dream/bytes` extension (`bytes`): searching, comparing, C strings, varints, big-endian
+# and 24-bit and half-float reads and writes, and the `bytes.math()` receiver lowered under jit.
+bytes = ["dep:memchr"]
+# `bytes.inflate`/`deflate` (zlib, raw, gzip), LZ4 block and frame, zstd and LZMA/XZ decoding.
+bytes-codecs = ["bytes", "dep:miniz_oxide", "dep:lz4_flex", "dep:ruzstd", "dep:lzma-rs", "dep:crc32fast"]
+# CRC32, Adler-32, FNV-1a, xxHash, MD5, SHA-1, SHA-256 and BLAKE3, one-shot and incremental.
+bytes-digests = ["bytes", "dep:crc32fast", "dep:adler2", "dep:xxhash-rust", "dep:md-5", "dep:sha1", "dep:sha2", "dep:blake3"]
+# Text decoding and encoding for every WHATWG label (windows-1252, shift_jis, utf-16 ...).
+bytes-text = ["bytes", "dep:encoding_rs"]

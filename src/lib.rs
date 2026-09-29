@@ -57,6 +57,8 @@
 #[cfg(feature = "analysis")]
 pub mod analysis;
 pub mod bind;
+#[cfg(feature = "bytes")]
+pub mod bytes;
 pub mod call;
 pub mod convert;
 pub mod debug;

@@ -29,14 +29,39 @@ impl SourceProvider for Scripts {
 }
 
 fn plan() -> Rc<RuntimePlan> {
-    RuntimePlan::builder()
+    let builder = RuntimePlan::builder()
         .policy(RuntimePolicy::new())
         .extension(QuatExtension)
         .extension(RasterExtension)
-        .extension(SoftRenderExtension)
-        .finalize()
-        .unwrap()
+        .extension(SoftRenderExtension);
+    #[cfg(feature = "bytes")]
+    let builder = builder.extension(l3i::bytes::BytesExtension);
+    builder.finalize().unwrap()
 }
+
+/// Every feature's members are declared, so the bytes script only needs the core to exist.
+#[cfg(feature = "bytes")]
+const BYTES_SCRIPT: (&str, &str) = (
+    "bytes_script",
+    "--!strict\n\
+     local bytes = require('@dream/bytes')\n\
+     local buf = buffer.create(32)\n\
+     local at: number? = bytes.find(buf, 'x', 0)\n\
+     local same: boolean = bytes.equals(buf, buffer.tostring(buf))\n\
+     local piece: buffer = bytes.slice(buf, 0, 4)\n\
+     local text: string, after: number = bytes.readCString('abc', 0)\n\
+     local next: number = bytes.writeCString(buf, 0, text, 8)\n\
+     local value: integer, after2: number = bytes.readVarint(buf, 0)\n\
+     local written: number = bytes.writeVarint(buf, 8, value)\n\
+     local n: number = bytes.readu32be(buf, 0) + bytes.readf16(buf, 4) + bytes.readi24be('abc', 0)\n\
+     bytes.writef64be(buf, 8, n)\n\
+     local big: integer = bytes.readi64be(buf, 8)\n\
+     local B = bytes.math()\n\
+     local m: number = B:readu16be(buf, 0) + B:readf32be(buf, 4)\n\
+     B:writei64be(buf, 16, big)\n\
+     local hex: string = bytes.toHex(piece)\n\
+     print(at, same, after, next, after2, written, m, hex)\n",
+);
 
 const SCRIPTS: &[(&str, &str)] = &[
     (
@@ -122,7 +147,10 @@ fn the_generated_definitions_type_check_and_typed_scripts_pass_strict_mode() {
         assert!(!definitions.contains(fallback), "every built-in member is typed ({fallback:?} found):\n{definitions}");
     }
     assert!(!definitions.contains("declare quat"), "no compatibility global is declared:\n{definitions}");
-    let scripts = plan.analysis_sources(Scripts(SCRIPTS.iter().copied().collect()));
+    let mut all_scripts: Vec<(&str, &str)> = SCRIPTS.to_vec();
+    #[cfg(feature = "bytes")]
+    all_scripts.push(BYTES_SCRIPT);
+    let scripts = plan.analysis_sources(Scripts(all_scripts.iter().copied().collect()));
     let options = AnalysisOptions {
         definitions: vec![Definitions { name: "dream.d.luau".to_owned(), source: definitions.clone() }],
         ..Default::default()
@@ -131,7 +159,7 @@ fn the_generated_definitions_type_check_and_typed_scripts_pass_strict_mode() {
         Ok(analysis) => analysis,
         Err(error) => panic!("{error}\n---\n{definitions}"),
     };
-    for (name, _) in SCRIPTS {
+    for (name, _) in &all_scripts {
         let report = analysis.check(name, false);
         let text: Vec<String> = report
             .diagnostics
