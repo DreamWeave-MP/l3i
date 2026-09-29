@@ -188,11 +188,14 @@ impl Renderer {
     fn begin_frame(&self, width: Exact<i64>, height: Exact<i64>) -> Result<Owned<Frame>> {
         let (width, height) = (dimension("width", width)?, dimension("height", height)?);
         self.state.borrow_mut()?.begin_frame(width, height).map_err(raster_error)?;
+        // `u64::MAX` is reserved: a frame never carries it, so `finish` can always advance past
+        // the frame's own generation and a finished handle never compares live again.
         let generation = self
             .state
             .generation
             .get()
             .checked_add(1)
+            .filter(|next| *next != u64::MAX)
             .ok_or_else(|| Error::runtime("dream.soft_render: frame generations exhausted"))?;
         self.state.generation.set(generation);
         Ok(Owned(Frame { state: Rc::clone(&self.state), generation, width, height }))
@@ -310,7 +313,8 @@ impl Frame {
 
     fn finish(&self) -> Result<()> {
         self.live()?;
-        self.state.generation.set(self.generation.saturating_add(1));
+        // The frame's generation is below `u64::MAX` by construction (see `begin_frame`).
+        self.state.generation.set(self.generation.checked_add(1).expect("frame generations stay below u64::MAX"));
         Ok(())
     }
 }
