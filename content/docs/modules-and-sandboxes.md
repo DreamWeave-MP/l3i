@@ -173,8 +173,10 @@ An `Instance` exposes its `env` and `loaded` tables.
 
 `load_template` and `instantiate` take the root stack, which is suspended while a script call
 is running. A `require` loader bound with `bind_function` runs inside that call, so it uses
-`Sandbox::load_template_in(scope, &runtime, chunk_name, source)` and
-`Sandbox::instantiate_in(scope, &template, env)` with the call as the scope:
+`Sandbox::load_template_in(scope, chunk_name, source)` and
+`Sandbox::instantiate_in(scope, &template, env)` with the call as the scope. Neither needs the
+`Runtime`: the initialization context and the native code generator live with the VM, so a
+loader captures only the sandbox:
 
 ```rust
 use std::rc::Rc;
@@ -185,7 +187,6 @@ use l3i::value::{Function, Table, Value};
 use l3i::{Result, Runtime};
 
 fn loader(runtime: &Rc<Runtime>, sandbox: &Rc<Sandbox>) -> Result<Function> {
-    let captured = Rc::clone(runtime);
     let sandbox = Rc::clone(sandbox);
     runtime.bind_function("dreamweave.loader", move |call: &Call, name: &str, env: Value| -> Result<StackResults> {
         if name != "util" {
@@ -193,7 +194,7 @@ fn loader(runtime: &Rc<Runtime>, sandbox: &Rc<Sandbox>) -> Result<Function> {
         }
         let env = Table::from_value(env)?;
         let source = "return function(name) return { twice = function(x) return x * 2 end } end";
-        let template = sandbox.load_template_in(call, &captured, "util.lua", source)?;
+        let template = sandbox.load_template_in(call, "util.lua", source)?;
         let factory = sandbox.instantiate_in(call, &template, Some(&env))?;
         factory.invoke::<Function, _>(call, ())?.value().push_to_scope(call)?;
         Ok(StackResults)
