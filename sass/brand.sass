@@ -189,26 +189,6 @@
   background-position: bottom
   background-repeat: no-repeat
 
-// The feature grid on the overview: cards catch a little of the moonlight on hover.
-.dw-features > ul > li
-  transition: border-color .2s ease, box-shadow .2s ease, transform .2s ease
-
-  &:hover
-    border-color: var(--dw-accent-line)
-    box-shadow: 0 0 0 1px color-mix(in oklab, var(--dw-accent) 25%, transparent), 0 14px 40px rgb(0 0 0 / 35%)
-    transform: translateY(-2px)
-
-// Docs ------------------------------------------------------------------------------------
-
-// A signature line is the page's unit of truth: it gets the accent's edge.
-.docs-api-signature
-  border-left: 2px solid var(--dw-accent)
-  background: linear-gradient(90deg, var(--dw-accent-soft), var(--dw-code-bg) 60%)
-
-// Tables of numbers read right-aligned; the docs' benchmark tables lean on this.
-.docs-article table td:not(:first-child):has(> code:only-child)
-  font-variant-numeric: tabular-nums
-
 // The feature grid: four to a row, wider, then two, then one.
 .dw-features > ul
   grid-template-columns: repeat(4, minmax(0, 1fr))
@@ -218,3 +198,10 @@
 
   @media (max-width: 560px)
     grid-template-columns: minmax(0, 1fr)
+
+// Docs ------------------------------------------------------------------------------------
+
+// A signature line is the page's unit of truth: it gets the accent's edge.
+.docs-api-signature
+  border-left: 2px solid var(--dw-accent)
+  background: linear-gradient(90deg, var(--dw-accent-soft), var(--dw-code-bg) 60%)
