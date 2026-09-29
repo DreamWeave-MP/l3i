@@ -75,6 +75,7 @@ The integration tests link as one binary (`tests/main.rs`), one file's tests run
 | `tests/net.rs` | The dream-net bridge over real localhost UDP: a schema from Luau, a host-created server, a script-created client, events both ways, stats, the capability gate |
 | `tests/quat.rs` | Packed quaternions against the f32 userdata baseline, kind checks, and (`jit`) the native lowering |
 | `tests/raster.rs` | Colors and clip rectangles: construction, kind checks, the byte layout, and (`jit`) the lowered color math |
+| `tests/bytes.rs` | `@dream/bytes` (`bytes`): searching, record strings, varints, every width and order against `buffer`, the codecs against Python-made fixtures, the digests against their published vectors, the text codepages, and (`jit`) the lowered integer reads and writes |
 | `tests/soft_render.rs` (`soft-render`) | A Luau scene byte-identical to the Rust scene, malformed input, textures freeing themselves, two runtimes with different tags, the vertex writer on all three paths |
 | `tests/native_code.rs` (`jit`) | The code generator with the binder's hooks, the `writef32x3` lowering, a userdata field lowering in Rust, modes, module ids, assembly dumps, the perf log |
 | `tests/typed_definitions.rs` (`analysis`) | The generated `.d.luau` checked by Luau's frontend, strict scripts against every built-in module through `require`, typed views and forward module references |
@@ -241,6 +242,17 @@ The encoding itself, 1000 operations.
 | decode, mul, encode | 70.08 µs | 3.12 µs |
 
 The encode's floor is the three float-to-integer conversions.
+
+### Bytes
+
+`cargo bench --bench bytes`, with every `bytes-*` feature and `jit`. Per call from a Luau loop:
+`buffer.readu32` plus `bit32.byteswap` 116 ns interpreted and 4.3 ns native; the module's
+`readu32be` 65 ns; the receiver's `readu32be` 68 ns interpreted and 5.9 ns lowered, `readi64be`
+5.1 ns, `readu24be` 6.5 ns, `writeu32be` 5.3 ns; `readCString` of a 16-byte field 157 ns,
+`readVarint` 64 ns. Over one megabyte: `find` 23 GiB/s, `equals` 28 GiB/s, `crc32` 23 GiB/s,
+`xxh3` 17 GiB/s, `blake3` 3.7 GiB/s, `sha256` 238 MiB/s, `inflate` 1.6 GiB/s of output,
+`deflate` level 1 2.8 GiB/s, LZ4 block decompress 1.1 GiB/s and compress 5.9 GiB/s, `decode`
+Windows-1252 1.5 GiB/s.
 
 ## Instructions and cycles
 

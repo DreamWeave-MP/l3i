@@ -21,6 +21,7 @@ Rust API by module, and the benchmarks; this file is the same material in one pa
 - [Modules and sandboxes](#modules-and-sandboxes)
 - [Runtime options](#runtime-options)
 - [Direct access and atoms](#direct-access-and-atoms)
+- [Bytes for foreign formats](#bytes-for-foreign-formats)
 - [Native code generation](#native-code-generation)
 - [Safety model](#safety-model)
 - [Building](#building)
@@ -369,6 +370,26 @@ is 213 ns against 102 ns native, of which the bound call itself (the namecall pl
 arguments) is 84 ns; writing the fan's 258 vertices takes 506 ns per vertex with five
 `buffer.write*` calls, 330 ns through the bound writer, and 70 ns through the lowered writer
 (cos, sin, and `vector.create` included).
+
+## Bytes for foreign formats
+
+With the `bytes` feature, `bytes::BytesExtension` (`dream.bytes`, module `@dream/bytes`) is the
+toolkit for scripts that parse foreign file formats, which a preserved game engine does all day.
+Luau's `buffer` library already covers every little-endian width, 64-bit integers and bit
+fields, and its code generator lowers them all, so a `buffer` parser under `--!native` is
+already native-speed; the module adds what a script cannot do fast or at all: `find`, `rfind`,
+`count`, `equals`, `compare`, `startsWith`, `slice`, `toHex`, `fromHex`; `readCString` and
+`writeCString` for NUL-terminated and fixed-width fields; LEB128 `readVarint`,
+`readSignedVarint` and their writes; big-endian 16, 32 and 64-bit integers and floats, 24-bit
+integers in either order, and IEEE half floats, as module functions over a `buffer | string`
+and as methods on `bytes.math()`, whose integer forms lower to native code under `jit` (a tag
+check, Luau's buffer bounds check, one load or store, a byte swap). Behind their own features,
+all pure Rust: `bytes-codecs` (`inflate` and `deflate` in zlib, raw and gzip framing, LZ4 blocks
+and frames, zstd and LZMA/XZ decoding, every decoder capped by `maxSize`), `bytes-digests`
+(CRC-32, Adler-32, FNV-1a, xxHash, MD5, SHA-1, SHA-256, BLAKE3, one-shot or through
+`bytes.hasher`), and `bytes-text` (decoding and encoding every WHATWG-labelled encoding, with
+real UTF-16). Inputs are read without copying; an output is one `buffer` allocated at its final
+size (`convert::NewBuffer`). Every bounds failure names the call, the width and the offset.
 
 ## Native code generation
 

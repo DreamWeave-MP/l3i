@@ -81,6 +81,10 @@ l3i = { version = "1.0", features = ["jit"] }
 | `jit` | off | Luau's CodeGen library and `csrc/codegen.cpp`: `l3i::native_code`, the lowering hooks, `quat.math()`, and the lowered paths of `raster.math()` and `soft.vertices()`. Not supported on emscripten |
 | `analysis` | off | Luau's Analysis library and `csrc/analysis.cpp`: `l3i::analysis` (type checker, linter, autocomplete, parser) and `RuntimePlan::check_definitions` |
 | `soft-render` | off | The `dream-soft-render` dependency as the `dream.soft_render` extension |
+| `bytes` | off | The `dream.bytes` extension (`l3i::bytes`) and `memchr` for its searches |
+| `bytes-codecs` | off | `miniz_oxide`, `lz4_flex`, `ruzstd`, `lzma-rs` and `crc32fast`: `inflate`, `deflate`, LZ4, zstd, LZMA/XZ |
+| `bytes-digests` | off | `crc32fast`, `adler2`, `xxhash-rust`, `md-5`, `sha1`, `sha2`, `blake3`: the checksums and digests |
+| `bytes-text` | off | `encoding_rs`: text decoding and encoding for every WHATWG label |
 
 Networking is not a feature: `dream-net` is a normal dependency and the `dream.net` bridge is in
 every plan.

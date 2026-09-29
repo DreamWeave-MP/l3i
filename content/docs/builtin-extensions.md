@@ -397,3 +397,127 @@ offscreen `frame:rect` call is 213 ns against 102 ns native, of which the bound 
 namecall plus its four arguments) is 84 ns; writing the fan's 258 vertices takes 506 ns per vertex
 with five `buffer.write*` calls, 330 ns through the bound writer, and 70 ns through the lowered
 writer (cos, sin, and `vector.create` included).
+
+## dream.bytes
+
+Feature `bytes`; module `@dream/bytes`, `l3i::bytes::BytesExtension`. The extension for scripts
+that parse foreign file formats, which is most of what a preserved game engine does. Luau's own
+`buffer` library already reads and writes every little-endian width, 64-bit integers (`readinteger`)
+and bit fields (`readbits`), and its code generator lowers all of them to native loads and stores,
+so a parser written against `buffer` under `--!native` already runs at native speed. This module
+adds what a script cannot do fast, or at all, on top of that. Every "some bytes" input is a
+`buffer | string`, every bytes output is a new `buffer` of exactly its length, offsets are
+zero-based like `buffer`'s, and nothing allocates on a read.
+
+```luau
+local bytes = require("@dream/bytes")
+local header = file:readRange(0, 64)
+assert(bytes.equals(bytes.slice(header, 0, 4), "FORM"), "IFF")
+local size = bytes.readu32be(header, 4)
+local name, next = bytes.readCString(header, 8, 32)
+local count, after = bytes.readVarint(header, next)
+```
+
+### Searching, comparing, record strings
+
+| Function | Returns |
+|---|---|
+| `find(haystack, needle, start?)`, `rfind(haystack, needle, endOffset?)` | The offset of the needle, or nil; SIMD searches through `memchr` |
+| `count(haystack, needle)` | Non-overlapping occurrences |
+| `equals(a, b)`, `startsWith(haystack, prefix, offset?)` | Booleans |
+| `compare(a, aOffset, b, bOffset, length)` | -1, 0 or 1 over `length` bytes of each |
+| `slice(source, offset, length)` | A new buffer |
+| `toHex(data)`, `fromHex(text)` | Lower-case hex and back; whitespace between digits is ignored |
+| `readCString(source, offset, fieldLength?)` | The text up to the first NUL and the offset after the terminator, or after the fixed-width field when `fieldLength` is given |
+| `writeCString(target, offset, text, fieldLength?)` | Writes the text and a NUL, NUL-padded to the field; returns the offset after it |
+| `readVarint`, `readSignedVarint(source, offset)` | LEB128: the value as an integer and the offset after it |
+| `writeVarint`, `writeSignedVarint(target, offset, value)` | The offset after the encoding |
+
+Every bounds failure names the call, the width and the offset: `bytes.readu32be: 4 bytes at
+offset 30 past the end (length 32)`.
+
+### The widths and orders buffer lacks
+
+`readu16be`, `readi16be`, `readu24`, `readi24`, `readu24be`, `readi24be`, `readu32be`,
+`readi32be`, `readf32be`, `readf64be`, `readi64be` (an integer), `readf16` and `readf16be` (IEEE
+half floats), each `(source, offset)`, and the matching `write*(target, offset, value)`. A value
+written through a `u` or `i` form is truncated to the width exactly as `buffer.writeu16`
+truncates, so both paths of a lowered call agree by construction.
+
+The same methods live on `bytes.math()`, the `dream_bytes_Math` receiver. Under `jit`, when the
+script annotates it (`local B: dream_bytes_Math = bytes.math()`), the integer forms lower to
+native code: the receiver's tag check, Luau's own buffer bounds check, one load or store, and a
+byte swap, which is what `buffer.readu32` compiles to plus the swap. A bad offset exits to the
+interpreter, whose bound method raises the error. The float forms stay on the binder path, since
+the IR has no bit cast between integers and floats; a script that needs a big-endian float in
+native code reads the integer form and moves it through a scratch buffer with `buffer.writeu32`
+and `buffer.readf32`, both of which Luau lowers.
+
+```luau
+--!native
+local B: dream_bytes_Math = bytes.math()
+for i = 0, count - 1 do
+    local id = B:readu16be(table, i * 6)      -- native: load, swap, no C call
+    local offset = B:readu24be(table, i * 6 + 2)
+end
+```
+
+### Codecs (`bytes-codecs`)
+
+| Function | Notes |
+|---|---|
+| `inflate(source, { format?, maxSize? }?)` | DEFLATE: `zlib` (default), `raw` or `gzip`; the gzip trailer's CRC and size are checked |
+| `deflate(source, { format?, level? }?)` | Levels 0 to 10, default 6 |
+| `lz4Decompress(source, decompressedSize)`, `lz4Compress(source)` | LZ4 blocks; the block format carries no size, so the caller supplies it |
+| `lz4FrameDecompress(source, { maxSize? }?)`, `lz4FrameCompress(source)` | LZ4 frames |
+| `zstdDecompress(source, { maxSize? }?)` | Zstandard, decoding only (pure Rust has no encoder) |
+| `lzmaDecompress(source, { format?, maxSize? }?)` | `.lzma` (default) or `xz`, decoding only |
+
+Every decoder takes `maxSize`, the most it will produce (default 1 GiB), so a hostile stream
+cannot grow memory without bound; exceeding it is an error, never a truncated result. All of it is
+pure Rust: `miniz_oxide`, `lz4_flex`, `ruzstd`, `lzma-rs`.
+
+### Digests (`bytes-digests`)
+
+`crc32(data, seed?)`, `adler32`, `fnv1a32`, `xxh32(data, seed?)` return numbers; `fnv1a64`,
+`xxh64(data, seed?)`, `xxh3` return integers carrying the 64 bits; `md5`, `sha1`, `sha256` and
+`blake3` return lower-case hex; `digest(data, algorithm)` returns the raw bytes of any of them
+(checksums big-endian). For data that arrives in pieces, `hasher(algorithm)` returns a
+`dream_bytes_Hasher`: `update(data)` any number of times, `finish()` for the hex, `finishBytes()`
+for the bytes, `value()` for the integer of a checksum, `reset()` to start over. `finish` leaves
+the state intact, so a running digest can be read at any point.
+
+### Text (`bytes-text`)
+
+`decode(source, encoding, { strict? }?)` turns bytes in any WHATWG-labelled encoding
+(`windows-1252`, `latin1`, `shift_jis`, `euc-kr`, `gbk`, `koi8-r`, `macintosh`, `utf-16le`,
+`utf-16be`, and the rest of `encoding_rs`'s table, aliases included) into a string; malformed
+input becomes U+FFFD unless `strict`. `encode(text, encoding)` goes the other way and refuses a
+character the encoding lacks; the UTF-16 labels produce real UTF-16, not the UTF-8 the WHATWG
+spec substitutes. `encodingName(label)` gives the canonical name, `isUtf8(data)` the check.
+
+### What it costs
+
+Measured by `benches/bytes.rs` (`cargo bench --bench bytes --features bytes,bytes-codecs,bytes-digests,bytes-text,jit`)
+on an i7-10870H. Per call, from a Luau loop:
+
+| Read | Interpreted | Native |
+|---|---:|---:|
+| `buffer.readu32` + `bit32.byteswap`, Luau's own | 116 ns | 4.3 ns |
+| `bytes.readu32be`, the module | 65 ns | 94 ns |
+| `B:readu32be`, the receiver | 68 ns | 5.9 ns |
+| `B:readi64be` | 66 ns | 5.1 ns |
+| `B:readu24be` | | 6.5 ns |
+| `B:writeu32be` | | 5.3 ns |
+| `bytes.readf16` | 69 ns | |
+| `bytes.readCString`, 16-byte field | 157 ns | |
+| `bytes.readVarint` | 64 ns | |
+
+A lowered receiver call is within two nanoseconds of Luau's own lowered builtins, and a module
+call, at 65 ns, is faster than the interpreted builtin pair it replaces. Over one megabyte, one
+call each: `find` with an absent needle 23 GiB/s, `equals` 28 GiB/s, `count` of a byte
+4.6 GiB/s, `slice` 3.1 GiB/s, `crc32` 23 GiB/s, `xxh3` 17 GiB/s, `blake3` 3.7 GiB/s, `sha256`
+238 MiB/s (no SHA extensions on that CPU), `inflate` of a compressible megabyte 1.6 GiB/s of
+output, `deflate` at level 1 2.8 GiB/s, LZ4 block decompression 1.1 GiB/s and compression
+5.9 GiB/s, `decode` of Windows-1252 1.5 GiB/s, `isUtf8` 21 GiB/s. The boundary is a fixed
+few tens of nanoseconds; the rest is the library's own speed.

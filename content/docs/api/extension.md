@@ -691,3 +691,36 @@ out of bounds`.
 
 Module `l3i::soft_render::lowering` (feature `jit`): `struct VertexWriter`, the hook set, and
 `fn lowered_sites() -> usize`.
+
+## dream.bytes
+
+Module `l3i::bytes`, feature `bytes`; the module functions, the receiver and the codecs are
+described from the script's side in [Built-in extensions](@/docs/builtin-extensions.md#dream-bytes).
+
+{{ api_signature(value="pub struct BytesExtension") }}
+
+The extension; `id()` is `"dream.bytes"`, the module path is `MODULE` (`"@dream/bytes"`).
+`Clone`, `Copy`, `Debug`, `Default`.
+
+{{ api_signature(value="pub struct Math") }}
+
+The receiver behind `bytes.math()` (`Userdata::NAME` `"dream.bytes.Math"`), tagged and given a
+compiler type slot, both `Required`.
+
+{{ api_signature(value="pub fn to_hex(data: &[u8]) -> String") }}
+
+Lower-case hex, the module's `toHex`.
+
+| Module | Feature | Items |
+|---|---|---|
+| `bytes::numeric` | `bytes` | `f16_to_f32(bits: u16) -> f32`, `f32_to_f16(value: f32) -> u16` (round to nearest even, overflow to infinity), the read and write implementations |
+| `bytes::codecs` | `bytes-codecs` | `DEFAULT_MAX_SIZE` (1 GiB), the codec bindings |
+| `bytes::digests` | `bytes-digests` | `fnv1a32(&[u8]) -> u32`, `fnv1a64(&[u8]) -> u64`, `Hasher` (`Userdata::NAME` `"dream.bytes.Hasher"`, untagged) |
+| `bytes::text` | `bytes-text` | The text bindings |
+| `bytes::lowering` | `jit` | `ByteMath`, the `NativeCodeHooks` set that lowers the receiver's integer methods; `lowered_sites()` |
+
+{{ api_signature(value="pub struct NewBuffer(pub Vec<u8>)") }}
+
+In `l3i::convert`: the return type for bytes a script receives as a new `buffer`. Pushing
+allocates the buffer at the vector's length and copies once; returning a `Vec<u8>` pushes a
+string instead. `Push` and a single `Return`.

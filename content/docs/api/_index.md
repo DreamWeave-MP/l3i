@@ -25,6 +25,10 @@ the root.
 | `jit` | Luau's code generator, host lowering hooks written in Rust, the IR builder, assembly and IR dumps, the perf log | `native_code` |
 | `analysis` | Luau's type checker, linter, autocomplete and parser over a host source provider; `RuntimePlan::check_definitions` | `analysis` |
 | `soft-render` | dream-soft-render as the `dream.soft_render` extension and `@dream/soft-render` module | `soft_render` |
+| `bytes` | The `dream.bytes` extension and `@dream/bytes` module: searching, record strings, varints, the widths and orders `buffer` lacks, and the `bytes.math()` receiver lowered under `jit` | `bytes`, `bytes::numeric` |
+| `bytes-codecs` | `inflate`/`deflate` (zlib, raw, gzip), LZ4 blocks and frames, zstd and LZMA/XZ decoding | `bytes::codecs` |
+| `bytes-digests` | CRC-32, Adler-32, FNV-1a, xxHash, MD5, SHA-1, SHA-256, BLAKE3, one-shot and incremental | `bytes::digests` |
+| `bytes-text` | Decoding and encoding every WHATWG-labelled text encoding | `bytes::text` |
 
 The default feature set is empty. Networking is not a feature: `dream-net` is a dependency and
 every runtime plan carries the `dream.net` bridge.

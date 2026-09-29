@@ -71,6 +71,7 @@ added = [
     "Packed 64-bit scalars with a kind registry: `dream.quat` rotations and animation keys, `dream.raster` colours and clip rectangles, and `dream.soft_render` behind the `soft-render` feature.",
     "Native code generation (`jit`): Luau's CodeGen with lowering hooks written in Rust against an `IrBuilder` C ABI; quaternion, colour and vertex-writer paths that lower to IR with no C call.",
     "Luau's Analysis frontend (`analysis`): type checker, linter and autocomplete over a source provider, definition files, and the gate that type checks a plan's declared API against strict scripts.",
+    "`@dream/bytes` (`bytes`) for parsing foreign file formats in script: searching, record strings, varints, big-endian, 24-bit and half-float reads with a receiver lowered to native code, and behind their own features the codecs (DEFLATE, LZ4, zstd, LZMA), the digests (CRC-32 to BLAKE3) and the text codepages, all pure Rust.",
     "Watchdog limits, memory categories, call scopes, collector control and the profiler plumbing OpenMW's engine needs, and every function in `lua.h`, `lualib.h`, `luacode.h`, `luacodegen.h`, `luajitinliner.h` and `Require.h` declared by hand.",
     "The clang, lld and cross-language thin LTO toolchain, enforced by `build.rs` and measured in TOOLCHAIN.md: a bound call within forty instructions of a bare C function.",
 ]

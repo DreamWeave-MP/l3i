@@ -22,6 +22,8 @@ are optional:
 | `jit` | Luau's CodeGen library and the C++ shim behind `native_code`: native compilation and lowering hooks written in Rust |
 | `analysis` | Luau's Analysis library behind a C++ shim: the type checker, linter, autocomplete and parser in `analysis` |
 | `soft-render` | dream-soft-render as the `dream.soft_render` extension |
+| `bytes` | The `dream.bytes` extension for parsing foreign formats: searching, record strings, varints, big-endian and half-float reads, natively lowered under `jit` |
+| `bytes-codecs`, `bytes-digests`, `bytes-text` | Its codecs (DEFLATE, LZ4, zstd, LZMA), digests (CRC-32 to BLAKE3) and text encodings, each pulling in its pure-Rust dependencies |
 
 dream-net is not a feature: l3i depends on it and owns the Luau bridge to it, so every runtime
 has the network and the policy decides what scripts may do with it.
