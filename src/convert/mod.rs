@@ -30,7 +30,7 @@ mod tests;
 use crate::error::Result;
 use crate::stack::{Scope, ValueView};
 
-pub use buffer::{BufferView, BytesView, new_buffer};
+pub use buffer::{BufferView, BytesView, NewBuffer, new_buffer};
 pub use exact::{Bits64, Exact};
 pub use raw::RawValue;
 pub use scalar::Integer;

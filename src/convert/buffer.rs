@@ -1,6 +1,6 @@
 use std::marker::PhantomData;
 
-use super::{FromView, Vector3};
+use super::{FromView, Push, Vector3};
 use crate::error::{Error, Result};
 use crate::raw::ffi;
 use crate::stack::{Scope, Type, ValueView};
@@ -268,6 +268,21 @@ impl<'v> FromView<'v> for BytesView<'v> {
 }
 
 /// Creates a zero-filled buffer of `len` bytes on `scope`.
+/// Bytes returned to a script as a new Luau `buffer` of exactly their length: the result type
+/// for operations that produce bytes (a decompressed block, a digest, an encoded string).
+/// Pushing allocates the buffer and copies once; a `Vec<u8>` pushes a string instead.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct NewBuffer(pub Vec<u8>);
+
+impl Push for NewBuffer {
+    fn push_into<'s, S: Scope>(&self, scope: &'s S) -> Result<ValueView<'s>> {
+        let mut buffer = new_buffer(scope, self.0.len())?;
+        // SAFETY: the buffer was created by this call and no other view of it exists yet.
+        unsafe { buffer.bytes_mut_unchecked() }.copy_from_slice(&self.0);
+        Ok(scope.top_value())
+    }
+}
+
 pub fn new_buffer<'s, S: Scope>(scope: &'s S, len: usize) -> Result<BufferView<'s>> {
     // SAFETY: lua_newbuffer raises only for out of memory (fatal at host level, propagated in
     // native calls) and pushes the buffer.

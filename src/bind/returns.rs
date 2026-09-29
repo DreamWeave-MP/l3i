@@ -52,6 +52,7 @@ single_returns!(
     Vec<u8>,
     Integer,
     crate::convert::Bits64,
+    crate::convert::NewBuffer,
     Vector3,
     Value,
     Table,
