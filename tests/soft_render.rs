@@ -46,7 +46,13 @@ fn native_scene() -> Vec<u8> {
         )
         .unwrap();
     frame
-        .textured_rect(Rect::from_min_max([32.0, 4.0], [48.0, 20.0]), Rect::FULL_UV, texture, Color::WHITE, ClipRect::ALL)
+        .textured_rect(
+            Rect::from_min_max([32.0, 4.0], [48.0, 20.0]),
+            Rect::FULL_UV,
+            texture,
+            Color::WHITE,
+            ClipRect::ALL,
+        )
         .unwrap();
     renderer.update_texture(texture, 1, 1, 1, 1, &[255, 0, 0, 255]).unwrap();
     let mut frame = renderer.begin_frame(WIDTH, HEIGHT).unwrap();
@@ -135,7 +141,8 @@ fn luau_scene_matches_the_native_scene_byte_for_byte() {
     let luau = bytes_of_global(&runtime, "out");
     assert_eq!(luau.len(), WIDTH * HEIGHT * 4);
     if luau != native {
-        let diffs: Vec<usize> = (0..native.len() / 4).filter(|i| luau[i * 4..i * 4 + 4] != native[i * 4..i * 4 + 4]).collect();
+        let diffs: Vec<usize> =
+            (0..native.len() / 4).filter(|i| luau[i * 4..i * 4 + 4] != native[i * 4..i * 4 + 4]).collect();
         let first = diffs[0];
         eprintln!(
             "{} pixels differ; first at ({}, {}): luau {:?} native {:?}; last at ({}, {})",
@@ -265,9 +272,18 @@ fn vertex_writer_matches_manual_buffer_writes() {
         manual.chunks(20).map(|v| unsafe { std::ptr::read_unaligned(v.as_ptr().cast::<Vertex>()) }).collect();
     assert_eq!(vertices[0], Vertex::new([320.0, 240.0], [0.0, 0.0], Color::WHITE));
     let errors: &[(&str, &str)] = &[
-        ("local V = soft.vertices() V:write(buffer.create(19), 0, vector.zero, vector.zero, raster.WHITE)", "out of bounds"),
-        ("local V = soft.vertices() V:write(buffer.create(40), 21, vector.zero, vector.zero, raster.WHITE)", "out of bounds"),
-        ("local V = soft.vertices() V:write(buffer.create(40), -1, vector.zero, vector.zero, raster.WHITE)", "out of bounds"),
+        (
+            "local V = soft.vertices() V:write(buffer.create(19), 0, vector.zero, vector.zero, raster.WHITE)",
+            "out of bounds",
+        ),
+        (
+            "local V = soft.vertices() V:write(buffer.create(40), 21, vector.zero, vector.zero, raster.WHITE)",
+            "out of bounds",
+        ),
+        (
+            "local V = soft.vertices() V:write(buffer.create(40), -1, vector.zero, vector.zero, raster.WHITE)",
+            "out of bounds",
+        ),
         ("local V = soft.vertices() V:write(buffer.create(40), 0, vector.zero, vector.zero, raster.CLIP_ALL)", "Color"),
     ];
     for (source, expected) in errors {
@@ -333,11 +349,10 @@ fn vertex_writer_lowers_to_native_stores() {
     let instance = sandbox
         .new_instance(&runtime, &InstanceSpec { name: "v", packages: &[], hidden_data: None, loader: &loader })
         .unwrap();
-    let results = sandbox.run(&runtime, &template, &instance, CallContext { id: 1, category: MemoryCategory(0) }).unwrap();
-    let lowered: Vec<u8> = runtime
-        .stack()
-        .with_frame(|frame| Ok(results[0].push_to(frame)?.read::<BytesView>()?.to_vec()))
-        .unwrap();
+    let results =
+        sandbox.run(&runtime, &template, &instance, CallContext { id: 1, category: MemoryCategory(0) }).unwrap();
+    let lowered: Vec<u8> =
+        runtime.stack().with_frame(|frame| Ok(results[0].push_to(frame)?.read::<BytesView>()?.to_vec())).unwrap();
     assert!(lowered.iter().eq(binder.iter()), "the lowered writer diverges from the bound method");
     let stats = generator.execution_stats(&runtime.stack());
     assert_eq!(stats.vm_exits_taken, 2, "only the two bad calls exit: {stats:?}");

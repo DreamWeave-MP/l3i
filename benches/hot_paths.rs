@@ -406,13 +406,21 @@ fn typed_variants(c: &mut Criterion) {
     let two_i32 = runtime.bind_function("dreamweave.bench.twoInt", |a: i32, b: i32| a + b).unwrap();
     let unit = runtime.bind_function("dreamweave.bench.unit", |_a: f64| ()).unwrap();
     let vec_x = runtime.bind_function("dreamweave.bench.vecX", |v: Vector3| f64::from(v.x)).unwrap();
-    let packed_red =
-        runtime.bind_function("dreamweave.bench.packedRed", |c: l3i::packed::Packed<l3i::raster::Color>| f64::from(c.0.r)).unwrap();
-    let integer_id = runtime.bind_function("dreamweave.bench.integerId", |i: l3i::convert::Integer| i.0 as f64).unwrap();
+    let packed_red = runtime
+        .bind_function("dreamweave.bench.packedRed", |c: l3i::packed::Packed<l3i::raster::Color>| f64::from(c.0.r))
+        .unwrap();
+    let integer_id =
+        runtime.bind_function("dreamweave.bench.integerId", |i: l3i::convert::Integer| i.0 as f64).unwrap();
     let four = runtime
-        .bind_function("dreamweave.bench.four", |a: Vector3, b: Vector3, c: l3i::packed::Packed<l3i::raster::Color>, d: l3i::packed::Packed<l3i::raster::ClipRect>| {
-            f64::from(a.x + b.y) + f64::from(c.0.r) + f64::from(d.0.max_x)
-        })
+        .bind_function(
+            "dreamweave.bench.four",
+            |a: Vector3,
+             b: Vector3,
+             c: l3i::packed::Packed<l3i::raster::Color>,
+             d: l3i::packed::Packed<l3i::raster::ClipRect>| {
+                f64::from(a.x + b.y) + f64::from(c.0.r) + f64::from(d.0.max_x)
+            },
+        )
         .unwrap();
     for (name, function) in [
         ("zero", &zero),
@@ -491,7 +499,9 @@ impl l3i::extension::Extension for PlannedExtension {
         if self.tag != l3i::extension::TagPolicy::Never {
             planned.field::<PlannedValue>("field").untyped();
         }
-        d.module("@dream/bench").function("new", |v: f64| l3i::userdata::Owned(Planned { value: Cell::new(v) })).untyped();
+        d.module("@dream/bench")
+            .function("new", |v: f64| l3i::userdata::Owned(Planned { value: Cell::new(v) }))
+            .untyped();
         Ok(())
     }
 }

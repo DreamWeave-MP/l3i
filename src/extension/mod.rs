@@ -400,15 +400,31 @@ impl ModuleDecl {
         &self.members
     }
 
-    fn push(&mut self, name: &str, kind: ModuleMemberKind, binder: Option<SharedModuleFunction>) -> ModuleMemberBuilder<'_> {
-        self.members.push(ModuleMemberDecl { name: name.to_owned(), kind, signature: None, untyped: false, doc: None, binder });
+    fn push(
+        &mut self,
+        name: &str,
+        kind: ModuleMemberKind,
+        binder: Option<SharedModuleFunction>,
+    ) -> ModuleMemberBuilder<'_> {
+        self.members.push(ModuleMemberDecl {
+            name: name.to_owned(),
+            kind,
+            signature: None,
+            untyped: false,
+            doc: None,
+            binder,
+        });
         let index = self.members.len() - 1;
         ModuleMemberBuilder { module: self, index }
     }
 
     /// A module function, bound in every runtime. The callable is `Clone` for the same reason
     /// userdata members' are (see [`UserdataBuilder`]).
-    pub fn function<F: Binding<M> + Clone + 'static, M: 'static>(&mut self, name: &str, callable: F) -> ModuleMemberBuilder<'_> {
+    pub fn function<F: Binding<M> + Clone + 'static, M: 'static>(
+        &mut self,
+        name: &str,
+        callable: F,
+    ) -> ModuleMemberBuilder<'_> {
         let binder: SharedModuleFunction = Rc::new(move |runtime, roots, debug_name| {
             crate::bind::function(&runtime.stack(), roots, debug_name, callable.clone())
         });
@@ -457,7 +473,11 @@ impl<'m> ModuleMemberBuilder<'m> {
         self.module
     }
 
-    pub fn function<F: Binding<M> + Clone + 'static, M: 'static>(self, name: &str, callable: F) -> ModuleMemberBuilder<'m> {
+    pub fn function<F: Binding<M> + Clone + 'static, M: 'static>(
+        self,
+        name: &str,
+        callable: F,
+    ) -> ModuleMemberBuilder<'m> {
         self.module.function(name, callable)
     }
 
@@ -596,7 +616,10 @@ impl ExtensionDescriptor {
     }
 
     /// Declares a [`crate::sequence::Stream`] over `S` under `key` (`for` only), fully bound.
-    pub fn stream<S: crate::sequence::StreamSource>(&mut self, key: &str) -> UserdataBuilder<'_, crate::sequence::Stream<S>> {
+    pub fn stream<S: crate::sequence::StreamSource>(
+        &mut self,
+        key: &str,
+    ) -> UserdataBuilder<'_, crate::sequence::Stream<S>> {
         let builder = self.userdata::<crate::sequence::Stream<S>>(key);
         builder.decl.installers.push(Rc::new(|ty| {
             crate::sequence::configure_stream::<S>(ty)?;

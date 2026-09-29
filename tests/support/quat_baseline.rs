@@ -70,12 +70,15 @@ impl Extension for QuatBaseline {
         ud.method("mul", |a: &QuatUserdata, b: &QuatUserdata| Owned(QuatUserdata::from(a.get() * b.get()))).untyped();
         ud.method("slerp", |a: &QuatUserdata, b: &QuatUserdata, t: f64| {
             Owned(QuatUserdata::from(a.get().slerp(b.get(), t)))
-        }).untyped();
+        })
+        .untyped();
         ud.method("rotate", |a: &QuatUserdata, v: Vector3| to_vec3(a.get().rotate(from_vec3(v)))).untyped();
         ud.method("angleTo", |a: &QuatUserdata, b: &QuatUserdata| a.get().angle_to(b.get())).untyped();
-        d.module("@dream/quatud").function("axisAngle", |axis: Vector3, angle: f64| {
-            Owned(QuatUserdata::from(Quat::from_axis_angle(from_vec3(axis), angle)))
-        }).untyped();
+        d.module("@dream/quatud")
+            .function("axisAngle", |axis: Vector3, angle: f64| {
+                Owned(QuatUserdata::from(Quat::from_axis_angle(from_vec3(axis), angle)))
+            })
+            .untyped();
         Ok(())
     }
 }

@@ -1,6 +1,6 @@
 use std::ffi::c_int;
 
-use super::{FromView, RawValue, Push};
+use super::{FromView, Push, RawValue};
 use crate::error::{Error, Result};
 use crate::raw::ffi;
 use crate::stack::{Scope, Type, ValueView};

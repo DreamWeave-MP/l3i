@@ -158,7 +158,8 @@ fn color_math_lowers_to_native_code() {
     let instance = sandbox
         .new_instance(&runtime, &InstanceSpec { name: "c", packages: &[], hidden_data: None, loader: &loader })
         .unwrap();
-    let results = sandbox.run(&runtime, &template, &instance, CallContext { id: 1, category: MemoryCategory(0) }).unwrap();
+    let results =
+        sandbox.run(&runtime, &template, &instance, CallContext { id: 1, category: MemoryCategory(0) }).unwrap();
     let checks: f64 = runtime.stack().with_frame(|frame| results[0].push_to(frame)?.read::<f64>()).unwrap();
     assert_eq!(checks as usize, 17 * 17);
     let stats = generator.execution_stats(&runtime.stack());

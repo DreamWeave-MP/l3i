@@ -370,8 +370,14 @@ impl<'c> ModuleInstaller<'c> {
     /// Creates the table with the module's declared functions and constants.
     fn open(runtime: &'c Runtime, plan: &'c RuntimePlan, resolved: &'c ResolvedModule) -> Result<Self> {
         let table = Table::new(&runtime.stack(), 0, 8)?;
-        let mut module =
-            ModuleInstaller { runtime, plan, resolved, table, members: Vec::new(), prefix: debug_prefix(resolved.provider) };
+        let mut module = ModuleInstaller {
+            runtime,
+            plan,
+            resolved,
+            table,
+            members: Vec::new(),
+            prefix: debug_prefix(resolved.provider),
+        };
         for member in &resolved.members {
             match &member.kind {
                 ModuleMemberKind::Function => {
@@ -393,7 +399,9 @@ impl<'c> ModuleInstaller<'c> {
     fn finish(self, members: &mut ModuleMembers) -> Result<()> {
         let ModuleInstaller { runtime, resolved, table, members: recorded, .. } = self;
         for member in &resolved.members {
-            if matches!(member.kind, ModuleMemberKind::Installed) && !recorded.iter().any(|(name, _)| *name == member.name) {
+            if matches!(member.kind, ModuleMemberKind::Installed)
+                && !recorded.iter().any(|(name, _)| *name == member.name)
+            {
                 return Err(Error::logic(format!(
                     "module '{}' declares member '{}' for install, which '{}' did not provide",
                     resolved.path, member.name, resolved.provider

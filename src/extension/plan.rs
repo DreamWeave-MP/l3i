@@ -4,11 +4,11 @@ use std::any::{Any, TypeId};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::rc::Rc;
 
-use super::typedefs::class_name;
 use super::debug_prefix;
-use super::{COMPILER_TYPE_CAPACITY, CompilerTypePolicy, ModuleMemberKind, 
-    Extension, ExtensionDescriptor, MemberKind, RuntimePolicy, TagPolicy, UserdataDecl, debug_root,
-    validate_extension_id,
+use super::typedefs::class_name;
+use super::{
+    COMPILER_TYPE_CAPACITY, CompilerTypePolicy, Extension, ExtensionDescriptor, MemberKind, ModuleMemberKind,
+    RuntimePolicy, TagPolicy, UserdataDecl, debug_root, validate_extension_id,
 };
 use crate::TAG_LIMIT;
 use crate::direct::plan::{MAX_ATOM_SPAN, MAX_SLOT};
@@ -267,7 +267,10 @@ impl RuntimePlanBuilder {
 
 /// Every declared packed kind, validated: numbers in the host range (or l3i's own types), and
 /// one type per number across the whole plan.
-fn resolve_packed_kinds(descriptors: &[ExtensionDescriptor], order: &[usize]) -> Result<Vec<crate::packed::PackedKind>> {
+fn resolve_packed_kinds(
+    descriptors: &[ExtensionDescriptor],
+    order: &[usize],
+) -> Result<Vec<crate::packed::PackedKind>> {
     let mut kinds: Vec<(crate::packed::PackedKind, &'static str)> = Vec::new();
     for &index in order {
         for kind in descriptors[index].packed_kinds() {
@@ -288,7 +291,8 @@ fn resolve_packed_kinds(descriptors: &[ExtensionDescriptor], order: &[usize]) ->
         }
     }
     for builtin in crate::packed::builtin_kinds() {
-        if let Some((kind, owner)) = kinds.iter().find(|(k, _)| k.kind == builtin.kind && k.type_id != builtin.type_id) {
+        if let Some((kind, owner)) = kinds.iter().find(|(k, _)| k.kind == builtin.kind && k.type_id != builtin.type_id)
+        {
             return Err(Error::logic(format!(
                 "packed kind {} belongs to l3i ({}); '{owner}' declares it for {}",
                 builtin.kind, builtin.name, kind.name
@@ -297,7 +301,6 @@ fn resolve_packed_kinds(descriptors: &[ExtensionDescriptor], order: &[usize]) ->
     }
     Ok(kinds.into_iter().map(|(kind, _)| kind).collect())
 }
-
 
 /// Every member has a signature or was declared `untyped()`: the generated definitions never
 /// fall back to `any` by accident.
@@ -349,7 +352,11 @@ fn check_debug_prefixes(descriptors: &[ExtensionDescriptor]) -> Result<()> {
 
 /// Modules in installation order: unique paths, unique member names, compat globals one per
 /// module and one module per global, and no two paths folding to one generated type name.
-fn resolve_modules(descriptors: &[ExtensionDescriptor], order: &[usize], policy: &RuntimePolicy) -> Result<Vec<ResolvedModule>> {
+fn resolve_modules(
+    descriptors: &[ExtensionDescriptor],
+    order: &[usize],
+    policy: &RuntimePolicy,
+) -> Result<Vec<ResolvedModule>> {
     let mut modules = Vec::new();
     let mut module_paths = HashSet::new();
     for &index in order {
@@ -366,7 +373,10 @@ fn resolve_modules(descriptors: &[ExtensionDescriptor], order: &[usize], policy:
             for member in &module.members {
                 validate_identifier(&format!("member of module '{}'", module.path), &member.name)?;
                 if !names.insert(member.name.as_str()) {
-                    return Err(Error::logic(format!("module '{}' declares member '{}' twice", module.path, member.name)));
+                    return Err(Error::logic(format!(
+                        "module '{}' declares member '{}' twice",
+                        module.path, member.name
+                    )));
                 }
             }
             modules.push(ResolvedModule {
@@ -387,7 +397,9 @@ fn resolve_modules(descriptors: &[ExtensionDescriptor], order: &[usize], policy:
             return Err(Error::logic(format!("compat global for '{path}', which no extension provides")));
         }
         if let Some(other) = global_paths.insert(path, global) {
-            return Err(Error::logic(format!("module '{path}' is exposed as two compat globals, '{other}' and '{global}'")));
+            return Err(Error::logic(format!(
+                "module '{path}' is exposed as two compat globals, '{other}' and '{global}'"
+            )));
         }
         if let Some(other) = global_names.insert(global, path) {
             return Err(Error::logic(format!("compat global '{global}' is mapped to both '{other}' and '{path}'")));
@@ -515,7 +527,11 @@ fn check_services_and_capabilities(
 }
 
 /// The policy's debug roots plus one per extension id family and per userdata type name root.
-fn debug_roots(policy: &RuntimePolicy, descriptors: &[ExtensionDescriptor], userdata: &[ResolvedUserdata]) -> Vec<Box<str>> {
+fn debug_roots(
+    policy: &RuntimePolicy,
+    descriptors: &[ExtensionDescriptor],
+    userdata: &[ResolvedUserdata],
+) -> Vec<Box<str>> {
     let mut roots: Vec<Box<str>> = policy.debug_roots.iter().map(|root| Box::from(root.as_str())).collect();
     let mut add = |root: &str| {
         if !roots.iter().any(|existing| &**existing == root) {
@@ -693,11 +709,7 @@ fn is_identifier(name: &str) -> bool {
 }
 
 fn validate_identifier(what: &str, name: &str) -> Result<()> {
-    if is_identifier(name) {
-        Ok(())
-    } else {
-        Err(Error::logic(format!("{what} '{name}' is not a Luau identifier")))
-    }
+    if is_identifier(name) { Ok(()) } else { Err(Error::logic(format!("{what} '{name}' is not a Luau identifier"))) }
 }
 
 /// A stable userdata key: ASCII letters, digits, `.`, `_`, and `-`, so it reads the same in
@@ -966,7 +978,10 @@ impl RuntimePlan {
     /// A source provider for the analysis frontend that serves this plan's modules as stubs
     /// (see [`Self::module_stub`]) and everything else from `inner`.
     #[cfg(feature = "analysis")]
-    pub fn analysis_sources<P: crate::analysis::SourceProvider>(self: &Rc<Self>, inner: P) -> crate::analysis::PlanSources<P> {
+    pub fn analysis_sources<P: crate::analysis::SourceProvider>(
+        self: &Rc<Self>,
+        inner: P,
+    ) -> crate::analysis::PlanSources<P> {
         crate::analysis::PlanSources::new(Rc::clone(self), inner)
     }
 

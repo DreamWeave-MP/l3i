@@ -95,8 +95,11 @@ fn native(c: &mut Criterion) {
             frame.clear(Color::from_rgb(17, 20, 28));
             for panel in 0..48_usize {
                 let (x, y) = (((panel % 8) * 80 + 4) as f32, ((panel / 8) * 80 + 4) as f32);
-                let color =
-                    if panel % 3 == 0 { Color::from_rgb(40, 44, 58) } else { Color::from_rgba_unmultiplied(90, 140, 220, 96) };
+                let color = if panel % 3 == 0 {
+                    Color::from_rgb(40, 44, 58)
+                } else {
+                    Color::from_rgba_unmultiplied(90, 140, 220, 96)
+                };
                 frame.fill_rect(Rect::from_min_size([x, y], [120.0, 60.0]), color, ClipRect::ALL).unwrap();
             }
         })
@@ -115,7 +118,9 @@ fn native(c: &mut Criterion) {
         b.iter(|| {
             let mut frame = renderer.begin_frame(WIDTH, HEIGHT).unwrap();
             for _ in 0..1000 {
-                frame.fill_rect(Rect::from_min_max([700.0, 700.0], [701.0, 701.0]), Color::WHITE, ClipRect::ALL).unwrap();
+                frame
+                    .fill_rect(Rect::from_min_max([700.0, 700.0], [701.0, 701.0]), Color::WHITE, ClipRect::ALL)
+                    .unwrap();
             }
         })
     });
@@ -139,7 +144,9 @@ fn native(c: &mut Criterion) {
 
 fn runtime() -> Runtime {
     let plan = RuntimePlan::builder()
-        .policy(RuntimePolicy::new().compat_global("@dream/raster", "raster").compat_global("@dream/soft-render", "soft"))
+        .policy(
+            RuntimePolicy::new().compat_global("@dream/raster", "raster").compat_global("@dream/soft-render", "soft"),
+        )
         .extension(RasterExtension)
         .extension(SoftRenderExtension)
         .finalize()
@@ -295,7 +302,12 @@ fn lowered(c: &mut Criterion) {
         .compat_global("@dream/raster", "raster")
         .compat_global("@dream/soft-render", "soft")
         .native_code(NativeCodePolicy { mode: NativeCodeMode::Eager, ..NativeCodePolicy::default() });
-    let plan = RuntimePlan::builder().policy(policy).extension(RasterExtension).extension(SoftRenderExtension).finalize().unwrap();
+    let plan = RuntimePlan::builder()
+        .policy(policy)
+        .extension(RasterExtension)
+        .extension(SoftRenderExtension)
+        .finalize()
+        .unwrap();
     let runtime = Runtime::from_plan(&plan).unwrap();
     if !runtime.native_code().is_some_and(l3i::native_code::NativeCodeGen::is_available) {
         return;
@@ -325,7 +337,8 @@ fn lowered(c: &mut Criterion) {
              end",
         )
         .unwrap();
-    let results = sandbox.run(&runtime, &template, &instance, CallContext { id: 1, category: MemoryCategory(0) }).unwrap();
+    let results =
+        sandbox.run(&runtime, &template, &instance, CallContext { id: 1, category: MemoryCategory(0) }).unwrap();
     let function = Function::from_value(results.into_iter().next().unwrap()).unwrap();
     let mut group = c.benchmark_group("soft_render_luau");
     group.throughput(Throughput::Elements(258));

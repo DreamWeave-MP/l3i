@@ -48,7 +48,10 @@ fn packed_quaternions_and_keys_are_distinct_kinds_through_luau() {
     let back = Packed::<AnimationKey>::from_bits(key.bits().unwrap()).unwrap();
     assert_eq!(back.0.flags, 9);
     assert!(Packed::<Quaternion>::from_bits(key.bits().unwrap()).is_err());
-    assert_eq!(Packed::<Quaternion>::from_bits(Quaternion::pack(Quat::IDENTITY).bits().unwrap()).unwrap().0.0, Quat::IDENTITY);
+    assert_eq!(
+        Packed::<Quaternion>::from_bits(Quaternion::pack(Quat::IDENTITY).bits().unwrap()).unwrap().0.0,
+        Quat::IDENTITY
+    );
 }
 
 /// Native lowering: the same operations through the `dream_quat_Math` receiver compile to IR
@@ -145,7 +148,8 @@ fn packed_quaternion_operations_lower_to_native_code() {
     let instance = sandbox
         .new_instance(&runtime, &InstanceSpec { name: "q", packages: &[], hidden_data: None, loader: &loader })
         .unwrap();
-    let results = sandbox.run(&runtime, &template, &instance, CallContext { id: 1, category: MemoryCategory(0) }).unwrap();
+    let results =
+        sandbox.run(&runtime, &template, &instance, CallContext { id: 1, category: MemoryCategory(0) }).unwrap();
     let worst: f64 = results[0].push_to(&runtime.stack().frame()).map(|v| v.read::<f64>().unwrap()).unwrap();
     eprintln!("lowered vs binder worst divergence: {worst:.3e}");
     assert!(worst < 5e-5, "lowered results diverge from the binder: {worst}");
@@ -156,10 +160,10 @@ fn packed_quaternion_operations_lower_to_native_code() {
     assert_eq!(stats.vm_exits_taken, 6, "only the malformed calls exit to the interpreter: {stats:?}");
 }
 
-
 #[test]
 fn constructors_refuse_malformed_rotations() {
-    let plan = RuntimePlan::builder().policy(policy()).extension(QuatExtension).extension(QuatBaseline).finalize().unwrap();
+    let plan =
+        RuntimePlan::builder().policy(policy()).extension(QuatExtension).extension(QuatBaseline).finalize().unwrap();
     let runtime = Runtime::from_plan(&plan).unwrap();
     runtime
         .exec(
@@ -185,4 +189,3 @@ fn constructors_refuse_malformed_rotations() {
     assert!(Quat { x: 0.0, y: 0.0, z: 0.0, w: 0.0 }.try_normalize().is_none());
     assert!(Quat { x: 0.0, y: 0.0, z: 0.0, w: f64::INFINITY }.try_normalize().is_none());
 }
-

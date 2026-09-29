@@ -39,7 +39,7 @@ use std::rc::Rc;
 
 use dream_soft_render::{SoftwareRenderer, TextureId};
 
-use crate::convert::{Exact, BufferView, BytesView, Vector3};
+use crate::convert::{BufferView, BytesView, Exact, Vector3};
 use crate::direct::field::{DirectField, FieldValue};
 use crate::error::{Error, Result};
 use crate::extension::{Extension, ExtensionDescriptor, TagPolicy};
@@ -338,7 +338,14 @@ impl Texture {
         Ok(self.id)
     }
 
-    fn update(&self, x: Exact<i64>, y: Exact<i64>, width: Exact<i64>, height: Exact<i64>, pixels: BytesView<'_>) -> Result<()> {
+    fn update(
+        &self,
+        x: Exact<i64>,
+        y: Exact<i64>,
+        width: Exact<i64>,
+        height: Exact<i64>,
+        pixels: BytesView<'_>,
+    ) -> Result<()> {
         let id = self.id()?;
         let (x, y) = (dimension("x", x)?, dimension("y", y)?);
         let (width, height) = (dimension("width", width)?, dimension("height", height)?);
@@ -390,7 +397,13 @@ unsafe impl Userdata for Vertices {
 /// The interpreter path of `Vertices:write`, and the oracle its lowering must match. The
 /// offset truncates toward zero like the buffer library's; anything outside the buffer is the
 /// library's "buffer access out of bounds".
-pub fn write_vertex(buffer: BufferView<'_>, offset: f64, pos: Vector3, uv: Vector3, color: Packed<Color>) -> Result<f64> {
+pub fn write_vertex(
+    buffer: BufferView<'_>,
+    offset: f64,
+    pos: Vector3,
+    uv: Vector3,
+    color: Packed<Color>,
+) -> Result<f64> {
     let offset = if offset.is_finite() && offset >= 0.0 && offset < f64::from(i32::MAX) {
         offset.trunc() as usize
     } else {
@@ -424,6 +437,25 @@ size_field!(FrameHeight, Frame, |f: &Frame| f.height);
 size_field!(TextureWidth, Texture, |t: &Texture| t.width);
 size_field!(TextureHeight, Texture, |t: &Texture| t.height);
 
+/// The module `@dream/soft-render`: the device and vertex-writer constructors, the
+/// premultiply helper, and the renderer's limits as folded constants.
+fn describe_module(d: &mut ExtensionDescriptor) {
+    d.module(MODULE)
+        .doc("A software rendering device.")
+        .function("renderer", || Owned(Renderer::new()))
+        .signature("() -> dream_soft_render_Renderer")
+        .function("vertices", || Owned(Vertices))
+        .signature("() -> dream_soft_render_Vertices")
+        .function("premultiply", |c: Packed<Color>| {
+            let c = c.0;
+            Color::from_packed(dream_soft_render::Color::from_rgba_unmultiplied(c.r, c.g, c.b, c.a).to_packed()).pack()
+        })
+        .signature("(color: integer) -> integer")
+        .constant("MAX_SURFACE_PIXELS", CompileConstant::Number(dream_soft_render::MAX_SURFACE_PIXELS as f64))
+        .constant("MAX_TEXTURE_BYTES", CompileConstant::Number(dream_soft_render::MAX_TEXTURE_BYTES as f64))
+        .constant("VERTEX_BYTES", CompileConstant::Number(VERTEX_BYTES as f64));
+}
+
 /// The `dream.soft_render` extension; requires `dream.raster` in the same plan.
 pub struct SoftRenderExtension;
 
@@ -445,7 +477,9 @@ impl Extension for SoftRenderExtension {
             })
             .signature("(self, width: number, height: number, pixels: buffer | string): dream_soft_render_Texture");
         renderer
-            .method("readInto", |r: &Renderer, buffer: BufferView, offset: Option<Exact<i64>>| r.read_into(buffer, offset))
+            .method("readInto", |r: &Renderer, buffer: BufferView, offset: Option<Exact<i64>>| {
+                r.read_into(buffer, offset)
+            })
             .signature("(self, buffer: buffer, offset: number?): number");
         renderer.field::<RendererWidth>("width").signature("number");
         renderer.field::<RendererHeight>("height").signature("number");
@@ -476,9 +510,11 @@ impl Extension for SoftRenderExtension {
         frame
             .method(
                 "mesh",
-                |f: &Frame, vertices: BufferView, indices: BufferView, texture: Option<&Texture>, clip: Packed<ClipRect>| {
-                    f.mesh(vertices, indices, texture, clip)
-                },
+                |f: &Frame,
+                 vertices: BufferView,
+                 indices: BufferView,
+                 texture: Option<&Texture>,
+                 clip: Packed<ClipRect>| { f.mesh(vertices, indices, texture, clip) },
             )
             .signature("(self, vertices: buffer, indices: buffer, texture: dream_soft_render_Texture?, clip: integer)");
         frame.method("finish", |f: &Frame| f.finish()).signature("(self)");
@@ -488,9 +524,15 @@ impl Extension for SoftRenderExtension {
         let mut texture = d.userdata::<Texture>("dream.soft_render.Texture");
         texture.tag(TagPolicy::Preferred).doc("Premultiplied RGBA8 pixels in the renderer's store.");
         texture
-            .method("update", |t: &Texture, x: Exact<i64>, y: Exact<i64>, width: Exact<i64>, height: Exact<i64>, pixels: BytesView| {
-                t.update(x, y, width, height, pixels)
-            })
+            .method(
+                "update",
+                |t: &Texture,
+                 x: Exact<i64>,
+                 y: Exact<i64>,
+                 width: Exact<i64>,
+                 height: Exact<i64>,
+                 pixels: BytesView| { t.update(x, y, width, height, pixels) },
+            )
             .signature("(self, x: number, y: number, width: number, height: number, pixels: buffer | string)");
         texture.method("free", |t: &Texture| t.free()).signature("(self)");
         texture.field::<TextureWidth>("width").signature("number");
@@ -512,18 +554,7 @@ impl Extension for SoftRenderExtension {
         #[cfg(feature = "jit")]
         d.native_hooks(lowering::VertexWriter);
 
-        d.module(MODULE)
-            .doc("A software rendering device.")
-            .function("renderer", || Owned(Renderer::new())).signature("() -> dream_soft_render_Renderer")
-            .function("vertices", || Owned(Vertices)).signature("() -> dream_soft_render_Vertices")
-            .function("premultiply", |c: Packed<Color>| {
-                let c = c.0;
-                Color::from_packed(dream_soft_render::Color::from_rgba_unmultiplied(c.r, c.g, c.b, c.a).to_packed())
-                    .pack()
-            }).signature("(color: integer) -> integer")
-            .constant("MAX_SURFACE_PIXELS", CompileConstant::Number(dream_soft_render::MAX_SURFACE_PIXELS as f64))
-            .constant("MAX_TEXTURE_BYTES", CompileConstant::Number(dream_soft_render::MAX_TEXTURE_BYTES as f64))
-            .constant("VERTEX_BYTES", CompileConstant::Number(VERTEX_BYTES as f64));
+        describe_module(d);
         d.memory_category(EXTENSION_ID);
         Ok(())
     }
@@ -542,8 +573,8 @@ pub mod lowering {
     use crate::native_code::hooks::{NamecallSite, NativeCodeHooks, NativeContext};
     use crate::native_code::ir::{IrBuilder, IrCmd, IrCondition, IrOp, bytecode_type};
     use crate::packed::PackedScalar;
-    use crate::raw::ffi::{LUA_TBUFFER, LUA_TINTEGER, LUA_TNUMBER, LUA_TVECTOR};
     use crate::raster::Color;
+    use crate::raw::ffi::{LUA_TBUFFER, LUA_TINTEGER, LUA_TNUMBER, LUA_TVECTOR};
 
     static LOWERED: AtomicUsize = AtomicUsize::new(0);
 

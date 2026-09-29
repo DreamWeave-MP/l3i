@@ -218,7 +218,13 @@ unsafe extern "C-unwind" fn method_thunk<F: Binding<M>, M>(state: *mut ffi::lua_
 #[derive(Clone, Copy)]
 #[repr(C)]
 pub(crate) struct MemberEntry {
-    invoke: unsafe fn(*mut ffi::lua_State, *const c_void, c_int, *const ThreadRecord, *const crate::convert::RawValue) -> c_int,
+    invoke: unsafe fn(
+        *mut ffi::lua_State,
+        *const c_void,
+        c_int,
+        *const ThreadRecord,
+        *const crate::convert::RawValue,
+    ) -> c_int,
     context: *const c_void,
 }
 

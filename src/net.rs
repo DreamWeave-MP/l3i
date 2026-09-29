@@ -34,7 +34,7 @@ use dream_net::{
 };
 
 use crate::bind::{Call, Return};
-use crate::convert::{Bits64, Exact, BufferView, BytesView, Integer, Push};
+use crate::convert::{Bits64, BufferView, BytesView, Exact, Integer, Push};
 use crate::direct::field::{DirectField, FieldValue};
 use crate::error::{Error, Result};
 use crate::extension::{Extension, ExtensionDescriptor, InstallContext, TagPolicy};
@@ -518,7 +518,6 @@ impl Default for NetExtension {
     }
 }
 
-
 impl Extension for NetExtension {
     fn id(&self) -> &'static str {
         EXTENSION_ID
@@ -604,7 +603,10 @@ fn describe_schema(d: &mut ExtensionDescriptor) {
         .signature("(self, id: integer): string?");
     schema
         .method("maxPayload", |s: &NetSchema, id: Exact<i64>| -> Option<Integer> {
-            u32::try_from(id.0).ok().and_then(|id| s.0.event(EventTypeId(id))).map(|e| Integer(i64::from(e.max_payload)))
+            u32::try_from(id.0)
+                .ok()
+                .and_then(|id| s.0.event(EventTypeId(id)))
+                .map(|e| Integer(i64::from(e.max_payload)))
         })
         .signature("(self, eventId: integer): integer?");
     schema
@@ -622,9 +624,7 @@ fn describe_schema(d: &mut ExtensionDescriptor) {
 #[allow(clippy::too_many_lines)]
 fn describe_server(d: &mut ExtensionDescriptor) {
     let mut server = d.userdata::<Server>("dream.net.Server");
-    server
-        .tag(TagPolicy::Preferred)
-        .doc("The host's transport server; created in Rust, the private key stays there.");
+    server.tag(TagPolicy::Preferred).doc("The host's transport server; created in Rust, the private key stays there.");
     server
         .method("update", |server: &Server| {
             let now = (server.clock)();
@@ -637,7 +637,12 @@ fn describe_server(d: &mut ExtensionDescriptor) {
     server
         .method(
             "sendEvent",
-            |server: &Server, peer: Bits64, event: Exact<i64>, payload: BytesView, offset: Option<Exact<i64>>, length: Option<Exact<i64>>| {
+            |server: &Server,
+             peer: Bits64,
+             event: Exact<i64>,
+             payload: BytesView,
+             offset: Option<Exact<i64>>,
+             length: Option<Exact<i64>>| {
                 let event = event_from_int(event)?;
                 payload_range(payload, offset, length, |bytes| {
                     server.inner.borrow_mut().send(peer_from_int(peer), event, bytes)
@@ -645,11 +650,17 @@ fn describe_server(d: &mut ExtensionDescriptor) {
                 .map_err(send_error)
             },
         )
-        .signature("(self, peer: integer, eventId: integer, payload: buffer | string, offset: number?, length: number?)");
+        .signature(
+            "(self, peer: integer, eventId: integer, payload: buffer | string, offset: number?, length: number?)",
+        );
     server
         .method(
             "broadcast",
-            |server: &Server, event: Exact<i64>, payload: BytesView, offset: Option<Exact<i64>>, length: Option<Exact<i64>>| {
+            |server: &Server,
+             event: Exact<i64>,
+             payload: BytesView,
+             offset: Option<Exact<i64>>,
+             length: Option<Exact<i64>>| {
                 let event = event_from_int(event)?;
                 payload_range(payload, offset, length, |bytes| server.inner.borrow_mut().broadcast(event, bytes))?
                     .map(|refused| Integer(refused as i64))
@@ -702,7 +713,9 @@ fn describe_server(d: &mut ExtensionDescriptor) {
             server.inner.borrow().client_address(peer_from_int(peer)).map(|a| a.to_string())
         })
         .signature("(self, peer: integer): string?");
-    server.method("peerRtt", |server: &Server, peer: Bits64| server.stat(peer, |s| s.rtt)).signature("(self, peer: integer): number?");
+    server
+        .method("peerRtt", |server: &Server, peer: Bits64| server.stat(peer, |s| s.rtt))
+        .signature("(self, peer: integer): number?");
     server
         .method("peerJitter", |server: &Server, peer: Bits64| server.stat(peer, |s| s.jitter))
         .signature("(self, peer: integer): number?");
@@ -740,9 +753,7 @@ fn describe_server(d: &mut ExtensionDescriptor) {
 
 fn describe_client(d: &mut ExtensionDescriptor) {
     let mut client = d.userdata::<NetClient>("dream.net.Client");
-    client
-        .tag(TagPolicy::Preferred)
-        .doc("A transport client; `net.client{}` needs the network.transport capability.");
+    client.tag(TagPolicy::Preferred).doc("A transport client; `net.client{}` needs the network.transport capability.");
     client
         .method("connect", |client: &NetClient, token: BytesView| {
             let mut bytes = [0u8; dream_net::CONNECT_TOKEN_BYTES];
@@ -767,7 +778,11 @@ fn describe_client(d: &mut ExtensionDescriptor) {
     client
         .method(
             "sendEvent",
-            |client: &NetClient, event: Exact<i64>, payload: BytesView, offset: Option<Exact<i64>>, length: Option<Exact<i64>>| {
+            |client: &NetClient,
+             event: Exact<i64>,
+             payload: BytesView,
+             offset: Option<Exact<i64>>,
+             length: Option<Exact<i64>>| {
                 let event = event_from_int(event)?;
                 payload_range(payload, offset, length, |bytes| client.inner.borrow_mut().send(event, bytes))?
                     .map_err(send_error)
@@ -784,7 +799,9 @@ fn describe_client(d: &mut ExtensionDescriptor) {
         })
         .signature("(self): { [string]: number }?");
     client
-        .method("memoryUsage", |client: &NetClient, call: &Call| memory_table(call, &client.inner.borrow().memory_usage()))
+        .method("memoryUsage", |client: &NetClient, call: &Call| {
+            memory_table(call, &client.inner.borrow().memory_usage())
+        })
         .signature("(self): { [string]: number }");
     client.getter("status", |client: &NetClient| client.status_name()).signature("string");
     client.getter("port", |client: &NetClient| i64::from(client.inner.borrow().port())).signature("number");

@@ -230,7 +230,15 @@ impl<'r> DirectPlanBuilder<'r> {
             by_slot[usize::from(entry.slot)] = Some(index as u32);
             slot_keys[usize::from(entry.slot)] = slot_key(i32::from(entry.tag), entry.kind, entry.atom);
         }
-        let mut plan = DirectPlan { entries: self.entries, by_slot, slot_keys, first_atom, atom_count, tag_count, slots: Vec::new() };
+        let mut plan = DirectPlan {
+            entries: self.entries,
+            by_slot,
+            slot_keys,
+            first_atom,
+            atom_count,
+            tag_count,
+            slots: Vec::new(),
+        };
         for entry in &plan.entries {
             let index = plan.index(i32::from(entry.tag), entry.kind, entry.atom).expect("entry atoms lie in range");
             slots[index] = entry.slot;

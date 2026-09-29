@@ -417,8 +417,9 @@ measurements.
 ## Quality
 
 `cargo test` (and `cargo test --all-features`) run the ported C++ test contracts plus the
-runtime, sandbox, watchdog, native code, analysis, and renderer suites; `cargo clippy --all-targets --
--D warnings` is clean. The integration tests under `tests/` link as one binary (each binary
+runtime, sandbox, watchdog, native code, analysis, and renderer suites; `cargo clippy
+--all-targets --all-features -- -W clippy::pedantic -D warnings` and `cargo fmt --check` are
+clean, and every commit keeps them so. The integration tests under `tests/` link as one binary (each binary
 pays a full link-time codegen under cross-language LTO), so one file's tests run with
 `cargo test <file>::`. `BENCHMARKS.md` holds the Criterion numbers for the hot paths
 (`cargo bench --bench hot_paths`, then `python3 scripts/gen_benchmarks.py`).

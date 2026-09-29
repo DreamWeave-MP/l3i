@@ -12,9 +12,9 @@
 use std::cell::Cell;
 use std::ffi::{c_int, c_long, c_ulong, c_void};
 
+use l3i::Result;
 use l3i::Runtime;
 use l3i::bind::Call;
-use l3i::stack::Scope;
 use l3i::convert::{Integer, Vector3};
 use l3i::direct::field::{DirectField, FieldValue};
 use l3i::direct::{self, Atom, DirectAccess, DirectMetamethods};
@@ -22,9 +22,9 @@ use l3i::extension::{Extension, ExtensionDescriptor, RuntimePlan, RuntimePolicy,
 use l3i::ffi;
 use l3i::packed::Packed;
 use l3i::raster::{ClipRect, Color};
+use l3i::stack::Scope;
 use l3i::userdata::{Owned, Userdata};
 use l3i::value::Function;
-use l3i::Result;
 
 const CALLS: u64 = 100_000;
 const ROUNDS: usize = 7;
@@ -114,7 +114,8 @@ impl Counter {
             config3: 0,
         };
         // SAFETY: a well-formed attribute block for this process and any CPU.
-        let fd = unsafe { syscall(SYS_PERF_EVENT_OPEN, &raw mut attr, 0 as c_int, -1 as c_int, -1 as c_int, 0 as c_ulong) };
+        let fd =
+            unsafe { syscall(SYS_PERF_EVENT_OPEN, &raw mut attr, 0 as c_int, -1 as c_int, -1 as c_int, 0 as c_ulong) };
         (fd >= 0).then_some(Counter(fd as c_int))
     }
 
@@ -173,15 +174,22 @@ impl Extension for PlannedExtension {
         planned.getter("value", |p: &Planned| p.value.get()).untyped();
         planned.field::<PlannedValue>("field").untyped();
         d.module("@dream/bench")
-            .function("new", |v: f64| Owned(Planned { value: Cell::new(v) })).untyped()
-            .function("zero", || 7.0f64).untyped()
-            .function("two", |a: f64, b: f64| a + b).untyped()
-            .function("vec", |v: Vector3| f64::from(v.x)).untyped()
-            .function("packed", |c: Packed<Color>| f64::from(c.0.r)).untyped()
-            .function("integer", |i: Integer| i.0 as f64).untyped()
+            .function("new", |v: f64| Owned(Planned { value: Cell::new(v) }))
+            .untyped()
+            .function("zero", || 7.0f64)
+            .untyped()
+            .function("two", |a: f64, b: f64| a + b)
+            .untyped()
+            .function("vec", |v: Vector3| f64::from(v.x))
+            .untyped()
+            .function("packed", |c: Packed<Color>| f64::from(c.0.r))
+            .untyped()
+            .function("integer", |i: Integer| i.0 as f64)
+            .untyped()
             .function("four", |a: Vector3, b: Vector3, c: Packed<Color>, d: Packed<ClipRect>| {
                 f64::from(a.x + b.y) + f64::from(c.0.r) + f64::from(d.0.max_x)
-            }).untyped();
+            })
+            .untyped();
         Ok(())
     }
 }
@@ -232,15 +240,21 @@ fn runtime() -> Runtime {
     })
     .unwrap();
     direct::register::<Direct>(&runtime, DIRECT).unwrap();
-    runtime.stack().with_frame(|frame| {
-        l3i::userdata::tagged::push(frame, Direct { value: Cell::new(7.0) })?;
-        frame.set_global("direct")
-    }).unwrap();
-    runtime.stack().with_frame(|frame| {
-        // SAFETY: a plain C function with a static debug name.
-        unsafe { frame.push_c_function(raw_add, c"dream.bench.rawAdd".as_ptr()) };
-        frame.set_global("raw_add")
-    }).unwrap();
+    runtime
+        .stack()
+        .with_frame(|frame| {
+            l3i::userdata::tagged::push(frame, Direct { value: Cell::new(7.0) })?;
+            frame.set_global("direct")
+        })
+        .unwrap();
+    runtime
+        .stack()
+        .with_frame(|frame| {
+            // SAFETY: a plain C function with a static debug name.
+            unsafe { frame.push_c_function(raw_add, c"dream.bench.rawAdd".as_ptr()) };
+            frame.set_global("raw_add")
+        })
+        .unwrap();
     runtime.set_global("color", &Integer(Color::WHITE.pack().bits().unwrap())).unwrap();
     runtime.set_global("clip", &Integer(ClipRect::ALL.pack().bits().unwrap())).unwrap();
     runtime.exec("planned = bench.new(7) hoisted = vector.create(1, 2, 3)").unwrap();
@@ -270,7 +284,8 @@ const COLUMNS: &[(&str, u32, u64)] = &[
 ];
 
 fn main() {
-    let counters: Vec<Option<Counter>> = COLUMNS.iter().map(|(_, kind, config)| Counter::open(*kind, *config)).collect();
+    let counters: Vec<Option<Counter>> =
+        COLUMNS.iter().map(|(_, kind, config)| Counter::open(*kind, *config)).collect();
     if counters[0].is_none() || counters[1].is_none() {
         eprintln!("perf counters unavailable (perf_event_paranoid > 2, or not Linux); nothing measured");
         return;

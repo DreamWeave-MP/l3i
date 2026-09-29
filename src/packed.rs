@@ -163,7 +163,10 @@ impl PackedKind {
     /// Rejects kind numbers no registry accepts: 0, above 15, or one of l3i's for a host type.
     pub(crate) fn validate(&self) -> Result<()> {
         if self.kind == 0 || self.kind > LAST_KIND {
-            return Err(Error::logic(format!("packed scalar {} declares kind {}, outside 1..=15", self.name, self.kind)));
+            return Err(Error::logic(format!(
+                "packed scalar {} declares kind {}, outside 1..=15",
+                self.name, self.kind
+            )));
         }
         if self.kind < HOST_KIND_FIRST && !self.is_builtin() {
             return Err(Error::logic(format!(
@@ -207,11 +210,9 @@ fn check_registered<T: PackedScalar>(state: *mut crate::raw::ffi::lua_State) -> 
 #[inline(never)]
 fn unregistered<T: PackedScalar>(shared: Option<&crate::runtime::shared::Shared>) -> Error {
     match shared.and_then(|shared| shared.packed_owner_name(T::KIND)) {
-        Some(owner) => Error::logic(format!(
-            "packed kind {} is registered to {owner} in this runtime, not {}",
-            T::KIND,
-            T::NAME
-        )),
+        Some(owner) => {
+            Error::logic(format!("packed kind {} is registered to {owner} in this runtime, not {}", T::KIND, T::NAME))
+        }
         None => Error::logic(format!(
             "packed scalar {} (kind {}) is not registered in this runtime; declare it with ExtensionDescriptor::packed or Runtime::register_packed",
             T::NAME,

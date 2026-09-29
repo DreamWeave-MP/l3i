@@ -156,10 +156,12 @@ impl Extension for Views {
         d.module("@dream/views")
             .function("numbers", |call: &Call, count: i64| {
                 Sequence::push(call, Numbers((1..=count).map(|n| n * 10).collect())).map(l3i::value::Value::store)?
-            }).untyped()
+            })
+            .untyped()
             .function("countdown", |call: &Call, from: i64| {
                 Stream::push(call, Countdown(from)).map(l3i::value::Value::store)?
-            }).untyped();
+            })
+            .untyped();
         Ok(())
     }
 }
@@ -210,10 +212,7 @@ fn exact_integers_never_round_and_bit_patterns_keep_all_sixty_four_bits() {
         )
         .unwrap();
     // The full pattern round-trips through the stack.
-    let all = runtime
-        .stack()
-        .with_frame(|frame| Bits64(u64::MAX).push_into(frame)?.read::<Bits64>())
-        .unwrap();
+    let all = runtime.stack().with_frame(|frame| Bits64(u64::MAX).push_into(frame)?.read::<Bits64>()).unwrap();
     assert_eq!(all, Bits64(u64::MAX));
 }
 
@@ -263,11 +262,16 @@ impl PackedScalar for Handle {
 fn packed_scalars_cross_as_integers_with_a_kind_check() {
     let runtime = Runtime::new().unwrap();
     // Nothing crosses until the kind is registered on this VM.
-    let unregistered = runtime.bind_function("dreamweave.tests.unregistered", |h: Packed<Handle>| i64::from(h.0.id)).unwrap();
+    let unregistered =
+        runtime.bind_function("dreamweave.tests.unregistered", |h: Packed<Handle>| i64::from(h.0.id)).unwrap();
     runtime.set_global("unregistered", &unregistered).unwrap();
     let error = runtime.exec("unregistered(5i)").unwrap_err().to_string();
     assert!(error.contains("Handle (kind 5) is not registered"), "{error}");
-    let error = runtime.stack().with_frame(|frame| Packed(Handle { id: 1, flags: 0 }).push_into(frame).map(|_| ())).unwrap_err().to_string();
+    let error = runtime
+        .stack()
+        .with_frame(|frame| Packed(Handle { id: 1, flags: 0 }).push_into(frame).map(|_| ()))
+        .unwrap_err()
+        .to_string();
     assert!(error.contains("not registered"), "{error}");
     runtime.register_packed::<Handle>().unwrap();
     runtime.register_packed::<Handle>().unwrap();

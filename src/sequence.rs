@@ -75,7 +75,11 @@ unsafe extern "C-unwind" fn sequence_index<S: SequenceSource>(state: *mut ffi::l
                 // An exact integer key selects an element; a fractional or out-of-range number is
                 // no element (nil), as in a table, never a rounded neighbour.
                 let index = key.read::<crate::convert::Exact<i64>>().ok().map(|index| index.0);
-                match index.and_then(|i| i.checked_sub(1)).and_then(|i| usize::try_from(i).ok()).and_then(|i| sequence.0.get(i)) {
+                match index
+                    .and_then(|i| i.checked_sub(1))
+                    .and_then(|i| usize::try_from(i).ok())
+                    .and_then(|i| sequence.0.get(i))
+                {
                     Some(item) => {
                         item.push_into(&call)?;
                     }

@@ -90,7 +90,8 @@ fn lowered(c: &mut Criterion) {
                 ),
             )
             .unwrap();
-        let results = sandbox.run(&runtime, &template, &instance, CallContext { id: 1, category: MemoryCategory(0) }).unwrap();
+        let results =
+            sandbox.run(&runtime, &template, &instance, CallContext { id: 1, category: MemoryCategory(0) }).unwrap();
         let function = Function::from_value(results.into_iter().next().unwrap()).unwrap();
         let stack = runtime.stack();
         group.bench_function(name, |b| b.iter(|| function.invoke::<f64, _>(&stack, ()).unwrap()));

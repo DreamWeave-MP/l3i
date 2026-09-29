@@ -123,8 +123,10 @@ fn the_generated_definitions_type_check_and_typed_scripts_pass_strict_mode() {
     }
     assert!(!definitions.contains("declare quat"), "no compatibility global is declared:\n{definitions}");
     let scripts = plan.analysis_sources(Scripts(SCRIPTS.iter().copied().collect()));
-    let options =
-        AnalysisOptions { definitions: vec![Definitions { name: "dream.d.luau".to_owned(), source: definitions.clone() }], ..Default::default() };
+    let options = AnalysisOptions {
+        definitions: vec![Definitions { name: "dream.d.luau".to_owned(), source: definitions.clone() }],
+        ..Default::default()
+    };
     let analysis = match Analysis::new(scripts, options) {
         Ok(analysis) => analysis,
         Err(error) => panic!("{error}\n---\n{definitions}"),

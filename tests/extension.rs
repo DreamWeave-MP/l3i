@@ -70,7 +70,8 @@ impl Extension for Core {
         }
         d.module("@dream/core")
             .doc("Counters.")
-            .function("new", |n: i64| Owned(Counter { value: Cell::new(n) })).untyped()
+            .function("new", |n: i64| Owned(Counter { value: Cell::new(n) }))
+            .untyped()
             .constant("ANSWER", CompileConstant::Number(42.0))
             .constant("LIMIT", CompileConstant::Integer(7))
             .constant("NAME", CompileConstant::String("core".to_owned()));
@@ -128,7 +129,10 @@ fn dependency_order_composition_and_direct_dispatch() {
     let slots: Vec<Option<u16>> = counter.members.iter().map(|m| m.slot).collect();
     // Slots are dense across the plan in key order; the network bridge's Client comes first.
     let base = slots[0].expect("the first method has a slot");
-    assert_eq!(slots, [Some(base), Some(base + 1), Some(base + 2), Some(base + 3), None, Some(base + 4), Some(base + 5)]);
+    assert_eq!(
+        slots,
+        [Some(base), Some(base + 1), Some(base + 2), Some(base + 3), None, Some(base + 4), Some(base + 5)]
+    );
     // Atoms are dense over the sorted member names; direct field names get none.
     assert_eq!(plan.atom_of("add"), Some(1));
     assert!(plan.atom_of("twice").is_some_and(|atom| atom > 1), "every method and property name has an atom");
@@ -193,11 +197,19 @@ fn stale_direct_cache_is_rejected_across_types() {
             "dream.pair"
         }
         fn describe(&self, d: &mut ExtensionDescriptor) -> Result<()> {
-            d.userdata::<Counter>("dream.tests.Counter").tag(TagPolicy::Required).method("get", |c: &Counter| c.value.get()).untyped();
-            d.userdata::<Other>("dream.tests.Other").tag(TagPolicy::Required).method("get", |_: &Other| -1i64).untyped();
+            d.userdata::<Counter>("dream.tests.Counter")
+                .tag(TagPolicy::Required)
+                .method("get", |c: &Counter| c.value.get())
+                .untyped();
+            d.userdata::<Other>("dream.tests.Other")
+                .tag(TagPolicy::Required)
+                .method("get", |_: &Other| -1i64)
+                .untyped();
             d.module("@dream/pair")
-                .function("counter", |n: i64| Owned(Counter { value: Cell::new(n) })).untyped()
-                .function("other", || Owned(Other)).untyped();
+                .function("counter", |n: i64| Owned(Counter { value: Cell::new(n) }))
+                .untyped()
+                .function("other", || Owned(Other))
+                .untyped();
             Ok(())
         }
     }
@@ -361,7 +373,9 @@ fn finalization_rejects_bad_compositions() {
 
     // Names that fold to one identifier: debug prefixes, generated class and module type
     // names; and compat globals, one per module and one module per global.
-    let error = text(RuntimePlan::builder().extension(Bare("dream.a-b", vec![])).extension(Bare("dream.a_b", vec![])).finalize());
+    let error = text(
+        RuntimePlan::builder().extension(Bare("dream.a-b", vec![])).extension(Bare("dream.a_b", vec![])).finalize(),
+    );
     assert!(error.contains("share the debug prefix 'dream.a_b'"), "{error}");
     struct Mod(&'static str, &'static str);
     impl Extension for Mod {
@@ -373,7 +387,8 @@ fn finalization_rejects_bad_compositions() {
             Ok(())
         }
     }
-    let error = text(RuntimePlan::builder().extension(Mod("a", "@dream/x-y")).extension(Mod("b", "@dream/x_y")).finalize());
+    let error =
+        text(RuntimePlan::builder().extension(Mod("a", "@dream/x-y")).extension(Mod("b", "@dream/x_y")).finalize());
     assert!(error.contains("would share the generated type name 'Module__dream_x_y'"), "{error}");
     let error = text(
         RuntimePlan::builder()
@@ -405,7 +420,10 @@ fn finalization_rejects_bad_compositions() {
         }
     }
     let error = text(
-        RuntimePlan::builder().extension(Keyed("a", "dream.x-y.T", true)).extension(Keyed("b", "dream.x_y.T", false)).finalize(),
+        RuntimePlan::builder()
+            .extension(Keyed("a", "dream.x-y.T", true))
+            .extension(Keyed("b", "dream.x_y.T", false))
+            .finalize(),
     );
     assert!(error.contains("would share the generated class name 'dream_x_y_T'"), "{error}");
 
@@ -423,11 +441,15 @@ fn finalization_rejects_bad_compositions() {
         fn describe(&self, d: &mut ExtensionDescriptor) -> Result<()> {
             match self.1 {
                 0 => {
-                    d.userdata::<Other>("dream.tests.Other").method("get", |_: &Other| 1i64).signature("(self): number");
+                    d.userdata::<Other>("dream.tests.Other")
+                        .method("get", |_: &Other| 1i64)
+                        .signature("(self): number");
                     d.userdata::<Twin>("dream.tests.Twin").method("get", |_: &Twin| 1i64).signature("(self): number");
                 }
                 1 => {
-                    d.userdata::<Other>("dream.tests.Other").method("bad-name", |_: &Other| 1i64).signature("(self): number");
+                    d.userdata::<Other>("dream.tests.Other")
+                        .method("bad-name", |_: &Other| 1i64)
+                        .signature("(self): number");
                 }
                 2 => {
                     d.module("@dream/spaced path").function("f", || 1i64).signature("() -> number");
@@ -461,10 +483,14 @@ fn finalization_rejects_bad_compositions() {
                     d.module("@dream/quo\"te").function("f", || 1i64).signature("() -> number");
                 }
                 1 => {
-                    d.userdata::<Other>("dream/tests/Other").method("get", |_: &Other| 1i64).signature("(self): number");
+                    d.userdata::<Other>("dream/tests/Other")
+                        .method("get", |_: &Other| 1i64)
+                        .signature("(self): number");
                 }
                 2 => {
-                    d.userdata::<BadName>("dream.tests.BadName").method("get", |_: &BadName| 1i64).signature("(self): number");
+                    d.userdata::<BadName>("dream.tests.BadName")
+                        .method("get", |_: &BadName| 1i64)
+                        .signature("(self): number");
                 }
                 _ => {
                     d.module("@dream/spelled").function("continue", || 1i64).signature("() -> number");
@@ -503,7 +529,10 @@ fn finalization_rejects_bad_compositions() {
         }
     }
     let error = text(RuntimePlan::builder().extension(Unsigned).finalize());
-    assert!(error.contains("member 'mystery' of 'dream.tests.Other' (from 'dream.unsigned') has no signature"), "{error}");
+    assert!(
+        error.contains("member 'mystery' of 'dream.tests.Other' (from 'dream.unsigned') has no signature"),
+        "{error}"
+    );
     struct UnsignedModule;
     impl Extension for UnsignedModule {
         fn id(&self) -> &'static str {
@@ -634,7 +663,10 @@ fn finalization_rejects_bad_compositions() {
         }
         fn describe(&self, d: &mut ExtensionDescriptor) -> Result<()> {
             d.requires("dream.core");
-            d.userdata::<Other>("dream.tests.Other").tag(TagPolicy::Required).method("value", |_: &Other| 99i64).untyped();
+            d.userdata::<Other>("dream.tests.Other")
+                .tag(TagPolicy::Required)
+                .method("value", |_: &Other| 99i64)
+                .untyped();
             d.module("@dream/clash").function("new", || Owned(Other)).untyped();
             Ok(())
         }
@@ -741,7 +773,9 @@ fn install_adds_to_declared_modules_and_rejects_duplicates() {
     assert!(definitions.contains("    declared: () -> number,"), "{definitions}");
     assert!(definitions.contains("    installed: () -> number,"), "{definitions}");
     assert!(definitions.contains("    instance: Other,"), "{definitions}");
-    let instantiate = |late: Late| Runtime::from_plan(&RuntimePlan::builder().extension(late).finalize().unwrap()).err().unwrap().to_string();
+    let instantiate = |late: Late| {
+        Runtime::from_plan(&RuntimePlan::builder().extension(late).finalize().unwrap()).err().unwrap().to_string()
+    };
     let error = instantiate(Late(1));
     assert!(error.contains("member 'declared' is bound from its declaration; install cannot replace it"), "{error}");
     let error = instantiate(Late(2));
@@ -785,7 +819,10 @@ macro_rules! slot_types {
     };
 }
 
-slot_types!(S0, S1, S2, S3, S4, S5, S6, S7, S8, S9, S10, S11, S12, S13, S14, S15, S16, S17, S18, S19, S20, S21, S22, S23, S24, S25, S26, S27, S28, S29, S30, S31, S32, S33);
+slot_types!(
+    S0, S1, S2, S3, S4, S5, S6, S7, S8, S9, S10, S11, S12, S13, S14, S15, S16, S17, S18, S19, S20, S21, S22, S23, S24,
+    S25, S26, S27, S28, S29, S30, S31, S32, S33
+);
 
 struct Hot;
 // SAFETY: a plain unit type.
@@ -811,7 +848,9 @@ fn compiler_type_slots_go_to_required_types_first_and_a_required_type_without_on
             "dream.zlowered"
         }
         fn describe(&self, d: &mut ExtensionDescriptor) -> Result<()> {
-            d.userdata::<Hot>("dream.zlowered.Hot").tag(TagPolicy::Required).compiler_type(CompilerTypePolicy::Required);
+            d.userdata::<Hot>("dream.zlowered.Hot")
+                .tag(TagPolicy::Required)
+                .compiler_type(CompilerTypePolicy::Required);
             Ok(())
         }
     }
@@ -819,12 +858,15 @@ fn compiler_type_slots_go_to_required_types_first_and_a_required_type_without_on
 
     // Thirty-four Required types: the thirty-third in tag order (tags follow the keys' order,
     // where "S8" sorts after "S33") fails the plan instead of silently losing its compiler type.
-    let error = text(RuntimePlan::builder().extension(Many(TagPolicy::Required, CompilerTypePolicy::Required)).finalize());
+    let error =
+        text(RuntimePlan::builder().extension(Many(TagPolicy::Required, CompilerTypePolicy::Required)).finalize());
     assert!(error.contains("no compiler type slot left for 'dream.slots.S8'"), "{error}");
 
     // Preferred types take what is left, in tag order, and the rest go without.
-    let plan = RuntimePlan::builder().extension(Many(TagPolicy::Required, CompilerTypePolicy::Preferred)).finalize().unwrap();
-    let typed: Vec<&str> = plan.userdata().iter().filter(|u| u.bytecode_type.is_some()).map(|u| u.key.as_str()).collect();
+    let plan =
+        RuntimePlan::builder().extension(Many(TagPolicy::Required, CompilerTypePolicy::Preferred)).finalize().unwrap();
+    let typed: Vec<&str> =
+        plan.userdata().iter().filter(|u| u.bytecode_type.is_some()).map(|u| u.key.as_str()).collect();
     assert_eq!(typed.len(), COMPILER_TYPE_CAPACITY);
     // `dream.net.Client` keys before the slot types and takes the first slot.
     assert_eq!(plan.userdata_by_key("dream.net.Client").unwrap().bytecode_type, Some(64));
@@ -867,7 +909,8 @@ fn compiler_type_slots_go_to_required_types_first_and_a_required_type_without_on
     let error = text(RuntimePlan::builder().extension(Many(TagPolicy::Never, CompilerTypePolicy::Required)).finalize());
     assert!(error.contains("requires a compiler type slot, which needs a tag"), "{error}");
     // Never is never named.
-    let plan = RuntimePlan::builder().extension(Many(TagPolicy::Required, CompilerTypePolicy::Never)).finalize().unwrap();
+    let plan =
+        RuntimePlan::builder().extension(Many(TagPolicy::Required, CompilerTypePolicy::Never)).finalize().unwrap();
     assert!(plan.userdata().iter().filter(|u| u.owner == "dream.slots").all(|u| u.bytecode_type.is_none()));
 }
 

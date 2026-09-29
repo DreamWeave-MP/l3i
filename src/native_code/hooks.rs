@@ -168,10 +168,22 @@ impl<H: NativeCodeHooks + ?Sized> NativeCodeHooks for std::rc::Rc<H> {
     fn vector_namecall_type(&self, member: &str) -> u8 {
         (**self).vector_namecall_type(member)
     }
-    fn vector_access(&self, context: &NativeContext<'_>, build: &mut IrBuilder<'_>, member: &str, site: AccessSite) -> bool {
+    fn vector_access(
+        &self,
+        context: &NativeContext<'_>,
+        build: &mut IrBuilder<'_>,
+        member: &str,
+        site: AccessSite,
+    ) -> bool {
         (**self).vector_access(context, build, member, site)
     }
-    fn vector_namecall(&self, context: &NativeContext<'_>, build: &mut IrBuilder<'_>, member: &str, site: NamecallSite) -> bool {
+    fn vector_namecall(
+        &self,
+        context: &NativeContext<'_>,
+        build: &mut IrBuilder<'_>,
+        member: &str,
+        site: NamecallSite,
+    ) -> bool {
         (**self).vector_namecall(context, build, member, site)
     }
     fn userdata_access_type(&self, context: &NativeContext<'_>, userdata_type: u8, member: &str) -> u8 {
@@ -199,7 +211,12 @@ impl<H: NativeCodeHooks + ?Sized> NativeCodeHooks for std::rc::Rc<H> {
     ) -> bool {
         (**self).userdata_access(context, build, userdata_type, member, site)
     }
-    fn userdata_metamethod(&self, context: &NativeContext<'_>, build: &mut IrBuilder<'_>, site: MetamethodSite) -> bool {
+    fn userdata_metamethod(
+        &self,
+        context: &NativeContext<'_>,
+        build: &mut IrBuilder<'_>,
+        site: MetamethodSite,
+    ) -> bool {
         (**self).userdata_metamethod(context, build, site)
     }
     fn userdata_namecall(

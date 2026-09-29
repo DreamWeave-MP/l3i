@@ -82,8 +82,8 @@ pub(crate) unsafe fn self_test(state: *mut ffi::lua_State) -> crate::error::Resu
         let ok = {
             let slot = |offset: i32| ffi::l3i_stack_slot(state, top + offset).as_ref();
             let number = slot(1).is_some_and(|v| v.tag() == ffi::LUA_TNUMBER && v.number() == 2.5);
-            let integer = slot(2)
-                .is_some_and(|v| v.tag() == ffi::LUA_TINTEGER && v.integer() == 0x1234_5678_9ABC_DEF0u64 as i64);
+            let integer =
+                slot(2).is_some_and(|v| v.tag() == ffi::LUA_TINTEGER && v.integer() == 0x1234_5678_9ABC_DEF0u64 as i64);
             let boolean = slot(3).is_some_and(|v| v.tag() == ffi::LUA_TBOOLEAN && v.boolean());
             let vector = slot(4).is_some_and(|v| v.tag() == ffi::LUA_TVECTOR && v.vector() == [1.5, -2.5, 3.5]);
             number && integer && boolean && vector

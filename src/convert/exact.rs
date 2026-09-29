@@ -120,7 +120,11 @@ impl<'v> FromView<'v> for Bits64 {
 
     #[inline(always)]
     fn from_raw_arg(raw: &RawValue, view: impl FnOnce() -> ValueView<'v>) -> Result<Bits64> {
-        if raw.tag() == ffi::LUA_TINTEGER { Ok(Bits64(raw.integer() as u64)) } else { Err(view().type_error(Type::Integer)) }
+        if raw.tag() == ffi::LUA_TINTEGER {
+            Ok(Bits64(raw.integer() as u64))
+        } else {
+            Err(view().type_error(Type::Integer))
+        }
     }
 
     #[inline]

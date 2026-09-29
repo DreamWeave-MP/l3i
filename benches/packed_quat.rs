@@ -135,7 +135,10 @@ fn lowered(c: &mut Criterion) {
         // the compiler order the call differently and the site does not lower.
         ("lowered Q:slerp (native)", "local target = if i % 2 == 0 then a else b s = Q:slerp(s, target, 0.3)"),
         ("binder quat.slerp (native)", "local target = if i % 2 == 0 then a else b s = quat.slerp(s, target, 0.3)"),
-        ("userdata slerp (native, allocates)", "local target = if i % 2 == 0 then ua else ub us = us:slerp(target, 0.3)"),
+        (
+            "userdata slerp (native, allocates)",
+            "local target = if i % 2 == 0 then ua else ub us = us:slerp(target, 0.3)",
+        ),
         ("lowered Q:rotate (native)", "w = Q:rotate(a, w)"),
         ("binder quat.rotate (native)", "w = quat.rotate(a, w)"),
         ("userdata rotate (native)", "w = ua:rotate(w)"),
@@ -160,7 +163,8 @@ fn lowered(c: &mut Criterion) {
                 ),
             )
             .unwrap();
-        let results = sandbox.run(&runtime, &template, &instance, CallContext { id: 1, category: MemoryCategory(0) }).unwrap();
+        let results =
+            sandbox.run(&runtime, &template, &instance, CallContext { id: 1, category: MemoryCategory(0) }).unwrap();
         let function = Function::from_value(results.into_iter().next().unwrap()).unwrap();
         let stack = runtime.stack();
         group.bench_function(name, |b| b.iter(|| function.invoke::<f64, _>(&stack, ()).unwrap()));
