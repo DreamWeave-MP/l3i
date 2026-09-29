@@ -13,6 +13,10 @@
 // the device pixel ratio, and under prefers-reduced-motion draws one frame and stops. The still
 // that sass/brand.sass draws stays until the first frame is on the canvas, which fades in over
 // it. Without WebGL nothing is added and the still remains.
+//
+// The template loads this module through [extra.hero] in config.toml and gives the hero an empty
+// [data-dw-hero-art] behind the text, which the canvas fills. A hero without one gets the canvas
+// as its own first child.
 
 import * as THREE from './vendor/three.module.min.js';
 
@@ -383,7 +387,7 @@ const DUST_FRAGMENT = /* glsl */ `
   }
 `;
 
-function start(hero) {
+function start(hero, art) {
   const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
   let renderer;
@@ -395,7 +399,8 @@ function start(hero) {
   const canvas = renderer.domElement;
   canvas.className = 'l3i-sky';
   canvas.setAttribute('aria-hidden', 'true');
-  hero.prepend(canvas);
+  if (art) art.append(canvas);
+  else hero.prepend(canvas);
 
   const accent = cssColor('--dw-accent', '#c9a4ff');
   const bg0 = cssColor('--dw-bg-0', '#0a0710');
@@ -570,7 +575,7 @@ function start(hero) {
   function layout() {
     width = Math.max(hero.clientWidth, 1);
     height = Math.max(hero.clientHeight, 1);
-    const column = hero.querySelector('.dw-hero__grid > div');
+    const column = hero.querySelector('.dw-hero__text, .dw-hero__grid > div');
     const textRight = column ? column.getBoundingClientRect().right - canvas.getBoundingClientRect().left : width;
     const shell = Math.min(width, pageWidth);
     const wideCentre = width / 2 + shell / 2 - 14 * rem;
@@ -775,5 +780,6 @@ function start(hero) {
   resume();
 }
 
-const hero = document.querySelector('.dw-hero');
-if (hero) start(hero);
+const art = document.querySelector('[data-dw-hero-art]');
+const hero = art ? art.closest('.dw-hero') || art.parentElement : document.querySelector('.dw-hero');
+if (hero) start(hero, art);
