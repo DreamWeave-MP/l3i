@@ -12,17 +12,18 @@ on:
 jobs:
   build:
     permissions:
+      actions: write
       contents: write
       pages: write
       id-token: write
-    uses: DreamWeave-MP/StroggForge/.github/workflows/libGlobalBuild.yml@v46
+    uses: DreamWeave-MP/StroggForge/.github/workflows/libGlobalBuild.yml@v52
     secrets: inherit
     with:
       crate_names: '["l3i"]'
 
-      # l3i builds only under the clang cross-language LTO policy (TOOLCHAIN.md): every job that
-      # compiles gets a clang and lld whose LLVM major matches the active rustc.
-      llvm_toolchain: true
+      # l3i builds only under the clang cross-language LTO policy (TOOLCHAIN.md). StroggForge's
+      # setup-llvm step gives every job that compiles a clang and lld whose LLVM major matches the
+      # active rustc; since v52 it runs unconditionally, so there is nothing to switch on here.
 
       # rust-version in Cargo.toml; the MSRV job matches that toolchain's LLVM major too.
       msrv: auto
@@ -32,3 +33,7 @@ jobs:
 
       # Not on crates.io yet. Flip to true (and add CARGO_REGISTRY_TOKEN) for the first release.
       cargo_publish: false
+
+      # StroggForge records each version crates.io has in content/home/mod.lock and deploys this
+      # site, in place of the rustdoc Pages.
+      mod_template: true
