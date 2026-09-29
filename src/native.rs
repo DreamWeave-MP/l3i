@@ -7,7 +7,8 @@ use crate::raw::{ffi, trampoline};
 use crate::stack::Stack;
 
 /// Runs `body` as the entire implementation of a `lua_CFunction`, with a [`Stack`] over the
-/// calling thread. Errors and panics become Lua errors after every Rust value has dropped.
+/// calling thread. An `Err` is raised as a Lua error after every Rust value has dropped; a panic
+/// aborts the process, since it cannot cross Luau's frames.
 ///
 /// # Safety
 /// `state` is the `lua_State*` Luau passed to the enclosing C function, and the caller is that
