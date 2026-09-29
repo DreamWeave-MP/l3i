@@ -1,0 +1,76 @@
+# l3i. Structured facts only: the name and summary are `title` and `description` in index.md.
+# Every key is explained at https://dreamweave-mp.github.io/DreamWeave-Mod-Template/guide/mod-toml/
+
+# Permanent identity. Never changes, whatever the crate is called or wherever it is hosted.
+id = "2198fb51-71ba-4695-8e1f-26b55144c4fd"
+
+slug = "l3i"
+type = "library"
+status = "active"
+license = "MIT OR Apache-2.0"
+
+[[maintainers]]
+name = "Dave Corley"
+url = "https://github.com/magicaldave"
+
+[links]
+documentation = "@/docs/_index.md"
+donate = "https://ko-fi.com/magicaldave"
+
+# A Rust library. StroggForge's library workflow (.github/workflows/build.yml) tests it on every
+# push; pushing a bare version tag, like 1.0.0, publishes that version to crates.io and records it
+# here.
+[package]
+format = "crate"
+crate = "l3i"
+
+# The transport every runtime carries: the planner inserts the dream.net bridge into every plan.
+[[requires]]
+id = "f82752ac-e7f6-43c0-8c2f-d91b7f6b3dda"
+name = "dream-net"
+version = "=1.0.0"
+url = "https://DreamWeave-MP.github.io/dream-net/"
+reason = "Runtime infrastructure: the @dream/net module is in every plan, and l3i owns the bridge."
+
+# The CPU rasterizer, bound as the dream.soft_render extension behind the soft-render feature.
+[[recommends]]
+id = "f7b9633b-b7cb-4db9-a19f-63556586a81d"
+name = "dream-soft-render"
+version = "=1.0.0"
+url = "https://DreamWeave-MP.github.io/dream-soft-render/"
+reason = "The @dream/soft-render module, when the soft-render feature is on."
+
+[[credits]]
+name = "Roblox"
+role = "Luau, the language and VM this crate builds and binds (MIT)"
+url = "https://luau.org"
+
+[[credits]]
+name = "The OpenMW project"
+role = "The C++ Luau binder in components/luau that l3i ports, and the tests it answers to"
+url = "https://openmw.org"
+
+[[credits]]
+name = "Más Bandwidth LLC"
+role = "netcode, reliable and serialize, beneath dream-net"
+url = "https://mas-bandwidth.com"
+
+# Every version on crates.io, oldest first. To release, add the next one here with the day you
+# publish it, set the same version in Cargo.toml, commit, and push its tag: git tag 1.0.0.
+
+[[releases]]
+version = "1.0.0"
+date = 2026-09-29
+summary = "First release: the whole Luau 0.740 C API under a scoped Rust layer, planned runtimes composed from extensions, sandboxes, the dream-net bridge in every VM, and native lowering hooks written in Rust."
+added = [
+    "The typed binder: `Runtime::bind_function` reads arguments straight from Luau's 16-byte value layout, with OpenMW's optional, variadic and overload rules and its exact error wording.",
+    "Tagged and untagged userdata per runtime: the same Rust type may be tag 8 in one VM, 17 in another, and untagged in a third; generated `__index` and `__namecall` dispatchers that cost one Luau call frame.",
+    "Runtime plans: an `Extension` describes modules, userdata, packed kinds, services and capabilities without a VM, and `RuntimePlan::finalize` assigns tags, compiler slots, atoms and direct slots, validates every identifier and path, and renders the `.d.luau` for the composition.",
+    "Sandboxes with OpenMW's prelude, per-script instances, and compiled templates cloned per script.",
+    "The `dream.net` bridge in every plan: schemas, clients gated by the `network.transport` capability, host-created servers, and `pollInto` with one payload copy and no allocation.",
+    "Packed 64-bit scalars with a kind registry: `dream.quat` rotations and animation keys, `dream.raster` colours and clip rectangles, and `dream.soft_render` behind the `soft-render` feature.",
+    "Native code generation (`jit`): Luau's CodeGen with lowering hooks written in Rust against an `IrBuilder` C ABI; quaternion, colour and vertex-writer paths that lower to IR with no C call.",
+    "Luau's Analysis frontend (`analysis`): type checker, linter and autocomplete over a source provider, definition files, and the gate that type checks a plan's declared API against strict scripts.",
+    "Watchdog limits, memory categories, call scopes, collector control and the profiler plumbing OpenMW's engine needs, and every function in `lua.h`, `lualib.h`, `luacode.h`, `luacodegen.h`, `luajitinliner.h` and `Require.h` declared by hand.",
+    "The clang, lld and cross-language thin LTO toolchain, enforced by `build.rs` and measured in TOOLCHAIN.md: a bound call within forty instructions of a bare C function.",
+]

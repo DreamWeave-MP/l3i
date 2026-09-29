@@ -1,0 +1,67 @@
+# Site configuration. This file is about the website; facts about the crate live in
+# content/home/mod.toml. Zola reads this file; so does CI.
+
+# Where the site lives. On GitHub Pages the workflow substitutes the real Pages URL, so this
+# value matters for local previews.
+base_url = "https://DreamWeave-MP.github.io/l3i"
+title = "l3i"
+description = "The Luau runtime for DreamWeave: a Rust binder that owns its Luau 0.740 build, plans every VM before it exists, and lowers hot script calls to native code."
+
+compile_sass = true
+build_search_index = true
+generate_feeds = true
+feed_filenames = ["atom.xml"]
+taxonomies = [{ name = "tags", feed = false }]
+
+[search]
+index_format = "fuse_json"
+include_title = true
+include_description = true
+include_content = true
+truncate_content_length = 400
+
+[markdown]
+highlighting = { theme = "dracula-soft" }
+insert_anchor_links = "right"
+smart_punctuation = true
+
+[slugify]
+paths = "safe"
+
+[link_checker]
+skip_prefixes = ["https://github.com/", "https://www.nexusmods.com/", "https://crates.io/", "https://docs.rs/"]
+
+[extra]
+# The repository that builds and publishes this site. CI refuses to build anywhere else.
+github_username = "DreamWeave-MP"
+github_project = "l3i"
+
+logo_text = "l3i"
+footer_text = "l3i · MIT OR Apache-2.0 · Luau is Roblox's, MIT · a port of the OpenMW Luau binder, not affiliated with the OpenMW project"
+# The moon over the mist: the site's own mark, drawn in sass/brand.sass and static/js/l3i-hero.js.
+favicon = "img/l3i.svg"
+
+# Purple is DreamWeave's own palette. l3i is the runtime every DreamWeave crate speaks through, so
+# it wears the root colours; sass/brand.sass pushes them toward night.
+palette = "purple"
+
+# Oxanium for titles: the crate is a VM and a compiler backend, and its headings read as such.
+# The docs are read, so their text stays in the system font.
+font_override = "oxanium"
+font_override_titles_only = true
+
+menu_items = [
+    { name = "Overview", url = "@/home/index.md" },
+    { name = "Guide", url = "@/docs/_index.md" },
+    { name = "Extensions", url = "@/docs/extensions.md" },
+    { name = "Rust API", url = "@/docs/api/_index.md" },
+    { name = "Benchmarks", url = "@/docs/performance.md" },
+]
+
+# DreamWeave's own page-view counter: this is DreamWeave's site.
+goatcounter = "dreamweave-mp"
+
+# GitHub Discussions on this repository, through giscus. The ids are looked up at build time.
+[extra.comments]
+enabled = true
+category = "General"
