@@ -77,6 +77,17 @@ const NOISE = /* glsl */ `
     }
     return v;
   }
+  // Three octaves: for detail that must stay wider than a pixel on a small disc.
+  float fbm3Coarse(vec3 p) {
+    float v = 0.0;
+    float a = 0.5;
+    for (int i = 0; i < 3; i++) {
+      v += a * noise3(p);
+      p = p * 2.03 + vec3(1.7, 9.2, 3.1);
+      a *= 0.5;
+    }
+    return v;
+  }
 `;
 
 // The sky: stars, then two layers of domain-warped mist, lit by the moon.
@@ -207,10 +218,11 @@ const MOON_FRAGMENT = /* glsl */ `
           vec3 o = vec3(hash31(c), hash31(c + 7.1), hash31(c + 13.7));
           float radius = 0.22 + 0.33 * hash31(c + 3.3);
           float d = length(c + o - q) / radius;
-          if (d < 1.15) {
-            float bowl = -(1.0 - d * d) * 0.9;
-            float rim = smoothstep(0.55, 1.0, d) * smoothstep(1.15, 1.0, d) * 0.55;
-            h += bowl * step(d, 1.0) + rim;
+          if (d < 1.2) {
+            // A flat floor, a wall from a third of the way out, a low raised rim outside it.
+            float bowl = -0.16 * (1.0 - smoothstep(0.25, 1.0, d));
+            float rim = 0.07 * smoothstep(0.7, 1.0, d) * smoothstep(1.2, 1.0, d);
+            h += bowl + rim;
           }
         }
       }
@@ -219,11 +231,11 @@ const MOON_FRAGMENT = /* glsl */ `
   }
 
   float height(vec3 p) {
-    float plains = fbm3(p * 2.2) * 0.45;
-    float fine = fbm3(p * 9.0 + 4.0) * 0.3;
+    float plains = fbm3(p * 2.2) * 0.3;
+    float fine = fbm3Coarse(p * 5.0 + 4.0) * 0.3;
     float big = craters(p, 2.4, 0.3) * 1.1;
     float medium = craters(p + 5.0, 5.0, 0.28) * 0.6;
-    float small = craters(p + 11.0, 11.0, 0.35) * 0.25;
+    float small = craters(p + 11.0, 8.0, 0.3) * 0.25;
     return plains + fine + big + medium + small;
   }
 
@@ -234,19 +246,19 @@ const MOON_FRAGMENT = /* glsl */ `
     // Bump mapping by finite differences of the height field in the tangent plane.
     vec3 t1 = normalize(cross(op, abs(op.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0)));
     vec3 t2 = cross(op, t1);
-    float e = 0.008;
+    float e = 0.02;
     float h0 = height(op);
     float h1 = height(normalize(op + t1 * e));
     float h2 = height(normalize(op + t2 * e));
     vec3 wt1 = normalize(vTangent1);
     vec3 wt2 = normalize(vTangent2);
-    float strength = 0.45;
+    float strength = 0.55;
     vec3 bumped = normalize(n - (wt1 * (h1 - h0) + wt2 * (h2 - h0)) * (strength / e));
 
     // Maria: the dark plains, where the low-frequency field is low.
     float maria = smoothstep(0.44, 0.58, fbm3(op * 1.6 + 2.0));
     vec3 albedo = mix(uLit, uMaria, maria * 0.85);
-    albedo *= 0.82 + 0.35 * fbm3(op * 14.0);
+    albedo *= 0.88 + 0.24 * fbm3Coarse(op * 6.0);
 
     // The camera is orthographic and looks down -z, so every fragment is seen along +z.
     vec3 view = vec3(0.0, 0.0, 1.0);
@@ -255,11 +267,11 @@ const MOON_FRAGMENT = /* glsl */ `
     float wrap = max((dot(bumped, light) + 0.25) / 1.25, 0.0);
     float terminator = smoothstep(-0.12, 0.22, dot(n, light));
     vec3 halfway = normalize(light + view);
-    float spec = pow(max(dot(bumped, halfway), 0.0), 90.0) * 0.4 * terminator;
+    float spec = pow(max(dot(n, halfway), 0.0), 24.0) * 0.22 * terminator;
     float fresnel = pow(1.0 - max(dot(n, view), 0.0), 3.5);
 
     // Crater floors sit in shadow, rims catch the light.
-    albedo *= 0.72 + 0.4 * clamp(h0 * 0.5 + 0.55, 0.0, 1.0);
+    albedo *= 0.78 + 0.35 * clamp(h0 * 0.8 + 0.6, 0.0, 1.0);
 
     // Earthshine: the dark side glows faintly purple, from the sky it hangs in.
     vec3 ambient = uShadow + uAccent * 0.14 * (0.5 + 0.5 * dot(n, vec3(0.0, -0.4, 0.9)));
