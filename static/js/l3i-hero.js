@@ -571,7 +571,7 @@ function start(hero) {
     height = Math.max(hero.clientHeight, 1);
     narrow = width < 761;
     const pixels = width * height;
-    const ratio = Math.min(window.devicePixelRatio || 1, pixels > 1.6e6 ? 1.25 : 1.5);
+    const ratio = Math.min(window.devicePixelRatio || 1, pixels > 1.6e6 ? 1 : 1.25);
     renderer.setPixelRatio(ratio);
     renderer.setSize(width, height, false);
     const halfHeight = HALF_HEIGHT;
