@@ -1,0 +1,33 @@
+{#- {{ pipeline(data_path="data/pipeline/x.json") }}: a left-to-right flow of stages with a
+    connector between each, and pieces that hang off a stage drawn beneath it. Stages carry
+    `kind`, `title`, `detail` and an optional `page`; `alongside` entries name the stage they
+    attach to (`from`, one-based) and a short `label` for the link. Styled in sass/brand.sass. -#}
+{%- set figure = load_data(path=data_path, format="json") -%}
+{%- set figure_id = figure.id | default(value="pipeline") -%}
+{%- set count = figure.stages | length -%}
+<figure class="l3i-pipeline" aria-labelledby="{{ figure_id }}-title" style="--stages: {{ count }}">
+  <figcaption class="l3i-pipeline__caption">
+    <h2 id="{{ figure_id }}-title">{{ figure.title }}</h2>
+    {%- if figure.description %}<p>{{ figure.description }}</p>{% endif %}
+  </figcaption>
+  <ol class="l3i-pipeline__stages">
+  {%- for stage in figure.stages %}
+    <li class="l3i-pipeline__stage l3i-pipeline__stage--{{ stage.kind | default(value="step") }}">
+      <span class="l3i-pipeline__index" aria-hidden="true">{{ loop.index }}</span>
+      {%- if stage.page %}<a class="l3i-pipeline__title" href="{{ get_url(path=stage.page) | safe }}">{{ stage.title }}</a>{% else %}<span class="l3i-pipeline__title">{{ stage.title }}</span>{% endif %}
+      {%- if stage.detail %}<p>{{ stage.detail }}</p>{% endif %}
+    </li>
+  {%- endfor %}
+  </ol>
+  {%- if figure.alongside %}
+  <ul class="l3i-pipeline__alongside" aria-label="Alongside the flow">
+  {%- for piece in figure.alongside %}
+    <li class="l3i-pipeline__piece" style="--from: {{ piece.from }}">
+      <span class="l3i-pipeline__label">{{ piece.label }}</span>
+      {%- if piece.page %}<a class="l3i-pipeline__title" href="{{ get_url(path=piece.page) | safe }}">{{ piece.title }}</a>{% else %}<span class="l3i-pipeline__title">{{ piece.title }}</span>{% endif %}
+      {%- if piece.detail %}<p>{{ piece.detail }}</p>{% endif %}
+    </li>
+  {%- endfor %}
+  </ul>
+  {%- endif %}
+</figure>

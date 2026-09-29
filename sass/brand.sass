@@ -190,3 +190,183 @@
 // Tables of numbers read right-aligned; the docs' benchmark tables lean on this.
 .docs-article table td:not(:first-child):has(> code:only-child)
   font-variant-numeric: tabular-nums
+
+// The overview's pipeline figure ({{ pipeline() }}, templates/shortcodes/pipeline.html): four
+// stages in a row, joined by connectors that carry the accent, and the pieces that hang off a
+// stage beneath it, each tied to its stage by a stem.
+.l3i-pipeline
+  margin: 2.2em 0
+  padding: 1.4rem 1.4rem 1.6rem
+  border: 1px solid var(--dw-line)
+  border-radius: var(--dw-radius)
+  background: radial-gradient(ellipse 80% 60% at 50% 0%, color-mix(in oklab, var(--dw-accent) 9%, transparent), transparent 70%), var(--dw-bg-1)
+
+.l3i-pipeline__caption
+  max-width: 70ch
+  margin-bottom: 1.4rem
+
+  h2
+    margin: 0 0 .4rem
+    font-size: 1.35rem
+
+  p
+    margin: 0
+    color: var(--dw-text-muted)
+
+.l3i-pipeline__stages,
+.l3i-pipeline__alongside
+  display: grid
+  grid-template-columns: repeat(var(--stages), minmax(0, 1fr))
+  gap: 2rem
+  margin: 0
+  padding: 0
+  list-style: none
+
+.l3i-pipeline__stage,
+.l3i-pipeline__piece
+  position: relative
+  // The prose list rule spaces list items apart; these are cards on a grid.
+  margin: 0 !important
+  padding: 1rem 1.1rem 1.1rem
+  border: 1px solid var(--dw-line-strong)
+  border-radius: var(--dw-radius)
+  background: var(--dw-bg-2)
+  font-size: .9rem
+  transition: border-color .2s ease, box-shadow .2s ease
+
+  &:hover
+    border-color: var(--dw-accent-line)
+    box-shadow: 0 0 0 1px color-mix(in oklab, var(--dw-accent) 25%, transparent), 0 14px 40px rgb(0 0 0 / 35%)
+
+  p
+    margin: .45em 0 0
+    color: var(--dw-text-muted)
+    line-height: 1.5
+
+.l3i-pipeline__title
+  display: block
+  color: var(--dw-text)
+  font-family: var(--dw-font-display)
+  font-size: 1.02rem
+  font-weight: 700
+  letter-spacing: .01em
+  text-decoration: none
+
+  &:hover
+    color: var(--dw-accent)
+
+.l3i-pipeline__index
+  display: inline-block
+  margin-bottom: .55rem
+  padding: .1em .55em
+  border-radius: 999px
+  background: var(--dw-accent-soft)
+  color: var(--dw-accent)
+  font-family: var(--dw-font-mono)
+  font-size: .72rem
+  letter-spacing: .12em
+
+// The connector: a line out of each stage's right edge into the next, tipped with a chevron.
+.l3i-pipeline__stage:not(:last-child)::after
+  content: ""
+  position: absolute
+  top: 50%
+  left: 100%
+  width: 2rem
+  height: 2px
+  background: linear-gradient(90deg, var(--dw-accent-line), var(--dw-accent))
+  transform: translateY(-50%)
+  pointer-events: none
+
+.l3i-pipeline__stage:not(:last-child)::before
+  content: ""
+  position: absolute
+  top: 50%
+  left: calc(100% + 2rem - .55rem)
+  width: .5rem
+  height: .5rem
+  border-top: 2px solid var(--dw-accent)
+  border-right: 2px solid var(--dw-accent)
+  transform: translateY(-50%) rotate(45deg)
+  pointer-events: none
+  z-index: 1
+
+// A piece sits under the stage it hangs off, tied to it by a stem from the stage's bottom edge.
+.l3i-pipeline__alongside
+  margin-top: 2.6rem
+
+.l3i-pipeline__piece
+  grid-column: var(--from)
+  border-style: dashed
+  background: color-mix(in oklab, var(--dw-bg-2) 70%, var(--dw-bg-1))
+
+  &::before
+    content: ""
+    position: absolute
+    left: 50%
+    bottom: 100%
+    width: 2px
+    height: 2.6rem
+    background: linear-gradient(180deg, var(--dw-accent-line), var(--dw-accent))
+    transform: translateX(-50%)
+    pointer-events: none
+
+  &::after
+    content: ""
+    position: absolute
+    left: 50%
+    bottom: calc(100% - .3rem)
+    width: .5rem
+    height: .5rem
+    border-right: 2px solid var(--dw-accent)
+    border-bottom: 2px solid var(--dw-accent)
+    transform: translateX(-50%) rotate(45deg)
+    pointer-events: none
+
+.l3i-pipeline__label
+  display: block
+  margin-bottom: .35rem
+  color: var(--dw-accent)
+  font-family: var(--dw-font-mono)
+  font-size: .72rem
+  letter-spacing: .12em
+  text-transform: uppercase
+
+// Two columns, then one: the flow turns downward and the stems shorten.
+@media (max-width: 1100px)
+  .l3i-pipeline__stages,
+  .l3i-pipeline__alongside
+    grid-template-columns: repeat(2, minmax(0, 1fr))
+
+  .l3i-pipeline__stage:nth-child(2n)::after,
+  .l3i-pipeline__stage:nth-child(2n)::before
+    display: none
+
+  .l3i-pipeline__piece
+    grid-column: auto
+
+    &::before,
+    &::after
+      display: none
+
+@media (max-width: 640px)
+  .l3i-pipeline
+    padding: 1rem
+
+  .l3i-pipeline__stages,
+  .l3i-pipeline__alongside
+    grid-template-columns: minmax(0, 1fr)
+    gap: 1.6rem
+
+  .l3i-pipeline__stage::after,
+  .l3i-pipeline__stage::before
+    display: none
+
+  .l3i-pipeline__stage:not(:last-child)::after
+    display: block
+    top: 100%
+    left: 50%
+    width: 2px
+    height: 1.6rem
+    transform: translateX(-50%)
+    background: linear-gradient(180deg, var(--dw-accent-line), var(--dw-accent))

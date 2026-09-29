@@ -21,7 +21,7 @@ engine needs on top: a planner that composes a VM from extensions before the VM 
 integer vocabulary for values that should never allocate, the network bridge in every runtime,
 and Luau's native code generator with lowering hooks written in Rust.
 
-{{ schematic(data_path="data/schematics/plan.json") }}
+{{ pipeline(data_path="data/pipeline/plan.json") }}
 
 {% features() %}
 - **Its own Luau.** Luau 0.740 is a git submodule compiled by `build.rs` with clang, lld and
