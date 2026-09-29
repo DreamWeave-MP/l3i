@@ -111,6 +111,11 @@ name = "soft_render"
 harness = false
 required-features = ["soft-render"]
 
+[[bench]]
+name = "bytes"
+harness = false
+required-features = ["bytes"]
+
 [features]
 default = []
 # Luau native code generation: builds Luau's CodeGen library plus the C++ shim that exposes
