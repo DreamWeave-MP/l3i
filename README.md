@@ -1,39 +1,46 @@
 # l3i
 
-**l3i** is a Rust binder for [Luau](https://luau.org) 0.740, ported from the OpenMW
-Luau binder (`components/luau` and `components/lua/bindfunction.hpp`). It owns its Luau build,
-declares the C API by hand, and puts a safe, scoped layer over it: frame-scoped stack views,
-registry-pinned owned values, a typed function binder that reads arguments straight from stack
-slots, tagged and untagged userdata, Luau's direct userdata access, sandboxed script instances,
-watchdog and profiler plumbing, (with the `jit` feature) Luau's native code generator with
-lowering hooks written in Rust, and (with the `soft-render` feature) a CPU rasterizer as a
-Luau extension.
+**The Luau runtime for DreamWeave.** A Rust binder for [Luau](https://luau.org) 0.740 that
+owns its own Luau build, plans every VM before it exists, and lowers hot script calls to native
+code. Ported from the OpenMW Luau binder (`components/luau`), then given what a multi-crate
+engine needs on top.
 
-No `mlua`. Tags, atoms, type names and debug-name roots are host data: the crate ships the
-mechanism, never a catalogue.
+Documentation: **<https://DreamWeave-MP.github.io/l3i/>**. This file is the short version.
 
-The site, <https://DreamWeave-MP.github.io/l3i/>, has the guide, the built-in extensions, the
-Rust API by module, and the benchmarks; this file is the same material in one page.
-
+- [What it is](#what-it-is)
 - [Quick start](#quick-start)
-- [The three tiers](#the-three-tiers)
-- [Userdata](#userdata)
-- [Modules and sandboxes](#modules-and-sandboxes)
-- [Runtime options](#runtime-options)
-- [Direct access and atoms](#direct-access-and-atoms)
-- [Bytes for foreign formats](#bytes-for-foreign-formats)
-- [Native code generation](#native-code-generation)
-- [Safety model](#safety-model)
+- [What you get](#what-you-get)
+- [Features](#features)
+- [The rules](#the-rules)
 - [Building](#building)
 - [Quality](#quality)
 - [License](#license)
+
+## What it is
+
+| | |
+|---|---|
+| **No `mlua`, no binding crate** | Luau is a git submodule compiled by `build.rs`. The whole C API is declared by hand in `l3i::ffi`, and a safe, scoped layer sits over it. |
+| **Arguments read from the value layout** | The typed binder reads stack slots straight from Luau's 16-byte `TValue`. A bound `(f64, f64) -> f64` call retires 369 instructions against 277 for a bare `lua_CFunction`. |
+| **Tags, atoms and slots are plan data** | A `RuntimePlan` assigns userdata tags, Luau's 32 compiler type slots, atoms and direct-access slots per VM, so one Rust type can be tag 8 in one runtime and untagged in another. |
+| **Typed by construction** | Every module member carries a Luau signature. The plan renders the `.d.luau`, and the `analysis` feature type checks strict scripts against it in the crate's own tests. |
+| **The network is not optional** | Every plan carries the `dream.net` bridge; the policy's capabilities decide what a script may do with it. |
+| **Lowering hooks in Rust** | With `jit`, hosts write Luau's userdata and vector lowering hooks against an `IrBuilder` C ABI. Quaternions, colours, byte reads and vertex writes compile to IR with no C call. |
+
+Nothing here is a catalogue: tags, atoms, type names and debug-name roots are host data.
 
 ## Quick start
 
 ```toml
 [dependencies]
-l3i = { version = "1", features = ["jit"] } # jit, analysis, and soft-render are optional
+l3i = { version = "1", features = ["jit"] }   # jit, analysis, bytes, soft-render are optional
 ```
+
+l3i builds only with **clang, lld and cross-language thin LTO**, and Cargo does not inherit a
+dependency's config, so copy the `[env]` and `rustflags` lines from this repository's
+[`.cargo/config.toml`](.cargo/config.toml) into your own. `build.rs` refuses anything else and
+names the missing piece; `L3I_UNVERIFIED_TOOLCHAIN=1` turns that into a warning.
+[Start here](https://DreamWeave-MP.github.io/l3i/docs/start-here/) walks through it.
 
 ```rust
 use l3i::Runtime;
@@ -59,479 +66,132 @@ fn main() -> l3i::Result<()> {
 }
 ```
 
-`examples/openmw_shapes.rs` runs every binding shape the OpenMW engine uses on toy types.
+That is the hand-assembled runtime. An engine composes one from extensions instead:
 
-## The three tiers
+```rust
+use l3i::Runtime;
+use l3i::extension::{RuntimePlan, RuntimePolicy};
+use l3i::quat::QuatExtension;
+use l3i::raster::RasterExtension;
 
-| Tier | Type | Cost | Use |
-| --- | --- | --- | --- |
-| Borrowed | `ValueView`, `TableView`, `FunctionView` | none: a stack index bound to a `Frame` | hot paths, arguments, results |
-| Owned | `Value`, `Table`, `Function` | one registry pin (`lua_ref`) | values that outlive a frame |
-| Typed binder | `Runtime::bind_function`, `MetatableBuilder` | conversion from stack slots, no pins | exposing Rust to scripts |
+let plan = RuntimePlan::builder()
+    .policy(RuntimePolicy::new().compat_global("@dream/quat", "quat"))
+    .extension(QuatExtension)
+    .extension(RasterExtension)
+    .finalize()?;
+let runtime = Runtime::from_plan(&plan)?;            // any number of these per plan
+std::fs::write("dream.d.luau", plan.type_definitions())?;
+```
 
-`Stack` is the exclusive handle to a thread's stack; `Frame` owns temporaries and restores the
-height when dropped. Frames nest strictly (siblings panic), `with_frame` closures are
-higher-ranked so views cannot escape, and the runtime leases exactly one root stack at a time.
+## What you get
 
-The typed binder accepts converted scalars (`i32`, `f64`, `Integer`, `bool`, `String`,
-`&str`, `Vector3`, `BufferView`), borrowed views, `&T` userdata receivers, injected `&Call`,
-`Option<T>` (with OpenMW's middle-optional rules), `VarArgs<T>`, `ArgView`, `Overload<(..)>`, and
-returns unit, scalars, `Option`, tuples, `Variadic`, `ResultOrError`, `NilThen`, `Owned<T>`,
-`Borrowed<T>`, `StackResults`, and `Result<T>` (an `Err` raises a Lua error with the exact
-`luaL_typeerror` wording).
+Each row is a page of the guide.
 
-## Userdata
+| Area | In one line | Read |
+|---|---|---|
+| **Stack and values** | Borrowed views bound to a `Frame`, owned registry pins, and a typed binder that accepts scalars, views, `&T` receivers, `Option<T>` with OpenMW's rules, `VarArgs`, `Overload`, and returns tuples, `Owned<T>`, `Result<T>` and more. | [Stack and values](https://DreamWeave-MP.github.io/l3i/docs/stack-and-values/) |
+| **Userdata** | Tagged (inline payload, one tag read to check) or untagged (exact metatable identity, borrowed engine objects), decided per runtime; `MetatableBuilder` for methods, properties, metamethods and `__iter` factories; generated dispatchers that cost one Luau call frame. | [Userdata](https://DreamWeave-MP.github.io/l3i/docs/userdata/) |
+| **Modules and sandboxes** | Frozen package tables, read-only views, OpenMW's prelude, one environment per script instance cloned from a compiled template, `require` over a host navigator. | [Modules and sandboxes](https://DreamWeave-MP.github.io/l3i/docs/modules-and-sandboxes/) |
+| **Runtime options** | Watchdog on time and heap, memory categories, call scopes with self-time accounting, collector control, a sampling profiler, frozen fast flags. | [Runtime options](https://DreamWeave-MP.github.io/l3i/docs/runtime-options/) |
+| **Direct access** | Atoms let `GETTABLEKS`/`NAMECALL` reach a native callback with no metatable walk; `DirectPlan` validates Luau's inline cache in O(1) and serves a type under any tag. | [Direct access](https://DreamWeave-MP.github.io/l3i/docs/direct-access/) |
+| **Extensions and plans** | A crate declares its Luau surface once (`describe`), a plan composes crates and assigns every tag, slot and atom (`finalize`), a runtime is built from it (`from_plan`); the plan renders the `.d.luau` and can type check it. | [Extensions](https://DreamWeave-MP.github.io/l3i/docs/extensions/) |
+| **Primitives** | `BytesView`, `BufferView`, `Exact<T>`, `Integer`, `Bits64`, `PackedScalar` with a kind registry, strict `Options` tables, in-place table walks, `Sequence` and `Stream` views. | [Primitives](https://DreamWeave-MP.github.io/l3i/docs/primitives/) |
+| **Built-in extensions** | `@dream/net` (in every plan), `@dream/quat`, `@dream/raster`, `@dream/bytes`, `@dream/soft-render`. | [Built-in extensions](https://DreamWeave-MP.github.io/l3i/docs/builtin-extensions/) |
+| **Native code** | Luau's CodeGen with lowering hooks written in Rust; which call sites lower and why. | [Native code](https://DreamWeave-MP.github.io/l3i/docs/native-code/) |
+| **The rest of the VM** | Coroutines, the debug API, memory and GC controls, libraries, `require`, Luau's analysis frontend. | [Coroutines, debugging and the rest](https://DreamWeave-MP.github.io/l3i/docs/vm/) |
+| **Rust API** | Every public module. | [Rust API](https://DreamWeave-MP.github.io/l3i/docs/api/) |
 
-A type implements `Userdata` for identity and script name only. How it is exposed is decided
-per runtime:
+### Built-in extensions
 
-- `tagged::register::<T>(&runtime, tag, configure)`: inline payload, one Luau tag, checks are one
-  tag read and one `TypeId` compare against the runtime's tag plan. Scarce (tags `1..254`);
-  for hot types.
-- `untagged::register::<T>(&runtime, configure)`: exact metatable identity, `Storage<T>` owned or
-  a `StableRef<T>` borrow of an engine object, per-instance destructors. No tag consumed.
+| Extension | Module | What it is |
+|---|---|---|
+| `dream.net` | `@dream/net` | The dream-net bridge, in every plan: schemas, host-created servers, clients behind the `network.transport` capability, `pollInto` with one payload copy and no allocation. |
+| `dream.quat` | `@dream/quat` | Unit rotations packed into one Luau integer (smallest-three, 18 bits per component) and animation keys; `quat.math()` lowers `rotate` to 21 ns native. |
+| `dream.raster` | `@dream/raster` | RGBA8 colours, clip rectangles and RGBA16 colours as packed integers; `raster.math()` lowers colour arithmetic. |
+| `dream.bytes` (`bytes`) | `@dream/bytes` | For parsing foreign file formats in script: searching, C strings, varints, big-endian and half-float reads lowered natively, plus codecs, digests and text codepages behind `bytes-codecs`, `bytes-digests`, `bytes-text`. |
+| `dream.soft_render` (`soft-render`) | `@dream/soft-render` | dream-soft-render as a CPU rendering device, byte-identical from Luau and from Rust. |
 
-The same Rust type may be tag 8 in one runtime, 17 in another, and untagged in a third.
-`MetatableBuilder` gives methods, properties, read/write properties, unbound methods,
-metamethods, native method tables, and array/keyed/cursor `__iter` factories, with OpenMW's
-conflict rules and the plain-table → generated `__index`/`__namecall` phase machine. The
-generated dispatchers run bound members directly on their own stack instead of `lua_call`ing
-the member closure, so a generated method call or property read costs one Luau call frame,
-not two. Untagged receiver checks compare against a per-VM cached metatable identity rather
-than reading the registry each time.
+## Features
 
-## Modules and sandboxes
+| Feature | Adds | Extra dependencies |
+|---|---|---|
+| `jit` | Luau's CodeGen, lowering hooks in Rust, IR and assembly dumps | none |
+| `analysis` | Luau's type checker, linter, autocomplete and parser; `RuntimePlan::check_definitions` | none |
+| `bytes` | The `@dream/bytes` extension | `memchr` |
+| `bytes-codecs` | DEFLATE, LZ4, zstd and LZMA/XZ | `miniz_oxide`, `lz4_flex`, `ruzstd`, `lzma-rs` |
+| `bytes-digests` | CRC-32 to BLAKE3, one-shot and incremental | `crc32fast`, `xxhash-rust`, RustCrypto, `blake3` |
+| `bytes-text` | Every WHATWG text encoding | `encoding_rs` |
+| `soft-render` | The `dream.soft_render` extension | `dream-soft-render` |
 
-`LuauModule` + `ModuleBuilder` build one frozen package table (`dreamweave.assets` style
-debug names, `__tostring`, userdata registration). `readonly` provides frozen tables, strict
-tables, and read-only views that iterate their backing table without exposing it.
+The default feature set is empty. Networking is not a feature: `dream-net` is a dependency.
+Everything optional is pure Rust.
 
-`Runtime::sandbox` installs OpenMW's prelude (compatibility `pairs`/`ipairs` honouring
-`__pairs`/`__ipairs`, optional LuaJIT-style `string.format` `%s`, optional neutered
-`math.randomseed`) and builds the frozen base environment. `Sandbox::new_instance` makes a
-per-script environment (`_G`, named `print`, `loaded` packages, `require`), and
-`Sandbox::load_template` compiles a chunk once on an isolated loader thread so
-`Sandbox::instantiate` can clone it per script with `lua_clonefunction` + `lua_setfenv`.
-`load_template_in`/`instantiate_in` do the same on a bound function's own scope, for `require`
-loaders written in Rust.
+## The rules
 
-## Runtime options
-
-`Runtime::builder()` configures debug-name roots, pointer-encoding seed, deferred standard
-libraries, the atom catalogue, and:
-
-- **Watchdog**: `execution_time_limit` (per outermost script call) and `memory_limit` (a heap
-  ceiling polled every 64th safepoint, not an allocator cap), raising Lua errors like OpenMW.
-- **Memory categories**: `MemoryCategory(u8)`, `total_bytes_in`, per-call switching.
-- **Call scopes**: `Runtime::call_scope(context, kind)` (script call, initialization, host
-  interface) with nested self-time accounting.
-- **Collector**: `gc(GcControl::...)` reads the heap size and sets Luau's goal, step
-  multiplier, and step size (the defaults, a 200 percent goal, multiplier 200, and 1 KB
-  steps, are kept), or drives the collector by hand with `Step` and `Collect`; Luau has no
-  `collectgarbage`, so a host that wants collection at frame boundaries steps it there.
-- **Profiler**: `profiler(true)` records call time and allocation activity per context;
-  `set_sampled_context` samples one context every 32nd safepoint into `source:line` and
-  per-function counters; `gc_step_timed`, `caller_location`, and the pure statistics helpers in
-  `runtime::profiler` (30-frame rolling averages, decaying peaks) cover the generic half of
-  OpenMW's profiler. Report text and UI stay in the host.
-
-## Direct access and atoms
-
-Luau can call a native callback straight from `GETTABLEKS`/`SETTABLEKS`/`NAMECALL` for a tagged
-userdata when the key has an *atom*. Each runtime carries its own `AtomCatalogue`
-(`RuntimeBuilder::atom_catalogue`). `direct::plan::DirectPlan` is the normal path: built per
-runtime from the tags and atoms that VM actually assigned, it maps `(tag, kind, atom)` to the
-host's slot ids and validates Luau's per-instruction cache in O(1) before trusting it, so one
-handler serves a type that is tag 8 in one VM and tag 17 in another. A runtime publishes one
-plan: `finish` refuses a second, because the slot ids are the host's dispatch protocol and
-Luau's inline caches hold them. `direct::Registry` is the
-static alternative for hosts whose identities really are compile-time constants. `DirectAccess`
-handlers run on both the direct path and the ordinary metamethod path with the original
-metamethod retained as the fallback; `direct::field` registers per-field getters that write
-straight into the destination register. `Runtime::install_vector_buffer_writer` adds
-`vector:writef32x3(buffer, offset)`.
-
-## Extensions and runtime plans
-
-A native crate exposes its Luau surface as an [`extension::Extension`]: `describe` declares
-identity (`dream.archive`), dependencies, modules (`@dream/archive`, frozen by default) with
-each member's kind, signature, and doc (`function("open", open).signature("(path: string) ->
-dream_archive_Archive")`, `constant`, or `installed("client")` for a value only a live VM can
-provide), userdata types under stable string keys with a `TagPolicy` and each member with its
-callable (`method("read", |a: &Archive, path: &str| ..)`), services, capabilities, packed
-kinds, and memory categories, all without touching a VM. Types are never accidental: every
-member carries a signature or is marked `untyped()`, and a plan with neither fails to
-finalize. The vocabulary follows the runtime, where Luau's checker keeps `integer` and
-`number` apart: a packed value, a `Bits64`, or an `Integer` result is `integer`; a count, a
-size, or an `f64` is `number`; a class is its generated name (`dream_net_Client`). Callables
-are `Clone` because one plan binds them in every runtime it creates, so whatever a callable
-captures is shared by every one of those runtimes by construction; mutable per-runtime state
-belongs in `InstallContext::insert_state`, never in a capture. `install` is optional and
-runs per runtime for what needs the live VM or the resolved policy: it fills the module
-members declared `installed` (a policy-gated function, a userdata instance) and cannot add a
-name the plan does not know, so the plan's type definitions and compiler metadata describe the
-whole API before any runtime exists; services and runtime-owned state live there too
-(`InstallContext::insert_state` is per extension, `Runtime::host_state` the host's own). The planned dispatch costs 429 instructions per
-method call against 368 for the VM's own typed direct handler (`benches/instructions.rs`):
-Luau's inline cache and the member entry are one indexed load in a fused slot table, the plan
-is read without a refcount or a borrow flag, a type's own dispatchers vouch for the receiver
-so the bound member skips its type check, and one panic guard covers the whole call.
-`RuntimePlan::builder().policy(..).service(..)
-.extension(..).finalize()` orders extensions by their dependency graph (deterministically),
-merges owners with augmenters into one type per key, assigns tags (pinned, then `Required`,
-then `Preferred` while tags last), allocates Luau's 32 compiler userdata type slots the same
-way (`CompilerTypePolicy`: a type whose methods lower natively declares `Required` and the plan
-fails rather than leave that path interpreted), assigns atoms densely, lays out direct slots (a direct field
-whose name is a method or property elsewhere in the plan is served through a slot instead of
-Luau's field table, since the atom rewrite would bypass that table), resolves memory
-categories, and checks services and capabilities. `Runtime::from_plan(&plan)` then builds a VM,
-registers metatables with the merged members, wires the planned direct members to one set of
-generic VM callbacks, opens the declared modules, runs every extension's `install` in order,
-freezes modules, registers them for `require`, derives compiler-known library metadata for
-compat globals, and publishes. A plan is
-immutable and instantiates any number of runtimes; each gets its own tags, atoms, and direct
-plan, and its shape is frozen: a planned runtime refuses `register_packed` and
-`set_compile_options`, which stay for hand-assembled runtimes. Finalize also rejects two Rust
-types sharing one `Userdata::NAME` and any member, global, key, or path spelled in a way the
-generated definitions or the VM would choke on, so `Runtime::from_plan` has nothing left to
-discover. `RuntimePlan::type_definitions()` renders the `.d.luau` for the composition in
-Luau's `declare extern type` grammar, and `RuntimePlan::analysis_sources(inner)` serves each
-module's canonical path (`require("@dream/quat")`) to the analysis frontend as a strict stub
-returning the module's declared type. `RuntimePlan::check_definitions()` (feature `analysis`)
-is the gate every extension crate's tests run: it loads the definitions into Luau's frontend
-and type checks a strict script requiring every module, so a signature string that is not
-Luau, or one naming a type that does not exist, fails with the frontend's diagnostics attributed
-to the declaration. `tests/typed_definitions.rs` runs that gate and strict scripts against every
-built-in module through `require`, with no compatibility global, so the declared API and the
-runtime cannot drift apart. One distinction to keep: the compiler's known-library metadata
-(folded constants, member types) reaches only modules exposed as compatibility globals, since
-Luau's mechanism keys on a global name; a module reached through `require` is typed by the
-analyzer but not folded by the compiler. Runtime-owned extension state drops before the VM
-closes.
-
-### Rules the first extensions ran into
-
-- Direct fields carry nil, booleans, numbers, integers, and vectors: Luau's direct-field API has
-  no string setter, so a text field is a getter. Return borrowed text from a getter with
-  `call.push(&text)?` and `StackResults`; a `Return` type cannot borrow from the arguments.
-- Module types in the definitions are ordered by reference, so a member may name a module
-  declared later in the plan (`() -> Module__dream_archive_ba2`).
-- `Runtime::eval::<R>(source)` runs a chunk and reads what it returns (`f64`, a tuple, `()`),
-  the shape a benchmark harness wants; `load_function` stays for chunks that return a closure.
-  A harness must not hold `Runtime::stack()` across `load_function` or `eval`, which lease the
-  root stack themselves.
-- One frame per scope: inside a bound function, read the arguments before opening a frame, or
-  open it from the call; a second frame on the same scope panics with that message.
-- `Frame::check(n)` reserves stack for a bulk push (`n` is a `usize` count); the type-error
-  constructors on `ValueView` cover a type, a union in words, and a context prefix (a field path
-  or an API name) without the slot index.
-- A `with_required`/`with_optional` body sees the value's slot and nothing else: it can read a
-  scalar or a borrowed string, not walk a table (no frame is reachable there). Tables go through
-  `required_table`/`optional_table`, or the `_expecting` forms when the non-table case should
-  read in the option's own words (`optional_table_expecting("dataDirs", "an array of strings",
-  ..)`).
-- Inside `required_table`'s body, an error comes back prefixed with the reader's context and
-  key (`add.inputs: ...`) unless it already starts with that path: a `field_type_error` spelled
-  with the full path reads flat (`ini.importMaps.dataDirs[2]: expected a string, got number`),
-  and a nested `Options::read` under the field's context keeps one segment per level.
-- Cargo has no optional dev-dependencies, so a crate that tests its plan with
-  `check_definitions` (feature `analysis`) either pays the analysis build on every `cargo test`
-  or declares l3i as an optional normal dependency with a test feature, `luau-analysis =
-  ["luau", "l3i/analysis"]`, and runs its typed tests with `--features luau-analysis`.
-
-## Extension primitives
-
-The shapes the migration audits asked for, all allocation-free at the boundary:
-`convert::BytesView` accepts a Lua string or a Luau buffer without normalising;
-`BufferView` reads and writes through bounds-checked copies (`read`, `write`, `fill`, `range`,
-scalar helpers), never a safe slice, because a script can pass one buffer to two parameters;
-the zero-copy slices are `unsafe fn bytes_unchecked`/`bytes_mut_unchecked` for trusted code
-that proves nothing writes the buffer meanwhile, the rules `lua_tobuffer` imposes on C;
-`convert::Exact<T>` reads an integer that never rounds (a Luau integer or an integer-valued
-number, in range) for indices, offsets, counts, sizes, and ids, where the plain Rust integer
-conversions keep OpenMW's rounding for compatibility; it is input only, results use a plain
-Rust integer (an exact `number`), `Integer` (a Luau `integer`), or `Bits64`, which carries an opaque
-64-bit pattern (a hash, a peer id) through a Luau integer with no numeric meaning, so a numeric
-`u64` stays within what an integer or an exact number holds and nothing silently reinterprets;
-`packed::BufferPack` reads and writes fixed layouts through a copy in one bounds check, and `packed::PackedScalar` puts a semantic value into one Luau integer (4-bit
-kind, 4 flag bits, 56-bit payload) with the kind checked on every read. Kinds are a registry:
-1 to 4 are l3i's own and fixed for good (a packed integer is a file and wire format), 5 to 15
-are the application's, declared per extension (`ExtensionDescriptor::packed`) or per runtime
-(`Runtime::register_packed`); a plan with two types on one number does not finalize, and a
-`Packed<T>` crossing a VM where `T` is not the kind's registered owner is a logic error, and
-an encoding whose kind, flags, or payload overflow its fields is an error rather than a
-truncated integer; `options::Options`
-reads camelCase option tables strictly (unknown keys are errors, required keys and field paths
-are named), by value through `required`/`optional` and borrowed through `required_str`,
-`required_bytes`, and `with_required` (the value's slot handed to a closure, so `&str`, `&[u8]`,
-and `BufferView` cost no copy), with `Table` and `Function` readable as values and a table
-option walked in place through `required_table(key, |frame, table| ..)` with nothing pinned;
-`TableView::for_each_array` (and `for_each`) visit elements with one element on the stack at a
-time and no frame per element, so a walk over twenty thousand entries never nears Luau's stack
-limit; a conversion by hand raises `ValueView::type_error(Type)`, `type_error_expecting("an
-entry handle or an archive path")` for a union, or `field_type_error("dirs[2]", "a string")`
-for a value reached through a path;
-`sequence::Sequence` and `sequence::Stream` show a Rust collection to scripts as `#items`,
-`items[i]`, `for item in items`, and `items:toTable()` (or `for` only, with a private cursor per
-loop) without materialising it, declared through the planner like any userdata. A view's
-declaration names its element type (`d.sequence::<Rows>(key).item_type("dream_vfs_Entry")`), and
-the definitions then declare the length, the indexer, and the iterator with it, so a strict
-script can measure, index, and iterate a view; elements are pushed by value
-(`sequence::SequenceItem`), so a row served as `Owned<T>` needs no `Clone`. Indexing a view reads
-the receiver and the key straight from Luau's value layout; the rest of its cost is Luau's own
-`__index` dispatch (547 instructions against 431 for a planned method), since the VM has no
-integer-key direct path for userdata.
-
-`raster::RasterExtension` (`dream.raster`, module `@dream/raster`) provides `raster::Color`
-(kind 3: RGBA8 in the low 32 bits, red in bits 0 to 7, the same four bytes a vertex or a texel
-holds, every `u32` valid) and `raster::ClipRect` (kind 4: four 14-bit pixel coordinates, so at
-most 16383 on an axis; a deliberate limit of the packed form, not of the renderer, which takes
-`u32` coordinates: a surface past 16K on an axis needs a clip type of its own), with `rgba8`, `rgb8`, `channels`, `packed`,
-`withAlpha`, `lerp`, `mul`, `add`, `scale`, `premultiply`, `clip`, `clipBounds`, and folded
-constants. Channel meaning is the consumer's: the renderer below reads colors as premultiplied.
-Color arithmetic for GUI and shader-style scripts goes through `raster.math()`, a receiver
-whose methods (`rgba8`, `rgb8`, `red`/`green`/`blue`/`alpha`, `channels`, `withAlpha`, `lerp`,
-`mul`, `add`, `scale`, `premultiply`) lower to native code under `jit` when annotated
-(`local C: dream_raster_Math = raster.math()`): shifts and masks to unpack, double arithmetic,
-clamp, round, one integer store. Shader semantics: inputs clamp, results round to nearest, NaN
-gives channel 0, and the interpreter path computes the same formulas. Measured per call
-(`benches/raster.rs`): `rgba8` 71 ns through the module against 2.6 ns lowered, `lerp` 72 ns
-against 15 ns, `mul` 61 ns against 17 ns, `premultiply` 52 ns against 16 ns.
-`raster::Color16` is the wide form for formats that require 16 bits per channel: red in bits 0
-to 15 through alpha in bits 48 to 63, the little-endian `u64` being an RGBA16 pixel. It fills
-the whole Luau integer and so has **no kind nibble**: any integer is accepted as a `Color16`,
-and nothing at runtime distinguishes it from an RGBA8 color or an id. That is the deliberate
-price of exact interchange. `widen` (`x * 257`) and `narrow` (`round(x / 257)`) convert
-exactly, every method has a `16` form on the receiver and the module, and the lowering is
-shared: `lerp16` 69 ns against 14 ns, `narrow` 48 ns against 3 ns.
-
-`quat::QuatExtension` (`dream.quat`, module `@dream/quat`; `axisAngle` and `fromXYZW` refuse a
-zero or non-finite axis, angle, or quaternion, `slerp` refuses a non-finite weight on the bound
-and the lowered path alike, and `key` takes the low four bits of an exact integer) is the first
-packed kind: a unit
-rotation compressed smallest-three into one Luau integer (18 bits per component, exact
-identity, 1.6e-5 rad worst case), with `axisAngle`, `fromXYZW`/`toXYZW`, `mul`, `inverse`,
-`slerp`, `rotate`, `angleTo`, the compiler-folded constant `IDENTITY`, `quat::AnimationKey`
-(kind 2: the rotation plus four opaque flag bits, `key`/`keyRotation`/`keyFlags`), and, under `jit`,
-`quat.math()`: a tagged receiver whose `rotate`, `mul`, `slerp`, `key`, `keyRotation`, and
-`keyFlags` lower to IR when the script annotates it (`local Q: dream_quat_Math = quat.math()`):
-rotate 21 ns and mul 45 ns per call in native code against 46 ns and 111 ns for an f32
-quaternion userdata and 99 ns and 150 ns through the binder; slerp 86 ns against 167 ns and
-214 ns, with polynomial trigonometry (acos to 2e-8, sine to 6e-8) shared by both paths so they
-agree exactly; key plus keyRotation 5 ns against 220 ns. Only single-result, fixed-arity call
-sites lower: bind a nested call's result to a local first, and an argument that is itself an
-`if` expression or an `and`/`or` chain makes the compiler order the call differently, so bind
-that to a local too. The packed form is storage and transport; long-lived rotation state stays
-`quat::Quat` on the host, because re-encoding every blend step accumulates quantisation error.
-
-## Networking
-
-dream-net is runtime infrastructure, not a feature: l3i depends on it and owns the Luau bridge,
-extension `dream.net`, module `@dream/net`, and every `RuntimePlan` carries l3i's own bridge:
-the planner adds it, the id is reserved (an extension claiming `dream.net` fails the plan), so
-no runtime lacks the network and the policy's capabilities decide what scripts may do with it.
-Scripts build a frozen wire
-schema from a strict option table (`net.schema{ version, channels, events }`), the host creates
-`dream_net::Server`s in Rust and hands them over as `net::Server` handles (the private key never
-reaches Luau), and scripts may create `net.client{ schema }` only when the policy grants the
-`network.transport` capability. The hot calls are `update()` (reading the plan's clock, a
-monotonic one by default or the host's through `RuntimePlanBuilder::network_clock`, so scripts
-cannot spoof transport time and simulations can drive it), `pollInto(buffer)` returning `kind, peer, a, b, c` with one
-payload copy into the caller's buffer and no allocation, `sendEvent(peer, eventId, bytes,
-offset?, length?)` copying out of a buffer or string before it returns, and `flush()`. Ids are
-integer64, sizes and counters plain numbers, connection stats direct fields on the client and
-per-peer methods on the server. Nothing calls into Luau from inside the transport; the host
-drives one network phase per frame. `benches/net.rs` measures the bridge over localhost UDP.
-
-## Software rendering
-
-With the `soft-render` feature, `soft_render::SoftRenderExtension` (`dream.soft_render`,
-module `@dream/soft-render`, requires `dream.raster`) binds
-[dream-soft-render](https://github.com/DreamWeave-MP/dream-soft-render) as a small software
-rendering device. Layering rule: dream-net (runtime infrastructure) and dream-soft-render (an
-experimental rendering primitive whose lowering lives next to the raster kinds) are the two
-explicit l3i integrations, named here so they stay exceptions; every other DreamWeave crate
-owns its l3i extension and depends upward on l3i, never the other way round. The device: `soft.renderer()`, `renderer:beginFrame(w, h)`, `frame:clear`, `frame:rect`,
-`frame:image`, `frame:mesh(vertexBuffer, indexBuffer, texture?, clip)`, `frame:finish()`,
-`renderer:createTexture(w, h, pixels)`, `texture:update(...)`, `renderer:readInto(buffer)`.
-Draws rasterize immediately in call order, as the crate does; colors are `raster` integers the
-renderer reads as premultiplied (`soft.premultiply` converts straight alpha); meshes are Luau
-buffers of 20-byte vertices and `u32` indices borrowed for one call and never kept, validated
-for stride and alignment here and for indices and finiteness by the crate. A scene drawn from
-Luau is byte-identical to the same scene drawn from Rust (`tests/soft_render.rs` compares every
-pixel), malformed input is an error in the renderer's own words, textures free their storage
-when collected, and the extension is a plain domain extension: l3i does not depend on the
-renderer unless the feature is on. `soft.vertices()` returns a writer whose
-`write(buffer, offset, pos, uv, color)` packs a vertex with one bounds check and returns the
-next offset; under `jit` it lowers to native buffer stores. Measured (`benches/soft_render.rs`,
-640x480): a frame of 48 panels costs 363 µs from Luau against 353 µs native, 3200 glyph quads
-5.1 ms against 4.8 ms, the 256-triangle fan 4.7 ms either way; an offscreen `frame:rect` call
-is 213 ns against 102 ns native, of which the bound call itself (the namecall plus its four
-arguments) is 84 ns; writing the fan's 258 vertices takes 506 ns per vertex with five
-`buffer.write*` calls, 330 ns through the bound writer, and 70 ns through the lowered writer
-(cos, sin, and `vector.create` included).
-
-## Bytes for foreign formats
-
-With the `bytes` feature, `bytes::BytesExtension` (`dream.bytes`, module `@dream/bytes`) is the
-toolkit for scripts that parse foreign file formats, which a preserved game engine does all day.
-Luau's `buffer` library already covers every little-endian width, 64-bit integers and bit
-fields, and its code generator lowers them all, so a `buffer` parser under `--!native` is
-already native-speed; the module adds what a script cannot do fast or at all: `find`, `rfind`,
-`count`, `equals`, `compare`, `startsWith`, `slice`, `toHex`, `fromHex`; `readCString` and
-`writeCString` for NUL-terminated and fixed-width fields; LEB128 `readVarint`,
-`readSignedVarint` and their writes; big-endian 16, 32 and 64-bit integers and floats, 24-bit
-integers in either order, and IEEE half floats, as module functions over a `buffer | string`
-and as methods on `bytes.math()`, whose integer forms lower to native code under `jit` (a tag
-check, Luau's buffer bounds check, one load or store, a byte swap). Behind their own features,
-all pure Rust: `bytes-codecs` (`inflate` and `deflate` in zlib, raw and gzip framing, LZ4 blocks
-and frames, zstd and LZMA/XZ decoding, every decoder capped by `maxSize`), `bytes-digests`
-(CRC-32, Adler-32, FNV-1a, xxHash, MD5, SHA-1, SHA-256, BLAKE3, one-shot or through
-`bytes.hasher`), and `bytes-text` (decoding and encoding every WHATWG-labelled encoding, with
-real UTF-16). Inputs are read without copying; an output is one `buffer` allocated at its final
-size (`convert::NewBuffer`). Every bounds failure names the call, the width and the offset.
-
-## Native code generation
-
-With the `jit` feature the crate builds Luau's CodeGen library and a small C++ shim
-(`csrc/codegen.cpp`) that exposes the C++-only parts of `Luau/CodeGen.h`: shared code
-contexts with a size budget, `compile` with `CompilationOptions`, the userdata remapper, block
-counters, and an `IrBuilder` C ABI. `native_code::NativeCodeHooks` lets hosts write Luau's
-lowering hooks (vector access/namecall, userdata access/metamethod/namecall and their bytecode
-type suggestions) in Rust against `native_code::ir::IrBuilder`, with `IrCmd` generated from
-the headers of the exact Luau build. `VectorBufferWriter` is the default hook set: it lowers
-`vector:writef32x3` to three native f32 stores; `quat::lowering::Lowering` (integer unpacking,
-vector stores, no C call) and `soft_render::lowering::VertexWriter` (one bounds check and five
-buffer stores) are the larger examples. Hooks learn the VM's real tags
-and the compiler's userdata type indices from `NativeContext` (`tag_of`, `userdata_type_of`)
-rather than assuming them; extensions register hook sets with `ExtensionDescriptor::native_hooks`.
-Modes: off, annotated (`--!native`), eager.
-
-Everything the shim needs is in the tree: Luau is the `luau/` submodule, so the build is the
-same on every target and needs nothing outside the checkout.
-
-## Coroutines, debugging, and the rest of the VM
-
-- `thread::Thread`: host-driven coroutines (`start`, `resume`, `resume_with_error`, `reset`,
-  status queries, sandboxed globals, thread data); bound functions yield with `bind::Yield` and
-  request a debugger stop with `bind::Break`.
-- `debug`: activation records, locals, arguments, upvalues, tracebacks, single stepping,
-  breakpoints (`DebugAction::Break` stops a host-driven thread), coverage, and `RuntimeHooks`
-  for every remaining `lua_Callbacks` slot.
-- `memory`: `lua_gc` controls, allocation rate, memory and heap dumps, the buffer cage,
-  userdata marks and embedder GC with weak references, light userdata with tags and names,
-  coroutine finalizers, and fast-flag introspection.
-- `libraries`: opening standard libraries one at a time, `luaL_sandbox`, `luaL_register`,
-  `luaL_findtable`, table clone and clear, `concat`, `equal`, `less_than`, the `luaL_Strbuf`
-  string builder, `load_with_env`, compile-time library members and constants, and the inliner.
-- `require`: Luau's require-by-string runtime over a host `RequireNavigator`, with caching,
-  proxy requires, registered modules, and cyclic-require placeholders.
-- `native_code` (`jit`): also assembly and IR dumps for any target and the perf log.
-- `analysis` (feature): Luau's type checker, linter, autocomplete, and parser over a
-  `SourceProvider`, with diagnostics, spans, per-module strictness, AST JSON, definition
-  files (`AnalysisOptions::definitions`, a plan's `.d.luau` for one) whose own errors fail
-  `Analysis::new` with their text (`new_reporting` for them as values), and `PlanSources`,
-  the provider that resolves a plan's module paths to typed stubs.
-
-Every function in `lua.h`, `lualib.h`, `luacode.h`, `luacodegen.h`, `luajitinliner.h`, and
-`Require.h` is declared in `raw::ffi`; the only exception is the varargs `lua_pushvfstring`.
-
-## Safety model
+The short form of the [safety model](https://DreamWeave-MP.github.io/l3i/docs/safety/), which
+also records the Luau facts the ecosystem builds on and the deliberate divergences from the C++
+binder.
 
 - Luau is built with C++ exceptions. A Lua error inside a bound function unwinds through Rust
-  frames (destructors run) to Luau's `pcall`; nothing puts `catch_unwind` on that path. Panics
-  in native code abort. Host-level raising calls run under `lua_pcall` (`raw::protect`).
+  frames to Luau's `pcall`; nothing puts `catch_unwind` on that path. A panic inside a native
+  call aborts. Host-level raising calls run under `lua_pcall`.
+- `Stack` is exclusive and never pops; temporaries live in a `Frame`; one open child frame per
+  scope; views cannot escape the frame that owns their slot.
+- Receivers are `&T`, never `&mut T`, because one userdata can appear in several argument
+  slots of one call. Mutation goes through interior mutability.
+- Bound callables are `Fn`, not `FnMut`: a binding can re-enter itself through Lua.
 - Every `unsafe` block states the invariant it relies on. GC destructors never call the Lua API.
-- `Value` holds a weak handle to its runtime's lifetime token: a value that outlives its
-  `Runtime` becomes invalid instead of touching a closed VM.
-- `Runtime::stack` leases the root stack; a second root while one is alive and not suspended in
-  a Lua call panics, so no two frames can alias one stack region. Native-call stacks only arise
-  from Luau calling into Rust.
-- Untagged type identity is a leaked per-type address recorded by exact `TypeId`, never a hash.
-- `build.rs` owns `-DLUA_UTAG_LIMIT=254`; `l3i::TAG_LIMIT` mirrors it. Tag 0 is Luau's
-  untagged default; nothing else is reserved.
-- Fast flags follow OpenMW's policy (plus `LuauExperimentalIfLocalSyntax`), frozen before the
-  first VM or compile.
-
-`QUESTIONABLE.md` lists C++ behaviours ported faithfully but flagged, and the deliberate
-divergences.
+- Tags are `1..254`; tag 0 is Luau's untagged default. Fast flags follow OpenMW's policy (plus
+  `LuauExperimentalIfLocalSyntax`) and are frozen before the first VM or compile.
+- Luau integers (`42i`) compare with `==` only and never equal a number, so identities (peers,
+  events, handles, packed scalars) are integers and everything a script counts or thresholds is
+  a plain number.
 
 ## Building
 
-Luau is a git submodule (`luau/`, pinned at release 0.740, the commit OpenMW pins); clone with
-`--recurse-submodules` or run `git submodule update --init`. `build.rs` compiles it and the
-binder's C++ additions with `cc` (in parallel): `LUAI_MAXCSTACK=8000`, three-component vectors,
-`LUA_UTAG_LIMIT=254`, `-fno-math-errno`, Cargo's optimisation level (`-O3` in release) with
-no `-march` so the binary stays portable, Luau's internal assertions whenever Rust's debug
-assertions are on (a failed one prints its location before trapping; a release build with
-debuginfo keeps the release VM), CodeGen under `jit`, Analysis under `analysis`; `soft-render`
-adds the dream-soft-render dependency. Compiled chunks default to optimisation level 2 and
-debug level 1, and runtime plans turn type information on so native code sees the userdata
-types. The binder reads argument slots straight from Luau's 16-byte
-value layout; `csrc/extra.cpp` pins every offset at compile time and each runtime proves the
-mirror against the API once at creation, so a Luau bump that moves a byte fails at once. No network access at build time and no external Lua crate. Hosts may append
-compiler flags through `LUAU_CXXFLAGS`. Rust 1.92 or newer.
+| | |
+|---|---|
+| Luau | git submodule `luau/`, release 0.740 (the commit OpenMW pins); `git clone --recurse-submodules` |
+| C++ side | compiled by `build.rs` with `cc`: `LUAI_MAXCSTACK=8000`, three-component vectors, `LUA_UTAG_LIMIT=254`, `-fno-math-errno`, no `-march` |
+| Toolchain | clang++, lld, cross-language thin LTO, clang and rustc on the same LLVM major; enforced by `build.rs` |
+| Apple targets | clang and lld without `-Clinker-plugin-lto` (ld64.lld rejects it); macOS forfeits the cross-language inlining |
+| MSVC targets | `clang-cl` compiles, rustc links with `lld-link` |
+| Rust | 1.92 or newer, edition 2024 |
+| Network at build time | none |
 
-The toolchain is fixed: **clang++ for the C++ side, lld, and cross-language thin LTO**
-(`-Clinker-plugin-lto -Clinker=clang -Clink-arg=-fuse-ld=lld`), with clang and rustc on the
-same LLVM major. Measured against gcc, that configuration is the only one that makes the binder
-hot paths faster (8 to 15 percent, from the Rust thunks and Luau's API inlining into each
-other) and it is also the fastest clean build. `build.rs` refuses other configurations;
-`L3I_UNVERIFIED_TOOLCHAIN=1` downgrades that to a warning, and docs.rs is exempt. Apple targets
-are the vetted exception: `ld64.lld` rejects rustc's plugin-LTO arguments, so there the policy
-is clang and lld without the cross-language half, and macOS forfeits that gain rather than the
-platform. This repository's `.cargo/config.toml` sets everything for Linux, macOS, and MSVC
-targets; a dependent crate copies its `[env]` and `rustflags` lines. [TOOLCHAIN.md](TOOLCHAIN.md) has the
-measurements.
+The value layout the binder reads is pinned by `static_assert`s in `csrc/extra.cpp` and proven
+against the API once per runtime, so a Luau bump that moves a byte fails at once. Every Luau
+API function in `lua.h`, `lualib.h`, `luacode.h`, `luacodegen.h`, `luajitinliner.h` and
+`Require.h` is declared in `l3i::ffi`, except the varargs `lua_pushvfstring`.
+[TOOLCHAIN.md](TOOLCHAIN.md) has the measurements behind the rule and
+[Building](https://DreamWeave-MP.github.io/l3i/docs/building/) the whole procedure.
 
 ## Quality
 
-`cargo test` (and `cargo test --all-features`) run the ported C++ test contracts plus the
-runtime, sandbox, watchdog, native code, analysis, and renderer suites; `cargo clippy
---all-targets --all-features -- -W clippy::pedantic -D warnings` and `cargo fmt --check` are
-clean, and every commit keeps them so. The integration tests under `tests/` link as one binary (each binary
-pays a full link-time codegen under cross-language LTO), so one file's tests run with
-`cargo test <file>::`. `BENCHMARKS.md` holds the Criterion numbers for the hot paths
-(`cargo bench --bench hot_paths`, then `python3 scripts/gen_benchmarks.py`).
+`cargo test`, `cargo test --all-features`, `cargo clippy --all-targets --all-features -- -W
+clippy::pedantic -D warnings` and `cargo fmt --check` are clean on every commit. The integration
+tests link as one binary (`cargo test <file>::` runs one file), since each binary pays a full
+link-time codegen under cross-language LTO. [`BENCHMARKS.md`](BENCHMARKS.md) holds the Criterion
+numbers for the hot paths.
 
-Past a few nanoseconds wall time is noise, so the binder's own cost is tracked in retired
-instructions and cycles per call, read from the CPU's counters by `cargo bench --bench
-instructions` (Linux, `perf_event_paranoid` at 2 or lower, no `perf` binary needed). The loop
-is subtracted, the minimum over seven rounds is reported, and the floors are measured the same
-way: a hand-written `lua_CFunction` and a typed direct handler. On the pinned Luau 0.740:
+Wall time is noise past a few nanoseconds, so the binder's own cost is tracked in retired
+instructions per call from the CPU's counters (`cargo bench --bench instructions`), the loop
+subtracted, on the pinned Luau 0.740:
 
 | Per call | Instructions | Cycles |
 |---|---:|---:|
 | hand-written `lua_CFunction (f64, f64)` | 277 | 69 |
-| bound `() -> f64` | 292 | 73 |
 | bound `(f64, f64) -> f64` | 369 | 89 |
-| bound `(Vector3) -> f64` | 332 | 85 |
-| bound `(Packed<Color>) -> f64` | 364 | 89 |
 | typed direct namecall, the VM's leanest method path | 368 | 98 |
 | planned method `() -> f64` | 431 | 107 |
-| planned getter | 397 | 101 |
 | planned direct field | 78 | 12 |
-| planned sequence `[i]` | 547 | 148 |
-| planned sequence `#` | 563 | 148 |
 
-A bound call is within about forty instructions of a bare C function; a planned method is
-within sixty of the typed direct handler. The rest is Luau's own call and return machinery.
-A packed argument pays eleven instructions for the kind registry check (one owner load and a
-type compare) on top of its bit decode.
-
-The same harness reads the L1 data, L1 instruction, last-level cache, data and instruction
-TLB, and branch-miss counters. Every scenario reports fewer than 0.005 of each per call: the
-whole path, Luau's and the binder's, stays in L1 and predicts. The binder's side of a call
-touches four lines of its own, the slot row (rows are 32 bytes, so a row never straddles a
-line), the member's context, the thread record, and the shared block's first line, which
-holds the slot table, the plan, and the profiler switch (`#[repr(C, align(64))]`).
-
-Memory per runtime, after a full collection: a bare VM's heap is 64 KiB, with `dream.quat`
-and `dream.raster` 84 KiB, with `dream.soft_render` as well 96 KiB. The binder's own state is
-a 600-byte shared block, 32 bytes per plan slot, 64 bytes per plan entry, and the dense
-`(tag, kind, atom)` table, sized by the tags and atoms the plan uses (1.4 KB for five tags and
-39 atoms).
+Every scenario reports fewer than 0.005 cache, TLB and branch misses per call. A bare VM's heap
+is 64 KiB after a full collection; the binder's own state is a 600-byte shared block plus 32
+bytes per plan slot. [Compatibility and performance](https://DreamWeave-MP.github.io/l3i/docs/performance/)
+has every table.
 
 ## License
 
-MIT OR Apache-2.0.
+MIT OR Apache-2.0. Luau is Roblox's, under the MIT license; its notice ships in the package as
+`luau/LICENSE.txt` and `luau/lua_LICENSE.txt`.
