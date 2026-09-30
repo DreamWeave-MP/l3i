@@ -1,5 +1,13 @@
-//! Luau binder for DreamWeave component crates: a Rust port of the OpenMW Luau binder that
-//! owns its own Luau 0.740 build (no intermediate Lua binding crate).
+//! Luau binder for DreamWeave component crates, which owns its own Luau 0.740 build (no
+//! intermediate Lua binding crate).
+//!
+//! l3i is its author's second Luau binder. The first is C++: `components/luau`, which Dave
+//! Corley (S3kshun8) wrote for OpenMW on the `feat/least-mergeable-branch` branch of his fork
+//! (<https://gitlab.com/magicaldave1/openmw/-/commits/feat/least-mergeable-branch>).
+//! That branch is not in OpenMW's master and may never be: OpenMW's own scripting is
+//! `components/lua`, and OpenMW has no Luau binder. "The C++ binder" in these docs is that one,
+//! and every `components/luau/...` file and `testluau*.cpp` test they cite is a file on that
+//! branch. l3i is not affiliated with or endorsed by the OpenMW project.
 //!
 //! The host application owns the [`runtime::Runtime`]; component crates register bindings
 //! into it through the shared contract in this crate.

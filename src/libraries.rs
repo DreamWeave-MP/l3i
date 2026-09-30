@@ -1,4 +1,4 @@
-//! Standard-library and VM utility entry points that OpenMW's binder never needed but Luau
+//! Standard-library and VM utility entry points that the C++ binder never needed but Luau
 //! offers: opening libraries one at a time, Luau's own sandboxing helpers, `luaL_register`,
 //! `luaL_findtable`, table cloning and clearing, concatenation, raw equality and ordering, the
 //! `luaL_Strbuf` string builder, and the experimental inliner toggle.

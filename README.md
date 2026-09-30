@@ -2,8 +2,16 @@
 
 **The Luau runtime for DreamWeave.** A Rust binder for [Luau](https://luau.org) 0.740 that
 owns its own Luau build, plans every VM before it exists, and lowers hot script calls to native
-code. Ported from the OpenMW Luau binder (`components/luau`), then given what a multi-crate
-engine needs on top.
+code.
+
+l3i is its author's second Luau binder. The first is C++: `components/luau`, which Dave Corley
+(S3kshun8) wrote for OpenMW on the
+[`feat/least-mergeable-branch`](https://gitlab.com/magicaldave1/openmw/-/commits/feat/least-mergeable-branch)
+branch of his fork. That branch is not in OpenMW's master and may never be: OpenMW's own
+scripting is `components/lua`, and OpenMW has no Luau binder. l3i is that binder done again in
+Rust, then given what a multi-crate engine needs on top. "The C++ binder" in the documentation
+is that one, and every `components/luau/...` file and `testluau*.cpp` test the sources cite is a
+file on that branch. l3i is not affiliated with or endorsed by the OpenMW project.
 
 Documentation: **<https://DreamWeave-MP.github.io/l3i/>**. This file is the short version.
 

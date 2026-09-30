@@ -16,10 +16,12 @@ objects at the cost of a table lookup, not a registry walk. The engine must be a
 thousands of script instances in sandboxes it can measure, limit and profile. And the surface a
 script sees has to be declared once, typed, and impossible to drift from what the runtime does.
 
-l3i is that binder. It is a Rust port of the OpenMW Luau binder, with the parts a multi-crate
-engine needs on top: a planner that composes a VM from extensions before the VM exists, a packed
-integer vocabulary for values that should never allocate, the network bridge in every runtime,
-and Luau's native code generator with lowering hooks written in Rust.
+l3i is that binder. Its author wrote one in C++ first, for OpenMW, on
+[a branch of his fork](https://gitlab.com/magicaldave1/openmw/-/commits/feat/least-mergeable-branch)
+that is not part of OpenMW and may never be. l3i is that binder done again in Rust, with the
+parts a multi-crate engine needs on top: a planner that composes a VM from extensions before the
+VM exists, a packed integer vocabulary for values that should never allocate, the network bridge
+in every runtime, and Luau's native code generator with lowering hooks written in Rust.
 
 {{ pipeline(data_path="data/pipeline/plan.json") }}
 

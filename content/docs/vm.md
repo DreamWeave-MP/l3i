@@ -122,7 +122,7 @@ encodes an address with the VM's pointer-encoding key, as `tostring` does.
 
 ## Libraries
 
-`libraries` covers standard-library and VM utility entry points OpenMW's binder never needed:
+`libraries` covers standard-library and VM utility entry points the C++ binder never needed:
 
 - `Runtime::open_library(Library)` opens one standard library at a time (`Base` first);
   `Library::STANDARD` is the twelve `luaL_openlibs` opens, in its order, and `Library::Class` is

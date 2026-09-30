@@ -514,7 +514,7 @@ index: c_int)` and `populate_require_placeholder(&self, placeholder: c_int, resu
 
 ## Libraries
 
-Module `l3i::libraries`: standard-library and VM utility entry points OpenMW's binder never
+Module `l3i::libraries`: standard-library and VM utility entry points the C++ binder never
 needed but Luau offers.
 
 {{ api_signature(value="enum Library { Base, Coroutine, Table, Os, String, Bit32, Buffer, Utf8, Math, Debug, Vector, Integer, Class }") }}
