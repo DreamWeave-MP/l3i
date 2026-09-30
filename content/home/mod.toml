@@ -77,3 +77,14 @@ added = [
     "Templates load from any thread of the VM: `Sandbox::load_template_in` takes only the scope, so a `require` loader captures the sandbox and nothing else.",
     "Rust 1.92, clang and lld; dream-net 1.1.0.",
 ]
+
+[[releases]]
+version = "1.1.0"
+date = 2026-09-30
+summary = "Chunks load on any scope's thread under the runtime's native code policy, the code generator is reachable from a call, templates resolve their imports at load time, and a frame's call site costs two debug fields."
+added = [
+    "`source::LoadScope`, implemented for every scope: `load_bytecode` and `load_source` load a chunk on the scope's own thread, so Luau resolves its builtin imports against that thread's safe globals, and compile it natively according to the runtime's mode, so a `require` written in Rust needs neither the `Runtime` nor `luau_load` by hand.",
+    "`NativeCodeGen::for_scope`: the runtime's code generator from a bound function's `Call` or any other scope of its VM.",
+    "`DebugScope::call_site`: the chunk name and current line of a frame, asking Luau for those two fields only; Luau records lines, not columns.",
+    "Templates load on a loader thread whose globals are the base environment, so Luau resolves their builtin imports when the template loads and every instance takes the fast import path from its first run.",
+]
