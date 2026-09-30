@@ -34,6 +34,21 @@ pub struct DebugInfo {
     pub is_vararg: bool,
 }
 
+/// Where a running function is (`lua_getinfo` with `"sl"`): the cheap query for attributing a
+/// native call to the script line that made it.
+///
+/// Luau records lines, not columns: the bytecode carries one line per instruction and nothing
+/// finer, so no binder can give a column.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CallSite {
+    /// The chunk name as given to `load`, without the leading `=` or `@`; `[C]` for a native
+    /// function.
+    pub source: String,
+    /// The line being executed, `-1` when unknown (a native function, or a chunk compiled
+    /// without line information).
+    pub line: i32,
+}
+
 /// Hit counts of one function from `lua_getcoverage`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CoverageEntry {
@@ -86,6 +101,27 @@ pub trait DebugScope: Scope + Sized {
                 return None;
             }
             Some(info_from(ar.assume_init_ref()))
+        }
+    }
+
+    /// The chunk name and current line `level` frames up the call stack (0 is the running
+    /// function), or `None` past the bottom. From inside a bound function, level 1 is the
+    /// script line that called it. Asks Luau for the source and line only, so it costs a
+    /// fraction of [`DebugScope::debug_info`].
+    fn call_site(&self, level: c_int) -> Option<CallSite> {
+        let mut ar = MaybeUninit::<ffi::lua_Debug>::zeroed();
+        // SAFETY: lua_getinfo with a level never touches the stack; "sl" fills source,
+        // short_src and currentline.
+        unsafe {
+            if ffi::lua_getinfo(self.state(), level, c"sl".as_ptr(), ar.as_mut_ptr()) == 0 {
+                return None;
+            }
+            let ar = ar.assume_init_ref();
+            let mut source = text(ar.source).or_else(|| text(ar.short_src)).unwrap_or_default();
+            if source.starts_with('@') || source.starts_with('=') {
+                source.remove(0);
+            }
+            Some(CallSite { source, line: ar.currentline })
         }
     }
 

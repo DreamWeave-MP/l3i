@@ -461,6 +461,12 @@ One activation record (`lua_getinfo` with `"slnua"`): `what` is `Lua` or `C`, `s
 name without its leading `=` or `@`, `current_line` the line being executed or `-1`. `Clone`,
 `Debug`, `Eq`.
 
+{{ api_signature(value="struct CallSite { pub source: String, pub line: i32 }") }}
+
+Where a running function is (`lua_getinfo` with `"sl"`): the chunk name without its leading `=`
+or `@` (`[C]` for a native function) and the line being executed, `-1` when unknown. Luau records
+lines, not columns, so no binder can give a column. `Clone`, `Debug`, `Eq`.
+
 {{ api_signature(value="struct CoverageEntry { pub function: Option<String>, pub line_defined: i32, pub depth: i32, pub hits: Vec<i32> }") }}
 
 Hit counts of one function from `lua_getcoverage`; `hits` per line, `-1` for lines without
@@ -473,6 +479,7 @@ Debug queries over the call stack of a scope's thread, implemented for every `Sc
 | Method | Meaning |
 |---|---|
 | `fn debug_info(&self, level: c_int) -> Option<DebugInfo>` | The record `level` frames up (0 is the running function), or `None` past the bottom |
+| `fn call_site(&self, level: c_int) -> Option<CallSite>` | The chunk name and current line `level` frames up, asking Luau for those two only; from a bound function, level 1 is the script line that called it |
 | `fn function_info(&self, function: ValueView<'_>) -> Result<DebugInfo>` | The record of the function at a stack slot |
 | `fn stack_depth(&self) -> c_int` | Lua and C frames on this thread |
 | `fn debug_trace(&self) -> String` | Luau's own multi-line trace |

@@ -6,7 +6,7 @@ use std::rc::Rc;
 
 use l3i::Runtime;
 use l3i::bind::Call;
-use l3i::debug::{DebugAction, DebugInfo, DebugScope, HookSet, RuntimeHooks};
+use l3i::debug::{CallSite, DebugAction, DebugInfo, DebugScope, HookSet, RuntimeHooks};
 use l3i::source::CompileOptions;
 use l3i::stack::Stack;
 use l3i::thread::Resume;
@@ -38,6 +38,11 @@ fn activation_records_locals_arguments_and_upvalues_are_readable_from_a_bound_fu
             notes.push(format!("depth {}", call.stack_depth()));
             notes.push(format!("trace has caller: {}", call.debug_trace().contains("inner")));
             notes.push(call.traceback(Some("tb"), 0).unwrap().lines().next().unwrap_or_default().to_owned());
+            // The cheap query gives the same chunk name and line as the full record.
+            assert_eq!(call.call_site(1), Some(CallSite { source: "probe".to_owned(), line: 3 }));
+            assert_eq!(call.call_site(0), Some(CallSite { source: "[C]".to_owned(), line: -1 }));
+            assert_eq!(call.call_site(1).map(|site| site.line), call.debug_info(1).map(|info| info.current_line));
+            assert_eq!(call.call_site(99), None);
         })
         .unwrap();
     runtime.set_global("probe", &probe).unwrap();

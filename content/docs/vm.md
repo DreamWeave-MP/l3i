@@ -73,6 +73,7 @@ answers debug queries about its thread's call stack:
 | Method | Returns |
 |---|---|
 | `debug_info(level)` | The `DebugInfo` record `level` frames up (0 is the running function): `what` (`"Lua"` or `"C"`), `source`, `short_source`, `name`, `line_defined`, `current_line`, counts, `is_vararg` |
+| `call_site(level)` | Only the chunk name and current line of that frame, as a `CallSite`, for attributing every native call to the script line that made it (level 1 from inside a bound function). Luau records lines, not columns: no binder can give a column |
 | `function_info(view)` | The record of the function at a stack slot |
 | `stack_depth()`, `debug_trace()`, `traceback(message, level)` | Frame count, Luau's own trace, and `luaL_traceback` |
 | `local(level, n)`, `set_local(level, n)` | Push local `n` of a frame with its name, or pop the top value into it |
