@@ -262,6 +262,8 @@ fn main() -> l3i::Result<()> {
 | `runtime.load_function(source)` | Runs a chunk that returns one function and pins it |
 | `runtime.load(frame, chunk_name, source, &options)` | Compiles and pushes the chunk function onto a frame of any thread of the VM |
 | `runtime.load_with_env(frame, chunk_name, source, &options, &env)` | The same with the chunk's globals resolving through `env` |
+| `scope.load_source(chunk_name, source, &options)` | `source::LoadScope`, on any scope: compiles and loads on the scope's own thread, natively under the runtime's policy, and pins the chunk as a `Function` |
+| `scope.load_bytecode(chunk_name, &bytecode)` | The same from bytecode already compiled |
 | `source::compile(source, &options)` | Bytecode, with a compile error as `Error::Runtime` carrying Luau's message |
 
 `exec`, `eval` and `load_function` use `runtime.compile_options()`, which default to

@@ -226,6 +226,49 @@ writable globals table that proxies the frozen main globals, which is how a chun
 thread writes without touching the real globals. `Runtime::load_with_env` loads one chunk with
 its globals resolving through a table of the host's choosing instead.
 
+### Loading on the running thread
+
+A host with one global environment has no use for templates: it wants each chunk loaded on the
+thread that runs it, so Luau resolves the chunk's builtin imports against that thread's safe
+globals as it loads, and compiled natively according to the runtime's policy. `source::LoadScope`
+is implemented for every scope, so a bound `require` does both from its `Call` without a handle
+to the `Runtime`:
+
+```rust
+use std::collections::HashMap;
+use std::rc::Rc;
+
+use l3i::bind::{Call, StackResults};
+use l3i::source::{CompileOptions, LoadScope, compile};
+use l3i::{Result, Runtime};
+
+fn install_require(runtime: &Runtime, options: CompileOptions) -> Result<()> {
+    let bytecode: Rc<std::cell::RefCell<HashMap<String, Rc<Vec<u8>>>>> = Rc::default();
+    let require = runtime.bind_function("dreamweave.require", move |call: &Call, name: &str| -> Result<StackResults> {
+        let cached = bytecode.borrow().get(name).cloned();
+        let compiled = match cached {
+            Some(compiled) => compiled,
+            None => {
+                let source = std::fs::read_to_string(name).map_err(|error| l3i::Error::runtime(error.to_string()))?;
+                let compiled = Rc::new(compile(&source, &options)?);
+                bytecode.borrow_mut().insert(name.to_owned(), Rc::clone(&compiled));
+                compiled
+            }
+        };
+        let module = call.load_bytecode(&format!("@{name}"), &compiled)?;
+        module.value().push_to_scope(call)?;
+        Ok(StackResults)
+    })?;
+    runtime.set_global("require", &require)
+}
+```
+
+`load_bytecode(chunk_name, &bytecode)` takes bytecode from `source::compile`, or a cache of it,
+and `load_source(chunk_name, source, &options)` compiles first; both pin the chunk as a
+`Function` that runs in the thread's globals until the host gives it another environment. A
+chunk name beginning `@` or `=` loses that prefix in debug records, as Luau's `load` does. A
+failed load is `Error::Runtime` with Luau's message, chunk name included.
+
 ## `require` over a host navigator
 
 Luau resolves `require("./path")` by walking a navigator the host provides: reset to the

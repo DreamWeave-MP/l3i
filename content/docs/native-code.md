@@ -46,13 +46,33 @@ asked after the defaults and before the extensions'. A hand-assembled runtime pa
 `NativeCodeOptions` to `Runtime::builder().native_code(..)` instead, and names its userdata types
 itself with `.userdata_types([..])`; a planned runtime derives that list from the plan.
 
-`Runtime::native_code()` returns the generator. `is_available()` says whether the platform has a
-code generator; the tests skip when it does not. Compilation happens where chunks are loaded: a
-`Sandbox::load_template` compiles the template and `Template::native_code()` reports the
-`NativeCodeResult` with its `status` (`Success`, `NothingToCompile`, `NotNativeModule`,
+`Runtime::native_code()` returns the generator, and `NativeCodeGen::for_scope(&scope)` the same
+generator from any scope of its VM, a bound function's `Call` included, so a `require` written in
+Rust can reach it without a handle to the `Runtime`. `is_available()` says whether the platform
+has a code generator; the tests skip when it does not. Compilation happens where chunks are
+loaded: a `Sandbox::load_template` compiles the template and `Template::native_code()` reports
+the `NativeCodeResult` with its `status` (`Success`, `NothingToCompile`, `NotNativeModule`,
 `CodeGenOverflowInstructionLimit`, `AllocationFailed`, and the rest of Luau's outcomes), `stats`
 (`native_code_size_bytes`, `functions_compiled`, `functions_bound`) and `module_id`. A module that
 ran out of code space is not retried (`AllocationRetrySkipped`).
+
+Outside a sandbox, `source::LoadScope` is implemented for every scope: `scope.load_bytecode(name,
+&bytecode)` and `scope.load_source(name, source, &options)` load a chunk on the scope's own thread
+and compile it according to the mode, always under `Eager`, when it is marked `--!native` under
+`Annotated`, so a module loaded from inside a bound function runs natively like the script that
+required it. Loading on the running thread also lets Luau resolve the chunk's builtin imports
+against that thread's globals when they are marked safe, which the sandbox's loader thread does
+against the base environment.
+
+```rust
+use l3i::bind::Call;
+use l3i::source::{CompileOptions, LoadScope};
+
+fn require(call: &Call, source: &str) -> l3i::Result<f64> {
+    let module = call.load_source("@module.luau", source, &CompileOptions::default())?;
+    module.invoke::<f64, _>(call, ())
+}
+```
 
 ## Lowering hooks in Rust
 

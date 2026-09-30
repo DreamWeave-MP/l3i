@@ -73,6 +73,7 @@ after `lua_close`, as Luau requires for shared contexts.
 
 | Method | Meaning |
 |---|---|
+| `fn for_scope<'s>(scope: &'s impl Scope) -> Option<&'s NativeCodeGen>` | The generator of the runtime whose VM `scope` runs on, from a bound function's `Call` or any other scope; `None` for a runtime without native code |
 | `fn is_available(&self) -> bool` | Whether native execution is live on this runtime |
 | `fn mode(&self) -> NativeCodeMode` | |
 | `fn set_native_execution_enabled(&self, scope: &impl Scope, enabled: bool)` | Turns native execution on or off for the whole VM |
@@ -83,7 +84,8 @@ after `lua_close`, as Luau requires for shared contexts.
 | `fn execution_stats(&self, scope: &impl Scope) -> ExecutionStats` | Luau's block counters summed over every retained module (counters must be on) |
 
 `Sandbox::load_template` compiles each template according to the mode and keeps the result on
-the `Template`.
+the `Template`; `source::LoadScope::load_bytecode` and `load_source` compile the chunk they load
+on any scope the same way.
 
 {{ api_signature(value="enum AssemblyTarget { Host, A64, A64NoFeatures, X64Windows, X64SystemV }") }}
 

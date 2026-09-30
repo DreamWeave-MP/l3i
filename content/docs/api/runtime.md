@@ -506,6 +506,19 @@ A constant the compiler may fold in place of a library member access. `Clone`, `
 Compiles Luau source to bytecode. A compile error is `Error::Runtime` carrying Luau's message
 (without a chunk name) rather than error bytecode. Freezes the flag policy first.
 
+{{ api_signature(value="trait LoadScope: Scope + Sized") }}
+
+Loading chunks on the thread of any scope, implemented for every `Scope`. The chunk loads on
+the scope's own thread, so Luau resolves its builtin imports against that thread's globals when
+they are marked safe, and with `jit` and a runtime built with native code it is compiled
+according to the runtime's mode (always under `Eager`, when marked `--!native` under
+`Annotated`). The chunk runs in the thread's globals until the host sets another environment.
+
+| Method | Meaning |
+|---|---|
+| `fn load_bytecode(&self, chunk_name: &str, bytecode: &[u8]) -> Result<Function>` | Loads bytecode from `compile`, or a cache of it, and pins the chunk. A leading `@` or `=` on the chunk name is stripped in debug records. A failed load is `Error::Runtime` with Luau's message; a chunk name containing NUL is `Error::Logic` |
+| `fn load_source(&self, chunk_name: &str, source: &str, options: &CompileOptions) -> Result<Function>` | Compiles `source` with `options` and loads it the same way; a compile error carries the chunk name |
+
 ## Flags
 
 Module `l3i::flags`: the process-global Luau feature-flag policy. Flags change the bytecode the

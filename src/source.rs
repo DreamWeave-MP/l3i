@@ -1,11 +1,15 @@
 //! Source compilation: an explicit `CompileOptions` always travels with the source, never
-//! Luau's silent defaults (`components/luau/compileoptions.hpp`, `bytecode.cpp`).
+//! Luau's silent defaults (`components/luau/compileoptions.hpp`, `bytecode.cpp`). And
+//! [`LoadScope`], loading a chunk on the thread of any scope with the runtime's native code
+//! policy applied.
 
 use std::ffi::{CString, c_char, c_int};
 use std::ptr;
 
 use crate::error::{Error, Result};
 use crate::raw::ffi;
+use crate::stack::Scope;
+use crate::value::{Function, Value};
 
 /// Luau compiler policy. Defaults match OpenMW: optimisation 2, line info and function names,
 /// no type information, no coverage.
@@ -221,3 +225,49 @@ pub(crate) fn compile_raw(source: &str, options: &CompileOptions) -> Result<Vec<
     unsafe { ffi::free(bytecode.cast()) };
     Ok(bytes)
 }
+
+/// Loading chunks on the thread of any scope: a bound function's `Call`, a frame of a host
+/// thread, the root stack. Implemented for every [`Scope`].
+///
+/// A chunk loads on the scope's own thread, so Luau resolves its builtin imports (`math.sqrt`,
+/// `string.format`, ...) against that thread's globals when they are marked safe
+/// (`Runtime::sandbox_globals`, `Thread::sandbox`), and the chunk takes the fast import path
+/// from its first run; a template loaded on the sandbox's loader thread resolves against the
+/// base environment instead. With the `jit` feature and a runtime built with native code, the
+/// loaded chunk is compiled according to the runtime's mode: always under `Eager`, when it is
+/// marked `--!native` under `Annotated`, never under `Off`. Without a generator the chunk simply
+/// loads. The chunk runs in the thread's globals until the host sets another environment.
+pub trait LoadScope: Scope + Sized {
+    /// Loads `bytecode` (from [`compile`], or a cache of it) under `chunk_name` and pins the
+    /// chunk as a `Function`. A chunk name starting with `@` or `=` is stripped of that prefix
+    /// in debug records, as Luau does. A load failure is `Error::Runtime` with Luau's message;
+    /// a chunk name containing NUL is a logic error.
+    fn load_bytecode(&self, chunk_name: &str, bytecode: &[u8]) -> Result<Function> {
+        let name = CString::new(chunk_name).map_err(|_| Error::logic("Chunk name cannot contain NUL"))?;
+        self.with_frame(|frame| {
+            let state = frame.state();
+            // SAFETY: the frame's thread is live; the bytecode and name outlive the call.
+            // luau_load reports failure by status and leaves the message on top of the frame.
+            let status = unsafe { ffi::luau_load(state, name.as_ptr(), bytecode.as_ptr().cast(), bytecode.len(), 0) };
+            if status != ffi::LUA_OK {
+                // SAFETY: the message is on the frame's thread.
+                return Err(unsafe { crate::raw::protect::pop_error(state, status) });
+            }
+            #[cfg(feature = "jit")]
+            if let Some(generator) = crate::native_code::NativeCodeGen::for_scope(frame) {
+                generator.compile(frame, -1, bytecode)?;
+            }
+            Function::from_value(Value::store(frame.top_value())?)
+        })
+    }
+
+    /// Compiles `source` with `options` and loads it as [`LoadScope::load_bytecode`] does. A
+    /// compile error is `Error::Runtime` carrying Luau's message with the chunk name, as a
+    /// failed `luau_load` reports it.
+    fn load_source(&self, chunk_name: &str, source: &str, options: &CompileOptions) -> Result<Function> {
+        let bytecode = compile_raw(source, options)?;
+        self.load_bytecode(chunk_name, &bytecode)
+    }
+}
+
+impl<S: Scope> LoadScope for S {}

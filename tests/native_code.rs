@@ -9,7 +9,7 @@ use l3i::ffi::{LUA_TNUMBER, LUA_TUSERDATA};
 use l3i::native_code::hooks::{AccessSite, NamecallSite, NativeCodeHooks, NativeContext};
 use l3i::native_code::ir::{IrBuilder, IrCmd, bytecode_type};
 use l3i::native_code::vector_buffer::VectorBufferWriter;
-use l3i::native_code::{NativeCodeMode, NativeCodeOptions, NativeCodeStatus, module_id};
+use l3i::native_code::{NativeCodeGen, NativeCodeMode, NativeCodeOptions, NativeCodeStatus, module_id};
 use l3i::runtime::{CallContext, MemoryCategory};
 use l3i::sandbox::{InstanceSpec, SandboxOptions};
 use l3i::source::CompileOptions;
@@ -211,6 +211,48 @@ fn annotated_mode_compiles_only_marked_modules_and_ids_are_stable() {
     let template = sandbox.load_template(&off, "x.lua", "--!native\nreturn 1").unwrap();
     assert_eq!(template.native_code().unwrap().status, NativeCodeStatus::Skipped);
     let _ = Cell::new(0);
+}
+
+#[test]
+fn a_bound_function_reaches_the_generator_and_loads_native_modules_on_its_own_thread() {
+    use l3i::bind::Call;
+    use l3i::source::LoadScope;
+    let eager = runtime(NativeCodeMode::Eager);
+    let generator = eager.native_code().expect("built with native code");
+    assert!(generator.is_available(), "this platform has no Luau code generator");
+    let plain = Runtime::new().unwrap();
+    assert!(NativeCodeGen::for_scope(&plain.stack()).is_none(), "no generator without native code");
+    // A `require` written in Rust: it compiles the module natively because the load applies the
+    // runtime's policy, and it can ask the generator itself from the call.
+    let require = eager
+        .bind_function("dreamweave.test.require", |call: &Call, source: &str| -> l3i::Result<f64> {
+            let generator = NativeCodeGen::for_scope(call).expect("the runtime's generator, from a call");
+            assert_eq!(generator.mode(), NativeCodeMode::Eager);
+            let before = generator.execution_stats(call).regular_blocks_executed;
+            let module = call.load_source("@module.luau", source, &CompileOptions::default())?;
+            let sum = module.invoke::<f64, _>(call, ())?;
+            let after = generator.execution_stats(call).regular_blocks_executed;
+            assert!(after > before, "the module ran natively: {before} -> {after}");
+            Ok(sum)
+        })
+        .unwrap();
+    eager.set_global("require_source", &require).unwrap();
+    let sum: f64 = eager.eval("return require_source('local s = 0 for i = 1, 100 do s += i end return s')").unwrap();
+    assert_eq!(sum, 5050.0);
+    // `Annotated` compiles only marked chunks: a plain one loads and runs interpreted.
+    let annotated = runtime(NativeCodeMode::Annotated);
+    let generator = annotated.native_code().unwrap();
+    let plain_source = "local s = 0 for i = 1, 100 do s += i end return s";
+    let marked_source = "--!native\nlocal s = 0 for i = 1, 100 do s += i end return s";
+    let counted = |source: &str| -> u64 {
+        let stack = annotated.stack();
+        let before = generator.execution_stats(&stack).regular_blocks_executed;
+        let chunk = stack.load_source("=chunk", source, &CompileOptions::default()).unwrap();
+        assert_eq!(chunk.invoke::<f64, _>(&stack, ()).unwrap(), 5050.0);
+        generator.execution_stats(&stack).regular_blocks_executed - before
+    };
+    assert_eq!(counted(plain_source), 0, "an unmarked chunk stays interpreted");
+    assert!(counted(marked_source) > 0, "a --!native chunk runs natively");
 }
 
 #[test]

@@ -165,3 +165,38 @@ fn thread_stacks_are_leased_per_thread_not_per_vm() {
     runtime.collect_garbage();
     assert!(thread.data().is_null());
 }
+
+#[test]
+fn chunks_load_on_the_thread_of_any_scope() {
+    use l3i::bind::Call;
+    use l3i::source::LoadScope;
+    let runtime = Runtime::new().unwrap();
+    runtime.exec("shared_value = 1").unwrap();
+    // From inside a bound function, on the calling thread: the module runs where it was loaded.
+    let loader = runtime
+        .bind_function("dreamweave.test.load", |call: &Call, source: &str| -> l3i::Result<f64> {
+            let chunk = call.load_source("@loaded.luau", source, &CompileOptions::default())?;
+            chunk.invoke::<f64, _>(call, ())
+        })
+        .unwrap();
+    runtime.set_global("load_and_run", &loader).unwrap();
+    let doubled: f64 = runtime.eval("return load_and_run('return shared_value * 2')").unwrap();
+    assert_eq!(doubled, 2.0);
+    // On a sandboxed thread, the chunk captures that thread's globals proxy, as `Runtime::load`
+    // would, and runs from cached bytecode without recompiling.
+    let thread = runtime.new_thread().unwrap();
+    thread.sandbox(&runtime.stack()).unwrap();
+    let bytecode = l3i::source::compile("shared_value = 5 return shared_value", &CompileOptions::default()).unwrap();
+    let writer = thread.with_stack(&runtime.stack(), |stack| stack.load_bytecode("=sandboxed", &bytecode)).unwrap();
+    let Resume::Finished(values) = thread.start(&runtime.stack(), &writer, ()).unwrap() else { panic!() };
+    assert_eq!(number(&runtime, &values[0]), 5.0);
+    assert_eq!(
+        runtime.global("shared_value").unwrap().with_value(&runtime.stack(), |_, v| v.read::<f64>()).unwrap(),
+        1.0
+    );
+    // A compile error names the chunk, as a failed `luau_load` reports it.
+    let error = runtime.stack().load_source("bad.lua", "local = 1", &CompileOptions::default()).unwrap_err();
+    assert_eq!(error.to_string(), "[string \"bad.lua\"]:1: Expected identifier when parsing variable name, got '='");
+    assert!(runtime.stack().load_bytecode("a\0b", &bytecode).unwrap_err().to_string().contains("NUL"));
+    assert_eq!(runtime.stack().top(), 0);
+}

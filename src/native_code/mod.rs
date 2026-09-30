@@ -324,6 +324,16 @@ impl NativeCodeGen {
         Ok(generator)
     }
 
+    /// The generator of the runtime whose VM `scope` runs on, when that runtime was built with
+    /// one: what [`crate::Runtime::native_code`] returns, reachable from a bound function's
+    /// `Call` or any other scope, so a `require` written in Rust can compile the modules it
+    /// loads. `None` for a runtime without native code.
+    pub fn for_scope<'s>(scope: &'s impl Scope) -> Option<&'s NativeCodeGen> {
+        // SAFETY: the scope's thread is live for `'s`, and the runtime owning it (whose shared
+        // block holds the generator) outlives every scope on it.
+        unsafe { crate::runtime::shared_for(scope.state()) }.and_then(crate::runtime::shared::Shared::native_code)
+    }
+
     /// Whether native execution is live on this runtime.
     pub fn is_available(&self) -> bool {
         self.available
