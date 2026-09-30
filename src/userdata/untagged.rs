@@ -247,7 +247,7 @@ pub fn test_owned<'v, T: Userdata>(value: ValueView<'v>) -> Option<&'v T> {
     storage::<T>(value).and_then(Storage::owned)
 }
 
-/// [`test`] or a Luau-style type error.
+/// [`test()`] or a Luau-style type error.
 pub fn check<'v, T: Userdata>(value: ValueView<'v>) -> Result<&'v T> {
     test::<T>(value).ok_or_else(|| crate::diagnostics::type_error(value, T::NAME))
 }

@@ -240,7 +240,7 @@ pub unsafe fn test_mut<'v, T: Userdata>(value: ValueView<'v>) -> Option<&'v mut 
     unsafe { payload_ptr::<T>(value.state(), value.index()).as_mut() }
 }
 
-/// [`test`] or a Luau-style type error for argument `value`.
+/// [`test()`] or a Luau-style type error for argument `value`.
 pub fn check<'v, T: Userdata>(value: ValueView<'v>) -> Result<&'v T> {
     test::<T>(value).ok_or_else(|| crate::diagnostics::type_error(value, T::NAME))
 }

@@ -5,7 +5,7 @@
 //! exception unwind through them, exactly as the C++ thunks did. Messages use `luaL_error`
 //! wording with the caller's location prefix.
 //!
-//! Bound members are stored in the dispatch tables as [`MemberEntry`] userdata and run
+//! Bound members are stored in the dispatch tables as `MemberEntry` userdata and run
 //! directly on the dispatcher's stack; a plain function (an unbound method) is `lua_call`ed.
 
 use std::ffi::{CStr, c_int};

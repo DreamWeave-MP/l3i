@@ -1,4 +1,4 @@
-//! Native lowering of the [`Math`](super::Math) receiver's integer methods (feature `jit`).
+//! Native lowering of the [`Math`] receiver's integer methods (feature `jit`).
 //!
 //! A lowered call is a tag check on the receiver and the arguments, Luau's own buffer bounds
 //! check, one load or store, and a byte swap: the same instructions `buffer.readu32` compiles

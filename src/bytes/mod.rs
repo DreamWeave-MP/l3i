@@ -19,7 +19,7 @@
 //! - **Codecs** (`bytes-codecs`): `inflate` and `deflate` in zlib, raw and gzip framing, LZ4
 //!   blocks and frames, zstd and LZMA/XZ decoding.
 //! - **Digests** (`bytes-digests`): CRC-32, Adler-32, FNV-1a, xxHash and the cryptographic
-//!   digests, one-shot or through a [`Hasher`] for data that arrives in pieces.
+//!   digests, one-shot or through a `Hasher` for data that arrives in pieces.
 //! - **Text** (`bytes-text`): decoding and encoding every WHATWG label, for the codepages old
 //!   formats were written in.
 //!

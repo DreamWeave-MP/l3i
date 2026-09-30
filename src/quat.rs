@@ -433,10 +433,10 @@ impl Extension for QuatExtension {
 
 /// Native lowering of the packed operations (`jit`).
 ///
-/// [`Math`] is a payload-free tagged receiver: `Q:rotate(q, v)`, `Q:mul(a, b)`, `Q:key(q, flags)`,
+/// [`Math`](lowering::Math) is a payload-free tagged receiver: `Q:rotate(q, v)`, `Q:mul(a, b)`, `Q:key(q, flags)`,
 /// `Q:keyRotation(k)`, and `Q:keyFlags(k)` are ordinary bound methods on the interpreter path
 /// and lowered through
-/// [`NativeCodeHooks::userdata_namecall`] when the compiler knows the receiver's type. The
+/// [`NativeCodeHooks::userdata_namecall`](crate::native_code::NativeCodeHooks::userdata_namecall) when the compiler knows the receiver's type. The
 /// lowering checks the receiver's tag, the operands' integer tags and packed kinds (a mismatch
 /// exits to the interpreter, whose C method raises the type error), and writes a vector or a
 /// packed integer straight into the result register. It matches the interpreter path to the

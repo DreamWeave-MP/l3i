@@ -50,7 +50,7 @@ pub trait ParamItem<'c>: Sized {
     }
 
     /// Converts the receiver slot of a method call; the dispatcher may have established its
-    /// type already ([`Call::verified_receiver`]). Defaults to [`Self::read_arg`].
+    /// type already (`Call::verified_receiver`). Defaults to [`Self::read_arg`].
     #[inline]
     fn read_receiver(call: &'c Call<'c>, view: ValueView<'c>) -> Result<Self> {
         let _ = view;
