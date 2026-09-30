@@ -11,7 +11,9 @@ branch of his fork. That branch is not in OpenMW's master and may never be: Open
 scripting is `components/lua`, and OpenMW has no Luau binder. l3i is that binder done again in
 Rust, then given what a multi-crate engine needs on top. "The C++ binder" in the documentation
 is that one, and every `components/luau/...` file and `testluau*.cpp` test the sources cite is a
-file on that branch. l3i is not affiliated with or endorsed by the OpenMW project.
+file on that branch, at [commit `f69579c8`](https://gitlab.com/magicaldave1/openmw/-/tree/f69579c8d54fb2ae4d7a79a4d7033205effaec0e/components/luau).
+[Where the fast paths came from](https://DreamWeave-MP.github.io/l3i/docs/performance/#where-the-fast-paths-came-from) links each optimisation to the C++ lines it
+started as. l3i is not affiliated with or endorsed by the OpenMW project.
 
 Documentation: **<https://DreamWeave-MP.github.io/l3i/>**. This file is the short version.
 

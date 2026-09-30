@@ -17,9 +17,10 @@ kind = "guide"
 +++
 
 l3i is a Rust binder for Luau 0.740. Its author wrote one in C++ first, for OpenMW:
-`components/luau` on the [`feat/least-mergeable-branch`](https://gitlab.com/magicaldave1/openmw/-/commits/feat/least-mergeable-branch)
-branch of his fork, which is not part of OpenMW and may never be. That is "the C++ binder" these
-pages compare against; l3i is not affiliated with the OpenMW project. It owns its Luau
+[`components/luau`](https://gitlab.com/magicaldave1/openmw/-/tree/f69579c8d54fb2ae4d7a79a4d7033205effaec0e/components/luau) on a branch of his fork, which is not part of OpenMW and may never
+be. That is "the C++ binder" these pages compare against, and
+[Where the fast paths came from](@/docs/performance.md#where-the-fast-paths-came-from) points
+at its lines; l3i is not affiliated with the OpenMW project. It owns its Luau
 build, declares the C API by hand, and puts a scoped layer over it: frame-bound stack views,
 registry-pinned owned values, a typed function binder that reads arguments straight from stack
 slots, tagged and untagged userdata, Luau's direct userdata access, sandboxed script instances,

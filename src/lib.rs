@@ -2,12 +2,14 @@
 //! intermediate Lua binding crate).
 //!
 //! l3i is its author's second Luau binder. The first is C++: `components/luau`, which Dave
-//! Corley (S3kshun8) wrote for OpenMW on the `feat/least-mergeable-branch` branch of his fork
-//! (<https://gitlab.com/magicaldave1/openmw/-/commits/feat/least-mergeable-branch>).
+//! Corley (S3kshun8) wrote for OpenMW on the `feat/least-mergeable-branch` branch of his fork.
 //! That branch is not in OpenMW's master and may never be: OpenMW's own scripting is
 //! `components/lua`, and OpenMW has no Luau binder. "The C++ binder" in these docs is that one,
 //! and every `components/luau/...` file and `testluau*.cpp` test they cite is a file on that
-//! branch. l3i is not affiliated with or endorsed by the OpenMW project.
+//! branch, at commit `f69579c8`
+//! (<https://gitlab.com/magicaldave1/openmw/-/tree/f69579c8d54fb2ae4d7a79a4d7033205effaec0e/components/luau>);
+//! the site's [Compatibility and performance](https://DreamWeave-MP.github.io/l3i/docs/performance/#where-the-fast-paths-came-from) page links each fast path to the
+//! C++ lines it came from. l3i is not affiliated with or endorsed by the OpenMW project.
 //!
 //! The host application owns the [`runtime::Runtime`]; component crates register bindings
 //! into it through the shared contract in this crate.

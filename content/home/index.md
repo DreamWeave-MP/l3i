@@ -17,7 +17,7 @@ thousands of script instances in sandboxes it can measure, limit and profile. An
 script sees has to be declared once, typed, and impossible to drift from what the runtime does.
 
 l3i is that binder. Its author wrote one in C++ first, for OpenMW, on
-[a branch of his fork](https://gitlab.com/magicaldave1/openmw/-/commits/feat/least-mergeable-branch)
+[a branch of his fork](https://gitlab.com/magicaldave1/openmw/-/tree/f69579c8d54fb2ae4d7a79a4d7033205effaec0e/components/luau)
 that is not part of OpenMW and may never be. l3i is that binder done again in Rust, with the
 parts a multi-crate engine needs on top: a planner that composes a VM from extensions before the
 VM exists, a packed integer vocabulary for values that should never allocate, the network bridge

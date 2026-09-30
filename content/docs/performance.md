@@ -1,6 +1,6 @@
 +++
 title = "Compatibility and performance"
-description = "What the version promises, the supported Rust, the pinned dependencies, the license, what is tested, and what each path through the binder costs in nanoseconds, instructions and bytes."
+description = "What the version promises, the supported Rust, the pinned dependencies, the license, what is tested, what each path through the binder costs in nanoseconds, instructions and bytes, and which lines of the C++ binder each fast path came from."
 weight = 105
 
 [extra]
@@ -294,6 +294,220 @@ After a full collection, a bare VM's heap is 64 KiB, with `dream.quat` and `drea
 84 KiB, with `dream.soft_render` as well 96 KiB. The binder's own state is a 600-byte shared
 block, 32 bytes per plan slot, 64 bytes per plan entry, and the dense `(tag, kind, atom)` table,
 sized by the tags and atoms the plan uses (1.4 KB for five tags and 39 atoms).
+
+## Where the fast paths came from
+
+l3i is its author's second Luau binder. The first is C++: `components/luau`, on a branch of his
+OpenMW fork that OpenMW itself does not have. Most of what makes a call cheap here was worked
+out there first, and the honest way to say so is to point at the lines. Every link below is
+pinned to one commit of that branch, [`f69579c8`](https://gitlab.com/magicaldave1/openmw/-/tree/f69579c8d54fb2ae4d7a79a4d7033205effaec0e/components/luau), so the line numbers cannot drift
+under it. A few of the files live in `components/lua` on the same branch; the links say which.
+
+Each entry says what the C++ does, what l3i does with the idea, and where l3i goes further. The
+last one lists what has no C++ ancestor at all.
+
+### Borrowed views first, pins second
+
+The C++ binder sorts its API into three tiers: borrowed stack views for binding hot paths, one
+registry pin for values that outlive a call, and proxy conveniences that may pin behind your
+back ([`README.md` 7-29](https://gitlab.com/magicaldave1/openmw/-/blob/f69579c8d54fb2ae4d7a79a4d7033205effaec0e/components/luau/README.md#L7-29)). It also bans the `is<T>()` then `as<T>()` habit, which validates the
+same value twice ([`README.md` 35-37](https://gitlab.com/magicaldave1/openmw/-/blob/f69579c8d54fb2ae4d7a79a4d7033205effaec0e/components/luau/README.md#L35-37)).
+
+l3i keeps the tiers as they are: `stack`, `value`, and the cold lookups. One conversion per
+argument is the binder's rule here too.
+
+Further: in C++ a view that outlives its slot is a comment asking you not to
+([`stack.hpp` 25-26](https://gitlab.com/magicaldave1/openmw/-/blob/f69579c8d54fb2ae4d7a79a4d7033205effaec0e/components/luau/stack.hpp#L25-26)). Here a view borrows the `Frame` that owns the slot, so the mistake
+does not compile.
+
+### Tagged userdata
+
+One tag per hot type, the payload allocated inline with the metatable already attached
+([`taggeduserdata.hpp` 56-71](https://gitlab.com/magicaldave1/openmw/-/blob/f69579c8d54fb2ae4d7a79a4d7033205effaec0e/components/luau/taggeduserdata.hpp#L56-71)), and a type check that is a single `lua_touserdatatagged`
+([`taggeduserdata.hpp` 40-54](https://gitlab.com/magicaldave1/openmw/-/blob/f69579c8d54fb2ae4d7a79a4d7033205effaec0e/components/luau/taggeduserdata.hpp#L40-54)). Registration builds and freezes the metatable first and
+publishes the destructor and the metatable for the tag last, because those Luau setters cannot
+report failure ([`taggeduserdata.hpp` 101-123](https://gitlab.com/magicaldave1/openmw/-/blob/f69579c8d54fb2ae4d7a79a4d7033205effaec0e/components/luau/taggeduserdata.hpp#L101-123)).
+
+`userdata::tagged` allocates the same way and publishes in the same order.
+
+Further: the C++ tag is a template constant, fixed when the engine is compiled. Here a Rust
+type carries no tag. The host or the plan assigns one per VM, so the check is a tag read and
+one `TypeId` compare against that VM's tag plan, the 20 ns in the host-side table above, and
+the same type can be tag 8 in one runtime, 17 in another, and untagged in a third.
+
+### Untagged userdata
+
+The long tail gets no tag: a type is recognised by the exact identity of its one read-only
+metatable. The C++ check fetches the type's metatable from the registry, pushes the value's
+own, compares the two pointers, and pops ([`untaggeduserdataaccess.hpp` 32-40](https://gitlab.com/magicaldave1/openmw/-/blob/f69579c8d54fb2ae4d7a79a4d7033205effaec0e/components/luau/untaggeduserdataaccess.hpp#L32-40),
+[`untaggeduserdataaccess.hpp` 111-129](https://gitlab.com/magicaldave1/openmw/-/blob/f69579c8d54fb2ae4d7a79a4d7033205effaec0e/components/luau/untaggeduserdataaccess.hpp#L111-129)).
+
+l3i keeps the identity rule and drops the stack traffic. The expected pointer is cached per VM
+in the shared block, keyed by `TypeId`, and the value's metatable pointer is read by
+`lua_getmetatablepointer`, one of the few C additions in `csrc/extra.cpp`, which pushes
+nothing. That is the 37 ns receiver check.
+
+### Generated `__index` and `__namecall`
+
+A type with getters gets generated dispatchers. The C++ `__namecall` thunk looks the method up
+by Luau atom in an integer-keyed table, falling back to the name for a method without one
+([`binding.cpp` 88-111](https://gitlab.com/magicaldave1/openmw/-/blob/f69579c8d54fb2ae4d7a79a4d7033205effaec0e/components/luau/binding.cpp#L88-111)); the table is filled as methods are registered
+([`binding.cpp` 541-557](https://gitlab.com/magicaldave1/openmw/-/blob/f69579c8d54fb2ae4d7a79a4d7033205effaec0e/components/luau/binding.cpp#L541-557)) and the three-upvalue closures are installed once the first getter
+appears ([`binding.cpp` 559-595](https://gitlab.com/magicaldave1/openmw/-/blob/f69579c8d54fb2ae4d7a79a4d7033205effaec0e/components/luau/binding.cpp#L559-595)). `__index` tries methods, then getters
+([`binding.cpp` 63-86](https://gitlab.com/magicaldave1/openmw/-/blob/f69579c8d54fb2ae4d7a79a4d7033205effaec0e/components/luau/binding.cpp#L63-86)).
+
+`userdata::dispatch` has the same upvalues and the same atom table.
+
+Further: the C++ thunk finds the method and then `lua_call`s it, a second call frame on top
+of the dispatcher's own. l3i stores a bound member as a `MemberEntry` and runs it on the
+dispatcher's stack, so a generated method call costs one Luau call frame, not two.
+
+### Direct userdata access
+
+Luau can call a native callback straight from `GETTABLEKS`, `SETTABLEKS` and `NAMECALL` when
+the key has an atom. The C++ side registers the callbacks per tag and insists that each has its
+metamethod ([`directuserdata.cpp` 31-52](https://gitlab.com/magicaldave1/openmw/-/blob/f69579c8d54fb2ae4d7a79a4d7033205effaec0e/components/luau/directuserdata.cpp#L31-52)), wraps the ordinary metamethods so they reach the
+same handler and keep the original as upvalue 1 ([`userdatadispatch.hpp` 14-54](https://gitlab.com/magicaldave1/openmw/-/blob/f69579c8d54fb2ae4d7a79a4d7033205effaec0e/components/luau/userdatadispatch.hpp#L14-54)), and
+installs the wrappers before the metatable freezes and publishes the callbacks after
+([`userdatadispatch.hpp` 100-123](https://gitlab.com/magicaldave1/openmw/-/blob/f69579c8d54fb2ae4d7a79a4d7033205effaec0e/components/luau/userdatadispatch.hpp#L100-123)). Members resolve through a dense
+`(tag, kind, atom) -> slot` table built at compile time
+([`directregistry.hpp` 51-72](https://gitlab.com/magicaldave1/openmw/-/blob/f69579c8d54fb2ae4d7a79a4d7033205effaec0e/components/lua/directregistry.hpp#L51-72), in `components/lua`), and Luau's 16-bit per-instruction
+cache is trusted only after it is shown to name this exact tag, atom and kind
+([`directregistry.hpp` 140-158](https://gitlab.com/magicaldave1/openmw/-/blob/f69579c8d54fb2ae4d7a79a4d7033205effaec0e/components/lua/directregistry.hpp#L140-158)). Direct fields are a separate registration
+([`directuserdata.cpp` 54-70](https://gitlab.com/magicaldave1/openmw/-/blob/f69579c8d54fb2ae4d7a79a4d7033205effaec0e/components/luau/directuserdata.cpp#L54-70)).
+
+`direct::registry::Registry` is that compile-time table as a `const fn`, with the same cache
+rule, and the wrapper arrangement is unchanged.
+
+Further: a compile-time table needs every tag and atom to be a constant, which is fine for one
+engine and useless for crates that do not know what VM they will be loaded into.
+`direct::plan::DirectPlan` is the same table built at run time from the tags and atoms this VM
+assigned. Its cache-hit test is one load and one compare of a packed `(tag, kind, atom)` key,
+which is why 128 members cost what 4 do in the plan dispatch table above.
+
+### Pointer encoding
+
+Luau prints and hashes pointers through a keyed permutation. The C++ binder draws four 64-bit
+words from the platform's entropy source and redraws while they would normalise to Luau's
+identity map ([`pointerencoding.cpp` 14-20](https://gitlab.com/magicaldave1/openmw/-/blob/f69579c8d54fb2ae4d7a79a4d7033205effaec0e/components/luau/pointerencoding.cpp#L14-20), [`pointerencoding.cpp` 28-47](https://gitlab.com/magicaldave1/openmw/-/blob/f69579c8d54fb2ae4d7a79a4d7033205effaec0e/components/luau/pointerencoding.cpp#L28-47)), and seeds
+the state before anything else touches it ([`pointerencoding.hpp` 24-26](https://gitlab.com/magicaldave1/openmw/-/blob/f69579c8d54fb2ae4d7a79a4d7033205effaec0e/components/luau/pointerencoding.hpp#L24-26)).
+
+`runtime::PointerEncodingKey::random` and `is_identity` are the same two functions, and the
+key is installed first in the creation order. The entropy comes from the standard library's
+`RandomState`, so it costs no dependency. It is a builder choice, on unless the host turns it
+off.
+
+### Debug names
+
+Luau borrows the name pointer given to a C closure for the closure's whole life. The C++
+binder interns every name as a Luau string in a VM-private registry table and hands out the
+interned pointer ([`debugname.cpp` 14-46](https://gitlab.com/magicaldave1/openmw/-/blob/f69579c8d54fb2ae4d7a79a4d7033205effaec0e/components/luau/debugname.cpp#L14-46)), after checking that it is a dot-separated
+identifier path under a known root ([`cfunction.hpp` 25-60](https://gitlab.com/magicaldave1/openmw/-/blob/f69579c8d54fb2ae4d7a79a4d7033205effaec0e/components/luau/cfunction.hpp#L25-60)).
+
+`debug_name` does the same interning and the same validation.
+
+Further: the C++ roots are `openmw`, `string` and `vector`, written into the header. Here they
+are host data, `RuntimeBuilder::debug_roots`.
+
+### Flags and compile options
+
+Luau's fast flags are process globals and several change the bytecode the compiler emits. The
+C++ binder names its whole policy, compiler side and runtime side, and freezes it once
+([`runtimeflags.cpp` 48-94](https://gitlab.com/magicaldave1/openmw/-/blob/f69579c8d54fb2ae4d7a79a4d7033205effaec0e/components/luau/runtimeflags.cpp#L48-94), [`runtimeflags.cpp` 96-130](https://gitlab.com/magicaldave1/openmw/-/blob/f69579c8d54fb2ae4d7a79a4d7033205effaec0e/components/luau/runtimeflags.cpp#L96-130), [`runtimeflags.cpp` 133-140](https://gitlab.com/magicaldave1/openmw/-/blob/f69579c8d54fb2ae4d7a79a4d7033205effaec0e/components/luau/runtimeflags.cpp#L133-140)).
+Compile options always travel with the source rather than falling back to Luau's defaults
+([`compileoptions.hpp` 8-26](https://gitlab.com/magicaldave1/openmw/-/blob/f69579c8d54fb2ae4d7a79a4d7033205effaec0e/components/luau/compileoptions.hpp#L8-26)), and loading bytecode is one explicit call
+([`bytecode.cpp` 9-13](https://gitlab.com/magicaldave1/openmw/-/blob/f69579c8d54fb2ae4d7a79a4d7033205effaec0e/components/luau/bytecode.cpp#L9-13)).
+
+`flags::LUAU_FLAGS` and `LUAU_CODEGEN_FLAGS` are that policy, and `source::CompileOptions` has
+the same defaults: optimisation 2, debug 1, no type information, no coverage.
+
+Further: the flags are set by name through `luau_setfflag`, and a name the linked Luau does not
+have is a logic error at the first runtime, so a Luau bump cannot drop a flag quietly. Three
+flags are l3i's own: `LuauExperimentalIfLocalSyntax`, `LuauGcTraceUdata` and `LuauBufferCage`.
+The options own their strings instead of borrowing pointers for the duration of a compile.
+
+### Calls into Luau
+
+Every host call is a `lua_pcall` that restores the stack ([`call.hpp` 47-66](https://gitlab.com/magicaldave1/openmw/-/blob/f69579c8d54fb2ae4d7a79a4d7033205effaec0e/components/luau/call.hpp#L47-66)). The variant
+worth stealing hands the borrowed result to a visitor while the call frame is still alive, so
+reading a result pins nothing ([`call.hpp` 86-113](https://gitlab.com/magicaldave1/openmw/-/blob/f69579c8d54fb2ae4d7a79a4d7033205effaec0e/components/luau/call.hpp#L86-113)). Host code that may raise runs as a C
+closure under `pcall`, with the C++ callable passed as a light userdata
+([`protectedcall.hpp` 15-29](https://gitlab.com/magicaldave1/openmw/-/blob/f69579c8d54fb2ae4d7a79a4d7033205effaec0e/components/luau/protectedcall.hpp#L15-29)).
+
+`Function::invoke_with` is the visitor call and `raw::protect::protected_call` is the same
+light-userdata trick.
+
+Further: a native callback already runs under Luau's own protection, so it skips the `pcall`.
+Only a host-level scope pays for one.
+
+### Conversion
+
+One checked conversion per value, with rules that do not guess: a number becomes an integer by
+rounding and a range check, a Luau integer by range check alone, and a Rust integer is pushed
+as a number only when a double can hold it exactly ([`convert.hpp` 201-214](https://gitlab.com/magicaldave1/openmw/-/blob/f69579c8d54fb2ae4d7a79a4d7033205effaec0e/components/luau/convert.hpp#L201-214),
+[`convert.hpp` 216-236](https://gitlab.com/magicaldave1/openmw/-/blob/f69579c8d54fb2ae4d7a79a4d7033205effaec0e/components/luau/convert.hpp#L216-236), [`convert.hpp` 589-626](https://gitlab.com/magicaldave1/openmw/-/blob/f69579c8d54fb2ae4d7a79a4d7033205effaec0e/components/luau/convert.hpp#L589-626)).
+
+`convert` keeps those rules and the tests hold them against the C++ suite.
+
+Further: the C++ reads a scalar with a type query and then an API call. l3i reads the argument
+slot itself, through a mirror of Luau's 16-byte value layout. See the last entry.
+
+### Owned references
+
+A reference owns a registry pin and never the VM, and its owner is the main thread, not the
+coroutine it happened to be made on ([`reference.hpp` 14-16](https://gitlab.com/magicaldave1/openmw/-/blob/f69579c8d54fb2ae4d7a79a4d7033205effaec0e/components/luau/reference.hpp#L14-16),
+[`reference.hpp` 68-75](https://gitlab.com/magicaldave1/openmw/-/blob/f69579c8d54fb2ae4d7a79a4d7033205effaec0e/components/luau/reference.hpp#L68-75)). The rule that every reference must die before the VM is a
+comment.
+
+`value::Value` is that pin.
+
+Further: each value carries a weak handle to its VM's lifetime token. One that outlives its
+`Runtime` reads as invalid instead of touching a closed VM.
+
+### Native code
+
+These are in `components/lua` on the same branch. One code generator per VM with a hard size
+budget in whole blocks ([`nativecodegen.cpp` 188-194](https://gitlab.com/magicaldave1/openmw/-/blob/f69579c8d54fb2ae4d7a79a4d7033205effaec0e/components/lua/nativecodegen.cpp#L188-194)), an annotated mode that compiles
+only `--!native` modules ([`nativecodegen.cpp` 24-27](https://gitlab.com/magicaldave1/openmw/-/blob/f69579c8d54fb2ae4d7a79a4d7033205effaec0e/components/lua/nativecodegen.cpp#L24-27)), module identities hashed from the
+bytecode with MurmurHash3 and a fixed seed ([`nativecodegen.cpp` 77-87](https://gitlab.com/magicaldave1/openmw/-/blob/f69579c8d54fb2ae4d7a79a4d7033205effaec0e/components/lua/nativecodegen.cpp#L77-87)), a collision
+reported rather than aliased and a module that ran out of code space never retried
+([`nativecodegen.cpp` 229-260](https://gitlab.com/magicaldave1/openmw/-/blob/f69579c8d54fb2ae4d7a79a4d7033205effaec0e/components/lua/nativecodegen.cpp#L229-260)). And the first lowering: `vector:writef32x3(buffer, offset)`
+as three native f32 stores behind one bounds check ([`nativevectorbuffer.cpp` 71-105](https://gitlab.com/magicaldave1/openmw/-/blob/f69579c8d54fb2ae4d7a79a4d7033205effaec0e/components/lua/nativevectorbuffer.cpp#L71-105)).
+
+`native_code::NativeCodeGen` keeps all of it, the seed included, and
+`native_code::vector_buffer::VectorBufferWriter` is that lowering.
+
+Further: the C++ lowering is C++ against Luau's `IrBuilder`. l3i puts a C ABI over the builder
+and writes its hooks in Rust, and a hook asks the VM it is compiling for which tag a type has
+rather than assuming one. The quaternion, colour, vertex-writer and byte-reader lowerings have
+no C++ counterpart.
+
+### What is l3i's own
+
+No C++ ancestor, for better or worse:
+
+- **Runtime plans.** Composing a VM from extensions before it exists, assigning tags, atoms,
+  compiler slots and direct slots per VM, and rendering the type definitions for exactly that
+  composition. The C++ binder's tags and atoms are constants of one engine.
+- **Reading the value layout.** `convert::raw` mirrors Luau's 16-byte `TValue`, so a scalar
+  argument is a tag compare and a load. `csrc/extra.cpp` checks every offset when it compiles
+  and each runtime checks the reads against the API when it is created, so a Luau bump that
+  moves a byte fails at once instead of misreading.
+- **One call on entry.** `l3i_native_enter` returns the argument count, the thread record and
+  the closure context together, where a bound function would otherwise ask Luau three times.
+  The instruction counts above are what is left: a bound call within about forty instructions
+  of a bare C function.
+- **Packed 64-bit scalars** and their kind registry: values that never allocate.
+- **The shared block's layout.** One cache line holds the slot table, the plan and the
+  profiler switch.
+- **The toolchain rule.** A C++ binder and Luau are one language, and ordinary link-time
+  optimisation inlines across them. A Rust binder gets that back only with clang, lld and
+  cross-language thin LTO, which is what the campaign below measures.
+- **Templates that resolve their imports.** The C++ loader thread has empty, unsafe globals, so
+  every import is looked up at run time ([`luastate.cpp` 638-652](https://gitlab.com/magicaldave1/openmw/-/blob/f69579c8d54fb2ae4d7a79a4d7033205effaec0e/components/lua/luastate.cpp#L638-652)). l3i's loader thread has
+  the base environment for globals, and Luau resolves a template's imports when it loads.
+- **`source::LoadScope` and `DebugScope::call_site`**, for hosts that load modules from inside
+  a bound function and attribute every native call to a script line.
 
 ## The toolchain campaign
 

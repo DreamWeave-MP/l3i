@@ -48,7 +48,7 @@ url = "https://luau.org"
 [[credits]]
 name = "Dave Corley (S3kshun8)"
 role = "components/luau, the C++ Luau binder he wrote for OpenMW on the feat/least-mergeable-branch branch of his fork: what l3i does again in Rust, and the tests it answers to. Not part of OpenMW, and l3i is not affiliated with the project"
-url = "https://gitlab.com/magicaldave1/openmw/-/commits/feat/least-mergeable-branch"
+url = "https://gitlab.com/magicaldave1/openmw/-/tree/f69579c8d54fb2ae4d7a79a4d7033205effaec0e/components/luau"
 
 [[credits]]
 name = "Más Bandwidth LLC"
