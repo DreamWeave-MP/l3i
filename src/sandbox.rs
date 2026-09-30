@@ -10,8 +10,12 @@
 //! - An **instance** is a writable table whose frozen metatable indexes the base env, with
 //!   `_G`, a named `print`, a `loaded` table of packages (function packages are factories
 //!   called once with the instance's hidden data) and a `require` reading from it.
-//! - A **template** is a chunk compiled once and loaded on a loader thread whose globals are an
-//!   empty frozen table, then instantiated per script with `lua_clonefunction` + `lua_setfenv`.
+//! - A **template** is a chunk compiled once and loaded on a loader thread whose globals are the
+//!   base env, then instantiated per script with `lua_clonefunction` + `lua_setfenv`. Since the
+//!   base env is marked safe, Luau resolves the chunk's builtin imports against it at load time
+//!   (`lvmload.cpp`, `resolveImportSafe`), and every instance, whose environment is marked safe
+//!   too, takes the fast import path from its first run. OpenMW loads templates on a thread with
+//!   empty, unsafe globals, which leaves every import to be looked up at run time.
 //!
 //! Hosts supply the log sink, the loader function behind `require`, and the packages; nothing
 //! here knows about scripts, files, or OpenMW.
@@ -199,7 +203,7 @@ impl Runtime {
         }
         let mut common_packages = BTreeMap::new();
         let base_env = self.build_base_env(&get_safe_metatable, &mut common_packages)?;
-        let loader_thread = self.new_loader_thread()?;
+        let loader_thread = self.new_loader_thread(&base_env)?;
         Ok(Sandbox {
             base_env,
             common_packages,
@@ -266,20 +270,23 @@ impl Runtime {
         })
     }
 
-    /// A thread whose globals are an empty frozen table: chunks loaded on it capture no
-    /// environment until `lua_setfenv` gives them one (`pushTemplateLoaderThread`).
-    fn new_loader_thread(&self) -> Result<Value> {
+    /// A thread whose globals are the frozen, safe base env (`pushTemplateLoaderThread`, with
+    /// the base env in place of OpenMW's empty unsafe table): `luau_load` resolves a chunk's
+    /// builtin imports against the loading thread's globals when they are marked safe, so a
+    /// template loaded here carries them resolved into every instance. The closure it produces
+    /// is never run as is; `instantiate` clones it into its environment.
+    fn new_loader_thread(&self, base_env: &Table) -> Result<Value> {
         let stack = self.stack();
         stack.with_frame(|frame| {
             let state = frame.state();
-            // SAFETY: lua_newthread pushes the thread on `state`; the loader's own stack is
-            // touched only to replace its globals.
+            // SAFETY: lua_newthread pushes the thread on `state`; the base env is pushed above
+            // it, moved onto the loader's own stack and made its globals, so the loader's stack
+            // stays empty and the thread is left on top of the frame.
             unsafe {
                 let loader = ffi::lua_newthread(state);
-                ffi::lua_newtable(loader);
+                base_env.push_to(frame)?;
+                ffi::lua_xmove(state, loader, 1);
                 ffi::lua_replace(loader, ffi::LUA_GLOBALSINDEX);
-                ffi::lua_setreadonly(loader, ffi::LUA_GLOBALSINDEX, 1);
-                ffi::lua_setsafeenv(loader, ffi::LUA_GLOBALSINDEX, 0);
             }
             Value::store(frame.top_value())
         })

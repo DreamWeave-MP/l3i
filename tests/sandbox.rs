@@ -102,6 +102,30 @@ fn templates_reject_binary_chunks_and_report_syntax_errors() {
 }
 
 #[test]
+fn templates_resolve_their_imports_against_the_base_env() {
+    let runtime = Runtime::new().unwrap();
+    runtime.exec("lib = { answer = 42 }").unwrap();
+    let (sandbox, log) = sandbox_with_log(&runtime, SandboxOptions::default());
+    let loader = runtime.load_function("return function(name) error('module ' .. name .. ' not found') end").unwrap();
+    let instance = sandbox
+        .new_instance(&runtime, &InstanceSpec { name: "a", packages: &[], hidden_data: None, loader: &loader })
+        .unwrap();
+    // A chunk of its own assigning `lib` would compile the read as a global lookup; a shadow
+    // written by another chunk is what the safe environments trade for the fast import path.
+    let shadow = sandbox.load_template(&runtime, "shadow.lua", "lib = { answer = 1 }").unwrap();
+    sandbox.run(&runtime, &shadow, &instance, context()).unwrap();
+    let reader = sandbox.load_template(&runtime, "reader.lua", "return lib.answer, rawget(_G, 'lib').answer").unwrap();
+    let results = sandbox.run(&runtime, &reader, &instance, context()).unwrap();
+    let read = |value: &Value| value.with_value(&runtime.stack(), |_, view| view.read::<f64>()).unwrap();
+    assert_eq!((read(&results[0]), read(&results[1])), (42.0, 1.0));
+    // Names the base env leaves out, `print` and `require`, still resolve per instance.
+    let printer = sandbox.load_template(&runtime, "printer.lua", "print('hi') return type(require)").unwrap();
+    let results = sandbox.run(&runtime, &printer, &instance, context()).unwrap();
+    assert_eq!(results[0].with_value(&runtime.stack(), |_, view| view.read::<String>()).unwrap(), "function");
+    assert_eq!(log.borrow().as_slice(), ["a:\thi"]);
+}
+
+#[test]
 fn instantiating_without_an_environment_runs_in_the_real_globals() {
     let runtime = Runtime::new().unwrap();
     let (sandbox, _log) = sandbox_with_log(&runtime, SandboxOptions::default());

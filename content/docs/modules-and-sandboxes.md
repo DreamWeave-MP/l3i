@@ -114,8 +114,16 @@ receives each `print` line, already tab-joined and prefixed with the instance's 
   import fast paths apply. The real `_G` is never frozen.
 - An **instance** is a writable table whose frozen metatable indexes the base environment, with
   `_G`, a named `print`, a `loaded` table of packages, and a `require` reading from it.
-- A **template** is a chunk compiled once and loaded on a loader thread whose globals are an
-  empty frozen table, then instantiated per script with `lua_clonefunction` plus `lua_setfenv`.
+- A **template** is a chunk compiled once and loaded on a loader thread whose globals are the
+  base environment, then instantiated per script with `lua_clonefunction` plus `lua_setfenv`.
+  Because the base environment is marked safe, Luau resolves the chunk's builtin imports
+  (`math.sqrt`, a module placed as a global, ...) against it when the template loads, and every
+  instance, whose environment is marked safe too, takes the fast import path from its first run.
+  The trade is Luau's own: a global the base environment holds cannot be shadowed by a write
+  from another chunk into the instance; a chunk that assigns the name itself compiles its reads
+  as lookups, and `print` and `require`, which the base environment leaves out, resolve per
+  instance. OpenMW loads templates on a thread with empty, unsafe globals and looks every import
+  up at run time.
 
 `SandboxOptions` holds the compile options for templates and three compatibility switches:
 `compat_iterators` (on by default: `pairs` and `ipairs` honouring `__pairs` and `__ipairs`, which
@@ -158,7 +166,7 @@ own `counter`; the real globals never saw it, and a second instance would start 
 | `Sandbox::base_env()` | The frozen base environment every instance indexes |
 | `Sandbox::common_packages()`, `add_common_package(&runtime, name, value)` | Packages every instance receives: the base environment's tables and userdata plus those added. A table is frozen in place; a function is a factory called once per instance with the hidden data |
 | `Sandbox::new_instance(&runtime, &spec)` | One instance, built inside an initialization call scope |
-| `Sandbox::load_template(&runtime, chunk_name, source)` | Compiles once and loads on the loader thread. Binary chunks are rejected; a syntax error is `Err` with Luau's message |
+| `Sandbox::load_template(&runtime, chunk_name, source)` | Compiles once and loads on the loader thread, with its imports resolved against the base environment. Binary chunks are rejected; a syntax error is `Err` with Luau's message |
 | `Sandbox::instantiate(&runtime, &template, env)` | A fresh closure sharing the template's prototype, running in `env`, or in the real globals for `None` |
 | `Sandbox::run(&runtime, &template, &instance, context)` | Instantiates in the instance and runs it inside a script call scope, returning everything the chunk returned |
 | `Template::chunk_name()` | The name the template was loaded under |
