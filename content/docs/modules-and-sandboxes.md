@@ -291,7 +291,8 @@ scripts see.
 `require_function(navigator)` returns the closure pinned for a sandbox to hand to instances
 itself. `proxy_require_function()` is a `proxyrequire(path, chunkname)` closure that resolves a
 path as if required from a named module. `register_require_module(path, &value)` makes a value
-the permanent result of requiring an alias, and `clear_require_cache_entry(key)` and
+the permanent result of requiring an alias, `registered_require_modules()` lists every path
+registered so, the plan's included, and `clear_require_cache_entry(key)` and
 `clear_require_cache()` drop cached results. A module that is loaded twice in a cycle sees a
 locked placeholder table; the `require::RequirePlaceholders` trait on any scope creates,
 locks and populates one from inside `load`.

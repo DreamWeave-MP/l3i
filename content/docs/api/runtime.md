@@ -238,7 +238,7 @@ Methods other modules add to `Runtime` are documented with their module:
 `finalizer_function`, `atom_catalogue`, `atom_of`, `install_vector_buffer_writer` on
 [Direct access and the VM](@/docs/api/direct.md); `open_library`, `sandbox_luau`,
 `register_library`, `find_table`, `set_jit_inliner`, `install_require`, `require_function`,
-`proxy_require_function`, `register_require_module`, `clear_require_cache_entry`,
+`proxy_require_function`, `register_require_module`, `registered_require_modules`, `clear_require_cache_entry`,
 `clear_require_cache` on [Binding and userdata](@/docs/api/bind.md); `native_code` on
 [Native code and analysis](@/docs/api/native-code.md).
 

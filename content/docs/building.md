@@ -78,7 +78,7 @@ l3i = { version = "1.0", features = ["jit"] }
 
 | Feature | Default | Adds |
 |---|---|---|
-| `jit` | off | Luau's CodeGen library and `csrc/codegen.cpp`: `l3i::native_code`, the lowering hooks, `quat.math()`, and the lowered paths of `raster.math()` and `soft.vertices()`. Not supported on emscripten |
+| `jit` | off | Luau's CodeGen library and `csrc/codegen.cpp`: `l3i::native_code`, the lowering hooks, `quat.math()`, and the lowered paths of `raster.math()`, `soft.vertices()`, `bytes.math()` and an annotated intern `Pool`'s `intern` and `find`. Not supported on emscripten |
 | `analysis` | off | Luau's Analysis library and `csrc/analysis.cpp`: `l3i::analysis` (type checker, linter, autocomplete, parser) and `RuntimePlan::check_definitions` |
 | `soft-render` | off | The `dream-soft-render` dependency as the `dream.soft_render` extension |
 | `bytes` | off | The `dream.bytes` extension (`l3i::bytes`) and `memchr` for its searches |
@@ -120,6 +120,10 @@ Two exemptions:
 
 - `L3I_UNVERIFIED_TOOLCHAIN=1` turns the refusal into a warning, for hosts that cannot meet the requirement; expect slower binder hot paths.
 - docs.rs, which sets `DOCS_RS`, is exempt automatically: it only renders documentation and cannot be handed a linker configuration.
+
+`l3i::VERIFIED_TOOLCHAIN` says which kind of build a binary is: `true` exactly when `build.rs`
+found nothing missing, whether or not `L3I_UNVERIFIED_TOOLCHAIN` was set. A host that publishes
+performance numbers checks it, since an exempted build is slower by no fixed amount.
 
 Installing the tools: Fedora `dnf install clang lld`; Debian and Ubuntu
 `apt install clang-<N> lld-<N>` where `<N>` is rustc's LLVM major. Apple's clang is not upstream

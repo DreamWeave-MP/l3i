@@ -254,6 +254,7 @@ Luau's IR builder for the function being compiled, valid for one hook invocation
 | `fn vm_const(&mut self, index: u32) -> IrOp`, `fn vm_upvalue(&mut self, index: u8) -> IrOp` | |
 | `fn vm_exit(&mut self, pcpos: c_int) -> IrOp` | The VM exit guards take when a check fails at bytecode position `pcpos` |
 | `fn in_terminated_block(&self) -> bool` | |
+| `fn namecall_call(&mut self, pcpos: c_int)` | The generic namecall at `pcpos` and the call after it, as Luau emits them when no hook lowers the pair: a userdata namecall hook's slow path, since returning `true` skips both instructions |
 
 ## The vector buffer writer
 

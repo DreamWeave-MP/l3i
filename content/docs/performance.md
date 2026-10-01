@@ -9,7 +9,7 @@ kind = "reference"
 
 ## Versions
 
-l3i is at 1.0.0: releases in 1.x keep the Rust API compatible, as Cargo's semver rules expect.
+l3i is on 1.x: every release in 1.x keeps the Rust API compatible, as Cargo's semver rules expect.
 The Luau it embeds is release 0.740, the commit OpenMW pins, as the `luau/` submodule; bumping it
 is a deliberate change that re-audits the hand-declared C API.
 
@@ -17,12 +17,13 @@ is a deliberate change that re-audits the hand-declared C API.
 
 - **Rust 1.92** or newer, declared as `rust-version` and checked in CI. Edition 2024. The optional `dream-soft-render` dependency declares the same.
 - `unsafe` is used, at the FFI boundary and in the value-layout reads; every block states the invariant it relies on (see [Safety](@/docs/safety.md)).
-- Three optional features, `jit`, `analysis` and `soft-render`, all off by default (see [Building](@/docs/building.md)).
+- Optional features, all off by default: `jit`, `analysis`, `soft-render`, `bytes` with `bytes-codecs`, `bytes-digests` and `bytes-text`, and `intern` (see [Building](@/docs/building.md)).
 
 | Dependency | Version | For |
 |---|---|---|
 | `dream-net` | `=1.1.0` | The `dream.net` bridge every plan carries |
 | `dream-soft-render` | `=1.0.0`, optional (`soft-render`) | The `dream.soft_render` extension |
+| `memchr`, `miniz_oxide`, `lz4_flex`, `ruzstd`, `lzma-rs`, `crc32fast`, `adler2`, `xxhash-rust`, `md-5`, `sha1`, `sha2`, `blake3`, `encoding_rs` | Optional, behind `bytes` and its `bytes-*` features | `@dream/bytes`'s searches, codecs, digests and text encodings |
 | `cc` | `1`, `parallel` feature, build only | Compiling the Luau submodule and `csrc/` |
 | `criterion` | `0.8.2`, dev only | The benchmarks |
 

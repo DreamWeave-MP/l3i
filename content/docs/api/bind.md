@@ -503,6 +503,7 @@ On `Runtime`:
 | `fn require_function(&self, navigator: impl RequireNavigator) -> Result<Function>` | Installs `navigator` and returns the `require` closure pinned without a global, for sandboxes |
 | `fn proxy_require_function(&self) -> Result<Function>` | A `proxyrequire(path, chunkname)` closure over the installed navigator |
 | `fn register_require_module(&self, path: &str, value: &Value) -> Result<()>` | `value` as the permanent result of requiring the alias `path` |
+| `fn registered_require_modules(&self) -> Vec<String>` | Every path registered with `register_require_module`, in registration order: the plan's modules and the host's |
 | `fn clear_require_cache_entry(&self, cache_key: &str) -> Result<()>` | |
 | `fn clear_require_cache(&self) -> Result<()>` | |
 

@@ -59,10 +59,11 @@ Declared at the root:
 pub mod ffi                          the raw Luau C API (raw::ffi, re-exported)
 pub const TAG_LIMIT: u8              254: valid userdata tags are 1..TAG_LIMIT
 pub const LUAU_VERSION: &str         "0.740"
+pub const VERIFIED_TOOLCHAIN: bool   whether build.rs found the verified toolchain
 ```
 
 `Result<T>` is `std::result::Result<T, l3i::Error>` and is what every fallible function in the
-crate returns. [The raw C API](@/docs/api/ffi.md) covers `ffi` and the two constants.
+crate returns. [The raw C API](@/docs/api/ffi.md) covers `ffi` and the two VM constants; [Building](@/docs/building.md#the-toolchain-rule) covers `VERIFIED_TOOLCHAIN`.
 
 ## Conventions
 

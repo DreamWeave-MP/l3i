@@ -43,7 +43,7 @@ Nothing here is a catalogue: tags, atoms, type names and debug-name roots are ho
 
 ```toml
 [dependencies]
-l3i = { version = "1", features = ["jit"] }   # jit, analysis, bytes, soft-render are optional
+l3i = { version = "1", features = ["jit"] }   # jit, analysis, soft-render, bytes(-codecs, -digests, -text), intern are optional
 ```
 
 l3i builds only with **clang, lld and cross-language thin LTO**, and Cargo does not inherit a

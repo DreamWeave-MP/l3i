@@ -119,6 +119,7 @@ renumbers the IR cannot silently desynchronise this layer. Operands are `IrOp` v
 | `vm_exit(pcpos)` | The exit guards take when a check fails |
 | `load_and_check_tag(location, tag, fallback)` | Loads a tag and branches unless it matches |
 | `block(kind)`, `begin_block(block)`, `block_at_inst`, `fallback_block`, `in_terminated_block()` | Control flow |
+| `namecall_call(pcpos)` | The namecall and call Luau would have emitted: a userdata namecall hook's slow path, so a miss runs the bound method in place and stays in native code |
 
 `bytecode_type` holds the answers a `*_type` hook may give (`NIL`, `NUMBER`, `VECTOR`, `INTEGER`,
 `ANY`, ...) and `TAGGED_USERDATA_BASE`, 64: an annotated userdata type at index `i` of the
@@ -212,8 +213,10 @@ The hook sets in the crate:
 | Hook set | Lowers |
 |---|---|
 | `native_code::vector_buffer::VectorBufferWriter` | `vector:writef32x3(buffer, offset)` to three native f32 stores; part of the default hook set. Its interpreter half, `Runtime::install_vector_buffer_writer()`, installs the `__namecall` shim on Luau's vector metatable with exactly the semantics of three `buffer.writef32` calls, and is where a failed guard lands |
-| `quat::lowering::Lowering` | `dream_quat_Math`'s `rotate`, `mul`, `slerp`, `key`, `keyRotation`, `keyFlags`: integer unpacking, double arithmetic, vector or integer stores, no C call |
+| `quat::lowering::Lowering` | `dream_quat_Math`'s `rotate`, `mul`, `slerp`, `fromXYZW`, `key`, `keyRotation`, `keyFlags`: integer unpacking, double arithmetic, vector or integer stores, no C call |
 | `raster::lowering::ColorMath` | `dream_raster_Math`'s color arithmetic in both widths |
+| `bytes::lowering::ByteMath` | `dream_bytes_Math`'s 16-, 24-, 32- and 64-bit integer reads and writes: a tag check, Luau's own bounds check, one load or store, and a byte swap for the big-endian forms |
+| `intern::lowering::InternLowering` | An annotated `dream_intern_Pool`'s `intern` and `find` on a string or buffer span: the policy's hash eight bytes at a time, the probe and a word compare against the arena; an insert or a bad argument runs the bound method through `namecall_call` |
 | `soft_render::lowering::VertexWriter` | `dream_soft_render_Vertices:write`: one bounds check and six buffer stores |
 
 ## Which call sites lower

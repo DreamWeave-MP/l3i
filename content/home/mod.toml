@@ -28,7 +28,7 @@ crate = "l3i"
 [[requires]]
 id = "f82752ac-e7f6-43c0-8c2f-d91b7f6b3dda"
 name = "dream-net"
-version = "=1.0.0"
+version = "=1.1.0"
 url = "https://DreamWeave-MP.github.io/dream-net/"
 reason = "Runtime infrastructure: the @dream/net module is in every plan, and l3i owns the bridge."
 
