@@ -78,6 +78,8 @@ pub mod direct;
 pub mod error;
 pub mod extension;
 pub mod flags;
+#[cfg(feature = "intern")]
+pub mod intern;
 pub mod libraries;
 pub mod memory;
 pub mod module;
