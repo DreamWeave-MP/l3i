@@ -437,6 +437,7 @@ local count, after = bytes.readVarint(header, next)
 | `compare(a, aOffset, b, bOffset, length)` | -1, 0 or 1 over `length` bytes of each |
 | `slice(source, offset, length)` | A new buffer |
 | `toHex(data)`, `fromHex(text)` | Lower-case hex and back; whitespace between digits is ignored |
+| `toBase64(source, offset?, length?)`, `fromBase64(text)` | Standard padded base64 (RFC 4648) of a range, the whole source by default, and back; `fromBase64` refuses anything else, naming the byte |
 | `readCString(source, offset, fieldLength?)` | The text up to the first NUL and the offset after the terminator, or after the fixed-width field when `fieldLength` is given |
 | `writeCString(target, offset, text, fieldLength?)` | Writes the text and a NUL, NUL-padded to the field; returns the offset after it |
 | `readVarint`, `readSignedVarint(source, offset)` | LEB128: the value as an integer and the offset after it |

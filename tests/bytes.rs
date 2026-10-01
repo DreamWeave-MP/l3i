@@ -43,6 +43,27 @@ fn searching_comparing_and_slicing_work_on_buffers_and_strings() {
         .unwrap();
 }
 
+/// The RFC 4648 test vectors, a range of a buffer, and what isn't base64.
+#[test]
+fn base64_matches_the_rfc_vectors_and_refuses_what_isnt_base64() {
+    runtime()
+        .exec(
+            "local vectors = { [''] = '', f = 'Zg==', fo = 'Zm8=', foo = 'Zm9v', foob = 'Zm9vYg==', fooba = 'Zm9vYmE=', foobar = 'Zm9vYmFy' } \
+             for plain, encoded in vectors do \
+               assert(bytes.toBase64(plain) == encoded, plain) \
+               assert(buffer.tostring(bytes.fromBase64(encoded)) == plain, encoded) \
+             end \
+             local all = buffer.create(256) for i = 0, 255 do buffer.writeu8(all, i, i) end \
+             assert(buffer.tostring(bytes.fromBase64(bytes.toBase64(all))) == buffer.tostring(all), 'every byte') \
+             assert(bytes.toBase64(all, 1, 2) == 'AQI=' and bytes.toBase64('xfoobar', 1) == 'Zm9vYmFy', 'ranges') \
+             local ok, err = pcall(bytes.toBase64, 'abc', 2, 5) assert(not ok and err:find('past the end'), err) \
+             local ok2, err2 = pcall(bytes.fromBase64, 'Zm9') assert(not ok2 and err2:find('multiple of four'), err2) \
+             local ok3, err3 = pcall(bytes.fromBase64, 'Zm=v') assert(not ok3 and err3:find('is not base64'), err3) \
+             local ok4, err4 = pcall(bytes.fromBase64, 'Zm9*') assert(not ok4 and err4:find('byte 42 at 3'), err4)",
+        )
+        .unwrap();
+}
+
 #[test]
 fn record_strings_and_varints_round_trip() {
     runtime()

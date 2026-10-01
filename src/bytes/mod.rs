@@ -6,7 +6,8 @@
 //! This module adds what a script cannot do fast, or at all, on top of that:
 //!
 //! - **Searching and comparing**: `find`, `rfind`, `count`, `equals`, `compare`, `startsWith`,
-//!   `slice`, `toHex`, `fromHex`, over a `buffer` or a string without copying.
+//!   `slice`, `toHex`, `fromHex`, `toBase64`, `fromBase64`, over a `buffer` or a string without
+//!   copying.
 //! - **Strings inside records**: `readCString` and `writeCString` for NUL-terminated and
 //!   fixed-width fields, and `readVarint`, `readSignedVarint`, `writeVarint`,
 //!   `writeSignedVarint` for LEB128.
@@ -199,6 +200,88 @@ fn from_hex(text: &str) -> Result<NewBuffer> {
     Ok(NewBuffer(out))
 }
 
+const BASE64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+/// Standard, padded base64 of `data` (RFC 4648 section 4).
+#[must_use]
+pub fn to_base64(data: &[u8]) -> String {
+    let mut out = Vec::with_capacity(data.len().div_ceil(3) * 4);
+    let (chunks, rest) = data.as_chunks::<3>();
+    for chunk in chunks {
+        let n = (u32::from(chunk[0]) << 16) | (u32::from(chunk[1]) << 8) | u32::from(chunk[2]);
+        out.extend_from_slice(&[
+            BASE64[(n >> 18) as usize],
+            BASE64[((n >> 12) & 63) as usize],
+            BASE64[((n >> 6) & 63) as usize],
+            BASE64[(n & 63) as usize],
+        ]);
+    }
+    match *rest {
+        [a] => {
+            let n = u32::from(a) << 16;
+            out.extend_from_slice(&[BASE64[(n >> 18) as usize], BASE64[((n >> 12) & 63) as usize], b'=', b'=']);
+        }
+        [a, b] => {
+            let n = (u32::from(a) << 16) | (u32::from(b) << 8);
+            out.extend_from_slice(&[
+                BASE64[(n >> 18) as usize],
+                BASE64[((n >> 12) & 63) as usize],
+                BASE64[((n >> 6) & 63) as usize],
+                b'=',
+            ]);
+        }
+        _ => {}
+    }
+    String::from_utf8(out).expect("base64 is ASCII")
+}
+
+/// The bytes standard, padded base64 `text` holds; anything else (a stray character, a length
+/// that isn't a multiple of four, padding before the end) is an error naming where.
+fn from_base64(text: BytesView<'_>) -> Result<NewBuffer> {
+    const WHAT: &str = "bytes.fromBase64";
+    // SAFETY: as `find`; the decoded bytes are copied out before returning.
+    let text = unsafe { bytes(&text) };
+    if !text.len().is_multiple_of(4) {
+        return Err(Error::runtime(format!("{WHAT}: {} characters is not a multiple of four", text.len())));
+    }
+    let padding = text.iter().rev().take(2).take_while(|byte| **byte == b'=').count();
+    let mut out = Vec::with_capacity(text.len() / 4 * 3);
+    let value = |at: usize| -> Result<u32> {
+        let byte = text[at];
+        let digit = match byte {
+            b'A'..=b'Z' => byte - b'A',
+            b'a'..=b'z' => byte - b'a' + 26,
+            b'0'..=b'9' => byte - b'0' + 52,
+            b'+' => 62,
+            b'/' => 63,
+            b'=' if at + padding >= text.len() => 0,
+            _ => return Err(Error::runtime(format!("{WHAT}: byte {byte} at {at} is not base64"))),
+        };
+        Ok(u32::from(digit))
+    };
+    for index in 0..text.len() / 4 {
+        let at = index * 4;
+        let n = (value(at)? << 18) | (value(at + 1)? << 12) | (value(at + 2)? << 6) | value(at + 3)?;
+        out.extend_from_slice(&[(n >> 16) as u8, (n >> 8) as u8, n as u8]);
+    }
+    out.truncate(out.len() - padding);
+    Ok(NewBuffer(out))
+}
+
+/// `toBase64(source, offset?, length?)`: base64 of `length` bytes from `offset`, the whole of the
+/// source by default.
+fn to_base64_range(source: BytesView<'_>, offset: Option<Exact<i64>>, length: Option<Exact<i64>>) -> Result<String> {
+    let offset = offset.unwrap_or(Exact(0));
+    let start = count("bytes.toBase64 offset", offset)?;
+    let len = match length {
+        Some(length) => count("bytes.toBase64 length", length)?,
+        None => source.len().saturating_sub(start),
+    };
+    let start = span("bytes.toBase64", source.len(), offset, len)?;
+    // SAFETY: as `find`; the encoding is built before anything else runs.
+    Ok(to_base64(&unsafe { bytes(&source) }[start..start + len]))
+}
+
 /// `readCString(bytes, offset, fieldLength?)`: the text up to the first NUL, and the offset
 /// after the terminator, or after the field when a width is given.
 fn read_cstring(source: BytesView<'_>, offset: Exact<i64>, field: Option<Exact<i64>>) -> Result<(Vec<u8>, f64)> {
@@ -386,6 +469,12 @@ fn describe_core(module: &mut ModuleDecl) {
         .function("fromHex", from_hex)
         .signature("(text: string) -> buffer")
         .doc("Bytes from hex digits; whitespace between them is ignored.")
+        .function("toBase64", to_base64_range)
+        .signature("(source: buffer | string, offset: number?, length: number?) -> string")
+        .doc("Standard padded base64 of length bytes from offset; the whole source by default.")
+        .function("fromBase64", from_base64)
+        .signature("(text: buffer | string) -> buffer")
+        .doc("The bytes standard padded base64 holds; anything else is an error.")
         .function("readCString", read_cstring)
         .signature("(source: buffer | string, offset: number, fieldLength: number?) -> (string, number)")
         .doc("The text up to the first NUL and the offset after the terminator, or after the field when fieldLength is given.")
