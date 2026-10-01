@@ -104,7 +104,7 @@ function cases.lower(pass)
 end
 
 function cases.pool(pass)
-  local pool = pass.pool
+  local pool: dream_intern_Pool = pass.pool
   for i = 0, count - 1 do
     local o, l = buffer.readu32(index, i * 8), buffer.readu32(index, i * 8 + 4)
     local id = pool:intern(text, o, l)
@@ -150,7 +150,7 @@ function cases.strLower(pass)
 end
 
 function cases.strPool(pass)
-  local pool = pass.pool
+  local pool: dream_intern_Pool = pass.pool
   for i = 1, count do
     local id = pool:intern(strs[i])
   end
@@ -203,7 +203,7 @@ end
 -- Table reads by key kind over the occurrences' identities: the pool's dense number tokens,
 -- the same identities as integers, and as strings.
 function ops.lookupPrepare()
-  local pool = intern.new('exact')
+  local pool: dream_intern_Pool = intern.new('exact')
   local tokens, integers, strings = table.create(count), table.create(count), table.create(count)
   local byToken, byInteger, byString = {}, {}, {}
   for i = 0, count - 1 do
@@ -246,7 +246,7 @@ function ops.lookupRelease()
 end
 
 function ops.resolvePrepare()
-  local pool = intern.new('ascii-nocase')
+  local pool: dream_intern_Pool = intern.new('ascii-nocase')
   for i = 0, count - 1 do
     local o, l = buffer.readu32(index, i * 8), buffer.readu32(index, i * 8 + 4)
     pool:intern(text, o, l)
@@ -264,7 +264,7 @@ function ops.resolve()
 end
 
 function ops.micro(kind)
-  local pool = intern.new('ascii-nocase')
+  local pool: dream_intern_Pool = intern.new('ascii-nocase')
   local key = 'Caius_Cosades_x1'
   local keyBuffer = buffer.fromstring(key)
   local map = { [string.lower(key)] = 1 }
@@ -302,6 +302,10 @@ function ops.micro(kind)
   elseif kind == 'find' then
     for i = 1, n do
       local id = pool:find(key)
+    end
+  elseif kind == 'findAbsent' then
+    for i = 1, n do
+      local id = pool:find('Caius_Cosades_x2')
     end
   elseif kind == 'readstring' then
     for i = 1, n do
@@ -703,6 +707,7 @@ end
             ("internString", "pool:intern(string), duplicate"),
             ("internSpan", "pool:intern(buffer, 0, 16), duplicate"),
             ("find", "pool:find(string), present"),
+            ("findAbsent", "pool:find(string), absent"),
             ("internerString", "internId(string), duplicate (pool:interner())"),
             ("internerSpan", "internId(buffer, 0, 16), duplicate (pool:interner())"),
             ("readu32", "buffer.readu32(buffer, 0)"),
