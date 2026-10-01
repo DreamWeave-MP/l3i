@@ -36,6 +36,8 @@ fn plan() -> Rc<RuntimePlan> {
         .extension(SoftRenderExtension);
     #[cfg(feature = "bytes")]
     let builder = builder.extension(l3i::bytes::BytesExtension);
+    #[cfg(feature = "intern")]
+    let builder = builder.extension(l3i::intern::InternExtension);
     builder.finalize().unwrap()
 }
 
@@ -61,6 +63,23 @@ const BYTES_SCRIPT: (&str, &str) = (
      B:writei64be(buf, 16, big)\n\
      local hex: string = bytes.toHex(piece)\n\
      print(at, same, after, next, after2, written, m, hex)\n",
+);
+
+#[cfg(feature = "intern")]
+const INTERN_SCRIPT: (&str, &str) = (
+    "intern_script",
+    "--!strict\n\
+     local intern = require('@dream/intern')\n\
+     local ids = intern.new('ascii-nocase')\n\
+     local id: number = ids:intern('Caius Cosades')\n\
+     local span: number = ids:intern(buffer.fromstring('xx'), 0, 2)\n\
+     local found: number? = ids:find('caius cosades')\n\
+     local text: string = ids:resolve(id)\n\
+     local internId = ids:interner()\n\
+     local again: number = internId('CAIUS COSADES', 0, 13)\n\
+     local n: number = ids:count() + ids:memory()\n\
+     local policy: string = ids:policy()\n\
+     print(span, found, text, again, n, policy)\n",
 );
 
 const SCRIPTS: &[(&str, &str)] = &[
@@ -150,6 +169,8 @@ fn the_generated_definitions_type_check_and_typed_scripts_pass_strict_mode() {
     let mut all_scripts: Vec<(&str, &str)> = SCRIPTS.to_vec();
     #[cfg(feature = "bytes")]
     all_scripts.push(BYTES_SCRIPT);
+    #[cfg(feature = "intern")]
+    all_scripts.push(INTERN_SCRIPT);
     let scripts = plan.analysis_sources(Scripts(all_scripts.iter().copied().collect()));
     let options = AnalysisOptions {
         definitions: vec![Definitions { name: "dream.d.luau".to_owned(), source: definitions.clone() }],
