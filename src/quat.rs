@@ -28,16 +28,18 @@
 //! ```
 //!
 //! With the `jit` feature, `quat.math()` returns a tagged receiver whose `rotate(q, v)`,
-//! `mul(a, b)`, `slerp(a, b, t)`, `key(q, flags)`, `keyRotation(k)`, and `keyFlags(k)` are lowered to IR by
+//! `mul(a, b)`, `slerp(a, b, t)`, `fromXYZW(x, y, z, w)`, `key(q, flags)`, `keyRotation(k)`, and
+//! `keyFlags(k)` are lowered to IR by
 //! [`lowering::Lowering`] when the receiver's type is known to the compiler
 //! (`local Q: dream_quat_Math = quat.math()` in a `--!native` script): no C call, the integer is
 //! unpacked with shifts and masks, the arithmetic runs on doubles, and the result is stored as a
 //! vector, a number, or a fresh packed integer. Measured per call inside native code: rotate
 //! 21 ns and mul 45 ns, against 99 ns and 150 ns through the binder and 46 ns and 111 ns for an
 //! f32 quaternion userdata (the latter allocating); `key` plus `keyRotation` together take 5 ns
-//! against 220 ns through the binder.
+//! against 220 ns through the binder; `fromXYZW` takes 93 instructions against 459 through the
+//! binder (`benches/instructions`).
 
-use crate::convert::{Exact, Vector3};
+use crate::convert::{Exact, Integer, Vector3};
 use crate::error::Result;
 use crate::extension::{Extension, ExtensionDescriptor};
 use crate::packed::{Packed, PackedScalar};
@@ -211,6 +213,13 @@ pub const COMPONENT_BITS: u32 = 18;
 pub const COMPONENT_MAX: f64 = ((1u64 << COMPONENT_BITS) - 2) as f64;
 /// The magnitude bound of a non-largest component of a unit quaternion.
 pub const RANGE: f64 = std::f64::consts::FRAC_1_SQRT_2;
+/// The smallest squared norm [`PackedRotation::encode_scaled`] takes: `SCALE / norm2` is finite
+/// above it. `Q:fromXYZW` exits to the binder below it, which rescales first.
+const NORM2_FLOOR: f64 = 1e-290;
+/// A unit component's grid position per unit, centered on zero: `[-RANGE, RANGE]` spans the grid.
+const SCALE: f64 = 0.5 / RANGE * COMPONENT_MAX;
+/// The grid's center plus the half step that makes truncation round to nearest.
+const CENTER: f64 = 0.5 * COMPONENT_MAX + 0.5;
 
 /// A rotation packed into 56 bits: 2 bits for the omitted (largest) component, 3 × 18 bits.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -241,6 +250,30 @@ impl PackedRotation {
             let normalized = (component * sign / RANGE).clamp(-1.0, 1.0).midpoint(1.0);
             // `normalized` is in [0, 1]: adding one half and truncating rounds to nearest.
             let quantized = (normalized * COMPONENT_MAX + 0.5) as u64;
+            bits = (bits << COMPONENT_BITS) | quantized;
+        }
+        PackedRotation(bits)
+    }
+
+    /// Packs `c / sqrt(norm2)` for a finite `norm2` above `NORM2_FLOOR`, never dividing a component: which lane is
+    /// largest and its sign are the same before scaling, so one factor (sign, norm, range, and
+    /// grid in one) scales each lane, and the half-step rounding offset folds into the clamp.
+    /// `Q:fromXYZW` lowers to these operations in this order, so the two agree bit for bit; the
+    /// grid point can differ from [`PackedRotation::encode`]'s by one step where rounding ties.
+    #[must_use]
+    pub fn encode_scaled(c: [f64; 4], norm2: f64) -> PackedRotation {
+        let abs = c.map(f64::abs);
+        let m = abs[0].max(abs[1]).max(abs[2].max(abs[3]));
+        let largest = abs.iter().position(|a| *a == m).unwrap_or(3);
+        let signed = if c[largest] == -m { -SCALE } else { SCALE };
+        let factor = signed / norm2 * norm2.sqrt();
+        let mut bits = largest as u64;
+        for (i, component) in c.iter().enumerate() {
+            if i == largest {
+                continue;
+            }
+            // In [0.5, MAX + 0.5]: truncating rounds the grid position to nearest.
+            let quantized = (component * factor + CENTER).clamp(0.5, COMPONENT_MAX + 0.5) as u64;
             bits = (bits << COMPONENT_BITS) | quantized;
         }
         PackedRotation(bits)
@@ -334,6 +367,26 @@ fn finite_weight(t: f64) -> Result<()> {
 
 /// An animation key's flags: the low four bits of an exact integer, by contract (a fraction
 /// is refused by `Exact`; higher bits are dropped, on the lowered path too).
+/// `quat.fromXYZW` and `Q:fromXYZW`: four components normalized and packed, or an error when they
+/// are not a rotation (all zero, or not finite).
+fn from_xyzw(x: f64, y: f64, z: f64, w: f64) -> Result<Integer> {
+    let n2 = x * x + y * y + z * z + w * w;
+    // NaN fails both comparisons.
+    if !(n2 > 0.0 && n2 < f64::INFINITY) {
+        return Err(crate::error::Error::runtime("quat.fromXYZW: the components must be finite and not all zero"));
+    }
+    let (components, n2) = if n2 > NORM2_FLOOR {
+        ([x, y, z, w], n2)
+    } else {
+        // Divided by the largest magnitude first, so `encode_scaled`'s quotient stays finite.
+        let largest = x.abs().max(y.abs()).max(z.abs().max(w.abs()));
+        let components = [x / largest, y / largest, z / largest, w / largest];
+        (components, components.iter().map(|v| v * v).sum())
+    };
+    let bits = PackedRotation::encode_scaled(components, n2);
+    Ok(Integer(crate::packed::encode(Quaternion::KIND, 0, bits.0)?))
+}
+
 fn key_flags(flags: Exact<i64>) -> u8 {
     (flags.0 & 0xF) as u8
 }
@@ -368,11 +421,7 @@ impl Extension for QuatExtension {
                 })
             })
             .signature("(axis: vector, angle: number) -> integer")
-            .function("fromXYZW", |x: f64, y: f64, z: f64, w: f64| -> Result<Packed<Quaternion>> {
-                Quat { x, y, z, w }.try_normalize().map(Quaternion::pack).ok_or_else(|| {
-                    crate::error::Error::runtime("quat.fromXYZW: the components must be finite and not all zero")
-                })
-            })
+            .function("fromXYZW", from_xyzw)
             .signature("(x: number, y: number, z: number, w: number) -> integer")
             .function("toXYZW", |q: Packed<Quaternion>| (q.0.0.x, q.0.0.y, q.0.0.z, q.0.0.w))
             .signature("(q: integer) -> (number, number, number, number)")
@@ -415,6 +464,9 @@ impl Extension for QuatExtension {
                 })
                 .signature("(self, a: integer, b: integer, t: number): integer");
             receiver
+                .method("fromXYZW", |_: &lowering::Math, x: f64, y: f64, z: f64, w: f64| from_xyzw(x, y, z, w))
+                .signature("(self, x: number, y: number, z: number, w: number): integer");
+            receiver
                 .method("key", |_: &lowering::Math, q: Packed<Quaternion>, flags: Exact<i64>| {
                     AnimationKey::pack(q.0.0, key_flags(flags))
                 })
@@ -450,10 +502,10 @@ pub mod lowering {
     use std::ffi::c_int;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use super::{AnimationKey, COMPONENT_BITS, COMPONENT_MAX, Quaternion, RANGE};
+    use super::{AnimationKey, CENTER, COMPONENT_BITS, COMPONENT_MAX, NORM2_FLOOR, Quaternion, RANGE, SCALE};
     use crate::convert::Vector3;
     use crate::native_code::hooks::{NamecallSite, NativeCodeHooks, NativeContext};
-    use crate::native_code::ir::{IrBlockKind, IrBuilder, IrCmd, IrCondition, IrOp, bytecode_type};
+    use crate::native_code::ir::{IrBuilder, IrCmd, IrCondition, IrOp, bytecode_type};
     use crate::packed::{Packed, PackedScalar};
     use crate::raw::ffi::{LUA_TINTEGER, LUA_TNUMBER, LUA_TVECTOR};
     use crate::userdata::Userdata;
@@ -603,12 +655,22 @@ pub mod lowering {
 
     /// Packs four doubles (a unit quaternion) into the integer bit pattern, branch-free.
     fn encode(build: &mut IrBuilder<'_>, q: &Decoded) -> IrOp {
-        let c = [q.x, q.y, q.z, q.w];
+        quantize(build, [q.x, q.y, q.z, q.w], None)
+    }
+
+    /// [`PackedRotation::encode_scaled`]: `c / sqrt(norm2)` packed, `norm2` positive and finite.
+    fn encode_scaled(build: &mut IrBuilder<'_>, c: [IrOp; 4], norm2: IrOp) -> IrOp {
+        quantize(build, c, Some(norm2))
+    }
+
+    /// Smallest-three packing of `c`, divided by `sqrt(norm2)` when given, through one factor:
+    /// the largest magnitude's index (ties to the lowest) and that component's sign, then each
+    /// lane scaled, offset, clamped, and truncated.
+    fn quantize(build: &mut IrBuilder<'_>, c: [IrOp; 4], norm2: Option<IrOp>) -> IrOp {
         let abs: Vec<IrOp> = c.iter().map(|v| build.inst(IrCmd::ABS_NUM, &[*v])).collect();
         let m01 = op(build, IrCmd::MAX_NUM, abs[0], abs[1]);
         let m23 = op(build, IrCmd::MAX_NUM, abs[2], abs[3]);
         let m = op(build, IrCmd::MAX_NUM, m01, m23);
-        // Index of the largest magnitude (ties to the lowest index), as a double for selects.
         let three = num(build, 3.0);
         let two = num(build, 2.0);
         let one = num(build, 1.0);
@@ -616,29 +678,41 @@ pub mod lowering {
         let l = build.inst(IrCmd::SELECT_NUM, &[three, two, abs[2], m]);
         let l = build.inst(IrCmd::SELECT_NUM, &[l, one, abs[1], m]);
         let l = build.inst(IrCmd::SELECT_NUM, &[l, zero, abs[0], m]);
-        // Sign: the largest component is negative exactly when min(c) == -m.
-        let n01 = op(build, IrCmd::MIN_NUM, c[0], c[1]);
-        let n23 = op(build, IrCmd::MIN_NUM, c[2], c[3]);
-        let n = op(build, IrCmd::MIN_NUM, n01, n23);
+        // The omitted component itself, whose sign the stored lanes take: with two magnitudes
+        // tied, the other may have the opposite sign.
+        let largest = build.inst(IrCmd::SELECT_NUM, &[c[3], c[2], abs[2], m]);
+        let largest = build.inst(IrCmd::SELECT_NUM, &[largest, c[1], abs[1], m]);
+        let largest = build.inst(IrCmd::SELECT_NUM, &[largest, c[0], abs[0], m]);
         let neg_m = op(build, IrCmd::SUB_NUM, zero, m);
-        let minus_one = num(build, -1.0);
-        let sign = build.inst(IrCmd::SELECT_NUM, &[one, minus_one, n, neg_m]);
-        // Quantise every lane: q = trunc(clamp01((c * sign / RANGE + 1) / 2) * MAX + 0.5).
-        let scale = num(build, 0.5 / RANGE);
-        let half = num(build, 0.5);
-        let max = num(build, COMPONENT_MAX);
+        let scale = num(build, SCALE);
+        let minus_scale = num(build, -SCALE);
+        let signed = build.inst(IrCmd::SELECT_NUM, &[scale, minus_scale, largest, neg_m]);
+        // Over the root as a quotient and a root computed side by side, not one after the other.
+        let factor = match norm2 {
+            Some(norm2) => {
+                let quotient = op(build, IrCmd::DIV_NUM, signed, norm2);
+                let root = build.inst(IrCmd::SQRT_NUM, &[norm2]);
+                op(build, IrCmd::MUL_NUM, quotient, root)
+            }
+            None => signed,
+        };
+        let center = num(build, CENTER);
+        let low = num(build, 0.5);
+        let high = num(build, COMPONENT_MAX + 0.5);
         let mut lanes = [zero; 4];
         for (i, component) in c.iter().enumerate() {
-            let v = op(build, IrCmd::MUL_NUM, *component, sign);
-            let v = op(build, IrCmd::MUL_NUM, v, scale);
-            let v = op(build, IrCmd::ADD_NUM, v, half);
-            let v = op(build, IrCmd::MAX_NUM, zero, v);
-            let v = op(build, IrCmd::MIN_NUM, one, v);
-            let v = op(build, IrCmd::MUL_NUM, v, max);
-            let v = op(build, IrCmd::ADD_NUM, v, half);
+            let v = op(build, IrCmd::MUL_NUM, *component, factor);
+            let v = op(build, IrCmd::ADD_NUM, v, center);
+            let v = op(build, IrCmd::MAX_NUM, v, low);
+            let v = op(build, IrCmd::MIN_NUM, v, high);
             lanes[i] = build.inst(IrCmd::NUM_TO_INT64, &[v]);
         }
-        // Kept lanes in index order, skipping the largest.
+        pack_lanes(build, l, lanes)
+    }
+
+    /// The packed integer from the largest lane's index `l` (a double) and all four quantized
+    /// lanes: the three kept in index order, the kind on top.
+    fn pack_lanes(build: &mut IrBuilder<'_>, l: IrOp, lanes: [IrOp; 4]) -> IrOp {
         let l64 = build.inst(IrCmd::NUM_TO_INT64, &[l]);
         let equal = build.cond(IrCondition::Equal);
         let k0 = i64c(build, 0);
@@ -699,30 +773,49 @@ pub mod lowering {
         op(build, IrCmd::MUL_NUM, x, poly)
     }
 
+    /// `Q:fromXYZW(x, y, z, w)` from the four argument registers starting at `first`.
+    fn lower_from_xyzw(build: &mut IrBuilder<'_>, result: IrOp, first: c_int, exit: IrOp) {
+        let mut c = [result; 4];
+        for (reg, slot) in (first..).zip(c.iter_mut()) {
+            let reg = build.vm_reg(reg);
+            build.load_and_check_tag(reg, LUA_TNUMBER as u8, exit);
+            *slot = build.inst(IrCmd::LOAD_DOUBLE, &[reg]);
+        }
+        // The binder's order: the squared norm, then a rotation only when it is finite and above
+        // `NORM2_FLOOR`. Zero, NaN, and infinity exit, so the interpreter raises the binder's
+        // error, and so do tiny components, which the binder rescales. The guards fail on NaN,
+        // and split no block.
+        let squares: Vec<IrOp> = c.iter().map(|v| op(build, IrCmd::MUL_NUM, *v, *v)).collect();
+        let n2 = op(build, IrCmd::ADD_NUM, squares[0], squares[1]);
+        let n2 = op(build, IrCmd::ADD_NUM, n2, squares[2]);
+        let n2 = op(build, IrCmd::ADD_NUM, n2, squares[3]);
+        let floor = num(build, NORM2_FLOOR);
+        let greater = build.cond(IrCondition::Greater);
+        build.inst(IrCmd::CHECK_CMP_NUM, &[n2, floor, greater, exit]);
+        let infinity = num(build, f64::INFINITY);
+        let less = build.cond(IrCondition::Less);
+        build.inst(IrCmd::CHECK_CMP_NUM, &[n2, infinity, less, exit]);
+        let bits = encode_scaled(build, c, n2);
+        store_integer(build, result, bits);
+    }
+
     /// `Q:slerp(a, b, t)` in one block: both weight sets are computed and the linear pair is
-    /// selected when `max(dot, 0.9995) == dot`, so nothing branches, nothing is decoded twice,
-    /// and no value stays live across a block boundary. The spherical weights are NaN when the
+    /// selected when `max(dot, 0.9995) == dot`, so nothing branches and nothing is decoded twice. The spherical weights are NaN when the
     /// inputs coincide (sin(theta) is zero) but are never selected then. Same formulas as the
     /// interpreter's [`super::Quat::slerp`], polynomial trigonometry included.
     fn lower_slerp(build: &mut IrBuilder<'_>, result: IrOp, a_reg: IrOp, b_reg: IrOp, t_reg: c_int, exit: IrOp) {
         let t_reg = build.vm_reg(t_reg);
         // A non-finite weight exits to the binder, which raises: `t - t` is zero exactly for
-        // finite `t` and NaN for NaN or an infinity, and `NotEqual` is true for NaN. A jump
-        // needs blocks for both targets; the bail block is one jump to the VM exit.
+        // finite `t` and NaN for NaN or an infinity, which fails the guard.
         build.load_and_check_tag(t_reg, LUA_TNUMBER as u8, exit);
         let weight = build.inst(IrCmd::LOAD_DOUBLE, &[t_reg]);
         let difference = op(build, IrCmd::SUB_NUM, weight, weight);
         let zero = num(build, 0.0);
-        let not_equal = build.cond(IrCondition::NotEqual);
-        let bail = build.block(IrBlockKind::Internal);
-        let finite = build.block(IrBlockKind::Internal);
-        build.inst(IrCmd::JUMP_CMP_NUM, &[difference, zero, not_equal, bail, finite]);
-        build.begin_block(bail);
-        build.inst(IrCmd::JUMP, &[exit]);
-        build.begin_block(finite);
+        let equal = build.cond(IrCondition::Equal);
+        build.inst(IrCmd::CHECK_CMP_NUM, &[difference, zero, equal, exit]);
         let a = decode(build, a_reg, exit);
         let b = decode(build, b_reg, exit);
-        let t = build.inst(IrCmd::LOAD_DOUBLE, &[t_reg]);
+        let t = weight;
         let one = num(build, 1.0);
         let zero = num(build, 0.0);
         let t = build.inst(IrCmd::MIN_NUM, &[one, t]);
@@ -817,7 +910,7 @@ pub mod lowering {
             }
             match member {
                 "rotate" => bytecode_type::VECTOR,
-                "mul" | "slerp" | "key" | "keyRotation" => bytecode_type::INTEGER,
+                "mul" | "slerp" | "key" | "keyRotation" | "fromXYZW" => bytecode_type::INTEGER,
                 "keyFlags" => bytecode_type::NUMBER,
                 _ => bytecode_type::ANY,
             }
@@ -885,6 +978,7 @@ pub mod lowering {
                     store_integer(build, result, bits);
                 }
                 ("slerp", 4) => lower_slerp(build, result, first, second, site.arg_res_reg + 4, exit),
+                ("fromXYZW", 5) => lower_from_xyzw(build, result, site.arg_res_reg + 2, exit),
                 ("key", 3) => {
                     // `flags` must be an exact integer, as the binder's `Exact` demands: a number
                     // that does not survive the round trip through int64 (a fraction, NaN, out
@@ -893,22 +987,13 @@ pub mod lowering {
                     let number = build.inst(IrCmd::LOAD_DOUBLE, &[second]);
                     let truncated = build.inst(IrCmd::NUM_TO_INT64, &[number]);
                     let back = build.inst(IrCmd::INT64_TO_NUM, &[truncated]);
-                    // `NotEqual` is true for NaN as well, which is the exit we want (`Equal` is
-                    // the one condition the number compare does not implement). A jump needs
-                    // blocks for both targets; the bail block is one jump to the VM exit.
-                    let not_equal = build.cond(IrCondition::NotEqual);
-                    let bail = build.block(IrBlockKind::Internal);
-                    let exact = build.block(IrBlockKind::Internal);
-                    build.inst(IrCmd::JUMP_CMP_NUM, &[number, back, not_equal, bail, exact]);
-                    build.begin_block(bail);
-                    build.inst(IrCmd::JUMP, &[exit]);
-                    build.begin_block(exact);
+                    // NaN fails the guard too.
+                    let equal = build.cond(IrCondition::Equal);
+                    build.inst(IrCmd::CHECK_CMP_NUM, &[number, back, equal, exit]);
                     // The rotation payload with the low four bits of `flags` and kind 2.
                     let q = checked_bits(build, first, KIND, exit);
-                    let flags = build.inst(IrCmd::LOAD_DOUBLE, &[second]);
-                    let flags = build.inst(IrCmd::NUM_TO_INT64, &[flags]);
                     let fifteen = i64c(build, 15);
-                    let flags = op(build, IrCmd::BITAND_INT64, flags, fifteen);
+                    let flags = op(build, IrCmd::BITAND_INT64, truncated, fifteen);
                     let shift = i64c(build, FLAG_SHIFT);
                     let flags = op(build, IrCmd::BITLSHIFT_INT64, flags, shift);
                     let payload_mask = i64c(build, PAYLOAD_MASK);
@@ -984,6 +1069,26 @@ mod tests {
         assert!(mean < 1.0e-5, "mean error {mean}");
         assert!(PackedRotation::encode(Quat::IDENTITY).0 < (1 << 56));
         assert!(Quat::IDENTITY.angle_to(PackedRotation::encode(Quat::IDENTITY).decode()) < 1e-9);
+    }
+
+    #[test]
+    fn scaled_packing_matches_normalizing_first_within_one_grid_step() {
+        let mut rng = 0x2545_F491_4F6C_DD1Du64;
+        for i in 0..100_000 {
+            let q = random_quat(&mut rng);
+            // Unnormalized, as files store them, and negated half the time.
+            let scale = if i % 2 == 0 { 3.5 } else { -0.25 };
+            let c = [q.x * scale, q.y * scale, q.z * scale, q.w * scale];
+            let norm2 = c.iter().map(|v| v * v).sum::<f64>();
+            let scaled = PackedRotation::encode_scaled(c, norm2);
+            let normalized = PackedRotation::encode(Quat { x: c[0], y: c[1], z: c[2], w: c[3] }.normalize());
+            assert!(q.angle_to(scaled.decode()) < 2.0e-5);
+            assert_eq!(scaled.0 >> 54, normalized.0 >> 54, "the same lane is omitted");
+            for shift in [0, 18, 36] {
+                let lane = |bits: u64| ((bits >> shift) & ((1 << COMPONENT_BITS) - 1)).cast_signed();
+                assert!((lane(scaled.0) - lane(normalized.0)).abs() <= 1, "{c:?}");
+            }
+        }
     }
 
     #[test]

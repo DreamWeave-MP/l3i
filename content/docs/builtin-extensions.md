@@ -197,8 +197,8 @@ stays within one quantisation step. Keep long-lived rotation state as `quat::Qua
 ### quat.math()
 
 With the `jit` feature, `quat.math()` returns a payload-free tagged receiver, `dream.quat.Math`,
-whose `rotate(q, v)`, `mul(a, b)`, `slerp(a, b, t)`, `key(q, flags)`, `keyRotation(k)` and
-`keyFlags(k)` are ordinary bound methods on the interpreter path and lower to IR through
+whose `rotate(q, v)`, `mul(a, b)`, `slerp(a, b, t)`, `fromXYZW(x, y, z, w)`, `key(q, flags)`,
+`keyRotation(k)` and `keyFlags(k)` are ordinary bound methods on the interpreter path and lower to IR through
 `quat::lowering::Lowering` when the compiler knows the receiver's type:
 
 ```luau
@@ -209,14 +209,16 @@ local a = quat.axisAngle(vector.create(0, 0, 1), 0.3)
 local b = quat.axisAngle(vector.create(1, 0, 0), 0.7)
 local m = Q:mul(a, b)
 local r = Q:rotate(m, vector.create(1, 2, 3))
+local f = Q:fromXYZW(0, 0, 0.5, 0.5)
 local k = Q:key(a, 3)
 local back = Q:keyRotation(k)
 ```
 
 No C call: the integer is unpacked with shifts and masks, the arithmetic runs on doubles, and the
 result is stored as a vector, a number, or a fresh packed integer. The lowering checks the
-receiver's tag, the operands' integer tags and packed kinds, a non-finite weight and a fractional
-flag value; a mismatch exits to the interpreter, whose bound method raises the same error. Only
+receiver's tag, the operands' integer tags and packed kinds, a non-finite weight, a fractional
+flag value, and `fromXYZW` components that are zero, not finite, or so small their squared norm
+is below 1e-290 (the binder rescales those); a mismatch exits to the interpreter, whose bound method raises the same error. Only
 single-result, fixed-arity call sites lower: `return Q:mul(a, b)` and `Q:keyRotation(Q:key(q, 3))`
 run through the bound method, so bind the inner result to a local first. The type declares
 `TagPolicy::Required` and `CompilerTypePolicy::Required`, so a plan that cannot give it a tag and
@@ -225,7 +227,11 @@ a compiler slot fails instead of leaving the path interpreted.
 Measured per call inside native code: `rotate` 21 ns and `mul` 45 ns, against 99 ns and 150 ns
 through the binder and 46 ns and 111 ns for an f32 quaternion userdata (the latter allocating);
 `slerp` 86 ns against 167 ns and 214 ns; `key` plus `keyRotation` together 5 ns against 220 ns
-through the binder.
+through the binder. `fromXYZW` normalizes and packs in 93 instructions and 70 cycles, against 459
+and 196 through the binder and 616 and 196 for a four-field table
+([Performance](@/docs/performance.md#instructions-and-cycles)): which component is largest, and
+its sign, do not change with the norm, so one factor folds the sign, the norm, and the grid, and
+its quotient and square root run side by side.
 
 ## dream.raster
 

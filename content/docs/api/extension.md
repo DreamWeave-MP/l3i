@@ -459,8 +459,8 @@ angle)`, `fromXYZW(x, y, z, w)`, `toXYZW(q)`, `mul(a, b)`, `inverse(q)`, `slerp(
 `rotate(q, v)`, `angleTo(a, b)`, `key(q, flags)`, `keyRotation(k)`, `keyFlags(k)`. `axisAngle`
 and `fromXYZW` refuse a zero or non-finite input, `slerp` a non-finite weight, and `key` takes the
 low four bits of an exact integer. With `jit`, `math()` returns a `dream.quat.Math` receiver
-(class `dream_quat_Math`) whose `rotate`, `mul`, `slerp`, `key`, `keyRotation` and `keyFlags`
-lower to IR when the script annotates it.
+(class `dream_quat_Math`) whose `rotate`, `mul`, `slerp`, `fromXYZW`, `key`, `keyRotation` and
+`keyFlags` lower to IR when the script annotates it.
 
 {{ api_signature(value="struct Quat { pub x: f64, pub y: f64, pub z: f64, pub w: f64 }") }}
 

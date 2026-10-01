@@ -120,7 +120,28 @@ fn packed_quaternion_operations_lower_to_native_code() {
                  assert(k1 == k2, 'lowered key differs from the binder')\n\
                  assert(Q:keyFlags(k1) == i % 16, 'lowered keyFlags')\n\
                  assert(Q:keyRotation(k1) == quat.keyRotation(k2), 'lowered keyRotation')\n\
+                 -- Unnormalized components, as files store them: the same integer as the binder.\n\
+                 local cx, cy, cz, cw = math.sin(i) * 3, math.cos(i * 0.7) * 3, 0.01 * i, -1.5\n\
+                 local f1 = Q:fromXYZW(cx, cy, cz, cw)\n\
+                 assert(f1 == quat.fromXYZW(cx, cy, cz, cw), 'lowered fromXYZW differs from the binder')\n\
              end\n\
+             -- Two magnitudes tied with opposite signs: a quarter turn. The lanes take the\n\
+             -- omitted component's sign, not the other's.\n\
+             local half = math.sqrt(0.5)\n\
+             for _, c in { { 1, -1, 0, 0 }, { -1, 1, 0, 0 }, { 0, half, 0, -half }, { -2, 0, 2, 0 } } do\n\
+                 local tie = Q:fromXYZW(c[1], c[2], c[3], c[4])\n\
+                 assert(tie == quat.fromXYZW(c[1], c[2], c[3], c[4]), 'a tie: lowered and binder differ')\n\
+                 local x, y, z, w = quat.toXYZW(tie)\n\
+                 local n = math.sqrt(c[1] * c[1] + c[2] * c[2] + c[3] * c[3] + c[4] * c[4])\n\
+                 local dot = (x * c[1] + y * c[2] + z * c[3] + w * c[4]) / n\n\
+                 assert(math.abs(dot) > 0.99999, `a tie packs another rotation: {dot}`)\n\
+                 local through = Q:mul(quat.IDENTITY, tie)\n\
+                 assert(quat.angleTo(through, tie) < 1e-4, 'a tie through the lowered encoder')\n\
+             end\n\
+             -- Components so small their squared norm is subnormal: the lowering exits to the\n\
+             -- binder, which rescales them.\n\
+             local tiny = Q:fromXYZW(0, 0, 1e-160, 1e-160)\n\
+             assert(tiny == quat.fromXYZW(0, 0, 1, 1), 'tiny components')\n\
              local key = quat.key(a, 3)\n\
              -- Single-result calls so the hook lowers these sites too; the kind check then\n\
              -- exits to the interpreter, whose C method raises the type error.\n\
@@ -138,12 +159,23 @@ fn packed_quaternion_operations_lower_to_native_code() {
              assert(not ok6 and string.find(err6, 'finite'), err6)\n\
              local ok5, err5 = pcall(function() local r = Q:key(a, 3.7) return r end)\n\
              assert(not ok5 and string.find(err5, 'exact'), err5)\n\
+             -- No rotation in the components: zero, NaN, and infinity exit to the binder's error.\n\
+             local ok7, err7 = pcall(function() local r = Q:fromXYZW(0, 0, 0, 0) return r end)\n\
+             assert(not ok7 and string.find(err7, 'not all zero'), err7)\n\
+             local ok8 = pcall(function() local r = Q:fromXYZW(nan, 0, 0, 1) return r end)\n\
+             assert(not ok8)\n\
+             local ok9 = pcall(function() local r = Q:fromXYZW(math.huge, 0, 0, 1) return r end)\n\
+             assert(not ok9)\n\
              return worst",
         )
         .unwrap();
     let native = template.native_code().expect("compiled");
     assert_eq!(native.status, NativeCodeStatus::Success, "{native:?}");
-    assert_eq!(lowered_sites() - before, 13, "the hook lowered the seven loop sites and the six closures");
+    assert_eq!(
+        lowered_sites() - before,
+        20,
+        "the hook lowered the ten loop sites, the tiny rotation, and the nine closures"
+    );
     let loader = runtime.load_function("return function(name) error('module ' .. name .. ' not found') end").unwrap();
     let instance = sandbox
         .new_instance(&runtime, &InstanceSpec { name: "q", packages: &[], hidden_data: None, loader: &loader })
@@ -156,8 +188,12 @@ fn packed_quaternion_operations_lower_to_native_code() {
     let stats = generator.execution_stats(&runtime.stack());
     assert!(stats.regular_blocks_executed > 0, "{stats:?}");
     // Exactly the three wrong-kind calls, the two NaN weights (a constant and a runtime one),
-    // and the fractional flags exit; the 1400 lowered calls in the loop run natively.
-    assert_eq!(stats.vm_exits_taken, 6, "only the malformed calls exit to the interpreter: {stats:?}");
+    // the fractional flags, and the three components with no rotation exit; the 1600 lowered
+    // calls in the loop run natively.
+    assert_eq!(
+        stats.vm_exits_taken, 10,
+        "only the malformed calls and the tiny rotation exit to the interpreter: {stats:?}"
+    );
 }
 
 #[test]
