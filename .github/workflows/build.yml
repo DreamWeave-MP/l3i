@@ -16,7 +16,7 @@ jobs:
       contents: write
       pages: write
       id-token: write
-    uses: DreamWeave-MP/StroggForge/.github/workflows/libGlobalBuild.yml@v53
+    uses: DreamWeave-MP/StroggForge/.github/workflows/libGlobalBuild.yml@v55
     secrets: inherit
     with:
       crate_names: '["l3i"]'
