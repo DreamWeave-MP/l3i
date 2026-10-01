@@ -106,8 +106,9 @@ Everything one extension declares in `describe`. `Debug`.
 | `fn optional_capability(&mut self, name: &str) -> &mut Self` | A capability checked at install time but not needed to install |
 | `fn memory_category(&mut self, name: &str) -> &mut Self` | A symbolic memory category the planner maps to a Luau category number |
 | `fn packed<T: PackedScalar>(&mut self) -> &mut Self` | A packed kind this extension's members use, so every runtime registers `T` as its owner |
+| `fn type_alias(&mut self, name: &str, definition: impl Into<String>) -> &mut Self` | A named Luau type the signatures refer to, for values that are plain tables (a parse tree, an options record); rendered `export type <name> = <definition>` ahead of every module, so aliases may refer to one another in any order. The plan refuses a name that is not an identifier, is declared twice, or is a userdata class name |
 | `fn native_hooks(&mut self, hooks: impl NativeCodeHooks) -> &mut Self` | Feature `jit`: lowering hooks for this extension's types |
-| `fn dependencies(&self)`, `optional_dependencies`, `modules`, `owned_userdata`, `augmentations`, `services`, `capabilities`, `optional_capabilities`, `memory_categories`, `packed_kinds`, `native_hook_sets` | Read back what was declared |
+| `fn dependencies(&self)`, `optional_dependencies`, `modules`, `owned_userdata`, `augmentations`, `services`, `capabilities`, `optional_capabilities`, `memory_categories`, `packed_kinds`, `type_aliases`, `native_hook_sets` | Read back what was declared |
 
 ### UserdataBuilder and MemberDecl
 
@@ -759,3 +760,19 @@ binds, which keep it alive, laid out `#[repr(C)]` for native code.
 `IrBuilder::namecall_call(pcpos)` emits the namecall and call Luau would have emitted for the
 pair at `pcpos`: a userdata namecall hook that lowers a fast path keeps the bound method as its
 slow path with it, without a VM exit, since returning true skips both instructions.
+
+## dream.luau
+
+Module `l3i::syntax`, feature `syntax`; the Luau side is in
+[Built-in extensions](@/docs/builtin-extensions.md#dream-luau).
+
+{{ api_signature(value="pub struct SyntaxExtension") }}
+
+The extension; `id()` is `"dream.luau"` (`EXTENSION_ID`), the module path is `MODULE`
+(`"@dream/luau"`). `Clone`, `Copy`, `Debug`, `Default`.
+
+| Item | What it is |
+|---|---|
+| `TYPES: &[(&str, &str)]` | Every `dream_luau_*` type the definitions declare, name and definition, in order: the node kinds, the unions over them, the result |
+| `TOKEN_KINDS: [&str; 14]` | The token kind names, numbered from 1 in this order as `luau.tokenKinds` numbers them |
+

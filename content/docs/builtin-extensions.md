@@ -1,13 +1,13 @@
 +++
 title = "Built-in extensions"
-description = "The extensions l3i ships: the dream.net bridge every plan carries, packed rotations in dream.quat, colors and clip rectangles in dream.raster, the dream.soft_render device, bytes for parsing in dream.bytes, and textual identity as numbers in dream.intern."
+description = "The extensions l3i ships: the dream.net bridge every plan carries, packed rotations in dream.quat, colors and clip rectangles in dream.raster, the dream.soft_render device, bytes for parsing in dream.bytes, textual identity as numbers in dream.intern, and Luau's own parser in dream.luau."
 weight = 90
 
 [extra]
 kind = "guide"
 +++
 
-Six extensions come with the crate. `dream.net` is in every plan; the others are added with
+Seven extensions come with the crate. `dream.net` is in every plan; the others are added with
 `RuntimePlan::builder().extension(..)`. Each is an ordinary `Extension` built on the
 [primitives](@/docs/primitives.md), with a Luau signature on every member, so a strict script
 that requires its module type checks against the plan's definitions.
@@ -20,6 +20,7 @@ that requires its module type checks against the plan's definitions.
 | `dream.soft_render` | `@dream/soft-render` | `l3i::soft_render::SoftRenderExtension` | `soft-render` |
 | `dream.bytes` | `@dream/bytes` | `l3i::bytes::BytesExtension` | `bytes` |
 | `dream.intern` | `@dream/intern` | `l3i::intern::InternExtension` | `intern` |
+| `dream.luau` | `@dream/luau` | `l3i::syntax::SyntaxExtension` | `syntax` |
 
 The samples below reach the modules as compat globals (`RuntimePolicy::new().compat_global("@dream/quat", "quat")`),
 which is what the tests do; `require("@dream/quat")` is the canonical path.
@@ -653,3 +654,120 @@ The lowered call costs about what the Rust lookup does: the C-call protocol, 277
 for even a hand-written `lua_CFunction`, is gone. Reading a table keyed by tokens is 25
 instructions and a quarter to one L1 miss, against 140 and 2.5 to 4 for `integer` keys and 122
 and 3 to 5.5 for strings. `resolve` is about 900 instructions, most of it making the string.
+
+## dream.luau
+
+Feature `syntax`; module `@dream/luau`, `l3i::syntax::SyntaxExtension`. Luau's own parser for
+scripts: `Luau::Parser`, the parser the compiler and the type checker use, under the runtime's
+frozen fast flags, its tree built as Luau tables in native code. It is for tools written in Luau
+that read Luau: linters, style checkers, formatters, documentation generators. Nothing in it
+knows a rule; it hands a script the tree, comments and errors Luau's own tools see.
+
+```luau
+local luau = require("@dream/luau")
+local result = luau.parse(source, { tokens = true })
+for _, stat in result.root.body do
+    print(stat.kind, stat.line, stat.column, stat.endLine, stat.endColumn)
+end
+for _, comment in result.comments do
+    print(comment.kind, comment.line)
+end
+```
+
+| Member | What it is |
+|---|---|
+| `luau.parse(source, options?)` | Parses a string or buffer. `options.declarations` allows definition-file syntax (`declare`, `declare extern type`); `options.tokens` adds the token stream |
+| `luau.tokenKinds` | The token kinds in the token stream, by name (`name = 1` ... `error = 14`); read-only |
+
+### The result
+
+| Field | What it holds |
+|---|---|
+| `root` | The chunk, a `StatBlock` |
+| `errors` | Every parse error: `kind = "Error"`, a span and `message` |
+| `comments` | Every comment: `kind` `"line"`, `"block"` or `"broken"` (unterminated), and a span |
+| `hotComments` | `--!strict`, `--!native` and the rest: `header` (before any code) and `content` |
+| `lineStarts` | `lineStarts[n]` is the 1-based source index of line `n`'s first byte |
+| `tokens` | With `{ tokens = true }`: a buffer of 12-byte records, a token each, comments included |
+
+A syntax error is data. The parser recovers, the tree holds `ExprError`, `StatError` and
+`TypeError` nodes where it did, and `errors` lists them; `parse` raises only for a bad argument
+or when the VM cannot allocate.
+
+### The tree
+
+Every node is a table with `kind`, the class name without `Ast` (`StatLocal`, `ExprCall`,
+`TypeReference`, 66 kinds in all), and an exact span: `line`, `column`, `endLine`, `endColumn`,
+1-based, the end column inclusive, columns counted in bytes. A node's text is
+
+```luau
+string.sub(source, result.lineStarts[node.line] + node.column - 1,
+    result.lineStarts[node.endLine] + node.endColumn - 1)
+```
+
+The other fields are Luau's own member names (`thenbody`, `elsebody`, `func`, `args`, `vars`,
+`values`), so Luau's `Ast.h` is the reference. A few additions say what the tree folds away:
+`ExprConstantString.quoteStyle` is `"single"`, `"double"`, `"backtick"`, `"long"` or
+`"unquoted"` (a record key or an attribute name); every statement has `hasSemicolon`; `StatIf`
+has `thenLocation` and `elseLocation`; `ExprCall` has `argLocation`.
+
+A local is one `Local` table (`name`, `isConst`, `functionDepth`, `loopDepth`, `annotation`,
+`shadow`) shared by its declaration and every `ExprLocal` that reads it, so `use['local'] ==
+declaration` resolves scope with no scope tracking. A global read is an `ExprGlobal` with its
+`name`.
+
+The definitions declare every node as a `dream_luau_*` table type with a singleton `kind`, and
+`dream_luau_Expr`, `dream_luau_Stat`, `dream_luau_Type`, `dream_luau_TypePack` and
+`dream_luau_Node` as unions over them, so a strict walker refines a node by testing its `kind`:
+
+```luau
+--!strict
+local function callee(expr: dream_luau_Expr): string?
+    if expr.kind == "ExprCall" and expr.func.kind == "ExprGlobal" then
+        return expr.func.name
+    end
+    return nil
+end
+```
+
+### Tokens and trivia
+
+Between two tokens there is only whitespace and comments. `comments` lists every comment, and
+the token stream is Luau's own lexer over the whole source: each record is three `u32`s, the
+kind, then the 1-based indices of the token's first and last bytes, so `string.sub(source,
+first, last)` is its text. What precedes any node, a blank line, a comment, a semicolon, is then
+exact:
+
+```luau
+local tokens = result.tokens :: buffer
+for at = 0, buffer.len(tokens) - 12, 12 do
+    local kind = buffer.readu32(tokens, at)
+    local first, last = buffer.readu32(tokens, at + 4), buffer.readu32(tokens, at + 8)
+    if kind == luau.tokenKinds.comment then
+        print(string.sub(source, first, last))
+    end
+end
+```
+
+Interpolated strings lex as `interpolatedBegin`, `interpolatedMid` and `interpolatedEnd` around
+their expressions, or `interpolatedSimple` with none; `longString` is `[[...]]`.
+
+### What it costs
+
+Every table is made at its final size and every key string is pushed once per call, so building
+a node hashes no string. Counted by `benches/syntax.rs` (`cargo bench --bench syntax --features
+syntax,analysis`) in retired instructions per source line, on a typed module of ordinary script
+code repeated to 4701 lines, the minimum of five rounds, the tree collected after each:
+
+| | Instructions per line |
+|---|---:|
+| `Luau::Parser` alone, from Rust | 2518 |
+| the parser and Luau's `toJson` of the tree | 27861 |
+| `luau.parse` | 17205 |
+| `luau.parse` with `tokens` | 18867 |
+| `luau.parse` and a Luau walk over every statement and expression | 20173 |
+
+The tables cost less than Luau's JSON encoding alone, which is 18 times the source's size (2.2
+MB for 119 KB) and would still have to be decoded in Luau before anything could walk it. Most of
+`luau.parse`'s cost is the tables: making them, filling their fields and collecting them again.
+

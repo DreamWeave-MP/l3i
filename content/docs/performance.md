@@ -17,7 +17,7 @@ is a deliberate change that re-audits the hand-declared C API.
 
 - **Rust 1.92** or newer, declared as `rust-version` and checked in CI. Edition 2024. The optional `dream-soft-render` dependency declares the same.
 - `unsafe` is used, at the FFI boundary and in the value-layout reads; every block states the invariant it relies on (see [Safety](@/docs/safety.md)).
-- Optional features, all off by default: `jit`, `analysis`, `soft-render`, `bytes` with `bytes-codecs`, `bytes-digests` and `bytes-text`, and `intern` (see [Building](@/docs/building.md)).
+- Optional features, all off by default: `jit`, `analysis`, `soft-render`, `bytes` with `bytes-codecs`, `bytes-digests` and `bytes-text`, `intern`, and `syntax` (see [Building](@/docs/building.md)).
 
 | Dependency | Version | For |
 |---|---|---|
@@ -78,6 +78,7 @@ The integration tests link as one binary (`tests/main.rs`), one file's tests run
 | `tests/raster.rs` | Colors and clip rectangles: construction, kind checks, the byte layout, and (`jit`) the lowered color math |
 | `tests/bytes.rs` | `@dream/bytes` (`bytes`): searching, record strings, varints, every width and order against `buffer`, the codecs against Python-made fixtures, the digests against their published vectors, the text codepages, and (`jit`) the lowered integer reads and writes |
 | `tests/intern.rs` (`intern`) | `@dream/intern`: one token per identity across spellings, strings and buffer spans, dense keys in a table's array part, the first spelling back from `resolve`, `interner` against the method and across a collection, named errors, and (`jit`) the lowered `intern` and `find` against the binder for both policies over every length to 40, every fallback, a miss then a hit, growth between calls, duplicates that never reach the binder, and the A64 build |
+| `tests/syntax.rs` (`syntax`) | `@dream/luau`: Luau's kinds, members and exact spans, one table per local for its declaration and every use, quote styles, functions, tables and types, errors as data with a recovered tree, declaration syntax only on request, the token stream over every byte that is not whitespace, the parser's nesting limit, and trees built while the collector steps on every allocation |
 | `tests/soft_render.rs` (`soft-render`) | A Luau scene byte-identical to the Rust scene, malformed input, textures freeing themselves, two runtimes with different tags, the vertex writer on all three paths |
 | `tests/native_code.rs` (`jit`) | The code generator with the binder's hooks, the `writef32x3` lowering, a userdata field lowering in Rust, modes, module ids, assembly dumps, the perf log |
 | `tests/typed_definitions.rs` (`analysis`) | The generated `.d.luau` checked by Luau's frontend, strict scripts against every built-in module through `require`, typed views and forward module references |

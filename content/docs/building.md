@@ -86,6 +86,7 @@ l3i = { version = "1.0", features = ["jit"] }
 | `bytes-digests` | off | `crc32fast`, `adler2`, `xxhash-rust`, `md-5`, `sha1`, `sha2`, `blake3`: the checksums and digests |
 | `bytes-text` | off | `encoding_rs`: text decoding and encoding for every WHATWG label |
 | `intern` | off | The `dream.intern` extension (`l3i::intern`); no dependencies |
+| `syntax` | off | The `dream.luau` extension (`l3i::syntax`) and `csrc/syntax.cpp`, which builds Luau's parse tree as tables; Luau's Ast library is in every build, so no dependencies |
 
 Networking is not a feature: `dream-net` is a normal dependency and the `dream.net` bridge is in
 every plan.
