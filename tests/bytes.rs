@@ -148,6 +148,74 @@ fn a_plan_runtime_lists_its_modules_as_registered() {
     assert!(runtime().registered_require_modules().iter().any(|module| module == "@dream/bytes"));
 }
 
+/// A RIFF-like file framed in one call: records, their fields checked, and every problem named.
+#[test]
+fn frame_walks_length_prefixed_chunks_and_names_what_stops_it() {
+    runtime()
+        .exec(
+            "local function chunk(tag, header, payload) \
+               return tag .. string.pack('<I4', #payload) .. string.rep('\\0', header - 8) .. payload \
+             end \
+             local fields = chunk('NAME', 8, 'id') .. chunk('DATA', 8, 'abcd') \
+             local file = chunk('STAT', 16, fields) .. chunk('MISC', 16, '') \
+             local layout = { header = 16, lengthAt = 4, inner = { header = 8, lengthAt = 4 } } \
+             local spans, count, problem = bytes.frame(file, layout) \
+             assert(count == 2 and problem == nil, 'two records') \
+             assert(buffer.readu32(spans, 0) == 0 and buffer.readu32(spans, 4) == 16 + #fields, 'first') \
+             assert(buffer.readu32(spans, 8) == 16 + #fields and buffer.readu32(spans, 12) == #file, 'second') \
+             local _, inner = bytes.frame(file, { header = 8, lengthAt = 4 }, 16, 16 + #fields) \
+             assert(inner == 2, 'a range') \
+             local short = string.sub(file, 1, #file - 4) \
+             local _, n, why, at = bytes.frame(short, layout) \
+             assert(n == 1 and why == 'truncated' and at == 16 + #fields, why) \
+             local long = string.sub(file, 1, 4) .. string.pack('<I4', 999) .. string.sub(file, 9) \
+             local _, n2, why2, at2 = bytes.frame(long, layout) \
+             assert(n2 == 0 and why2 == 'overrun' and at2 == 0, why2) \
+             local bad = chunk('STAT', 16, chunk('NAME', 8, 'id') .. 'xyz') \
+             local _, n3, why3, at3 = bytes.frame(bad, layout) \
+             assert(n3 == 0 and why3 == 'innerTruncated' and at3 == 26, why3) \
+             local png = string.pack('>I4', 3) .. 'IHDRabc' \
+             local _, n4 = bytes.frame(png, { header = 8, lengthAt = 0, bigEndian = true }) \
+             assert(n4 == 1, 'big-endian') \
+             local ok, err = pcall(bytes.frame, file, { header = 4, lengthAt = 2 }) \
+             assert(not ok and err:find('doesn.t fit'), err) \
+             local ok2, err2 = pcall(bytes.frame, file, { header = 16, lengthAt = 4, size = 2 }) \
+             assert(not ok2 and err2:find('size'), err2)",
+        )
+        .unwrap();
+}
+
+/// One pattern over one range and over many, Unicode-aware by default, bytes when asked.
+#[cfg(feature = "bytes-regex")]
+#[test]
+fn regex_matches_ranges_and_many_spans_in_one_call() {
+    runtime()
+        .exec(
+            "local re = bytes.regex([[\\b(position|positioncell)\\b]], { caseInsensitive = true }) \
+             assert(re:isMatch('PositionCell 0 0 0 0 Balmora') and not re:isMatch('repositions'), 'isMatch') \
+             assert(re:isMatch('xx Position', 3) and not re:isMatch('Position xx', 1), 'ranges') \
+             local s, e = re:find('go Position now') assert(s == 3 and e == 11, 'find') \
+             local s2 = re:find('go Position now', 2, 9) assert(s2 == 3, 'find in a range') \
+             local text = 'Position A|nothing here|ok positioncell|' \
+             local spans = buffer.create(24) \
+             buffer.writeu32(spans, 0, 0) buffer.writeu32(spans, 4, 10) \
+             buffer.writeu32(spans, 8, 11) buffer.writeu32(spans, 12, 23) \
+             buffer.writeu32(spans, 16, 24) buffer.writeu32(spans, 20, 40) \
+             local flags = re:matchSpans(text, spans) \
+             assert(buffer.len(flags) == 3, 'one flag per span') \
+             assert(buffer.readu8(flags, 0) == 1 and buffer.readu8(flags, 1) == 0 and buffer.readu8(flags, 2) == 1, 'flags') \
+             assert(buffer.len(re:matchSpans(text, spans, 2)) == 2, 'a count') \
+             local anchored = bytes.regex('^ok') \
+             assert(buffer.readu8(anchored:matchSpans(text, spans), 2) == 1, '^ anchors to the span') \
+             assert(bytes.regex('(?-u)\\\\xe9'):isMatch('caf\\233') and not bytes.regex('\\\\w$'):isMatch('caf\\233'), 'bytes') \
+             local ok, err = pcall(bytes.regex, '(') assert(not ok and err:find('invalid pattern'), err) \
+             local outside = buffer.create(8) buffer.writeu32(outside, 0, 0) buffer.writeu32(outside, 4, 99) \
+             local ok2, err2 = pcall(re.matchSpans, re, text, outside) assert(not ok2 and err2:find('outside'), err2) \
+             local ok3, err3 = pcall(re.matchSpans, re, text, spans, 4) assert(not ok3 and err3:find('holds 3'), err3)",
+        )
+        .unwrap();
+}
+
 #[cfg(feature = "bytes-codecs")]
 #[test]
 fn codecs_round_trip_and_decode_foreign_fixtures() {

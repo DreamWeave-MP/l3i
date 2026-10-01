@@ -23,6 +23,10 @@
 //!   digests, one-shot or through a `Hasher` for data that arrives in pieces.
 //! - **Text** (`bytes-text`): decoding and encoding every WHATWG label, for the codepages old
 //!   formats were written in.
+//! - **Framing**: `frame` walks a run of tag-length-payload chunks natively and returns where
+//!   each one is ([`framing`]).
+//! - **Regular expressions** (`bytes-regex`): `regex` compiles a pattern once; its `matchSpans`
+//!   tests many ranges of one buffer in one call ([`regex`]).
 //!
 //! Every input that is "some bytes" is a `buffer | string` ([`crate::convert::BytesView`]);
 //! every output that is bytes is a new `buffer` ([`crate::convert::NewBuffer`]). Offsets are
@@ -46,9 +50,12 @@
 pub mod codecs;
 #[cfg(feature = "bytes-digests")]
 pub mod digests;
+pub mod framing;
 #[cfg(feature = "jit")]
 pub mod lowering;
 pub mod numeric;
+#[cfg(feature = "bytes-regex")]
+pub mod regex;
 #[cfg(feature = "bytes-text")]
 pub mod text;
 
@@ -422,6 +429,8 @@ impl Extension for BytesExtension {
         d.native_hooks(lowering::ByteMath);
         #[cfg(feature = "bytes-digests")]
         digests::describe_hasher(d);
+        #[cfg(feature = "bytes-regex")]
+        regex::describe_regex(d);
 
         let module = d.module(MODULE);
         module.doc("Searching, comparing, record strings, varints, the byte widths and orders buffer lacks, codecs, digests and text.");
@@ -433,6 +442,9 @@ impl Extension for BytesExtension {
         digests::describe(module);
         #[cfg(feature = "bytes-text")]
         text::describe(module);
+        #[cfg(feature = "bytes-regex")]
+        regex::describe(module);
+        framing::describe(module);
         Ok(())
     }
 }

@@ -163,9 +163,81 @@ fn throughput(c: &mut Criterion) {
     group.finish();
 }
 
+#[cfg(feature = "bytes-regex")]
+/// `bytes.frame` against the Luau walk it replaces, and `matchSpans` against a call per span, over
+/// one megabyte of 16-byte-header records holding 8-byte-header fields (about 26000 records and
+/// 78000 fields, one text field per record matched).
+fn framing_and_regex(c: &mut Criterion) {
+    let runtime = plain_runtime();
+    let setup = "local parts = {} \
+                 local text = 'The quick brown fox, now with PositionCell in it at times.' \
+                 while #parts < 26000 do \
+                   local name = 'NAME' .. string.pack('<I4', 12) .. 'record_' .. string.format('%05d', #parts) \
+                   local body = (if #parts % 7 == 0 then text else string.sub(text, 1, 30)) \
+                   local fields = name .. 'TEXT' .. string.pack('<I4', #body) .. body .. 'DATA' .. string.pack('<I4', 4) .. 'abcd' \
+                   table.insert(parts, 'RECD' .. string.pack('<I4', #fields) .. string.rep('\\0', 8) .. fields) \
+                 end \
+                 local file = buffer.fromstring(table.concat(parts)) \
+                 local layout = { header = 16, lengthAt = 4, inner = { header = 8, lengthAt = 4 } } \
+                 local spans, count = bytes.frame(file, layout) \
+                 local texts = buffer.create(count * 8) \
+                 for i = 0, count - 1 do \
+                   local start = buffer.readu32(spans, i * 8) \
+                   local at = start + 16 + 8 + 12 \
+                   buffer.writeu32(texts, i * 8, at + 8) \
+                   buffer.writeu32(texts, i * 8 + 4, at + 8 + buffer.readu32(file, at + 4)) \
+                 end \
+                 local re = bytes.regex([[(?i)\\b(position|positioncell)\\b]]) \
+                 local v = 0";
+    let cases = [
+        ("frame, records and fields", "local _, n = bytes.frame(file, layout) v = n"),
+        (
+            "Luau walk, records and fields",
+            "local p, n, finish = 0, 0, buffer.len(file) \
+             while p < finish do \
+               if p + 16 > finish then error('truncated') end \
+               local e = p + 16 + buffer.readu32(file, p + 4) \
+               if e > finish then error('overrun') end \
+               local q = p + 16 \
+               while q < e do \
+                 if q + 8 > e then error('truncated') end \
+                 local f = q + 8 + buffer.readu32(file, q + 4) \
+                 if f > e then error('overrun') end \
+                 q = f \
+               end \
+               p, n = e, n + 1 \
+             end \
+             v = n",
+        ),
+        ("matchSpans, every record's text", "local flags = re:matchSpans(file, texts, count) v = buffer.len(flags)"),
+        (
+            "isMatch per record's text",
+            "local n = 0 \
+             for i = 0, count - 1 do \
+               local s = buffer.readu32(texts, i * 8) \
+               if re:isMatch(file, s, buffer.readu32(texts, i * 8 + 4) - s) then n += 1 end \
+             end \
+             v = n",
+        ),
+    ];
+    let mut group = c.benchmark_group("bytes_framing_and_regex");
+    group.throughput(Throughput::Bytes(MIB));
+    for (name, body) in cases {
+        let function = runtime
+            .load_function(&format!("local bytes = bytes {setup} return function() {body} return v end"))
+            .unwrap();
+        let stack = runtime.stack();
+        group.bench_function(name, |b| b.iter(|| function.invoke::<f64, _>(&stack, ()).unwrap()));
+    }
+    group.finish();
+}
+
+#[cfg(not(feature = "bytes-regex"))]
+fn framing_and_regex(_: &mut Criterion) {}
+
 fn configure() -> Criterion {
     Criterion::default().warm_up_time(Duration::from_secs(1)).measurement_time(Duration::from_secs(3))
 }
 
-criterion_group! { name = benches; config = configure(); targets = per_call, lowered, throughput }
+criterion_group! { name = benches; config = configure(); targets = per_call, lowered, throughput, framing_and_regex }
 criterion_main!(benches);
