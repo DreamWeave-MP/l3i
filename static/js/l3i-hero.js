@@ -252,28 +252,41 @@ const BAKE_FRAGMENT = /* glsl */ `
   vec2 basin(vec3 p, vec3 centre, float radius) {
     float d = length(p - normalize(centre)) / radius;
     d += (fbm3Coarse(p * 13.0) - 0.5) * 0.12;
-    float floorMask = 1.0 - smoothstep(0.65, 1.02, d);
-    float ringDistance = (d - 1.08) / 0.13;
+    // Old basins have broad, broken margins, not a sharply outlined circular stain.
+    float floorMask = 1.0 - smoothstep(0.40, 1.18, d);
+    float ringDistance = (d - 1.08) / 0.22;
     float ring = exp(-ringDistance * ringDistance);
-    return vec2(-0.12 * floorMask + 0.045 * ring, floorMask);
+    return vec2(-0.12 * floorMask + 0.025 * ring, floorMask);
   }
 
   void main() {
     float lon = (vUv.x - 0.5) * 6.2831853;
     float lat = (vUv.y - 0.5) * 3.14159265;
     vec3 p = vec3(cos(lat) * cos(lon), sin(lat), cos(lat) * sin(lon));
-    vec2 basins = basin(p, vec3(-0.45, 0.3, 1.0), 0.55);
-    basins += basin(p, vec3(0.35, 0.55, 1.0), 0.34);
-    basins += basin(p, vec3(0.65, -0.25, 0.7), 0.27);
-    basins += basin(p, vec3(-0.5, -0.15, -1.0), 0.47);
-    basins += basin(p, vec3(1.0, 0.45, -0.4), 0.32);
-    float maria = clamp(basins.y, 0.0, 1.0);
-    vec3 large = craters(p, 3.6, 0.8, 2.0, maria);
-    vec3 medium = craters(p, 9.0, 0.85, 17.0, maria);
-    vec3 small = craters(p, 21.0, 0.9, 41.0, maria);
-    vec3 micro = craters(p, 43.0, 0.9, 67.0, maria);
+    // A shared, continuous spherical warp creates lobes and channels between basins.
+    // Apply it to both relief and coverage so colour still follows the geology.
+    vec3 basinWarp = vec3(
+      fbm3Coarse(p * 4.5 + vec3(3.1, 0.0, 0.0)),
+      fbm3Coarse(p * 4.5 + vec3(0.0, 7.3, 0.0)),
+      fbm3Coarse(p * 4.5 + vec3(0.0, 0.0, 11.7))
+    ) - vec3(0.4375);
+    vec3 basinPoint = normalize(p + basinWarp * 0.85);
+    vec2 basins = basin(basinPoint, vec3(-0.45, 0.3, 1.0), 0.55);
+    basins += basin(basinPoint, vec3(0.35, 0.55, 1.0), 0.34);
+    basins += basin(basinPoint, vec3(0.65, -0.25, 0.7), 0.27);
+    basins += basin(basinPoint, vec3(-0.5, -0.15, -1.0), 0.47);
+    basins += basin(basinPoint, vec3(1.0, 0.45, -0.4), 0.32);
+    float flooded = clamp(basins.y, 0.0, 1.0);
+    // Different lava flows and exposed regolith interrupt uniform basalt coverage.
+    // Keep this material variation separate from crater preservation and ground height.
+    float lava = fbm3(p * 18.0 + vec3(8.0, 2.0, 5.0));
+    float maria = flooded * (0.60 + 0.30 * lava);
+    vec3 large = craters(p, 3.6, 0.8, 2.0, flooded);
+    vec3 medium = craters(p, 9.0, 0.85, 17.0, flooded);
+    vec3 small = craters(p, 21.0, 0.9, 41.0, flooded);
+    vec3 micro = craters(p, 43.0, 0.9, 67.0, flooded);
     float highlands = (fbm3(p * 7.0) - 0.5) * 0.10;
-    float h = basins.x + highlands * (1.0 - maria * 0.92)
+    float h = basins.x + highlands * (1.0 - flooded * 0.92)
       + large.x + medium.x * 0.40 + small.x * 0.17 + micro.x * 0.075;
     float ejecta = large.y + medium.y * 0.75 + small.y * 0.45;
     float reflectance = clamp(0.48 + (fbm3Coarse(p * 32.0) - 0.5) * 0.20 + ejecta, 0.0, 1.0);
@@ -366,7 +379,7 @@ const MOON_FRAGMENT = /* glsl */ `
     // Heights are fractions of the unit sphere's radius, not arbitrary bump intensity.
     vec3 bumped = normalize(n - (east * sx + north * sy) * (RELIEF / (2.0 * stepSize)));
 
-    vec3 albedo = mix(uLit, uMaria, maria * 0.90);
+    vec3 albedo = mix(uLit, uMaria, maria * 0.65);
     albedo *= 0.78 + 0.44 * surface.b;
 
     vec3 light = normalize(uLight);
