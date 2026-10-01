@@ -1,13 +1,13 @@
 +++
 title = "Built-in extensions"
-description = "The extensions l3i ships: the dream.net bridge every plan carries, packed rotations in dream.quat, colors and clip rectangles in dream.raster, the dream.soft_render device, bytes for parsing in dream.bytes, textual identity as numbers in dream.intern, and Luau's own parser in dream.luau."
+description = "The extensions l3i ships: the dream.net bridge every plan carries, packed rotations in dream.quat, colors and clip rectangles in dream.raster, the dream.soft_render device, bytes for parsing in dream.bytes, textual identity as numbers in dream.intern, Luau's own parser in dream.luau, the host filesystem in dream.fs, and child processes in dream.process."
 weight = 90
 
 [extra]
 kind = "guide"
 +++
 
-Seven extensions come with the crate. `dream.net` is in every plan; the others are added with
+Nine extensions come with the crate. `dream.net` is in every plan; the others are added with
 `RuntimePlan::builder().extension(..)`. Each is an ordinary `Extension` built on the
 [primitives](@/docs/primitives.md), with a Luau signature on every member, so a strict script
 that requires its module type checks against the plan's definitions.
@@ -21,6 +21,8 @@ that requires its module type checks against the plan's definitions.
 | `dream.bytes` | `@dream/bytes` | `l3i::bytes::BytesExtension` | `bytes` |
 | `dream.intern` | `@dream/intern` | `l3i::intern::InternExtension` | `intern` |
 | `dream.luau` | `@dream/luau` | `l3i::syntax::SyntaxExtension` | `syntax` |
+| `dream.fs` | `@dream/fs` | `l3i::fs::FsExtension` | `fs` |
+| `dream.process` | `@dream/process` | `l3i::process::ProcessExtension` | `process` |
 
 The samples below reach the modules as compat globals (`RuntimePolicy::new().compat_global("@dream/quat", "quat")`),
 which is what the tests do; `require("@dream/quat")` is the canonical path.
@@ -436,6 +438,7 @@ local count, after = bytes.readVarint(header, next)
 | `equals(a, b)`, `startsWith(haystack, prefix, offset?)` | Booleans |
 | `compare(a, aOffset, b, bOffset, length)` | -1, 0 or 1 over `length` bytes of each |
 | `slice(source, offset, length)` | A new buffer |
+| `translate(text, from, to, { collapse?, trimStart?, trimEnd? }?)` | `text` with each byte found in `from` replaced by the byte at the same position in `to`, like `tr`, then runs of `collapse` made one and `trimStart` and `trimEnd` removed from the ends; `text` itself, uncopied, when nothing changes |
 | `toHex(data)`, `fromHex(text)` | Lower-case hex and back; whitespace between digits is ignored |
 | `toBase64(source, offset?, length?)`, `fromBase64(text)` | Standard padded base64 (RFC 4648) of a range, the whole source by default, and back; `fromBase64` refuses anything else, naming the byte |
 | `readCString(source, offset, fieldLength?)` | The text up to the first NUL and the offset after the terminator, or after the fixed-width field when `fieldLength` is given |
@@ -586,6 +589,12 @@ fields (26000 records, 78000 fields; a verified build under a load average of 4.
 
 About 9 ns per chunk framed and 39 ns per span matched, the regex's own time included.
 
+`translate` is for when the normalized text itself is needed; to compare or key by it, an intern
+pool's rules policy (below) does the same without making the string. Folding a 36-byte path
+with `translate(path, "ABC…Z\\", "abc…z/")` costs 141 ns a call against 470 ns for
+`string.gsub(string.lower(path), "\\", "/")`; a path already folded costs 108 ns against 230 ns
+for `string.lower` plus a `string.find` for the separator.
+
 ## dream.intern
 
 Feature `intern`; module `@dream/intern`, `l3i::intern::InternExtension`. Textual identity as
@@ -608,11 +617,11 @@ print(ids:resolve(id))                          -- the first spelling the pool s
 
 | Function | Returns |
 |---|---|
-| `intern.new(policy?)` | An empty pool: `"exact"` (the default) or `"ascii-nocase"` |
+| `intern.new(policy?)` | An empty pool: `"exact"` (the default), `"ascii-nocase"`, or a rules table (below) |
 | `pool:intern(source, offset?, length?)` | The identity of `length` bytes of a string or buffer from `offset` (the whole of it by default), added on first sight |
 | `pool:interner()` | The same operation as a plain function bound to the pool |
 | `pool:find(source, offset?, length?)` | The identity the bytes already have, or nil; never adds one |
-| `pool:resolve(token)` | The first spelling the pool saw for `token`, as a string |
+| `pool:resolve(token)` | The first spelling the pool saw for `token`, as a string; under rules, the normal form |
 | `pool:count()`, `pool:memory()`, `pool:policy()` | Identities held (also the last token handed out), native bytes held, the policy |
 
 ### Policies
@@ -620,8 +629,25 @@ print(ids:resolve(id))                          -- the first spelling the pool s
 `exact` compares bytes. `ascii-nocase` makes `A`..`Z` equal to `a`..`z` and compares every other
 byte exactly, UTF-8 included: SQLite's `NOCASE`. The folding happens inside the hash and the
 comparison, eight bytes at a time; no folded copy of the input is made, in Luau or in Rust.
-Nothing else is a policy here. Path separators, Unicode case folding and the like are a domain's
-rules, and a domain that needs them normalises its keys before interning them.
+
+A rules table normalizes keys before they compare, in this order: ASCII letters lowered when
+`nocase`, up to two bytes replaced by others (`replace = { ["\\"] = "/" }`; a replaced byte isn't
+also lowered, and NUL can't be replaced), runs of the `collapse` byte made one, and the
+`trimStart` and `trimEnd` bytes removed from the ends. Case-insensitive paths with either
+separator are one rules table:
+
+```luau
+local paths = intern.new({ nocase = true, replace = { ["\\"] = "/" }, collapse = "/", trimStart = "/" })
+local id = paths:intern("\\Meshes\\X//Rock.NIF")
+assert(id == paths:intern("meshes/x/rock.nif") and paths:resolve(id) == "meshes/x/rock.nif")
+```
+
+The pool keeps each identity's normal form, and that is what `resolve` returns: rules that drop
+bytes make a first spelling a poor answer to "which key is this", and a caller that wants the key
+wants it normal. Natively, the byte map runs eight bytes at a time inside the hash and the
+compare, and no normalized copy is made; a span that needs a run collapsed or a byte trimmed takes
+the binder, which normalizes it once into the pool's reused scratch. Unicode case folding, and any
+rule a byte map and these switches can't say, stay the domain's, applied before interning.
 
 ### Tokens
 
@@ -701,6 +727,11 @@ Per call, cache-resident, a 16-byte duplicate:
 | the function from `pool:interner()`, buffer span | 532 |
 | `Interner::intern` from Rust, `ascii-nocase` | 184 |
 | `map[string.lower(buffer.readstring(..))]` | 1311 |
+
+A 31-byte path through the rules pool above, duplicate: 522 instructions lowered, whether the map
+folds it or it is already normal; 2178 when a run of `/` sends it to the binder; the Luau it replaces,
+`map[string.gsub(string.lower(path), "\\", "/")]`, is 5008. From Rust, `Interner::intern` on the
+same key is 898 and 551.
 
 The lowered call costs about what the Rust lookup does: the C-call protocol, 277 instructions
 for even a hand-written `lua_CFunction`, is gone. Reading a table keyed by tokens is 25
@@ -822,4 +853,99 @@ code repeated to 4701 lines, the minimum of five rounds, the tree collected afte
 The tables cost less than Luau's JSON encoding alone, which is 18 times the source's size (2.2
 MB for 119 KB) and would still have to be decoded in Luau before anything could walk it. Most of
 `luau.parse`'s cost is the tables: making them, filling their fields and collecting them again.
+
+## dream.fs
+
+Feature `fs`; module `@dream/fs`, `l3i::fs::FsExtension`. The host filesystem, for tools that
+work on files on disk: whole and positional reads, readers over a memory map, writers with
+positions and truncation, metadata with and without following links, listings and a fast
+recursive walk, directories made and removed, renames, copies, hard and symbolic links,
+canonical paths and file identity.
+
+```luau
+local fs = require("@dream/fs")
+local reader, message, kind = fs.open("Data Files/Morrowind.bsa")
+if not reader then
+    return if kind == "notFound" then nil else error(message)
+end
+local header = reader:readAt(0, 12)
+local walk = assert(fs.walk("Data Files", { followLinks = true, include = "files", sort = true }))
+for index, path in walk.paths do
+    print(path, walk.kinds[index])
+end
+```
+
+Paths are bytes: every path argument is a string read as its bytes, and every path the module
+returns is what the OS gave, so a file name that isn't UTF-8 round-trips on Unix. Windows paths
+are Unicode, so there a path must be UTF-8.
+
+### What the disk refuses is an answer
+
+An operation the OS refuses returns `nil`, the message `dream.fs.<function>: <path>: <the OS's
+message>` and the error's kind (`dream_fs_ErrorKind`: `notFound`, `permissionDenied`,
+`alreadyExists`, `isADirectory`, `notADirectory`, `directoryNotEmpty`, `readOnlyFilesystem`,
+`storageFull`, `crossesDevices`, `invalidInput`, `invalidFilename`, `unsupported`, `other`), the way
+`io.open` reports one. A script branches on a missing file instead of catching it, and `assert`
+turns the answer into an error when that is what it wants. An operation with nothing to return
+returns `true`. `stat`, `lstat` and `readLink` return a lone `nil` for a path where nothing is,
+and `exists` returns `false`. Calling a function wrongly is the script's mistake and raises: a
+value of the wrong type, an unknown option, a negative offset, a position past the end, a closed
+handle.
+
+| Function | Returns |
+|---|---|
+| `readFile(path)`, `readFileString(path)` | The whole file as a buffer or a string |
+| `readAt(path, offset, length)` | `length` bytes from `offset` as a buffer, fewer at the end |
+| `open(path)` | A `dream_fs_Reader` over a memory map of the file |
+| `stat(path)`, `lstat(path)` | `{ kind, size, isFile, isDir, isSymlink, readonly, modified, modifiedSeconds, modifiedNanoseconds }`; `lstat` describes a link instead of following it |
+| `exists(path)` | Whether something is there, following links |
+| `list(path)` | The names in a directory, sorted by their bytes |
+| `walk(root, options?)` | Everything under `root`, depth first, as parallel arrays (below) |
+| `canonicalize(path)`, `absolute(path)` | The path with every link resolved, or made absolute without touching the disk |
+| `readLink(path)`, `sameFile(a, b)`, `cwd()` | A link's target as written, whether two paths are one file, the working directory |
+| `writeFile(path, data, { offset?, append?, create? }?)` | The count written; truncates unless `offset` or `append` |
+| `openWrite(path, { append?, truncate?, create? }?)` | A buffered `dream_fs_Writer` |
+| `mkdir(path, { recursive? }?)`, `remove(path, { recursive? }?)` | `true`; `remove` never follows a link |
+| `rename(from, to)`, `copy(from, to)`, `hardLink(source, link)`, `symlink(target, link, { directory? }?)` | `true`, or the byte count for `copy` |
+
+`walk` takes `{ followLinks?, include?, metadata?, sort?, maxDepth?, skipErrors? }` and returns
+`{ paths, kinds, sizes?, modifiedSeconds?, modifiedNanoseconds?, errors }`: one table per column,
+so a walk of a hundred thousand files makes a handful of tables. With `skipErrors`, what can't be
+read below the root goes into `errors` as `{ path, message }`; without it, the first one is the
+walk's answer.
+
+A reader's `read`, `readInto`, `readAt` and `readAtInto` copy from the map; its position moves
+with `read`, `readInto`, `seek` and `skip`. A writer's `write`, `writeAt`, `seek`, `truncate`,
+`flush` and `close` answer the same way as the module's functions.
+
+### Capabilities
+
+Reading needs `filesystem.read` (`l3i::fs::READ_CAPABILITY`) and changing the disk needs
+`filesystem.write` (`l3i::fs::WRITE_CAPABILITY`). A plan that grants neither still has the module
+and its types, and each function raises a permission error naming what it lacks.
+
+## dream.process
+
+Feature `process`; module `@dream/process`, `l3i::process::ProcessExtension`. The script's own
+process and the ones it starts.
+
+```luau
+local process = require("@dream/process")
+local result, message = process.run("tes3cmd", { "clean", "Mod.esp" }, { cwd = "Data Files", stdout = "capture" })
+if not result then error(message) end
+if not result.success then error(`tes3cmd exited with {result.code}`) end
+```
+
+| Function | Returns |
+|---|---|
+| `run(program, args?, { cwd?, env?, clearEnv?, stdin?, stdout?, stderr? }?)` | `{ success, code?, signal?, stdout?, stderr? }`; `stdout` and `stderr` are `"inherit"` (the default), `"capture"` or `"null"` |
+| `env(name)` | An environment variable, or nil |
+| `write(stream, data)` | `true`: data to `"stdout"` or `"stderr"`, unbuffered, without `print`'s newline; a closed pipe is not an error |
+| `isTerminal(stream)` | Whether the stream is a terminal |
+
+The program is found the way the OS finds one, and its arguments reach it as they are, with no
+shell in between. A program the OS can't start returns `nil`, the message and the kind, as
+`@dream/fs` does. `run` needs `process.spawn` (`l3i::process::SPAWN_CAPABILITY`) and `env` needs
+`process.environment`; `write` and `isTerminal` need nothing, since `print` already reaches
+standard output.
 

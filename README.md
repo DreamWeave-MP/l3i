@@ -43,7 +43,7 @@ Nothing here is a catalogue: tags, atoms, type names and debug-name roots are ho
 
 ```toml
 [dependencies]
-l3i = { version = "1", features = ["jit"] }   # jit, analysis, soft-render, bytes(-codecs, -digests, -text), intern are optional
+l3i = { version = "1", features = ["jit"] }   # jit, analysis, soft-render, bytes(-codecs, -digests, -text), intern, syntax, fs, process are optional
 ```
 
 l3i builds only with **clang, lld and cross-language thin LTO**, and Cargo does not inherit a
@@ -106,7 +106,7 @@ Each row is a page of the guide.
 | **Direct access** | Atoms let `GETTABLEKS`/`NAMECALL` reach a native callback with no metatable walk; `DirectPlan` validates Luau's inline cache in O(1) and serves a type under any tag. | [Direct access](https://DreamWeave-MP.github.io/l3i/docs/direct-access/) |
 | **Extensions and plans** | A crate declares its Luau surface once (`describe`), a plan composes crates and assigns every tag, slot and atom (`finalize`), a runtime is built from it (`from_plan`); the plan renders the `.d.luau` and can type check it. | [Extensions](https://DreamWeave-MP.github.io/l3i/docs/extensions/) |
 | **Primitives** | `BytesView`, `BufferView`, `Exact<T>`, `Integer`, `Bits64`, `PackedScalar` with a kind registry, strict `Options` tables, in-place table walks, `Sequence` and `Stream` views. | [Primitives](https://DreamWeave-MP.github.io/l3i/docs/primitives/) |
-| **Built-in extensions** | `@dream/net` (in every plan), `@dream/quat`, `@dream/raster`, `@dream/bytes`, `@dream/intern`, `@dream/luau`, `@dream/soft-render`. | [Built-in extensions](https://DreamWeave-MP.github.io/l3i/docs/builtin-extensions/) |
+| **Built-in extensions** | `@dream/net` (in every plan), `@dream/quat`, `@dream/raster`, `@dream/bytes`, `@dream/intern`, `@dream/luau`, `@dream/soft-render`, `@dream/fs`, `@dream/process`. | [Built-in extensions](https://DreamWeave-MP.github.io/l3i/docs/builtin-extensions/) |
 | **Native code** | Luau's CodeGen with lowering hooks written in Rust; which call sites lower and why. | [Native code](https://DreamWeave-MP.github.io/l3i/docs/native-code/) |
 | **The rest of the VM** | Coroutines, the debug API, memory and GC controls, libraries, `require`, Luau's analysis frontend. | [Coroutines, debugging and the rest](https://DreamWeave-MP.github.io/l3i/docs/vm/) |
 | **Rust API** | Every public module. | [Rust API](https://DreamWeave-MP.github.io/l3i/docs/api/) |
@@ -119,9 +119,11 @@ Each row is a page of the guide.
 | `dream.quat` | `@dream/quat` | Unit rotations packed into one Luau integer (smallest-three, 18 bits per component) and animation keys; `quat.math()` lowers `rotate` to 21 ns native. |
 | `dream.raster` | `@dream/raster` | RGBA8 colours, clip rectangles and RGBA16 colours as packed integers; `raster.math()` lowers colour arithmetic. |
 | `dream.bytes` (`bytes`) | `@dream/bytes` | For parsing foreign file formats in script: searching, C strings, varints, big-endian and half-float reads lowered natively, plus codecs, digests and text codepages behind `bytes-codecs`, `bytes-digests`, `bytes-text`. |
-| `dream.intern` (`intern`) | `@dream/intern` | Textual identity as dense numbers: pools that intern strings or buffer spans under exact or ASCII case-insensitive equality, folding inside the hash, with no Luau string made for a duplicate. |
+| `dream.intern` (`intern`) | `@dream/intern` | Textual identity as dense numbers: pools that intern strings or buffer spans exactly, ASCII case-insensitively, or by their normal form under byte rules (case, replaced bytes, collapsed runs, trimmed ends), folding inside the hash, with no Luau string made for a duplicate. |
 | `dream.luau` (`syntax`) | `@dream/luau` | Luau's own parser for scripts: the syntax tree with exact spans, comments, errors and the token stream, built as tables in native code, typed for strict walkers. |
 | `dream.soft_render` (`soft-render`) | `@dream/soft-render` | dream-soft-render as a CPU rendering device, byte-identical from Luau and from Rust. |
+| `dream.fs` (`fs`) | `@dream/fs` | The host filesystem over byte paths: reads, memory-mapped readers, writers, metadata, a columnar walk, links and identity; what the OS refuses is an answer, not an error. Behind `filesystem.read` and `filesystem.write`. |
+| `dream.process` (`process`) | `@dream/process` | Child processes with their exit code and output, behind `process.spawn`; the environment behind `process.environment`; unbuffered writes to stdout and stderr. |
 
 ## Features
 
@@ -136,6 +138,8 @@ Each row is a page of the guide.
 | `bytes-regex` | Regular expressions over bytes, many ranges in one call | `regex` |
 | `intern` | The `@dream/intern` extension | none |
 | `syntax` | The `@dream/luau` extension | none |
+| `fs` | The `@dream/fs` extension | `memmap2`, `walkdir`, `same-file` |
+| `process` | The `@dream/process` extension | none |
 | `soft-render` | The `dream.soft_render` extension | `dream-soft-render` |
 
 The default feature set is empty. Networking is not a feature: `dream-net` is a dependency.

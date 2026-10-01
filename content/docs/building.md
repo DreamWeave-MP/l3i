@@ -88,6 +88,8 @@ l3i = { version = "1.0", features = ["jit"] }
 | `bytes-regex` | off | `regex`: `bytes.regex`, regular expressions over bytes, many ranges of a buffer in one call |
 | `intern` | off | The `dream.intern` extension (`l3i::intern`); no dependencies |
 | `syntax` | off | The `dream.luau` extension (`l3i::syntax`) and `csrc/syntax.cpp`, which builds Luau's parse tree as tables; Luau's Ast library is in every build, so no dependencies |
+| `fs` | off | The `dream.fs` extension (`l3i::fs`) with `memmap2`, `walkdir` and `same-file` |
+| `process` | off | The `dream.process` extension (`l3i::process`); no dependencies |
 
 Networking is not a feature: `dream-net` is a normal dependency and the `dream.net` bridge is in
 every plan.
