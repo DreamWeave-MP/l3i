@@ -76,7 +76,7 @@ impl RawValue {
         // SAFETY: the caller checked the tag; a live TString holds `len` bytes after its header,
         // and strings are immutable.
         unsafe {
-            let len = object.add(20).cast::<u32>().read();
+            let len = object.add(20).cast::<u32>().read_unaligned();
             std::slice::from_raw_parts(object.add(24), len as usize)
         }
     }
@@ -90,7 +90,7 @@ impl RawValue {
     pub unsafe fn buffer(&self) -> (*mut u8, usize) {
         let object = self.bits as usize as *mut u8;
         // SAFETY: the caller checked the tag; a live Buffer is at least its header long.
-        unsafe { (object.add(8), object.add(4).cast::<u32>().read() as usize) }
+        unsafe { (object.add(8), object.add(4).cast::<u32>().read_unaligned() as usize) }
     }
 }
 
