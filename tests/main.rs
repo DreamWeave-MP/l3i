@@ -32,6 +32,8 @@ mod call;
 mod debug;
 mod direct;
 mod extension;
+#[cfg(feature = "intern")]
+mod intern;
 mod iterator;
 mod libraries;
 mod memory;
