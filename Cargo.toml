@@ -116,6 +116,11 @@ name = "bytes"
 harness = false
 required-features = ["bytes"]
 
+[[bench]]
+name = "intern"
+harness = false
+required-features = ["intern"]
+
 [features]
 default = []
 # Luau native code generation: builds Luau's CodeGen library plus the C++ shim that exposes

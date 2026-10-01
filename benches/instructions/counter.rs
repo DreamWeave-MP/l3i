@@ -114,3 +114,29 @@ impl Drop for Counter {
         unsafe { close(self.0) };
     }
 }
+
+/// Runs `body` once with every counter enabled and returns each counter's value, in order.
+pub fn measure_all(counters: &[Counter], body: &mut dyn FnMut()) -> Vec<u64> {
+    // SAFETY: valid descriptors from `open`; each read buffer is eight bytes.
+    unsafe {
+        for counter in counters {
+            ioctl(counter.0, PERF_EVENT_IOC_RESET, 0);
+        }
+        for counter in counters {
+            ioctl(counter.0, PERF_EVENT_IOC_ENABLE, 0);
+        }
+        body();
+        for counter in counters {
+            ioctl(counter.0, PERF_EVENT_IOC_DISABLE, 0);
+        }
+        counters
+            .iter()
+            .map(|counter| {
+                let mut value: u64 = 0;
+                let got = read(counter.0, (&raw mut value).cast(), 8);
+                assert_eq!(got, 8, "perf counter read");
+                value
+            })
+            .collect()
+    }
+}
