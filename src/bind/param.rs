@@ -398,6 +398,27 @@ impl<'c, T: ParamItem<'c>> ParamItem<'c> for Option<T> {
         debug_name: &str,
         allow_mismatch: bool,
     ) -> Result<Self> {
+        // An optional that may not be skipped on a mismatch converts whatever is there or
+        // fails, so it reads the slot once, through the raw path when the call has one,
+        // instead of probing it with `matches` and converting it again.
+        if !allow_mismatch {
+            if *cursor > top {
+                return Ok(None);
+            }
+            *position += 1;
+            let nil = match call.raw_arg(*cursor) {
+                Some(raw) => raw.tag() == crate::raw::ffi::LUA_TNIL,
+                None => call.arg(*cursor).is_nil(),
+            };
+            if nil {
+                *cursor += 1;
+                return Ok(None);
+            }
+            let value = T::read_arg(call, *cursor)
+                .map_err(|cause| diagnostics::bad_argument(debug_name, *position, T::EXPECTED, &cause))?;
+            *cursor += 1;
+            return Ok(Some(value));
+        }
         match inspect_optional::<T>(call, *cursor, top, allow_mismatch) {
             OptionalState::Absent => Ok(None),
             OptionalState::Nil => {
