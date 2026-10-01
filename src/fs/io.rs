@@ -30,17 +30,28 @@ pub(crate) enum Backing {
     Empty,
 }
 
+/// What reading a directory as a file fails with, said when it is opened: EISDIR (21) on Linux
+/// and macOS, the portable kind elsewhere.
+fn is_a_directory() -> io::Error {
+    if cfg!(unix) {
+        io::Error::from_raw_os_error(21)
+    } else {
+        io::Error::new(io::ErrorKind::IsADirectory, "Is a directory")
+    }
+}
+
 impl Backing {
     /// Maps the file at `path`, or opens it for positional reads when mapping fails.
     pub(crate) fn open(path: &Path) -> io::Result<Backing> {
-        let file = File::open(path)?;
+        let file = match File::open(path) {
+            Ok(file) => file,
+            // Windows refuses to open a directory as a file with ERROR_ACCESS_DENIED; say what it is.
+            Err(_) if std::fs::metadata(path).is_ok_and(|metadata| metadata.is_dir()) => return Err(is_a_directory()),
+            Err(error) => return Err(error),
+        };
         let metadata = file.metadata()?;
         if metadata.is_dir() {
-            // What reading it would fail with later, said now: EISDIR is 21 on Linux and macOS.
-            #[cfg(unix)]
-            return Err(io::Error::from_raw_os_error(21));
-            #[cfg(not(unix))]
-            return Err(io::Error::new(io::ErrorKind::IsADirectory, "Is a directory"));
+            return Err(is_a_directory());
         }
         let len = metadata.len();
         if len == 0 {
