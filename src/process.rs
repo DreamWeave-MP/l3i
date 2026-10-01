@@ -1,9 +1,16 @@
-//! Child processes for scripts: the `dream.process` extension, module `@dream/process`.
+//! The process a script runs in, and the ones it starts: the `dream.process` extension, module
+//! `@dream/process`.
 //!
-//! One function, `process.run`: start a program with arguments, wait for it, and get its exit
-//! code, with its output passed through, captured or discarded. It needs the `process.spawn`
-//! capability ([`SPAWN_CAPABILITY`]), which no plan grants unless the host asks for it; without
-//! it the function exists, typed, and raises a permission error.
+//! - `process.run`: start a program with arguments, wait for it, and get its exit code, with its
+//!   output passed through, captured or discarded. It needs the `process.spawn` capability
+//!   ([`SPAWN_CAPABILITY`]), which no plan grants unless the host asks for it.
+//! - `process.env(name)`: an environment variable, with the `process.environment` capability
+//!   ([`ENVIRONMENT_CAPABILITY`]).
+//! - `process.write(stream, data)` and `process.isTerminal(stream)`: bytes to the host's standard
+//!   output or error, unbuffered and without the newline `print` adds, and whether a stream is a
+//!   terminal (to decide on colors). They need no capability: `print` already reaches stdout.
+//!
+//! A function whose capability the runtime lacks exists, typed, and raises a permission error.
 //!
 //! ```lua
 //! local process = require('@dream/process')
@@ -29,6 +36,8 @@ pub const EXTENSION_ID: &str = "dream.process";
 pub const MODULE: &str = "@dream/process";
 /// The capability `process.run` needs.
 pub const SPAWN_CAPABILITY: &str = "process.spawn";
+/// The capability `process.env` needs.
+pub const ENVIRONMENT_CAPABILITY: &str = "process.environment";
 
 const RUN_SIGNATURE: &str =
     "(program: string, args: { string }?, options: dream_process_RunOptions?) -> dream_process_Result";
@@ -211,6 +220,42 @@ fn run(
     Ok(StackResults)
 }
 
+/// `stdout` or `stderr`.
+fn stream(what: &str, name: &str) -> Result<bool> {
+    match name {
+        "stdout" => Ok(false),
+        "stderr" => Ok(true),
+        other => {
+            Err(Error::runtime(format!("dream.process.{what}: stream must be 'stdout' or 'stderr', got '{other}'")))
+        }
+    }
+}
+
+/// `process.write(stream, data)`: every byte, unbuffered; a reader that went away (a closed
+/// pipe) is not an error, so `| head` ends the output quietly.
+fn write(name: &str, data: BytesView<'_>) -> Result<()> {
+    use std::io::Write as _;
+    // SAFETY: the bytes go straight to the stream, with no call into Lua while the slice lives.
+    let bytes = unsafe { data.bytes_unchecked() };
+    let result = if stream("write", name)? {
+        std::io::stderr().lock().write_all(bytes)
+    } else {
+        let mut out = std::io::stdout().lock();
+        out.write_all(bytes).and_then(|()| out.flush())
+    };
+    match result {
+        Err(error) if error.kind() != std::io::ErrorKind::BrokenPipe => {
+            Err(Error::runtime(format!("dream.process.write: {name}: {error}")))
+        }
+        _ => Ok(()),
+    }
+}
+
+fn is_terminal(name: &str) -> Result<bool> {
+    use std::io::IsTerminal as _;
+    Ok(if stream("isTerminal", name)? { std::io::stderr().is_terminal() } else { std::io::stdout().is_terminal() })
+}
+
 /// The `dream.process` extension.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ProcessExtension;
@@ -224,17 +269,39 @@ impl Extension for ProcessExtension {
         d.type_alias("dream_process_RunOptions", OPTIONS_TYPE);
         d.type_alias("dream_process_Result", RESULT_TYPE);
         d.optional_capability(SPAWN_CAPABILITY);
+        d.optional_capability(ENVIRONMENT_CAPABILITY);
         d.module(MODULE)
-            .doc("Child processes: run a program with arguments, wait for it, and get its exit code.")
+            .doc("The script's process and the ones it starts: run a program and wait for its exit code, environment variables, and the standard streams.")
             .installed("run")
             .signature(RUN_SIGNATURE)
-            .doc("Runs program with args (no shell), waits for it, and returns how it ended; needs the process.spawn capability. stdout and stderr are inherited unless captured or discarded; stdin is empty unless given.");
+            .doc("Runs program with args (no shell), waits for it, and returns how it ended; needs the process.spawn capability. stdout and stderr are inherited unless captured or discarded; stdin is empty unless given.")
+            .installed("env")
+            .signature("(name: string) -> string?")
+            .doc("The environment variable name, or nil when it is unset; needs the process.environment capability.")
+            .function("write", write)
+            .signature("(stream: \"stdout\" | \"stderr\", data: buffer | string) -> ()")
+            .doc("Writes data to the host's standard output or error, without the newline print adds.")
+            .function("isTerminal", is_terminal)
+            .signature("(stream: \"stdout\" | \"stderr\") -> boolean")
+            .doc("Whether the stream is a terminal.");
         Ok(())
     }
 
     fn install(&self, cx: &mut InstallContext<'_>) -> Result<()> {
         let granted = cx.has_capability(SPAWN_CAPABILITY)?;
+        let environment = cx.has_capability(ENVIRONMENT_CAPABILITY)?;
         let module = cx.module(MODULE)?;
+        if environment {
+            module.function("env", |name: &[u8]| -> Result<Option<Vec<u8>>> {
+                Ok(std::env::var_os(os_string("a variable name", name)?).map(|value| value.as_encoded_bytes().to_vec()))
+            })?;
+        } else {
+            module.function("env", |_: ArgView<'_>| -> Result<()> {
+                Err(Error::permission(format!(
+                    "dream.process.env: needs the '{ENVIRONMENT_CAPABILITY}' capability, which this runtime does not grant"
+                )))
+            })?;
+        }
         if granted {
             module.function("run", run)?;
         } else {

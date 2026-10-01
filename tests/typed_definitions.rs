@@ -125,7 +125,9 @@ const PROCESS_SCRIPT: (&str, &str) = (
      local result = process.run('tool', { '--help' }, { cwd = '.', env = { A = 'b' }, stdout = 'capture', stdin = 'x' })\n\
      local code: number? = result.code\n\
      local output: string = result.stdout or ''\n\
-     print(result.success, code, output, result.signal)\n",
+     local home: string? = process.env('HOME')\n\
+     process.write('stderr', 'x')\n\
+     print(result.success, code, output, result.signal, home, process.isTerminal('stdout'))\n",
 );
 
 /// A strict walker over the tree: refinement on `kind` narrows each union to its node type.

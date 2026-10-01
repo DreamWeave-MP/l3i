@@ -3,12 +3,12 @@
 
 use l3i::Runtime;
 use l3i::extension::{RuntimePlan, RuntimePolicy};
-use l3i::process::{ProcessExtension, SPAWN_CAPABILITY};
+use l3i::process::{ENVIRONMENT_CAPABILITY, ProcessExtension, SPAWN_CAPABILITY};
 
 fn runtime_with(granted: bool) -> Runtime {
     let mut policy = RuntimePolicy::new().compat_global("@dream/process", "process");
     if granted {
-        policy = policy.capability(SPAWN_CAPABILITY);
+        policy = policy.capability(SPAWN_CAPABILITY).capability(ENVIRONMENT_CAPABILITY);
     }
     let plan = RuntimePlan::builder().policy(policy).extension(ProcessExtension).finalize().unwrap();
     Runtime::from_plan(&plan).unwrap()
@@ -40,11 +40,25 @@ fn a_child_runs_with_arguments_input_and_environment() {
 }
 
 #[test]
-fn running_needs_the_spawn_capability() {
+fn running_and_the_environment_need_their_capabilities() {
     runtime_with(false)
         .exec(
             "local ok, err = pcall(process.run, 'sh', { '-c', 'exit 0' }) \
-             assert(not ok and err:find(\"needs the 'process.spawn' capability\"), err)",
+             assert(not ok and err:find(\"needs the 'process.spawn' capability\"), err) \
+             ok, err = pcall(process.env, 'PATH') \
+             assert(not ok and err:find(\"needs the 'process.environment' capability\"), err) \
+             process.write('stdout', '') process.write('stderr', buffer.create(0)) \
+             assert(type(process.isTerminal('stdout')) == 'boolean') \
+             ok, err = pcall(process.write, 'stdin', 'x') assert(not ok and err:find('stream must be'), err)",
         )
+        .unwrap();
+}
+
+#[test]
+fn the_environment_reads_variables() {
+    // SAFETY: the integration binary's tests touch no other variable of this name.
+    unsafe { std::env::set_var("DREAM_PROCESS_TEST", "caf\u{e9}") };
+    runtime_with(true)
+        .exec("assert(process.env('DREAM_PROCESS_TEST') == 'caf\\u{e9}') assert(process.env('DREAM_PROCESS_UNSET_VARIABLE') == nil)")
         .unwrap();
 }
