@@ -137,7 +137,7 @@ fn collect(root: &Path, root_bytes: &[u8], options: &WalkOptions) -> Outcome<Col
             }
         }
         let relative = entry.path().strip_prefix(root).unwrap_or(entry.path());
-        columns.paths.push(path_bytes(relative).to_vec());
+        columns.paths.push(relative_bytes(relative));
         columns.kinds.push(kind_name(file_type));
     }
     Outcome::Done(columns)
@@ -157,6 +157,26 @@ fn column<T>(
         array.raw_set_index(frame, index as i64 + 1)?;
     }
     table.raw_set(frame, key)
+}
+
+/// A path under the walk's root as a script sees it: components joined with `/` on every
+/// platform, so `root .. '/' .. path` names the entry on Windows too.
+#[cfg(windows)]
+fn relative_bytes(relative: &Path) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    for (index, component) in relative.components().enumerate() {
+        if index > 0 {
+            bytes.push(b'/');
+        }
+        bytes.extend_from_slice(component.as_os_str().as_encoded_bytes());
+    }
+    bytes
+}
+
+/// A path under the walk's root as a script sees it; `/` is already the separator here.
+#[cfg(not(windows))]
+fn relative_bytes(relative: &Path) -> Vec<u8> {
+    path_bytes(relative).to_vec()
 }
 
 /// `fs.walk(root, options?)`.

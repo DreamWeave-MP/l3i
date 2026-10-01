@@ -910,7 +910,9 @@ handle.
 
 `walk` takes `{ followLinks?, include?, metadata?, sort?, maxDepth?, skipErrors? }` and returns
 `{ paths, kinds, sizes?, modifiedSeconds?, modifiedNanoseconds?, errors }`: one table per column,
-so a walk of a hundred thousand files makes a handful of tables. With `skipErrors`, what can't be
+so a walk of a hundred thousand files makes a handful of tables. `paths` are relative to the
+root and separated by `/` on every platform, Windows included, so `root .. '/' .. path` names the
+entry. With `skipErrors`, what can't be
 read below the root goes into `errors` as `{ path, message }`; without it, the first one is the
 walk's answer.
 
