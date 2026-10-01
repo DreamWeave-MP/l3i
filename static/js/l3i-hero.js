@@ -7,7 +7,7 @@
 // normals; bounded spherical height-field traces shadow the relief, and a Lommel-Seeliger/
 // Lambert blend gives the stone a powdery, airless appearance rather than a glossy highlight.
 // Violet earthshine and phase-linked observer-side haze retain the site's palette.
-// Dust rises through the moonlight as point sprites.
+// A local foreground veil crosses the lower limb; dust rises as point sprites.
 //
 // The palette is read from the site's CSS tokens, so sass/brand.sass stays the single owner of
 // the colours. The canvas is inert until the hero is on screen, stops when the tab is hidden, caps
@@ -503,6 +503,51 @@ const CORONA_FRAGMENT = /* glsl */ `
   }
 `;
 
+// A small camera-facing plane, not a fullscreen volume. Normal alpha blending
+// reduces surface contrast through the veil rather than adding an emissive stripe.
+const VEIL_VERTEX = /* glsl */ `
+  varying vec2 vUv;
+  varying vec2 vScreen;
+  void main() {
+    vUv = uv;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    vScreen = gl_Position.xy / gl_Position.w * 0.5 + 0.5;
+  }
+`;
+
+const VEIL_FRAGMENT = /* glsl */ `
+  precision highp float;
+  varying vec2 vUv;
+  varying vec2 vScreen;
+  uniform float uTime;
+  uniform float uMoonlight;
+  uniform vec2 uDrift;
+  uniform vec2 uSafeMin;
+  uniform vec2 uSafeFeather;
+  uniform vec3 uTint;
+  ${NOISE}
+
+  void main() {
+    vec2 p = (vUv - 0.5) * vec2(3.6, 1.5);
+    float t = uTime * 0.018;
+    vec2 q = p * vec2(1.2, 2.3) + uDrift + vec2(-t, t * 0.23);
+    vec2 warp = vec2(noise2(q + 4.1), noise2(q * 0.8 + 13.7)) - 0.5;
+    float wisps = fbm2(q + warp * 1.4);
+    float fold = sin(p.x * 1.7 - t * 0.6) * 0.13 + warp.x * 0.15;
+    float bandDistance = (p.y - fold) * 3.6;
+    float band = exp(-bandDistance * bandDistance);
+    float density = smoothstep(0.25, 0.72, wisps) * band;
+    // Fade all four plane edges and keep the veil clear of the text and status strip.
+    vec2 edge = smoothstep(vec2(0.0), vec2(0.18), vUv)
+      * (1.0 - smoothstep(vec2(0.82), vec2(1.0), vUv));
+    vec2 safe = smoothstep(uSafeMin, uSafeMin + uSafeFeather, vScreen);
+    float alpha = density * edge.x * edge.y * safe.x * safe.y
+      * (0.035 + 0.085 * uMoonlight);
+    gl_FragColor = vec4(uTint, alpha);
+    #include <colorspace_fragment>
+  }
+`;
+
 // Dust: point sprites rising through the light, swaying, blinking.
 const DUST_VERTEX = /* glsl */ `
   attribute float aSeed;
@@ -704,6 +749,29 @@ function start(hero, art) {
   dust.frustumCulled = false;
   scene.add(dust);
 
+  const veilUniforms = {
+    uTime: { value: 0 },
+    uMoonlight: { value: 0.7 },
+    uDrift: { value: new THREE.Vector2() },
+    uSafeMin: { value: new THREE.Vector2() },
+    uSafeFeather: { value: new THREE.Vector2() },
+    uTint: { value: bg1.clone().lerp(accent, 0.22) },
+  };
+  const veil = new THREE.Mesh(
+    new THREE.PlaneGeometry(2, 2),
+    new THREE.ShaderMaterial({
+      vertexShader: VEIL_VERTEX,
+      fragmentShader: VEIL_FRAGMENT,
+      uniforms: veilUniforms,
+      transparent: true,
+      depthTest: false,
+      depthWrite: false,
+      blending: THREE.NormalBlending,
+    }),
+  );
+  veil.renderOrder = 10;
+  scene.add(veil);
+
   // Layout: the moon sits in the hero's empty right column when there is one, and in the top
   // right corner, above the text, when the column would land on the text. The text column's own
   // width decides, not a breakpoint, so a landscape phone and a narrow window get the corner. The
@@ -768,6 +836,13 @@ function start(hero, art) {
     corona.position.copy(moonGroup.position);
     corona.position.z = -worldRadius * 0.6;
     corona.scale.setScalar(worldRadius);
+    veil.visible = !narrow;
+    veil.position.copy(moonGroup.position);
+    veil.position.y -= worldRadius * 0.66;
+    veil.position.z = worldRadius * 1.1;
+    veil.scale.set(worldRadius * 1.8, worldRadius * 0.75, 1);
+    veilUniforms.uSafeMin.value.set(Math.min((textRight + rem) / width, 1), 1 - band / height);
+    veilUniforms.uSafeFeather.value.set(12 / width, 12 / height);
     dustUniforms.uMoonPosition.value.copy(moonGroup.position);
     sky.material.uniforms.uMoon.value.set((centreX / width) * (width / height), 1 - centreY / height);
     sky.material.uniforms.uMoonRadius.value = radiusPx / height;
@@ -861,6 +936,8 @@ function start(hero, art) {
     sky.material.uniforms.uTime.value = elapsed;
     sky.material.uniforms.uDrift.value.set(eased.x * 0.02, -eased.y * 0.014);
     dustUniforms.uTime.value = elapsed;
+    veilUniforms.uTime.value = elapsed;
+    veilUniforms.uDrift.value.set(-eased.x * 0.07, eased.y * 0.035);
 
     // The sun swings across the moon over about two minutes, always from the camera's side, so
     // the terminator wanders without the disc ever going dark.
@@ -892,6 +969,8 @@ function start(hero, art) {
     sky.material.uniforms.uMoonlight.value = moonlight;
     coronaUniforms.uMoonlight.value = moonlight;
     corona.quaternion.copy(camera.quaternion);
+    veilUniforms.uMoonlight.value = moonlight;
+    veil.quaternion.copy(camera.quaternion);
     renderer.render(scene, camera);
     framesDrawn += 1;
     if (framesDrawn === 1) {
