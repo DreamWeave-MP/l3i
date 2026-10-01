@@ -259,6 +259,79 @@ const BAKE_FRAGMENT = /* glsl */ `
     return vec2(-0.12 * floorMask + 0.025 * ring, floorMask);
   }
 
+  // A recognisable ancient impact within the near-side plains. Worn mountain arcs,
+  // not a new albedo spot: later procedural impacts remain visible across its floor.
+  float ancientRing(vec3 p) {
+    vec3 centre = normalize(vec3(-0.48, 0.27, 1.0));
+    vec3 delta = p - centre;
+    float d = length(delta) / 0.32;
+    if (d > 1.6) return 0.0;
+    vec3 tangent = delta - centre * dot(delta, centre);
+    vec3 direction = tangent / max(length(tangent), 0.0001);
+    float erosion = smoothstep(0.25, 0.70, noise3(direction * 4.5 + 12.0));
+    float brokenRadius = d + (noise3(p * 24.0) - 0.5) * 0.11;
+    float outer = (brokenRadius - 1.0) / 0.12;
+    float inner = (brokenRadius - 0.73) / 0.10;
+    float mountains = exp(-outer * outer) * 0.075 * erosion;
+    mountains += exp(-inner * inner) * 0.019 * erosion;
+    float floorDepth = -0.035 * (1.0 - smoothstep(0.45, 1.0, d));
+    return (floorDepth + mountains) * (1.0 - smoothstep(1.3, 1.6, d));
+  }
+
+  // One young landmark, with sparse directional ejecta instead of a bright circular
+  // halo. Return relief, ejecta, cavity and the footprint that buries older impacts.
+  vec4 rayCrater(vec3 p) {
+    vec3 centre = normalize(vec3(-0.30, -0.46, 1.0));
+    vec3 delta = p - centre;
+    float d = length(delta) / 0.068;
+    if (d > 6.5) return vec4(0.0);
+    vec3 east = normalize(cross(vec3(0.0, 1.0, 0.0), centre));
+    vec3 north = cross(centre, east);
+    vec2 tangent = vec2(dot(delta, east), dot(delta, north));
+    tangent /= max(length(tangent), 0.0001);
+    float rays = 0.0;
+    for (int i = 0; i < 7; i++) {
+      float seed = float(i);
+      float angle = seed * 2.399963 + hash21(vec2(seed, 7.0)) * 0.45;
+      float alignment = max(dot(tangent, vec2(cos(angle), sin(angle))), 0.0);
+      float beam = pow(alignment, 95.0 + 90.0 * hash21(vec2(seed, 3.0)));
+      float reach = 2.7 + 3.8 * hash21(vec2(seed, 11.0));
+      rays = max(rays, beam * (1.0 - smoothstep(1.15, reach, d)));
+    }
+    float streaks = rays * smoothstep(0.95, 1.3, d)
+      * (0.55 + 0.45 * noise3(p * 95.0)) * 0.36;
+    float rimDistance = (d - 1.0) / 0.10;
+    float floorMask = 1.0 - smoothstep(0.25, 1.0, d);
+    float peak = (1.0 - smoothstep(0.0, 0.23, d)) * 0.065;
+    float relief = -0.19 * floorMask + exp(-rimDistance * rimDistance) * 0.075 + peak;
+    float ejecta = streaks + exp(-rimDistance * rimDistance) * 0.12;
+    return vec4(relief, ejecta, floorMask * 0.4, 1.0 - smoothstep(0.7, 1.3, d));
+  }
+
+  // Fragment impacts overlap along short curved tracks. Each later bowl partially
+  // replaces the preceding rim, rather than summing identical rings into a deep trench.
+  vec2 craterChain(vec3 p, vec3 origin, vec3 heading, float seed) {
+    origin = normalize(origin);
+    vec3 along = normalize(heading - origin * dot(heading, origin));
+    vec3 across = cross(origin, along);
+    if (length(p - origin) > 0.20) return vec2(0.0);
+    vec2 result = vec2(0.0);
+    for (int i = 0; i < 6; i++) {
+      float index = float(i);
+      float size = hash21(vec2(index, seed));
+      float offset = (index - 2.5) * 0.038;
+      float stagger = (hash21(vec2(index, seed + 4.0)) - 0.5) * 0.015;
+      vec3 centre = normalize(origin + along * offset + across * stagger);
+      float d = length(p - centre) / (0.021 + size * 0.010);
+      float floorMask = 1.0 - smoothstep(0.2, 1.0, d);
+      float rimDistance = (d - 1.0) / 0.16;
+      float rim = exp(-rimDistance * rimDistance) * 0.018;
+      result.x = result.x * (1.0 - floorMask * 0.8) - floorMask * (0.045 + size * 0.02) + rim;
+      result.y = max(result.y, floorMask * 0.22);
+    }
+    return result;
+  }
+
   void main() {
     float lon = (vUv.x - 0.5) * 6.2831853;
     float lat = (vUv.y - 0.5) * 3.14159265;
@@ -285,12 +358,17 @@ const BAKE_FRAGMENT = /* glsl */ `
     vec3 medium = craters(p, 9.0, 0.85, 17.0, flooded);
     vec3 small = craters(p, 21.0, 0.9, 41.0, flooded);
     vec3 micro = craters(p, 43.0, 0.9, 67.0, flooded);
+    vec4 young = rayCrater(p);
+    vec2 chains = craterChain(p, vec3(0.38, 0.36, 1.0), vec3(0.8, -0.5, 0.1), 23.0);
+    chains += craterChain(p, vec3(-0.7, -0.1, -1.0), vec3(0.2, 1.0, 0.1), 51.0);
     float highlands = (fbm3(p * 7.0) - 0.5) * 0.10;
-    float h = basins.x + highlands * (1.0 - flooded * 0.92)
-      + large.x + medium.x * 0.40 + small.x * 0.17 + micro.x * 0.075;
-    float ejecta = large.y + medium.y * 0.75 + small.y * 0.45;
+    float oldImpacts = large.x + medium.x * 0.40 + small.x * 0.17 + micro.x * 0.075;
+    float h = basins.x + ancientRing(p) + highlands * (1.0 - flooded * 0.92)
+      + (oldImpacts + chains.x) * (1.0 - young.w * 0.9) + young.x;
+    float ejecta = (large.y + medium.y * 0.75 + small.y * 0.45) * (1.0 - young.w) + young.y;
     float reflectance = clamp(0.48 + (fbm3Coarse(p * 32.0) - 0.5) * 0.20 + ejecta, 0.0, 1.0);
-    float cavity = clamp(1.0 - large.z - medium.z * 0.6 - small.z * 0.3, 0.3, 1.0);
+    float oldCavity = large.z + medium.z * 0.6 + small.z * 0.3 + chains.y;
+    float cavity = clamp(1.0 - oldCavity * (1.0 - young.w) - young.z, 0.3, 1.0);
     // Use most of the available byte range; decode with (r - 0.5) * 0.8.
     gl_FragColor = vec4(clamp(h / 0.8 + 0.5, 0.0, 1.0), maria, reflectance, cavity);
   }
