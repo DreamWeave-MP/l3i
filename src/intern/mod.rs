@@ -55,11 +55,12 @@
 //! copy nothing and allocate nothing, native or VM. The index is open addressing with the hash
 //! in each slot: 8 bytes per slot, 8 per identity, plus the text.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
+use std::rc::Rc;
 
 use crate::convert::{BytesView, Exact};
 use crate::error::{Error, Result};
-use crate::extension::{Extension, ExtensionDescriptor, TagPolicy};
+use crate::extension::{CompilerTypePolicy, Extension, ExtensionDescriptor, TagPolicy};
 use crate::userdata::Owned;
 
 /// The extension id.
@@ -208,12 +209,21 @@ fn equal<const FOLD: bool>(a: &[u8], b: &[u8]) -> bool {
     at == len || unsafe { same_word::<FOLD>(load(a, len - 8), load(b, len - 8)) }
 }
 
-/// One identity's first spelling in the arena.
+/// One identity's first spelling in the arena. Native code reads it as one little-endian word:
+/// `start` in the low half, `len` in the high half.
 #[derive(Clone, Copy)]
+#[repr(C)]
 struct Entry {
     start: u32,
     len: u32,
 }
+
+/// Zero bytes in front of the arena's first spelling, so a read of the eight bytes that end at a
+/// short spelling's end never starts before the arena (native code compares spellings shorter
+/// than a word that way).
+const TEXT_PAD: usize = 8;
+/// The table a pool starts with: never empty, so a lookup always has a slot to read.
+const FIRST_SLOTS: usize = 16;
 
 /// The pool itself, without Luau: usable from Rust, and what `dream.intern.Pool` wraps.
 pub struct Interner {
@@ -227,7 +237,7 @@ pub struct Interner {
 impl Interner {
     /// An empty pool.
     pub fn new(policy: Policy) -> Interner {
-        Interner { policy, text: Vec::new(), entries: Vec::new(), slots: Vec::new() }
+        Interner { policy, text: vec![0; TEXT_PAD], entries: Vec::new(), slots: vec![0; FIRST_SLOTS] }
     }
 
     /// The pool's policy.
@@ -283,9 +293,6 @@ impl Interner {
 
     /// The token `bytes` already has, without adding it.
     pub fn find(&self, bytes: &[u8]) -> Option<u32> {
-        if self.slots.is_empty() {
-            return None;
-        }
         match self.policy {
             Policy::Exact => self.probe::<false>(bytes, hash::<false>(bytes)).ok(),
             Policy::AsciiNoCase => self.probe::<true>(bytes, hash::<true>(bytes)).ok(),
@@ -338,7 +345,7 @@ impl Interner {
         if self.entries.len() >= u32::MAX as usize - 1 {
             return Err(Error::runtime("intern: the pool holds 2^32 - 1 identities"));
         }
-        let capacity = (self.slots.len() * 2).max(16);
+        let capacity = self.slots.len() * 2;
         let old = std::mem::replace(&mut self.slots, vec![0; capacity]);
         let mask = capacity - 1;
         for slot in old.into_iter().filter(|slot| *slot != 0) {
@@ -352,12 +359,122 @@ impl Interner {
     }
 }
 
-/// `dream.intern.Pool`, from `intern.new(policy?)`.
-pub struct Pool(std::rc::Rc<RefCell<Interner>>);
+/// Where native code finds a pool's memory: the addresses and sizes of the interner's arrays,
+/// refreshed after every change that can move them. Addresses are stored as integers.
+#[repr(C)]
+struct View {
+    /// `slots[0]`.
+    slots: Cell<u64>,
+    /// `slots.len() - 1`.
+    mask: Cell<u64>,
+    /// `entries[0]`.
+    entries: Cell<u64>,
+    /// `text[0]`.
+    text: Cell<u64>,
+    /// 1 under `ascii-nocase`, 0 under `exact`.
+    fold: Cell<u64>,
+}
+
+/// An interner and the view of it native code reads, shared by a pool and the functions its
+/// `interner()` binds.
+#[repr(C)]
+struct Shared {
+    view: View,
+    interner: RefCell<Interner>,
+}
+
+impl Shared {
+    fn new(policy: Policy) -> Shared {
+        let fold = u64::from(policy == Policy::AsciiNoCase);
+        let view = View {
+            slots: Cell::new(0),
+            mask: Cell::new(0),
+            entries: Cell::new(0),
+            text: Cell::new(0),
+            fold: Cell::new(fold),
+        };
+        let shared = Shared { view, interner: RefCell::new(Interner::new(policy)) };
+        shared.refresh();
+        shared
+    }
+
+    /// Points the view at the interner's arrays as they are now.
+    fn refresh(&self) {
+        let interner = self.interner.borrow();
+        self.view.slots.set(interner.slots.as_ptr() as u64);
+        self.view.mask.set(interner.slots.len() as u64 - 1);
+        self.view.entries.set(interner.entries.as_ptr() as u64);
+        self.view.text.set(interner.text.as_ptr() as u64);
+    }
+
+    fn intern(&self, bytes: &[u8]) -> Result<u32> {
+        let mut interner = self.interner.borrow_mut();
+        let before = interner.len();
+        let token = interner.intern(bytes)?;
+        if interner.len() != before {
+            drop(interner);
+            self.refresh();
+        }
+        Ok(token)
+    }
+}
+
+/// Words of scratch in a pool's payload for the native lowering's loop state.
+const SCRATCH_WORDS: usize = 8;
+
+/// `dream.intern.Pool`, from `intern.new(policy?)`. Tagged, and laid out for native code: the
+/// shared view's address first, then the lowering's scratch.
+#[repr(C)]
+pub struct Pool {
+    shared_address: *const Shared,
+    scratch: [Cell<u64>; SCRATCH_WORDS],
+    shared: Rc<Shared>,
+}
+
+impl Pool {
+    fn new(policy: Policy) -> Pool {
+        let shared = Rc::new(Shared::new(policy));
+        Pool { shared_address: Rc::as_ptr(&shared), scratch: Default::default(), shared }
+    }
+
+    fn interner(&self) -> std::cell::Ref<'_, Interner> {
+        self.shared.interner.borrow()
+    }
+}
 
 // SAFETY: the payload holds no Lua references.
 unsafe impl crate::userdata::Userdata for Pool {
     const NAME: &'static str = "dream.intern.Pool";
+}
+
+/// Byte offsets native code reads at, pinned here at compile time: in the pool's payload, in the
+/// shared view, and in an entry.
+pub(crate) mod layout {
+    use super::{Entry, Pool, Shared, View};
+
+    pub const POOL_SHARED: i32 = 0;
+    pub const POOL_SCRATCH: i32 = 8;
+    pub const VIEW_SLOTS: i64 = 0;
+    pub const VIEW_MASK: i64 = 8;
+    pub const VIEW_ENTRIES: i64 = 16;
+    pub const VIEW_TEXT: i64 = 24;
+    pub const VIEW_FOLD: i64 = 32;
+
+    const _: () = {
+        assert!(std::mem::offset_of!(Pool, shared_address) == POOL_SHARED as usize);
+        assert!(std::mem::offset_of!(Pool, scratch) == POOL_SCRATCH as usize);
+        assert!(std::mem::offset_of!(Shared, view) == 0);
+        assert!(std::mem::offset_of!(View, slots) == VIEW_SLOTS as usize);
+        assert!(std::mem::offset_of!(View, mask) == VIEW_MASK as usize);
+        assert!(std::mem::offset_of!(View, entries) == VIEW_ENTRIES as usize);
+        assert!(std::mem::offset_of!(View, text) == VIEW_TEXT as usize);
+        assert!(std::mem::offset_of!(View, fold) == VIEW_FOLD as usize);
+        assert!(std::mem::size_of::<Entry>() == 8);
+        assert!(std::mem::offset_of!(Entry, start) == 0);
+        assert!(std::mem::offset_of!(Entry, len) == 4);
+        assert!(std::mem::size_of::<std::cell::Cell<u64>>() == 8);
+        assert!(cfg!(target_endian = "little"));
+    };
 }
 
 /// The bytes `offset..offset + length` of `source`, the whole of it when both are absent.
@@ -402,7 +519,9 @@ impl Extension for InternExtension {
 
     fn describe(&self, d: &mut ExtensionDescriptor) -> Result<()> {
         let mut pool = d.userdata::<Pool>("dream.intern.Pool");
-        pool.tag(TagPolicy::Preferred).doc("Byte sequences to dense number identities under one policy.");
+        pool.tag(TagPolicy::Required)
+            .compiler_type(CompilerTypePolicy::Required)
+            .doc("Byte sequences to dense number identities under one policy.");
         pool.method(
             "intern",
             |pool: &Pool,
@@ -411,7 +530,7 @@ impl Extension for InternExtension {
              length: Option<Exact<i64>>|
              -> Result<f64> {
                 let bytes = span("Pool:intern", &source, offset, length)?;
-                pool.0.borrow_mut().intern(bytes).map(f64::from)
+                pool.shared.intern(bytes).map(f64::from)
             },
         )
         .signature("(self, source: string | buffer, offset: number?, length: number?): number")
@@ -424,14 +543,13 @@ impl Extension for InternExtension {
              length: Option<Exact<i64>>|
              -> Result<Option<f64>> {
                 let bytes = span("Pool:find", &source, offset, length)?;
-                Ok(pool.0.borrow().find(bytes).map(f64::from))
+                Ok(pool.interner().find(bytes).map(f64::from))
             },
         )
         .signature("(self, source: string | buffer, offset: number?, length: number?): number?")
         .doc("The identity the bytes already have, or nil; never adds one.");
         pool.method("resolve", |pool: &Pool, token: Exact<i64>| -> Result<Vec<u8>> {
-            pool.0
-                .borrow()
+            pool.interner()
                 .resolve(token.0)
                 .map(<[u8]>::to_vec)
                 .ok_or_else(|| Error::runtime(format!("Pool:resolve: {} is not an identity of this pool", token.0)))
@@ -439,26 +557,26 @@ impl Extension for InternExtension {
         .signature("(self, token: number): string")
         .doc("The first spelling the pool saw for token.");
         pool.method("interner", |pool: &Pool, call: &crate::bind::Call<'_>| -> Result<crate::value::Function> {
-            let shared = std::rc::Rc::clone(&pool.0);
+            let shared = Rc::clone(&pool.shared);
             crate::bind::function(
                 call.stack(),
                 &["dream"],
                 "dream.intern.Pool.interner",
                 move |source: BytesView<'_>, offset: Option<Exact<i64>>, length: Option<Exact<i64>>| -> Result<f64> {
                     let bytes = span("interner", &source, offset, length)?;
-                    shared.borrow_mut().intern(bytes).map(f64::from)
+                    shared.intern(bytes).map(f64::from)
                 },
             )
         })
         .signature("(self): (source: string | buffer, offset: number?, length: number?) -> number")
         .doc("Pool:intern as a plain function bound to this pool: no method lookup on each call.");
-        pool.method("count", |pool: &Pool| pool.0.borrow().len() as f64)
+        pool.method("count", |pool: &Pool| pool.interner().len() as f64)
             .signature("(self): number")
             .doc("How many identities the pool holds; also the last token it handed out.");
-        pool.method("memory", |pool: &Pool| pool.0.borrow().memory() as f64)
+        pool.method("memory", |pool: &Pool| pool.interner().memory() as f64)
             .signature("(self): number")
             .doc("Bytes of native memory the pool holds.");
-        pool.method("policy", |pool: &Pool| pool.0.borrow().policy().name()).signature("(self): string");
+        pool.method("policy", |pool: &Pool| pool.interner().policy().name()).signature("(self): string");
 
         d.module(MODULE)
             .doc("Textual identity as numbers: pools that intern byte sequences under exact or ASCII case-insensitive equality.")
@@ -469,7 +587,7 @@ impl Extension for InternExtension {
                         Error::runtime(format!("intern.new: unknown policy '{name}' (exact or ascii-nocase)"))
                     })?,
                 };
-                Ok(Owned(Pool(std::rc::Rc::new(RefCell::new(Interner::new(policy))))))
+                Ok(Owned(Pool::new(policy)))
             })
             .signature("(policy: (\"exact\" | \"ascii-nocase\")?) -> dream_intern_Pool")
             .doc("An empty pool; exact by default.");
