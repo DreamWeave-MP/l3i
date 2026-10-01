@@ -143,4 +143,5 @@ unsafe extern "C" {
     pub fn db_ir_vm_upvalue(build: *mut db_ir_builder, index: u8) -> u32;
     pub fn db_ir_vm_exit(build: *mut db_ir_builder, pcpos: u32) -> u32;
     pub fn db_ir_in_terminated_block(build: *mut db_ir_builder) -> c_int;
+    pub fn db_ir_namecall_call(build: *mut db_ir_builder, pcpos: u32);
 }

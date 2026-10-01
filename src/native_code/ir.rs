@@ -117,4 +117,10 @@ impl IrBuilder<'_> {
     pub fn in_terminated_block(&self) -> bool {
         unsafe { ffi::db_ir_in_terminated_block(self.raw) != 0 }
     }
+    /// The generic path of the namecall at `pcpos` and the call after it, as Luau translates
+    /// them when no hook lowers the pair: a userdata namecall hook emits this on its slow path,
+    /// since returning true skips both instructions.
+    pub fn namecall_call(&mut self, pcpos: c_int) {
+        unsafe { ffi::db_ir_namecall_call(self.raw, pcpos as u32) }
+    }
 }

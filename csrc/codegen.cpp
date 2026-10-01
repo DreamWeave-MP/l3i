@@ -9,11 +9,14 @@
 // Rules: nothing here throws across the C boundary (Luau's code generator does not throw; the
 // Rust side aborts on panic), and IrOp travels as a 32-bit value (it is a 4+28 bit struct).
 
+#include <Luau/Bytecode.h>
+#include <Luau/BytecodeUtils.h>
 #include <Luau/CodeGen.h>
 #include <Luau/IrBuilder.h>
 #include <Luau/IrData.h>
 
 #include <lua.h>
+#include <lobject.h>
 
 #include <array>
 #include <cstdint>
@@ -23,6 +26,8 @@
 namespace CG = Luau::CodeGen;
 
 static_assert(sizeof(CG::IrOp) == sizeof(uint32_t), "IrOp must travel as a 32-bit value");
+
+LUAU_FASTFLAG(LuauCallFeedback)
 
 extern "C" {
 
@@ -369,6 +374,29 @@ uint32_t db_ir_vm_exit(db_ir_builder* build, uint32_t pcpos)
 int db_ir_in_terminated_block(db_ir_builder* build)
 {
     return unwrap(build).inTerminatedBlock ? 1 : 0;
+}
+
+// The generic path of the NAMECALL at `pcpos` and the CALL after it, emitted into the current
+// block exactly as Luau translates the pair when no hook lowers it (translateInstNamecall's
+// FALLBACK_NAMECALL, then IrBuilder's LOP_CALL case). A userdata namecall hook that lowers a
+// fast path emits this on its slow path and rejoins: the hook returning true skips both
+// instructions, so the call has to be in the hook's IR or it never happens.
+void db_ir_namecall_call(db_ir_builder* build, uint32_t pcpos)
+{
+    CG::IrBuilder& b = unwrap(build);
+    const Instruction* pc = b.function.proto->code + pcpos;
+    LuauOpcode namecall = LuauOpcode(LUAU_INSN_OP(*pc));
+    int ra = LUAU_INSN_A(*pc);
+    int rb = LUAU_INSN_B(*pc);
+    uint32_t aux = namecall == LOP_NAMECALLUDATA ? LUAU_INSN_AUX_KV16(pc[1]) : pc[1];
+    b.inst(CG::IrCmd::FALLBACK_NAMECALL, b.constUint(pcpos), b.vmReg(ra), b.vmReg(rb), b.vmConst(aux));
+
+    uint32_t callpos = pcpos + Luau::getOpLength(namecall);
+    const Instruction* call = b.function.proto->code + callpos;
+    LuauOpcode op = LuauOpcode(LUAU_INSN_OP(*call));
+    b.inst(CG::IrCmd::INTERRUPT, b.constUint(callpos));
+    b.inst(CG::IrCmd::SET_SAVEDPC, b.constUint(FFlag::LuauCallFeedback ? callpos + Luau::getOpLength(op) : callpos + 1));
+    b.inst(CG::IrCmd::CALL, b.vmReg(LUAU_INSN_A(*call)), b.constInt(LUAU_INSN_B(*call) - 1), b.constInt(LUAU_INSN_C(*call) - 1));
 }
 
 } // extern "C"
