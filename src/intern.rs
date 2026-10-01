@@ -1,8 +1,8 @@
-//! Textual identity as integers: the `dream.intern` extension, module `@dream/intern`.
+//! Textual identity as numbers: the `dream.intern` extension, module `@dream/intern`.
 //!
-//! A pool maps byte sequences to Luau integers under one equivalence policy. Equivalent inputs
-//! get the same integer, different ones different integers, and from then on identity is
-//! integer equality and integer table keys:
+//! A pool maps byte sequences to small whole numbers under one equivalence policy. Equivalent
+//! inputs get the same number, different ones different numbers, and from then on identity is
+//! number equality and number table keys:
 //!
 //! ```lua
 //! local intern = require('@dream/intern')
@@ -25,11 +25,16 @@
 //! # Tokens and lifetime
 //!
 //! A token is the 1-based position of its identity in its pool: `1, 2, 3, ...` in first-seen
-//! order, dense, below 2^32. Tokens are pool-relative: two pools hand out the same integers, and
-//! a token means something only to the pool that made it. Pools only grow (no removal, no
-//! reuse), so a token never changes meaning while its pool lives, and needs no generation.
-//! Dropping the pool frees everything at once; tokens kept after that are plain integers.
-//! Dense tokens fit a `u32` column (`buffer.writeu32`) and index arrays directly.
+//! order, dense, below 2^32, as a Luau number. A number and not an `integer`, because a table
+//! keyed by dense numbers keeps them in its array part, and an `integer` key always hashes: a
+//! read costs about a fifth of the instructions of an integer or string key, and a third of an
+//! integer key's L1 misses (`benches/intern.rs`). Dense tokens also fit a `u32` column
+//! (`buffer.writeu32`).
+//!
+//! Tokens are pool-relative: two pools hand out the same numbers, and a token means something
+//! only to the pool that made it. Pools only grow (no removal, no reuse), so a token never
+//! changes meaning while its pool lives, and needs no generation or pool bits. Dropping the
+//! pool frees everything at once; tokens kept after that are plain numbers.
 //!
 //! # Storage
 //!
@@ -39,7 +44,7 @@
 
 use std::cell::RefCell;
 
-use crate::convert::{BytesView, Exact, Integer};
+use crate::convert::{BytesView, Exact};
 use crate::error::{Error, Result};
 use crate::extension::{Extension, ExtensionDescriptor, TagPolicy};
 use crate::userdata::Owned;
@@ -325,19 +330,19 @@ impl Extension for InternExtension {
 
     fn describe(&self, d: &mut ExtensionDescriptor) -> Result<()> {
         let mut pool = d.userdata::<Pool>("dream.intern.Pool");
-        pool.tag(TagPolicy::Preferred).doc("Byte sequences to integer identities under one policy.");
+        pool.tag(TagPolicy::Preferred).doc("Byte sequences to dense number identities under one policy.");
         pool.method(
             "intern",
             |pool: &Pool,
              source: BytesView<'_>,
              offset: Option<Exact<i64>>,
              length: Option<Exact<i64>>|
-             -> Result<Integer> {
+             -> Result<f64> {
                 let bytes = span("Pool:intern", &source, offset, length)?;
-                pool.0.borrow_mut().intern(bytes).map(|token| Integer(i64::from(token)))
+                pool.0.borrow_mut().intern(bytes).map(f64::from)
             },
         )
-        .signature("(self, source: string | buffer, offset: number?, length: number?): integer")
+        .signature("(self, source: string | buffer, offset: number?, length: number?): number")
         .doc("The identity of length bytes of source from offset (all of it by default), added on first sight.");
         pool.method(
             "find",
@@ -345,21 +350,21 @@ impl Extension for InternExtension {
              source: BytesView<'_>,
              offset: Option<Exact<i64>>,
              length: Option<Exact<i64>>|
-             -> Result<Option<Integer>> {
+             -> Result<Option<f64>> {
                 let bytes = span("Pool:find", &source, offset, length)?;
-                Ok(pool.0.borrow().find(bytes).map(|token| Integer(i64::from(token))))
+                Ok(pool.0.borrow().find(bytes).map(f64::from))
             },
         )
-        .signature("(self, source: string | buffer, offset: number?, length: number?): integer?")
+        .signature("(self, source: string | buffer, offset: number?, length: number?): number?")
         .doc("The identity the bytes already have, or nil; never adds one.");
-        pool.method("resolve", |pool: &Pool, token: Integer| -> Result<Vec<u8>> {
+        pool.method("resolve", |pool: &Pool, token: Exact<i64>| -> Result<Vec<u8>> {
             pool.0
                 .borrow()
                 .resolve(token.0)
                 .map(<[u8]>::to_vec)
                 .ok_or_else(|| Error::runtime(format!("Pool:resolve: {} is not an identity of this pool", token.0)))
         })
-        .signature("(self, token: integer): string")
+        .signature("(self, token: number): string")
         .doc("The first spelling the pool saw for token.");
         pool.method("count", |pool: &Pool| pool.0.borrow().len() as f64)
             .signature("(self): number")
@@ -370,7 +375,7 @@ impl Extension for InternExtension {
         pool.method("policy", |pool: &Pool| pool.0.borrow().policy().name()).signature("(self): string");
 
         d.module(MODULE)
-            .doc("Textual identity as integers: pools that intern byte sequences under exact or ASCII case-insensitive equality.")
+            .doc("Textual identity as numbers: pools that intern byte sequences under exact or ASCII case-insensitive equality.")
             .function("new", |policy: Option<&str>| -> Result<Owned<Pool>> {
                 let policy = match policy {
                     None => Policy::Exact,
