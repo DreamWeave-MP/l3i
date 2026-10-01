@@ -5,7 +5,9 @@
 //! runs a Luau loop of `CALLS` iterations, the loop itself is measured with an empty body and
 //! subtracted, and the minimum over `ROUNDS` repeats is reported per call. Run with
 //! `cargo bench --bench instructions`; Linux only, and it needs
-//! `/proc/sys/kernel/perf_event_paranoid` at 2 or lower.
+//! `/proc/sys/kernel/perf_event_paranoid` at 2 or lower. With `--features jit` a second table
+//! measures packed rotations and colors in `--!native` code against plain Luau values;
+//! `L3I_ASSEMBLY=<scenario>` prints that native scenario's IR and machine code instead.
 
 #![allow(clippy::cast_precision_loss, clippy::cast_possible_truncation, clippy::missing_panics_doc)]
 
@@ -224,17 +226,32 @@ pub fn main() {
     // `L3I_SCENARIO=<name>` runs one scenario for `L3I_ROUNDS` rounds (a profiling workload).
     let only = std::env::var("L3I_SCENARIO").ok();
     let rounds: usize = std::env::var("L3I_ROUNDS").ok().and_then(|r| r.parse().ok()).unwrap_or(ROUNDS);
+    let functions: Vec<(&str, Function)> = scenarios
+        .iter()
+        .filter(|(name, _)| only.as_deref().is_none_or(|only| only == *name || *name == "loop only"))
+        .map(|(name, body)| (*name, looped(&runtime, body)))
+        .collect();
+    report(&runtime, &counters, rounds, "loop only", &functions);
+    #[cfg(feature = "jit")]
+    native(&counters, rounds, only.as_deref());
+}
+
+/// Prints one table: every function's counters per call, less the first row's (the loop alone),
+/// the minimum over `rounds` runs each.
+fn report(
+    runtime: &Runtime,
+    counters: &[Option<Counter>],
+    rounds: usize,
+    baseline_name: &str,
+    functions: &[(&str, Function)],
+) {
     let mut baseline = vec![0u64; COLUMNS.len()];
-    print!("{:<40}", "scenario");
+    print!("{:<44}", "scenario");
     for (label, _, _) in COLUMNS {
         print!(" {label:>12}");
     }
     println!();
-    for (name, body) in scenarios {
-        if only.as_deref().is_some_and(|only| only != *name && *name != "loop only") {
-            continue;
-        }
-        let function = looped(&runtime, body);
+    for (name, function) in functions {
         let stack = runtime.stack();
         // The minimum over the rounds for every counter: the steady state, without the round
         // that took an interrupt or a page fault.
@@ -249,8 +266,8 @@ pub fn main() {
                 }
             }
         }
-        let is_baseline = *name == "loop only";
-        print!("{name:<40}");
+        let is_baseline = *name == baseline_name;
+        print!("{name:<44}");
         for (column, counter) in counters.iter().enumerate() {
             if counter.is_none() {
                 print!(" {:>12}", "-");
@@ -271,4 +288,94 @@ pub fn main() {
             println!();
         }
     }
+}
+
+/// Packed rotations and colors in natively compiled code: the lowered receivers against the
+/// binder and against plain Luau values (numbers, tables, vectors). Every body computes a varying
+/// component first, so nothing is hoisted, and the loop row does that alone.
+#[cfg(feature = "jit")]
+fn native(counters: &[Option<Counter>], rounds: usize, only: Option<&str>) {
+    use l3i::extension::NativeCodePolicy;
+    use l3i::native_code::NativeCodeMode;
+    use l3i::quat::QuatExtension;
+    use l3i::raster::RasterExtension;
+    use l3i::runtime::{CallContext, MemoryCategory};
+    use l3i::sandbox::{InstanceSpec, SandboxOptions};
+
+    let policy = RuntimePolicy::new()
+        .compat_global("@dream/quat", "quat")
+        .compat_global("@dream/raster", "raster")
+        .native_code(NativeCodePolicy { mode: NativeCodeMode::Eager, ..NativeCodePolicy::default() });
+    let plan =
+        RuntimePlan::builder().policy(policy).extension(QuatExtension).extension(RasterExtension).finalize().unwrap();
+    let runtime = Runtime::from_plan(&plan).unwrap();
+    if !runtime.native_code().is_some_and(l3i::native_code::NativeCodeGen::is_available) {
+        eprintln!("no Luau code generator on this platform; the native table is skipped");
+        return;
+    }
+    let sandbox = runtime
+        .sandbox(|_| {}, SandboxOptions { compile_options: runtime.compile_options(), ..SandboxOptions::default() })
+        .unwrap();
+    let loader = runtime.load_function("return function(name) error('module ' .. name .. ' not found') end").unwrap();
+    let instance = sandbox
+        .new_instance(&runtime, &InstanceSpec { name: "n", packages: &[], hidden_data: None, loader: &loader })
+        .unwrap();
+    let scenarios: &[(&str, &str)] = &[
+        ("native loop only", "s = x"),
+        ("quat: four numbers (plain Luau)", "s, t, u, v = x, 0.2, 0.3, 0.9"),
+        ("quat: table { x, y, z, w } (plain Luau)", "s = { x, 0.2, 0.3, 0.9 }"),
+        ("quat: binder quat.fromXYZW", "s = quat.fromXYZW(x, 0.2, 0.3, 0.9)"),
+        ("quat: lowered Q:fromXYZW", "s = Q:fromXYZW(x, 0.2, 0.3, 0.9)"),
+        (
+            "rotate: four numbers, vector math (plain Luau)",
+            "local axis = vector.create(x, 0.2, 0.3) local twice = 2 * vector.cross(axis, p) s = p + 0.9 * twice + vector.cross(axis, twice)",
+        ),
+        ("rotate: lowered Q:fromXYZW + Q:rotate", "local q = Q:fromXYZW(x, 0.2, 0.3, 0.9) s = Q:rotate(q, p)"),
+        ("rotate: lowered Q:rotate of a packed rotation", "s = Q:rotate(r, p)"),
+        ("color: four numbers (plain Luau)", "s, t, u, v = i % 256, 40, 40, 255"),
+        ("color: binder raster.rgba8", "s = raster.rgba8(i % 256, 40, 40, 255)"),
+        ("color: lowered C:rgba8", "s = C:rgba8(i % 256, 40, 40, 255)"),
+    ];
+    let functions: Vec<(&str, Function)> = scenarios
+        .iter()
+        .filter(|(name, _)| only.is_none_or(|only| only == *name || *name == "native loop only"))
+        .map(|(name, body)| {
+            let template = sandbox
+                .load_template(
+                    &runtime,
+                    "native.lua",
+                    &format!(
+                        "--!native\nlocal Q: dream_quat_Math = quat.math()\nlocal C: dream_raster_Math = raster.math()\n\
+                         local r = quat.axisAngle(vector.create(0, 0, 1), 0.3)\nlocal p = vector.create(1, 2, 3)\nlocal sink\n\
+                         return function() local s, t, u, v = 0, 0, 0, 0 for i = 1, {CALLS} do local x = 0.1 + (i % 64) * 0.01 {body} end sink = {{ s, t, u, v }} return 0 end"
+                    ),
+                )
+                .unwrap();
+            let results =
+                sandbox.run(&runtime, &template, &instance, CallContext { id: 1, category: MemoryCategory(0) }).unwrap();
+            (*name, Function::from_value(results.into_iter().next().unwrap()).unwrap())
+        })
+        .collect();
+    // `L3I_ASSEMBLY=<name>` prints that scenario's IR and machine code instead.
+    if let Ok(wanted) = std::env::var("L3I_ASSEMBLY") {
+        use l3i::native_code::AssemblyOptions;
+        let generator = runtime.native_code().unwrap();
+        for (name, function) in functions.iter().filter(|(name, _)| *name == wanted) {
+            let text = runtime
+                .stack()
+                .with_frame(|frame| {
+                    let view = function.push_to(frame)?;
+                    generator.assembly(
+                        frame,
+                        view.index(),
+                        AssemblyOptions { include_ir: true, ..AssemblyOptions::default() },
+                    )
+                })
+                .unwrap();
+            println!("{name}\n{text}");
+        }
+        return;
+    }
+    println!();
+    report(&runtime, counters, rounds, "native loop only", &functions);
 }

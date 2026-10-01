@@ -282,6 +282,27 @@ sixty of the typed direct handler. The rest is Luau's own call and return machin
 argument pays eleven instructions for the kind registry check (one owner load and a type
 compare) on top of its bit decode.
 
+The `jit` build adds a second table: packed rotations and colors inside `--!native` code, where
+the lowered receivers (`quat.math()`, `raster.math()`) skip the call entirely. Each body computes
+a varying component first and keeps its result live past the loop, so the code generator cannot
+drop the work; the bare native loop is subtracted.
+
+| Per call, native | Instructions | Cycles |
+|---|---:|---:|
+| four numbers in locals (no packing) | 9 | 2 |
+| a table `{ x, y, z, w }` | 616 | 196 |
+| `quat.fromXYZW` through the binder | 459 | 196 |
+| `Q:fromXYZW`, lowered | 93 | 70 |
+| `Q:rotate` of a packed rotation, lowered | 104 | 77 |
+| `Q:fromXYZW` then `Q:rotate`, lowered | 185 | 164 |
+| the same rotation as plain `vector` math on four numbers | 59 | 60 |
+| `raster.rgba8` through the binder | 432 | 129 |
+| `C:rgba8`, lowered | 20 | 11 |
+
+A packed rotation built natively costs a sixth of a table and a fifth of a binder call, and
+allocates nothing. Rotating by four numbers already in locals is still cheaper than unpacking one;
+the packed form pays for itself where the rotation is stored, keyed, or sent rather than used once.
+
 The same harness reads the L1 data, L1 instruction, last-level cache, data and instruction TLB,
 and branch-miss counters. Every scenario reports fewer than 0.005 of each per call: the whole
 path, Luau's and the binder's, stays in L1 and predicts. The binder's side of a call touches four
