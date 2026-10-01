@@ -55,6 +55,9 @@
 //! copy nothing and allocate nothing, native or VM. The index is open addressing with the hash
 //! in each slot: 8 bytes per slot, 8 per identity, plus the text.
 
+#[cfg(feature = "jit")]
+pub mod lowering;
+
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
@@ -529,6 +532,8 @@ impl Extension for InternExtension {
              offset: Option<Exact<i64>>,
              length: Option<Exact<i64>>|
              -> Result<f64> {
+                #[cfg(feature = "jit")]
+                lowering::count_binder_call();
                 let bytes = span("Pool:intern", &source, offset, length)?;
                 pool.shared.intern(bytes).map(f64::from)
             },
@@ -542,6 +547,8 @@ impl Extension for InternExtension {
              offset: Option<Exact<i64>>,
              length: Option<Exact<i64>>|
              -> Result<Option<f64>> {
+                #[cfg(feature = "jit")]
+                lowering::count_binder_call();
                 let bytes = span("Pool:find", &source, offset, length)?;
                 Ok(pool.interner().find(bytes).map(f64::from))
             },
@@ -577,6 +584,9 @@ impl Extension for InternExtension {
             .signature("(self): number")
             .doc("Bytes of native memory the pool holds.");
         pool.method("policy", |pool: &Pool| pool.interner().policy().name()).signature("(self): string");
+
+        #[cfg(feature = "jit")]
+        d.native_hooks(lowering::InternLowering);
 
         d.module(MODULE)
             .doc("Textual identity as numbers: pools that intern byte sequences under exact or ASCII case-insensitive equality.")
