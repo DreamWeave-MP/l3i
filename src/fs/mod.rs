@@ -31,9 +31,22 @@
 //!
 //! # Errors
 //!
-//! A failed operation raises `dream.fs.<function>: <path>: <the OS's message>`, for example
-//! `dream.fs.open: Data Files/x.bsa: No such file or directory (os error 2)`. `stat`, `lstat`
-//! and `readLink` answer nil for a path where nothing is; `exists` answers false.
+//! The disk refusing is an answer, not an exception: an operation the OS fails returns `nil`, the
+//! message `dream.fs.<function>: <path>: <the OS's message>` and the error's kind
+//! (`dream_fs_ErrorKind`, such as `notFound` or `permissionDenied`), the way `io.open` does:
+//!
+//! ```lua
+//! local reader, message, kind = fs.open('Data Files/x.bsa')
+//! if not reader then
+//!     print(message) -- dream.fs.open: Data Files/x.bsa: No such file or directory (os error 2)
+//!     return kind == 'notFound'
+//! end
+//! ```
+//!
+//! An operation with nothing to return returns `true`. `stat`, `lstat` and `readLink` answer a
+//! lone nil for a path where nothing is; `exists` answers false. Calling a function wrongly (an
+//! argument of the wrong type, an unknown option, a negative offset, a position past the end, a
+//! closed handle) is the script's mistake, and raises.
 
 mod io;
 mod walk;
@@ -87,10 +100,7 @@ pub(crate) fn display(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).into_owned()
 }
 
-/// `dream.fs.<what>: <path>: <error>`.
-pub(crate) fn io_error(what: &str, path: &[u8], error: &std::io::Error) -> Error {
-    Error::runtime(format!("dream.fs.{what}: {}: {error}", display(path)))
-}
+pub(crate) use crate::outcome::{Failure, Outcome, done};
 
 /// `fs::canonicalize` as a script sees it again: on Windows the plain drive or UNC spelling,
 /// not the verbatim `\\?\` one the Win32 API will not join with `/`.
@@ -157,17 +167,17 @@ fn push_stat(call: &Call<'_>, metadata: &std::fs::Metadata) -> Result<StackResul
     Ok(StackResults)
 }
 
-/// `stat` or `lstat`: the table, or nil when nothing is there.
-fn stat(call: &Call<'_>, what: &str, path: &[u8], follow: bool) -> Result<StackResults> {
+/// `stat` or `lstat`: the table, or a lone nil when nothing is there.
+fn stat(call: &Call<'_>, what: &str, path: &[u8], follow: bool) -> Result<Outcome<StackResults>> {
     let host = host_path(what, path)?;
     let metadata = if follow { std::fs::metadata(&host) } else { std::fs::symlink_metadata(&host) };
     match metadata {
-        Ok(metadata) => push_stat(call, &metadata),
+        Ok(metadata) => push_stat(call, &metadata).map(Outcome::Done),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             call.push(&())?;
-            Ok(StackResults)
+            Ok(Outcome::Done(StackResults))
         }
-        Err(error) => Err(io_error(what, path, &error)),
+        Err(error) => Ok(Outcome::Failed(Failure::new(what, path, &error))),
     }
 }
 
@@ -183,27 +193,26 @@ fn push_list<T>(scope: &impl Scope, items: &[T], mut push: impl FnMut(&Frame<'_>
     Ok(())
 }
 
-fn read_file(call: &Call<'_>, path: &[u8]) -> Result<StackResults> {
+fn read_file(call: &Call<'_>, path: &[u8]) -> Result<Outcome<StackResults>> {
     let host = host_path("readFile", path)?;
-    let bytes = std::fs::read(&host).map_err(|error| io_error("readFile", path, &error))?;
+    let bytes = done!(Outcome::of(std::fs::read(&host), "readFile", path));
     let mut buffer = new_buffer(call, bytes.len())?;
     // SAFETY: the buffer was created by this call and no other view of it exists.
     unsafe { buffer.bytes_mut_unchecked() }.copy_from_slice(&bytes);
-    Ok(StackResults)
+    Ok(Outcome::Done(StackResults))
 }
 
-fn list(call: &Call<'_>, path: &[u8]) -> Result<StackResults> {
+fn list(call: &Call<'_>, path: &[u8]) -> Result<Outcome<StackResults>> {
     let host = host_path("list", path)?;
-    let mut names = std::fs::read_dir(&host)
-        .and_then(|entries| {
-            entries
-                .map(|entry| entry.map(|entry| entry.file_name().as_encoded_bytes().to_vec()))
-                .collect::<std::io::Result<Vec<_>>>()
-        })
-        .map_err(|error| io_error("list", path, &error))?;
+    let names = std::fs::read_dir(&host).and_then(|entries| {
+        entries
+            .map(|entry| entry.map(|entry| entry.file_name().as_encoded_bytes().to_vec()))
+            .collect::<std::io::Result<Vec<_>>>()
+    });
+    let mut names = done!(Outcome::of(names, "list", path));
     names.sort_unstable();
     push_list(call, &names, |frame, name| frame.push(name.as_slice()).map(drop))?;
-    Ok(StackResults)
+    Ok(Outcome::Done(StackResults))
 }
 
 /// `{ recursive? }`.
@@ -214,22 +223,22 @@ fn recursive(scope: &impl Scope, options: Option<ValueView<'_>>, context: &str) 
     Options::read(scope, options, context, |o| o.or("recursive", false))
 }
 
-fn mkdir(call: &Call<'_>, path: &[u8], options: Option<ValueView<'_>>) -> Result<()> {
+fn mkdir(call: &Call<'_>, path: &[u8], options: Option<ValueView<'_>>) -> Result<Outcome<bool>> {
     let host = host_path("mkdir", path)?;
     let result = if recursive(call, options, "dream.fs.mkdir")? {
         std::fs::create_dir_all(&host)
     } else {
         std::fs::create_dir(&host)
     };
-    result.map_err(|error| io_error("mkdir", path, &error))
+    Ok(Outcome::of(result.map(|()| true), "mkdir", path))
 }
 
 /// Removes a file, a link (never what it points at), or a directory: empty, or with everything in
 /// it when `recursive`.
-fn remove(call: &Call<'_>, path: &[u8], options: Option<ValueView<'_>>) -> Result<()> {
+fn remove(call: &Call<'_>, path: &[u8], options: Option<ValueView<'_>>) -> Result<Outcome<bool>> {
     let recursive = recursive(call, options, "dream.fs.remove")?;
     let host = host_path("remove", path)?;
-    let metadata = std::fs::symlink_metadata(&host).map_err(|error| io_error("remove", path, &error))?;
+    let metadata = done!(Outcome::of(std::fs::symlink_metadata(&host), "remove", path));
     let result = if !metadata.is_dir() {
         remove_link_or_file(&host, &metadata)
     } else if recursive {
@@ -237,7 +246,7 @@ fn remove(call: &Call<'_>, path: &[u8], options: Option<ValueView<'_>>) -> Resul
     } else {
         std::fs::remove_dir(&host)
     };
-    result.map_err(|error| io_error("remove", path, &error))
+    Ok(Outcome::of(result.map(|()| true), "remove", path))
 }
 
 /// A file, or a link: on Windows a link to a directory is removed as a directory.
@@ -253,7 +262,7 @@ fn remove_link_or_file(path: &Path, metadata: &std::fs::Metadata) -> std::io::Re
     std::fs::remove_file(path)
 }
 
-fn symlink(call: &Call<'_>, target: &[u8], link: &[u8], options: Option<ValueView<'_>>) -> Result<()> {
+fn symlink(call: &Call<'_>, target: &[u8], link: &[u8], options: Option<ValueView<'_>>) -> Result<Outcome<bool>> {
     let directory = match options.filter(|view| !view.is_nil()) {
         Some(options) => Options::read(call, options, "dream.fs.symlink", |o| o.or("directory", false))?,
         None => false,
@@ -276,27 +285,27 @@ fn symlink(call: &Call<'_>, target: &[u8], link: &[u8], options: Option<ValueVie
         let _ = (directory, &target_path, &link_path);
         Err(std::io::Error::new(std::io::ErrorKind::Unsupported, "symbolic links are not supported on this platform"))
     };
-    result.map_err(|error| io_error("symlink", link, &error))
+    Ok(Outcome::of(result.map(|()| true), "symlink", link))
 }
 
-fn read_link(path: &[u8]) -> Result<Option<Vec<u8>>> {
+fn read_link(path: &[u8]) -> Result<Outcome<Option<Vec<u8>>>> {
     let host = host_path("readLink", path)?;
-    match std::fs::read_link(&host) {
-        Ok(target) => Ok(Some(path_bytes(&target).to_vec())),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(io_error("readLink", path, &error)),
-    }
+    Ok(match std::fs::read_link(&host) {
+        Ok(target) => Outcome::Done(Some(path_bytes(&target).to_vec())),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Outcome::Done(None),
+        Err(error) => Outcome::Failed(Failure::new("readLink", path, &error)),
+    })
 }
 
 /// Whether two paths name the same file (the same device and file number, so a hard link or a
 /// symbolic link to it counts); false when either does not exist.
-fn same_file(a: &[u8], b: &[u8]) -> Result<bool> {
+fn same_file(a: &[u8], b: &[u8]) -> Result<Outcome<bool>> {
     let (left, right) = (host_path("sameFile", a)?, host_path("sameFile", b)?);
-    match same_file::is_same_file(&left, &right) {
-        Ok(same) => Ok(same),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
-        Err(error) => Err(io_error("sameFile", a, &error)),
-    }
+    Ok(match same_file::is_same_file(&left, &right) {
+        Ok(same) => Outcome::Done(same),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Outcome::Done(false),
+        Err(error) => Outcome::Failed(Failure::new("sameFile", a, &error)),
+    })
 }
 
 /// A module member: its name, signature, doc, and whether it changes the disk.
@@ -313,100 +322,130 @@ const fn member(name: &'static str, signature: &'static str, doc: &'static str, 
 
 /// The module's functions, in declaration order.
 const MEMBERS: &[Member] = &[
-    member("readFile", "(path: string) -> buffer", "The whole file as a new buffer.", false),
-    member("readFileString", "(path: string) -> string", "The whole file as a string.", false),
+    member(
+        "readFile",
+        "(path: string) -> (buffer?, string?, dream_fs_ErrorKind?)",
+        "The whole file as a new buffer.",
+        false,
+    ),
+    member(
+        "readFileString",
+        "(path: string) -> (string?, string?, dream_fs_ErrorKind?)",
+        "The whole file as a string.",
+        false,
+    ),
     member(
         "readAt",
-        "(path: string, offset: number, length: number) -> buffer",
+        "(path: string, offset: number, length: number) -> (buffer?, string?, dream_fs_ErrorKind?)",
         "length bytes from offset as a new buffer, fewer at the end; an offset past the end is an error.",
         false,
     ),
-    member("open", "(path: string) -> dream_fs_Reader", "A reader over a memory map of the file.", false),
+    member(
+        "open",
+        "(path: string) -> (dream_fs_Reader?, string?, dream_fs_ErrorKind?)",
+        "A reader over a memory map of the file.",
+        false,
+    ),
     member(
         "stat",
-        "(path: string) -> dream_fs_Stat?",
+        "(path: string) -> (dream_fs_Stat?, string?, dream_fs_ErrorKind?)",
         "The metadata of what path names, following symbolic links, or nil when nothing is there.",
         false,
     ),
     member(
         "lstat",
-        "(path: string) -> dream_fs_Stat?",
+        "(path: string) -> (dream_fs_Stat?, string?, dream_fs_ErrorKind?)",
         "The metadata of path itself: a symbolic link is described, not followed. Nil when nothing is there.",
         false,
     ),
-    member("exists", "(path: string) -> boolean", "Whether something is there, following symbolic links.", false),
-    member("list", "(path: string) -> { string }", "The names in a directory, sorted by their bytes.", false),
+    member(
+        "exists",
+        "(path: string) -> (boolean?, string?, dream_fs_ErrorKind?)",
+        "Whether something is there, following symbolic links.",
+        false,
+    ),
+    member(
+        "list",
+        "(path: string) -> ({ string }?, string?, dream_fs_ErrorKind?)",
+        "The names in a directory, sorted by their bytes.",
+        false,
+    ),
     member(
         "walk",
-        "(root: string, options: dream_fs_WalkOptions?) -> dream_fs_Walk",
+        "(root: string, options: dream_fs_WalkOptions?) -> (dream_fs_Walk?, string?, dream_fs_ErrorKind?)",
         "Everything under root, depth first, as parallel arrays: paths relative to root, kinds, and with metadata = true sizes and modification times.",
         false,
     ),
     member(
         "canonicalize",
-        "(path: string) -> string",
+        "(path: string) -> (string?, string?, dream_fs_ErrorKind?)",
         "The absolute path with every symbolic link, '.' and '..' resolved; the file must exist.",
         false,
     ),
     member(
         "absolute",
-        "(path: string) -> string",
+        "(path: string) -> (string?, string?, dream_fs_ErrorKind?)",
         "path made absolute against the working directory, without touching the disk or resolving links.",
         false,
     ),
     member(
         "readLink",
-        "(path: string) -> string?",
+        "(path: string) -> (string?, string?, dream_fs_ErrorKind?)",
         "What a symbolic link points at, as written in the link; nil when nothing is there.",
         false,
     ),
     member(
         "sameFile",
-        "(a: string, b: string) -> boolean",
+        "(a: string, b: string) -> (boolean?, string?, dream_fs_ErrorKind?)",
         "Whether a and b are the same file (hard links and symbolic links to it included); false when either is missing.",
         false,
     ),
-    member("cwd", "() -> string", "The working directory.", false),
+    member("cwd", "() -> (string?, string?, dream_fs_ErrorKind?)", "The working directory.", false),
     member(
         "writeFile",
-        "(path: string, data: buffer | string, options: { offset: number?, append: boolean?, create: boolean? }?) -> number",
+        "(path: string, data: buffer | string, options: { offset: number?, append: boolean?, create: boolean? }?) -> (number?, string?, dream_fs_ErrorKind?)",
         "Writes data to path, truncating it, and returns the count. offset writes in place without truncating; append adds at the end; create = false refuses a file that does not exist.",
         true,
     ),
     member(
         "openWrite",
-        "(path: string, options: { append: boolean?, truncate: boolean?, create: boolean? }?) -> dream_fs_Writer",
+        "(path: string, options: { append: boolean?, truncate: boolean?, create: boolean? }?) -> (dream_fs_Writer?, string?, dream_fs_ErrorKind?)",
         "A writer over path, truncated unless append or truncate = false; created unless create = false.",
         true,
     ),
     member(
         "mkdir",
-        "(path: string, options: { recursive: boolean? }?) -> ()",
+        "(path: string, options: { recursive: boolean? }?) -> (boolean?, string?, dream_fs_ErrorKind?)",
         "Creates a directory; recursive creates its missing parents and accepts one that exists.",
         true,
     ),
     member(
         "remove",
-        "(path: string, options: { recursive: boolean? }?) -> ()",
+        "(path: string, options: { recursive: boolean? }?) -> (boolean?, string?, dream_fs_ErrorKind?)",
         "Removes a file, a symbolic link (never what it points at), or an empty directory; recursive removes a directory with everything in it.",
         true,
     ),
-    member("rename", "(from: string, to: string) -> ()", "Moves a file or directory, replacing a file at to.", true),
+    member(
+        "rename",
+        "(from: string, to: string) -> (boolean?, string?, dream_fs_ErrorKind?)",
+        "Moves a file or directory, replacing a file at to.",
+        true,
+    ),
     member(
         "copy",
-        "(from: string, to: string) -> number",
+        "(from: string, to: string) -> (number?, string?, dream_fs_ErrorKind?)",
         "Copies a file's contents and permissions; returns the byte count.",
         true,
     ),
     member(
         "hardLink",
-        "(source: string, link: string) -> ()",
+        "(source: string, link: string) -> (boolean?, string?, dream_fs_ErrorKind?)",
         "Creates link as another name for the file source.",
         true,
     ),
     member(
         "symlink",
-        "(target: string, link: string, options: { directory: boolean? }?) -> ()",
+        "(target: string, link: string, options: { directory: boolean? }?) -> (boolean?, string?, dream_fs_ErrorKind?)",
         "Creates link as a symbolic link to target, stored as written. directory marks a link to a directory, which Windows needs.",
         true,
     ),
@@ -430,6 +469,7 @@ impl Extension for FsExtension {
 
     fn describe(&self, d: &mut ExtensionDescriptor) -> Result<()> {
         d.type_alias("dream_fs_FileKind", "\"file\" | \"dir\" | \"symlink\" | \"other\"");
+        d.type_alias("dream_fs_ErrorKind", crate::outcome::ERROR_KIND_TYPE);
         d.type_alias("dream_fs_Stat", STAT_TYPE);
         d.type_alias("dream_fs_WalkOptions", WALK_OPTIONS_TYPE);
         d.type_alias("dream_fs_Walk", WALK_TYPE);
@@ -471,54 +511,63 @@ impl Extension for FsExtension {
             }};
         }
         bind!("readFile", read_file);
-        bind!("readFileString", |path: &[u8]| -> Result<Vec<u8>> {
-            std::fs::read(host_path("readFileString", path)?).map_err(|error| io_error("readFileString", path, &error))
+        bind!("readFileString", |path: &[u8]| -> Result<Outcome<Vec<u8>>> {
+            Ok(Outcome::of(std::fs::read(host_path("readFileString", path)?), "readFileString", path))
         });
         bind!("readAt", io::read_at);
-        bind!("open", |path: &[u8]| Reader::open(path).map(Owned));
+        bind!("open", |path: &[u8]| -> Result<Outcome<Owned<Reader>>> {
+            Ok(match Reader::open(path)? {
+                Outcome::Done(reader) => Outcome::Done(Owned(reader)),
+                Outcome::Failed(failure) => Outcome::Failed(failure),
+            })
+        });
         bind!("stat", |call: &Call<'_>, path: &[u8]| stat(call, "stat", path, true));
         bind!("lstat", |call: &Call<'_>, path: &[u8]| stat(call, "lstat", path, false));
-        bind!("exists", |path: &[u8]| -> Result<bool> {
-            std::fs::exists(host_path("exists", path)?).map_err(|error| io_error("exists", path, &error))
+        bind!("exists", |path: &[u8]| -> Result<Outcome<bool>> {
+            Ok(Outcome::of(std::fs::exists(host_path("exists", path)?), "exists", path))
         });
         bind!("list", list);
         bind!("walk", walk::walk);
-        bind!("canonicalize", |path: &[u8]| -> Result<Vec<u8>> {
-            canonical(&host_path("canonicalize", path)?)
-                .map(|resolved| path_bytes(&resolved).to_vec())
-                .map_err(|error| io_error("canonicalize", path, &error))
+        bind!("canonicalize", |path: &[u8]| -> Result<Outcome<Vec<u8>>> {
+            let resolved = canonical(&host_path("canonicalize", path)?);
+            Ok(Outcome::of(resolved.map(|resolved| path_bytes(&resolved).to_vec()), "canonicalize", path))
         });
-        bind!("absolute", |path: &[u8]| -> Result<Vec<u8>> {
-            std::path::absolute(host_path("absolute", path)?)
-                .map(|absolute| path_bytes(&absolute).to_vec())
-                .map_err(|error| io_error("absolute", path, &error))
+        bind!("absolute", |path: &[u8]| -> Result<Outcome<Vec<u8>>> {
+            let absolute = std::path::absolute(host_path("absolute", path)?);
+            Ok(Outcome::of(absolute.map(|absolute| path_bytes(&absolute).to_vec()), "absolute", path))
         });
         bind!("readLink", read_link);
         bind!("sameFile", same_file);
-        bind!("cwd", || -> Result<Vec<u8>> {
-            std::env::current_dir()
-                .map(|dir| path_bytes(&dir).to_vec())
-                .map_err(|error| Error::runtime(format!("dream.fs.cwd: {error}")))
+        bind!("cwd", || -> Outcome<Vec<u8>> {
+            match std::env::current_dir() {
+                Ok(dir) => Outcome::Done(path_bytes(&dir).to_vec()),
+                Err(error) => Outcome::Failed(Failure::message(format!("dream.fs.cwd: {error}"), &error)),
+            }
         });
         bind!("writeFile", io::write_file);
-        bind!("openWrite", |call: &Call<'_>, path: &[u8], options: Option<ValueView<'_>>| {
+        bind!("openWrite", |call: &Call<'_>,
+                            path: &[u8],
+                            options: Option<ValueView<'_>>|
+         -> Result<Outcome<Owned<Writer>>> {
             let options = io::OpenWrite::read(call, options)?;
-            Writer::open(path, options).map(Owned)
+            Ok(match Writer::open(path, options)? {
+                Outcome::Done(writer) => Outcome::Done(Owned(writer)),
+                Outcome::Failed(failure) => Outcome::Failed(failure),
+            })
         });
         bind!("mkdir", mkdir);
         bind!("remove", remove);
-        bind!("rename", |from: &[u8], to: &[u8]| -> Result<()> {
-            std::fs::rename(host_path("rename", from)?, host_path("rename", to)?)
-                .map_err(|error| io_error("rename", from, &error))
+        bind!("rename", |from: &[u8], to: &[u8]| -> Result<Outcome<bool>> {
+            let result = std::fs::rename(host_path("rename", from)?, host_path("rename", to)?);
+            Ok(Outcome::of(result.map(|()| true), "rename", from))
         });
-        bind!("copy", |from: &[u8], to: &[u8]| -> Result<f64> {
-            std::fs::copy(host_path("copy", from)?, host_path("copy", to)?)
-                .map(|count| count as f64)
-                .map_err(|error| io_error("copy", from, &error))
+        bind!("copy", |from: &[u8], to: &[u8]| -> Result<Outcome<f64>> {
+            let result = std::fs::copy(host_path("copy", from)?, host_path("copy", to)?);
+            Ok(Outcome::of(result.map(|count| count as f64), "copy", from))
         });
-        bind!("hardLink", |source: &[u8], link: &[u8]| -> Result<()> {
-            std::fs::hard_link(host_path("hardLink", source)?, host_path("hardLink", link)?)
-                .map_err(|error| io_error("hardLink", link, &error))
+        bind!("hardLink", |source: &[u8], link: &[u8]| -> Result<Outcome<bool>> {
+            let result = std::fs::hard_link(host_path("hardLink", source)?, host_path("hardLink", link)?);
+            Ok(Outcome::of(result.map(|()| true), "hardLink", link))
         });
         bind!("symlink", symlink);
         Ok(())

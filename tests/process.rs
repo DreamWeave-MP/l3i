@@ -31,9 +31,9 @@ fn a_child_runs_with_arguments_input_and_environment() {
              assert(errors.success and errors.stderr == 'oops\\n' and errors.stdout == nil) \
              local killed = process.run('sh', { '-c', 'kill -9 $$' }) \
              assert(not killed.success and killed.code == nil and killed.signal == 9) \
-             local ok, err = pcall(process.run, 'dream-process-no-such-program') \
-             assert(not ok and err:find('dream.process.run: dream%-process%-no%-such%-program'), err) \
-             ok, err = pcall(process.run, 'sh', { 1 }) assert(not ok and err:find('args%[1%]'), err) \
+             local missing, message, kind = process.run('dream-process-no-such-program') \
+             assert(missing == nil and kind == 'notFound' and message:find('dream.process.run: dream%-process%-no%-such%-program'), message) \
+             local ok, err = pcall(process.run, 'sh', { 1 }) assert(not ok and err:find('args%[1%]'), err) \
              ok, err = pcall(process.run, 'sh', {}, { stdout = 'file' }) assert(not ok and err:find('stdout'), err)",
         )
         .unwrap();
@@ -47,7 +47,7 @@ fn running_and_the_environment_need_their_capabilities() {
              assert(not ok and err:find(\"needs the 'process.spawn' capability\"), err) \
              ok, err = pcall(process.env, 'PATH') \
              assert(not ok and err:find(\"needs the 'process.environment' capability\"), err) \
-             process.write('stdout', '') process.write('stderr', buffer.create(0)) \
+             assert(process.write('stdout', '') == true and process.write('stderr', buffer.create(0)) == true) \
              assert(type(process.isTerminal('stdout')) == 'boolean') \
              ok, err = pcall(process.write, 'stdin', 'x') assert(not ok and err:find('stream must be'), err)",
         )

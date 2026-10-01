@@ -90,6 +90,8 @@ pub mod native;
 pub mod native_code;
 pub mod net;
 pub mod options;
+#[cfg(any(feature = "fs", feature = "process"))]
+mod outcome;
 pub mod packed;
 #[cfg(feature = "process")]
 pub mod process;

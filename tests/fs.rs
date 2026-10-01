@@ -71,9 +71,9 @@ fn files_read_whole_positionally_and_through_a_reader() {
              reader:close() reader:close() \
              ok, err = pcall(reader.read, reader, 1) assert(not ok and err:find('closed'), err) \
              assert(fs.open(root .. '/empty'):size() == 0 and buffer.len(fs.readFile(root .. '/empty')) == 0) \
-             ok, err = pcall(fs.open, root .. '/missing') \
-             assert(not ok and err:find('^dream.fs.open: .*/missing: No such file or directory'), err) \
-             ok, err = pcall(fs.open, root) assert(not ok and err:find('dream.fs.open'), err)",
+             local missing, message, kind = fs.open(root .. '/missing') \
+             assert(missing == nil and kind == 'notFound' and message:find('^dream.fs.open: .*/missing: No such file or directory'), message) \
+             missing, message, kind = fs.open(root) assert(missing == nil and kind == 'isADirectory' and message:find('dream.fs.open'), message)",
             root = scratch.lua()
         ))
         .unwrap();
@@ -90,7 +90,7 @@ fn writes_append_overwrite_in_place_and_truncate() {
              fs.writeFile(path, 'J', {{ offset = 0 }}) \
              assert(fs.readFileString(path) == 'Jello world!!') \
              local ok, err = pcall(fs.writeFile, path, 'x', {{ offset = 1, append = true }}) assert(not ok and err:find('cannot be combined'), err) \
-             ok, err = pcall(fs.writeFile, {root} .. '/new', 'x', {{ create = false }}) assert(not ok, 'create = false') \
+             local refused, _, kind = fs.writeFile({root} .. '/new', 'x', {{ create = false }}) assert(refused == nil and kind == 'notFound', 'create = false') \
              ok, err = pcall(fs.writeFile, path, 'x', {{ appendd = true }}) assert(not ok and err:find('appendd'), err) \
              local writer = fs.openWrite(path) \
              assert(writer:write('abcdef') == 6 and writer:tell() == 6) \
@@ -135,19 +135,20 @@ fn directories_metadata_listing_and_the_walk() {
              assert(#files.paths == 2 and files.sizes[1] == 3 and files.sizes[2] == 1 and #files.modifiedSeconds == 2) \
              local top = fs.walk(root, {{ maxDepth = 1, include = 'dirs', sort = true }}) \
              assert(table.concat(top.paths, ',') == 'Meshes,empty') \
-             local ok, err = pcall(fs.walk, root .. '/missing') assert(not ok and err:find('dream.fs.walk'), err) \
+             local missing, message, kind = fs.walk(root .. '/missing') assert(missing == nil and kind == 'notFound' and message:find('dream.fs.walk'), message) \
              local skipped = fs.walk(root .. '/missing', {{ skipErrors = true }}) \
              assert(#skipped.paths == 0 and #skipped.errors == 1) \
-             ok, err = pcall(fs.walk, root, {{ include = 'everything' }}) assert(not ok and err:find('include'), err) \
-             fs.mkdir(root .. '/new') ok = pcall(fs.mkdir, root .. '/new') assert(not ok, 'exists') \
+             local ok, err = pcall(fs.walk, root, {{ include = 'everything' }}) assert(not ok and err:find('include'), err) \
+             assert(fs.mkdir(root .. '/new') == true) \
+             local made, _, why = fs.mkdir(root .. '/new') assert(made == nil and why == 'alreadyExists', 'exists') \
              fs.mkdir(root .. '/deep/er/still', {{ recursive = true }}) fs.mkdir(root .. '/deep', {{ recursive = true }}) \
-             ok, err = pcall(fs.remove, root .. '/deep') assert(not ok, 'not empty') \
+             local removed, _, because = fs.remove(root .. '/deep') assert(removed == nil and because == 'directoryNotEmpty', 'not empty') \
              fs.remove(root .. '/deep', {{ recursive = true }}) fs.remove(root .. '/new') \
              assert(not fs.exists(root .. '/deep') and not fs.exists(root .. '/new')) \
              fs.rename(root .. '/a.txt', root .. '/b.txt') assert(fs.readFileString(root .. '/b.txt') == 'a') \
              assert(fs.copy(root .. '/b.txt', root .. '/c.txt') == 1 and fs.readFileString(root .. '/c.txt') == 'a') \
              fs.remove(root .. '/c.txt') assert(not fs.exists(root .. '/c.txt')) \
-             ok, err = pcall(fs.remove, root .. '/c.txt') assert(not ok and err:find('dream.fs.remove'), err) \
+             local gone, said, reason = fs.remove(root .. '/c.txt') assert(gone == nil and reason == 'notFound' and said:find('dream.fs.remove'), said) \
              assert(fs.canonicalize(root .. '/Meshes/../b.txt') == fs.canonicalize(root) .. '/b.txt') \
              assert(fs.absolute('x'):sub(-2) == '/x' and fs.cwd() ~= '')",
             root = scratch.lua()
@@ -169,6 +170,7 @@ fn links_identity_and_byte_paths() {
             "local root = {root} \
              fs.hardLink(root .. '/source', root .. '/hard') \
              assert(fs.sameFile(root .. '/source', root .. '/hard')) \
+             local again, _, kind = fs.hardLink(root .. '/source', root .. '/hard') assert(again == nil and kind == 'alreadyExists', kind) \
              fs.writeFile(root .. '/hard', 'changed', {{ offset = 0 }}) \
              assert(fs.readFileString(root .. '/source') == 'changed', 'one file under two names') \
              fs.symlink(root .. '/source', root .. '/soft') \

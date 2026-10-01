@@ -11,10 +11,13 @@
 //!   terminal (to decide on colors). They need no capability: `print` already reaches stdout.
 //!
 //! A function whose capability the runtime lacks exists, typed, and raises a permission error.
+//! A program the OS can't start, or a stream it can't write, is an answer, not an exception:
+//! `nil`, the message and the error's kind (`dream_process_ErrorKind`), as `@dream/fs` answers.
 //!
 //! ```lua
 //! local process = require('@dream/process')
-//! local result = process.run('tes3cmd', { 'clean', 'Mod.esp' }, { cwd = 'Data Files' })
+//! local result, message = process.run('tes3cmd', { 'clean', 'Mod.esp' }, { cwd = 'Data Files' })
+//! if not result then error(message) end
 //! if not result.success then error(`tes3cmd exited with {result.code}`) end
 //! ```
 //!
@@ -28,6 +31,7 @@ use crate::convert::{BytesView, FromView};
 use crate::error::{Error, Result};
 use crate::extension::{Extension, ExtensionDescriptor, InstallContext};
 use crate::options::Options;
+use crate::outcome::{Failure, Outcome, done};
 use crate::stack::{Scope, ValueView};
 
 /// The extension id.
@@ -39,8 +43,7 @@ pub const SPAWN_CAPABILITY: &str = "process.spawn";
 /// The capability `process.env` needs.
 pub const ENVIRONMENT_CAPABILITY: &str = "process.environment";
 
-const RUN_SIGNATURE: &str =
-    "(program: string, args: { string }?, options: dream_process_RunOptions?) -> dream_process_Result";
+const RUN_SIGNATURE: &str = "(program: string, args: { string }?, options: dream_process_RunOptions?) -> (dream_process_Result?, string?, dream_process_ErrorKind?)";
 const OPTIONS_TYPE: &str = "{ cwd: string?, env: { [string]: string }?, clearEnv: boolean?, stdin: (buffer | string)?, \
     stdout: (\"inherit\" | \"capture\" | \"null\")?, stderr: (\"inherit\" | \"capture\" | \"null\")? }";
 const RESULT_TYPE: &str = "{ success: boolean, code: number?, signal: number?, stdout: string?, stderr: string? }";
@@ -152,7 +155,7 @@ fn run(
     program: &[u8],
     args: Option<ValueView<'_>>,
     options: Option<ValueView<'_>>,
-) -> Result<StackResults> {
+) -> Result<Outcome<StackResults>> {
     let mut arguments = Vec::new();
     if let Some(args) = args.filter(|view| !view.is_nil()) {
         if !args.is_table() {
@@ -186,15 +189,21 @@ fn run(
         .stdin(if options.stdin.is_some() { Stdio::piped() } else { Stdio::null() })
         .stdout(options.stdout.stdio())
         .stderr(options.stderr.stdio());
-    let mut child = command.spawn().map_err(|error| Error::runtime(format!("dream.process.run: {name}: {error}")))?;
+    let failed = |error: std::io::Error| Failure::message(format!("dream.process.run: {name}: {error}"), &error);
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(error) => return Ok(Outcome::Failed(failed(error))),
+    };
     // The input goes in on its own thread, so a child that fills its output pipe before it has
     // read all of its input cannot deadlock against this one.
     let feeder = match (options.stdin, child.stdin.take()) {
         (Some(input), Some(mut pipe)) => Some(std::thread::spawn(move || std::io::Write::write_all(&mut pipe, &input))),
         _ => None,
     };
-    let output =
-        child.wait_with_output().map_err(|error| Error::runtime(format!("dream.process.run: {name}: {error}")))?;
+    let output = done!(match child.wait_with_output() {
+        Ok(output) => Outcome::Done(output),
+        Err(error) => Outcome::Failed(failed(error)),
+    });
     if let Some(feeder) = feeder {
         // A child that exits without reading all of its input closes the pipe; that is its
         // business, not an error of the run.
@@ -217,7 +226,7 @@ fn run(
         table.raw_set_value(&frame, "stderr", output.stderr.as_slice())?;
     }
     frame.release();
-    Ok(StackResults)
+    Ok(Outcome::Done(StackResults))
 }
 
 /// `stdout` or `stderr`.
@@ -233,7 +242,7 @@ fn stream(what: &str, name: &str) -> Result<bool> {
 
 /// `process.write(stream, data)`: every byte, unbuffered; a reader that went away (a closed
 /// pipe) is not an error, so `| head` ends the output quietly.
-fn write(name: &str, data: BytesView<'_>) -> Result<()> {
+fn write(name: &str, data: BytesView<'_>) -> Result<Outcome<bool>> {
     use std::io::Write as _;
     // SAFETY: the bytes go straight to the stream, with no call into Lua while the slice lives.
     let bytes = unsafe { data.bytes_unchecked() };
@@ -243,12 +252,12 @@ fn write(name: &str, data: BytesView<'_>) -> Result<()> {
         let mut out = std::io::stdout().lock();
         out.write_all(bytes).and_then(|()| out.flush())
     };
-    match result {
+    Ok(match result {
         Err(error) if error.kind() != std::io::ErrorKind::BrokenPipe => {
-            Err(Error::runtime(format!("dream.process.write: {name}: {error}")))
+            Outcome::Failed(Failure::message(format!("dream.process.write: {name}: {error}"), &error))
         }
-        _ => Ok(()),
-    }
+        _ => Outcome::Done(true),
+    })
 }
 
 fn is_terminal(name: &str) -> Result<bool> {
@@ -268,6 +277,7 @@ impl Extension for ProcessExtension {
     fn describe(&self, d: &mut ExtensionDescriptor) -> Result<()> {
         d.type_alias("dream_process_RunOptions", OPTIONS_TYPE);
         d.type_alias("dream_process_Result", RESULT_TYPE);
+        d.type_alias("dream_process_ErrorKind", crate::outcome::ERROR_KIND_TYPE);
         d.optional_capability(SPAWN_CAPABILITY);
         d.optional_capability(ENVIRONMENT_CAPABILITY);
         d.module(MODULE)
@@ -279,7 +289,7 @@ impl Extension for ProcessExtension {
             .signature("(name: string) -> string?")
             .doc("The environment variable name, or nil when it is unset; needs the process.environment capability.")
             .function("write", write)
-            .signature("(stream: \"stdout\" | \"stderr\", data: buffer | string) -> ()")
+            .signature("(stream: \"stdout\" | \"stderr\", data: buffer | string) -> (boolean?, string?, dream_process_ErrorKind?)")
             .doc("Writes data to the host's standard output or error, without the newline print adds.")
             .function("isTerminal", is_terminal)
             .signature("(stream: \"stdout\" | \"stderr\") -> boolean")

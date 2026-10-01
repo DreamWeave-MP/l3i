@@ -17,7 +17,7 @@ use crate::options::Options;
 use crate::stack::{Scope, ValueView};
 use crate::userdata::Userdata;
 
-use super::{display, io_error};
+use super::{Outcome, display, done};
 
 /// Where a reader's bytes come from.
 #[derive(Debug)]
@@ -210,19 +210,23 @@ fn data_window<'d>(
 }
 
 /// `fs.readAt(path, offset, length)`: a new buffer of the bytes there, fewer at the end.
-pub(crate) fn read_at(call: &Call<'_>, path: &[u8], offset: Exact<i64>, length: Exact<i64>) -> Result<StackResults> {
+pub(crate) fn read_at(
+    call: &Call<'_>,
+    path: &[u8],
+    offset: Exact<i64>,
+    length: Exact<i64>,
+) -> Result<Outcome<StackResults>> {
     let offset = non_negative("readAt", "offset", offset)?;
     let length = non_negative("readAt", "length", length)?;
     let host = super::host_path("readAt", path)?;
-    let backing = Backing::open(&host).map_err(|error| io_error("readAt", path, &error))?;
+    let backing = done!(Outcome::of(Backing::open(&host), "readAt", path));
     within_file("readAt", "offset", offset, backing.len())?;
     let mut buffer = new_buffer(call, clamp(offset, length, backing.len()))?;
     // SAFETY: the buffer was created by this call and no other view of it exists; the copy
-    // never calls into Lua.
-    backing
-        .read_at(offset, unsafe { buffer.bytes_mut_unchecked() })
-        .map_err(|error| io_error("readAt", path, &error))?;
-    Ok(StackResults)
+    // never calls into Lua. A failure's results go above the buffer, which the call drops.
+    let read = backing.read_at(offset, unsafe { buffer.bytes_mut_unchecked() });
+    done!(Outcome::of(read, "readAt", path));
+    Ok(Outcome::Done(StackResults))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -246,15 +250,15 @@ unsafe impl Userdata for Reader {
 
 impl Reader {
     /// A reader at position 0 over the file at `path`.
-    pub(crate) fn open(path: &[u8]) -> Result<Reader> {
+    pub(crate) fn open(path: &[u8]) -> Result<Outcome<Reader>> {
         let host = super::host_path("open", path)?;
-        let backing = Backing::open(&host).map_err(|error| io_error("open", path, &error))?;
-        Ok(Reader {
+        let backing = done!(Outcome::of(Backing::open(&host), "open", path));
+        Ok(Outcome::Done(Reader {
             size: backing.len(),
             backing: RefCell::new(Some(Arc::new(backing))),
             position: Cell::new(0),
             name: path.into(),
-        })
+        }))
     }
 
     fn backing(&self, what: &str) -> Result<Arc<Backing>> {
@@ -263,18 +267,19 @@ impl Reader {
         })
     }
 
-    fn read_into(&self, what: &str, offset: u64, dst: &mut [u8]) -> Result<usize> {
-        self.backing(what)?
-            .read_at(offset, dst)
-            .map_err(|error| io_error(&format!("Reader.{what}"), &self.name, &error))
+    /// Copies up to `dst.len()` bytes from `offset`; only a reader that could not map its file
+    /// reads through the OS, so only it can fail.
+    fn read_into(&self, what: &str, offset: u64, dst: &mut [u8]) -> Result<Outcome<usize>> {
+        let read = self.backing(what)?.read_at(offset, dst);
+        Ok(Outcome::of(read, &format!("Reader.{what}"), &self.name))
     }
 
     /// Copies up to `dst.len()` bytes at the position and advances past them.
-    fn read_next(&self, what: &str, dst: &mut [u8]) -> Result<usize> {
+    fn read_next(&self, what: &str, dst: &mut [u8]) -> Result<Outcome<usize>> {
         let position = self.position.get();
-        let count = self.read_into(what, position, dst)?;
+        let count = done!(self.read_into(what, position, dst)?);
         self.position.set(position + count as u64);
-        Ok(count)
+        Ok(Outcome::Done(count))
     }
 
     fn remaining(&self) -> u64 {
@@ -282,14 +287,22 @@ impl Reader {
     }
 }
 
-fn reader_read(reader: &Reader, call: &Call<'_>, length: Exact<i64>) -> Result<StackResults> {
+fn reader_read(reader: &Reader, call: &Call<'_>, length: Exact<i64>) -> Result<Outcome<StackResults>> {
     let length = non_negative("Reader.read", "length", length)?;
     reader.backing("read")?;
     let mut buffer = new_buffer(call, usize::try_from(length.min(reader.remaining())).unwrap_or(usize::MAX))?;
     // SAFETY: the buffer was created by this call and no other view of it exists; the copy never
     // calls into Lua.
-    reader.read_next("read", unsafe { buffer.bytes_mut_unchecked() })?;
-    Ok(StackResults)
+    done!(reader.read_next("read", unsafe { buffer.bytes_mut_unchecked() })?);
+    Ok(Outcome::Done(StackResults))
+}
+
+/// A count of bytes as the number a script gets.
+fn counted(outcome: Outcome<usize>) -> Outcome<f64> {
+    match outcome {
+        Outcome::Done(count) => Outcome::Done(count as f64),
+        Outcome::Failed(failure) => Outcome::Failed(failure),
+    }
 }
 
 fn reader_read_into(
@@ -297,25 +310,30 @@ fn reader_read_into(
     mut buffer: BufferView<'_>,
     buffer_offset: Option<Exact<i64>>,
     length: Option<Exact<i64>>,
-) -> Result<f64> {
+) -> Result<Outcome<f64>> {
     let (buffer_offset, length) =
         window("Reader.readInto", "bufferOffset", "buffer", buffer.len(), buffer_offset, length)?;
     let want = usize::try_from((length as u64).min(reader.remaining())).unwrap_or(usize::MAX);
     // SAFETY: the window is inside the buffer, this call holds the only view, and the copy
     // never calls into Lua.
     let dst = unsafe { &mut buffer.bytes_mut_unchecked()[buffer_offset..buffer_offset + want] };
-    reader.read_next("readInto", dst).map(|count| count as f64)
+    reader.read_next("readInto", dst).map(counted)
 }
 
-fn reader_read_at(reader: &Reader, call: &Call<'_>, position: Exact<i64>, length: Exact<i64>) -> Result<StackResults> {
+fn reader_read_at(
+    reader: &Reader,
+    call: &Call<'_>,
+    position: Exact<i64>,
+    length: Exact<i64>,
+) -> Result<Outcome<StackResults>> {
     let position = non_negative("Reader.readAt", "position", position)?;
     let length = non_negative("Reader.readAt", "length", length)?;
     within_file("Reader.readAt", "position", position, reader.size)?;
     reader.backing("readAt")?;
     let mut buffer = new_buffer(call, clamp(position, length, reader.size))?;
     // SAFETY: as `reader_read`.
-    reader.read_into("readAt", position, unsafe { buffer.bytes_mut_unchecked() })?;
-    Ok(StackResults)
+    done!(reader.read_into("readAt", position, unsafe { buffer.bytes_mut_unchecked() })?);
+    Ok(Outcome::Done(StackResults))
 }
 
 fn reader_read_at_into(
@@ -324,7 +342,7 @@ fn reader_read_at_into(
     position: Exact<i64>,
     length: Option<Exact<i64>>,
     buffer_offset: Option<Exact<i64>>,
-) -> Result<f64> {
+) -> Result<Outcome<f64>> {
     let (buffer_offset, length) =
         window("Reader.readAtInto", "bufferOffset", "buffer", buffer.len(), buffer_offset, length)?;
     let position = non_negative("Reader.readAtInto", "position", position)?;
@@ -332,7 +350,7 @@ fn reader_read_at_into(
     let want = clamp(position, length as u64, reader.size);
     // SAFETY: as `reader_read_into`.
     let dst = unsafe { &mut buffer.bytes_mut_unchecked()[buffer_offset..buffer_offset + want] };
-    reader.read_into("readAtInto", position, dst).map(|count| count as f64)
+    reader.read_into("readAtInto", position, dst).map(counted)
 }
 
 fn reader_seek(reader: &Reader, position: Exact<i64>) -> Result<()> {
@@ -359,22 +377,24 @@ fn reader_skip(reader: &Reader, count: Exact<i64>) -> Result<()> {
 
 pub(crate) fn describe_reader(d: &mut ExtensionDescriptor) {
     let mut reader = d.userdata::<Reader>(Reader::NAME);
-    reader.tag(TagPolicy::Preferred).doc("A position over the memory map of one file.");
+    reader.tag(TagPolicy::Preferred).doc(
+        "A position over the memory map of one file. A read returns nil, the message and the kind only when the file could not be mapped and the OS refuses the read.",
+    );
     reader
         .method("read", reader_read)
-        .signature("(self, length: number): buffer")
+        .signature("(self, length: number): (buffer?, string?, dream_fs_ErrorKind?)")
         .doc("The next length bytes as a new buffer, fewer at the end; advances past them.");
     reader
         .method("readInto", reader_read_into)
-        .signature("(self, target: buffer, bufferOffset: number?, length: number?): number")
+        .signature("(self, target: buffer, bufferOffset: number?, length: number?): (number?, string?, dream_fs_ErrorKind?)")
         .doc("Copies the next bytes into target at bufferOffset (default 0), at most length (default the space left); returns the count and advances past them.");
     reader
         .method("readAt", reader_read_at)
-        .signature("(self, position: number, length: number): buffer")
+        .signature("(self, position: number, length: number): (buffer?, string?, dream_fs_ErrorKind?)")
         .doc("length bytes from position as a new buffer, fewer at the end; the position does not move.");
     reader
         .method("readAtInto", reader_read_at_into)
-        .signature("(self, target: buffer, position: number, length: number?, bufferOffset: number?): number")
+        .signature("(self, target: buffer, position: number, length: number?, bufferOffset: number?): (number?, string?, dream_fs_ErrorKind?)")
         .doc("Copies bytes from position into target at bufferOffset; returns the count. The position does not move.");
     reader
         .method("seek", reader_seek)
@@ -486,14 +506,13 @@ pub(crate) fn write_file(
     path: &[u8],
     data: BytesView<'_>,
     options: Option<ValueView<'_>>,
-) -> Result<f64> {
+) -> Result<Outcome<f64>> {
     let write = WriteFile::read(call, options)?;
     let host = super::host_path("writeFile", path)?;
     // SAFETY: the bytes go straight to the file, with no call into Lua while the slice lives,
     // through this call's only view of them.
     let bytes = unsafe { data.bytes_unchecked() };
-    write.write(&host, bytes).map_err(|error| io_error("writeFile", path, &error))?;
-    Ok(bytes.len() as f64)
+    Ok(Outcome::of(write.write(&host, bytes).map(|()| bytes.len() as f64), "writeFile", path))
 }
 
 /// `dream.fs.Writer`: a buffered writer over one file.
@@ -521,18 +540,20 @@ unsafe impl Userdata for Writer {
 }
 
 impl Writer {
-    pub(crate) fn open(path: &[u8], options: OpenWrite) -> Result<Writer> {
+    pub(crate) fn open(path: &[u8], options: OpenWrite) -> Result<Outcome<Writer>> {
         let host = super::host_path("openWrite", path)?;
-        let (file, position) = options.open(&host).map_err(|error| io_error("openWrite", path, &error))?;
-        Ok(Writer {
+        let (file, position) = done!(Outcome::of(options.open(&host), "openWrite", path));
+        Ok(Outcome::Done(Writer {
             file: RefCell::new(Some(BufWriter::new(file))),
             position: Cell::new(position),
             append: options.append,
             name: path.into(),
-        })
+        }))
     }
 
-    fn with_file<R>(&self, what: &str, body: impl FnOnce(&mut BufWriter<File>) -> io::Result<R>) -> Result<R> {
+    /// Runs `body` on the open file: a closed writer is the script's mistake and raises; the OS
+    /// refusing is an outcome.
+    fn with_file<R>(&self, what: &str, body: impl FnOnce(&mut BufWriter<File>) -> io::Result<R>) -> Result<Outcome<R>> {
         let mut file = self.file.borrow_mut();
         let Some(file) = file.as_mut() else {
             return Err(Error::runtime(format!(
@@ -540,16 +561,16 @@ impl Writer {
                 display(&self.name)
             )));
         };
-        body(file).map_err(|error| io_error(&format!("Writer.{what}"), &self.name, &error))
+        Ok(Outcome::of(body(file), &format!("Writer.{what}"), &self.name))
     }
 
-    fn write(&self, data: &[u8]) -> Result<usize> {
-        self.with_file("write", |file| file.write_all(data))?;
+    fn write(&self, data: &[u8]) -> Result<Outcome<f64>> {
+        done!(self.with_file("write", |file| file.write_all(data))?);
         self.position.set(self.position.get() + data.len() as u64);
-        Ok(data.len())
+        Ok(Outcome::Done(data.len() as f64))
     }
 
-    fn write_at(&self, position: u64, data: &[u8]) -> Result<usize> {
+    fn write_at(&self, position: u64, data: &[u8]) -> Result<Outcome<f64>> {
         if self.append {
             return Err(Error::runtime(format!(
                 "dream.fs.Writer.writeAt: the writer over {} appends, so it cannot write at a position",
@@ -557,51 +578,54 @@ impl Writer {
             )));
         }
         let current = self.position.get();
-        self.with_file("writeAt", |file| {
+        done!(self.with_file("writeAt", |file| {
             file.flush()?;
             write_all_at(file.get_ref(), position, data)?;
             file.get_mut().seek(SeekFrom::Start(current)).map(drop)
-        })?;
-        Ok(data.len())
+        })?);
+        Ok(Outcome::Done(data.len() as f64))
     }
 
-    fn seek(&self, position: u64) -> Result<()> {
-        self.with_file("seek", |file| file.seek(SeekFrom::Start(position)).map(drop))?;
+    fn seek(&self, position: u64) -> Result<Outcome<bool>> {
+        done!(self.with_file("seek", |file| file.seek(SeekFrom::Start(position)).map(drop))?);
         self.position.set(position);
-        Ok(())
+        Ok(Outcome::Done(true))
     }
 
-    fn truncate(&self, length: u64) -> Result<()> {
+    fn truncate(&self, length: u64) -> Result<Outcome<bool>> {
         let position = self.position.get().min(length);
-        self.with_file("truncate", |file| {
+        done!(self.with_file("truncate", |file| {
             file.flush()?;
             file.get_ref().set_len(length)?;
             file.get_mut().seek(SeekFrom::Start(position)).map(drop)
-        })?;
+        })?);
         self.position.set(position);
-        Ok(())
+        Ok(Outcome::Done(true))
     }
 
-    fn close(&self) -> Result<()> {
+    /// Flushes and closes; closing a closed writer does nothing and answers true.
+    fn close(&self) -> Outcome<bool> {
         let Some(mut file) = self.file.borrow_mut().take() else {
-            return Ok(());
+            return Outcome::Done(true);
         };
-        file.flush().map_err(|error| io_error("Writer.close", &self.name, &error))
+        Outcome::of(file.flush().map(|()| true), "Writer.close", &self.name)
     }
 }
 
 pub(crate) fn describe_writer(d: &mut ExtensionDescriptor) {
     let mut writer = d.userdata::<Writer>(Writer::NAME);
-    writer.tag(TagPolicy::Never).doc("A buffered writer over one file.");
+    writer.tag(TagPolicy::Never).doc(
+        "A buffered writer over one file. A write the OS refuses returns nil, the message and the kind; a closed writer raises.",
+    );
     writer
         .method(
             "write",
             |w: &Writer, data: BytesView<'_>, offset: Option<Exact<i64>>, length: Option<Exact<i64>>| {
                 let bytes = data_window("Writer.write", &data, offset, length)?;
-                w.write(bytes).map(|count| count as f64)
+                w.write(bytes)
             },
         )
-        .signature("(self, data: buffer | string, offset: number?, length: number?): number")
+        .signature("(self, data: buffer | string, offset: number?, length: number?): (number?, string?, dream_fs_ErrorKind?)")
         .doc("Writes data, or its slice from offset of length bytes, at the position and advances past it; returns the count.");
     writer
         .method(
@@ -613,23 +637,33 @@ pub(crate) fn describe_writer(d: &mut ExtensionDescriptor) {
              length: Option<Exact<i64>>| {
                 let position = non_negative("Writer.writeAt", "position", position)?;
                 let bytes = data_window("Writer.writeAt", &data, offset, length)?;
-                w.write_at(position, bytes).map(|count| count as f64)
+                w.write_at(position, bytes)
             },
         )
-        .signature("(self, position: number, data: buffer | string, offset: number?, length: number?): number")
+        .signature("(self, position: number, data: buffer | string, offset: number?, length: number?): (number?, string?, dream_fs_ErrorKind?)")
         .doc("Writes data at position without moving; an error on an append writer.");
     writer
         .method("seek", |w: &Writer, position: Exact<i64>| w.seek(non_negative("Writer.seek", "position", position)?))
-        .signature("(self, position: number)")
+        .signature("(self, position: number): (boolean?, string?, dream_fs_ErrorKind?)")
         .doc("Moves to position; past the end, the next write extends the file.");
     writer.method("tell", |w: &Writer| w.position.get() as f64).signature("(self): number");
-    writer.method("flush", |w: &Writer| w.with_file("flush", Write::flush)).signature("(self)");
+    writer
+        .method("flush", |w: &Writer| -> Result<Outcome<bool>> {
+            Ok(match w.with_file("flush", Write::flush)? {
+                Outcome::Done(()) => Outcome::Done(true),
+                Outcome::Failed(failure) => Outcome::Failed(failure),
+            })
+        })
+        .signature("(self): (boolean?, string?, dream_fs_ErrorKind?)");
     writer
         .method("truncate", |w: &Writer, length: Exact<i64>| {
             w.truncate(non_negative("Writer.truncate", "length", length)?)
         })
-        .signature("(self, length: number)")
+        .signature("(self, length: number): (boolean?, string?, dream_fs_ErrorKind?)")
         .doc("Cuts or extends the file to length bytes; a position past it moves to it.");
-    writer.method("close", Writer::close).signature("(self)").doc("Flushes and closes; closing again does nothing.");
+    writer
+        .method("close", Writer::close)
+        .signature("(self): (boolean?, string?, dream_fs_ErrorKind?)")
+        .doc("Flushes and closes; closing again does nothing.");
     writer.metamethod("__tostring", |w: &Writer| format!("dream.fs.Writer({})", display(&w.name)));
 }

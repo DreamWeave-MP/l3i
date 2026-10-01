@@ -93,28 +93,35 @@ const FS_SCRIPT: (&str, &str) = (
     "fs_script",
     "--!strict\n\
      local fs = require('@dream/fs')\n\
-     local reader = fs.open('x')\n\
-     local head: buffer = reader:readAt(0, 4)\n\
-     local count: number = reader:readInto(buffer.create(4)) + reader:readAtInto(head, 0) + reader:size() + reader:tell()\n\
+     local reader, message, failure = fs.open('x')\n\
+     if not reader then\n\
+       local kind: dream_fs_ErrorKind? = failure\n\
+       error(`{message} ({kind})`)\n\
+     end\n\
+     local head = reader:readAt(0, 4) or buffer.create(0)\n\
+     local count: number = (reader:readInto(buffer.create(4)) or 0) + (reader:readAtInto(head, 0) or 0) + reader:size() + reader:tell()\n\
      reader:seek(0)\n\
      reader:close()\n\
      local stat: dream_fs_Stat? = fs.lstat('x')\n\
      local kind: dream_fs_FileKind = if stat then stat.kind else 'other'\n\
      local walk = fs.walk('.', { followLinks = true, include = 'files', metadata = true, sort = true, maxDepth = 3 })\n\
-     for index, path in walk.paths do\n\
-       print(path, walk.kinds[index], walk.sizes and walk.sizes[index])\n\
+     if walk then\n\
+       for index, path in walk.paths do\n\
+         print(path, walk.kinds[index], walk.sizes and walk.sizes[index])\n\
+       end\n\
      end\n\
-     local writer = fs.openWrite('y', { append = true })\n\
-     local written: number = writer:write('abc') + fs.writeFile('z', buffer.create(1), { offset = 0 })\n\
-     writer:close()\n\
-     fs.mkdir('d', { recursive = true })\n\
+     local writer, refused = fs.openWrite('y', { append = true })\n\
+     if not writer then error(refused) end\n\
+     local written: number = (writer:write('abc') or 0) + (fs.writeFile('z', buffer.create(1), { offset = 0 }) or 0)\n\
+     local closed: boolean? = writer:close()\n\
+     local made: boolean? = fs.mkdir('d', { recursive = true })\n\
      fs.hardLink('x', 'h')\n\
      fs.symlink('x', 's', { directory = false })\n\
-     local same: boolean = fs.sameFile('x', 'h') and fs.exists('s')\n\
+     local same: boolean = fs.sameFile('x', 'h') == true and fs.exists('s') == true\n\
      local target: string? = fs.readLink('s')\n\
-     local names: { string } = fs.list('.')\n\
+     local names: { string } = fs.list('.') or {}\n\
      fs.remove('d', { recursive = true })\n\
-     print(count, kind, written, same, target, names, fs.canonicalize('.'), fs.copy('x', 'w'))\n",
+     print(count, kind, written, closed, made, same, target, names, fs.canonicalize('.'), fs.copy('x', 'w'))\n",
 );
 
 #[cfg(feature = "process")]
@@ -122,12 +129,13 @@ const PROCESS_SCRIPT: (&str, &str) = (
     "process_script",
     "--!strict\n\
      local process = require('@dream/process')\n\
-     local result = process.run('tool', { '--help' }, { cwd = '.', env = { A = 'b' }, stdout = 'capture', stdin = 'x' })\n\
+     local result, message = process.run('tool', { '--help' }, { cwd = '.', env = { A = 'b' }, stdout = 'capture', stdin = 'x' })\n\
+     if not result then error(message) end\n\
      local code: number? = result.code\n\
      local output: string = result.stdout or ''\n\
      local home: string? = process.env('HOME')\n\
-     process.write('stderr', 'x')\n\
-     print(result.success, code, output, result.signal, home, process.isTerminal('stdout'))\n",
+     local wrote: boolean? = process.write('stderr', 'x')\n\
+     print(result.success, code, output, result.signal, home, wrote, process.isTerminal('stdout'))\n",
 );
 
 /// A strict walker over the tree: refinement on `kind` narrows each union to its node type.

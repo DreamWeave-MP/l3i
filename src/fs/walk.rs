@@ -9,7 +9,7 @@ use crate::error::{Error, Result};
 use crate::options::Options;
 use crate::stack::{Frame, Scope, TableView, ValueView};
 
-use super::{display, host_path, kind_name, path_bytes, since_epoch};
+use super::{Failure, Outcome, done, host_path, kind_name, path_bytes, since_epoch};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Include {
@@ -79,7 +79,16 @@ struct Columns {
     errors: Vec<(Vec<u8>, String)>,
 }
 
-fn collect(root: &Path, root_bytes: &[u8], options: &WalkOptions) -> Result<Columns> {
+/// A walk error as the failure a script gets: the OS error's kind when there is one.
+fn failure(path: &[u8], error: &walkdir::Error) -> Failure {
+    Failure {
+        message: format!("dream.fs.walk: {}: {error}", super::display(path)),
+        kind: error.io_error().map_or("other", crate::outcome::kind_of),
+    }
+}
+
+/// Everything under `root`, or the first error when `skipErrors` is off.
+fn collect(root: &Path, root_bytes: &[u8], options: &WalkOptions) -> Outcome<Columns> {
     let mut walker = walkdir::WalkDir::new(root).min_depth(1).follow_links(options.follow_links);
     if let Some(depth) = options.max_depth {
         walker = walker.max_depth(depth);
@@ -94,7 +103,7 @@ fn collect(root: &Path, root_bytes: &[u8], options: &WalkOptions) -> Result<Colu
             Err(error) => {
                 let path = error.path().map_or_else(|| root_bytes.to_vec(), |path| path_bytes(path).to_vec());
                 if !options.skip_errors {
-                    return Err(Error::runtime(format!("dream.fs.walk: {}: {error}", display(&path))));
+                    return Outcome::Failed(failure(&path, &error));
                 }
                 columns.errors.push((path, error.to_string()));
                 continue;
@@ -120,7 +129,7 @@ fn collect(root: &Path, root_bytes: &[u8], options: &WalkOptions) -> Result<Colu
                 Err(error) => {
                     let path = path_bytes(entry.path()).to_vec();
                     if !options.skip_errors {
-                        return Err(Error::runtime(format!("dream.fs.walk: {}: {error}", display(&path))));
+                        return Outcome::Failed(failure(&path, &error));
                     }
                     columns.errors.push((path, error.to_string()));
                     continue;
@@ -131,7 +140,7 @@ fn collect(root: &Path, root_bytes: &[u8], options: &WalkOptions) -> Result<Colu
         columns.paths.push(path_bytes(relative).to_vec());
         columns.kinds.push(kind_name(file_type));
     }
-    Ok(columns)
+    Outcome::Done(columns)
 }
 
 /// Pushes `values` as an array into `table[key]`.
@@ -151,10 +160,10 @@ fn column<T>(
 }
 
 /// `fs.walk(root, options?)`.
-pub(crate) fn walk(call: &Call<'_>, root: &[u8], options: Option<ValueView<'_>>) -> Result<StackResults> {
+pub(crate) fn walk(call: &Call<'_>, root: &[u8], options: Option<ValueView<'_>>) -> Result<Outcome<StackResults>> {
     let options = WalkOptions::read(call, options)?;
     let host = host_path("walk", root)?;
-    let columns = collect(&host, root, &options)?;
+    let columns = done!(collect(&host, root, &options));
     let mut frame = call.frame();
     let table = frame.push_table(0, 6)?;
     column(&frame, &table, "paths", &columns.paths, |frame, path| frame.push(path.as_slice()).map(drop))?;
@@ -175,5 +184,5 @@ pub(crate) fn walk(call: &Call<'_>, root: &[u8], options: Option<ValueView<'_>>)
         row.raw_set_value(frame, "message", message.as_str())
     })?;
     frame.release();
-    Ok(StackResults)
+    Ok(Outcome::Done(StackResults))
 }
