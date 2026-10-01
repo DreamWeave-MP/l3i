@@ -589,19 +589,27 @@ traverses a pool.
 
 ### The hot path
 
-`pool:intern` is a method call. `pool:interner()` returns the same operation as a function bound
-to the pool, which skips the method lookup and the receiver check on every call, about a third
-of what a call costs. A parser's inner loop takes it once:
+Under `jit`, in `--!native` code with the pool annotated, `pool:intern` and `pool:find` lower to
+native code. A lookup that finds its identity never leaves it: the receiver's tag check, the
+argument tag and range checks, the policy's hash eight bytes at a time, bit-identical to the
+Rust one, the probe of the slot array and a word compare against the arena, then the token in
+the result register. Anything else (an insert, a wrong type, an offset that is not a whole
+number, a span past the end) runs the bound method in place, through the binder, and native
+code carries on after it; so does `find` on an identity the pool lacks, natively, returning nil.
 
 ```luau
 --!native
-local internId = ids:interner()
+local ids: dream_intern_Pool = intern.new("ascii-nocase")
 for i = 0, count - 1 do
-    local id = internId(text, buffer.readu32(spans, i * 8), buffer.readu32(spans, i * 8 + 4))
+    local id = ids:intern(text, buffer.readu32(spans, i * 8), buffer.readu32(spans, i * 8 + 4))
 end
 ```
 
-The bound function keeps its pool alive.
+The annotation is what lowers it: Luau's compiler learns a userdata type only from one. Lengths
+under 8 bytes, 8 to 16 and 17 to 32 each get a straight-line hash and compare; longer spans
+loop. `pool:interner()` returns the same operation as a plain function bound to the pool, which
+skips the method lookup; it is a call, not a namecall, so no hook sees it and it never lowers.
+Use it only in interpreted code. The bound function keeps its pool alive.
 
 ### What it costs
 
@@ -609,28 +617,33 @@ Counted by `benches/intern.rs` (`cargo bench --bench intern --features intern,ji
 i7-10870H in retired instructions and cache misses from the CPU's own counters, not time, every
 chunk native. The workload is parse-shaped: 350K record-id-like identities, 5M occurrences
 drawn Zipf-distributed, a quarter of them in random case, read from a text buffer through an
-index of spans. Per occurrence, on the pass that sees only duplicates:
+index of spans. Per occurrence, the span reads included, on the pass that sees only duplicates:
 
 | Case-insensitive identity | Instructions | L1D misses | VM allocated | VM held | Native held |
 |---|---:|---:|---:|---:|---:|
-| `string.lower(buffer.readstring(..))` then a string-keyed table | 1378 | 12.8 | 93 MiB | 36 MiB | 0 |
-| `pool:intern(text, offset, length)` | 868 | 3.2 | 0 | 0 | 15 MiB |
-| the function from `pool:interner()` | 592 | 3.2 | 0 | 0 | 15 MiB |
+| `string.lower(buffer.readstring(..))` then a string-keyed table | 1378 | 12.4 | 93 MiB | 36 MiB | 0 |
+| the function from `pool:interner()` | 616 | 3.5 | 0 | 0 | 17.5 MiB |
+| `pool:intern(text, offset, length)`, lowered | 315 | 3.1 | 0 | 0 | 17.5 MiB |
 
-The pool does the case-insensitive job in fewer instructions than `buffer.readstring` alone does
-the exact one (706), allocates nothing in the VM, and leaves the collector nothing to walk: a
-full collection with the string table live costs 40M instructions and freeing it 59M more; a
-pool costs neither. 350K identities take 15 to 16 MiB native, about 45 bytes each with the
-spelling. The first occurrence costs about what a duplicate does, plus the copy into the arena.
+Exact identity on the same text: 244 instructions lowered against 706 for `buffer.readstring`
+and a string-keyed table. The pool allocates nothing in the VM and leaves the collector nothing
+to walk: a full collection with the string table live costs 40M instructions and freeing it
+59M more; a pool costs neither. 350K identities take 15 to 17.5 MiB native, about 50 bytes each
+with the spelling. The first pass, where inserts take the binder path, costs 368 instructions
+per occurrence against 1467 for `string.lower`.
 
-A cache-resident 16-byte duplicate costs 142 instructions natively under `exact` and 184 under
-`ascii-nocase`; through `interner()` the whole call is 508 from a buffer span and 414 from a
-string, against 1317 for `string.lower` plus a table read. Reading a table keyed by tokens is 25
+Per call, cache-resident, a 16-byte duplicate:
+
+| Call | Instructions |
+|---|---:|
+| `pool:intern(string)`, lowered | 163 |
+| `pool:intern(buffer, 0, 16)`, lowered | 201 |
+| `pool:find(string)`, absent, lowered | 108 |
+| the function from `pool:interner()`, buffer span | 532 |
+| `Interner::intern` from Rust, `ascii-nocase` | 184 |
+| `map[string.lower(buffer.readstring(..))]` | 1311 |
+
+The lowered call costs about what the Rust lookup does: the C-call protocol, 277 instructions
+for even a hand-written `lua_CFunction`, is gone. Reading a table keyed by tokens is 25
 instructions and a quarter to one L1 miss, against 140 and 2.5 to 4 for `integer` keys and 122
 and 3 to 5.5 for strings. `resolve` is about 900 instructions, most of it making the string.
-What remains is the call itself: a hand-written `lua_CFunction` taking two numbers already
-costs 277 instructions (`benches/instructions.rs`), so the C-call protocol, not the pool, is
-most of a duplicate. Duplicates from strings that already exist are the one case Luau wins,
-since a string key is a pointer the VM already hashed (159 against 402 for `interner`); the pool
-is for bytes that are not strings yet.
-

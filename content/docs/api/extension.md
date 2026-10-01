@@ -748,5 +748,14 @@ of text), `find(&[u8]) -> Option<u32>`, `resolve(i64) -> Option<&[u8]>` (the fir
 
 {{ api_signature(value="pub struct Pool") }}
 
-The userdata behind `intern.new` (`Userdata::NAME` `"dream.intern.Pool"`, tag `Preferred`): an
-`Interner` shared with the functions `Pool:interner()` binds, which keep it alive.
+The userdata behind `intern.new` (`Userdata::NAME` `"dream.intern.Pool"`, tagged and given a
+compiler type slot, both `Required`): an `Interner` shared with the functions `Pool:interner()`
+binds, which keep it alive, laid out `#[repr(C)]` for native code.
+
+| Module | Feature | Items |
+|---|---|---|
+| `intern::lowering` | `intern`, `jit` | `InternLowering`, the `NativeCodeHooks` set that lowers `Pool:intern` and `Pool:find`; `lowered_sites()`, `binder_calls()` |
+
+`IrBuilder::namecall_call(pcpos)` emits the namecall and call Luau would have emitted for the
+pair at `pcpos`: a userdata namecall hook that lowers a fast path keeps the bound method as its
+slow path with it, without a VM exit, since returning true skips both instructions.

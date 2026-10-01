@@ -14,16 +14,21 @@
 //!
 //! # The hot path
 //!
-//! `pool:intern` is a method call. `pool:interner()` returns the same operation as a plain
-//! function bound to the pool, which skips the method lookup and the receiver check on every
-//! call, about a third of what a call costs; a parser's inner loop uses it:
+//! Under `jit`, in `--!native` code with the pool annotated, `pool:intern` and `pool:find` lower
+//! to native code ([`lowering`]): a lookup that finds its identity never leaves it, and an
+//! insert or a bad argument runs the bound method in place. That is the fastest form by far:
 //!
 //! ```lua
-//! local internId = ids:interner()
+//! --!native
+//! local ids: dream_intern_Pool = intern.new('ascii-nocase')
 //! for i = 0, count - 1 do
-//!     local id = internId(text, buffer.readu32(spans, i * 8), buffer.readu32(spans, i * 8 + 4))
+//!     local id = ids:intern(text, buffer.readu32(spans, i * 8), buffer.readu32(spans, i * 8 + 4))
 //! end
 //! ```
+//!
+//! `pool:interner()` returns the same operation as a plain function bound to the pool, which
+//! skips the method lookup on every call. It is a call, not a namecall, so it never lowers; it
+//! is the faster form only in interpreted code.
 //!
 //! # Policies
 //!
