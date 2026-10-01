@@ -120,37 +120,37 @@ fn directories_metadata_listing_and_the_walk() {
         .exec(&format!(
             "local root = {root} \
              local stat = fs.stat(root .. '/a.txt') \
-             assert(stat and stat.kind == 'file' and stat.isFile and not stat.isDir and stat.size == 1 and not stat.readonly) \
-             assert(stat.modified and stat.modifiedSeconds and stat.modifiedNanoseconds and stat.modified >= stat.modifiedSeconds) \
-             local dir = fs.stat(root .. '/Meshes') assert(dir and dir.kind == 'dir' and dir.size == 0) \
-             assert(fs.stat(root .. '/missing') == nil and fs.lstat(root .. '/missing') == nil) \
-             assert(fs.exists(root .. '/a.txt') and not fs.exists(root .. '/missing')) \
+             assert(stat and stat.kind == 'file' and stat.isFile and not stat.isDir and stat.size == 1 and not stat.readonly, 'file stat') \
+             assert(stat.modified and stat.modifiedSeconds and stat.modifiedNanoseconds and stat.modified >= stat.modifiedSeconds, 'modified times') \
+             local dir = fs.stat(root .. '/Meshes') assert(dir and dir.kind == 'dir' and dir.size == 0, 'directory stat') \
+             assert(fs.stat(root .. '/missing') == nil and fs.lstat(root .. '/missing') == nil, 'missing stat') \
+             assert(fs.exists(root .. '/a.txt') and not fs.exists(root .. '/missing'), 'exists') \
              local names = fs.list(root) \
              assert(#names == 3 and names[1] == 'Meshes' and names[2] == 'a.txt' and names[3] == 'empty', table.concat(names, ',')) \
              local walk = fs.walk(root, {{ sort = true }}) \
              assert(table.concat(walk.paths, ',') == 'Meshes,Meshes/x,Meshes/x/Rock.NIF,a.txt,empty', table.concat(walk.paths, ',')) \
-             assert(table.concat(walk.kinds, ',') == 'dir,dir,file,file,dir') \
-             assert(walk.sizes == nil and #walk.errors == 0) \
+             assert(table.concat(walk.kinds, ',') == 'dir,dir,file,file,dir', table.concat(walk.kinds, ',')) \
+             assert(walk.sizes == nil and #walk.errors == 0, 'plain walk') \
              local files = fs.walk(root, {{ include = 'files', metadata = true, sort = true }}) \
-             assert(#files.paths == 2 and files.sizes[1] == 3 and files.sizes[2] == 1 and #files.modifiedSeconds == 2) \
+             assert(#files.paths == 2 and files.sizes[1] == 3 and files.sizes[2] == 1 and #files.modifiedSeconds == 2, 'files with metadata') \
              local top = fs.walk(root, {{ maxDepth = 1, include = 'dirs', sort = true }}) \
-             assert(table.concat(top.paths, ',') == 'Meshes,empty') \
+             assert(table.concat(top.paths, ',') == 'Meshes,empty', table.concat(top.paths, ',')) \
              local missing, message, kind = fs.walk(root .. '/missing') assert(missing == nil and kind == 'notFound' and message:find('dream.fs.walk'), message) \
              local skipped = fs.walk(root .. '/missing', {{ skipErrors = true }}) \
-             assert(#skipped.paths == 0 and #skipped.errors == 1) \
+             assert(#skipped.paths == 0 and #skipped.errors == 1, 'skipped errors') \
              local ok, err = pcall(fs.walk, root, {{ include = 'everything' }}) assert(not ok and err:find('include'), err) \
-             assert(fs.mkdir(root .. '/new') == true) \
+             assert(fs.mkdir(root .. '/new') == true, 'mkdir') \
              local made, _, why = fs.mkdir(root .. '/new') assert(made == nil and why == 'alreadyExists', 'exists') \
              fs.mkdir(root .. '/deep/er/still', {{ recursive = true }}) fs.mkdir(root .. '/deep', {{ recursive = true }}) \
              local removed, _, because = fs.remove(root .. '/deep') assert(removed == nil and because == 'directoryNotEmpty', 'not empty') \
              fs.remove(root .. '/deep', {{ recursive = true }}) fs.remove(root .. '/new') \
-             assert(not fs.exists(root .. '/deep') and not fs.exists(root .. '/new')) \
+             assert(not fs.exists(root .. '/deep') and not fs.exists(root .. '/new'), 'removed') \
              fs.rename(root .. '/a.txt', root .. '/b.txt') assert(fs.readFileString(root .. '/b.txt') == 'a') \
              assert(fs.copy(root .. '/b.txt', root .. '/c.txt') == 1 and fs.readFileString(root .. '/c.txt') == 'a') \
-             fs.remove(root .. '/c.txt') assert(not fs.exists(root .. '/c.txt')) \
+             fs.remove(root .. '/c.txt') assert(not fs.exists(root .. '/c.txt'), 'removed copy') \
              local gone, said, reason = fs.remove(root .. '/c.txt') assert(gone == nil and reason == 'notFound' and said:find('dream.fs.remove'), said) \
-             assert(fs.canonicalize(root .. '/Meshes/../b.txt') == fs.canonicalize(root) .. '/b.txt') \
-             assert(fs.absolute('x'):sub(-2) == '/x' and fs.cwd() ~= '')",
+             assert(fs.canonicalize(root .. '/Meshes/../b.txt') == fs.canonicalize(root .. '/b.txt'), 'canonicalize resolves ..') \
+             assert(fs.absolute('x'):find('[/\\\\]x$') and fs.cwd() ~= '', 'absolute joins the working folder')",
             root = scratch.lua()
         ))
         .unwrap();
