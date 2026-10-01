@@ -221,6 +221,7 @@ fn toolchain_policy(base: &mut cc::Build) {
     println!("cargo:rerun-if-env-changed=CXX");
     println!("cargo:rerun-if-env-changed=CARGO_ENCODED_RUSTFLAGS");
     println!("cargo:rerun-if-env-changed=CARGO_CFG_TARGET_OS");
+    println!("cargo:rustc-check-cfg=cfg(l3i_verified_toolchain)");
     let compiler = base.get_compiler();
     let rustflags = env::var("CARGO_ENCODED_RUSTFLAGS").unwrap_or_default().replace('\u{1f}', " ");
     // Apple targets cannot take -Clinker-plugin-lto: rustc hands the linker GNU `-plugin-opt`
@@ -260,6 +261,10 @@ fn toolchain_policy(base: &mut cc::Build) {
         }
     };
 
+    if problem.is_none() {
+        // `l3i::VERIFIED_TOOLCHAIN`: what a host checks before it trusts a measurement.
+        println!("cargo:rustc-cfg=l3i_verified_toolchain");
+    }
     match problem {
         None if apple => {}
         None => {

@@ -135,6 +135,17 @@ const fn parse_tag_limit(text: &str) -> u8 {
 /// The Luau release the linked VM was built from, e.g. `"0.740"`: the release OpenMW pins.
 pub const LUAU_VERSION: &str = env!("LUAU_VERSION");
 
+/// Whether this build of l3i met the verified toolchain (TOOLCHAIN.md): clang for Luau, the
+/// Rust side and Luau linked as one thin LTO module by lld, and clang and rustc on one LLVM
+/// major. Apple targets count without the cross-language half, as `build.rs` vets them.
+///
+/// `false` when `L3I_UNVERIFIED_TOOLCHAIN` or docs.rs let the build through anyway. Such a build
+/// runs the binder's hot paths slower than the one l3i is measured on, by no fixed amount, so a
+/// host that publishes numbers checks this first. `build.rs` decides it, from the same checks it
+/// refuses a build on; the environment variable alone says nothing, since it is also set on
+/// toolchains that pass.
+pub const VERIFIED_TOOLCHAIN: bool = cfg!(l3i_verified_toolchain);
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -146,4 +157,12 @@ mod tests {
     fn luau_is_the_release_openmw_pins() {
         assert_eq!(super::LUAU_VERSION, "0.740");
     }
+
+    // Without either variable, build.rs verifies the toolchain or refuses to build at all, so a
+    // test build that got this far without them must say it is verified.
+    const _: () = assert!(
+        super::VERIFIED_TOOLCHAIN
+            || option_env!("L3I_UNVERIFIED_TOOLCHAIN").is_some()
+            || option_env!("DOCS_RS").is_some()
+    );
 }

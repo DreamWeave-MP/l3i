@@ -36,6 +36,12 @@ but forfeits the gain. `build.rs` checks every half of the chain (clang++ as the
 `-flto=thin`, so a partial configuration is refused up front with the missing piece named
 instead of failing at the final link or building silently slow.
 
+`L3I_UNVERIFIED_TOOLCHAIN=1` turns the refusal into a warning, and the build that comes out is
+slower by no fixed amount. `l3i::VERIFIED_TOOLCHAIN` says which kind a binary got: `true`
+exactly when `build.rs` found nothing missing, whether or not the variable was set. A host that
+publishes performance numbers checks it. l3i's own benches don't: the campaign below measures
+unverified toolchains on purpose.
+
 ## Why: the 2026-09-27 campaign
 
 Measured with `scripts/toolchain_campaign.py` (clean `cargo build --release --lib`, then
