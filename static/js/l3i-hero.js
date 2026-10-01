@@ -1,6 +1,6 @@
 // The l3i hero: a night sky drawn live with three.js behind the project page's header.
 //
-// Three layers, back to front. A full-screen shader draws stars and layered purple mist, two
+// Back to front: a full-screen shader draws stars and layered purple mist, two
 // domain-warped noise fields drifting at different speeds, lit by the moon's position on screen.
 // A sphere is the moon: basalt-filled basins, aged impacts, terraced walls, central peaks and
 // fresh ejecta are baked once into a data texture. Spherical height derivatives supply relief
@@ -128,25 +128,35 @@ const SKY_FRAGMENT = /* glsl */ `
     vec2 p = vec2(vUv.x * aspect, vUv.y);
     vec3 col = mix(uBgBottom, uBgTop, smoothstep(0.0, 1.0, vUv.y));
 
-    // Stars: sparse hashed pinpoints in three tiles of unrelated size, twinkling, thinning
-    // toward the horizon and away from the moon's glare.
-    float stars = 0.0;
-    for (int layer = 0; layer < 3; layer++) {
-      float scale = 90.0 + 70.0 * float(layer);
+    // A quiet field: mostly faint, steady stars and a few brighter landmarks. Independent
+    // seeds control placement, magnitude, temperature and the small twinkling minority.
+    vec3 stars = vec3(0.0);
+    for (int layer = 0; layer < 2; layer++) {
+      float scale = 72.0 + 65.0 * float(layer);
       vec2 g = (p + uDrift * (0.12 + 0.06 * float(layer))) * scale + float(layer) * 31.7;
       vec2 cell = floor(g);
       vec2 f = fract(g) - 0.5;
       float h = hash21(cell + float(layer) * 7.3);
       vec2 offset = vec2(hash21(cell + 1.1), hash21(cell + 2.2)) - 0.5;
-      float d = length(f - offset * 0.7);
-      float twinkle = 0.55 + 0.45 * sin(uTime * (0.8 + 1.7 * h) + h * 40.0);
-      float star = (1.0 - smoothstep(0.0, 0.09, d)) * step(0.965, h) * twinkle;
-      stars += star * (0.5 + 0.5 * float(layer));
+      float magnitude = pow(hash21(cell + 41.8), 6.0);
+      vec2 pixelOffset = (f - offset * 0.60) * uResolution.y / scale;
+      float sigma = 0.38 + 0.24 * magnitude;
+      // A Gaussian core widened by the pixel footprint, with energy compensation.
+      // Keep tails inside the cell to avoid a discontinuity at the lattice boundary.
+      float variance = sigma * sigma + 0.0833333;
+      float core = exp(-dot(pixelOffset, pixelOffset) / (2.0 * variance)) * sigma * sigma / variance;
+      core *= 1.0 - smoothstep(0.36, 0.5, max(abs(f.x), abs(f.y)));
+      float twinkler = step(0.90, hash21(cell + 67.3));
+      float twinkle = 1.0 + twinkler * 0.12 * sin(uTime * (0.45 + h * 0.7) + h * 40.0);
+      float star = core * step(0.982 + float(layer) * 0.009, h) * (0.10 + 0.70 * magnitude) * twinkle;
+      vec3 temperature = mix(vec3(1.0, 0.88, 0.78), vec3(0.76, 0.84, 1.0), hash21(cell + 93.2));
+      stars += star * mix(vec3(1.0), temperature, 0.45);
     }
     stars *= smoothstep(0.05, 0.5, vUv.y);
     float moonDist = length(p - uMoon);
     stars *= smoothstep(uMoonRadius * 1.1, uMoonRadius * 2.6, moonDist);
-    col += stars * mix(vec3(1.0), uAccent, 0.35) * 0.9;
+    stars *= mix(0.45, 1.0, smoothstep(0.25, 0.70, vUv.x));
+    col += stars;
 
     // Mist: a slow field warped by a faster one, twice, at two scales. Denser at the horizon,
     // thinner over the text on the left, brighter within the moon's light.
@@ -174,10 +184,12 @@ const SKY_FRAGMENT = /* glsl */ `
     col += uAccent * halo * (0.015 + 0.07 * mist) * uMoonlight;
     col += mix(uAccent, vec3(1.0), 0.5) * exp(-max(moonDist - uMoonRadius, 0.0) * 14.0) * 0.025 * uMoonlight;
 
-    // A hint of grain, so the gradients never band.
-    col += (hash21(gl_FragCoord.xy + fract(uTime)) - 0.5) * 0.012;
     gl_FragColor = vec4(col, 1.0);
     #include <colorspace_fragment>
+    // Static, sub-code-value display-space dither. Linear-space noise was magnified
+    // by the output transfer function in shadows, making the sky look gritty.
+    float dither = (hash21(gl_FragCoord.xy) - 0.5) * (0.75 / 255.0);
+    gl_FragColor.rgb = clamp(gl_FragColor.rgb + dither, 0.0, 1.0);
   }
 `;
 
@@ -805,7 +817,8 @@ function start(hero, art) {
     camera.top = halfHeight;
     camera.bottom = -halfHeight;
     camera.updateProjectionMatrix();
-    sky.material.uniforms.uResolution.value.set(width, height);
+    // Star filtering uses physical pixels; aspect-corrected layout remains unchanged.
+    renderer.getDrawingBufferSize(sky.material.uniforms.uResolution.value);
     sky.material.uniforms.uNarrow.value = narrow ? 1 : 0;
     dustUniforms.uPixelRatio.value = ratio;
 
