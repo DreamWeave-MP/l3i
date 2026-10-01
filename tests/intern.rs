@@ -33,12 +33,23 @@ fn spellings_and_spans_are_one_integer_identity() {
              local records = {} records[id] = 'npc' \
              assert(records[ids:intern('caius cosades')] == 'npc' and #records == 1, 'dense keys, the array part') \
              assert(ids:policy() == 'ascii-nocase' and ids:memory() > 0, 'introspection') \
+             local internId = ids:interner() \
+             assert(internId('CAIUS COSADES') == id and internId(record, 5, 13) == id and internId('Fargoth') == fargoth, 'the bound form is the method') \
+             assert(internId('Vivec') == 3 and ids:count() == 3, 'and adds to the same pool') \
              local exact = intern.new() \
              assert(exact:policy() == 'exact' and exact:intern('A') ~= exact:intern('a'), 'exact by default') \
              assert(exact:intern('A') == 1 and exact:intern('a') == 2, 'tokens are pool-relative and dense') \
              assert(exact:resolve(2) == 'a' and exact:resolve(2i) == 'a', 'resolve takes a number or an integer')",
         )
         .unwrap();
+}
+
+#[test]
+fn a_bound_interner_keeps_its_pool_across_a_collection() {
+    let runtime = runtime();
+    runtime.exec("orphan = intern.new():interner() assert(orphan('x') == 1)").unwrap();
+    runtime.gc(l3i::memory::GcControl::Collect);
+    runtime.exec("assert(orphan('x') == 1 and orphan('y') == 2)").unwrap();
 }
 
 #[test]

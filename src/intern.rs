@@ -12,6 +12,19 @@
 //! print(ids:resolve(id))                            -- the first spelling the pool saw
 //! ```
 //!
+//! # The hot path
+//!
+//! `pool:intern` is a method call. `pool:interner()` returns the same operation as a plain
+//! function bound to the pool, which skips the method lookup and the receiver check on every
+//! call, about a third of what a call costs; a parser's inner loop uses it:
+//!
+//! ```lua
+//! local internId = ids:interner()
+//! for i = 0, count - 1 do
+//!     local id = internId(text, buffer.readu32(spans, i * 8), buffer.readu32(spans, i * 8 + 4))
+//! end
+//! ```
+//!
 //! # Policies
 //!
 //! - `exact`: byte-for-byte.
@@ -340,7 +353,7 @@ impl Interner {
 }
 
 /// `dream.intern.Pool`, from `intern.new(policy?)`.
-pub struct Pool(RefCell<Interner>);
+pub struct Pool(std::rc::Rc<RefCell<Interner>>);
 
 // SAFETY: the payload holds no Lua references.
 unsafe impl crate::userdata::Userdata for Pool {
@@ -425,6 +438,20 @@ impl Extension for InternExtension {
         })
         .signature("(self, token: number): string")
         .doc("The first spelling the pool saw for token.");
+        pool.method("interner", |pool: &Pool, call: &crate::bind::Call<'_>| -> Result<crate::value::Function> {
+            let shared = std::rc::Rc::clone(&pool.0);
+            crate::bind::function(
+                call.stack(),
+                &["dream"],
+                "dream.intern.Pool.interner",
+                move |source: BytesView<'_>, offset: Option<Exact<i64>>, length: Option<Exact<i64>>| -> Result<f64> {
+                    let bytes = span("interner", &source, offset, length)?;
+                    shared.borrow_mut().intern(bytes).map(f64::from)
+                },
+            )
+        })
+        .signature("(self): (source: string | buffer, offset: number?, length: number?) -> number")
+        .doc("Pool:intern as a plain function bound to this pool: no method lookup on each call.");
         pool.method("count", |pool: &Pool| pool.0.borrow().len() as f64)
             .signature("(self): number")
             .doc("How many identities the pool holds; also the last token it handed out.");
@@ -442,7 +469,7 @@ impl Extension for InternExtension {
                         Error::runtime(format!("intern.new: unknown policy '{name}' (exact or ascii-nocase)"))
                     })?,
                 };
-                Ok(Owned(Pool(RefCell::new(Interner::new(policy)))))
+                Ok(Owned(Pool(std::rc::Rc::new(RefCell::new(Interner::new(policy))))))
             })
             .signature("(policy: (\"exact\" | \"ascii-nocase\")?) -> dream_intern_Pool")
             .doc("An empty pool; exact by default.");
