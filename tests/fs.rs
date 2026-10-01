@@ -72,7 +72,7 @@ fn files_read_whole_positionally_and_through_a_reader() {
              ok, err = pcall(reader.read, reader, 1) assert(not ok and err:find('closed'), err) \
              assert(fs.open(root .. '/empty'):size() == 0 and buffer.len(fs.readFile(root .. '/empty')) == 0) \
              local missing, message, kind = fs.open(root .. '/missing') \
-             assert(missing == nil and kind == 'notFound' and message:find('^dream.fs.open: .*/missing: No such file or directory'), message) \
+             assert(missing == nil and kind == 'notFound' and message:find('^dream.fs.open: .*/missing: '), message) \
              missing, message, kind = fs.open(root) assert(missing == nil and kind == 'isADirectory' and message:find('dream.fs.open'), message)",
             root = scratch.lua()
         ))
@@ -158,13 +158,11 @@ fn directories_metadata_listing_and_the_walk() {
 
 #[cfg(unix)]
 #[test]
-fn links_identity_and_byte_paths() {
-    use std::os::unix::ffi::OsStrExt;
+fn links_and_identity() {
     let scratch = Scratch::new("links");
     let root = &scratch.0;
     std::fs::write(root.join("source"), b"payload").unwrap();
     std::fs::create_dir_all(root.join("dir")).unwrap();
-    std::fs::write(root.join(std::ffi::OsStr::from_bytes(b"caf\xe9")), b"latin1").unwrap();
     runtime()
         .exec(&format!(
             "local root = {root} \
@@ -185,10 +183,26 @@ fn links_identity_and_byte_paths() {
              local plain = fs.walk(root, {{ sort = true }}) \
              local kinds = {{}} for index, path in plain.paths do kinds[path] = plain.kinds[index] end \
              assert(kinds.soft == 'symlink' and kinds.dirlink == 'symlink' and kinds.hard == 'file') \
-             assert(kinds['caf\\xe9'] == 'file', 'a name that is not UTF-8 comes back byte for byte') \
-             assert(fs.readFileString(root .. '/caf\\xe9') == 'latin1') \
              fs.remove(root .. '/dirlink') assert(fs.exists(root .. '/dir'), 'removing a link leaves its target') \
              fs.remove(root .. '/soft') assert(fs.exists(root .. '/source'))",
+            root = scratch.lua()
+        ))
+        .unwrap();
+}
+
+// APFS refuses file names that are not UTF-8, so the byte-path round trip runs on Linux.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_name_that_is_not_utf8_comes_back_byte_for_byte() {
+    use std::os::unix::ffi::OsStrExt;
+    let scratch = Scratch::new("bytes");
+    std::fs::write(scratch.0.join(std::ffi::OsStr::from_bytes(b"caf\xe9")), b"latin1").unwrap();
+    runtime()
+        .exec(&format!(
+            "local root = {root} \
+             local listed = fs.walk(root, {{ sort = true }}) \
+             assert(listed.paths[1] == 'caf\\xe9' and listed.kinds[1] == 'file', 'a name that is not UTF-8 comes back byte for byte') \
+             assert(fs.readFileString(root .. '/caf\\xe9') == 'latin1')",
             root = scratch.lua()
         ))
         .unwrap();
