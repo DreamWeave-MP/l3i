@@ -125,6 +125,17 @@ pub(crate) fn render_with(plan: &RuntimePlan, members: Option<&ModuleMembers>) -
     for userdata in &plan.userdata {
         render_userdata(&mut out, userdata);
     }
+    for &index in &plan.order {
+        let descriptor = &plan.descriptors[index];
+        if descriptor.type_aliases().is_empty() {
+            continue;
+        }
+        let _ = writeln!(out, "-- types declared by {}", descriptor.id());
+        for (name, definition) in descriptor.type_aliases() {
+            let _ = writeln!(out, "export type {name} = {definition}");
+        }
+        out.push('\n');
+    }
     for index in module_order(plan) {
         let module = &plan.modules[index];
         let type_name = format!("Module_{}", class_name(&module.path));

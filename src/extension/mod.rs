@@ -552,6 +552,7 @@ pub struct ExtensionDescriptor {
     optional_capabilities: BTreeSet<String>,
     memory_categories: BTreeSet<String>,
     packed: Vec<crate::packed::PackedKind>,
+    type_aliases: Vec<(String, String)>,
     #[cfg(feature = "jit")]
     native_hooks: Vec<std::rc::Rc<dyn crate::native_code::NativeCodeHooks>>,
 }
@@ -583,9 +584,25 @@ impl ExtensionDescriptor {
             optional_capabilities: BTreeSet::new(),
             memory_categories: BTreeSet::new(),
             packed: Vec::new(),
+            type_aliases: Vec::new(),
             #[cfg(feature = "jit")]
             native_hooks: Vec::new(),
         }
+    }
+
+    /// Declares a named Luau type the extension's signatures refer to, for values that are plain
+    /// tables rather than userdata (a parse tree, a record of options). The definitions render
+    /// it as `export type <name> = <definition>` ahead of every module, so aliases may refer to
+    /// one another in any order. Names follow the userdata convention (`dream_luau_Node`); the
+    /// plan refuses a name declared twice or shared with a userdata class.
+    pub fn type_alias(&mut self, name: &str, definition: impl Into<String>) -> &mut Self {
+        self.type_aliases.push((name.to_owned(), definition.into()));
+        self
+    }
+
+    /// The named types declared with [`Self::type_alias`], in declaration order.
+    pub fn type_aliases(&self) -> &[(String, String)] {
+        &self.type_aliases
     }
 
     /// Declares a packed scalar kind this extension's members use, so every runtime from the

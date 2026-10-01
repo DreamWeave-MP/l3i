@@ -238,6 +238,7 @@ impl RuntimePlanBuilder {
                 )));
             }
         }
+        check_type_aliases(&descriptors, &classes)?;
 
         // 5. Tags: pinned, then Required, then Preferred while tags remain.
         assign_tags(&mut userdata, &pinned_tags, policy.first_tag)?;
@@ -265,6 +266,37 @@ impl RuntimePlanBuilder {
             packed_kinds,
         }))
     }
+}
+
+/// Every declared type alias: a Luau identifier, declared once across the plan, and not a
+/// userdata class name.
+fn check_type_aliases(descriptors: &[ExtensionDescriptor], classes: &HashMap<String, &str>) -> Result<()> {
+    let mut seen: HashMap<&str, &str> = HashMap::new();
+    for descriptor in descriptors {
+        for (name, _) in descriptor.type_aliases() {
+            let identifier = name.chars().next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+                && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+            if !identifier {
+                return Err(Error::logic(format!(
+                    "extension '{}' declares type '{name}', which is not a Luau identifier",
+                    descriptor.id()
+                )));
+            }
+            if let Some(key) = classes.get(name.as_str()) {
+                return Err(Error::logic(format!(
+                    "extension '{}' declares type '{name}', the class name of userdata '{key}'",
+                    descriptor.id()
+                )));
+            }
+            if let Some(other) = seen.insert(name, descriptor.id()) {
+                return Err(Error::logic(format!(
+                    "type '{name}' is declared by both '{other}' and '{}'",
+                    descriptor.id()
+                )));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Every declared packed kind, validated: numbers in the host range (or l3i's own types), and
