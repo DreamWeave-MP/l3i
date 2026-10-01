@@ -117,4 +117,5 @@ added = [
     "`@dream/luau` (feature `syntax`): `luau.parse(source, options?)` runs `Luau::Parser` under the runtime's fast flags and returns the tree as tables, every node with its kind and a 1-based span, one table per local shared by its declaration and every use, string quote styles, every comment and hot comment, parse errors as data with the recovered tree, and, with `{ tokens = true }`, Luau's token stream as a buffer of 12-byte records; `{ declarations = true }` parses definition-file syntax.",
     "The tree costs 17205 instructions per source line built and collected, against 27861 for the parser and Luau's own JSON encoding of it, which a script would still have to decode.",
     "`ExtensionDescriptor::type_alias`: a named Luau type an extension's signatures refer to, for values that are plain tables, rendered as `export type` ahead of every module.",
+    "`@dream/bytes`'s `toBase64` and `fromBase64`: standard padded base64 of a range of a buffer or string in one call, and back, refusing anything that isn't base64 by naming the byte.",
 ]
