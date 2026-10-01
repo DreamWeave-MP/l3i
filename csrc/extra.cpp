@@ -187,6 +187,10 @@ static_assert(offsetof(TValue, tt) == 12, "l3i mirrors the tag at offset 12");
 static_assert(LUA_VECTOR_SIZE == 3, "l3i mirrors three-component vectors");
 static_assert(offsetof(Udata, tag) == 3, "l3i mirrors the userdata tag at offset 3");
 static_assert(offsetof(Udata, data) == 16, "l3i mirrors the userdata payload at offset 16");
+static_assert(offsetof(TString, len) == 20, "l3i mirrors the string length at offset 20");
+static_assert(offsetof(TString, data) == 24, "l3i mirrors the string bytes at offset 24");
+static_assert(offsetof(Buffer, len) == 4, "l3i mirrors the buffer length at offset 4");
+static_assert(offsetof(Buffer, data) == 8, "l3i mirrors the buffer bytes at offset 8");
 
 // The running call's first argument slot (`L->base`): the first argument of a C function, the
 // receiver of a direct userdata callback. Valid until something grows the stack.

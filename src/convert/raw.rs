@@ -65,6 +65,33 @@ impl RawValue {
         // SAFETY: the caller checked the tag; a live Udata is at least its header long.
         unsafe { (*object.add(3), object.add(16).cast::<c_void>()) }
     }
+
+    /// The bytes of a `LUA_TSTRING` slot (`TString`: the length at offset 20, the bytes at 24).
+    ///
+    /// # Safety
+    /// The slot must hold a live string, and the slice must not outlive the slot's hold on it.
+    #[inline(always)]
+    pub unsafe fn string<'a>(&self) -> &'a [u8] {
+        let object = self.bits as usize as *const u8;
+        // SAFETY: the caller checked the tag; a live TString holds `len` bytes after its header,
+        // and strings are immutable.
+        unsafe {
+            let len = object.add(20).cast::<u32>().read();
+            std::slice::from_raw_parts(object.add(24), len as usize)
+        }
+    }
+
+    /// The storage and length of a `LUA_TBUFFER` slot (`Buffer`: the length at offset 4, the
+    /// bytes at 8).
+    ///
+    /// # Safety
+    /// The slot must hold a live buffer.
+    #[inline(always)]
+    pub unsafe fn buffer(&self) -> (*mut u8, usize) {
+        let object = self.bits as usize as *mut u8;
+        // SAFETY: the caller checked the tag; a live Buffer is at least its header long.
+        unsafe { (object.add(8), object.add(4).cast::<u32>().read() as usize) }
+    }
 }
 
 /// Reads known values through the mirror and compares with the API. Runs once per runtime.
@@ -79,6 +106,8 @@ pub(crate) unsafe fn self_test(state: *mut ffi::lua_State) -> crate::error::Resu
         ffi::lua_pushinteger64(state, 0x1234_5678_9ABC_DEF0u64 as i64);
         ffi::lua_pushboolean(state, 1);
         ffi::lua_pushvector(state, 1.5, -2.5, 3.5);
+        ffi::lua_pushlstring(state, c"mirror".as_ptr(), 6);
+        let buffer = ffi::lua_newbuffer(state, 5).cast::<u8>();
         let ok = {
             let slot = |offset: i32| ffi::l3i_stack_slot(state, top + offset).as_ref();
             let number = slot(1).is_some_and(|v| v.tag() == ffi::LUA_TNUMBER && v.number() == 2.5);
@@ -86,7 +115,9 @@ pub(crate) unsafe fn self_test(state: *mut ffi::lua_State) -> crate::error::Resu
                 slot(2).is_some_and(|v| v.tag() == ffi::LUA_TINTEGER && v.integer() == 0x1234_5678_9ABC_DEF0u64 as i64);
             let boolean = slot(3).is_some_and(|v| v.tag() == ffi::LUA_TBOOLEAN && v.boolean());
             let vector = slot(4).is_some_and(|v| v.tag() == ffi::LUA_TVECTOR && v.vector() == [1.5, -2.5, 3.5]);
-            number && integer && boolean && vector
+            let string = slot(5).is_some_and(|v| v.tag() == ffi::LUA_TSTRING && v.string() == b"mirror");
+            let buffer = slot(6).is_some_and(|v| v.tag() == ffi::LUA_TBUFFER && v.buffer() == (buffer, 5));
+            number && integer && boolean && vector && string && buffer
         };
         ffi::lua_settop(state, top);
         if ok {

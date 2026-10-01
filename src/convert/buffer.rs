@@ -149,6 +149,16 @@ impl<'v> FromView<'v> for BufferView<'v> {
         Ok(BufferView { data: data.cast(), len, _slot: PhantomData })
     }
 
+    #[inline(always)]
+    fn from_raw_arg(raw: &super::RawValue, view: impl FnOnce() -> ValueView<'v>) -> Result<Self> {
+        if raw.tag() == ffi::LUA_TBUFFER {
+            // SAFETY: the tag says buffer; the argument slot keeps it alive for the call ('v).
+            let (data, len) = unsafe { raw.buffer() };
+            return Ok(BufferView { data, len, _slot: PhantomData });
+        }
+        Self::from_view(view())
+    }
+
     fn matches(view: ValueView<'v>) -> bool {
         view.is_buffer()
     }
@@ -260,6 +270,15 @@ impl<'v> FromView<'v> for BytesView<'v> {
             return <&[u8]>::from_view(view).map(BytesView::String);
         }
         Err(view.type_error(Type::Buffer))
+    }
+
+    #[inline(always)]
+    fn from_raw_arg(raw: &super::RawValue, view: impl FnOnce() -> ValueView<'v>) -> Result<Self> {
+        match raw.tag() {
+            ffi::LUA_TSTRING => <&[u8]>::from_raw_arg(raw, view).map(BytesView::String),
+            ffi::LUA_TBUFFER => BufferView::from_raw_arg(raw, view).map(BytesView::Buffer),
+            _ => Self::from_view(view()),
+        }
     }
 
     fn matches(view: ValueView<'v>) -> bool {

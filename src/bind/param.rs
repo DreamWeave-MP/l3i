@@ -220,6 +220,13 @@ macro_rules! borrowed_params {
             fn read_slot(view: ValueView<'c>) -> Result<Self> {
                 <$item as FromView<'c>>::from_view(view)
             }
+            #[inline(always)]
+            fn read_arg(call: &'c Call<'c>, index: c_int) -> Result<Self> {
+                match call.raw_arg(index) {
+                    Some(raw) => <$item as FromView<'c>>::from_raw_arg(raw, || call.arg(index)),
+                    None => <$item as FromView<'c>>::from_view(call.arg(index)),
+                }
+            }
             #[inline]
             fn matches(view: ValueView<'c>) -> bool {
                 <$item as FromView<'c>>::matches(view)

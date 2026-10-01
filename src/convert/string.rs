@@ -1,4 +1,4 @@
-use super::{FromView, Push};
+use super::{FromView, Push, RawValue};
 use crate::error::{Error, Result};
 use crate::raw::ffi;
 use crate::stack::{Scope, Type, ValueView};
@@ -29,6 +29,15 @@ impl<'v> FromView<'v> for &'v [u8] {
         string_bytes(view)
     }
 
+    #[inline(always)]
+    fn from_raw_arg(raw: &RawValue, view: impl FnOnce() -> ValueView<'v>) -> Result<Self> {
+        if raw.tag() == ffi::LUA_TSTRING {
+            // SAFETY: the tag says string; the argument slot holds it for the call ('v).
+            return Ok(unsafe { raw.string() });
+        }
+        string_bytes(view())
+    }
+
     #[inline]
     fn matches(view: ValueView<'v>) -> bool {
         view.is_string()
@@ -42,6 +51,12 @@ impl<'v> FromView<'v> for &'v str {
     #[inline]
     fn from_view(view: ValueView<'v>) -> Result<Self> {
         std::str::from_utf8(string_bytes(view)?).map_err(|_| Error::runtime("Lua string is not valid UTF-8"))
+    }
+
+    #[inline(always)]
+    fn from_raw_arg(raw: &RawValue, view: impl FnOnce() -> ValueView<'v>) -> Result<Self> {
+        std::str::from_utf8(<&[u8]>::from_raw_arg(raw, view)?)
+            .map_err(|_| Error::runtime("Lua string is not valid UTF-8"))
     }
 
     #[inline]
