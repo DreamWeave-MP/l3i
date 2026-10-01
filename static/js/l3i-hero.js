@@ -1,12 +1,12 @@
 // The l3i hero: a night sky drawn live with three.js behind the project page's header.
 //
-// Three layers, back to front. A full-screen shader draws stars and a volumetric purple mist, two
+// Three layers, back to front. A full-screen shader draws stars and layered purple mist, two
 // domain-warped noise fields drifting at different speeds, lit by the moon's position on screen.
-// A sphere is the moon: its surface (maria from fractal noise, craters from three cellular
-// lattices, grain) is baked once into an equirectangular texture, and each frame reads the height
-// for a bump-mapped normal, lit by a sun that swings slowly across it so the terminator moves,
-// with a specular highlight, purple earthshine on the dark side, a fresnel rim and an additive
-// halo. Dust rises through the moonlight as point sprites.
+// A sphere is the moon: basalt-filled basins, aged impacts, terraced walls, central peaks and
+// fresh ejecta are baked once into a data texture. Spherical height derivatives supply relief
+// normals; a Lommel-Seeliger/Lambert blend gives the stone a powdery, airless appearance rather
+// than a glossy highlight. Violet earthshine and observer-side haze retain the site's palette.
+// Dust rises through the moonlight as point sprites.
 //
 // The palette is read from the site's CSS tokens, so sass/brand.sass stays the single owner of
 // the colours. The canvas is inert until the hero is on screen, stops when the tab is hidden, caps
@@ -179,9 +179,9 @@ const SKY_FRAGMENT = /* glsl */ `
   }
 `;
 
-// The moon's surface is baked once into an equirectangular texture: height, the maria mask
-// and the grain, one expensive pass per texel instead of per pixel per frame. The bake carries
-// the crater lattices; the surface shader below only reads the texture.
+// Linear data, not display colour: R = encoded height, G = basalt coverage,
+// B = reflectance variation/ejecta, A = cavity visibility for indirect light only.
+// All geological noise is sampled in object space, so the longitude seam joins exactly.
 const BAKE_VERTEX = /* glsl */ `
   varying vec2 vUv;
   void main() {
@@ -195,49 +195,89 @@ const BAKE_FRAGMENT = /* glsl */ `
   varying vec2 vUv;
   ${NOISE}
 
-  // A bowl per cell of a jittered lattice: a flat floor, a wall from a quarter of the way out,
-  // a low raised rim outside it.
-  float craters(vec3 p, float scale, float density) {
+  // Project a thin shell of seeded lattice points onto the sphere. Unlike intersecting a
+  // 3D bowl field with the surface, every surviving impact has its centre on the ground.
+  // The shell thickness plus the largest ejecta radius is < one cell: 27 neighbours suffice.
+  // Return relief, fresh ejecta and cavity strength independently.
+  vec3 craters(vec3 p, float scale, float density, float seed, float flooded) {
     vec3 q = p * scale;
     vec3 i = floor(q);
-    float h = 0.0;
+    vec3 result = vec3(0.0);
     for (int x = -1; x <= 1; x++) {
       for (int y = -1; y <= 1; y++) {
         for (int z = -1; z <= 1; z++) {
           vec3 c = i + vec3(float(x), float(y), float(z));
-          if (hash31(c + 19.1) > density) continue;
-          vec3 o = vec3(hash31(c), hash31(c + 7.1), hash31(c + 13.7));
-          float radius = 0.22 + 0.33 * hash31(c + 3.3);
-          float d = length(c + o - q) / radius;
-          if (d < 1.2) {
-            float bowl = -0.16 * (1.0 - smoothstep(0.25, 1.0, d));
-            float rim = 0.07 * smoothstep(0.7, 1.0, d) * (1.0 - smoothstep(1.0, 1.2, d));
-            h += bowl + rim;
-          }
+          vec3 key = c + seed;
+          if (hash31(key + 19.1) > density) continue;
+          vec3 o = vec3(hash31(key), hash31(key + 7.1), hash31(key + 13.7));
+          vec3 centre = c + o;
+          float centreLength = length(centre);
+          if (abs(centreLength - scale) > 0.45) continue;
+          centre *= scale / centreLength;
+          float radius = 0.12 + 0.12 * hash31(key + 3.3);
+          vec3 delta = q - centre;
+          float d2 = dot(delta, delta) / (radius * radius);
+          if (d2 > 4.41) continue;
+          float d = sqrt(d2);
+          float fresh = smoothstep(0.35, 0.95, hash31(key + 29.0));
+          // Basalt buries old impacts; young impacts remain cut into the plains.
+          float preserved = mix(1.0, mix(0.12, 1.0, fresh), flooded);
+          float wall = smoothstep(0.23, 1.0, d);
+          float bowl = -0.17 * (1.0 - wall);
+          float rimDistance = (d - 1.0) / mix(0.18, 0.09, fresh);
+          float rim = exp(-rimDistance * rimDistance) * 0.065;
+          float complex = 1.0 - smoothstep(8.0, 18.0, scale);
+          float peak = (1.0 - smoothstep(0.0, 0.24, d)) * 0.075 * complex;
+          float terrace = sin(d * 38.0) * 0.009 * complex * fresh
+            * smoothstep(0.35, 0.5, d) * (1.0 - smoothstep(0.8, 1.0, d));
+          float envelope = 1.0 - smoothstep(1.15, 2.1, d);
+          result.x += (bowl + rim + peak + terrace) * envelope * preserved;
+          // Directional streaks fade into the surrounding stone; never darken a floor
+          // merely because it is low. Direct-light visibility is a separate operation.
+          vec3 radial = delta / max(length(delta), 0.0001);
+          float rays = pow(noise3(radial * 19.0 + key), 4.0);
+          result.y += fresh * preserved * envelope * smoothstep(0.9, 1.08, d)
+            * (0.16 + 1.4 * rays);
+          result.z += (1.0 - smoothstep(0.35, 1.05, d)) * 0.45 * preserved;
         }
       }
     }
-    return h;
+    return result;
   }
 
-  float height(vec3 p) {
-    float plains = fbm3(p * 2.2) * 0.3;
-    float fine = fbm3Coarse(p * 5.0 + 4.0) * 0.3;
-    float big = craters(p, 2.4, 0.3) * 1.1;
-    float medium = craters(p + 5.0, 5.0, 0.28) * 0.6;
-    float small = craters(p + 11.0, 8.0, 0.3) * 0.25;
-    return plains + fine + big + medium + small;
+  // Selected ancient basins, not an unrelated dark noise mask. The same shape lowers
+  // the terrain, raises a worn mountain ring, and determines where basalt accumulated.
+  vec2 basin(vec3 p, vec3 centre, float radius) {
+    float d = length(p - normalize(centre)) / radius;
+    d += (fbm3Coarse(p * 13.0) - 0.5) * 0.12;
+    float floorMask = 1.0 - smoothstep(0.65, 1.02, d);
+    float ringDistance = (d - 1.08) / 0.13;
+    float ring = exp(-ringDistance * ringDistance);
+    return vec2(-0.12 * floorMask + 0.045 * ring, floorMask);
   }
 
   void main() {
     float lon = (vUv.x - 0.5) * 6.2831853;
     float lat = (vUv.y - 0.5) * 3.14159265;
     vec3 p = vec3(cos(lat) * cos(lon), sin(lat), cos(lat) * sin(lon));
-    float h = height(p);
-    float maria = smoothstep(0.44, 0.58, fbm3(p * 1.6 + 2.0));
-    float grain = fbm3Coarse(p * 6.0);
-    // Height in -1..1 stored as 0..1, so a byte target holds it too.
-    gl_FragColor = vec4(h * 0.5 + 0.5, maria, grain, 1.0);
+    vec2 basins = basin(p, vec3(-0.45, 0.3, 1.0), 0.55);
+    basins += basin(p, vec3(0.35, 0.55, 1.0), 0.34);
+    basins += basin(p, vec3(0.65, -0.25, 0.7), 0.27);
+    basins += basin(p, vec3(-0.5, -0.15, -1.0), 0.47);
+    basins += basin(p, vec3(1.0, 0.45, -0.4), 0.32);
+    float maria = clamp(basins.y, 0.0, 1.0);
+    vec3 large = craters(p, 3.6, 0.8, 2.0, maria);
+    vec3 medium = craters(p, 9.0, 0.85, 17.0, maria);
+    vec3 small = craters(p, 21.0, 0.9, 41.0, maria);
+    vec3 micro = craters(p, 43.0, 0.9, 67.0, maria);
+    float highlands = (fbm3(p * 7.0) - 0.5) * 0.10;
+    float h = basins.x + highlands * (1.0 - maria * 0.92)
+      + large.x + medium.x * 0.40 + small.x * 0.17 + micro.x * 0.075;
+    float ejecta = large.y + medium.y * 0.75 + small.y * 0.45;
+    float reflectance = clamp(0.48 + (fbm3Coarse(p * 32.0) - 0.5) * 0.20 + ejecta, 0.0, 1.0);
+    float cavity = clamp(1.0 - large.z - medium.z * 0.6 - small.z * 0.3, 0.3, 1.0);
+    // Use most of the available byte range; decode with (r - 0.5) * 0.8.
+    gl_FragColor = vec4(clamp(h / 0.8 + 0.5, 0.0, 1.0), maria, reflectance, cavity);
   }
 `;
 
@@ -253,10 +293,9 @@ const MOON_FRAGMENT = /* glsl */ `
   precision highp float;
   varying vec3 vObject;
   uniform sampler2D uSurface;
-  uniform vec2 uTexel;
+  uniform float uNormalStep;
   uniform vec3 uLight;  // in object space
   uniform vec3 uView;   // in object space
-  uniform vec3 uAccent;
   uniform vec3 uShadow;
   uniform vec3 uLit;
   uniform vec3 uMaria;
@@ -265,51 +304,43 @@ const MOON_FRAGMENT = /* glsl */ `
     return vec2(atan(p.z, p.x) / 6.2831853 + 0.5, asin(clamp(p.y, -1.0, 1.0)) / 3.14159265 + 0.5);
   }
   float heightAt(vec2 uv) {
-    return texture2D(uSurface, uv).r * 2.0 - 1.0;
+    return (texture2D(uSurface, uv).r - 0.5) * 0.8;
   }
 
   void main() {
     vec3 n = normalize(vObject);
     vec2 uv = equirect(n);
     vec4 surface = texture2D(uSurface, uv);
-    float h0 = surface.r * 2.0 - 1.0;
     float maria = surface.g;
-    float grain = surface.b;
+    // Equal angular offsets on the sphere avoid equirectangular pole singularities.
+    // Enlarge the footprint on small discs so unresolved relief does not sparkle.
+    vec3 reference = abs(n.y) < 0.9 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+    vec3 east = normalize(cross(reference, n));
+    vec3 north = cross(n, east);
+    float stepSize = uNormalStep;
+    float sx = heightAt(equirect(normalize(n + east * stepSize)))
+      - heightAt(equirect(normalize(n - east * stepSize)));
+    float sy = heightAt(equirect(normalize(n + north * stepSize)))
+      - heightAt(equirect(normalize(n - north * stepSize)));
+    // Heights are fractions of the unit sphere's radius, not arbitrary bump intensity.
+    vec3 bumped = normalize(n - (east * sx + north * sy) * (0.035 / (2.0 * stepSize)));
 
-    // The normal from the height field's slopes along the texture's axes, scaled by the arc
-    // each texel spans: shorter along a parallel near the poles.
-    float du = uTexel.x * 2.0;
-    float dv = uTexel.y * 2.0;
-    float hx = heightAt(uv + vec2(du, 0.0)) - heightAt(uv - vec2(du, 0.0));
-    float hy = heightAt(uv + vec2(0.0, dv)) - heightAt(uv - vec2(0.0, dv));
-    float cosLat = max(sqrt(max(1.0 - n.y * n.y, 0.0)), 0.05);
-    float sx = hx / (2.0 * du * 6.2831853 * cosLat);
-    float sy = hy / (2.0 * dv * 3.14159265);
-    // Longitude is undefined at the poles; use a finite limiting tangent there.
-    vec3 east = length(n.xz) > 0.0001 ? normalize(vec3(-n.z, 0.0, n.x)) : vec3(0.0, 0.0, 1.0);
-    vec3 north = cross(east, n);
-    vec3 bumped = normalize(n - (east * sx + north * sy) * 0.55);
-
-    vec3 albedo = mix(uLit, uMaria, maria * 0.85);
-    albedo *= 0.88 + 0.24 * grain;
-    // Crater floors sit in shadow, rims catch the light.
-    albedo *= 0.78 + 0.35 * clamp(h0 * 0.8 + 0.6, 0.0, 1.0);
+    vec3 albedo = mix(uLit, uMaria, maria * 0.90);
+    albedo *= 0.78 + 0.44 * surface.b;
 
     vec3 light = normalize(uLight);
     vec3 view = normalize(uView);
-    float diffuse = max(dot(bumped, light), 0.0);
-    float wrap = max((dot(bumped, light) + 0.25) / 1.25, 0.0);
-    float terminator = smoothstep(-0.12, 0.22, dot(n, light));
-    vec3 halfway = normalize(light + view);
-    float spec = pow(max(dot(n, halfway), 0.0), 24.0) * 0.22 * terminator;
-    float fresnel = pow(1.0 - max(dot(n, view), 0.0), 3.5);
-
-    // Earthshine: the dark side glows faintly purple, from the sky it hangs in.
-    vec3 ambient = uShadow + uAccent * 0.14 * (0.5 + 0.5 * dot(n, vec3(0.0, -0.4, 0.9)));
-    vec3 col = albedo * (diffuse * 0.9 + wrap * 0.25) * vec3(1.0, 0.97, 1.0);
-    col += ambient * (1.0 - terminator * 0.85) * 0.6;
-    col += spec * vec3(1.0, 0.96, 1.0);
-    col += uAccent * fresnel * (0.35 + 0.45 * terminator);
+    float mu0 = max(dot(bumped, light), 0.0);
+    float mu = max(dot(bumped, view), 0.0);
+    float terminator = smoothstep(-0.008, 0.012, dot(n, light));
+    // Lommel-Seeliger single scattering blended with Lambert multiple scattering.
+    // This is an artistic regolith approximation, not a calibrated Hapke BRDF.
+    float lunar = mix(mu0 / max(mu0 + mu, 0.025), mu0, 0.28);
+    float phase = acos(clamp(dot(light, view), -1.0, 1.0));
+    float opposition = 1.0 + 0.16 * exp(-phase / 0.09);
+    vec3 col = albedo * lunar * opposition * terminator * 1.15;
+    // Weak observer-facing earthshine; cavity visibility attenuates only this indirect term.
+    col += albedo * uShadow * (0.2 + 0.8 * mu) * surface.a;
     gl_FragColor = vec4(col, 1.0);
     #include <colorspace_fragment>
   }
@@ -427,9 +458,9 @@ function start(hero, art) {
   const mistBright = accent.clone().lerp(new THREE.Color('#ffffff'), 0.12);
   const skyTop = bg1.clone().lerp(accent, 0.06);
   const skyBottom = bg0.clone();
-  const litStone = accent.clone().lerp(new THREE.Color('#ffffff'), 0.7);
-  const maria = accent.clone().lerp(new THREE.Color('#24163d'), 0.62);
-  const shadow = bg0.clone().lerp(accent, 0.18);
+  const litStone = new THREE.Color('#c7c3c0').lerp(accent, 0.12);
+  const maria = new THREE.Color('#555360').lerp(accent, 0.08);
+  const shadow = accent.clone().multiplyScalar(0.028);
 
   const sky = new THREE.Mesh(
     new THREE.PlaneGeometry(2, 2),
@@ -467,8 +498,9 @@ function start(hero, art) {
   const surface = new THREE.WebGLRenderTarget(bakeSize.x, bakeSize.y, {
     type: halfFloat ? THREE.HalfFloatType : THREE.UnsignedByteType,
     format: THREE.RGBAFormat,
-    minFilter: THREE.LinearFilter,
+    minFilter: THREE.LinearMipmapLinearFilter,
     magFilter: THREE.LinearFilter,
+    generateMipmaps: true,
     wrapS: THREE.RepeatWrapping,
     wrapT: THREE.ClampToEdgeWrapping,
     depthBuffer: false,
@@ -491,10 +523,9 @@ function start(hero, art) {
 
   const moonUniforms = {
     uSurface: { value: surface.texture },
-    uTexel: { value: new THREE.Vector2(1 / bakeSize.x, 1 / bakeSize.y) },
+    uNormalStep: { value: 2 * Math.PI / bakeSize.x },
     uLight: { value: new THREE.Vector3(-1.2, 0.55, 0.6) },
     uView: { value: new THREE.Vector3(0, 0, 1) },
-    uAccent: { value: accent },
     uShadow: { value: shadow },
     uLit: { value: litStone },
     uMaria: { value: maria },
@@ -624,6 +655,7 @@ function start(hero, art) {
     moonOnScreen.x = centreX;
     moonOnScreen.y = centreY;
     moonOnScreen.radius = radiusPx;
+    moonUniforms.uNormalStep.value = Math.max(2 * Math.PI / bakeSize.x, 0.75 / (radiusPx * ratio));
     const worldRadius = (radiusPx / height) * 2 * halfHeight;
     const nx = (centreX / width) * 2 - 1;
     const ny = 1 - (centreY / height) * 2;
