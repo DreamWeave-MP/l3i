@@ -117,6 +117,11 @@ harness = false
 required-features = ["bytes"]
 
 [[bench]]
+name = "syntax"
+harness = false
+required-features = ["syntax", "analysis"]
+
+[[bench]]
 name = "intern"
 harness = false
 required-features = ["intern"]
@@ -139,6 +144,9 @@ bytes-codecs = ["bytes", "dep:miniz_oxide", "dep:lz4_flex", "dep:ruzstd", "dep:l
 bytes-digests = ["bytes", "dep:crc32fast", "dep:adler2", "dep:xxhash-rust", "dep:md-5", "dep:sha1", "dep:sha2", "dep:blake3"]
 # Text decoding and encoding for every WHATWG label (windows-1252, shift_jis, utf-16 ...).
 bytes-text = ["bytes", "dep:encoding_rs"]
+# The `@dream/luau` extension (`syntax`): Luau's own parser for scripts, its syntax tree,
+# comments, errors and tokens built as tables in native code.
+syntax = []
 # The `@dream/intern` extension (`intern`): pools that turn byte sequences into dense number
 # identities under exact or ASCII case-insensitive equality, lowered under jit.
 intern = []

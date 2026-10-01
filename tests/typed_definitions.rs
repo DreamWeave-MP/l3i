@@ -38,6 +38,8 @@ fn plan() -> Rc<RuntimePlan> {
     let builder = builder.extension(l3i::bytes::BytesExtension);
     #[cfg(feature = "intern")]
     let builder = builder.extension(l3i::intern::InternExtension);
+    #[cfg(feature = "syntax")]
+    let builder = builder.extension(l3i::syntax::SyntaxExtension);
     builder.finalize().unwrap()
 }
 
@@ -80,6 +82,37 @@ const INTERN_SCRIPT: (&str, &str) = (
      local n: number = ids:count() + ids:memory()\n\
      local policy: string = ids:policy()\n\
      print(span, found, text, again, n, policy)\n",
+);
+
+/// A strict walker over the tree: refinement on `kind` narrows each union to its node type.
+#[cfg(feature = "syntax")]
+const SYNTAX_SCRIPT: (&str, &str) = (
+    "syntax_script",
+    "--!strict\n\
+     local luau = require('@dream/luau')\n\
+     local result = luau.parse('local x = 1', { tokens = true })\n\
+     local function names(stat: dream_luau_Stat): { string }\n\
+       if stat.kind ~= 'StatLocal' then\n\
+         return {}\n\
+       end\n\
+       local out = {}\n\
+       for _, var in stat.vars do\n\
+         table.insert(out, var.name)\n\
+       end\n\
+       return out\n\
+     end\n\
+     local function callee(expr: dream_luau_Expr): string?\n\
+       if expr.kind == 'ExprCall' and expr.func.kind == 'ExprGlobal' then\n\
+         return expr.func.name\n\
+       end\n\
+       return nil\n\
+     end\n\
+     local first: dream_luau_Stat = result.root.body[1]\n\
+     local line: number = first.line + first.endColumn + result.lineStarts[1]\n\
+     local comment: dream_luau_Comment? = result.comments[1]\n\
+     local kinds: dream_luau_TokenKinds = luau.tokenKinds\n\
+     local tokens: buffer? = result.tokens\n\
+     print(names(first), callee, line, comment, kinds.name, tokens, #result.errors)\n",
 );
 
 const SCRIPTS: &[(&str, &str)] = &[
@@ -171,6 +204,8 @@ fn the_generated_definitions_type_check_and_typed_scripts_pass_strict_mode() {
     all_scripts.push(BYTES_SCRIPT);
     #[cfg(feature = "intern")]
     all_scripts.push(INTERN_SCRIPT);
+    #[cfg(feature = "syntax")]
+    all_scripts.push(SYNTAX_SCRIPT);
     let scripts = plan.analysis_sources(Scripts(all_scripts.iter().copied().collect()));
     let options = AnalysisOptions {
         definitions: vec![Definitions { name: "dream.d.luau".to_owned(), source: definitions.clone() }],

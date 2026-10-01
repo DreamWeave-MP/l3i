@@ -49,6 +49,8 @@ mod require;
 mod sandbox;
 #[cfg(feature = "soft-render")]
 mod soft_render;
+#[cfg(feature = "syntax")]
+mod syntax;
 mod tagged;
 mod thread;
 #[cfg(all(feature = "analysis", feature = "soft-render"))]

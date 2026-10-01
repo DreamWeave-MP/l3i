@@ -90,6 +90,7 @@ fn main() {
     let debug = env::var_os("CARGO_CFG_DEBUG_ASSERTIONS").is_some();
     let jit = env::var_os("CARGO_FEATURE_JIT").is_some();
     let analysis = env::var_os("CARGO_FEATURE_ANALYSIS").is_some();
+    let syntax = env::var_os("CARGO_FEATURE_SYNTAX").is_some();
 
     let mut base = cc::Build::new();
     base.cpp(true).std("c++17").warnings(false);
@@ -177,6 +178,14 @@ fn main() {
         shim.include(&codegen_include).include(&vm_include).include(&vm_src).file("csrc/codegen.cpp");
         shim.compile("l3icodegen");
         generate_ir_enums(&codegen_include);
+    }
+
+    if syntax {
+        // `@dream/luau`: the parser is the Ast library every build already has; the shim builds
+        // its tree with the VM's API.
+        let mut shim = luau.base.clone();
+        shim.include(&ast_include).include(&vm_include).include(&vm_src).file("csrc/syntax.cpp");
+        shim.compile("l3isyntax");
     }
 
     if analysis {

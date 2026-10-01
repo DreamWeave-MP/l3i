@@ -101,6 +101,8 @@ pub mod sequence;
 pub mod soft_render;
 pub mod source;
 pub mod stack;
+#[cfg(feature = "syntax")]
+pub mod syntax;
 pub mod thread;
 pub mod userdata;
 pub mod value;
