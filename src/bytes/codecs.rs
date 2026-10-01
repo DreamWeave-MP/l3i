@@ -1,5 +1,5 @@
 //! Compression codecs (feature `bytes-codecs`): DEFLATE in zlib, raw and gzip framing, LZ4
-//! blocks and frames, and zstd and LZMA/XZ decoding, all pure Rust.
+//! blocks and frames, zstd, and LZMA/XZ decoding, all pure Rust.
 //!
 //! Decoders take an optional `maxSize`, the most they will produce (default 1 GiB), and every
 //! one of them enforces it while producing, never only after: a hostile stream cannot grow the
@@ -263,6 +263,23 @@ fn zstd_decompress(call: &Call<'_>, source: BytesView<'_>, options: Option<Value
     Ok(NewBuffer(out))
 }
 
+fn zstd_compress(call: &Call<'_>, source: BytesView<'_>, options: Option<ValueView<'_>>) -> Result<NewBuffer> {
+    const WHAT: &str = "bytes.zstdCompress";
+    // ruzstd implements one real level, `Fastest`, which it likens to zstd's level 1; its other
+    // levels are `unimplemented!()`, a panic, so every level but 1 is refused here instead.
+    if let Some(options) = options {
+        Options::read(call, options, WHAT, |o| match o.optional::<Exact<i64>>("level")? {
+            None | Some(Exact(1)) => Ok(()),
+            Some(Exact(level)) => {
+                Err(Error::runtime(format!("{WHAT}: level {level} is not implemented; only level 1 is")))
+            }
+        })?;
+    }
+    // SAFETY: as `inflate`.
+    let data = unsafe { bytes(&source) };
+    Ok(NewBuffer(ruzstd::encoding::compress_to_vec(data, ruzstd::encoding::CompressionLevel::Fastest)))
+}
+
 fn lzma_decompress(call: &Call<'_>, source: BytesView<'_>, options: Option<ValueView<'_>>) -> Result<NewBuffer> {
     const WHAT: &str = "bytes.lzmaDecompress";
     let (xz, max) = match options {
@@ -325,6 +342,9 @@ pub(crate) fn describe(module: &mut ModuleDecl) {
         .signature("(source: buffer | string) -> buffer")
         .function("zstdDecompress", zstd_decompress)
         .signature("(source: buffer | string, options: { maxSize: number? }?) -> buffer")
+        .function("zstdCompress", zstd_compress)
+        .signature("(source: buffer | string, options: { level: number? }?) -> buffer")
+        .doc("A Zstandard frame with a content checksum; level 1, the one ruzstd implements, is the only level.")
         .function("lzmaDecompress", lzma_decompress)
         .signature("(source: buffer | string, options: { format: string?, maxSize: number? }?) -> buffer")
         .doc("LZMA (.lzma, default) or XZ (format = 'xz') decoding.");

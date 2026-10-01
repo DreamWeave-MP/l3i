@@ -150,6 +150,13 @@ fn codecs_round_trip_and_decode_foreign_fixtures() {
              assert(buffer.tostring(bytes.lz4Decompress(block, #big)) == big, 'lz4 block') \
              assert(buffer.tostring(bytes.lz4FrameDecompress(bytes.lz4FrameCompress(big))) == big, 'lz4 frame') \
              assert(buffer.tostring(bytes.lz4FrameDecompress(bytes.lz4FrameCompress(''))) == '', 'empty frame') \
+             local zstd = bytes.zstdCompress(big) \
+             assert(buffer.len(zstd) < #big / 10, 'zstd compresses') \
+             assert(buffer.tostring(bytes.zstdDecompress(zstd)) == big, 'zstd round trip') \
+             assert(buffer.tostring(bytes.zstdDecompress(bytes.zstdCompress(big, { level = 1 }))) == big, 'zstd level 1') \
+             assert(buffer.tostring(bytes.zstdDecompress(bytes.zstdCompress(''))) == '', 'empty zstd frame') \
+             assert(buffer.tostring(bytes.zstdCompress(big)) == buffer.tostring(zstd), 'zstd is deterministic') \
+             local ok12, err12 = pcall(bytes.zstdCompress, big, { level = 3 }) assert(not ok12 and err12:find('bytes.zstdCompress: level 3 is not implemented'), err12) \
              -- Limits and corruption are errors in the call's name, never a truncated result. \
              local ok, err = pcall(bytes.inflate, bytes.deflate(big), { maxSize = 100 }) assert(not ok and err:find('bytes.inflate: output exceeds maxSize'), err) \
              local ok2, err2 = pcall(bytes.inflate, 'not deflate at all') assert(not ok2 and err2:find('corrupt'), err2) \

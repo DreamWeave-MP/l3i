@@ -470,7 +470,7 @@ end
 | `deflate(source, { format?, level? }?)` | Levels 0 to 10, default 6 |
 | `lz4Decompress(source, decompressedSize, { maxSize? }?)`, `lz4Compress(source)` | LZ4 blocks; the block format carries no size, so the caller supplies it, and `maxSize` caps what the caller may ask for |
 | `lz4FrameDecompress(source, { maxSize? }?)`, `lz4FrameCompress(source)` | LZ4 frames |
-| `zstdDecompress(source, { maxSize? }?)` | Zstandard, decoding only (pure Rust has no encoder) |
+| `zstdDecompress(source, { maxSize? }?)`, `zstdCompress(source, { level? }?)` | Zstandard; the encoder is ruzstd's, whose only implemented level is 1 (roughly zstd's own level 1), so any other `level` is an error. Frames carry a content checksum |
 | `lzmaDecompress(source, { format?, maxSize? }?)` | `.lzma` (default) or `xz`, decoding only |
 
 Every decoder takes `maxSize`, the most it will produce (default 1 GiB), and enforces it while
