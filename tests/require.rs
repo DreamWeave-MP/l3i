@@ -113,6 +113,8 @@ fn require_resolves_relative_paths_through_the_navigator_and_caches_results() {
     table.set(&runtime.stack(), "answer", &42i32).unwrap();
     runtime.register_require_module("@answers", table.value()).unwrap();
     runtime.exec("assert(require('@answers').answer == 42)").unwrap();
+    runtime.register_require_module("@answers", table.value()).unwrap();
+    assert_eq!(runtime.registered_require_modules(), ["@answers"], "registered once, listed once");
     // Clearing the cache forces reloads.
     runtime.clear_require_cache_entry("lib/math").unwrap();
     runtime

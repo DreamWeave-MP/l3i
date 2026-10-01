@@ -121,6 +121,8 @@ pub(crate) struct Shared {
     embedder_gc: crate::memory::EmbedderGcSlot,
     /// The host's require navigator.
     require_navigator: crate::require::NavigatorSlot,
+    /// Every path registered with `register_require_module`, in registration order.
+    require_modules: RefCell<Vec<String>>,
     /// Registered untagged userdata metatables by Rust type: the identity the receiver check
     /// compares against and a registry reference for attaching the metatable on push.
     untagged: RefCell<HashMap<TypeId, UntaggedIdentity, BuildHasherDefault<TypeIdHasher>>>,
@@ -221,6 +223,7 @@ impl Shared {
             embedder_gc: RefCell::new(None),
             direct_plan: std::cell::OnceCell::new(),
             require_navigator: RefCell::new(None),
+            require_modules: RefCell::new(Vec::new()),
             untagged: RefCell::new(HashMap::default()),
             direct_entries: RefCell::new(Vec::new()),
             packed_owners: std::array::from_fn(|_| Cell::new(None)),
@@ -289,6 +292,10 @@ impl Shared {
     #[cfg(feature = "jit")]
     pub(crate) fn set_userdata_type(&self, id: TypeId, bytecode_type: u8) {
         self.userdata_types.borrow_mut().insert(id, bytecode_type);
+    }
+
+    pub(crate) fn require_modules(&self) -> &RefCell<Vec<String>> {
+        &self.require_modules
     }
 
     pub(crate) fn require_navigator(&self) -> &crate::require::NavigatorSlot {

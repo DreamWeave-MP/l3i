@@ -364,7 +364,19 @@ impl Runtime {
                     0
                 })
             }
-        })
+        })?;
+        let mut modules = self.shared().require_modules().borrow_mut();
+        if !modules.iter().any(|module| module == path) {
+            modules.push(path.to_owned());
+        }
+        Ok(())
+    }
+
+    /// Every path registered with [`Self::register_require_module`], in registration order: the
+    /// plan's modules and whatever the host registered after, the namespace `require` resolves
+    /// without a navigator.
+    pub fn registered_require_modules(&self) -> Vec<String> {
+        self.shared().require_modules().borrow().clone()
     }
 
     /// Drops one cached module result by its cache key (`luarequire_clearcacheentry`).

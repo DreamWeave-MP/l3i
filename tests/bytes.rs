@@ -122,6 +122,11 @@ fn the_widths_and_orders_buffer_lacks_agree_with_buffer_and_with_the_receiver() 
         .unwrap();
 }
 
+#[test]
+fn a_plan_runtime_lists_its_modules_as_registered() {
+    assert!(runtime().registered_require_modules().iter().any(|module| module == "@dream/bytes"));
+}
+
 #[cfg(feature = "bytes-codecs")]
 #[test]
 fn codecs_round_trip_and_decode_foreign_fixtures() {
