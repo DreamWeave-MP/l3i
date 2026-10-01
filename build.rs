@@ -49,6 +49,15 @@ impl Luau {
         for (key, value) in defines {
             build.define(key, Some(*value));
         }
+        if component == "Analysis" {
+            // TableLiteralInference.cpp calls std::abs without including <cmath>, which Apple's
+            // libc++ no longer pulls in through other headers; the submodule stays untouched.
+            if build.get_compiler().is_like_msvc() {
+                build.flag("/FIcmath");
+            } else {
+                build.flag("-include").flag("cmath");
+            }
+        }
         for source in sources(&self.dir(component, "src")) {
             build.file(source);
         }
