@@ -138,7 +138,7 @@ const SKY_FRAGMENT = /* glsl */ `
       vec2 offset = vec2(hash21(cell + 1.1), hash21(cell + 2.2)) - 0.5;
       float d = length(f - offset * 0.7);
       float twinkle = 0.55 + 0.45 * sin(uTime * (0.8 + 1.7 * h) + h * 40.0);
-      float star = smoothstep(0.09, 0.0, d) * step(0.965, h) * twinkle;
+      float star = (1.0 - smoothstep(0.0, 0.09, d)) * step(0.965, h) * twinkle;
       stars += star * (0.5 + 0.5 * float(layer));
     }
     stars *= smoothstep(0.05, 0.5, vUv.y);
@@ -175,6 +175,7 @@ const SKY_FRAGMENT = /* glsl */ `
     // A hint of grain, so the gradients never band.
     col += (hash21(gl_FragCoord.xy + fract(uTime)) - 0.5) * 0.012;
     gl_FragColor = vec4(col, 1.0);
+    #include <colorspace_fragment>
   }
 `;
 
@@ -210,7 +211,7 @@ const BAKE_FRAGMENT = /* glsl */ `
           float d = length(c + o - q) / radius;
           if (d < 1.2) {
             float bowl = -0.16 * (1.0 - smoothstep(0.25, 1.0, d));
-            float rim = 0.07 * smoothstep(0.7, 1.0, d) * smoothstep(1.2, 1.0, d);
+            float rim = 0.07 * smoothstep(0.7, 1.0, d) * (1.0 - smoothstep(1.0, 1.2, d));
             h += bowl + rim;
           }
         }
@@ -284,7 +285,8 @@ const MOON_FRAGMENT = /* glsl */ `
     float cosLat = max(sqrt(max(1.0 - n.y * n.y, 0.0)), 0.05);
     float sx = hx / (2.0 * du * 6.2831853 * cosLat);
     float sy = hy / (2.0 * dv * 3.14159265);
-    vec3 east = normalize(vec3(-n.z, 0.0, n.x));
+    // Longitude is undefined at the poles; use a finite limiting tangent there.
+    vec3 east = length(n.xz) > 0.0001 ? normalize(vec3(-n.z, 0.0, n.x)) : vec3(0.0, 0.0, 1.0);
     vec3 north = cross(east, n);
     vec3 bumped = normalize(n - (east * sx + north * sy) * 0.55);
 
@@ -309,6 +311,7 @@ const MOON_FRAGMENT = /* glsl */ `
     col += spec * vec3(1.0, 0.96, 1.0);
     col += uAccent * fresnel * (0.35 + 0.45 * terminator);
     gl_FragColor = vec4(col, 1.0);
+    #include <colorspace_fragment>
   }
 `;
 
@@ -330,6 +333,7 @@ const HALO_FRAGMENT = /* glsl */ `
     vec3 view = vec3(0.0, 0.0, 1.0);
     float rim = pow(1.0 - max(dot(normalize(vNormal), view), 0.0), 3.5);
     gl_FragColor = vec4(uAccent * rim * (0.9 + 0.25 * uPulse), rim);
+    #include <colorspace_fragment>
   }
 `;
 
@@ -352,6 +356,7 @@ const CORONA_FRAGMENT = /* glsl */ `
     float a = exp(-d * d * 5.5) * 0.45 + exp(-d * 9.0) * 0.35;
     a *= 1.0 + 0.12 * uPulse;
     gl_FragColor = vec4(mix(uAccent, vec3(1.0), 0.25) * a, a);
+    #include <colorspace_fragment>
   }
 `;
 
@@ -382,8 +387,9 @@ const DUST_FRAGMENT = /* glsl */ `
   uniform vec3 uAccent;
   void main() {
     float d = length(gl_PointCoord - 0.5) * 2.0;
-    float a = smoothstep(1.0, 0.1, d) * vAlpha;
+    float a = (1.0 - smoothstep(0.1, 1.0, d)) * vAlpha;
     gl_FragColor = vec4(mix(uAccent, vec3(1.0), 0.4) * a, a);
+    #include <colorspace_fragment>
   }
 `;
 
@@ -737,16 +743,17 @@ function start(hero, art) {
     spin += delta * 0.035;
     spinRotation.setFromAxisAngle(axisY, spin);
     moon.quaternion.copy(dragRotation).multiply(tilt).multiply(spinRotation);
+    moonGroup.rotation.x = eased.y * 0.05;
+    moonGroup.rotation.y = eased.x * 0.06;
     // The surface shader lights in object space, where the sphere's normal is exact.
     moon.getWorldQuaternion(worldRotation).invert();
     moonUniforms.uLight.value.copy(lightWorld).applyQuaternion(worldRotation);
     moonUniforms.uView.value.set(0, 0, 1).applyQuaternion(worldRotation);
-    moonGroup.rotation.x = eased.y * 0.05;
-    moonGroup.rotation.y = eased.x * 0.06;
     const pulse = 0.5 + 0.5 * Math.sin(elapsed * 0.7);
     haloUniforms.uPulse.value = pulse;
     coronaUniforms.uPulse.value = pulse;
-    corona.quaternion.copy(camera.quaternion);
+    moonGroup.getWorldQuaternion(worldRotation).invert();
+    corona.quaternion.copy(worldRotation).multiply(camera.quaternion);
     renderer.render(scene, camera);
     framesDrawn += 1;
     if (framesDrawn === 1) {
