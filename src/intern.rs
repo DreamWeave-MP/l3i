@@ -96,18 +96,65 @@ const fn fold_word(word: u64) -> u64 {
     word | (upper >> 2)
 }
 
+/// The little-endian word at `at`.
+///
+/// # Safety
+/// `at + 8 <= bytes.len()`.
 #[inline(always)]
-fn word_at(bytes: &[u8], at: usize) -> u64 {
-    u64::from_le_bytes(bytes[at..at + 8].try_into().unwrap())
+unsafe fn load(bytes: &[u8], at: usize) -> u64 {
+    debug_assert!(at + 8 <= bytes.len());
+    // SAFETY: forwarded bounds.
+    u64::from_le(unsafe { bytes.as_ptr().add(at).cast::<u64>().read_unaligned() })
 }
 
-/// The trailing `bytes.len() % 8` bytes, zero-padded.
+/// Fewer than eight bytes, zero-extended, from at most three loads that may overlap.
 #[inline(always)]
-fn tail_word(bytes: &[u8]) -> u64 {
-    let mut tail = [0u8; 8];
-    let rest = bytes.len() & !7;
-    tail[..bytes.len() - rest].copy_from_slice(&bytes[rest..]);
-    u64::from_le_bytes(tail)
+fn load_short(bytes: &[u8]) -> u64 {
+    let len = bytes.len();
+    debug_assert!(len < 8);
+    let at = bytes.as_ptr();
+    // SAFETY: every read lies inside `bytes`; overlapping reads put the same byte in the same
+    // place, so OR-ing them is exact.
+    unsafe {
+        if len >= 4 {
+            let low = u64::from(u32::from_le(at.cast::<u32>().read_unaligned()));
+            let high = u64::from(u32::from_le(at.add(len - 4).cast::<u32>().read_unaligned()));
+            low | (high << ((len - 4) * 8))
+        } else if len > 0 {
+            u64::from(*at)
+                | (u64::from(*at.add(len / 2)) << (len / 2 * 8))
+                | (u64::from(*at.add(len - 1)) << ((len - 1) * 8))
+        } else {
+            0
+        }
+    }
+}
+
+/// Calls `f` with every eight-byte word of `bytes`: the whole words, then the last eight bytes
+/// again when the length is not a multiple of eight (an overlapping read, the same bytes in the
+/// same place for equal inputs), or one zero-extended word for fewer than eight.
+#[inline(always)]
+fn words(bytes: &[u8], mut f: impl FnMut(u64)) {
+    let len = bytes.len();
+    if len < 8 {
+        f(load_short(bytes));
+        return;
+    }
+    let mut at = 0;
+    while at + 8 <= len {
+        // SAFETY: the loop bound.
+        f(unsafe { load(bytes, at) });
+        at += 8;
+    }
+    if at < len {
+        // SAFETY: len >= 8.
+        f(unsafe { load(bytes, len - 8) });
+    }
+}
+
+#[inline(always)]
+const fn fold<const FOLD: bool>(word: u64) -> u64 {
+    if FOLD { fold_word(word) } else { word }
 }
 
 const K: u64 = 0x517c_c1b7_2722_0a95;
@@ -115,34 +162,37 @@ const K: u64 = 0x517c_c1b7_2722_0a95;
 #[inline(always)]
 fn hash<const FOLD: bool>(bytes: &[u8]) -> u32 {
     let mut h = bytes.len() as u64;
-    let words = bytes.len() / 8;
-    for i in 0..words {
-        let word = word_at(bytes, i * 8);
-        let word = if FOLD { fold_word(word) } else { word };
-        h = (h.rotate_left(5) ^ word).wrapping_mul(K);
-    }
-    if !bytes.len().is_multiple_of(8) {
-        let word = tail_word(bytes);
-        let word = if FOLD { fold_word(word) } else { word };
-        h = (h.rotate_left(5) ^ word).wrapping_mul(K);
-    }
+    words(bytes, |word| h = (h.rotate_left(5) ^ fold::<FOLD>(word)).wrapping_mul(K));
     h ^= h >> 29;
     h = h.wrapping_mul(0xbf58_476d_1ce4_e5b9);
     (h ^ (h >> 32)) as u32
 }
 
+/// Two words equal under the policy. Most duplicates repeat a spelling exactly, so the raw
+/// compare decides them and only a difference is folded.
 #[inline(always)]
-fn equal_folded(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
+const fn same_word<const FOLD: bool>(a: u64, b: u64) -> bool {
+    a == b || (FOLD && fold_word(a) == fold_word(b))
+}
+
+/// Equal under the policy; `a` and `b` have the same length.
+#[inline(always)]
+fn equal<const FOLD: bool>(a: &[u8], b: &[u8]) -> bool {
+    debug_assert_eq!(a.len(), b.len());
+    let len = a.len();
+    if len < 8 {
+        return same_word::<FOLD>(load_short(a), load_short(b));
     }
-    let words = a.len() / 8;
-    for i in 0..words {
-        if fold_word(word_at(a, i * 8)) != fold_word(word_at(b, i * 8)) {
+    let mut at = 0;
+    while at + 8 <= len {
+        // SAFETY: the loop bound, and the lengths are equal.
+        if unsafe { !same_word::<FOLD>(load(a, at), load(b, at)) } {
             return false;
         }
+        at += 8;
     }
-    a.len().is_multiple_of(8) || fold_word(tail_word(a)) == fold_word(tail_word(b))
+    // SAFETY: len >= 8.
+    at == len || unsafe { same_word::<FOLD>(load(a, len - 8), load(b, len - 8)) }
 }
 
 /// One identity's first spelling in the arena.
@@ -186,41 +236,33 @@ impl Interner {
         self.text.capacity() + self.entries.capacity() * size_of::<Entry>() + self.slots.capacity() * size_of::<u64>()
     }
 
-    #[inline(always)]
-    fn hash_of(&self, bytes: &[u8]) -> u32 {
-        match self.policy {
-            Policy::Exact => hash::<false>(bytes),
-            Policy::AsciiNoCase => hash::<true>(bytes),
-        }
-    }
-
+    /// The first spelling of `token`, which this pool made.
     #[inline(always)]
     fn spelling(&self, token: u32) -> &[u8] {
-        let entry = self.entries[token as usize - 1];
-        &self.text[entry.start as usize..(entry.start + entry.len) as usize]
-    }
-
-    #[inline(always)]
-    fn same(&self, token: u32, bytes: &[u8]) -> bool {
-        let stored = self.spelling(token);
-        match self.policy {
-            Policy::Exact => stored == bytes,
-            Policy::AsciiNoCase => equal_folded(stored, bytes),
+        debug_assert!(token as usize >= 1 && token as usize <= self.entries.len());
+        // SAFETY: tokens in slots index `entries`, and entries index `text`; neither shrinks.
+        unsafe {
+            let entry = *self.entries.get_unchecked(token as usize - 1);
+            self.text.get_unchecked(entry.start as usize..(entry.start + entry.len) as usize)
         }
     }
 
-    /// The token for `bytes`, or the empty slot it would take.
+    /// The token for `bytes`, or the empty slot it would take. `slots` is not empty.
     #[inline(always)]
-    fn probe(&self, bytes: &[u8], hash: u32) -> std::result::Result<u32, usize> {
+    fn probe<const FOLD: bool>(&self, bytes: &[u8], hash: u32) -> std::result::Result<u32, usize> {
         let mask = self.slots.len() - 1;
         let mut at = hash as usize & mask;
         loop {
-            let slot = self.slots[at];
+            // SAFETY: `at` is masked to the power-of-two table.
+            let slot = unsafe { *self.slots.get_unchecked(at) };
             if slot == 0 {
                 return Err(at);
             }
-            if (slot >> 32) as u32 == hash && self.same(slot as u32, bytes) {
-                return Ok(slot as u32);
+            if (slot >> 32) as u32 == hash {
+                let stored = self.spelling(slot as u32);
+                if stored.len() == bytes.len() && equal::<FOLD>(stored, bytes) {
+                    return Ok(slot as u32);
+                }
             }
             at = (at + 1) & mask;
         }
@@ -231,29 +273,45 @@ impl Interner {
         if self.slots.is_empty() {
             return None;
         }
-        self.probe(bytes, self.hash_of(bytes)).ok()
+        match self.policy {
+            Policy::Exact => self.probe::<false>(bytes, hash::<false>(bytes)).ok(),
+            Policy::AsciiNoCase => self.probe::<true>(bytes, hash::<true>(bytes)).ok(),
+        }
     }
 
     /// The token for `bytes`, adding it on first sight.
     pub fn intern(&mut self, bytes: &[u8]) -> Result<u32> {
+        match self.policy {
+            Policy::Exact => self.intern_with::<false>(bytes),
+            Policy::AsciiNoCase => self.intern_with::<true>(bytes),
+        }
+    }
+
+    #[inline(always)]
+    fn intern_with<const FOLD: bool>(&mut self, bytes: &[u8]) -> Result<u32> {
         if (self.entries.len() + 1) * 4 > self.slots.len() * 3 {
             self.grow()?;
         }
-        let hash = self.hash_of(bytes);
-        match self.probe(bytes, hash) {
-            Ok(token) => Ok(token),
-            Err(at) => {
-                if self.text.len() + bytes.len() > u32::MAX as usize {
-                    return Err(Error::runtime("intern: the pool's text passed 4 GiB"));
-                }
-                let start = self.text.len() as u32;
-                self.text.extend_from_slice(bytes);
-                self.entries.push(Entry { start, len: bytes.len() as u32 });
-                let token = self.entries.len() as u32;
-                self.slots[at] = (u64::from(hash) << 32) | u64::from(token);
-                Ok(token)
-            }
+        let hash = hash::<FOLD>(bytes);
+        let at = match self.probe::<FOLD>(bytes, hash) {
+            Ok(token) => return Ok(token),
+            Err(at) => at,
+        };
+        self.insert(bytes, hash, at)
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn insert(&mut self, bytes: &[u8], hash: u32, at: usize) -> Result<u32> {
+        if self.text.len() + bytes.len() > u32::MAX as usize {
+            return Err(Error::runtime("intern: the pool's text passed 4 GiB"));
         }
+        let start = self.text.len() as u32;
+        self.text.extend_from_slice(bytes);
+        self.entries.push(Entry { start, len: bytes.len() as u32 });
+        let token = self.entries.len() as u32;
+        self.slots[at] = (u64::from(hash) << 32) | u64::from(token);
+        Ok(token)
     }
 
     /// The first spelling of `token`, if this pool made it.
@@ -262,6 +320,7 @@ impl Interner {
         Some(self.spelling(token))
     }
 
+    #[cold]
     fn grow(&mut self) -> Result<()> {
         if self.entries.len() >= u32::MAX as usize - 1 {
             return Err(Error::runtime("intern: the pool holds 2^32 - 1 identities"));
@@ -400,6 +459,37 @@ mod tests {
         for byte in 0..=255u8 {
             let word = u64::from_le_bytes([byte; 8]);
             assert_eq!(fold_word(word), u64::from_le_bytes([byte.to_ascii_lowercase(); 8]), "byte {byte:#x}");
+        }
+    }
+
+    #[test]
+    fn word_reads_hashes_and_equality_agree_with_bytewise_references() {
+        let mut seed = 0x9e37_79b9_7f4a_7c15u64;
+        let mut next = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        for len in 0..=40 {
+            for _ in 0..200 {
+                let a: Vec<u8> = (0..len).map(|_| b"aAzZ@[`{0_\xc3"[next() as usize % 11]).collect();
+                let b: Vec<u8> =
+                    a.iter().map(|byte| if next() & 1 == 0 { byte.to_ascii_uppercase() } else { *byte }).collect();
+                let mut flipped = b.clone();
+                if len > 0 {
+                    flipped[next() as usize % len] ^= 0x01;
+                }
+                assert!(equal::<false>(&a, &a) && equal::<true>(&a, &b), "{a:?} {b:?}");
+                assert_eq!(hash::<true>(&a), hash::<true>(&b));
+                assert_eq!(equal::<false>(&a, &b), a == b);
+                assert_eq!(equal::<true>(&a, &flipped), a.eq_ignore_ascii_case(&flipped), "{a:?} {flipped:?}");
+                if len < 8 {
+                    let mut padded = [0u8; 8];
+                    padded[..len].copy_from_slice(&a);
+                    assert_eq!(load_short(&a), u64::from_le_bytes(padded));
+                }
+            }
         }
     }
 
