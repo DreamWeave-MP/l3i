@@ -446,6 +446,47 @@ local count, after = bytes.readVarint(header, next)
 Every bounds failure names the call, the width and the offset: `bytes.readu32be: 4 bytes at
 offset 30 past the end (length 32)`.
 
+### Framing chunks
+
+`frame(source, layout, offset?, finish?)` walks a run of tag-length-payload chunks, the shape
+RIFF, IFF, PNG, GLB and Bethesda's records share, in one native call, and returns where each
+chunk is: a buffer of `u32` start and end pairs, the count, and, when the walk stopped early,
+why and where. The layout is data: `header` (bytes before the payload), `lengthAt` and
+`lengthSize` (1, 2, 4 or 8; 4 by default) for the length field, `bigEndian`, and an `inner`
+layout that frames each chunk's payload in turn and checks that its chunks tile it exactly,
+without recording them, which is the walk a parser makes before it trusts any offset in a file.
+
+```luau
+local layout = { header = 16, lengthAt = 4, inner = { header = 8, lengthAt = 4 } }
+local spans, count, problem, at = bytes.frame(file, layout)
+if problem then error(`{problem} at offset {at}`) end   -- truncated, overrun, innerTruncated, innerOverrun
+for i = 0, count - 1 do
+    local start, finish = buffer.readu32(spans, i * 8), buffer.readu32(spans, i * 8 + 4)
+end
+```
+
+The chunks before a problem are still in the result, so a parser reports it in its own words.
+
+### Regular expressions (`bytes-regex`)
+
+`regex(pattern, { caseInsensitive?, unicode?, multiLine?, dotAll? }?)` compiles a pattern once
+(the regex crate's syntax, matched over bytes: Unicode-aware by default, `unicode = false` or
+`(?-u)` for data in another encoding; no look-around, linear time). The `dream.bytes.Regex` it
+returns has `isMatch(source, offset?, length?)`, `find(source, offset?, length?)` (start and end,
+absolute), `pattern()`, and `matchSpans(source, spans, count?)`: one call tests every
+`(start, end)` `u32` pair in `spans` against its own range of `source`, as if that range were the
+whole input, and answers with a buffer of one byte per span, 1 where it matched. A thousand small
+fields laid out in one buffer cost one call instead of a thousand, and no string is made for any
+of them; `frame`'s spans are already that layout.
+
+```luau
+local teleports = bytes.regex([[\b(position|positioncell)\b]], { caseInsensitive = true })
+local flags = teleports:matchSpans(texts, spans, count)
+for i = 0, count - 1 do
+    if buffer.readu8(flags, i) == 1 then print(`record {i} teleports`) end
+end
+```
+
 ### The widths and orders buffer lacks
 
 `readu16be`, `readi16be`, `readu24`, `readi24`, `readu24be`, `readi24be`, `readu32be`,
@@ -534,6 +575,16 @@ call each: `find` with an absent needle 23 GiB/s, `equals` 28 GiB/s, `count` of 
 output, `deflate` at level 1 2.8 GiB/s, LZ4 block decompression 1.1 GiB/s and compression
 5.9 GiB/s, `decode` of Windows-1252 1.5 GiB/s, `isUtf8` 21 GiB/s. The boundary is a fixed
 few tens of nanoseconds; the rest is the library's own speed.
+
+`frame` and `matchSpans` over one megabyte of 16-byte-header records holding 8-byte-header
+fields (26000 records, 78000 fields; a verified build under a load average of 4.5):
+
+| Work | One call | The loop it replaces |
+|---|---:|---:|
+| `frame`, records and their fields checked | 0.98 ms | 9.8 ms, a Luau walk (interpreted) |
+| `matchSpans`, one text field per record | 1.02 ms | 7.7 ms, `isMatch` per record |
+
+About 9 ns per chunk framed and 39 ns per span matched, the regex's own time included.
 
 ## dream.intern
 

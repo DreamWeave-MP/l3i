@@ -118,4 +118,6 @@ added = [
     "The tree costs 17205 instructions per source line built and collected, against 27861 for the parser and Luau's own JSON encoding of it, which a script would still have to decode.",
     "`ExtensionDescriptor::type_alias`: a named Luau type an extension's signatures refer to, for values that are plain tables, rendered as `export type` ahead of every module.",
     "`@dream/bytes`'s `toBase64` and `fromBase64`: standard padded base64 of a range of a buffer or string in one call, and back, refusing anything that isn't base64 by naming the byte.",
+    "`@dream/bytes`'s `frame`: one native walk over a run of tag-length-payload chunks (RIFF, IFF, PNG, GLB, Bethesda records), the layout given as data, returning every chunk's start and end as `u32` pairs and, when it stops early, why and where; an `inner` layout checks that each payload's chunks tile it. A megabyte of records and fields in 0.98 ms against 9.8 ms for the Luau walk.",
+    "`@dream/bytes`'s `regex` (feature `bytes-regex`): a pattern compiled once over bytes, whose `matchSpans` tests every `(start, end)` range of a buffer in one call and answers with a byte per range, so a thousand small fields cost one call and no strings; `isMatch` and `find` over one range.",
 ]

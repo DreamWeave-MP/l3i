@@ -133,6 +133,7 @@ Each row is a page of the guide.
 | `bytes-codecs` | DEFLATE, LZ4, zstd and LZMA/XZ | `miniz_oxide`, `lz4_flex`, `ruzstd`, `lzma-rs` |
 | `bytes-digests` | CRC-32 to BLAKE3, one-shot and incremental | `crc32fast`, `xxhash-rust`, RustCrypto, `blake3` |
 | `bytes-text` | Every WHATWG text encoding | `encoding_rs` |
+| `bytes-regex` | Regular expressions over bytes, many ranges in one call | `regex` |
 | `intern` | The `@dream/intern` extension | none |
 | `syntax` | The `@dream/luau` extension | none |
 | `soft-render` | The `dream.soft_render` extension | `dream-soft-render` |

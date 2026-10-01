@@ -23,7 +23,7 @@ are optional:
 | `analysis` | Luau's Analysis library behind a C++ shim: the type checker, linter, autocomplete and parser in `analysis` |
 | `soft-render` | dream-soft-render as the `dream.soft_render` extension |
 | `bytes` | The `dream.bytes` extension for parsing foreign formats: searching, record strings, varints, big-endian and half-float reads, natively lowered under `jit` |
-| `bytes-codecs`, `bytes-digests`, `bytes-text` | Its codecs (DEFLATE, LZ4, zstd, LZMA), digests (CRC-32 to BLAKE3) and text encodings, each pulling in its pure-Rust dependencies |
+| `bytes-codecs`, `bytes-digests`, `bytes-text`, `bytes-regex` | Its codecs (DEFLATE, LZ4, zstd, LZMA), digests (CRC-32 to BLAKE3), text encodings and regular expressions, each pulling in its pure-Rust dependencies |
 | `intern` | The `dream.intern` extension: textual identities as dense numbers, from strings or buffer spans, exact or ASCII case-insensitive |
 
 dream-net is not a feature: l3i depends on it and owns the Luau bridge to it, so every runtime

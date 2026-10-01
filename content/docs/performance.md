@@ -17,7 +17,7 @@ is a deliberate change that re-audits the hand-declared C API.
 
 - **Rust 1.92** or newer, declared as `rust-version` and checked in CI. Edition 2024. The optional `dream-soft-render` dependency declares the same.
 - `unsafe` is used, at the FFI boundary and in the value-layout reads; every block states the invariant it relies on (see [Safety](@/docs/safety.md)).
-- Optional features, all off by default: `jit`, `analysis`, `soft-render`, `bytes` with `bytes-codecs`, `bytes-digests` and `bytes-text`, `intern`, and `syntax` (see [Building](@/docs/building.md)).
+- Optional features, all off by default: `jit`, `analysis`, `soft-render`, `bytes` with `bytes-codecs`, `bytes-digests`, `bytes-text` and `bytes-regex`, `intern`, and `syntax` (see [Building](@/docs/building.md)).
 
 | Dependency | Version | For |
 |---|---|---|
