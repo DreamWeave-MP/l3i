@@ -40,6 +40,10 @@ fn plan() -> Rc<RuntimePlan> {
     let builder = builder.extension(l3i::intern::InternExtension);
     #[cfg(feature = "syntax")]
     let builder = builder.extension(l3i::syntax::SyntaxExtension);
+    #[cfg(feature = "fs")]
+    let builder = builder.extension(l3i::fs::FsExtension);
+    #[cfg(feature = "process")]
+    let builder = builder.extension(l3i::process::ProcessExtension);
     builder.finalize().unwrap()
 }
 
@@ -82,6 +86,46 @@ const INTERN_SCRIPT: (&str, &str) = (
      local n: number = ids:count() + ids:memory()\n\
      local policy: string = ids:policy()\n\
      print(span, found, text, again, n, policy)\n",
+);
+
+#[cfg(feature = "fs")]
+const FS_SCRIPT: (&str, &str) = (
+    "fs_script",
+    "--!strict\n\
+     local fs = require('@dream/fs')\n\
+     local reader = fs.open('x')\n\
+     local head: buffer = reader:readAt(0, 4)\n\
+     local count: number = reader:readInto(buffer.create(4)) + reader:readAtInto(head, 0) + reader:size() + reader:tell()\n\
+     reader:seek(0)\n\
+     reader:close()\n\
+     local stat: dream_fs_Stat? = fs.lstat('x')\n\
+     local kind: dream_fs_FileKind = if stat then stat.kind else 'other'\n\
+     local walk = fs.walk('.', { followLinks = true, include = 'files', metadata = true, sort = true, maxDepth = 3 })\n\
+     for index, path in walk.paths do\n\
+       print(path, walk.kinds[index], walk.sizes and walk.sizes[index])\n\
+     end\n\
+     local writer = fs.openWrite('y', { append = true })\n\
+     local written: number = writer:write('abc') + fs.writeFile('z', buffer.create(1), { offset = 0 })\n\
+     writer:close()\n\
+     fs.mkdir('d', { recursive = true })\n\
+     fs.hardLink('x', 'h')\n\
+     fs.symlink('x', 's', { directory = false })\n\
+     local same: boolean = fs.sameFile('x', 'h') and fs.exists('s')\n\
+     local target: string? = fs.readLink('s')\n\
+     local names: { string } = fs.list('.')\n\
+     fs.remove('d', { recursive = true })\n\
+     print(count, kind, written, same, target, names, fs.canonicalize('.'), fs.copy('x', 'w'))\n",
+);
+
+#[cfg(feature = "process")]
+const PROCESS_SCRIPT: (&str, &str) = (
+    "process_script",
+    "--!strict\n\
+     local process = require('@dream/process')\n\
+     local result = process.run('tool', { '--help' }, { cwd = '.', env = { A = 'b' }, stdout = 'capture', stdin = 'x' })\n\
+     local code: number? = result.code\n\
+     local output: string = result.stdout or ''\n\
+     print(result.success, code, output, result.signal)\n",
 );
 
 /// A strict walker over the tree: refinement on `kind` narrows each union to its node type.
@@ -206,6 +250,10 @@ fn the_generated_definitions_type_check_and_typed_scripts_pass_strict_mode() {
     all_scripts.push(INTERN_SCRIPT);
     #[cfg(feature = "syntax")]
     all_scripts.push(SYNTAX_SCRIPT);
+    #[cfg(feature = "fs")]
+    all_scripts.push(FS_SCRIPT);
+    #[cfg(feature = "process")]
+    all_scripts.push(PROCESS_SCRIPT);
     let scripts = plan.analysis_sources(Scripts(all_scripts.iter().copied().collect()));
     let options = AnalysisOptions {
         definitions: vec![Definitions { name: "dream.d.luau".to_owned(), source: definitions.clone() }],

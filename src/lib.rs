@@ -78,6 +78,8 @@ pub mod direct;
 pub mod error;
 pub mod extension;
 pub mod flags;
+#[cfg(feature = "fs")]
+pub mod fs;
 #[cfg(feature = "intern")]
 pub mod intern;
 pub mod libraries;
@@ -89,6 +91,8 @@ pub mod native_code;
 pub mod net;
 pub mod options;
 pub mod packed;
+#[cfg(feature = "process")]
+pub mod process;
 pub mod quat;
 pub mod raster;
 mod raw;

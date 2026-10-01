@@ -32,6 +32,8 @@ mod call;
 mod debug;
 mod direct;
 mod extension;
+#[cfg(feature = "fs")]
+mod fs;
 #[cfg(feature = "intern")]
 mod intern;
 mod iterator;
@@ -43,6 +45,8 @@ mod module;
 mod native_code;
 mod net;
 mod primitives;
+#[cfg(feature = "process")]
+mod process;
 mod quat;
 mod raster;
 mod require;

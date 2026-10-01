@@ -76,6 +76,11 @@ blake3 = { version = "1", optional = true }
 encoding_rs = { version = "0.8", optional = true }
 # `bytes-regex`: the regex crate's byte-oriented matcher (MIT OR Apache-2.0).
 regex = { version = "1.10", optional = true }
+# `@dream/fs` (feature `fs`): readers over a memory map, the recursive walk, and file identity
+# (device and file number; std has none on Windows). All pure Rust.
+memmap2 = { version = "0.9", optional = true }
+walkdir = { version = "2.5", optional = true }
+same-file = { version = "1.0.6", optional = true }
 
 [build-dependencies]
 # Compiles the vendored Luau tree and the C++ shims.
@@ -151,6 +156,12 @@ bytes-regex = ["bytes", "dep:regex"]
 # The `@dream/luau` extension (`syntax`): Luau's own parser for scripts, its syntax tree,
 # comments, errors and tokens built as tables in native code.
 syntax = []
+# The `@dream/fs` extension (`fs`): the host filesystem over byte paths, gated by the
+# `filesystem.read` and `filesystem.write` capabilities.
+fs = ["dep:memmap2", "dep:walkdir", "dep:same-file"]
+# The `@dream/process` extension (`process`): run a child process and wait for its exit code,
+# gated by the `process.spawn` capability.
+process = []
 # The `@dream/intern` extension (`intern`): pools that turn byte sequences into dense number
 # identities under exact or ASCII case-insensitive equality, lowered under jit.
 intern = []
