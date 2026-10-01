@@ -108,3 +108,13 @@ changed = [
 fixed = [
     "A lowered rotation packs with the omitted component's own sign, so a quarter turn whose two largest components tie with opposite signs no longer packs a different rotation.",
 ]
+
+[[releases]]
+version = "1.3.0"
+date = 2026-10-01
+summary = "Luau's own parser for scripts with `@dream/luau`: the syntax tree with exact spans, comments, errors and the token stream, built as tables in native code and typed for strict walkers; and named Luau types for extensions whose values are plain tables."
+added = [
+    "`@dream/luau` (feature `syntax`): `luau.parse(source, options?)` runs `Luau::Parser` under the runtime's fast flags and returns the tree as tables, every node with its kind and a 1-based span, one table per local shared by its declaration and every use, string quote styles, every comment and hot comment, parse errors as data with the recovered tree, and, with `{ tokens = true }`, Luau's token stream as a buffer of 12-byte records; `{ declarations = true }` parses definition-file syntax.",
+    "The tree costs 17205 instructions per source line built and collected, against 27861 for the parser and Luau's own JSON encoding of it, which a script would still have to decode.",
+    "`ExtensionDescriptor::type_alias`: a named Luau type an extension's signatures refer to, for values that are plain tables, rendered as `export type` ahead of every module.",
+]

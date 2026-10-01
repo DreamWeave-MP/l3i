@@ -1,7 +1,7 @@
 [package]
 autotests = false
 name = "l3i"
-version = "1.2.0"
+version = "1.3.0"
 description = "Luau binder for DreamWeave component crates: typed function binding, tagged and untagged userdata, direct userdata access, sandboxed runtimes"
 authors = ["Dave Corley (S3kshun8) <corleycomputerrepair@protonmail.ch>"]
 license = "MIT OR Apache-2.0"
