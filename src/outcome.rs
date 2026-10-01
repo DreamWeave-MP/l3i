@@ -42,6 +42,7 @@ pub(crate) struct Failure {
 
 impl Failure {
     /// `dream.fs.<what>: <path>: <error>`.
+    #[cfg(feature = "fs")]
     pub(crate) fn new(what: &str, path: &[u8], error: &std::io::Error) -> Failure {
         Failure::message(format!("dream.fs.{what}: {}: {error}", String::from_utf8_lossy(path)), error)
     }
@@ -60,6 +61,7 @@ pub(crate) enum Outcome<T> {
 
 impl<T> Outcome<T> {
     /// `result` as an outcome, its error named for `what` on `path`.
+    #[cfg(feature = "fs")]
     pub(crate) fn of(result: std::io::Result<T>, what: &str, path: &[u8]) -> Outcome<T> {
         match result {
             Ok(value) => Outcome::Done(value),
