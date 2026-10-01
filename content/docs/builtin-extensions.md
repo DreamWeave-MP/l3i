@@ -1,14 +1,14 @@
 +++
 title = "Built-in extensions"
-description = "The extensions l3i ships: the dream.net bridge every plan carries, packed rotations in dream.quat, colors and clip rectangles in dream.raster, and the dream.soft_render device behind the soft-render feature."
+description = "The extensions l3i ships: the dream.net bridge every plan carries, packed rotations in dream.quat, colors and clip rectangles in dream.raster, the dream.soft_render device, bytes for parsing in dream.bytes, and textual identity as numbers in dream.intern."
 weight = 90
 
 [extra]
 kind = "guide"
 +++
 
-Four extensions come with the crate. `dream.net` is in every plan; the other three are added
-with `RuntimePlan::builder().extension(..)`. Each is an ordinary `Extension` built on the
+Six extensions come with the crate. `dream.net` is in every plan; the others are added with
+`RuntimePlan::builder().extension(..)`. Each is an ordinary `Extension` built on the
 [primitives](@/docs/primitives.md), with a Luau signature on every member, so a strict script
 that requires its module type checks against the plan's definitions.
 
@@ -18,6 +18,8 @@ that requires its module type checks against the plan's definitions.
 | `dream.quat` | `@dream/quat` | `l3i::quat::QuatExtension` | always (`quat.math()` needs `jit`) |
 | `dream.raster` | `@dream/raster` | `l3i::raster::RasterExtension` | always |
 | `dream.soft_render` | `@dream/soft-render` | `l3i::soft_render::SoftRenderExtension` | `soft-render` |
+| `dream.bytes` | `@dream/bytes` | `l3i::bytes::BytesExtension` | `bytes` |
+| `dream.intern` | `@dream/intern` | `l3i::intern::InternExtension` | `intern` |
 
 The samples below reach the modules as compat globals (`RuntimePolicy::new().compat_global("@dream/quat", "quat")`),
 which is what the tests do; `require("@dream/quat")` is the canonical path.
@@ -524,3 +526,111 @@ call each: `find` with an absent needle 23 GiB/s, `equals` 28 GiB/s, `count` of 
 output, `deflate` at level 1 2.8 GiB/s, LZ4 block decompression 1.1 GiB/s and compression
 5.9 GiB/s, `decode` of Windows-1252 1.5 GiB/s, `isUtf8` 21 GiB/s. The boundary is a fixed
 few tens of nanoseconds; the rest is the library's own speed.
+
+## dream.intern
+
+Feature `intern`; module `@dream/intern`, `l3i::intern::InternExtension`. Textual identity as
+numbers: a pool turns a byte sequence, a string or a span of a `buffer`, into a small whole
+number under one equivalence policy. Equivalent inputs get the same number and different ones
+different numbers, so from then on identity is `==` on numbers and a table read. It is for the
+names a content format repeats (record ids, asset paths, script and resource names), where the
+same few hundred thousand identities occur millions of times. It knows nothing about any format;
+what an identity means is the caller's business.
+
+```luau
+local intern = require("@dream/intern")
+local ids = intern.new("ascii-nocase")
+local id = ids:intern(record, offset, length)   -- a buffer span: no Luau string is made
+assert(id == ids:intern("Caius Cosades") and id == ids:intern("CAIUS COSADES"))
+local npcs = {}
+npcs[id] = npc                                  -- a dense key: the table's array part
+print(ids:resolve(id))                          -- the first spelling the pool saw
+```
+
+| Function | Returns |
+|---|---|
+| `intern.new(policy?)` | An empty pool: `"exact"` (the default) or `"ascii-nocase"` |
+| `pool:intern(source, offset?, length?)` | The identity of `length` bytes of a string or buffer from `offset` (the whole of it by default), added on first sight |
+| `pool:interner()` | The same operation as a plain function bound to the pool |
+| `pool:find(source, offset?, length?)` | The identity the bytes already have, or nil; never adds one |
+| `pool:resolve(token)` | The first spelling the pool saw for `token`, as a string |
+| `pool:count()`, `pool:memory()`, `pool:policy()` | Identities held (also the last token handed out), native bytes held, the policy |
+
+### Policies
+
+`exact` compares bytes. `ascii-nocase` makes `A`..`Z` equal to `a`..`z` and compares every other
+byte exactly, UTF-8 included: SQLite's `NOCASE`. The folding happens inside the hash and the
+comparison, eight bytes at a time; no folded copy of the input is made, in Luau or in Rust.
+Nothing else is a policy here. Path separators, Unicode case folding and the like are a domain's
+rules, and a domain that needs them normalises its keys before interning them.
+
+### Tokens
+
+A token is the identity's 1-based position in its pool, `1, 2, 3, ...` in first-seen order, as a
+Luau number. A number and not an `integer`, because Luau keeps dense number keys in a table's
+array part and always hashes an `integer` key: reading a table by token costs about a fifth of
+the instructions of reading it by an `integer` or a string, and a third of an `integer` key's L1
+misses (below). Dense tokens also fit a `u32` column, `buffer.writeu32(column, i * 4, id)`.
+
+Tokens are pool-relative: two pools hand out the same numbers, and a token means something only
+to the pool that made it. A pool only grows (nothing is removed or reused), so a token never
+changes meaning while its pool lives and needs no generation or pool bits. Drop the pool and its
+memory goes at once, in one native free per array; tokens kept after that are plain numbers. For
+content that loads and unloads, a pool per load is the unit.
+
+### Storage
+
+The first spelling of each identity is copied once into the pool's arena and kept as it was
+seen: under `ascii-nocase`, `cAiUs CoSaDeS` interned first is what `resolve` returns for every
+spelling after it. A duplicate copies nothing and allocates nothing, native or VM. The index is
+open addressing with each slot holding its hash: 8 bytes per slot at three quarters load at
+most, 8 bytes per identity, and the text. None of it is VM memory, so the collector never
+traverses a pool.
+
+### The hot path
+
+`pool:intern` is a method call. `pool:interner()` returns the same operation as a function bound
+to the pool, which skips the method lookup and the receiver check on every call, about a third
+of what a call costs. A parser's inner loop takes it once:
+
+```luau
+--!native
+local internId = ids:interner()
+for i = 0, count - 1 do
+    local id = internId(text, buffer.readu32(spans, i * 8), buffer.readu32(spans, i * 8 + 4))
+end
+```
+
+The bound function keeps its pool alive.
+
+### What it costs
+
+Counted by `benches/intern.rs` (`cargo bench --bench intern --features intern,jit`) on an
+i7-10870H in retired instructions and cache misses from the CPU's own counters, not time, every
+chunk native. The workload is parse-shaped: 350K record-id-like identities, 5M occurrences
+drawn Zipf-distributed, a quarter of them in random case, read from a text buffer through an
+index of spans. Per occurrence, on the pass that sees only duplicates:
+
+| Case-insensitive identity | Instructions | L1D misses | VM allocated | VM held | Native held |
+|---|---:|---:|---:|---:|---:|
+| `string.lower(buffer.readstring(..))` then a string-keyed table | 1378 | 12.8 | 93 MiB | 36 MiB | 0 |
+| `pool:intern(text, offset, length)` | 868 | 3.2 | 0 | 0 | 15 MiB |
+| the function from `pool:interner()` | 592 | 3.2 | 0 | 0 | 15 MiB |
+
+The pool does the case-insensitive job in fewer instructions than `buffer.readstring` alone does
+the exact one (706), allocates nothing in the VM, and leaves the collector nothing to walk: a
+full collection with the string table live costs 40M instructions and freeing it 59M more; a
+pool costs neither. 350K identities take 15 to 16 MiB native, about 45 bytes each with the
+spelling. The first occurrence costs about what a duplicate does, plus the copy into the arena.
+
+A cache-resident 16-byte duplicate costs 142 instructions natively under `exact` and 184 under
+`ascii-nocase`; through `interner()` the whole call is 508 from a buffer span and 414 from a
+string, against 1317 for `string.lower` plus a table read. Reading a table keyed by tokens is 25
+instructions and a quarter to one L1 miss, against 140 and 2.5 to 4 for `integer` keys and 122
+and 3 to 5.5 for strings. `resolve` is about 900 instructions, most of it making the string.
+What remains is the call itself: a hand-written `lua_CFunction` taking two numbers already
+costs 277 instructions (`benches/instructions.rs`), so the C-call protocol, not the pool, is
+most of a duplicate. Duplicates from strings that already exist are the one case Luau wins,
+since a string key is a pointer the VM already hashed (159 against 402 for `interner`); the pool
+is for bytes that are not strings yet.
+

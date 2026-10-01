@@ -85,6 +85,7 @@ l3i = { version = "1.0", features = ["jit"] }
 | `bytes-codecs` | off | `miniz_oxide`, `lz4_flex`, `ruzstd`, `lzma-rs` and `crc32fast`: `inflate`, `deflate`, LZ4, zstd, LZMA/XZ |
 | `bytes-digests` | off | `crc32fast`, `adler2`, `xxhash-rust`, `md-5`, `sha1`, `sha2`, `blake3`: the checksums and digests |
 | `bytes-text` | off | `encoding_rs`: text decoding and encoding for every WHATWG label |
+| `intern` | off | The `dream.intern` extension (`l3i::intern`); no dependencies |
 
 Networking is not a feature: `dream-net` is a normal dependency and the `dream.net` bridge is in
 every plan.

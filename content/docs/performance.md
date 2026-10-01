@@ -76,6 +76,7 @@ The integration tests link as one binary (`tests/main.rs`), one file's tests run
 | `tests/quat.rs` | Packed quaternions against the f32 userdata baseline, kind checks, and (`jit`) the native lowering |
 | `tests/raster.rs` | Colors and clip rectangles: construction, kind checks, the byte layout, and (`jit`) the lowered color math |
 | `tests/bytes.rs` | `@dream/bytes` (`bytes`): searching, record strings, varints, every width and order against `buffer`, the codecs against Python-made fixtures, the digests against their published vectors, the text codepages, and (`jit`) the lowered integer reads and writes |
+| `tests/intern.rs` (`intern`) | `@dream/intern`: one token per identity across spellings, strings and buffer spans, dense keys in a table's array part, the first spelling back from `resolve`, `interner` against the method and across a collection, named errors |
 | `tests/soft_render.rs` (`soft-render`) | A Luau scene byte-identical to the Rust scene, malformed input, textures freeing themselves, two runtimes with different tags, the vertex writer on all three paths |
 | `tests/native_code.rs` (`jit`) | The code generator with the binder's hooks, the `writef32x3` lowering, a userdata field lowering in Rust, modes, module ids, assembly dumps, the perf log |
 | `tests/typed_definitions.rs` (`analysis`) | The generated `.d.luau` checked by Luau's frontend, strict scripts against every built-in module through `require`, typed views and forward module references |

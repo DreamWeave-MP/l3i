@@ -724,3 +724,29 @@ Lower-case hex, the module's `toHex`.
 In `l3i::convert`: the return type for bytes a script receives as a new `buffer`. Pushing
 allocates the buffer at the vector's length and copies once; returning a `Vec<u8>` pushes a
 string instead. `Push` and a single `Return`.
+
+## dream.intern
+
+Module `l3i::intern`, feature `intern`; the Luau side is in
+[Built-in extensions](@/docs/builtin-extensions.md#dream-intern).
+
+{{ api_signature(value="pub struct InternExtension") }}
+
+The extension; `id()` is `"dream.intern"`, the module path is `MODULE` (`"@dream/intern"`).
+`Clone`, `Copy`, `Debug`, `Default`.
+
+{{ api_signature(value="pub enum Policy { Exact, AsciiNoCase }") }}
+
+When two byte sequences are one identity. `parse("exact" | "ascii-nocase")`, `name()`.
+
+{{ api_signature(value="pub struct Interner") }}
+
+The pool without Luau, for hosts that intern from Rust. `new(policy)`, `intern(&[u8]) ->
+Result<u32>` (the token, added on first sight; an error only past 2^32 - 1 identities or 4 GiB
+of text), `find(&[u8]) -> Option<u32>`, `resolve(i64) -> Option<&[u8]>` (the first spelling),
+`len()`, `is_empty()`, `policy()`, `memory()` (native bytes held).
+
+{{ api_signature(value="pub struct Pool") }}
+
+The userdata behind `intern.new` (`Userdata::NAME` `"dream.intern.Pool"`, tag `Preferred`): an
+`Interner` shared with the functions `Pool:interner()` binds, which keep it alive.
