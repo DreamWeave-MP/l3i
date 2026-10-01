@@ -4,6 +4,9 @@
 //! instructions` prints why it measured nothing, and `cargo test --all-targets` still links.
 
 #[cfg(target_os = "linux")]
+#[path = "instructions/counter.rs"]
+mod counter;
+#[cfg(target_os = "linux")]
 #[path = "instructions/linux.rs"]
 mod linux;
 
