@@ -88,3 +88,23 @@ added = [
     "`DebugScope::call_site`: the chunk name and current line of a frame, asking Luau for those two fields only; Luau records lines, not columns.",
     "Templates load on a loader thread whose globals are the base environment, so Luau resolves their builtin imports when the template loads and every instance takes the fast import path from its first run.",
 ]
+
+[[releases]]
+version = "1.2.0"
+date = 2026-09-30
+summary = "Textual identity as dense numbers with `@dream/intern`, lowered so a repeated identity never leaves native code; a zstd encoder; a constant that says whether a build used the verified toolchain; a slow path for lowering hooks that stays native; and cheaper string, buffer and optional arguments for every binding."
+added = [
+    "`@dream/intern` (feature `intern`): pools that turn strings or buffer spans into dense number tokens under `exact` or `ascii-nocase` equality, folding case inside the hash and the comparison, so no lowered copy is made and a repeated identity allocates nothing. `find`, `resolve` to the first spelling seen, and `interner()` for interpreted code.",
+    "Under `jit`, an annotated `dream_intern_Pool`'s `intern` and `find` lower to native code: a case-insensitive duplicate costs 315 instructions against 1378 for `string.lower` and a table lookup, and an insert or a bad argument runs the bound method without leaving native code.",
+    "`IrBuilder::namecall_call`: the namecall and call Luau would have emitted, as a userdata namecall hook's slow path.",
+    "`l3i::VERIFIED_TOOLCHAIN`: `true` exactly when `build.rs` found the verified toolchain, whether or not `L3I_UNVERIFIED_TOOLCHAIN` was set, for hosts that publish performance numbers.",
+    "`@dream/bytes`'s `zstdCompress`, through ruzstd's one implemented level; any other level is refused by name.",
+    "`Runtime::registered_require_modules`: every path registered with `register_require_module`, the plan's included, in registration order.",
+]
+changed = [
+    "`Q:fromXYZW` lowers to native code: 93 instructions against the binder's 459.",
+    "String, buffer and string-or-buffer arguments are read straight from Luau's value layout (54 instructions instead of 293), and a trailing optional argument is read once (two optional integers cost 335 fewer instructions).",
+]
+fixed = [
+    "A lowered rotation packs with the omitted component's own sign, so a quarter turn whose two largest components tie with opposite signs no longer packs a different rotation.",
+]
