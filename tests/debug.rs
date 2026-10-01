@@ -210,8 +210,7 @@ fn coverage_counts_line_hits_when_compiled_with_coverage() {
             frame.coverage(view)
         })
         .unwrap();
-    assert!(!entries.is_empty());
-    let body = &entries[0];
+    let body = entries.first().expect("the function has coverage entries");
     assert_eq!(body.line_defined, 1);
     // Line 4 (the loop body) ran five times; line 2 once. Lines without code are -1.
     assert!(body.hits.len() > 4, "{body:?}");

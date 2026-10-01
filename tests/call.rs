@@ -27,7 +27,7 @@ fn call_family_success_semantics() {
     assert_eq!(multi.invoke::<(i32, String), _>(&stack, ()).unwrap(), (1, "two".to_owned()));
     assert_eq!(multi.invoke::<(i32, String, Option<i32>), _>(&stack, ()).unwrap(), (1, "two".to_owned(), None));
 
-    assert!(nothing.invoke_multi(&stack, ()).unwrap().is_empty());
+    assert_eq!(nothing.invoke_multi(&stack, ()).unwrap().len(), 0);
     let results = multi.invoke_multi(&stack, ()).unwrap();
     assert_eq!(results.len(), 2);
     assert_eq!(results[0].type_of(), Type::Number);

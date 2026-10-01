@@ -204,7 +204,7 @@ end
 
         let parse = minimum(&instructions, || {
             let report = l3i::analysis::parse(&source, false);
-            assert!(report.errors.is_empty());
+            assert_eq!(report.errors, Vec::new());
         });
         let json = minimum(&instructions, || {
             let report = l3i::analysis::parse(&source, true);
