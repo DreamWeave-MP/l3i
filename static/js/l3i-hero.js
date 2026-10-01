@@ -4,8 +4,9 @@
 // domain-warped noise fields drifting at different speeds, lit by the moon's position on screen.
 // A sphere is the moon: basalt-filled basins, aged impacts, terraced walls, central peaks and
 // fresh ejecta are baked once into a data texture. Spherical height derivatives supply relief
-// normals; a Lommel-Seeliger/Lambert blend gives the stone a powdery, airless appearance rather
-// than a glossy highlight. Violet earthshine and observer-side haze retain the site's palette.
+// normals; bounded spherical height-field traces shadow the relief, and a Lommel-Seeliger/
+// Lambert blend gives the stone a powdery, airless appearance rather than a glossy highlight.
+// Violet earthshine and phase-linked observer-side haze retain the site's palette.
 // Dust rises through the moonlight as point sprites.
 //
 // The palette is read from the site's CSS tokens, so sass/brand.sass stays the single owner of
@@ -112,6 +113,7 @@ const SKY_FRAGMENT = /* glsl */ `
   uniform vec2 uResolution;
   uniform vec2 uMoon;        // the moon's centre, in aspect-corrected uv
   uniform float uMoonRadius; // its radius in the same units
+  uniform float uMoonlight;  // illuminated fraction, shared with the observer-side haze
   uniform vec2 uDrift;       // pointer parallax
   uniform vec3 uBgTop;
   uniform vec3 uBgBottom;
@@ -162,15 +164,15 @@ const SKY_FRAGMENT = /* glsl */ `
     mist *= shade;
 
     // The moon lights the mist: nearer is brighter and bluer-white, far is deep purple.
-    float glow = exp(-moonDist * 2.1) + 0.35 * exp(-moonDist * 0.9);
+    float glow = (exp(-moonDist * 2.1) + 0.35 * exp(-moonDist * 0.9)) * uMoonlight;
     vec3 mistColor = mix(uMistDeep, uMistBright, clamp(mist * 1.2, 0.0, 1.0));
     mistColor = mix(mistColor, mix(uMistBright, vec3(1.0), 0.35), clamp(glow * 0.9, 0.0, 1.0));
     col = mix(col, mistColor, clamp(mist * (0.55 + 0.45 * glow), 0.0, 0.95));
 
     // The halo: moonlight scattered by the mist itself, strongest where the mist is.
     float halo = exp(-max(moonDist - uMoonRadius, 0.0) * 3.2);
-    col += uAccent * halo * (0.10 + 0.35 * mist);
-    col += mix(uAccent, vec3(1.0), 0.5) * exp(-max(moonDist - uMoonRadius, 0.0) * 14.0) * 0.22;
+    col += uAccent * halo * (0.015 + 0.07 * mist) * uMoonlight;
+    col += mix(uAccent, vec3(1.0), 0.5) * exp(-max(moonDist - uMoonRadius, 0.0) * 14.0) * 0.025 * uMoonlight;
 
     // A hint of grain, so the gradients never band.
     col += (hash21(gl_FragCoord.xy + fract(uTime)) - 0.5) * 0.012;
@@ -294,6 +296,9 @@ const MOON_FRAGMENT = /* glsl */ `
   varying vec3 vObject;
   uniform sampler2D uSurface;
   uniform float uNormalStep;
+  uniform float uSurfaceLod;
+  uniform int uShadowSteps;
+  uniform float uShadowBias;
   uniform vec3 uLight;  // in object space
   uniform vec3 uView;   // in object space
   uniform vec3 uShadow;
@@ -301,16 +306,52 @@ const MOON_FRAGMENT = /* glsl */ `
   uniform vec3 uMaria;
 
   vec2 equirect(vec3 p) {
-    return vec2(atan(p.z, p.x) / 6.2831853 + 0.5, asin(clamp(p.y, -1.0, 1.0)) / 3.14159265 + 0.5);
+    // atan(0, 0) is undefined; longitude is immaterial at the exact pole.
+    float longitude = dot(p.xz, p.xz) > 1e-12 ? atan(p.z, p.x) : 0.0;
+    return vec2(longitude / 6.2831853 + 0.5, asin(clamp(p.y, -1.0, 1.0)) / 3.14159265 + 0.5);
+  }
+  vec4 surfaceAt(vec2 uv) {
+    // Three r180 requires WebGL2. Explicit LOD avoids false coarse mip selection at
+    // the longitude seam, and undefined implicit derivatives inside shadow branches.
+    return textureLod(uSurface, uv, uSurfaceLod);
   }
   float heightAt(vec2 uv) {
-    return (texture2D(uSurface, uv).r - 0.5) * 0.8;
+    return (surfaceAt(uv).r - 0.5) * 0.8;
+  }
+
+  const float RELIEF = 0.035;
+
+  float terrainVisibility(vec3 n, vec3 light, float height) {
+    float elevation = dot(n, light);
+    if (elevation <= -0.012 || elevation >= 0.65) return 1.0;
+    vec3 origin = n * (1.0 + height * RELIEF);
+    float visibility = 1.0;
+    // Short steps resolve nearby rims; progressively longer ones reach distant ridges.
+    // This samples a spherical radial height field, not a flat tangent-plane proxy.
+    for (int i = 0; i < 16; i++) {
+      if (i >= uShadowSteps) break;
+      float stepIndex = float(i + 1);
+      float distance = 0.003 * stepIndex + 0.0006 * stepIndex * stepIndex;
+      vec3 ray = origin + light * distance;
+      float radius = length(ray);
+      // The encoded height cannot exceed 0.4. Once outside this shell, an
+      // outward-moving ray cannot hit terrain again.
+      if (radius > 1.0 + 0.4 * RELIEF && dot(ray, light) > 0.0) break;
+      float terrain = 1.0 + heightAt(equirect(ray / radius)) * RELIEF;
+      float clearance = radius - terrain + uShadowBias;
+      // Approximate the sun's finite angular radius, not an exact area-light integral.
+      float softness = 0.00008 + distance * 0.00465;
+      visibility = min(visibility, smoothstep(-softness, softness, clearance));
+    }
+    // Fade out the tracing approximation where sunlight is steep enough that
+    // normal-based shading is sufficient, without a visible branch boundary.
+    return mix(visibility, 1.0, smoothstep(0.40, 0.65, elevation));
   }
 
   void main() {
     vec3 n = normalize(vObject);
     vec2 uv = equirect(n);
-    vec4 surface = texture2D(uSurface, uv);
+    vec4 surface = surfaceAt(uv);
     float maria = surface.g;
     // Equal angular offsets on the sphere avoid equirectangular pole singularities.
     // Enlarge the footprint on small discs so unresolved relief does not sparkle.
@@ -323,7 +364,7 @@ const MOON_FRAGMENT = /* glsl */ `
     float sy = heightAt(equirect(normalize(n + north * stepSize)))
       - heightAt(equirect(normalize(n - north * stepSize)));
     // Heights are fractions of the unit sphere's radius, not arbitrary bump intensity.
-    vec3 bumped = normalize(n - (east * sx + north * sy) * (0.035 / (2.0 * stepSize)));
+    vec3 bumped = normalize(n - (east * sx + north * sy) * (RELIEF / (2.0 * stepSize)));
 
     vec3 albedo = mix(uLit, uMaria, maria * 0.90);
     albedo *= 0.78 + 0.44 * surface.b;
@@ -338,7 +379,8 @@ const MOON_FRAGMENT = /* glsl */ `
     float lunar = mix(mu0 / max(mu0 + mu, 0.025), mu0, 0.28);
     float phase = acos(clamp(dot(light, view), -1.0, 1.0));
     float opposition = 1.0 + 0.16 * exp(-phase / 0.09);
-    vec3 col = albedo * lunar * opposition * terminator * 1.15;
+    float visibility = terrainVisibility(n, light, (surface.r - 0.5) * 0.8);
+    vec3 col = albedo * lunar * opposition * terminator * visibility * 1.15;
     // Weak observer-facing earthshine; cavity visibility attenuates only this indirect term.
     col += albedo * uShadow * (0.2 + 0.8 * mu) * surface.a;
     gl_FragColor = vec4(col, 1.0);
@@ -346,29 +388,8 @@ const MOON_FRAGMENT = /* glsl */ `
   }
 `;
 
-// The halo: a fresnel shell just outside the surface, added to whatever is behind.
-const HALO_VERTEX = /* glsl */ `
-  varying vec3 vNormal;
-  void main() {
-    vNormal = normalize(mat3(modelMatrix) * normal);
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-  }
-`;
-
-const HALO_FRAGMENT = /* glsl */ `
-  precision highp float;
-  varying vec3 vNormal;
-  uniform vec3 uAccent;
-  uniform float uPulse;
-  void main() {
-    vec3 view = vec3(0.0, 0.0, 1.0);
-    float rim = pow(1.0 - max(dot(normalize(vNormal), view), 0.0), 3.5);
-    gl_FragColor = vec4(uAccent * rim * (0.9 + 0.25 * uPulse), rim);
-    #include <colorspace_fragment>
-  }
-`;
-
-// The corona: a billboard behind the moon with a wide, soft falloff.
+// Observer-side haze, not a lunar atmosphere or an emissive shell. The billboard
+// stays in the camera plane; only its brightness follows the illuminated fraction.
 const CORONA_VERTEX = /* glsl */ `
   varying vec2 vUv;
   void main() {
@@ -381,12 +402,12 @@ const CORONA_FRAGMENT = /* glsl */ `
   precision highp float;
   varying vec2 vUv;
   uniform vec3 uAccent;
-  uniform float uPulse;
+  uniform float uMoonlight;
   void main() {
     float d = length(vUv - 0.5) * 2.0;
-    float a = exp(-d * d * 5.5) * 0.45 + exp(-d * 9.0) * 0.35;
-    a *= 1.0 + 0.12 * uPulse;
-    gl_FragColor = vec4(mix(uAccent, vec3(1.0), 0.25) * a, a);
+    float edge = 1.0 - smoothstep(0.7, 1.0, d);
+    float a = (exp(-d * d * 5.5) * 0.07 + exp(-d * 9.0) * 0.04) * edge * uMoonlight;
+    gl_FragColor = vec4(mix(uAccent, vec3(1.0), 0.25), a);
     #include <colorspace_fragment>
   }
 `;
@@ -474,6 +495,7 @@ function start(hero, art) {
         uResolution: { value: new THREE.Vector2(1, 1) },
         uMoon: { value: new THREE.Vector2(1.2, 0.5) },
         uMoonRadius: { value: 0.2 },
+        uMoonlight: { value: 0.7 },
         uDrift: { value: new THREE.Vector2(0, 0) },
         uBgTop: { value: skyTop },
         uBgBottom: { value: skyBottom },
@@ -524,6 +546,10 @@ function start(hero, art) {
   const moonUniforms = {
     uSurface: { value: surface.texture },
     uNormalStep: { value: 2 * Math.PI / bakeSize.x },
+    uSurfaceLod: { value: 0 },
+    uShadowSteps: { value: 16 },
+    // Byte heights need a larger bias to avoid quantization becoming self-shadow acne.
+    uShadowBias: { value: halfFloat ? 0.00006 : 0.00016 },
     uLight: { value: new THREE.Vector3(-1.2, 0.55, 0.6) },
     uView: { value: new THREE.Vector3(0, 0, 1) },
     uShadow: { value: shadow },
@@ -536,21 +562,7 @@ function start(hero, art) {
   );
   moonGroup.add(moon);
 
-  const haloUniforms = { uAccent: { value: accent }, uPulse: { value: 0 } };
-  const halo = new THREE.Mesh(
-    new THREE.SphereGeometry(1.045, 96, 64),
-    new THREE.ShaderMaterial({
-      vertexShader: HALO_VERTEX,
-      fragmentShader: HALO_FRAGMENT,
-      uniforms: haloUniforms,
-      transparent: true,
-      depthWrite: false,
-      blending: THREE.AdditiveBlending,
-    }),
-  );
-  moonGroup.add(halo);
-
-  const coronaUniforms = { uAccent: { value: accent }, uPulse: { value: 0 } };
+  const coronaUniforms = { uAccent: { value: accent }, uMoonlight: { value: 0.7 } };
   const corona = new THREE.Mesh(
     new THREE.PlaneGeometry(6.4, 6.4),
     new THREE.ShaderMaterial({
@@ -562,9 +574,8 @@ function start(hero, art) {
       blending: THREE.AdditiveBlending,
     }),
   );
-  corona.position.z = -0.6;
   corona.renderOrder = -5;
-  moonGroup.add(corona);
+  scene.add(corona);
 
   const dustCount = 420;
   const dustGeometry = new THREE.BufferGeometry();
@@ -656,11 +667,16 @@ function start(hero, art) {
     moonOnScreen.y = centreY;
     moonOnScreen.radius = radiusPx;
     moonUniforms.uNormalStep.value = Math.max(2 * Math.PI / bakeSize.x, 0.75 / (radiusPx * ratio));
+    moonUniforms.uSurfaceLod.value = Math.max(0, Math.log2(moonUniforms.uNormalStep.value * bakeSize.x / (2 * Math.PI)));
+    moonUniforms.uShadowSteps.value = radiusPx * ratio < 100 ? 8 : 16;
     const worldRadius = (radiusPx / height) * 2 * halfHeight;
     const nx = (centreX / width) * 2 - 1;
     const ny = 1 - (centreY / height) * 2;
     moonGroup.position.set(nx * halfWidth, ny * halfHeight, 0);
     moonGroup.scale.setScalar(worldRadius);
+    corona.position.copy(moonGroup.position);
+    corona.position.z = -worldRadius * 0.6;
+    corona.scale.setScalar(worldRadius);
     dustUniforms.uMoonPosition.value.copy(moonGroup.position);
     sky.material.uniforms.uMoon.value.set((centreX / width) * (width / height), 1 - centreY / height);
     sky.material.uniforms.uMoonRadius.value = radiusPx / height;
@@ -781,11 +797,10 @@ function start(hero, art) {
     moon.getWorldQuaternion(worldRotation).invert();
     moonUniforms.uLight.value.copy(lightWorld).applyQuaternion(worldRotation);
     moonUniforms.uView.value.set(0, 0, 1).applyQuaternion(worldRotation);
-    const pulse = 0.5 + 0.5 * Math.sin(elapsed * 0.7);
-    haloUniforms.uPulse.value = pulse;
-    coronaUniforms.uPulse.value = pulse;
-    moonGroup.getWorldQuaternion(worldRotation).invert();
-    corona.quaternion.copy(worldRotation).multiply(camera.quaternion);
+    const moonlight = (1 + lightWorld.z / lightWorld.length()) * 0.5;
+    sky.material.uniforms.uMoonlight.value = moonlight;
+    coronaUniforms.uMoonlight.value = moonlight;
+    corona.quaternion.copy(camera.quaternion);
     renderer.render(scene, camera);
     framesDrawn += 1;
     if (framesDrawn === 1) {
