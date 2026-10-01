@@ -59,9 +59,13 @@ pub mod regex;
 #[cfg(feature = "bytes-text")]
 pub mod text;
 
+use crate::bind::{Call, StackResults};
+use crate::byte_rules::{ByteRules, one_byte};
 use crate::convert::{BufferView, BytesView, Exact, Integer, NewBuffer};
 use crate::error::{Error, Result};
 use crate::extension::{Extension, ExtensionDescriptor, ModuleDecl};
+use crate::options::Options;
+use crate::stack::{Scope, ValueView};
 
 /// The extension id.
 pub const EXTENSION_ID: &str = "dream.bytes";
@@ -174,6 +178,54 @@ fn slice(source: BytesView<'_>, offset: Exact<i64>, len: Exact<i64>) -> Result<N
     let start = span("bytes.slice", source.len(), offset, len)?;
     // SAFETY: as `find`; the copy completes before anything else runs.
     Ok(NewBuffer(unsafe { bytes(&source) }[start..start + len].to_vec()))
+}
+
+/// `bytes.translate(text, from, to, { collapse?, trimStart?, trimEnd? }?)`: every byte found in
+/// `from` replaced by the byte at the same position in `to`, like `tr`; then runs of `collapse`
+/// made one, and `trimStart` and `trimEnd` removed from the ends. Nothing to change returns
+/// `text` itself, with no copy, so a key already in its normal spelling costs one scan.
+fn translate(
+    call: &Call<'_>,
+    text: ValueView<'_>,
+    from: &[u8],
+    to: &[u8],
+    options: Option<ValueView<'_>>,
+) -> Result<StackResults> {
+    const WHAT: &str = "bytes.translate";
+    if from.len() != to.len() {
+        return Err(Error::runtime(format!(
+            "{WHAT}: from and to must be the same length, got {} and {}",
+            from.len(),
+            to.len()
+        )));
+    }
+    if text.type_of() != crate::stack::Type::String {
+        return Err(Error::runtime(format!("{WHAT}: text must be a string, got {}", text.type_of().name())));
+    }
+    let mut rules = ByteRules::identity();
+    // A byte named twice in from maps as its first appearance says.
+    for (&old, &new) in from.iter().zip(to).rev() {
+        rules.map[usize::from(old)] = new;
+    }
+    if let Some(options) = options.filter(|view| !view.is_nil()) {
+        Options::read(call, options, WHAT, |o| {
+            rules.collapse = o.optional_bytes("collapse", |text| one_byte(WHAT, "collapse", text))?.flatten();
+            rules.trim_start = o.optional_bytes("trimStart", |text| one_byte(WHAT, "trimStart", text))?.flatten();
+            rules.trim_end = o.optional_bytes("trimEnd", |text| one_byte(WHAT, "trimEnd", text))?.flatten();
+            Ok(())
+        })?;
+    }
+    let source = text.read::<&[u8]>()?;
+    if rules.is_normal(source) {
+        let mut frame = call.frame();
+        frame.push_value(text)?;
+        frame.release();
+        return Ok(StackResults);
+    }
+    let mut out = Vec::new();
+    rules.normalize_into(source, &mut out);
+    call.push(out.as_slice())?;
+    Ok(StackResults)
 }
 
 const HEX: &[u8; 16] = b"0123456789abcdef";
@@ -470,6 +522,9 @@ fn describe_core(module: &mut ModuleDecl) {
         .doc("-1, 0 or 1, comparing length bytes of each from its offset.")
         .function("startsWith", starts_with)
         .signature("(haystack: buffer | string, prefix: buffer | string, offset: number?) -> boolean")
+        .function("translate", translate)
+        .signature("(text: string, from: string, to: string, options: { collapse: string?, trimStart: string?, trimEnd: string? }?) -> string")
+        .doc("text with each byte found in from replaced by the byte at the same position in to, then runs of collapse made one and trimStart and trimEnd removed from the ends; text itself when nothing changes.")
         .function("slice", slice)
         .signature("(source: buffer | string, offset: number, length: number) -> buffer")
         .doc("A new buffer holding length bytes from offset.")

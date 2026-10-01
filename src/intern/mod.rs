@@ -37,8 +37,16 @@
 //!   exactly. SQLite's `NOCASE`. Folding happens inside the hash and the comparison, a word at a
 //!   time; a folded copy of the input is never made.
 //!
-//! Nothing else belongs here: path separators, Unicode case folding and the like are a
-//! domain's rules, and a domain that needs them folds its keys before interning them.
+//! - `rules` ([`Rules`], `intern.new({ nocase?, replace?, collapse?, trimStart?, trimEnd? })`):
+//!   keys normalized before they are compared. ASCII letters lowered when `nocase`, up to two
+//!   bytes replaced by others, runs of one byte collapsed to one, and one byte trimmed from the
+//!   start and from the end, in that order, so `Meshes\\X//Rock.NIF` and `meshes/x/rock.nif`
+//!   are one identity under `{ nocase = true, replace = { ['\\'] = '/' }, collapse = '/',
+//!   trimStart = '/' }`. The pool keeps the normal form, which is what `resolve` returns: under
+//!   rules that drop bytes, a first spelling would not say which bytes the identity has.
+//!
+//! Unicode case folding, and any rule a byte map and these switches cannot say, are a domain's
+//! own, applied before interning.
 //!
 //! # Tokens and lifetime
 //!
@@ -66,9 +74,12 @@ pub mod lowering;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
+use crate::byte_rules::one_byte;
 use crate::convert::{BytesView, Exact};
 use crate::error::{Error, Result};
 use crate::extension::{CompilerTypePolicy, Extension, ExtensionDescriptor, TagPolicy};
+use crate::options::Options;
+use crate::stack::ValueView;
 use crate::userdata::Owned;
 
 /// The extension id.
@@ -83,6 +94,47 @@ pub enum Policy {
     Exact,
     /// ASCII letters compare without case; every other byte exactly.
     AsciiNoCase,
+    /// Keys compare by their normal form under a pool's [`Rules`].
+    Rules,
+}
+
+/// The `rules` policy: how a key is normalized before it is compared, step by step.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Rules {
+    /// Lower `A`..`Z`.
+    pub nocase: bool,
+    /// Bytes replaced by others, at most [`Rules::MAX_REPLACEMENTS`]; a replaced byte is not
+    /// also lowered.
+    pub replace: Vec<(u8, u8)>,
+    /// A byte whose runs, after the replacements, collapse to one.
+    pub collapse: Option<u8>,
+    /// A byte removed from the start, after collapsing.
+    pub trim_start: Option<u8>,
+    /// A byte removed from the end.
+    pub trim_end: Option<u8>,
+}
+
+impl Rules {
+    /// How many replacements a pool takes: what native code applies to every word it reads.
+    pub const MAX_REPLACEMENTS: usize = 2;
+
+    /// The byte each byte becomes.
+    fn map(&self, byte: u8) -> u8 {
+        match self.replace.iter().find(|(old, _)| *old == byte) {
+            Some((_, new)) => *new,
+            None if self.nocase => byte.to_ascii_lowercase(),
+            None => byte,
+        }
+    }
+
+    fn byte_rules(&self) -> crate::byte_rules::ByteRules {
+        crate::byte_rules::ByteRules {
+            map: std::array::from_fn(|byte| self.map(byte as u8)),
+            collapse: self.collapse,
+            trim_start: self.trim_start,
+            trim_end: self.trim_end,
+        }
+    }
 }
 
 impl Policy {
@@ -91,6 +143,7 @@ impl Policy {
         match name {
             "exact" => Some(Policy::Exact),
             "ascii-nocase" => Some(Policy::AsciiNoCase),
+            "rules" => Some(Policy::Rules),
             _ => None,
         }
     }
@@ -100,6 +153,7 @@ impl Policy {
         match self {
             Policy::Exact => "exact",
             Policy::AsciiNoCase => "ascii-nocase",
+            Policy::Rules => "rules",
         }
     }
 }
@@ -236,6 +290,10 @@ const FIRST_SLOTS: usize = 16;
 /// The pool itself, without Luau: usable from Rust, and what `dream.intern.Pool` wraps.
 pub struct Interner {
     policy: Policy,
+    /// The `rules` policy's rules, and the normalization they make.
+    rules: Option<(Rules, crate::byte_rules::ByteRules)>,
+    /// Where a key that isn't in its normal form is normalized: reused, never shrunk.
+    scratch: Vec<u8>,
     text: Vec<u8>,
     entries: Vec<Entry>,
     /// 0 is empty; otherwise the hash in the high half and the token in the low half.
@@ -243,9 +301,41 @@ pub struct Interner {
 }
 
 impl Interner {
-    /// An empty pool.
+    /// An empty pool; `Policy::Rules` with rules that change nothing.
     pub fn new(policy: Policy) -> Interner {
-        Interner { policy, text: vec![0; TEXT_PAD], entries: Vec::new(), slots: vec![0; FIRST_SLOTS] }
+        let rules = (policy == Policy::Rules).then(|| (Rules::default(), Rules::default().byte_rules()));
+        Interner {
+            policy,
+            rules,
+            scratch: Vec::new(),
+            text: vec![0; TEXT_PAD],
+            entries: Vec::new(),
+            slots: vec![0; FIRST_SLOTS],
+        }
+    }
+
+    /// An empty pool under `rules`; more than [`Rules::MAX_REPLACEMENTS`] replacements is an
+    /// error.
+    pub fn with_rules(rules: Rules) -> Result<Interner> {
+        if rules.replace.iter().any(|(old, _)| *old == 0) {
+            return Err(Error::runtime("intern: NUL can't be replaced"));
+        }
+        if rules.replace.len() > Rules::MAX_REPLACEMENTS {
+            return Err(Error::runtime(format!(
+                "intern: at most {} replacements, got {}",
+                Rules::MAX_REPLACEMENTS,
+                rules.replace.len()
+            )));
+        }
+        let mut interner = Interner::new(Policy::Rules);
+        let byte_rules = rules.byte_rules();
+        interner.rules = Some((rules, byte_rules));
+        Ok(interner)
+    }
+
+    /// The `rules` policy's rules.
+    pub fn rules(&self) -> Option<&Rules> {
+        self.rules.as_ref().map(|(rules, _)| rules)
     }
 
     /// The pool's policy.
@@ -264,7 +354,10 @@ impl Interner {
 
     /// Bytes of native memory the pool holds.
     pub fn memory(&self) -> usize {
-        self.text.capacity() + self.entries.capacity() * size_of::<Entry>() + self.slots.capacity() * size_of::<u64>()
+        self.text.capacity()
+            + self.scratch.capacity()
+            + self.entries.capacity() * size_of::<Entry>()
+            + self.slots.capacity() * size_of::<u64>()
     }
 
     /// The first spelling of `token`, which this pool made.
@@ -304,6 +397,15 @@ impl Interner {
         match self.policy {
             Policy::Exact => self.probe::<false>(bytes, hash::<false>(bytes)).ok(),
             Policy::AsciiNoCase => self.probe::<true>(bytes, hash::<true>(bytes)).ok(),
+            Policy::Rules => {
+                let normal = &self.rules.as_ref()?.1;
+                if normal.is_normal(bytes) {
+                    return self.probe::<false>(bytes, hash::<false>(bytes)).ok();
+                }
+                let mut key = Vec::new();
+                normal.normalize_into(bytes, &mut key);
+                self.probe::<false>(&key, hash::<false>(&key)).ok()
+            }
         }
     }
 
@@ -312,6 +414,18 @@ impl Interner {
         match self.policy {
             Policy::Exact => self.intern_with::<false>(bytes),
             Policy::AsciiNoCase => self.intern_with::<true>(bytes),
+            Policy::Rules => {
+                let Some((_, normal)) = &self.rules else { return self.intern_with::<false>(bytes) };
+                if normal.is_normal(bytes) {
+                    return self.intern_with::<false>(bytes);
+                }
+                let mut key = std::mem::take(&mut self.scratch);
+                key.clear();
+                normal.normalize_into(bytes, &mut key);
+                let token = self.intern_with::<false>(&key);
+                self.scratch = key;
+                token
+            }
         }
     }
 
@@ -379,8 +493,48 @@ struct View {
     entries: Cell<u64>,
     /// `text[0]`.
     text: Cell<u64>,
-    /// 1 under `ascii-nocase`, 0 under `exact`.
+    /// 0 under `exact`, 1 under `ascii-nocase`, 2 under `rules`.
     fold: Cell<u64>,
+    /// The `rules` policy, as native code applies it to a word: `rules` in `intern/mod.rs`.
+    rules: NativeRules,
+}
+
+/// A pool's [`Rules`] as words native code applies eight bytes at a time. A slot that is unused
+/// flips nothing, and a switch that is off matches no byte.
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct NativeRules {
+    /// All ones when `nocase`, else 0: the case bits are masked with it.
+    fold_mask: u64,
+    /// Per replacement: the old byte in every lane, and in every lane the bits that turn its
+    /// (folded) self into the new byte.
+    replace: [[u64; 2]; Rules::MAX_REPLACEMENTS],
+    /// The collapse byte in every lane, and `0x80` in every lane when it is on, else 0.
+    collapse: u64,
+    collapse_mask: u64,
+    /// The trimmed bytes, or 0x100, which no byte equals.
+    trim_start: u64,
+    trim_end: u64,
+}
+
+impl NativeRules {
+    const ONES: u64 = 0x0101_0101_0101_0101;
+
+    fn of(rules: &Rules) -> NativeRules {
+        let mut native = NativeRules {
+            fold_mask: if rules.nocase { u64::MAX } else { 0 },
+            collapse: u64::from(rules.collapse.unwrap_or(0)) * Self::ONES,
+            collapse_mask: if rules.collapse.is_some() { HIGHS } else { 0 },
+            trim_start: rules.trim_start.map_or(0x100, u64::from),
+            trim_end: rules.trim_end.map_or(0x100, u64::from),
+            ..NativeRules::default()
+        };
+        for (slot, &(old, new)) in native.replace.iter_mut().zip(&rules.replace) {
+            let folded = if rules.nocase { old.to_ascii_lowercase() } else { old };
+            *slot = [u64::from(old) * Self::ONES, u64::from(folded ^ new) * Self::ONES];
+        }
+        native
+    }
 }
 
 /// An interner and the view of it native code reads, shared by a pool and the functions its
@@ -392,16 +546,22 @@ struct Shared {
 }
 
 impl Shared {
-    fn new(policy: Policy) -> Shared {
-        let fold = u64::from(policy == Policy::AsciiNoCase);
+    fn new(interner: Interner) -> Shared {
+        let fold = match interner.policy {
+            Policy::Exact => 0,
+            Policy::AsciiNoCase => 1,
+            Policy::Rules => 2,
+        };
+        let rules = interner.rules().map(NativeRules::of).unwrap_or_default();
         let view = View {
             slots: Cell::new(0),
             mask: Cell::new(0),
             entries: Cell::new(0),
             text: Cell::new(0),
             fold: Cell::new(fold),
+            rules,
         };
-        let shared = Shared { view, interner: RefCell::new(Interner::new(policy)) };
+        let shared = Shared { view, interner: RefCell::new(interner) };
         shared.refresh();
         shared
     }
@@ -428,7 +588,7 @@ impl Shared {
 }
 
 /// Words of scratch in a pool's payload for the native lowering's loop state.
-const SCRATCH_WORDS: usize = 8;
+const SCRATCH_WORDS: usize = 13;
 
 /// `dream.intern.Pool`, from `intern.new(policy?)`. Tagged, and laid out for native code: the
 /// shared view's address first, then the lowering's scratch.
@@ -440,8 +600,8 @@ pub struct Pool {
 }
 
 impl Pool {
-    fn new(policy: Policy) -> Pool {
-        let shared = Rc::new(Shared::new(policy));
+    fn new(interner: Interner) -> Pool {
+        let shared = Rc::new(Shared::new(interner));
         Pool { shared_address: Rc::as_ptr(&shared), scratch: Default::default(), shared }
     }
 
@@ -458,7 +618,7 @@ unsafe impl crate::userdata::Userdata for Pool {
 /// Byte offsets native code reads at, pinned here at compile time: in the pool's payload, in the
 /// shared view, and in an entry.
 pub(crate) mod layout {
-    use super::{Entry, Pool, Shared, View};
+    use super::{Entry, NativeRules, Pool, Shared, View};
 
     pub const POOL_SHARED: i32 = 0;
     pub const POOL_SCRATCH: i32 = 8;
@@ -467,6 +627,13 @@ pub(crate) mod layout {
     pub const VIEW_ENTRIES: i64 = 16;
     pub const VIEW_TEXT: i64 = 24;
     pub const VIEW_FOLD: i64 = 32;
+    pub const VIEW_RULES: i64 = 40;
+    pub const RULES_FOLD_MASK: i64 = VIEW_RULES;
+    pub const RULES_REPLACE: i64 = VIEW_RULES + 8;
+    pub const RULES_COLLAPSE: i64 = VIEW_RULES + 40;
+    pub const RULES_COLLAPSE_MASK: i64 = VIEW_RULES + 48;
+    pub const RULES_TRIM_START: i64 = VIEW_RULES + 56;
+    pub const RULES_TRIM_END: i64 = VIEW_RULES + 64;
 
     const _: () = {
         assert!(std::mem::offset_of!(Pool, shared_address) == POOL_SHARED as usize);
@@ -477,6 +644,13 @@ pub(crate) mod layout {
         assert!(std::mem::offset_of!(View, entries) == VIEW_ENTRIES as usize);
         assert!(std::mem::offset_of!(View, text) == VIEW_TEXT as usize);
         assert!(std::mem::offset_of!(View, fold) == VIEW_FOLD as usize);
+        assert!(std::mem::offset_of!(View, rules) == VIEW_RULES as usize);
+        assert!(std::mem::offset_of!(NativeRules, fold_mask) == (RULES_FOLD_MASK - VIEW_RULES) as usize);
+        assert!(std::mem::offset_of!(NativeRules, replace) == (RULES_REPLACE - VIEW_RULES) as usize);
+        assert!(std::mem::offset_of!(NativeRules, collapse) == (RULES_COLLAPSE - VIEW_RULES) as usize);
+        assert!(std::mem::offset_of!(NativeRules, collapse_mask) == (RULES_COLLAPSE_MASK - VIEW_RULES) as usize);
+        assert!(std::mem::offset_of!(NativeRules, trim_start) == (RULES_TRIM_START - VIEW_RULES) as usize);
+        assert!(std::mem::offset_of!(NativeRules, trim_end) == (RULES_TRIM_END - VIEW_RULES) as usize);
         assert!(std::mem::size_of::<Entry>() == 8);
         assert!(std::mem::offset_of!(Entry, start) == 0);
         assert!(std::mem::offset_of!(Entry, len) == 4);
@@ -516,6 +690,63 @@ fn span<'a>(
     }
 }
 
+const RULES_TYPE: &str = "{ nocase: boolean?, replace: { [string]: string }?, collapse: string?, \
+    trimStart: string?, trimEnd: string? }";
+
+/// The rules a script's table names.
+fn read_rules(call: &crate::bind::Call<'_>, options: ValueView<'_>) -> Result<Rules> {
+    const WHAT: &str = "intern.new";
+    let mut rules = Rules::default();
+    Options::read(call, options, WHAT, |o| {
+        rules.nocase = o.or("nocase", false)?;
+        rules.collapse = o.optional_bytes("collapse", |text| one_byte(WHAT, "collapse", text))?.flatten();
+        rules.trim_start = o.optional_bytes("trimStart", |text| one_byte(WHAT, "trimStart", text))?.flatten();
+        rules.trim_end = o.optional_bytes("trimEnd", |text| one_byte(WHAT, "trimEnd", text))?.flatten();
+        o.optional_table("replace", |frame, table| {
+            table.for_each(frame, |_, key, value| {
+                let old =
+                    key.read::<&[u8]>().ok().and_then(|text| one_byte(WHAT, "a replaced byte", text).ok().flatten());
+                let new =
+                    value.read::<&[u8]>().ok().and_then(|text| one_byte(WHAT, "a replacement", text).ok().flatten());
+                match (old, new) {
+                    (Some(old), Some(new)) => {
+                        rules.replace.push((old, new));
+                        Ok(())
+                    }
+                    _ => Err(Error::runtime(format!("{WHAT}: replace maps one-byte strings to one-byte strings"))),
+                }
+            })
+        })?;
+        Ok(())
+    })?;
+    // Table order is no order: sorted, the same rules make the same pool.
+    rules.replace.sort_unstable();
+    Ok(rules)
+}
+
+/// `intern.new(policy?)`.
+fn new_pool(call: &crate::bind::Call<'_>, policy: Option<ValueView<'_>>) -> Result<Owned<Pool>> {
+    let interner = match policy.filter(|view| !view.is_nil()) {
+        None => Interner::new(Policy::Exact),
+        Some(view) if view.is_table() => {
+            let rules = read_rules(call, view)?;
+            Interner::with_rules(rules).map_err(|error| Error::runtime(format!("intern.new: {error}")))?
+        }
+        Some(view) => {
+            let name = view.read::<&str>()?;
+            match Policy::parse(name) {
+                Some(Policy::Rules) | None => {
+                    return Err(Error::runtime(format!(
+                        "intern.new: unknown policy '{name}' (exact, ascii-nocase, or a rules table)"
+                    )));
+                }
+                Some(policy) => Interner::new(policy),
+            }
+        }
+    };
+    Ok(Owned(Pool::new(interner)))
+}
+
 /// The `dream.intern` extension.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct InternExtension;
@@ -526,6 +757,7 @@ impl Extension for InternExtension {
     }
 
     fn describe(&self, d: &mut ExtensionDescriptor) -> Result<()> {
+        d.type_alias("dream_intern_Rules", RULES_TYPE);
         let mut pool = d.userdata::<Pool>("dream.intern.Pool");
         pool.tag(TagPolicy::Required)
             .compiler_type(CompilerTypePolicy::Required)
@@ -567,7 +799,7 @@ impl Extension for InternExtension {
                 .ok_or_else(|| Error::runtime(format!("Pool:resolve: {} is not an identity of this pool", token.0)))
         })
         .signature("(self, token: number): string")
-        .doc("The first spelling the pool saw for token.");
+        .doc("The first spelling the pool saw for token; under rules, its normal form.");
         pool.method("interner", |pool: &Pool, call: &crate::bind::Call<'_>| -> Result<crate::value::Function> {
             let shared = Rc::clone(&pool.shared);
             crate::bind::function(
@@ -594,18 +826,10 @@ impl Extension for InternExtension {
         d.native_hooks(lowering::InternLowering);
 
         d.module(MODULE)
-            .doc("Textual identity as numbers: pools that intern byte sequences under exact or ASCII case-insensitive equality.")
-            .function("new", |policy: Option<&str>| -> Result<Owned<Pool>> {
-                let policy = match policy {
-                    None => Policy::Exact,
-                    Some(name) => Policy::parse(name).ok_or_else(|| {
-                        Error::runtime(format!("intern.new: unknown policy '{name}' (exact or ascii-nocase)"))
-                    })?,
-                };
-                Ok(Owned(Pool::new(policy)))
-            })
-            .signature("(policy: (\"exact\" | \"ascii-nocase\")?) -> dream_intern_Pool")
-            .doc("An empty pool; exact by default.");
+            .doc("Textual identity as numbers: pools that intern byte sequences exactly, ASCII case-insensitively, or by their normal form under byte rules.")
+            .function("new", new_pool)
+            .signature("(policy: (\"exact\" | \"ascii-nocase\" | dream_intern_Rules)?) -> dream_intern_Pool")
+            .doc("An empty pool: exact by default, ASCII case-insensitive, or keys normalized by rules.");
         Ok(())
     }
 }

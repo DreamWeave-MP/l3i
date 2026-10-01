@@ -45,6 +45,27 @@ fn spellings_and_spans_are_one_integer_identity() {
 }
 
 #[test]
+fn rules_normalize_keys_before_they_compare() {
+    runtime()
+        .exec(
+            "local paths = intern.new({ nocase = true, replace = { ['\\\\'] = '/' }, collapse = '/', trimStart = '/' }) \
+             local id = paths:intern('\\\\Meshes\\\\X//Rock.NIF') \
+             assert(paths:resolve(id) == 'meshes/x/rock.nif', 'the normal form is kept') \
+             for _, spelling in { 'meshes/x/rock.nif', 'MESHES/X/ROCK.NIF', '/meshes//x///rock.nif', 'Meshes\\\\x\\\\Rock.nif' } do \
+               assert(paths:intern(spelling) == id and paths:find(spelling) == id, spelling) \
+             end \
+             assert(paths:intern('meshes/x/rock.nif/') ~= id, 'a trailing separator is kept') \
+             assert(paths:policy() == 'rules' and paths:count() == 2) \
+             local ok, err = pcall(intern.new, { replace = { a = 'b', c = 'd', e = 'f' } }) assert(not ok and err:find('at most 2'), err) \
+             ok, err = pcall(intern.new, { collapse = '//' }) assert(not ok and err:find('one byte'), err) \
+             ok, err = pcall(intern.new, { colapse = '/' }) assert(not ok and err:find('colapse'), err) \
+             ok, err = pcall(intern.new, 'rules') assert(not ok and err:find('rules table'), err) \
+             ok, err = pcall(intern.new, { replace = { ['\\0'] = 'x' } }) assert(not ok and err:find('NUL'), err)",
+        )
+        .unwrap();
+}
+
+#[test]
 fn a_bound_interner_keeps_its_pool_across_a_collection() {
     let runtime = runtime();
     runtime.exec("orphan = intern.new():interner() assert(orphan('x') == 1)").unwrap();
@@ -133,7 +154,7 @@ local function boundFind(ids: dream_intern_Pool, source: any, offset: any, lengt
 end
 
 -- Every length from 0 to 40, mixed case, a non-ASCII byte now and then.
-local letters = 'aBcDeFgHiJkLmNoPqRsTuVwXyZ_0123456789@[`{\195'
+local letters = 'aBcDeFgHiJkLmNoPqRsTuVwXyZ_0123456789@[`{\195/\\'
 local words = {}
 for length = 0, 40 do
   for variant = 0, 2 do
@@ -152,9 +173,12 @@ local function flip(word: string): string
   end))
 end
 
-for _, policy in { 'exact', 'ascii-nocase' } do
-  local a: dream_intern_Pool = intern.new(policy)
-  local b: dream_intern_Pool = intern.new(policy)
+local Rules = { nocase = true, replace = { ['\\'] = '/', ['@'] = '_' }, collapse = '/', trimStart = '/', trimEnd = '_' }
+
+for _, policy in { 'exact', 'ascii-nocase', 'rules' } do
+  local spec = if policy == 'rules' then Rules else policy
+  local a: dream_intern_Pool = intern.new(spec)
+  local b: dream_intern_Pool = intern.new(spec)
 
   -- First sight: the lowered site misses and inserts through the binder; same tokens as a
   -- pool fed only through the binder. The pool grows across many rehashes on the way.
@@ -173,6 +197,9 @@ for _, policy in { 'exact', 'ascii-nocase' } do
     expect(lowered(a, 'xyz' .. word .. 'xyz', 3, #word) == token, policy .. ' string span ' .. word)
     local flipped = flip(word)
     expect(lowered1(a, flipped) == bound(b, flipped), policy .. ' flipped ' .. flipped)
+    local slashed = '//' .. string.gsub(flipped, '/', '\\') .. '\\'
+    expect(lowered1(a, slashed) == bound(b, slashed), policy .. ' slashed ' .. slashed)
+    expect(found(a, slashed) == boundFind(b, slashed), policy .. ' find slashed ' .. slashed)
     expect(found(a, flipped .. '!') == boundFind(b, flipped .. '!'), policy .. ' absent ' .. flipped)
     at += #word
   end
@@ -264,10 +291,15 @@ local ids: dream_intern_Pool = intern.new('ascii-nocase')
 local text = buffer.fromstring('Caius_Cosades_x1Fargoth')
 ids:intern(text, 0, 16)
 ids:intern(text, 16, 7)
+local paths: dream_intern_Pool = intern.new({ nocase = true, replace = { ['\\'] = '/' }, collapse = '/', trimStart = '/' })
+paths:intern('meshes/x/rock_01.nif')
+paths:intern('Caius_Cosades_x1')
+paths:intern('Textures\\A.dds')
 return function()
   local sum = 0
   for i = 1, 1000 do
     sum += ids:intern(text, 0, 16) + ids:intern(text, 16, 7) + ids:intern('caius_cosades_X1')
+    sum += paths:intern('Meshes\\X\\Rock_01.NIF') + paths:intern(text, 0, 16) + paths:find('textures/a.dds')
   end
   return sum
 end
@@ -280,7 +312,7 @@ end
     let calls = binder_calls();
     let exits = generator.execution_stats(&runtime.stack()).vm_exits_taken;
     let sum: f64 = function.invoke(&runtime.stack(), ()).unwrap();
-    assert_eq!(sum, 1000.0 * (1.0 + 2.0 + 1.0));
+    assert_eq!(sum, 1000.0 * (1.0 + 2.0 + 1.0 + 1.0 + 2.0 + 3.0));
     assert_eq!(binder_calls() - calls, 0, "a duplicate never reaches the binder");
     assert_eq!(generator.execution_stats(&runtime.stack()).vm_exits_taken - exits, 0, "nor leaves native code");
 }

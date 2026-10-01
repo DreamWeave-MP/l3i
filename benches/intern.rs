@@ -269,6 +269,10 @@ function ops.micro(kind)
   local keyBuffer = buffer.fromstring(key)
   local map = { [string.lower(key)] = 1 }
   pool:intern(key)
+  local paths: dream_intern_Pool = intern.new({ nocase = true, replace = { ['\\'] = '/' }, collapse = '/', trimStart = '/' })
+  local path, normal, slashes = 'Meshes\\Architecture\\Rock_01.NIF', 'meshes/architecture/rock_01.nif', '/Meshes//Architecture/Rock_01.NIF'
+  local pathMap = { [normal] = 1 }
+  paths:intern(normal)
   local n = 200000
   if kind == 'loop' then
     for i = 1, n do
@@ -314,6 +318,22 @@ function ops.micro(kind)
   elseif kind == 'lower' then
     for i = 1, n do
       local s = map[string.lower(buffer.readstring(keyBuffer, 0, 16))]
+    end
+  elseif kind == 'rulesPath' then
+    for i = 1, n do
+      local id = paths:intern(path)
+    end
+  elseif kind == 'rulesNormal' then
+    for i = 1, n do
+      local id = paths:intern(normal)
+    end
+  elseif kind == 'rulesSlashes' then
+    for i = 1, n do
+      local id = paths:intern(slashes)
+    end
+  elseif kind == 'gsubPath' then
+    for i = 1, n do
+      local s = pathMap[string.gsub(string.lower(path), '\\', '/')]
     end
   end
   return 0, 0
@@ -699,6 +719,33 @@ end
             }
             println!("| `Interner::intern`, {label}, duplicate (native, no VM) | {:.0} | |", best as f64 / MICRO_CALLS);
         }
+        let rules = l3i::intern::Rules {
+            nocase: true,
+            replace: vec![(b'\\', b'/')],
+            collapse: Some(b'/'),
+            trim_start: Some(b'/'),
+            trim_end: None,
+        };
+        let mut pool = Interner::with_rules(rules).unwrap();
+        pool.intern(b"meshes/architecture/rock_01.nif").unwrap();
+        for (label, key) in
+            [("to fold", &b"Meshes\\Architecture\\Rock_01.NIF"[..]), ("normal", b"meshes/architecture/rock_01.nif")]
+        {
+            let mut best = u64::MAX;
+            for _ in 0..ROUNDS * 3 {
+                best = best.min(
+                    measure_all(&counters[..1], &mut || {
+                        for _ in 0..calls {
+                            std::hint::black_box(pool.intern(std::hint::black_box(key)).unwrap());
+                        }
+                    })[0],
+                );
+            }
+            println!(
+                "| `Interner::intern`, rules, path {label}, duplicate (native, no VM) | {:.0} | |",
+                best as f64 / MICRO_CALLS
+            );
+        }
     }
 
     fn micro(bench: &Bench<'_>) {
@@ -713,6 +760,10 @@ end
             ("readu32", "buffer.readu32(buffer, 0)"),
             ("readstring", "map[buffer.readstring(buffer, 0, 16)]"),
             ("lower", "map[string.lower(buffer.readstring(buffer, 0, 16))]"),
+            ("rulesPath", "paths:intern(path), 31-byte path to fold, duplicate"),
+            ("rulesNormal", "paths:intern(path), already normal, duplicate"),
+            ("rulesSlashes", "paths:intern(path), runs to collapse (the binder), duplicate"),
+            ("gsubPath", "map[string.gsub(string.lower(path), '\\\\', '/')]"),
         ];
         let mut loop_only = vec![u64::MAX; COUNTERS.len()];
         for _ in 0..ROUNDS * 3 {

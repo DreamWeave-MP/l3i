@@ -67,6 +67,8 @@
 #[cfg(feature = "analysis")]
 pub mod analysis;
 pub mod bind;
+#[cfg(any(feature = "bytes", feature = "intern"))]
+mod byte_rules;
 #[cfg(feature = "bytes")]
 pub mod bytes;
 pub mod call;

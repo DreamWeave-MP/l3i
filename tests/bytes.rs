@@ -43,6 +43,28 @@ fn searching_comparing_and_slicing_work_on_buffers_and_strings() {
         .unwrap();
 }
 
+/// `translate` maps bytes like `tr`, hands back the same string when nothing changes, and keeps
+/// bytes that aren't UTF-8.
+#[test]
+fn translate_maps_bytes_and_returns_unchanged_text_as_is() {
+    runtime()
+        .exec(
+            "local upper, lower = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ\\\\', 'abcdefghijklmnopqrstuvwxyz/' \
+             assert(bytes.translate('Meshes\\\\X\\\\Rock.NIF', upper, lower) == 'meshes/x/rock.nif') \
+             assert(bytes.translate('already/plain', upper, lower) == 'already/plain', 'unchanged') \
+             assert(bytes.translate('', upper, lower) == '', 'empty') \
+             assert(bytes.translate('A\\255B', 'AB', 'ab') == 'a\\255b', 'other bytes kept') \
+             assert(bytes.translate('aab', 'aa', 'xy') == 'xxb', 'the first mapping of a byte wins') \
+             assert(bytes.translate('\\\\\\\\Data//Files\\\\', upper, lower, { collapse = '/', trimStart = '/' }) == 'data/files/', 'collapse and trim') \
+             assert(bytes.translate('a//b//', '', '', { collapse = '/', trimEnd = '/' }) == 'a/b', 'trimEnd') \
+             local ok, err = pcall(bytes.translate, 'x', 'ab', 'a') assert(not ok and err:find('same length'), err) \
+             ok, err = pcall(bytes.translate, 'x', '', '', { collapse = '//' }) assert(not ok and err:find('one byte'), err) \
+             ok, err = pcall(bytes.translate, 'x', '', '', { colapse = '/' }) assert(not ok and err:find('colapse'), err) \
+             ok, err = pcall(bytes.translate, buffer.create(1), 'a', 'b') assert(not ok and err:find('must be a string'), err)",
+        )
+        .unwrap();
+}
+
 /// The RFC 4648 test vectors, a range of a buffer, and what isn't base64.
 #[test]
 fn base64_matches_the_rfc_vectors_and_refuses_what_isnt_base64() {
