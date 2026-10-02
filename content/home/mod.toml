@@ -125,3 +125,12 @@ added = [
     "`@dream/bytes`'s `translate(text, from, to, { collapse?, trimStart?, trimEnd? }?)`: bytes mapped like `tr`, runs of one byte collapsed, one byte trimmed from each end, and the text itself returned when nothing changes; folding a path's case and separators costs 141 ns a call against 470 ns for `string.lower` plus `string.gsub`.",
     "`@dream/intern`'s rules policy, `intern.new({ nocase?, replace?, collapse?, trimStart?, trimEnd? })`: keys normalized inside the hash and the compare, so `Meshes\\\\X//Rock.NIF` and `meshes/x/rock.nif` are one token with no normalized string made; the byte map lowers to native code eight bytes at a time, 522 instructions for a duplicate 31-byte path against 5008 for `string.lower` plus `string.gsub` and a table read, and `resolve` returns the normal form.",
 ]
+
+[[releases]]
+version = "1.3.1"
+date = 2026-10-02
+summary = "Luau can now create capability-gated dream.net servers and mint private-key-backed connect tokens, and l3i can emit a textual disassembly of the exact compiled bytecode."
+added = [
+    "`net.server{ schema, address, protocolId, maxClients? }` creates a dream.net server from Luau when `network.transport` is granted. The generated signing key remains private inside the server userdata; `server:connectToken(clientId, expiresInSeconds?, timeoutSeconds?)` returns only the token clients need.",
+    "`l3i::source::disassemble(source, options)` emits Luau's textual bytecode listing for every function, including instructions, source lines, locals and constants, using the same compiler options and library callbacks as `source::compile`.",
+]
