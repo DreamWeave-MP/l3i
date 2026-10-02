@@ -4,8 +4,7 @@
 use std::time::Duration;
 
 use l3i::extension::{RuntimePlan, RuntimePolicy};
-use l3i::net::{self, NetSchema, Server};
-use l3i::stack::Scope;
+use l3i::net::{self, NetSchema};
 use l3i::userdata;
 use l3i::{Error, Runtime};
 
@@ -75,37 +74,23 @@ fn client_creation_is_gated_by_the_transport_capability() {
     runtime.exec(SCHEMA).unwrap();
     let error = runtime.exec("net.client{ schema = schema }").unwrap_err().to_string();
     assert!(error.contains("network.transport"), "{error}");
+    let error =
+        runtime.exec("net.server{ schema = schema, address = '127.0.0.1:0', protocolId = 1 }").unwrap_err().to_string();
+    assert!(error.contains("network.transport"), "{error}");
 }
 
 #[test]
 fn events_flow_both_ways_over_localhost() {
     let runtime = Runtime::from_plan(&plan(true)).unwrap();
-    runtime.exec(SCHEMA).unwrap();
-    let schema = schema_of(&runtime);
-
-    // The host owns the server and the key.
-    let key = dream_net::generate_key();
-    let config = dream_net::ServerConfig {
-        public_address: "127.0.0.1:0".parse().unwrap(),
-        protocol_id: PROTOCOL,
-        max_clients: 4,
-        transport: dream_net::TransportConfig::default(),
-    };
-    let clock = net::monotonic_clock();
-    let server = dream_net::Server::new(config, &key, schema, clock()).unwrap();
-    let address = server.address();
-    let mut user_data = [0u8; dream_net::USER_DATA_BYTES];
-    user_data[..8].copy_from_slice(&77u64.to_le_bytes());
-    let token =
-        dream_net::generate_connect_token(&[address], &[address], 30, 5, 77, PROTOCOL, &key, &user_data).unwrap();
-    {
-        let stack = runtime.stack();
-        let frame = stack.frame();
-        Server::push(&frame, server, clock).unwrap();
-        frame.set_global("server").unwrap();
-        frame.push(&token[..]).unwrap();
-        frame.set_global("token").unwrap();
-    }
+    runtime
+        .exec(&format!(
+            "{SCHEMA} server = net.server{{ schema = schema, address = '127.0.0.1:0', protocolId = {}i, maxClients = 4 }} \
+             token = server:connectToken(77i, 30, 5) assert(buffer.len(token) == net.CONNECT_TOKEN_BYTES)",
+            PROTOCOL as i64
+        ))
+        .unwrap();
+    let error = runtime.exec("server:connectToken(77i, 0)").unwrap_err().to_string();
+    assert!(error.contains("expiresInSeconds must be in [1, 86400]"), "{error}");
 
     runtime
         .exec(

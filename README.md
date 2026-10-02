@@ -115,7 +115,7 @@ Each row is a page of the guide.
 
 | Extension | Module | What it is |
 |---|---|---|
-| `dream.net` | `@dream/net` | The dream-net bridge, in every plan: schemas, host-created servers, clients behind the `network.transport` capability, `pollInto` with one payload copy and no allocation. |
+| `dream.net` | `@dream/net` | The dream-net bridge, in every plan: schemas, capability-gated Luau clients and servers, opaque server keys with Luau token minting, `pollInto` with one payload copy and no allocation. |
 | `dream.quat` | `@dream/quat` | Unit rotations packed into one Luau integer (smallest-three, 18 bits per component) and animation keys; `quat.math()` lowers `rotate` to 21 ns native. |
 | `dream.raster` | `@dream/raster` | RGBA8 colours, clip rectangles and RGBA16 colours as packed integers; `raster.math()` lowers colour arithmetic. |
 | `dream.bytes` (`bytes`) | `@dream/bytes` | For parsing foreign file formats in script: searching, C strings, varints, big-endian and half-float reads lowered natively, plus codecs, digests and text codepages behind `bytes-codecs`, `bytes-digests`, `bytes-text`. |

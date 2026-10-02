@@ -53,6 +53,7 @@ mod require;
 mod sandbox;
 #[cfg(feature = "soft-render")]
 mod soft_render;
+mod source;
 #[cfg(feature = "syntax")]
 mod syntax;
 mod tagged;

@@ -173,9 +173,29 @@ pub fn compile(source: &str, options: &CompileOptions) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
+/// Returns Luau's textual disassembly for `source`, compiled with the same explicit options as
+/// [`compile`]. The output includes every function's bytecode instructions, source lines, locals,
+/// and constants.
+///
+/// # Errors
+///
+/// Returns the Luau parse or compile error, or an error if the disassembly is not UTF-8.
+pub fn disassemble(source: &str, options: &CompileOptions) -> Result<String> {
+    let output = compile_native(source, options, true)?;
+    if output.first() == Some(&0) {
+        return Err(Error::runtime(String::from_utf8_lossy(&output[1..]).into_owned()));
+    }
+    String::from_utf8(output).map_err(|_| Error::runtime("Luau disassembler returned invalid UTF-8"))
+}
+
 /// Compiles to bytecode, returning Luau's error bytecode (leading NUL byte) as-is so that
 /// `luau_load` reports the failure with the chunk name, as OpenMW's `loadBytecode` does.
 pub(crate) fn compile_raw(source: &str, options: &CompileOptions) -> Result<Vec<u8>> {
+    compile_native(source, options, false)
+}
+
+/// Runs either the bytecode compiler or its textual disassembler with identical option setup.
+fn compile_native(source: &str, options: &CompileOptions, disassemble: bool) -> Result<Vec<u8>> {
     // Several flags change emitted bytecode; standalone compilation must see the same policy
     // a Runtime would.
     crate::flags::initialize()?;
@@ -212,7 +232,8 @@ pub(crate) fn compile_raw(source: &str, options: &CompileOptions) -> Result<Vec<
     if with_members {
         ACTIVE_MEMBERS.with(|active| active.borrow_mut().clone_from(&options.library_members));
     }
-    let bytecode = unsafe { ffi::luau_compile(source.as_ptr().cast(), source.len(), &mut raw, &mut size) };
+    let compile = if disassemble { ffi::l3i_luau_disassemble } else { ffi::luau_compile };
+    let bytecode = unsafe { compile(source.as_ptr().cast(), source.len(), &mut raw, &mut size) };
     if with_members {
         ACTIVE_MEMBERS.with(|active| active.borrow_mut().take());
         CONSTANT_STRINGS.with(|strings| strings.borrow_mut().clear());
@@ -220,7 +241,7 @@ pub(crate) fn compile_raw(source: &str, options: &CompileOptions) -> Result<Vec<
     if bytecode.is_null() {
         return Err(Error::runtime("Luau compiler returned no bytecode"));
     }
-    // SAFETY: luau_compile returned `size` valid bytes at `bytecode`, owned by us until `free`.
+    // SAFETY: the selected compiler function returned `size` valid bytes, owned by us until `free`.
     let bytes = unsafe { std::slice::from_raw_parts(bytecode.cast::<u8>(), size) }.to_vec();
     unsafe { ffi::free(bytecode.cast()) };
     Ok(bytes)

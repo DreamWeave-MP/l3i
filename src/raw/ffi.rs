@@ -516,6 +516,14 @@ unsafe extern "C" {
         options: *mut lua_CompileOptions,
         outsize: *mut usize,
     ) -> *mut c_char;
+    /// Disassembles source through Luau's BytecodeBuilder using the supplied compiler options.
+    /// Compiler errors use the same leading-NUL convention as [`luau_compile`].
+    pub fn l3i_luau_disassemble(
+        source: *const c_char,
+        size: usize,
+        options: *mut lua_CompileOptions,
+        outsize: *mut usize,
+    ) -> *mut c_char;
     pub fn luau_set_compile_constant_nil(constant: *mut lua_CompileConstant);
     pub fn luau_set_compile_constant_boolean(constant: *mut lua_CompileConstant, b: c_int);
     pub fn luau_set_compile_constant_number(constant: *mut lua_CompileConstant, n: f64);

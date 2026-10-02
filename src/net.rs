@@ -14,11 +14,11 @@
 //! - the transport clock is the plan's: `update()` reads a monotonic clock started with the
 //!   bridge, or the clock the host gave `RuntimePlanBuilder::network_clock`, so a script cannot
 //!   spoof time;
-//! - the server private key never reaches Luau: servers are created by the host in Rust and
-//!   handed to scripts as [`Server`] handles; clients may be created from Luau only when the
-//!   runtime policy grants the `network.transport` capability;
-//! - everything is polled during the host's network phase; nothing calls into Luau from inside
-//!   dream-net.
+//! - the server private key never reaches Luau: hosts may push [`Server`] handles, or Luau may
+//!   create one with `net.server` when the runtime policy grants `network.transport`; the same
+//!   capability gates client creation;
+//! - Luau or its engine host explicitly drives each network phase; dream-net never calls back into
+//!   the VM.
 //!
 //! `pollInto` is deliberately a tuple interface (`kind, peer, a, b, c`) so a frame of events
 //! allocates nothing; an engine event layer above turns it into something pleasant.
@@ -30,11 +30,11 @@ use std::time::Instant;
 
 use dream_net::{
     ChannelConfig, ChannelId, Client, ClientConfig, ClientEvent, ClientStatus, Delivery, EventTypeId, OverflowPolicy,
-    PeerId, Schema, SchemaBuilder, SendError, ServerEvent, TransportConfig,
+    PeerId, Schema, SchemaBuilder, SendError, ServerConfig, ServerEvent, TransportConfig,
 };
 
 use crate::bind::{Call, Return};
-use crate::convert::{Bits64, BufferView, BytesView, Exact, Integer, Push};
+use crate::convert::{Bits64, BufferView, BytesView, Exact, Integer, NewBuffer, Push};
 use crate::direct::field::{DirectField, FieldValue};
 use crate::error::{Error, Result};
 use crate::extension::{Extension, ExtensionDescriptor, InstallContext, TagPolicy};
@@ -47,7 +47,7 @@ use crate::value::Table;
 pub const EXTENSION_ID: &str = "dream.net";
 /// The module path.
 pub const MODULE: &str = "@dream/net";
-/// The capability that lets scripts create transport objects (`net.client`).
+/// The capability that lets scripts create transport objects (`net.client` and `net.server`).
 pub const TRANSPORT_CAPABILITY: &str = "network.transport";
 
 /// A monotonic clock the transport reads on `update()`; seconds as f64.
@@ -293,11 +293,17 @@ fn payload_range<R>(
 // Server
 // ---------------------------------------------------------------------------------------------
 
-/// A dream-net server as scripts see it (`dream.net.Server`). Created by the host in Rust,
-/// which keeps the private key; pushed with [`Server::push`] or returned as `Owned<Server>`.
+/// A dream-net server as scripts see it (`dream.net.Server`). The private key stays in this
+/// userdata; Luau can request per-client connect tokens but cannot read or replace the key.
 pub struct Server {
     inner: RefCell<dream_net::Server>,
     clock: Clock,
+    token_issuer: Option<TokenIssuer>,
+}
+
+struct TokenIssuer {
+    key: dream_net::Key,
+    protocol_id: u64,
 }
 
 // SAFETY: `dream_net::Server` is plain Rust state with no Lua references; dropping it stops
@@ -309,7 +315,11 @@ unsafe impl Userdata for Server {
 impl Server {
     /// Wraps a server the host created, with the clock its `update()` reads.
     pub fn new(server: dream_net::Server, clock: Clock) -> Server {
-        Server { inner: RefCell::new(server), clock }
+        Server { inner: RefCell::new(server), clock, token_issuer: None }
+    }
+
+    fn new_from_luau(server: dream_net::Server, clock: Clock, key: dream_net::Key, protocol_id: u64) -> Server {
+        Server { inner: RefCell::new(server), clock, token_issuer: Some(TokenIssuer { key, protocol_id }) }
     }
 
     /// Pushes a server handle onto `scope` (the `dream.net` extension must be installed).
@@ -528,7 +538,7 @@ impl Extension for NetExtension {
         describe_server(d);
         describe_client(d);
         d.module(MODULE)
-            .doc("dream-net transport: schemas, clients, and the host's server handles.")
+            .doc("dream-net transport: schemas, clients, and capability-gated servers.")
             .function("schema", build_schema).signature("(options: { version: number, maxMessagesPerPacket: number?, channels: { { [string]: any } }, events: { { [string]: any } } }) -> dream_net_Schema")
             .constant(
                 "CONNECT_TOKEN_BYTES",
@@ -543,12 +553,16 @@ impl Extension for NetExtension {
             .installed("client")
             .signature("(options: { schema: dream_net_Schema, bind: string? }) -> dream_net_Client")
             .doc("A transport client; needs the network.transport capability at call time.");
+        d.module(MODULE)
+            .installed("server")
+            .signature("(options: { schema: dream_net_Schema, address: string, protocolId: integer, maxClients: number? }) -> dream_net_Server")
+            .doc("A transport server; needs network.transport. Its private key stays native; use connectToken() to mint client tokens.");
         d.optional_capability(TRANSPORT_CAPABILITY);
         d.memory_category("dream.net");
         Ok(())
     }
 
-    /// `net.client{}` depends on the runtime's capabilities, so its declared member binds here.
+    /// `net.client{}` and `net.server{}` depend on runtime capabilities, so their declared members bind here.
     fn install(&self, cx: &mut InstallContext<'_>) -> Result<()> {
         let transport_allowed = cx.has_capability(TRANSPORT_CAPABILITY)?;
         let clock = Rc::clone(&self.clock);
@@ -573,6 +587,42 @@ impl Extension for NetExtension {
             let config = ClientConfig { bind_address, transport: TransportConfig::default() };
             let client = Client::new(config, schema, clock()).map_err(config_error)?;
             Ok(Owned(NetClient::new(client, Rc::clone(&clock))))
+        })?;
+        let clock = Rc::clone(&self.clock);
+        cx.module(MODULE)?.function("server", move |call: &Call, options: ValueView| -> Result<Owned<Server>> {
+            if !transport_allowed {
+                return Err(Error::permission(format!(
+                    "net.server requires the '{TRANSPORT_CAPABILITY}' capability, which this runtime does not grant"
+                )));
+            }
+            let (address, protocol_id, max_clients, schema) = Options::read(call, options, "net.server", |o| {
+                let address: String = o.required("address")?;
+                let protocol_id = o.required::<Bits64>("protocolId")?.0;
+                let max_clients = o.optional::<Exact<i64>>("maxClients")?.map_or(Ok(4_usize), |n| {
+                    usize::try_from(n.0).map_err(|_| Error::runtime("net.server.maxClients: out of range"))
+                })?;
+                if !(1..=256).contains(&max_clients) {
+                    return Err(Error::runtime("net.server.maxClients: expected an integer in [1, 256]"));
+                }
+                let schema: crate::value::Value = o.required("schema")?;
+                let schema = o.frame().with_frame(|frame| {
+                    let view = schema.push_to(frame)?;
+                    crate::userdata::check_receiver::<NetSchema>(view)
+                        .map(|s| s.0.clone())
+                        .map_err(|_| Error::runtime("net.server.schema: expected a dream.net.Schema"))
+                })?;
+                Ok((address, protocol_id, max_clients, schema))
+            })?;
+            let address = address.parse().map_err(|e| Error::runtime(format!("net.server.address: {e}")))?;
+            let key = dream_net::generate_key();
+            let config = ServerConfig {
+                public_address: address,
+                protocol_id,
+                max_clients,
+                transport: TransportConfig::default(),
+            };
+            let server = dream_net::Server::new(config, &key, schema, clock()).map_err(config_error)?;
+            Ok(Owned(Server::new_from_luau(server, Rc::clone(&clock), key, protocol_id)))
         })?;
         Ok(())
     }
@@ -631,6 +681,39 @@ fn describe_server(d: &mut ExtensionDescriptor) {
             server.inner.borrow_mut().update(now);
         })
         .signature("(self)");
+    server
+        .method(
+            "connectToken",
+            |server: &Server, client_id: Bits64, expires_in: Option<Exact<i64>>, timeout: Option<Exact<i64>>| {
+                let issuer = server.token_issuer.as_ref().ok_or_else(|| {
+                    Error::runtime("dream.net.Server.connectToken: this host-created server has no token issuer")
+                })?;
+                let expires_in = expires_in.map_or(300, |n| n.0);
+                let timeout = timeout.map_or(30, |n| n.0);
+                if !(1..=86_400).contains(&expires_in) {
+                    return Err(Error::runtime("dream.net.Server.connectToken expiresInSeconds must be in [1, 86400]"));
+                }
+                if !(1..=300).contains(&timeout) {
+                    return Err(Error::runtime("dream.net.Server.connectToken timeoutSeconds must be in [1, 300]"));
+                }
+                let address = server.inner.borrow().address();
+                let user_data = [0; dream_net::USER_DATA_BYTES];
+                let token = dream_net::generate_connect_token(
+                    &[address],
+                    &[address],
+                    expires_in as i32,
+                    timeout as i32,
+                    client_id.0,
+                    issuer.protocol_id,
+                    &issuer.key,
+                    &user_data,
+                )
+                .map_err(config_error)?;
+                Ok(NewBuffer(token.to_vec()))
+            },
+        )
+        .signature("(self, clientId: integer, expiresInSeconds: number?, timeoutSeconds: number?): buffer")
+        .doc("Mints an authenticated connect token; private key material is never returned.");
     server
         .method("pollInto", |server: &Server, buffer: BufferView| server.poll_into(buffer))
         .signature("(self, buffer: buffer): (string?, integer, ...any)");

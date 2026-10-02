@@ -173,7 +173,15 @@ fn main() {
 
     // The binder's own additions to the C API.
     let mut extra = luau.base.clone();
-    extra.include(&vm_include).include(&vm_src).file("csrc/extra.cpp").compile("l3iextra");
+    extra
+        .include(&vm_include)
+        .include(&vm_src)
+        .include(&ast_include)
+        .include(&bytecode_include)
+        .include(&compiler_include)
+        .file("csrc/extra.cpp")
+        .file("csrc/bytecode.cpp")
+        .compile("l3iextra");
 
     if jit {
         assert!(!target.ends_with("emscripten"), "native code generation (jit) is not supported on emscripten");

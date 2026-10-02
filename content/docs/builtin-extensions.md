@@ -38,7 +38,7 @@ Luau-facing shape.
 - Peer, event, channel and client ids are Luau integers, exact and compared with `==`; a peer id is a `Bits64` pattern, all 64 bits. Sizes and counters are plain numbers, because scripts threshold them.
 - Payloads are Luau buffers, or strings on send. `pollInto` copies one received payload into a caller-owned buffer and `sendEvent` copies out of one before returning, so the transport retains no Lua memory.
 - The transport clock is the plan's: `update()` reads a monotonic clock started with the bridge, or the clock the host gave `RuntimePlanBuilder::network_clock`, so a script cannot spoof time and a simulation can drive it.
-- The server private key never reaches Luau: the host creates `dream_net::Server`s in Rust and hands them over as `net::Server` handles (`Server::new(server, clock)`, `Server::push(scope, server, clock)`, or a returned `Owned<Server>`). Scripts create clients with `net.client{}` only when the policy grants the `network.transport` capability (`net::TRANSPORT_CAPABILITY`).
+- The server private key never reaches Luau. A host may still hand scripts a `net::Server` handle, or Luau may create one with `net.server{}`; both `net.server{}` and `net.client{}` require the `network.transport` capability (`net::TRANSPORT_CAPABILITY`). A Luau-created server keeps its generated key in native userdata and mints client tokens with `server:connectToken(clientId, expiresInSeconds?, timeoutSeconds?)`.
 - Nothing calls into Luau from inside dream-net; the host drives one network phase per frame.
 
 ### The module
@@ -47,6 +47,7 @@ Luau-facing shape.
 |---|---|
 | `schema(options)` | `(options: { version: number, maxMessagesPerPacket: number?, channels: { { [string]: any } }, events: { { [string]: any } } }) -> dream_net_Schema` |
 | `client(options)` | `(options: { schema: dream_net_Schema, bind: string? }) -> dream_net_Client`, bound at install because it depends on the capability |
+| `server(options)` | `(options: { schema: dream_net_Schema, address: string, protocolId: integer, maxClients: number? }) -> dream_net_Server`, bound at install because it depends on the capability |
 | `CONNECT_TOKEN_BYTES`, `MAX_EVENT_PAYLOAD`, `MAX_CHANNELS` | Folded numbers: 2048, dream-net's payload limit, 64 |
 
 `net.schema{}` is a strict option table. A channel is `{ name, delivery, capacity?, overflow?,
@@ -74,6 +75,20 @@ assert(schema:maxPayload(schema:eventId("Move")) == 12i)
 ```
 
 ### Schema, client, server
+
+Creating the server and minting client tokens are ordinary Luau operations. The only authority
+required is the host-granted `network.transport` capability; token bytes are safe to distribute to
+clients, while the signing key remains private to the server userdata:
+
+```luau
+local server = net.server{
+    schema = schema,
+    address = "127.0.0.1:0", -- the bound and advertised address
+    protocolId = 0x12345678,
+    maxClients = 4,
+}
+local token = server:connectToken(1) -- buffer; expires after 300 seconds by default
+```
 
 `dream_net_Schema` is untagged: getters `version`, `fingerprint` (32 hex digits), `eventCount`,
 `channelCount`; methods `eventId(name)`, `channelId(name)` (`integer?`), `eventName(id)`,
@@ -950,4 +965,3 @@ shell in between. A program the OS can't start returns `nil`, the message and th
 `@dream/fs` does. `run` needs `process.spawn` (`l3i::process::SPAWN_CAPABILITY`) and `env` needs
 `process.environment`; `write` and `isTerminal` need nothing, since `print` already reaches
 standard output.
-
