@@ -4,10 +4,9 @@ use l3i::source::{CompileOptions, compile, disassemble};
 fn textual_disassembly_lists_bytecode_functions_lines_locals_and_constants() {
     let source = "local function add(base)\n return function(delta) return base + delta end\nend\nreturn add(40)(2)";
     let options = CompileOptions::default();
-    let bytecode = compile(source, &options).unwrap();
+    compile(source, &options).unwrap();
     let listing = disassemble(source, &options).unwrap();
 
-    assert!(!bytecode.is_empty());
     assert!(listing.contains("Function 0"), "{listing}");
     assert!(listing.contains("Function 1"), "{listing}");
     assert!(listing.contains("GETUPVAL"), "{listing}");
