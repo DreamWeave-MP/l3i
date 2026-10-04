@@ -191,6 +191,32 @@ fn comprehension_filters_refine_nullable_elements_and_fields_before_projection()
 }
 
 #[test]
+fn comprehension_entity_ids_nullable_records_and_nested_results_infer() {
+    let source = concat!(
+        "--!strict\n",
+        "type Entity = { id: number, active: boolean }\n",
+        "local entities: {Entity} = {{id = 1, active = true}}\n",
+        "local ids = [for e in entities if e.active => e.id]\n",
+        "type Foo = {name: string}\n",
+        "local nullable: {Foo?} = {{name = 'a'}}\n",
+        "local names = [for x in nullable if x ~= nil => x.name]\n",
+        "local nested = [for row in {{1, 2}, {3, 4}} => [for x in row => x * 2]]\n",
+        "local pairs = [for a in {1, 2} for b in {3, 4} => a + b]\n",
+        "return ids, names, nested, pairs\n",
+    );
+    for solver in [analysis::Solver::New, analysis::Solver::Old] {
+        let analysis = comprehension_analysis(HashMap::from([("entities", source)]), solver);
+        let report = analysis.check("entities", false);
+        assert!(report.is_clean(), "{solver:?}: {report:#?}");
+        for (name, expected) in
+            [("ids", "{number}"), ("names", "{string}"), ("nested", "{{number}}"), ("pairs", "{number}")]
+        {
+            assert_binding_type(&analysis, "entities", 9, name, expected);
+        }
+    }
+}
+
+#[test]
 fn comprehension_diagnostic_columns_currently_refer_to_lowered_source() {
     let projection = concat!(
         "--!strict\nlocal values: { number } = { 1 }\n",
