@@ -1,4 +1,4 @@
-//! Luau's own parser for scripts: the `dream.luau` extension, module `@dream/luau`.
+//! Source syntax parsing for scripts: the `dream.luau` extension, module `@dream/luau`.
 //!
 //! ```lua
 //! local luau = require('@dream/luau')
@@ -8,6 +8,8 @@
 //! end
 //! ```
 //!
+//! `parse` defaults to the `l3i` dialect, exporting comprehensions as source nodes rather
+//! than generated calls or locals. `{ dialect = "luau" }` selects strict stock Luau syntax.
 //! `parse` runs `Luau::Parser` (the parser the compiler and the type checker use, under the
 //! runtime's frozen fast flags) and builds the tree as Luau tables in native code: one table per
 //! node, made at its final size, with every key string pushed once per call. Nothing here knows
@@ -23,14 +25,26 @@
 //! member names (`thenbody`, `elsebody`, `func`, `args`); [`TYPES`] is the complete shape.
 //!
 //! A local (`Local`) is one table shared by its declaration and every `ExprLocal` that reads
-//! it, so identity comparison resolves scopes with no scope tracking.
+//! it, so identity comparison resolves scopes with no scope tracking. Comprehensions have
+//! ordered `ComprehensionGenerator` / `ComprehensionFilter` clauses and a projection; generator
+//! sources precede their binding's scope. Scope depths and upvalues exclude generated functions.
+//! `#[for ...]` remains an `ExprUnary` around an `ExprComprehension`.
+//! The intrinsic `sum[for ...]` is an `ExprReduction` with `op = "sum"` and an inner
+//! `ExprComprehension`; its outer span includes `sum`, while the inner span starts at `[`.
+//! This intrinsic does not refer to any local/global named `sum`; member accesses are excluded.
+//!
+//! Missing surface expressions are `ExprError` with `isMissing = true` and no children.
+//! Missing tokens have absent optional locations; their insertion spans are zero-width.
+//! `messageIndex` is zero-based into `errors`, or -1 if no matching diagnostic is available.
 //!
 //! # Trivia
 //!
 //! Between two tokens there is only whitespace and comments, and `comments` lists every
 //! comment with its span. With `{ tokens = true }`, `tokens` is Luau's own token stream as a
 //! buffer of 12-byte records (`kind`, first and last 1-based source index, each a `u32`), the
-//! kinds numbered by `luau.tokenKinds`; what precedes any node is then exact.
+//! kinds numbered by `luau.tokenKinds`; what precedes any node is then exact. In the `l3i`
+//! dialect contiguous `=` and `>` tokens form one `symbol` token for `=>`. Trivia and token
+//! offsets always refer to the original source; all 14 kind ids remain unchanged.
 //!
 //! # Errors
 //!
@@ -73,6 +87,7 @@ pub const TOKEN_KINDS: [&str; 14] = [
 
 const PARSE_DECLARATIONS: c_int = 1;
 const PARSE_TOKENS: c_int = 2;
+const PARSE_LUAU: c_int = 4;
 
 mod ffi {
     use std::ffi::{c_char, c_int};
@@ -89,14 +104,25 @@ fn parse(call: &Call<'_>, source: BytesView<'_>, options: Option<ValueView<'_>>)
     const WHAT: &str = "luau.parse";
     let mut flags = 0;
     if let Some(options) = options {
-        let (declarations, tokens) = Options::read(call, options, WHAT, |o| {
-            Ok((o.optional::<bool>("declarations")?.unwrap_or(false), o.optional::<bool>("tokens")?.unwrap_or(false)))
+        let (declarations, tokens, stock_luau) = Options::read(call, options, WHAT, |o| {
+            let declarations = o.optional::<bool>("declarations")?.unwrap_or(false);
+            let tokens = o.optional::<bool>("tokens")?.unwrap_or(false);
+            let dialect = o.optional::<String>("dialect")?;
+            let stock_luau = match dialect.as_deref().unwrap_or("l3i") {
+                "l3i" => false,
+                "luau" => true,
+                _ => return Err(Error::runtime(format!("{WHAT}.dialect: expected 'l3i' or 'luau'"))),
+            };
+            Ok((declarations, tokens, stock_luau))
         })?;
         if declarations {
             flags |= PARSE_DECLARATIONS;
         }
         if tokens {
             flags |= PARSE_TOKENS;
+        }
+        if stock_luau {
+            flags |= PARSE_LUAU;
         }
     }
     if u32::try_from(source.len()).is_err() {
@@ -162,6 +188,23 @@ pub const TYPES: &[(&str, &str)] = &[
     (
         "dream_luau_ArgumentName",
         "{ kind: \"ArgumentName\", line: number, column: number, endLine: number, endColumn: number, name: string }",
+    ),
+    (
+        "dream_luau_ComprehensionGenerator",
+        "{ kind: \"ComprehensionGenerator\", line: number, column: number, endLine: number, endColumn: number, binding: dream_luau_Local?, source: dream_luau_Expr, inLocation: dream_luau_Span?, keywordLocation: dream_luau_Span, hasIn: boolean }",
+    ),
+    (
+        "dream_luau_ComprehensionFilter",
+        "{ kind: \"ComprehensionFilter\", line: number, column: number, endLine: number, endColumn: number, condition: dream_luau_Expr, keywordLocation: dream_luau_Span }",
+    ),
+    ("dream_luau_ComprehensionClause", "dream_luau_ComprehensionGenerator | dream_luau_ComprehensionFilter"),
+    (
+        "dream_luau_ExprComprehension",
+        "{ kind: \"ExprComprehension\", line: number, column: number, endLine: number, endColumn: number, clauses: { dream_luau_ComprehensionClause }, projection: dream_luau_Expr, openLocation: dream_luau_Span, closeLocation: dream_luau_Span?, arrowLocation: dream_luau_Span?, hasClose: boolean, hasArrow: boolean, complete: boolean }",
+    ),
+    (
+        "dream_luau_ExprReduction",
+        "{ kind: \"ExprReduction\", line: number, column: number, endLine: number, endColumn: number, op: \"sum\", expr: dream_luau_ExprComprehension }",
     ),
     (
         "dream_luau_ExprGroup",
@@ -245,7 +288,7 @@ pub const TYPES: &[(&str, &str)] = &[
     ),
     (
         "dream_luau_ExprError",
-        "{ kind: \"ExprError\", line: number, column: number, endLine: number, endColumn: number, expressions: { dream_luau_Expr }, messageIndex: number }",
+        "{ kind: \"ExprError\", line: number, column: number, endLine: number, endColumn: number, expressions: { dream_luau_Expr }, messageIndex: number, isMissing: boolean? }",
     ),
     (
         "dream_luau_StatBlock",
@@ -393,7 +436,7 @@ pub const TYPES: &[(&str, &str)] = &[
     ),
     (
         "dream_luau_Expr",
-        "dream_luau_ExprGroup | dream_luau_ExprConstantNil | dream_luau_ExprConstantBool | dream_luau_ExprConstantNumber | dream_luau_ExprConstantInteger | dream_luau_ExprConstantString | dream_luau_ExprLocal | dream_luau_ExprGlobal | dream_luau_ExprVarargs | dream_luau_ExprCall | dream_luau_ExprIndexName | dream_luau_ExprIndexExpr | dream_luau_ExprFunction | dream_luau_ExprTable | dream_luau_ExprUnary | dream_luau_ExprBinary | dream_luau_ExprTypeAssertion | dream_luau_ExprIfElse | dream_luau_ExprInterpString | dream_luau_ExprInstantiate | dream_luau_ExprError",
+        "dream_luau_ExprGroup | dream_luau_ExprConstantNil | dream_luau_ExprConstantBool | dream_luau_ExprConstantNumber | dream_luau_ExprConstantInteger | dream_luau_ExprConstantString | dream_luau_ExprLocal | dream_luau_ExprGlobal | dream_luau_ExprVarargs | dream_luau_ExprCall | dream_luau_ExprIndexName | dream_luau_ExprIndexExpr | dream_luau_ExprFunction | dream_luau_ExprTable | dream_luau_ExprUnary | dream_luau_ExprBinary | dream_luau_ExprTypeAssertion | dream_luau_ExprIfElse | dream_luau_ExprInterpString | dream_luau_ExprInstantiate | dream_luau_ExprError | dream_luau_ExprComprehension | dream_luau_ExprReduction",
     ),
     (
         "dream_luau_Stat",
@@ -406,7 +449,7 @@ pub const TYPES: &[(&str, &str)] = &[
     ("dream_luau_TypePack", "dream_luau_TypePackExplicit | dream_luau_TypePackVariadic | dream_luau_TypePackGeneric"),
     (
         "dream_luau_Node",
-        "dream_luau_Expr | dream_luau_Stat | dream_luau_Type | dream_luau_TypePack | dream_luau_Local | dream_luau_Attr | dream_luau_GenericType | dream_luau_GenericTypePack | dream_luau_TableItem | dream_luau_TableProp | dream_luau_TableIndexer | dream_luau_DeclaredProp | dream_luau_ArgumentName",
+        "dream_luau_Expr | dream_luau_Stat | dream_luau_Type | dream_luau_TypePack | dream_luau_Local | dream_luau_Attr | dream_luau_GenericType | dream_luau_GenericTypePack | dream_luau_TableItem | dream_luau_TableProp | dream_luau_TableIndexer | dream_luau_DeclaredProp | dream_luau_ArgumentName | dream_luau_ComprehensionClause",
     ),
     (
         "dream_luau_Comment",
@@ -420,7 +463,7 @@ pub const TYPES: &[(&str, &str)] = &[
         "dream_luau_ParseError",
         "{ kind: \"Error\", line: number, column: number, endLine: number, endColumn: number, message: string }",
     ),
-    ("dream_luau_ParseOptions", "{ declarations: boolean?, tokens: boolean? }"),
+    ("dream_luau_ParseOptions", "{ declarations: boolean?, tokens: boolean?, dialect: (\"l3i\" | \"luau\")? }"),
     (
         "dream_luau_ParseResult",
         "{ root: dream_luau_StatBlock, errors: { dream_luau_ParseError }, comments: { dream_luau_Comment }, hotComments: { dream_luau_HotComment }, lineStarts: { number }, tokens: buffer? }",
@@ -445,10 +488,10 @@ impl Extension for SyntaxExtension {
             d.type_alias(name, *definition);
         }
         d.module(MODULE)
-            .doc("Luau's own parser: the syntax tree, comments, errors and tokens of a source, as tables.")
+            .doc("Source syntax trees, comments, errors and original tokens as tables; l3i and stock luau dialects.")
             .function("parse", parse)
             .signature("(source: string | buffer, options: dream_luau_ParseOptions?) -> dream_luau_ParseResult")
-            .doc("Parses source with Luau's parser; declarations allows definition-file syntax, tokens adds the token stream.")
+            .doc("Parses source (dialect defaults to l3i; luau selects strict stock syntax). Comprehensions and intrinsic sum reductions remain source nodes, including recovery holes. declarations allows definition-file syntax; tokens adds original 12-byte token records. Syntax errors are data; invalid options raise.")
             .installed("tokenKinds")
             .signature("dream_luau_TokenKinds")
             .doc("The token kinds in parse's tokens buffer, by name.");

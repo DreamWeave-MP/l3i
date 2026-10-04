@@ -1,6 +1,7 @@
 // `@dream/luau`'s parser: Luau's own `Luau::Parser`, its tree built as Luau tables directly on the
-// calling thread's stack, with every comment, hot comment and parse error, and, on request,
-// Luau's own token stream. Nothing here knows a style rule: the tree is Luau's, the spans exact.
+// calling thread's stack, with original comments, hot comments, errors and optional tokens.
+// The l3i dialect substitutes genuine surface nodes for precisely identified generated calls;
+// stock Luau nodes and their original-source spans otherwise retain their API shapes.
 //
 // Every table is made with its final size, and every key and enumeration string is pushed once
 // per call and copied from its slot, so building a node hashes no string.
@@ -20,6 +21,13 @@
 #include "Luau/ParseResult.h"
 #include "Luau/Parser.h"
 
+#include "surface_syntax.h"
+#include "source_locations.h"
+
+#include <algorithm>
+#include <cctype>
+#include <unordered_set>
+
 #include <stdint.h>
 #include <string.h>
 
@@ -34,6 +42,24 @@ using namespace Luau;
 
 // Every string a tree uses: field names, node kinds, and enumeration values. One stack slot each.
 #define L3I_SYNTAX_STRINGS(X) \
+    X(clauses, "clauses") \
+    X(projection, "projection") \
+    X(binding, "binding") \
+    X(sourceField, "source") \
+    X(openLocation, "openLocation") \
+    X(closeLocation, "closeLocation") \
+    X(arrowLocation, "arrowLocation") \
+    X(keywordLocation, "keywordLocation") \
+    X(inLocation, "inLocation") \
+    X(hasClose, "hasClose") \
+    X(hasArrow, "hasArrow") \
+    X(hasIn, "hasIn") \
+    X(complete, "complete") \
+    X(KExprReduction, "ExprReduction") \
+    X(SSum, "sum") \
+    X(KExprComprehension, "ExprComprehension") \
+    X(KComprehensionGenerator, "ComprehensionGenerator") \
+    X(KComprehensionFilter, "ComprehensionFilter") \
     X(kind, "kind") \
     X(line, "line") \
     X(column, "column") \
@@ -285,6 +311,259 @@ enum TokenKind : uint32_t
     TokenAttribute,
     TokenSymbol,
     TokenError,
+};
+
+using SurfaceRange = L3i::Surface::Range;
+
+void ensureRoot(ParseResult& result, std::string_view source, Allocator& allocator)
+{
+    if (result.root)
+        return;
+    Position end(0, 0);
+    for (char c : source)
+        if (c == '\n') end = Position(end.line + 1, 0);
+        else ++end.column;
+    const Location entire(Position(0, 0), end);
+    if (result.errors.empty())
+        result.errors.emplace_back(entire, "parser recovery could not construct a tree");
+    auto** body = static_cast<AstStat**>(allocator.allocate(sizeof(AstStat*)));
+    body[0] = allocator.alloc<AstStatError>(entire, AstArray<AstExpr*>{}, AstArray<AstStat*>{}, 0);
+    result.root = allocator.alloc<AstStatBlock>(entire, AstArray<AstStat*>{body, 1}, false);
+}
+
+// Index actual AST identities in generated coordinates, before any location is remapped.
+// A site's emitted expression can end in trivia: select the largest expression with the
+// same begin that is wholly contained in the site, not an exact end or a temporary name.
+class SiteIndex final : public AstVisitor
+{
+public:
+    explicit SiteIndex(const std::string& generated)
+    {
+        starts.push_back(0);
+        for (size_t i = 0; i < generated.size(); ++i)
+            if (generated[i] == '\n')
+                starts.push_back(i + 1);
+    }
+
+    size_t offset(Position p) const { return starts.at(p.line) + p.column; }
+    bool visit(AstType*) override { return true; }
+    bool visit(AstTypePack*) override { return true; }
+    bool visit(AstTypeFunction* n) override
+    {
+        for (auto* attr : n->attributes) attr->visit(this);
+        for (auto* generic : n->generics) generic->visit(this);
+        for (auto* generic : n->genericPacks) generic->visit(this);
+        return true;
+    }
+    bool visit(AstExpr* expr) override
+    {
+        expressions[offset(expr->location.begin)].push_back(expr);
+        return true;
+    }
+    void local(AstLocal* value)
+    {
+        if (value)
+            bindings[offset(value->location.begin)] = value;
+    }
+    bool visit(AstNode* node) override
+    {
+        if (auto* n = node->as<AstStatTypeAlias>())
+        {
+            for (auto* generic : n->generics) generic->visit(this);
+            for (auto* generic : n->genericPacks) generic->visit(this);
+        }
+        if (auto* n = node->as<AstStatDeclareFunction>())
+        {
+            for (auto* attr : n->attributes) attr->visit(this);
+            for (auto* generic : n->generics) generic->visit(this);
+            for (auto* generic : n->genericPacks) generic->visit(this);
+        }
+        if (auto* n = node->as<AstStatLocal>())
+            for (auto* v : n->vars) local(v);
+        else if (auto* n = node->as<AstStatFor>()) local(n->var);
+        else if (auto* n = node->as<AstStatForIn>())
+            for (auto* v : n->vars) local(v);
+        else if (auto* n = node->as<AstStatLocalFunction>()) local(n->name);
+        return true;
+    }
+    AstExpr* expression(SurfaceRange range) const
+    {
+        auto it = expressions.find(range.begin);
+        AstExpr* best = nullptr;
+        size_t bestEnd = 0;
+        if (it != expressions.end())
+            for (AstExpr* expr : it->second)
+            {
+                size_t end = offset(expr->location.end);
+                if (end <= range.end && (!best || end > bestEnd))
+                    best = expr, bestEnd = end;
+            }
+        return best;
+    }
+    bool visit(AstExprFunction* n) override
+    {
+        visit(static_cast<AstExpr*>(n));
+        for (auto* attr : n->attributes) attr->visit(this);
+        for (auto* generic : n->generics) generic->visit(this);
+        for (auto* generic : n->genericPacks) generic->visit(this);
+        if (n->self && n->self->annotation) n->self->annotation->visit(this);
+        for (auto* arg : n->args)
+            if (arg->annotation) arg->annotation->visit(this);
+        if (n->varargAnnotation) n->varargAnnotation->visit(this);
+        if (n->returnAnnotation) n->returnAnnotation->visit(this);
+        n->body->visit(this);
+        return false;
+    }
+    AstLocal* binding(SurfaceRange range) const
+    {
+        auto it = bindings.find(range.begin);
+        return it != bindings.end() && offset(it->second->location.end) == range.end ? it->second : nullptr;
+    }
+    std::vector<size_t> starts;
+    std::unordered_map<size_t, std::vector<AstExpr*>> expressions;
+    std::unordered_map<size_t, AstLocal*> bindings;
+};
+
+struct SurfaceClause
+{
+    AstLocal* binding = nullptr;
+    AstExpr* expression = nullptr;
+};
+struct SurfaceExpression
+{
+    const L3i::Surface::Comprehension* record = nullptr;
+    std::vector<SurfaceClause> clauses;
+    AstExpr* projection = nullptr;
+};
+using SurfaceExpressions = std::unordered_map<AstExprCall*, SurfaceExpression>;
+
+// Traverse the source tree, not the synthetic IIFE/loops. Keep stock AstLocal pointers and
+// binding resolution, but recompute scope metadata using only source functions and loops.
+class SourceMetadata final : public AstVisitor
+{
+public:
+    explicit SourceMetadata(const SurfaceExpressions& surfaces) : surfaces(surfaces) {}
+    void walk(AstNode* n) { if (n) n->visit(this); }
+    void local(AstLocal* n, bool annotation = true)
+    {
+        if (!n || !seen.insert(n).second) return;
+        n->functionDepth = functionDepth;
+        n->loopDepth = loopDepth;
+        if (annotation) walk(n->annotation);
+    }
+    bool visit(AstType*) override { return true; }
+    bool visit(AstTypePack*) override { return true; }
+    bool visit(AstTypeFunction* n) override
+    {
+        for (auto* attr : n->attributes) attr->visit(this);
+        for (auto* generic : n->generics) generic->visit(this);
+        for (auto* generic : n->genericPacks) generic->visit(this);
+        return true;
+    }
+    bool visit(AstNode* n) override
+    {
+        if (auto* s = n->as<AstStatTypeAlias>())
+        {
+            for (auto* generic : s->generics) walk(generic);
+            for (auto* generic : s->genericPacks) walk(generic);
+        }
+        if (auto* s = n->as<AstStatDeclareFunction>())
+        {
+            for (auto* attr : s->attributes) walk(attr);
+            for (auto* generic : s->generics) walk(generic);
+            for (auto* generic : s->genericPacks) walk(generic);
+        }
+        if (auto* s = n->as<AstStatLocal>())
+            for (auto* v : s->vars) local(v);
+        else if (auto* s = n->as<AstStatLocalFunction>()) local(s->name);
+        else if (auto* s = n->as<AstStatIf>()) local(s->conditionLocal);
+        else if (auto* s = n->as<AstStatClass>()) local(s->name);
+        return true;
+    }
+    bool visit(AstExprLocal* n) override
+    {
+        n->upvalue = n->local->functionDepth != functionDepth;
+        return false;
+    }
+    bool visit(AstExprIfElse* n) override
+    {
+        local(n->conditionLocal);
+        walk(n->condition); walk(n->trueExpr); walk(n->falseExpr);
+        return false;
+    }
+    bool visit(AstExprCall* n) override
+    {
+        auto it = surfaces.find(n);
+        if (it == surfaces.end()) return true;
+        unsigned saved = loopDepth;
+        for (size_t i = 0; i < it->second.clauses.size(); ++i)
+        {
+            const auto& clause = it->second.clauses[i];
+            walk(clause.expression); // A generator's source is outside its own header scope.
+            if (it->second.record->clauses[i].kind == L3i::Surface::ClauseKind::Generator)
+            {
+                ++loopDepth;
+                local(clause.binding);
+            }
+        }
+        walk(it->second.projection);
+        loopDepth = saved;
+        return false;
+    }
+    bool visit(AstExprFunction* n) override
+    {
+        for (auto* attr : n->attributes) walk(attr);
+        for (auto* generic : n->generics) walk(generic);
+        for (auto* generic : n->genericPacks) walk(generic);
+        // Stock Luau parses signature annotations in the enclosing function, before
+        // introducing parameter locals and entering the function body.
+        if (n->self) walk(n->self->annotation);
+        for (auto* arg : n->args) walk(arg->annotation);
+        walk(n->varargAnnotation); walk(n->returnAnnotation);
+        unsigned savedLoop = loopDepth;
+        ++functionDepth;
+        loopDepth = 0;
+        n->functionDepth = functionDepth;
+        local(n->self, false);
+        for (auto* arg : n->args) local(arg, false);
+        walk(n->body);
+        --functionDepth;
+        loopDepth = savedLoop;
+        return false;
+    }
+    bool visit(AstStatWhile* n) override
+    {
+        walk(n->condition);
+        ++loopDepth; walk(n->body); --loopDepth;
+        return false;
+    }
+    bool visit(AstStatRepeat* n) override
+    {
+        ++loopDepth; walk(n->body); --loopDepth; walk(n->condition);
+        return false;
+    }
+    bool visit(AstStatFor* n) override
+    {
+        if (n->var) walk(n->var->annotation);
+        walk(n->from); walk(n->to); walk(n->step);
+        ++loopDepth;
+        local(n->var, false);
+        walk(n->body); --loopDepth;
+        return false;
+    }
+    bool visit(AstStatForIn* n) override
+    {
+        for (auto* var : n->vars) walk(var->annotation);
+        for (auto* value : n->values) walk(value);
+        ++loopDepth;
+        for (auto* var : n->vars) local(var, false);
+        walk(n->body); --loopDepth;
+        return false;
+    }
+    const SurfaceExpressions& surfaces;
+    std::unordered_set<AstLocal*> seen;
+    unsigned functionDepth = 0;
+    unsigned loopDepth = 0;
 };
 
 class Builder final : public AstVisitor
@@ -733,6 +1012,12 @@ public:
 
     bool visit(AstExprCall* node) override
     {
+        auto surface = surfaces.find(node);
+        if (surface != surfaces.end())
+        {
+            comprehension(surface->second);
+            return false;
+        }
         open(KExprCall, node->location, 5);
         setNode(func, node->func);
         setArray(args, node->args);
@@ -1229,6 +1514,119 @@ public:
         return false;
     }
 
+    Position position(size_t at) const
+    {
+        at = std::min(at, length);
+        auto it = std::upper_bound(lineStarts.begin(), lineStarts.end(), at);
+        size_t index = size_t(it - lineStarts.begin() - 1);
+        return Position(unsigned(index), unsigned(at - lineStarts[index]));
+    }
+    Location location(SurfaceRange range) const { return Location(position(range.begin), position(range.end)); }
+
+    void surfaceExpr(AstExpr* expr, SurfaceRange range)
+    {
+        const Location expected = location(range);
+        if (!range.empty() && expr && expr->location == expected)
+        {
+            node(expr);
+            return;
+        }
+        open(KExprError, location(range), 3);
+        const bool child = expr && !range.empty();
+        newTable(child ? 1 : 0, 0);
+        if (child)
+        {
+            node(expr);
+            popAt(1);
+        }
+        popInto(expressions);
+        setBool(isMissing, range.empty());
+        // Error indices are stock Luau's zero-based indices. Match a structural diagnostic
+        // at the insertion point when available; -1 explicitly denotes no matching message.
+        int index = -1;
+        if (parseErrors)
+            for (size_t i = 0; i < parseErrors->size(); ++i)
+            {
+                const auto& loc = (*parseErrors)[i].getLocation();
+                if (loc.begin >= expected.begin && loc.begin <= expected.end) { index = int(i); break; }
+            }
+        setNumber(messageIndex, index);
+    }
+
+    void comprehension(const SurfaceExpression& surface)
+    {
+        const auto& record = *surface.record;
+        // The reducer is surface syntax, independent of any local/global named sum.
+        // It shares the comprehension's generated site and adds no source function scope.
+        const bool reduction = !record.sumPrefix.empty();
+        if (reduction)
+        {
+            open(KExprReduction, location({record.sumPrefix.begin, record.range.end}), 2);
+            setString(op, SSum);
+        }
+        open(KExprComprehension, location(record.range), 8);
+        span(openLocation, location(record.open));
+        if (!record.close.empty()) span(closeLocation, location(record.close));
+        if (!record.arrow.empty()) span(arrowLocation, location(record.arrow));
+        setBool(hasClose, !record.close.empty());
+        setBool(hasArrow, !record.arrow.empty());
+        bool ready = record.complete;
+        if (parseErrors)
+            for (const auto& error : *parseErrors)
+                if (error.getLocation().begin >= position(record.range.begin) && error.getLocation().begin <= position(record.range.end))
+                    ready = false;
+        setBool(complete, ready);
+        newTable(int(record.clauses.size()), 0);
+        for (size_t i = 0; i < record.clauses.size(); ++i)
+        {
+            const auto& clause = record.clauses[i];
+            const auto& ast = surface.clauses[i];
+            bool generator = clause.kind == L3i::Surface::ClauseKind::Generator;
+            open(generator ? KComprehensionGenerator : KComprehensionFilter, location(clause.range), generator ? 5 : 2);
+            span(keywordLocation, location(clause.keyword));
+            if (generator)
+            {
+                if (!clause.binding.empty()) setLocal(binding, ast.binding);
+                if (!clause.in.empty()) span(inLocation, location(clause.in));
+                setBool(hasIn, !clause.in.empty());
+            }
+            surfaceExpr(ast.expression, clause.expression);
+            popInto(generator ? sourceField : condition);
+            popAt(int(i + 1));
+        }
+        popInto(clauses);
+        surfaceExpr(surface.projection, record.projection);
+        popInto(projection);
+        if (reduction) popInto(expr);
+    }
+
+    // Always lex the original input for surface trivia, including comments the emitter elides.
+    void originalTrivia(AstNameTable& names)
+    {
+        std::vector<Comment> comments;
+        std::vector<HotComment> hot;
+        Lexer lexer(source, length, names);
+        bool header = true;
+        for (;;)
+        {
+            const auto& token = lexer.next(false, true);
+            if (token.type == Lexeme::Eof) break;
+            if (token.type == Lexeme::Comment || token.type == Lexeme::BlockComment || token.type == Lexeme::BrokenComment)
+            {
+                comments.push_back({token.type, token.location});
+                if (token.type == Lexeme::Comment && token.getLength() && token.data[0] == '!')
+                {
+                    unsigned end = token.getLength();
+                    while (end > 1 && std::isspace(static_cast<unsigned char>(token.data[end - 1]))) --end;
+                    hot.push_back({header, token.location, std::string(token.data + 1, token.data + end)});
+                }
+            }
+            else header = false;
+        }
+        this->comments(comments);
+        hotComments(hot);
+    }
+
     // Comments, hot comments and errors, each an array field of the result on top.
     void comments(const std::vector<Comment>& list)
     {
@@ -1323,7 +1721,7 @@ public:
 
     // Luau's lexer over the whole source, comments included, as 12-byte records: the kind, then
     // the 1-based indices of the token's first and last bytes (`string.sub(source, first, last)`).
-    void tokens(AstNameTable& names)
+    void tokens(AstNameTable& names, bool surfaceMode)
     {
         std::vector<uint32_t> records;
         records.reserve(length / 2);
@@ -1335,6 +1733,14 @@ public:
                 break;
             size_t first = offset(lexeme.location.begin);
             size_t end = offset(lexeme.location.end);
+            // Merge only consecutive lexer tokens, never text inside strings or comments.
+            if (surfaceMode && lexeme.type == '>' && records.size() >= 3 && first > 0 && source[first - 1] == '=' &&
+                records[records.size() - 3] == TokenSymbol && records[records.size() - 2] == first &&
+                records.back() == first)
+            {
+                records.back() = uint32_t(end);
+                continue;
+            }
             records.push_back(tokenKind(lexeme.type));
             records.push_back(uint32_t(first + 1));
             records.push_back(uint32_t(end));
@@ -1344,6 +1750,9 @@ public:
             memcpy(data, records.data(), records.size() * sizeof(uint32_t));
         popInto(tokens_);
     }
+
+    SurfaceExpressions surfaces;
+    const std::vector<ParseError>* parseErrors = nullptr;
 
     lua_State* L;
     const char* source;
@@ -1369,6 +1778,7 @@ enum
 {
     L3I_PARSE_DECLARATIONS = 1,
     L3I_PARSE_TOKENS = 2,
+    L3I_PARSE_LUAU = 4,
 };
 
 // Parses `source` and pushes the result table. Raises (a Luau error, through C++ exceptions) only
@@ -1388,10 +1798,45 @@ int l3i_luau_parse(lua_State* L, const char* source, size_t length, int flags)
     options.captureComments = true;
     options.allowDeclarationSyntax = (flags & L3I_PARSE_DECLARATIONS) != 0;
     ParseResult result;
+    L3i::Surface::LoweredSource lowered;
+    SurfaceExpressions surfaces;
+    bool surfaceMode = (flags & L3I_PARSE_LUAU) == 0;
     std::string failure;
     try
     {
-        result = Parser::parse(source, length, names, allocator, options);
+        if (surfaceMode)
+        {
+            lowered = L3i::Surface::lower(std::string_view(source, length), true, false);
+            result = Parser::parse(lowered.source.data(), lowered.source.size(), names, allocator, options);
+            ensureRoot(result, lowered.source, allocator);
+            SiteIndex index(lowered.source);
+            if (result.root) result.root->visit(&index);
+            for (const auto& site : lowered.sites)
+            {
+                if (site.comprehension >= lowered.document.comprehensions.size()) continue;
+                auto* expr = index.expression(site.call);
+                auto* call = expr ? expr->as<AstExprCall>() : nullptr;
+                if (!call) continue;
+                SurfaceExpression surface;
+                surface.record = &lowered.document.comprehensions[site.comprehension];
+                surface.clauses.resize(surface.record->clauses.size());
+                for (size_t i = 0; i < surface.clauses.size() && i < site.clauses.size(); ++i)
+                    surface.clauses[i] = {index.binding(site.clauses[i].binding), index.expression(site.clauses[i].expression)};
+                surface.projection = index.expression(site.projection);
+                surfaces.emplace(call, std::move(surface));
+            }
+            if (!surfaces.empty())
+            {
+                SourceMetadata metadata(surfaces);
+                metadata.walk(result.root);
+            }
+            L3i::Surface::remapLocations(result, lowered.map);
+        }
+        else
+        {
+            result = Parser::parse(source, length, names, allocator, options);
+            ensureRoot(result, std::string_view(source, length), allocator);
+        }
     }
     catch (const std::exception& error)
     {
@@ -1401,15 +1846,24 @@ int l3i_luau_parse(lua_State* L, const char* source, size_t length, int flags)
         luaL_error(L, "luau.parse: %s", failure.c_str());
 
     Builder builder(L, source, length);
+    builder.surfaces = std::move(surfaces);
+    if (surfaceMode)
+        for (const auto& error : lowered.document.errors)
+            result.errors.emplace_back(builder.location(error.range), error.message);
+    builder.parseErrors = &result.errors;
     builder.begin();
     lua_createtable(L, 0, 8);
     builder.setNode(root, result.root);
     builder.errors(result.errors);
-    builder.comments(result.commentLocations);
-    builder.hotComments(result.hotcomments);
+    if (surfaceMode && !lowered.document.comprehensions.empty()) builder.originalTrivia(names);
+    else
+    {
+        builder.comments(result.commentLocations);
+        builder.hotComments(result.hotcomments);
+    }
     builder.starts();
     if (flags & L3I_PARSE_TOKENS)
-        builder.tokens(names);
+        builder.tokens(names, surfaceMode);
 
     // Leave only the result: drop the strings and the locals table below it.
     lua_replace(L, builder.base);
