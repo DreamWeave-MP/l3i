@@ -33,6 +33,7 @@
 #include <cstring>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace
@@ -932,7 +933,7 @@ L3i::Surface::LoweredSource L3i::Surface::lower(std::string_view input)
     return {std::move(output.text), std::move(map)};
 }
 
-extern "C" char* l3i_rewrite_surface_syntax(const char* source, size_t size, size_t* outsize)
+static char* rewriteSurfaceSyntax(const char* source, size_t size, size_t* outsize)
 {
     if (outsize)
         *outsize = 0;
@@ -957,4 +958,20 @@ extern "C" char* l3i_rewrite_surface_syntax(const char* source, size_t size, siz
     std::memcpy(memory, output.data(), output.size());
     *outsize = output.size();
     return memory;
+}
+
+extern "C" char* l3i_rewrite_surface_syntax(const char* source, size_t size, size_t* outsize)
+{
+    if (outsize)
+        *outsize = 0;
+    try
+    {
+        return rewriteSurfaceSyntax(source, size, outsize);
+    }
+    catch (...)
+    {
+        // This legacy text-only seam cannot report allocation failures separately
+        // from unchanged input, but it must never unwind into its Rust test caller.
+        return nullptr;
+    }
 }

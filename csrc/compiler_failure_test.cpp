@@ -39,6 +39,12 @@ void operator delete[](void* memory, size_t) noexcept { std::free(memory); }
 
 extern "C" char* l3i_luau_compile(const char*, size_t, lua_CompileOptions*, size_t*);
 extern "C" char* l3i_luau_disassemble(const char*, size_t, lua_CompileOptions*, size_t*);
+extern "C" char* l3i_rewrite_surface_syntax(const char*, size_t, size_t*);
+
+static char* rewrite(const char* source, size_t size, lua_CompileOptions*, size_t* outsize)
+{
+    return l3i_rewrite_surface_syntax(source, size, outsize);
+}
 
 int main()
 {
@@ -49,10 +55,11 @@ int main()
     for (size_t i = 0; i < 256; ++i)
         types[i] = "UnusedType";
     types[256] = nullptr;
-    for (Compile compile : {&l3i_luau_compile, &l3i_luau_disassemble})
+    for (Compile compile : {&l3i_luau_compile, &l3i_luau_disassemble, &rewrite})
         for (bool parser : {true, false})
         {
             const std::string& source = parser ? parseError : compileError;
+            const bool legacy = compile == &rewrite;
             lua_CompileOptions options{};
             options.optimizationLevel = 2;
             options.debugLevel = 1;
@@ -64,7 +71,7 @@ int main()
             active = true;
             char* result = compile(source.data(), source.size(), &options, &size);
             active = false;
-            assert(result && size && result[0] == '\0');
+            assert(result && size && (legacy || result[0] == '\0'));
             const size_t count = allocations;
             std::free(result);
             size_t nulls = 0;
@@ -84,7 +91,7 @@ int main()
                 }
                 active = false;
                 if (result)
-                    assert(size && result[0] == '\0');
+                    assert(size && (legacy || result[0] == '\0'));
                 else
                 {
                     assert(size == 0);
@@ -93,6 +100,6 @@ int main()
                 std::free(result);
             }
             assert(nulls > 0);
-            std::cout << (parser ? "parse" : "compile") << " failure: " << count + 2 << " allocation budgets passed\n";
+            std::cout << (legacy ? "rewrite" : parser ? "parse" : "compile") << " failure: " << count + 2 << " allocation budgets passed\n";
         }
 }
