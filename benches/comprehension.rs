@@ -274,10 +274,8 @@ fn sum_comparisons(c: &mut Criterion) {
     bench_case(
         &mut sum,
         "materialized comprehension then sum",
-        &format!(
-            "local projected = [for x in values if x % 2 == 0 => x * 2] local total = 0 \
-                  for i = 1, #projected do total += projected[i] end return total"
-        ),
+        "local projected = [for x in values if x % 2 == 0 => x * 2] local total = 0 \
+         for i = 1, #projected do total += projected[i] end return total",
         Output::Sum,
     );
     sum.finish();

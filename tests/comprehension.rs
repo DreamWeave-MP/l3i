@@ -275,7 +275,7 @@ fn sum_reducer_fuses_without_materializing_and_preserves_effects() {
     let runtime = Runtime::new().unwrap();
     runtime
         .exec(
-            r#"
+            r"
             local calls = 0
             local function project(x)
                 calls += 1
@@ -287,7 +287,7 @@ fn sum_reducer_fuses_without_materializing_and_preserves_effects() {
             assert(sum[for x in {} => x] == 0)
             local nested = sum[for x in { 1, 2 } for y in { x, x + 1 } => y]
             assert(nested == 8)
-            "#,
+            ",
         )
         .unwrap();
 }
