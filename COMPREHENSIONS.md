@@ -1,0 +1,197 @@
+# Comprehensions: integration and instruction evidence
+
+Validated on the actual L3i checkout, 2026-10-04, starting from the already-applied
+`88e0636` dense/non-nil prototype. Luau remains stock 0.740, submodule commit
+`c0e346edd89066b44dca174c9f54ce84c746a540`. No additional syntax or reducers were added.
+
+## Contract
+
+```luau
+[for x in xs => x * 2]
+[for e in entities if e.active => e.id]
+[for x in xs if p(x) if q(x) for y in children(x) => project(x, y)]
+[for row in rows => [for x in row => x * 2]]
+#[for x in xs if accept(x) => effect(x)]
+```
+
+Results are dense, 1-based arrays. Every accepted projection executes exactly once;
+nil raises `L3i comprehension projection produced nil; filter nil explicitly`.
+False is a valid projection. Filters have ordinary Luau truthiness: only nil and
+false are falsey, including when a filter returns a number, string, or table.
+
+Sources execute once at their nesting level. Filters execute left-to-right and
+short-circuit before inner generators/projection. The source length is captured
+on entry to each generator, like a numeric handwritten loop. This is a dense,
+indexable-sequence operation, not generic iteration; arbitrary sparse table
+boundaries still have ordinary Luau `#` behavior.
+
+Direct unary `#[for ...]` eliminates the **result** table, not source or projection
+allocations. It retains projection effects, failures, and nil checks. Parentheses
+or comments between `#` and the comprehension can prevent this lexical optimization;
+the unfused expression remains valid. No purity assumptions are made.
+
+## Fixes and regression coverage
+
+- The original allocation test accidentally forbade its own input table literal.
+  The corrected fixture supplies the source externally and checks for no result
+  constructor, stores, or wrapper closure, while retaining multiply/nil-check opcodes.
+- Luau's new solver inferred `{unknown}` from `table.create(n)` with no fill value.
+  The generated allocation now uses `table.create(n) :: typeof({})`: the type of a
+  fresh unsealed builder lets indexed writes infer the projection type. This is
+  neither `any` nor a second typechecker. `:: {}` is not equivalent: it is sealed.
+  The literal inside `typeof` is not executed. The assertion produces identical
+  bytecode with and without it at optimization levels 0, 1, and 2, debug level 0.
+- Clause trimming could remove a line comment's terminating newline and let the
+  comment consume synthetic code. Literal-aware scanning now restores that boundary.
+  Runtime and standalone tests cover source/filter/projection comments, count
+  fusion, and multiple generators.
+- Unary-length recognition now verifies that the scanner encountered `#` as code.
+  A hash at the end of a preceding line comment previously triggered false fusion
+  and could swallow the entire result expression. An intervening comment after a
+  real hash safely falls back to materialization.
+- Hostile event logs prove dependent-source placement, filter order, rejected
+  outer iterations, and exactly-once projections for materialized and fused forms.
+  Paired failure tests prove execution stops at the same element on nil or errors.
+- Hygiene tests cover legacy temporary-like names, generator-variable shadowing,
+  recursively embedded comprehensions, and forced collisions with the actual
+  generated offset and its first salted alternative.
+
+## Compiler and executed VM instructions
+
+The normal L3i policy enables `LuauCompileIifeInline` and optimization level 2.
+Disassembly proves the simple wrapper emits neither `NEWCLOSURE` nor `DUPCLOSURE`.
+The dense entry function's only calls are `table.create` and the cold `error` path.
+Luau still emits an unused wrapper prototype in the listing; that is not a runtime
+closure or call. Expression-result register placement adds one setup `MOVE`.
+
+The deterministic test uses Luau's single-step callbacks on a host-driven coroutine,
+with default interpreter compilation. Counts are executed VM instructions, not AUX
+words, native C implementation instructions, or CPU instructions. Setup of the input
+and loading of the function occur before stepping. The cold nil-error path is not
+taken in these numeric fixtures.
+
+| Input size | Dense L3i / checked loop / unchecked loop | Filtered L3i / checked loop | Fused count L3i / checked loop | Materialized count |
+|---:|---:|---:|---:|---:|
+| 0 | 11 / 10 / 10 | 12 / 11 | 8 / 7 | 13 |
+| 1 | 16 / 15 / 14 | 16 / 15 | 12 / 11 | 17 |
+| 32 | 171 / 170 / 138 | 204 / 203 | 184 / 183 | 205 |
+| 4,096 | 20,491 / 20,490 / 16,394 | 24,588 / 24,587 | 22,536 / 22,535 | 24,589 |
+
+**There is no per-element wrapper overhead.** Dense, filtered, and count lowering
+each add exactly one setup instruction to the same-contract loop at every tested
+size. Dense nil checking adds one executed VM instruction per accepted projection.
+It is intentional semantic cost, not grounds for deleting the guard.
+
+Reproduce the evidence:
+
+```bash
+cargo test executed_instruction_counts -- --nocapture
+cargo test dense_comprehension_bytecode -- --nocapture
+```
+
+## Retired CPU instructions and secondary timings
+
+Measured with `cargo bench --bench comprehension`, default features (interpreter),
+Intel Core i7-10870H, Linux x86-64, rustc 1.99.0. Each invocation processes 4,096
+integers; the even predicate accepts 2,048. CPU counts use one user-space hardware
+instruction counter via the existing `perf_event_open` shim, seven rounds of 128
+calls. The table reports the minimum round total divided by 128, rounded down.
+The harness also prints median/max; it reports unavailable counters rather than
+inventing measurements on unsupported systems or restricted hosts.
+
+| Case | CPU instructions / call | Criterion estimate, µs (95% CI) |
+|---|---:|---:|
+| Dense L3i, nil-checked | 1,082,906 | 82.007 (81.711–82.315) |
+| Dense handwritten, unchecked | 939,523 | 72.085 (71.271–73.195) |
+| Dense handwritten, nil-checked | 1,082,856 | 88.792 (88.388–89.200) |
+| Filtered L3i, nil-checked | 1,318,897 | 153.45 (152.74–154.27) |
+| Filtered handwritten, unchecked | 1,246,758 | 145.61 (144.68–146.54) |
+| Filtered handwritten, nil-checked | 1,318,449 | 150.95 (150.38–151.58) |
+| Growing `table.insert`, unchecked | 2,561,299 | 252.18 (247.89–256.33) |
+| Fused length L3i, nil-checked | 1,160,400 | 133.78 (133.11–134.55) |
+| Materialized L3i, then length | 1,318,484 | 150.03 (149.19–150.94) |
+| Handwritten fused count, nil-checked | 1,160,370 | 138.26 (137.64–139.02) |
+| Callback L3i fusion, nil-checked | 3,120,937 | 273.41 (272.26–274.55) |
+| Callback handwritten fusion, nil-checked | 3,120,873 | 260.01 (258.85–261.16) |
+| Callback fused helper, nil-checked | 3,121,280 | 267.39 (266.00–269.24) |
+| Two-pass filter then map, nil-checked | 3,431,527 | 305.46 (302.69–308.46) |
+
+Same-contract CPU instruction deltas are below 0.04% in these cases. Count fusion
+reduces CPU instructions by about 12% versus materialization, and emits no result
+constructor or stores. Two-pass callbacks cost about 10% more instructions than
+L3i fusion. An already-fused callback helper is close to L3i; not every abstraction
+deserves a claimed speedup.
+
+Timings are secondary: the earlier run measured dense L3i at 85.711 µs versus
+79.201 µs handwritten nil-checked, reversing the relative result above despite
+equivalent hot loops. Sequential timing confidence intervals do not cover frequency,
+thermal, scheduling, or other between-case drift. These runs do **not** prove general
+wall-clock superiority. Instruction counts and disassembly explain the actual work.
+
+Each candidate gets its own VM. The harness validates every output outside timing,
+loads functions before leasing the root stack, drops returned table pins inside the
+measurement, and collects fully before each measurement batch/CPU round. Incremental
+GC and the host invocation boundary remain included. All 14 cases kept stack height
+0 and identical before/after full-GC VM byte counts across 128 calls. This checks
+retention, not total allocations. The result-allocation claim comes from bytecode.
+The `table.insert` case also differs in capacity growth. Two-pass callback ordering
+is equivalent only for these pure benchmark callbacks, not arbitrary effects.
+
+## Analysis and diagnostics
+
+Both old and default new solvers are tested through autocomplete of **unannotated
+user bindings**, not only assignment acceptance:
+
+- Numeric and filtered entity-id projections: `{number}`.
+- Record projection: `{{ label: string, value: number }}`.
+- Nullable generator elements and record fields filtered with `~= nil`: `{number}`.
+- Nullable `Foo` elements projected to `x.name` after filtering: `{string}`.
+- Nested comprehensions: `{{number}}`; multiple numeric generators: `{number}`.
+- Removing the nullable filters still fails arithmetic typechecking. The later
+  projection guard cannot refine an earlier invalid arithmetic operand.
+
+**Source mapping remains unfinished.** Analysis, standalone Analysis parsing, and
+runtime compilation consume lowered source. Their spans/AST locations/debug lines
+are not mapped back to the original. With zero-based, end-exclusive positions:
+
+```luau
+--!strict
+local values: { number } = { 1 }
+local projected = [for x in values => x.missing]
+return projected
+```
+
+The diagnostic is clear (`Type 'number' does not have key 'missing'`), but reports
+line 2, columns 323–332 instead of original columns 37–46. A same-line trailing
+`local wrong: string = 42` reports columns 561–563 instead of 65–67. In a separate
+next-line control, columns 22–24 remain correct. This does not generalize to
+multiline/nested expansions, where line counts and expression placement can change.
+Autocomplete request positions share this lowered-coordinate problem; the tests
+query an untouched later line. Production tooling needs mappings for copied
+expressions and synthetic spans across compiler, analysis, parser, and debugger.
+
+Other prototype boundaries remain: source-wide textual stem hygiene, grouped
+top-level conditional source/filter expressions, opaque backtick interpolation,
+malformed-form errors delegated to stock Luau, and the raw `@dream/luau` parser
+remaining a stock-Luau parser. Generated `table.create` and `error` references use
+ordinary lexical/global lookup; rebinding standard helpers is not hygienically isolated.
+
+## Validation and next boundary
+
+- `cargo test`: PASS (79 unit + 140 integration tests).
+- `cargo test --features analysis`: PASS (79 + 148).
+- `cargo bench --bench comprehension`: PASS (14 validated cases).
+- Workspace default/all-feature tests: PASS (all features: 88 + 195).
+- Default and Analysis strict Clippy: PASS.
+- All-feature, all-target strict pedantic Clippy and formatting: PASS.
+- GCC standalone scanner tests, C++17, `-Wall -Wextra -Werror -pedantic`: PASS.
+- Clang standalone scanner tests with the same warning policy and ASan/UBSan: PASS.
+
+Keep the generic surface-syntax seam. No Luau modifications, new typechecker, or
+reducer semantics were necessary. Future reducer fusion must identify canonical
+operations, define empty-input behavior, and preserve evaluation. In particular,
+short-circuiting `any`/`all` cannot transparently replace an eager comprehension
+that would evaluate later effects or encounter nil: that requires an explicit
+different contract or trustworthy effect proof.
+
+Allocation elimination is authorized. Observable evaluation elimination is not.

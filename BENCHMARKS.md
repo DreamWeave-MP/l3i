@@ -4,7 +4,7 @@
 
 All times are wall-clock means measured by [Criterion.rs](https://github.com/bheisler/criterion.rs) (95 % confidence interval). Debug assertions off, default features (interpreter only).
 
-> The comprehension prototype adds a separate `cargo bench --bench comprehension` target. It now measures dense projection, fused filtering, and allocation-free `#[for ... => ...]` count fusion against their handwritten loop equivalents. Numbers are intentionally not recorded here until run on the real Cargo/Luau checkout.
+> `cargo bench --bench comprehension` now measures dense/filtered projections, allocation-free count fusion, and callback comparisons on the real checkout. See [comprehension integration evidence](COMPREHENSIONS.md) for retired CPU instructions, deterministic executed VM counts, secondary timings, inference, and diagnostic limitations. Those results are separate from the generated 2026-09-28 tables below.
 
 ## rust_to_luau_call
 
