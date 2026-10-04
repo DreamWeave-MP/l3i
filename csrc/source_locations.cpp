@@ -4,6 +4,7 @@
 #include "Luau/Ast.h"
 #include "Luau/ParseResult.h"
 
+#include <algorithm>
 #include <optional>
 #include <unordered_set>
 #include <utility>
@@ -267,10 +268,15 @@ std::string originalParseMessage(std::string text, Position context, const Sourc
                 text = map.referenceText(std::move(text), suggestedAt + 1, context);
         }
     }
-    if (text.find("refers to a class and cannot be used as a variable name") != std::string::npos)
+    const size_t identifierEnd = text.find('\'', 1);
+    constexpr std::string_view classTemplate = " refers to a class and cannot be used as a variable name (defined on line ";
+    if (!text.empty() && text.front() == '\'' && identifierEnd != std::string::npos
+        && text.compare(identifierEnd + 1, classTemplate.size(), classTemplate) == 0 && text.back() == ')')
     {
-        const size_t at = text.rfind("on line ");
-        text = map.referenceText(std::move(text), at, context);
+        const size_t number = identifierEnd + 1 + classTemplate.size();
+        if (number < text.size() - 1
+            && std::all_of(text.begin() + number, text.end() - 1, [](char c) { return c >= '0' && c <= '9'; }))
+            text = map.referenceText(std::move(text), number - 8, context);
     }
     return text;
 }

@@ -604,3 +604,17 @@ fn lint_secondary_line_references_are_mapped_without_rewriting_user_numbers() {
     assert!(duplicate.text.contains("previously defined at line 6"), "{duplicate:?}");
     assert_eq!(duplicate.span.begin_line, 6, "{duplicate:?}");
 }
+
+#[test]
+fn parser_coordinate_templates_preserve_quoted_class_like_user_text() {
+    let payload = "refers to a class and cannot be used as a variable name on line 2";
+    let source = concat!(
+        "local xs = [\n for x in {1}\n => x\n]\n",
+        "local \"refers to a class and cannot be used as a variable name on line 2\"\n",
+    );
+    let parsed = analysis::parse(source, false);
+    assert!(parsed.errors.iter().any(|error| error.text.contains(payload)), "{parsed:?}");
+    let analysis = comprehension_analysis(HashMap::from([("quoted", source)]), analysis::Solver::New);
+    let report = analysis.check("quoted", false);
+    assert!(report.diagnostics.iter().any(|error| error.text.contains(payload)), "{report:?}");
+}

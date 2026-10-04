@@ -142,3 +142,13 @@ fn parser_secondary_references_and_eof_use_original_source() {
     let error = compile(same_line, &CompileOptions::default()).unwrap_err().to_string();
     assert!(error.contains(&format!("to close 'function' at line 1, column {column}")), "{error}");
 }
+
+#[test]
+fn coordinate_templates_never_rewrite_quoted_user_input() {
+    let payload = "refers to a class and cannot be used as a variable name on line 2";
+    let source = format!("local xs = [\n for x in {{1}}\n => x\n]\nlocal \"{payload}\"\n");
+    let compiled = compile(&source, &CompileOptions::default()).unwrap_err().to_string();
+    let listing = disassemble(&source, &CompileOptions::default()).unwrap_err().to_string();
+    assert_eq!(compiled, listing);
+    assert!(compiled.contains(payload), "{compiled}");
+}
