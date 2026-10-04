@@ -55,7 +55,7 @@ fn dense_comprehension_bytecode_exposes_guard_and_register_cost() {
 #[test]
 fn disassembly_returns_compile_errors_instead_of_an_error_listing() {
     let error = disassemble("local =", &CompileOptions::default()).unwrap_err().to_string();
-    assert!(error.contains("parse error"), "{error}");
+    assert!(error.contains(":1:") && error.contains("Expected identifier"), "{error}");
 }
 
 #[test]
@@ -85,4 +85,43 @@ fn comprehension_length_fuses_without_materializing_a_table() {
     assert!(!listing.contains("SETTABLE"), "{listing}");
     assert!(listing.contains("MULK") && listing.contains("JUMPXEQKNIL"), "{listing}");
     assert!(listing.contains("FORNPREP") && listing.contains("FORNLOOP"), "{listing}");
+}
+
+#[test]
+fn surface_compile_errors_and_disassembly_use_original_lines() {
+    let source = "local xs = {1}\nlocal ys = [for x in xs => x * 2]\n\nlocal broken =\n    [for y in ys => y + * 2]";
+    let options = CompileOptions::default();
+    let error = compile(source, &options).unwrap_err().to_string();
+    let listing_error = disassemble(source, &options).unwrap_err().to_string();
+    assert_eq!(error, listing_error);
+    assert!(error.starts_with(":5:"), "{error}");
+    assert!(error.contains("Expected identifier"), "{error}");
+}
+
+#[test]
+fn mapped_runtime_errors_attribute_copied_and_synthetic_operations() {
+    for consumer in ["", "#"] {
+        for projection in ["nil", "missing.field"] {
+            let source = format!(
+                "local xs = {{1}}\nlocal result = {consumer}[\n    for x in xs\n    if x > 0\n    => {projection}\n]\nreturn result"
+            );
+            let runtime = l3i::Runtime::new().unwrap();
+            let error = runtime.exec(&source).unwrap_err().to_string();
+            assert!(error.contains("exec:5:"), "{error}");
+            assert!(
+                if projection == "nil" {
+                    error.contains("projection produced nil")
+                } else {
+                    error.contains("attempt to index nil")
+                },
+                "{error}"
+            );
+        }
+    }
+    let runtime = l3i::Runtime::new().unwrap();
+    let error = runtime
+        .exec("local values = {1}\nlocal xs = [for x in values => x]\n\nlocal broken = nil\nreturn broken.field")
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("exec:5:"), "{error}");
 }

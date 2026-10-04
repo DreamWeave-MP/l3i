@@ -217,7 +217,7 @@ fn comprehension_entity_ids_nullable_records_and_nested_results_infer() {
 }
 
 #[test]
-fn comprehension_diagnostic_columns_currently_refer_to_lowered_source() {
+fn comprehension_diagnostics_refer_to_original_source() {
     let projection = concat!(
         "--!strict\nlocal values: { number } = { 1 }\n",
         "local projected = [for x in values => x.missing]\nreturn projected\n",
@@ -240,7 +240,9 @@ fn comprehension_diagnostic_columns_currently_refer_to_lowered_source() {
         ]),
         analysis::Solver::New,
     );
-    for (module, source, message) in [("projection", projection, "missing"), ("same_line", same_line, "string")] {
+    for (module, source, message, marked) in
+        [("projection", projection, "missing", "x.missing"), ("same_line", same_line, "string", "42")]
+    {
         let report = analysis.check(module, false);
         assert_eq!(report.diagnostics.len(), 1, "{report:#?}");
         let error = &report.diagnostics[0];
@@ -248,9 +250,10 @@ fn comprehension_diagnostic_columns_currently_refer_to_lowered_source() {
         assert_eq!(error.module, module);
         assert!(error.text.contains(message), "{error:?}");
         assert_eq!((error.span.begin_line, error.span.end_line), (2, 2));
-        // Characterize the missing source map without pinning generated names or their length.
-        assert!(error.span.begin_column as usize > source.lines().nth(2).unwrap().len(), "{error:?}");
-        assert!(error.span.end_column > error.span.begin_column, "{error:?}");
+        let original = source.lines().nth(2).unwrap();
+        let begin = original.find(marked).unwrap();
+        assert_eq!(error.span.begin_column as usize, begin, "{error:?}");
+        assert_eq!(error.span.end_column as usize, begin + marked.len(), "{error:?}");
     }
     let plain_report = analysis.check("plain", false);
     let next_report = analysis.check("next_line", false);
@@ -267,4 +270,220 @@ fn comprehension_diagnostic_columns_currently_refer_to_lowered_source() {
     assert_eq!(next_error.span.end_column, plain_error.span.end_column);
     let original_line = next_line.lines().nth(3).unwrap();
     assert_eq!(&original_line[next_error.span.begin_column as usize..next_error.span.end_column as usize], "42");
+}
+
+// Count bytes, not Unicode scalars; CRLF still advances the line only at LF.
+fn source_position(source: &str, offset: usize) -> (u32, u32) {
+    let prefix = &source[..offset];
+    let line = prefix.bytes().filter(|byte| *byte == b'\n').count();
+    let column = prefix.rfind('\n').map_or(offset, |newline| offset - newline - 1);
+    (u32::try_from(line).unwrap(), u32::try_from(column).unwrap())
+}
+
+fn token_span(source: &str, token: &str) -> analysis::Span {
+    let begin = source.find(token).expect(token);
+    assert!(!source[begin + token.len()..].contains(token), "ambiguous token: {token}");
+    let (begin_line, begin_column) = source_position(source, begin);
+    let (end_line, end_column) = source_position(source, begin + token.len());
+    analysis::Span { begin_line, begin_column, end_line, end_column }
+}
+
+fn assert_diagnostic_span(error: &analysis::Diagnostic, source: &str, token: &str) {
+    assert_eq!(error.span, token_span(source, token), "{error:#?}");
+}
+
+#[test]
+fn comprehension_multiline_nested_type_errors_use_original_byte_spans() {
+    let source = concat!(
+        "--!strict\r\nlocal rows: {{number}} = {{1}}\r\n",
+        "return [for row in rows =>\r\n",
+        "    [for x in row if x > 0 =>\r\n",
+        "        ({label = 'é🦀', value = x.\r\n            missing})\r\n",
+        "    ]\r\n]\r\n",
+    );
+    for solver in [analysis::Solver::New, analysis::Solver::Old] {
+        let analysis = comprehension_analysis(HashMap::from([("nested_error", source)]), solver);
+        let report = analysis.check("nested_error", false);
+        assert_eq!(report.diagnostics.len(), 1, "{solver:?}: {report:#?}");
+        let error = &report.diagnostics[0];
+        assert_eq!(error.kind, DiagnosticKind::TypeError);
+        assert_eq!(error.module, "nested_error");
+        assert!(error.text.contains("missing"), "{error:?}");
+        assert_diagnostic_span(error, source, "x.\r\n            missing");
+    }
+}
+
+#[test]
+fn comprehension_copied_parse_and_lint_errors_use_original_spans() {
+    let malformed = concat!(
+        "local rows = {{1}}\nreturn [for row in rows =>\n",
+        "    [for x in row => { label = 'é', value = x + * 2 }]\n]\n",
+    );
+    let parsed = analysis::parse(malformed, false);
+    assert_eq!(parsed.errors.len(), 1, "{parsed:#?}");
+    let error = parsed.errors.iter().find(|error| error.text.contains("expression")).expect("expression error");
+    assert_eq!(error.kind, DiagnosticKind::ParseError, "{parsed:#?}");
+    assert_diagnostic_span(error, malformed, "*");
+    let analysis = comprehension_analysis(HashMap::from([("parse_error", malformed)]), analysis::Solver::New);
+    let checked = analysis.check("parse_error", false);
+    assert_eq!(checked.diagnostics.len(), 1, "{checked:#?}");
+    let error = checked.diagnostics.iter().find(|error| error.text.contains("expression")).expect("expression error");
+    assert_eq!(error.kind, DiagnosticKind::ParseError, "{checked:#?}");
+    assert_eq!(error.module, "parse_error");
+    assert_diagnostic_span(error, malformed, "*");
+
+    let lint_source = concat!(
+        "local rows = {{1}}\r\nreturn [for row in rows =>\r\n",
+        "    [for x in row => (function()\r\n",
+        "        local label = 'é'; local forgotten = x\r\n",
+        "        return label\r\n",
+        "    end)()]\r\n]\r\n",
+    );
+    let analysis = comprehension_analysis(HashMap::from([("lint_error", lint_source)]), analysis::Solver::New);
+    let report = analysis.check("lint_error", true);
+    assert!(report.is_clean(), "{report:#?}");
+    let warnings: Vec<_> = report.diagnostics.iter().filter(|error| error.name == "LocalUnused").collect();
+    assert_eq!(warnings.len(), 1, "{report:#?}");
+    assert_eq!(warnings[0].kind, DiagnosticKind::LintWarning);
+    assert_diagnostic_span(warnings[0], lint_source, "forgotten");
+}
+
+#[test]
+fn required_comprehension_errors_use_the_diagnostic_module_map() {
+    let main = "--!strict\nlocal padding = [for n in {1} => n * 2]; return require('./dependency')\n";
+    let dependency =
+        concat!("--!strict\n\nlocal values: {number} = {1}\n", "return [for x in values =>\n    x.absent]\n",);
+    let analysis =
+        comprehension_analysis(HashMap::from([("main", main), ("dependency", dependency)]), analysis::Solver::New);
+    let report = analysis.check("main", false);
+    assert_eq!(report.diagnostics.len(), 1, "{report:#?}");
+    let error = &report.diagnostics[0];
+    assert_eq!(error.module, "dependency", "{error:?}");
+    assert_eq!(error.kind, DiagnosticKind::TypeError);
+    assert_diagnostic_span(error, dependency, "x.absent");
+}
+
+#[test]
+fn comprehension_autocomplete_maps_projection_filter_and_later_same_line_cursors() {
+    let source = concat!(
+        "--!strict\nlocal rows: {{score: number, enabled: boolean}} = {{score = 1, enabled = true}}\n",
+        "local first = [for r in {{warmup = 1}} => r.warmup]; local sameLine = [for item in {{later = 'a'}} => item.later]; local second = [for row in rows if row.enabled =>\n",
+        "    row.score]\nreturn first, sameLine, second\n",
+    );
+    let analysis = comprehension_analysis(HashMap::from([("cursor", source)]), analysis::Solver::New);
+    assert!(analysis.check("cursor", false).is_clean());
+    for (token, expected) in [
+        ("r.warmup", &["warmup"][..]),
+        ("item.later", &["later"][..]),
+        ("row.enabled", &["enabled", "score"][..]),
+        ("row.score", &["enabled", "score"][..]),
+    ] {
+        // The original cursor is immediately after the dot, including the filter
+        // that follows another expansion on the very same source line.
+        let offset = source.find(token).unwrap() + token.find('.').unwrap() + 1;
+        let (line, column) = source_position(source, offset);
+        let completions = analysis.autocomplete("cursor", line, column).unwrap();
+        assert_eq!(completions.context, CompletionContext::Property, "{token}: {completions:?}");
+        let mut properties: Vec<_> = completions
+            .entries
+            .iter()
+            .filter(|entry| entry.kind == CompletionKind::Property)
+            .map(|entry| entry.name.as_str())
+            .collect();
+        properties.sort_unstable();
+        assert_eq!(properties, expected, "{token}: {completions:?}");
+    }
+}
+
+#[test]
+fn comprehension_autocomplete_hides_only_synthetic_bindings() {
+    let source = concat!(
+        "local __l3i_comp_0_out = 17\nlocal __l3i_comp_999_value = 'user'\n",
+        "local rows = {{1}}\nreturn [for row in rows => [for x in row =>\n",
+        "    x + __l3i_comp_0_out]]\n",
+    );
+    let analysis = comprehension_analysis(HashMap::from([("bindings", source)]), analysis::Solver::New);
+    assert!(analysis.check("bindings", false).is_clean());
+    let (line, column) = source_position(source, source.find("x +").unwrap());
+    let completions = analysis.autocomplete("bindings", line, column).unwrap();
+    for name in ["x", "row", "__l3i_comp_0_out", "__l3i_comp_999_value"] {
+        assert!(
+            completions.entries.iter().any(|entry| entry.name == name && entry.kind == CompletionKind::Binding),
+            "{completions:?}"
+        );
+    }
+    let mut prefixed: Vec<_> = completions
+        .entries
+        .iter()
+        .filter(|entry| entry.name.starts_with("__l3i_comp_"))
+        .map(|entry| entry.name.as_str())
+        .collect();
+    prefixed.sort_unstable();
+    assert_eq!(prefixed, ["__l3i_comp_0_out", "__l3i_comp_999_value"], "{completions:?}");
+}
+
+struct ChangingSource(std::rc::Rc<std::cell::RefCell<&'static str>>);
+
+impl SourceProvider for ChangingSource {
+    fn read_source(&self, name: &str) -> Option<SourceCode> {
+        (name == "snapshot").then(|| SourceCode { text: (*self.0.borrow()).to_owned(), is_script: false })
+    }
+    fn module_config(&self, _name: &str) -> ModuleConfig {
+        ModuleConfig { mode: Mode::Strict, ..ModuleConfig::default() }
+    }
+}
+
+#[test]
+fn comprehension_cached_ast_keeps_its_map_until_dirty_or_clear() {
+    let old = "--!strict\nreturn [for x in {1} => x.oldField]\n";
+    let new = "--!strict\n\nlocal prefix = [for x in {1} => x]; return [for y in {2} =>\n    y.newField]\n";
+    let plain = "--!strict\n\n\nlocal wrong: string = 42\nreturn wrong\n";
+    let source = std::rc::Rc::new(std::cell::RefCell::new(old));
+    let analysis = Analysis::new(ChangingSource(source.clone()), AnalysisOptions::default()).unwrap();
+    let check_snapshot = |expected: &str, token: &str| {
+        let report = analysis.check("snapshot", false);
+        assert_eq!(report.diagnostics.len(), 1, "{report:#?}");
+        assert_eq!(report.diagnostics[0].kind, DiagnosticKind::TypeError);
+        assert_diagnostic_span(&report.diagnostics[0], expected, token);
+    };
+    check_snapshot(old, "x.oldField");
+    *source.borrow_mut() = new;
+    // check() probes current existence, but must not replace the cached AST's map.
+    check_snapshot(old, "x.oldField");
+    analysis.mark_dirty("snapshot");
+    check_snapshot(new, "y.newField");
+    *source.borrow_mut() = plain;
+    check_snapshot(new, "y.newField");
+    analysis.clear();
+    check_snapshot(plain, "42");
+    *source.borrow_mut() = old;
+    analysis.mark_dirty("snapshot");
+    check_snapshot(old, "x.oldField");
+}
+
+fn json_location(span: analysis::Span) -> String {
+    format!("\"location\":\"{},{} - {},{}\"", span.begin_line, span.begin_column, span.end_line, span.end_column)
+}
+
+#[test]
+fn comprehension_json_preserves_lowered_kinds_with_original_expression_and_annotation_spans() {
+    let source = concat!(
+        "local rows = {{1}}\r\n",
+        "local result = [for row in rows => [for x in row =>\r\n",
+        "    x * 37]]; local annotated: {number} = {1}\r\nreturn result, annotated\r\n",
+    );
+    let parsed = analysis::parse(source, true);
+    assert!(parsed.errors.is_empty(), "{parsed:#?}");
+    let json = parsed.json.unwrap();
+    assert!(json.contains("\"type\":\"AstExprFunction\"") && json.contains("\"type\":\"AstStatFor\""), "{json}");
+    let projection = format!("\"type\":\"AstExprBinary\",{}", json_location(token_span(source, "x * 37")));
+    assert!(json.contains(&projection), "missing copied projection {projection}: {json}");
+    let annotation = format!("\"type\":\"AstTypeTable\",{}", json_location(token_span(source, "{number}")));
+    assert!(json.contains(&annotation), "missing user annotation {annotation}: {json}");
+    // AstLocal's location covers the identifier, not the colon or annotation.
+    let mut identifier_span = token_span(source, "annotated:");
+    identifier_span.end_column -= 1;
+    let local =
+        format!("\"name\":\"annotated\",\"isConst\":false,\"type\":\"AstLocal\",{}", json_location(identifier_span));
+    assert!(json.contains(&local), "missing user local {local}: {json}");
 }

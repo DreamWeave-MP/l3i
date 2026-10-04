@@ -312,6 +312,7 @@ struct Generator
     std::string_view binding;
     std::string_view source;
     std::vector<std::string_view> predicates;
+    std::string_view clause;
 };
 
 struct Parsed
@@ -344,6 +345,7 @@ bool parseComprehension(std::string_view content, Parsed& out)
 
     while (cursor < header.size())
     {
+        const size_t clauseBegin = cursor;
         cursor += 3; // for
         cursor = skipSpaceAndComments(header, cursor);
 
@@ -409,6 +411,7 @@ bool parseComprehension(std::string_view content, Parsed& out)
             cursor = predicateEnd;
         }
 
+        generator.clause = header.substr(clauseBegin, cursor - clauseBegin);
         out.generators.push_back(std::move(generator));
         cursor = skipSpaceAndComments(header, cursor);
         if (cursor >= header.size())
@@ -434,12 +437,88 @@ std::string uniqueStem(std::string_view source, size_t offset)
     }
 }
 
-std::string rewriteRange(std::string_view source, std::string_view wholeSource, size_t baseOffset, bool& changed);
+struct MappedText
+{
+    std::string text;
+    std::vector<L3i::Surface::Segment> segments;
+    size_t originBegin = 0;
+    size_t originEnd = 0;
+    size_t anchorBegin = 0;
+    size_t anchorEnd = 0;
 
-std::string rewriteSubview(std::string_view view, std::string_view wholeSource, bool& changed)
+    size_t size() const { return text.size(); }
+    void reserve(size_t size) { text.reserve(size); }
+    void anchor(size_t begin, size_t end) { anchorBegin = begin; anchorEnd = end; }
+
+    void record(L3i::Surface::Segment segment)
+    {
+        if (segment.begin == segment.end)
+            return;
+        if (!segments.empty())
+        {
+            auto& previous = segments.back();
+            if (previous.end == segment.begin && previous.copied == segment.copied
+                && (segment.copied ? previous.originalEnd == segment.originalBegin
+                                   : previous.originalBegin == segment.originalBegin && previous.originalEnd == segment.originalEnd))
+            {
+                previous.end = segment.end;
+                previous.originalEnd = segment.originalEnd;
+                return;
+            }
+        }
+        segments.push_back(segment);
+    }
+
+    MappedText& operator+=(std::string_view added)
+    {
+        const size_t begin = text.size();
+        text.append(added.data(), added.size());
+        record({begin, text.size(), anchorBegin, anchorEnd, false});
+        return *this;
+    }
+
+    MappedText& operator+=(char added)
+    {
+        return *this += std::string_view(&added, 1);
+    }
+
+    MappedText& operator+=(const MappedText& added)
+    {
+        const size_t begin = text.size();
+        text += added.text;
+        for (auto segment : added.segments)
+        {
+            segment.begin += begin;
+            segment.end += begin;
+            record(segment);
+        }
+        return *this;
+    }
+
+    void copy(std::string_view view, size_t originalOffset)
+    {
+        const size_t begin = text.size();
+        text.append(view.data(), view.size());
+        record({begin, text.size(), originalOffset, originalOffset + view.size(), true});
+    }
+};
+
+MappedText copied(std::string_view view, std::string_view wholeSource)
+{
+    MappedText result;
+    result.originBegin = size_t(view.data() - wholeSource.data());
+    result.originEnd = result.originBegin + view.size();
+    result.copy(view, result.originBegin);
+    return result;
+}
+
+MappedText rewriteRange(std::string_view source, std::string_view wholeSource, size_t baseOffset, bool& changed);
+
+MappedText rewriteSubview(std::string_view view, std::string_view wholeSource, bool& changed)
 {
     const size_t offset = static_cast<size_t>(view.data() - wholeSource.data());
-    std::string result = rewriteRange(view, wholeSource, offset, changed);
+    MappedText result = rewriteRange(view, wholeSource, offset, changed);
+    result.anchor(offset + view.size(), offset + view.size());
     // Clause trimming can remove the newline that terminates a trailing line comment.
     // Restore that lexical boundary before appending generated statements. Scan literals too:
     // a textual rfind("--") would misclassify strings and closed long comments.
@@ -457,13 +536,16 @@ std::string rewriteSubview(std::string_view view, std::string_view wholeSource, 
 
 struct LoweredGenerator
 {
-    std::string binding;
-    std::string source;
-    std::vector<std::string> predicates;
+    MappedText binding;
+    MappedText source;
+    std::vector<MappedText> predicates;
+    size_t begin;
+    size_t end;
 };
 
-void emitProjection(std::string& result, const std::string& stem, const std::string& project)
+void emitProjection(MappedText& result, const std::string& stem, const MappedText& project)
 {
+    result.anchor(project.originBegin, project.originEnd);
     const std::string value = stem + "_value";
     result += "local ";
     result += value;
@@ -474,10 +556,11 @@ void emitProjection(std::string& result, const std::string& stem, const std::str
     result += " == nil then error(\"L3i comprehension projection produced nil; filter nil explicitly\") end ";
 }
 
-void emitGeneratorNest(std::string& result, const std::vector<LoweredGenerator>& generators, size_t level, const std::string& stem,
-    const std::string& out, const std::string& count, const std::string& project, bool countOnly)
+void emitGeneratorNest(MappedText& result, const std::vector<LoweredGenerator>& generators, size_t level, const std::string& stem,
+    const std::string& out, const std::string& count, const MappedText& project, bool countOnly)
 {
     const LoweredGenerator& generator = generators[level];
+    result.anchor(generator.begin, generator.end);
     const std::string suffix = "_g" + std::to_string(level);
     const std::string src = stem + suffix + "_src";
     const std::string len = stem + suffix + "_len";
@@ -503,8 +586,9 @@ void emitGeneratorNest(std::string& result, const std::vector<LoweredGenerator>&
     result += index;
     result += "] ";
 
-    for (const std::string& predicate : generator.predicates)
+    for (const MappedText& predicate : generator.predicates)
     {
+        result.anchor(predicate.originBegin, predicate.originEnd);
         result += "if ";
         result += predicate;
         result += " then ";
@@ -535,10 +619,11 @@ void emitGeneratorNest(std::string& result, const std::vector<LoweredGenerator>&
     result += "end ";
 }
 
-std::string lower(const Parsed& parsed, std::string_view wholeSource, size_t offset, bool& nestedChanged, bool countOnly)
+MappedText lower(const Parsed& parsed, std::string_view wholeSource, size_t offset, size_t beginOffset, size_t endOffset,
+    bool& nestedChanged, bool countOnly)
 {
     bool projectChanged = false;
-    const std::string project = rewriteSubview(parsed.project, wholeSource, projectChanged);
+    const MappedText project = rewriteSubview(parsed.project, wholeSource, projectChanged);
     nestedChanged = nestedChanged || projectChanged;
 
     std::vector<LoweredGenerator> generators;
@@ -546,7 +631,9 @@ std::string lower(const Parsed& parsed, std::string_view wholeSource, size_t off
     for (const Generator& generator : parsed.generators)
     {
         LoweredGenerator lowered;
-        lowered.binding.assign(generator.binding.data(), generator.binding.size());
+        lowered.binding = copied(generator.binding, wholeSource);
+        lowered.begin = size_t(generator.clause.data() - wholeSource.data());
+        lowered.end = lowered.begin + generator.clause.size();
 
         bool sourceChanged = false;
         lowered.source = rewriteSubview(generator.source, wholeSource, sourceChanged);
@@ -570,12 +657,15 @@ std::string lower(const Parsed& parsed, std::string_view wholeSource, size_t off
     // lowering shape and write by source index directly: no cursor increment in the hot loop.
     const bool exactDense = generators.size() == 1 && generators[0].predicates.empty();
 
-    std::string result;
+    MappedText result;
+    result.originBegin = beginOffset;
+    result.originEnd = endOffset;
+    result.anchor(beginOffset, endOffset);
     size_t reserve = project.size() + 320;
     for (const LoweredGenerator& generator : generators)
     {
         reserve += generator.binding.size() + generator.source.size() + 96;
-        for (const std::string& predicate : generator.predicates)
+        for (const MappedText& predicate : generator.predicates)
             reserve += predicate.size() + 16;
     }
     result.reserve(reserve);
@@ -583,6 +673,7 @@ std::string lower(const Parsed& parsed, std::string_view wholeSource, size_t off
 
     if (exactDense)
     {
+        result.anchor(generators[0].begin, generators[0].end);
         const std::string src = stem + "_g0_src";
         const std::string len = stem + "_g0_len";
         const std::string index = stem + "_g0_i";
@@ -650,6 +741,7 @@ std::string lower(const Parsed& parsed, std::string_view wholeSource, size_t off
     if (generators.size() == 1)
     {
         const LoweredGenerator& generator = generators[0];
+        result.anchor(generator.begin, generator.end);
         const std::string src = stem + "_g0_src";
         const std::string len = stem + "_g0_len";
         const std::string index = stem + "_g0_i";
@@ -681,8 +773,9 @@ std::string lower(const Parsed& parsed, std::string_view wholeSource, size_t off
         result += "[";
         result += index;
         result += "] ";
-        for (const std::string& predicate : generator.predicates)
+        for (const MappedText& predicate : generator.predicates)
         {
+            result.anchor(predicate.originBegin, predicate.originEnd);
             result += "if ";
             result += predicate;
             result += " then ";
@@ -734,10 +827,12 @@ bool startsComprehension(std::string_view source, size_t open)
     return cursor < source.size() && keywordAt(source, cursor, "for");
 }
 
-std::string rewriteRange(std::string_view source, std::string_view wholeSource, size_t baseOffset, bool& changed)
+MappedText rewriteRange(std::string_view source, std::string_view wholeSource, size_t baseOffset, bool& changed)
 {
     Scan scan{source};
-    std::string result;
+    MappedText result;
+    result.originBegin = baseOffset;
+    result.originEnd = baseOffset + source.size();
     result.reserve(source.size());
     size_t copied = 0;
     size_t lengthPrefix = std::string_view::npos;
@@ -797,9 +892,9 @@ std::string rewriteRange(std::string_view source, std::string_view wholeSource, 
                 replaceBegin = prefix - 1;
             }
 
-            result.append(source.data() + copied, replaceBegin - copied);
+            result.copy(source.substr(copied, replaceBegin - copied), baseOffset + copied);
             bool nested = false;
-            result += lower(parsed, wholeSource, baseOffset + i, nested, countOnly);
+            result += lower(parsed, wholeSource, baseOffset + i, baseOffset + replaceBegin, baseOffset + close + 1, nested, countOnly);
             changed = true;
             copied = close + 1;
             lengthPrefix = std::string_view::npos;
@@ -814,11 +909,24 @@ std::string rewriteRange(std::string_view source, std::string_view wholeSource, 
     }
 
     if (!changed)
-        return std::string(source);
-    result.append(source.data() + copied, source.size() - copied);
+        return ::copied(source, wholeSource);
+    result.copy(source.substr(copied), baseOffset + copied);
     return result;
 }
 } // namespace
+
+L3i::Surface::LoweredSource L3i::Surface::lower(std::string_view input)
+{
+    if (input.find("=>") == std::string_view::npos || input.find('[') == std::string_view::npos
+        || input.find("for") == std::string_view::npos)
+        return {std::string(input), {}};
+    bool changed = false;
+    MappedText output = rewriteRange(input, input, 0, changed);
+    if (!changed)
+        return {std::move(output.text), {}};
+    SourceMap map(input, output.text, std::move(output.segments));
+    return {std::move(output.text), std::move(map)};
+}
 
 extern "C" char* l3i_rewrite_surface_syntax(const char* source, size_t size, size_t* outsize)
 {
@@ -834,10 +942,10 @@ extern "C" char* l3i_rewrite_surface_syntax(const char* source, size_t size, siz
         || input.find("for") == std::string_view::npos)
         return nullptr;
 
-    bool changed = false;
-    std::string output = rewriteRange(input, input, 0, changed);
-    if (!changed)
+    const auto lowered = L3i::Surface::lower(input);
+    if (lowered.map.empty())
         return nullptr;
+    const std::string& output = lowered.source;
 
     char* memory = static_cast<char*>(std::malloc(output.size()));
     if (!memory)

@@ -1,0 +1,53 @@
+#pragma once
+
+#include <cstddef>
+#include <string>
+#include <string_view>
+#include <vector>
+
+namespace L3i::Surface
+{
+struct Position
+{
+    unsigned line;
+    unsigned column;
+};
+
+struct Span
+{
+    Position begin;
+    Position end;
+};
+
+// Sorted, disjoint ranges covering generated text. Copies map affinely in byte offsets;
+// synthetic ranges are attributed to an intentional original-source span.
+struct Segment
+{
+    size_t begin;
+    size_t end;
+    size_t originalBegin;
+    size_t originalEnd;
+    bool copied;
+};
+
+class SourceMap
+{
+public:
+    SourceMap() = default; // Identity mapping: ordinary Luau does not need provenance storage.
+    SourceMap(std::string_view original, std::string_view generated, std::vector<Segment> segments);
+
+    bool empty() const { return segments.empty(); }
+    Position originalPosition(Position generated) const;
+    Span originalSpan(Span generated) const;
+    Position generatedPosition(Position original) const;
+    bool generatedName(std::string_view name) const;
+    unsigned originalLines() const;
+
+private:
+    std::string original;
+    size_t generatedSize = 0;
+    std::vector<size_t> originalStarts;
+    std::vector<size_t> generatedStarts;
+    std::vector<Segment> segments;
+};
+}

@@ -18,14 +18,16 @@
 #include <Luau/TypeArena.h>
 
 #include "surface_syntax.h"
+#include "source_locations.h"
 
 #include <cstdint>
-#include <cstdlib>
 #include <cstring>
 #include <exception>
 #include <memory>
 #include <optional>
 #include <string>
+#include <unordered_map>
+#include <utility>
 
 extern "C" {
 
@@ -106,20 +108,37 @@ namespace
         static_cast<std::string*>(ctx)->append(data, length);
     }
 
-    std::string rewriteSurfaceSyntax(std::string source)
+    void discardSource(void*, const char*, size_t)
     {
-        size_t length = 0;
-        char* rewritten = l3i_rewrite_surface_syntax(source.data(), source.size(), &length);
-        if (rewritten == nullptr)
-            return source;
-        std::string result(rewritten, length);
-        std::free(rewritten);
-        return result;
     }
 
     struct HostFileResolver : Luau::FileResolver
     {
         db_source_provider provider;
+        // Updated only by the frontend's readSource, so cached ASTs keep the map
+        // from their source snapshot even after markDirty or an existence probe.
+        std::unordered_map<Luau::ModuleName, L3i::Surface::SourceMap> maps;
+
+        bool sourceExists(const Luau::ModuleName& name) const
+        {
+            int type = 0;
+            return provider.read_source(provider.ctx, name.data(), name.size(), discardSource, nullptr, &type) != 0;
+        }
+
+        const L3i::Surface::SourceMap* sourceMap(const Luau::ModuleName& name) const
+        {
+            auto it = maps.find(name);
+            return it == maps.end() ? nullptr : &it->second;
+        }
+
+        Luau::Location originalLocation(const Luau::ModuleName& name, const Luau::Location& location) const
+        {
+            const auto* map = sourceMap(name);
+            if (map == nullptr || map->empty())
+                return location;
+            const auto span = map->originalSpan({{location.begin.line, location.begin.column}, {location.end.line, location.end.column}});
+            return Luau::Location{Luau::Position(span.begin.line, span.begin.column), Luau::Position(span.end.line, span.end.column)};
+        }
 
         std::optional<Luau::SourceCode> readSource(const Luau::ModuleName& name) override
         {
@@ -128,7 +147,9 @@ namespace
             if (!provider.read_source(provider.ctx, name.data(), name.size(), appendToString, &source, &type))
                 return std::nullopt;
             Luau::SourceCode::Type kind = type == 2 ? Luau::SourceCode::Script : Luau::SourceCode::Module;
-            return Luau::SourceCode{rewriteSurfaceSyntax(std::move(source)), kind};
+            auto lowered = L3i::Surface::lower(source);
+            maps.insert_or_assign(name, std::move(lowered.map));
+            return Luau::SourceCode{std::move(lowered.source), kind};
         }
 
         std::optional<Luau::ModuleInfo> resolveModule(const Luau::ModuleInfo* context, Luau::AstExpr* node, const Luau::TypeCheckLimits&) override
@@ -277,7 +298,8 @@ int db_analysis_check(db_analysis* analysis, const char* name, size_t name_lengt
     try
     {
         // Luau asserts on a module its resolver cannot read; report it instead.
-        if (!analysis->files.readSource(module))
+        // Probe the provider directly: a clean frontend may still hold an older AST.
+        if (!analysis->files.sourceExists(module))
         {
             emit(diagnostic, ctx, DB_DIAG_INTERNAL_ERROR, 0, nullptr, module, "module not found", Luau::Location{});
             return -1;
@@ -291,16 +313,20 @@ int db_analysis_check(db_analysis* analysis, const char* name, size_t name_lengt
             if (const Luau::SyntaxError* syntax = Luau::get_if<Luau::SyntaxError>(&error.data))
             {
                 text = syntax->message;
-                emit(diagnostic, ctx, DB_DIAG_PARSE_ERROR, error.code(), nullptr, error.moduleName, text, error.location);
+                emit(diagnostic, ctx, DB_DIAG_PARSE_ERROR, error.code(), nullptr, error.moduleName, text,
+                    analysis->files.originalLocation(error.moduleName, error.location));
                 continue;
             }
             text = Luau::toString(error, Luau::TypeErrorToStringOptions{analysis->frontend->fileResolver});
-            emit(diagnostic, ctx, DB_DIAG_TYPE_ERROR, error.code(), nullptr, error.moduleName, text, error.location);
+            emit(diagnostic, ctx, DB_DIAG_TYPE_ERROR, error.code(), nullptr, error.moduleName, text,
+                analysis->files.originalLocation(error.moduleName, error.location));
         }
         for (const Luau::LintWarning& warning : result.lintResult.errors)
-            emit(diagnostic, ctx, DB_DIAG_LINT_ERROR, warning.code, Luau::LintWarning::getName(warning.code), module, warning.text, warning.location);
+            emit(diagnostic, ctx, DB_DIAG_LINT_ERROR, warning.code, Luau::LintWarning::getName(warning.code), module, warning.text,
+                analysis->files.originalLocation(module, warning.location));
         for (const Luau::LintWarning& warning : result.lintResult.warnings)
-            emit(diagnostic, ctx, DB_DIAG_LINT_WARNING, warning.code, Luau::LintWarning::getName(warning.code), module, warning.text, warning.location);
+            emit(diagnostic, ctx, DB_DIAG_LINT_WARNING, warning.code, Luau::LintWarning::getName(warning.code), module, warning.text,
+                analysis->files.originalLocation(module, warning.location));
         return int(result.errors.size() + result.lintResult.errors.size());
     }
     catch (const std::exception& error)
@@ -317,12 +343,14 @@ int db_analysis_check(db_analysis* analysis, const char* name, size_t name_lengt
 
 void db_analysis_mark_dirty(db_analysis* analysis, const char* name, size_t name_length)
 {
+    // Keep maps while the frontend still owns the corresponding cached ASTs.
     analysis->frontend->markDirty(std::string(name, name_length));
 }
 
 void db_analysis_clear(db_analysis* analysis)
 {
     analysis->frontend->clear();
+    analysis->files.maps.clear();
 }
 
 // Autocompletes `name` at (line, column) (0-based), reporting entries. Returns the context kind
@@ -338,11 +366,14 @@ int db_analysis_autocomplete(
         options.retainFullTypeGraphs = true; // autocomplete reads per-term types
         options.runLintChecks = false;
         analysis->frontend->check(module, options);
-        Luau::AutocompleteResult result =
-            Luau::autocomplete(*analysis->frontend, module, Luau::Position(line, column), [](std::string, std::optional<const Luau::ExternType*>,
-                                                                                            std::optional<std::string>) { return std::nullopt; });
+        const auto* map = analysis->files.sourceMap(module);
+        const auto cursor = map ? map->generatedPosition({line, column}) : L3i::Surface::Position{line, column};
+        Luau::AutocompleteResult result = Luau::autocomplete(*analysis->frontend, module, Luau::Position(cursor.line, cursor.column),
+            [](std::string, std::optional<const Luau::ExternType*>, std::optional<std::string>) { return std::nullopt; });
         for (const auto& [entryName, entry] : result.entryMap)
         {
+            if (map && map->generatedName(entryName))
+                continue;
             std::string type = entry.type ? Luau::toString(*entry.type) : std::string();
             completion(ctx, entryName.data(), entryName.size(), int(entry.kind), entry.deprecated ? 1 : 0, type.data(), type.size());
         }
@@ -360,12 +391,13 @@ int db_parse(const char* source, size_t length, db_diagnostic_fn diagnostic, voi
 {
     try
     {
-        std::string rewritten = rewriteSurfaceSyntax(std::string(source, length));
+        auto lowered = L3i::Surface::lower(std::string_view(source, length));
         Luau::Allocator allocator;
         Luau::AstNameTable names(allocator);
         Luau::ParseOptions options;
         options.captureComments = true;
-        Luau::ParseResult result = Luau::Parser::parse(rewritten.data(), rewritten.size(), names, allocator, options);
+        Luau::ParseResult result = Luau::Parser::parse(lowered.source.data(), lowered.source.size(), names, allocator, options);
+        L3i::Surface::remapLocations(result, lowered.map);
         for (const Luau::ParseError& error : result.errors)
             emit(diagnostic, ctx, DB_DIAG_PARSE_ERROR, 0, nullptr, std::string(), error.getMessage(), error.getLocation());
         if (json != nullptr && result.root != nullptr)

@@ -11,11 +11,13 @@ use crate::raw::ffi;
 use crate::stack::Scope;
 use crate::value::{Function, Value};
 
+#[cfg(test)]
 unsafe extern "C" {
     /// L3i surface syntax pass. Returns malloc-owned rewritten source, or null when unchanged.
     fn l3i_rewrite_surface_syntax(source: *const c_char, size: usize, outsize: *mut usize) -> *mut c_char;
 }
 
+#[cfg(test)]
 fn rewrite_surface_syntax(source: &str) -> Option<Vec<u8>> {
     let mut size = 0usize;
     // SAFETY: source is a valid byte range for the call. The returned allocation, when non-null,
@@ -244,18 +246,15 @@ fn compile_native(source: &str, options: &CompileOptions, disassemble: bool) -> 
         disabledBuiltins: c_array(&options.disabled_builtins, &mut disabled_builtins),
     };
 
-    let rewritten = rewrite_surface_syntax(source);
-    let compile_source = rewritten.as_deref().unwrap_or(source.as_bytes());
-
     let mut size = 0usize;
     // SAFETY: every pointer in `raw` outlives this call (the CStrings and the pointer arrays
-    // are locals of this function). The surface pass owns its Vec through the call, and
-    // luau_compile never raises; it reports failure in-band.
+    // are locals of this function). The C++ shim owns lowering, mapping and parsing and
+    // catches all compiler exceptions, reporting failure in-band.
     if with_members {
         ACTIVE_MEMBERS.with(|active| active.borrow_mut().clone_from(&options.library_members));
     }
-    let compile = if disassemble { ffi::l3i_luau_disassemble } else { ffi::luau_compile };
-    let bytecode = unsafe { compile(compile_source.as_ptr().cast(), compile_source.len(), &mut raw, &mut size) };
+    let compile = if disassemble { ffi::l3i_luau_disassemble } else { ffi::l3i_luau_compile };
+    let bytecode = unsafe { compile(source.as_ptr().cast(), source.len(), &mut raw, &mut size) };
     if with_members {
         ACTIVE_MEMBERS.with(|active| active.borrow_mut().take());
         CONSTANT_STRINGS.with(|strings| strings.borrow_mut().clear());

@@ -53,10 +53,59 @@ void unchanged(std::string_view source)
     assert(!changed);
     assert(result == source);
 }
+
+L3i::Surface::Position positionAt(std::string_view text, size_t offset)
+{
+    L3i::Surface::Position result{0, 0};
+    for (size_t i = 0; i < offset; ++i)
+        if (text[i] == '\n')
+            result = {result.line + 1, 0};
+        else
+            ++result.column;
+    return result;
+}
+
+void samePosition(L3i::Surface::Position actual, L3i::Surface::Position expected)
+{
+    assert(actual.line == expected.line && actual.column == expected.column);
+}
+
+void copiedSpan(std::string_view original, const L3i::Surface::LoweredSource& lowered, std::string_view token)
+{
+    const size_t input = original.find(token);
+    const size_t output = lowered.source.find(token);
+    assert(input != std::string_view::npos && output != std::string::npos);
+    const auto mapped = lowered.map.originalSpan({positionAt(lowered.source, output), positionAt(lowered.source, output + token.size())});
+    samePosition(mapped.begin, positionAt(original, input));
+    samePosition(mapped.end, positionAt(original, input + token.size()));
+    samePosition(lowered.map.generatedPosition(positionAt(original, input)), positionAt(lowered.source, output));
+    samePosition(lowered.map.generatedPosition(positionAt(original, input + token.size())), positionAt(lowered.source, output + token.size()));
+}
 } // namespace
 
 int main()
 {
+    // Provenance is compositional across nested rewrites, exact at exclusive token ends,
+    // and byte-based (CRLF and UTF-8 are not normalized).
+    {
+        const std::string source = "local prefix = 'é'\r\nlocal out = [for row in sourceRows()\r\n"
+            " if row.keep => [for item in row.items if item.active => item.missing]]; local tail = 42\r\n";
+        const auto lowered = L3i::Surface::lower(source);
+        for (std::string_view token : {"'é'", "sourceRows()", "row.keep", "row.items", "item.active", "item.missing", "local tail = 42"})
+            copiedSpan(source, lowered, token);
+        samePosition(lowered.map.originalPosition(positionAt(lowered.source, lowered.source.size())), positionAt(source, source.size()));
+        const auto whole = lowered.map.originalSpan({{0, 0}, positionAt(lowered.source, lowered.source.size())});
+        samePosition(whole.begin, {0, 0});
+        samePosition(whole.end, positionAt(source, source.size()));
+        assert(lowered.map.generatedName("__l3i_comp_123_value"));
+        assert(!lowered.map.generatedName("sourceRows"));
+    }
+    {
+        const auto plain = L3i::Surface::lower("local xs = {1}\nreturn xs");
+        assert(plain.map.empty());
+        samePosition(plain.map.originalPosition({1, 7}), {1, 7});
+        samePosition(plain.map.generatedPosition({1, 7}), {1, 7});
+    }
     // Ordinary Luau and the old Python spelling remain untouched.  Most importantly, Luau's long
     // string syntax no longer has any relationship to comprehension recognition.
     unchanged("return xs[1]");

@@ -516,8 +516,17 @@ unsafe extern "C" {
         options: *mut lua_CompileOptions,
         outsize: *mut usize,
     ) -> *mut c_char;
-    /// Disassembles source through Luau's BytecodeBuilder using the supplied compiler options.
-    /// Compiler errors use the same leading-NUL convention as [`luau_compile`].
+    /// Compiles L3i surface source, embedding original-source locations in bytecode.
+    /// Uses [`luau_compile`]'s malloc/free and leading-NUL error conventions. No C++
+    /// exception escapes; allocation failure returns null with output size zero.
+    pub fn l3i_luau_compile(
+        source: *const c_char,
+        size: usize,
+        options: *mut lua_CompileOptions,
+        outsize: *mut usize,
+    ) -> *mut c_char;
+    /// Disassembles through the same lowering, mapping and compilation pipeline as
+    /// [`l3i_luau_compile`], with identical error and ownership conventions.
     pub fn l3i_luau_disassemble(
         source: *const c_char,
         size: usize,

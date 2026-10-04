@@ -218,6 +218,99 @@ fn coverage_counts_line_hits_when_compiled_with_coverage() {
     assert_eq!(body.hits[2], 1, "{body:?}");
 }
 
+#[test]
+fn surface_call_sites_follow_original_nested_clause_lines_at_every_optimization_level() {
+    let source = concat!(
+        "local result = [\n",
+        "    for x in {probe('source', 1)}\n",
+        "    if probe('filter', x) > 0\n",
+        "    => [for y in {x}\n",
+        "        if probe('inner', y) > 0\n",
+        "        => probe('project', y)]\n",
+        "]\n",
+        "probe('after', result[1][1])\n",
+        "return result\n",
+    );
+    for optimization_level in 0..=2 {
+        let runtime = Runtime::new().unwrap();
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let record = seen.clone();
+        let probe = runtime
+            .bind_function("dreamweave.probe", move |call: &Call, label: String, value: i32| {
+                record.borrow_mut().push((label, call.call_site(1).unwrap()));
+                value
+            })
+            .unwrap();
+        runtime.set_global("probe", &probe).unwrap();
+        let options = CompileOptions { optimization_level, debug_level: 2, ..CompileOptions::default() };
+        runtime
+            .stack()
+            .with_frame(|frame| {
+                let chunk = runtime.load(frame, "=surface", source, &options)?;
+                chunk.as_function()?.invoke::<Value, _>(frame, ())
+            })
+            .unwrap();
+        let seen = seen.borrow();
+        let expected = [("source", 2), ("filter", 3), ("inner", 5), ("project", 6), ("after", 8)];
+        assert_eq!(seen.len(), expected.len());
+        for ((label, site), (expected_label, line)) in seen.iter().zip(expected) {
+            assert_eq!(label, expected_label);
+            assert_eq!(site, &CallSite { source: "surface".to_owned(), line }, "optimization {optimization_level}");
+        }
+    }
+}
+
+struct SurfaceBreakpoint(Rc<Cell<bool>>);
+
+impl RuntimeHooks for SurfaceBreakpoint {
+    fn debug_break(&self, _stack: &Stack<'_>, info: &DebugInfo) -> DebugAction {
+        assert_eq!(info.source, "surface-breakpoint");
+        assert_eq!(info.current_line, 5);
+        if self.0.replace(true) { DebugAction::Continue } else { DebugAction::Break }
+    }
+}
+
+#[test]
+fn surface_breakpoints_and_coverage_use_original_projection_line() {
+    let runtime = Runtime::new().unwrap();
+    runtime.exec("values = {1, 2}").unwrap();
+    let options =
+        CompileOptions { optimization_level: 1, debug_level: 2, coverage_level: 2, ..CompileOptions::default() };
+    let source = concat!(
+        "return function()\n",
+        "    local ys = [\n",
+        "        for x in values\n",
+        "        if x > 0\n",
+        "        => x * 2\n",
+        "    ]\n",
+        "    return ys\n",
+        "end\n",
+    );
+    let body = runtime
+        .stack()
+        .with_frame(|frame| {
+            let chunk = runtime.load(frame, "=surface-breakpoint", source, &options)?;
+            chunk.as_function()?.invoke::<Function, _>(frame, ())
+        })
+        .unwrap();
+    let landed = runtime.stack().with_frame(|frame| frame.set_breakpoint(body.push_to(frame)?, 5, true)).unwrap();
+    assert_eq!(landed, 5);
+    let stopped = Rc::new(Cell::new(false));
+    runtime.set_hooks(SurfaceBreakpoint(stopped.clone()), HookSet::DEBUGGER);
+    let thread = runtime.new_thread().unwrap();
+    assert!(matches!(thread.start(&runtime.stack(), &body, ()).unwrap(), Resume::Break));
+    assert!(stopped.get());
+    assert!(matches!(thread.resume(&runtime.stack(), ()).unwrap(), Resume::Finished(_)));
+    runtime.clear_hooks();
+    let coverage = runtime.stack().with_frame(|frame| frame.coverage(body.push_to(frame)?)).unwrap();
+    assert!(coverage.iter().any(|entry| entry.hits.get(5).copied().unwrap_or(-1) >= 2), "{coverage:?}");
+    assert!(coverage.iter().all(|entry| entry.hits.len() <= source.lines().count() + 1), "{coverage:?}");
+    assert!(
+        coverage.iter().any(|entry| entry.line_defined == 2),
+        "wrapper definition must map to opening bracket: {coverage:?}"
+    );
+}
+
 struct Lifecycle {
     threads: Rc<Cell<u32>>,
     resumes: Rc<Cell<u32>>,
