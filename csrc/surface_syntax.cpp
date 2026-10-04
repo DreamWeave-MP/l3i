@@ -594,7 +594,10 @@ std::string lower(const Parsed& parsed, std::string_view wholeSource, size_t off
             result += out;
             result += " = table.create(";
             result += len;
-            result += ") ";
+            // table.create's omitted fill parameter infers {unknown} with Luau's new solver.
+            // Give the fresh allocation the unsealed builder type of an empty literal, so indexed
+            // writes infer the checked projection type. typeof's literal is never executed.
+            result += ") :: typeof({}) ";
         }
         result += "for ";
         result += index;
@@ -651,7 +654,7 @@ std::string lower(const Parsed& parsed, std::string_view wholeSource, size_t off
             result += out;
             result += " = table.create(";
             result += len;
-            result += ") local ";
+            result += ") :: typeof({}) local ";
         }
         result += count;
         result += " = 0 for ";

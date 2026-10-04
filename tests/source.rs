@@ -16,6 +16,43 @@ fn textual_disassembly_lists_bytecode_functions_lines_locals_and_constants() {
 }
 
 #[test]
+fn builder_type_assertion_has_no_runtime_cost() {
+    let source = "local src = values local out = table.create(#src) TYPE \
+                  for i = 1, #src do local value = src[i] * 2 \
+                  if value == nil then error('nil') end out[i] = value end return out";
+    for optimization_level in 0..=2 {
+        let options = CompileOptions { optimization_level, debug_level: 0, ..CompileOptions::default() };
+        assert_eq!(
+            compile(&source.replace("TYPE", ":: typeof({})"), &options).unwrap(),
+            compile(&source.replace("TYPE", ""), &options).unwrap(),
+            "type-only builder must not allocate or change executable bytecode"
+        );
+    }
+}
+
+#[test]
+fn dense_comprehension_bytecode_exposes_guard_and_register_cost() {
+    let options = CompileOptions::default();
+    let surface = disassemble("return [for x in values => x * 2]", &options).unwrap();
+    let handwritten = disassemble(
+        "local src = values local n = #src local out = table.create(n) \
+         for i = 1, n do local x = src[i] local value = x * 2 \
+         if value == nil then error('L3i comprehension projection produced nil; filter nil explicitly') end \
+         out[i] = value end return out",
+        &options,
+    )
+    .unwrap();
+    // Luau retains an unused prototype for the flattened wrapper. Inspect the entry function,
+    // not that dead prototype, when counting executed instructions.
+    let entry = surface.rsplit("Function ").next().unwrap();
+    assert!(!entry.contains("CLOSURE") && !entry.contains("CAPTURE"), "{surface}");
+    // The only runtime calls are table.create and the cold nil-error path, never the wrapper.
+    assert_eq!(entry.matches(": CALL ").count(), 2, "{surface}");
+    assert!(entry.contains("JUMPXEQKNIL"), "{surface}");
+    println!("dense surface:\n{surface}\ndense handwritten nil-checked:\n{handwritten}");
+}
+
+#[test]
 fn disassembly_returns_compile_errors_instead_of_an_error_listing() {
     let error = disassemble("local =", &CompileOptions::default()).unwrap_err().to_string();
     assert!(error.contains("parse error"), "{error}");
