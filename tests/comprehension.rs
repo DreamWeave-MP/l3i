@@ -91,12 +91,12 @@ fn dense_comprehension_executes() {
     let runtime = Runtime::new().unwrap();
     runtime
         .exec(
-            r#"
+            r"
             local values = { 1, 2, 3, 4 }
             local squares = [for x in values => x * x]
             assert(#squares == 4)
             assert(squares[1] == 1 and squares[2] == 4 and squares[3] == 9 and squares[4] == 16)
-            "#,
+            ",
         )
         .unwrap();
 }
@@ -106,7 +106,7 @@ fn filtered_comprehension_fuses_filter_and_projection() {
     let runtime = Runtime::new().unwrap();
     runtime
         .exec(
-            r#"
+            r"
             local values = {
                 { id = 10, active = true },
                 { id = 20, active = false },
@@ -115,7 +115,7 @@ fn filtered_comprehension_fuses_filter_and_projection() {
             local ids = [for x in values if x.active => x.id]
             assert(#ids == 2)
             assert(ids[1] == 10 and ids[2] == 30)
-            "#,
+            ",
         )
         .unwrap();
 }
@@ -125,7 +125,7 @@ fn source_expression_is_evaluated_once() {
     let runtime = Runtime::new().unwrap();
     runtime
         .exec(
-            r#"
+            r"
             local calls = 0
             local function source()
                 calls += 1
@@ -134,7 +134,7 @@ fn source_expression_is_evaluated_once() {
             local doubled = [for x in source() => x * 2]
             assert(calls == 1)
             assert(doubled[1] == 4 and doubled[3] == 12)
-            "#,
+            ",
         )
         .unwrap();
 }
@@ -144,7 +144,7 @@ fn strings_comments_and_normal_indexing_are_not_surface_syntax() {
     let runtime = Runtime::new().unwrap();
     runtime
         .exec(
-            r#"
+            r"
             local values = { 9 }
             assert(values[1] == 9)
             local text = '[for x in values => x]'
@@ -152,7 +152,7 @@ fn strings_comments_and_normal_indexing_are_not_surface_syntax() {
             -- [for x in values => x]
             local long = [=[[for x in values => x]]=]
             assert(long == '[for x in values => x]')
-            "#,
+            ",
         )
         .unwrap();
 }
@@ -162,12 +162,12 @@ fn multiple_generators_and_filters_execute() {
     let runtime = Runtime::new().unwrap();
     runtime
         .exec(
-            r#"
+            r"
             local rows = { { 1, 2 }, { 3, 4 } }
             local pairs = [for row in rows for x in row if x % 2 == 0 => x * 10]
             assert(#pairs == 2)
             assert(pairs[1] == 20 and pairs[2] == 40)
-            "#,
+            ",
         )
         .unwrap();
 }
@@ -177,7 +177,7 @@ fn nested_comprehensions_do_not_conflict_with_long_strings() {
     let runtime = Runtime::new().unwrap();
     runtime
         .exec(
-            r#"
+            r"
             local rows = {
                 { values = { 1, 2 } },
                 { values = { 3, 4 } },
@@ -185,7 +185,7 @@ fn nested_comprehensions_do_not_conflict_with_long_strings() {
             local doubled = [for row in rows => [for x in row.values => x * 2]]
             assert(doubled[1][1] == 2 and doubled[1][2] == 4)
             assert(doubled[2][1] == 6 and doubled[2][2] == 8)
-            "#,
+            ",
         )
         .unwrap();
 }
@@ -230,7 +230,7 @@ fn length_of_comprehension_is_fused_without_dropping_projection_effects() {
     let runtime = Runtime::new().unwrap();
     runtime
         .exec(
-            r#"
+            r"
             local calls = 0
             local function project(x)
                 calls += 1
@@ -239,7 +239,7 @@ fn length_of_comprehension_is_fused_without_dropping_projection_effects() {
             local n = #[for x in { 1, 2, 3, 4 } if x % 2 == 0 => project(x)]
             assert(n == 2)
             assert(calls == 2)
-            "#,
+            ",
         )
         .unwrap();
 }
@@ -342,7 +342,7 @@ fn generated_locals_do_not_capture_adversarial_user_names() {
     let runtime = Runtime::new().unwrap();
     runtime
         .exec(
-            r#"
+            r"
         local __l3i_src, __l3i_out, __l3i_value, __l3i_count = {1, 2}, 20, 30, 40
         local __l3i_comp_7_g0_src, __l3i_comp_7_out = 50, 60
         local result = [for __l3i_value in __l3i_src => __l3i_value + __l3i_out + __l3i_count]
@@ -350,7 +350,7 @@ fn generated_locals_do_not_capture_adversarial_user_names() {
         assert(__l3i_comp_7_g0_src == 50 and __l3i_comp_7_out == 60)
         local nested = [for x in [for y in {1, 2} => y] if #[for z in {x} => z] => [for w in {x} => w]]
         assert(#nested == 2 and nested[1][1] == 1 and nested[2][1] == 2)
-    "#,
+    ",
         )
         .unwrap();
     // Force a collision at the actual source offset (and with its first salted alternative).
@@ -370,7 +370,7 @@ fn trailing_clause_comments_cannot_swallow_generated_code() {
     let runtime = Runtime::new().unwrap();
     runtime
         .exec(
-            r#"
+            r"
         local result = [for x in {1, 2} -- source comment
             if x > 0 -- filter comment
             => x * 2 -- projection comment
@@ -386,7 +386,7 @@ fn trailing_clause_comments_cannot_swallow_generated_code() {
             => y -- nested projection
         ]
         assert(#nested == 2 and nested[1] == 1 and nested[2] == 2)
-    "#,
+    ",
         )
         .unwrap();
 }
