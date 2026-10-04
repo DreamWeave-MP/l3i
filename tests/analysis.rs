@@ -636,6 +636,27 @@ fn parser_coordinate_templates_preserve_quoted_class_like_user_text() {
     assert!(report.diagnostics.iter().any(|error| error.text.contains(payload)), "{report:?}");
 }
 
+#[test]
+fn unfinished_member_diagnostics_survive_a_shared_projection_hole_at_eof() {
+    for source in ["local xs = {1}\nreturn [for x in xs.", "local xs = {1}\nreturn [for x in xs if x."] {
+        let expected = |error: &&analysis::Diagnostic| {
+            error.kind == DiagnosticKind::ParseError && error.text.contains("Expected identifier")
+        };
+        let parsed = analysis::parse(source, false);
+        let error = parsed.errors.iter().find(expected).expect("copied member suffix, not scaffolding noise");
+        let (line, column) = source_position(source, source.len());
+        let eof = analysis::Span { begin_line: line, begin_column: column, end_line: line, end_column: column };
+        assert_eq!(error.span, eof, "{error:?}");
+        for solver in [analysis::Solver::New, analysis::Solver::Old] {
+            let analysis = comprehension_analysis(HashMap::from([("member", source)]), solver);
+            let checked = analysis.check("member", false);
+            let error =
+                checked.diagnostics.iter().find(expected).expect("checking must retain the copied member diagnostic");
+            assert_eq!(error.span, eof, "{solver:?}: {error:?}");
+        }
+    }
+}
+
 fn complete_at(analysis: &Analysis, module: &str, source: &str, offset: usize) -> analysis::Completions {
     let (line, column) = source_position(source, offset);
     let completions = analysis.autocomplete(module, line, column).unwrap();

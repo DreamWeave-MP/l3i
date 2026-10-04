@@ -161,11 +161,19 @@ namespace
         if (!inner)
             return false;
         const auto& node = lowered.document.comprehensions.at(inner->comprehension);
-        if (!node.projection.empty() && overlaps(range, inner->projection))
+        const auto copiedExpression = [&](L3i::Surface::Range site)
+        {
+            // A trailing '.' or operator is diagnosed at its generated ')' fence.
+            // It is still a copied-expression error, even when another structural
+            // hole shares the same original EOF insertion point.
+            return overlaps(range, site) ||
+                (range.begin == site.end && range.end <= site.end + 1 && site.end < lowered.source.size() && lowered.source[site.end] == ')');
+        };
+        if (!node.projection.empty() && copiedExpression(inner->projection))
             return false;
         for (size_t i = 0; i < inner->clauses.size(); ++i)
         {
-            if (!node.clauses[i].expression.empty() && overlaps(range, inner->clauses[i].expression))
+            if (!node.clauses[i].expression.empty() && copiedExpression(inner->clauses[i].expression))
                 return false;
             if (!node.clauses[i].binding.empty() && overlaps(range, inner->clauses[i].binding))
                 return false;
