@@ -1,23 +1,34 @@
 #pragma once
 
-#include <stddef.h>
-
-// L3i-owned source surface lowering.  Returns a malloc-owned byte buffer when the source changed;
-// returns nullptr when no recognized surface syntax was present or allocation failed. No C++
-// exception escapes. The buffer is not NUL-terminated;
-// callers must use `outsize` and release it with the same C runtime's free().
-extern "C" char* l3i_rewrite_surface_syntax(const char* source, size_t size, size_t* outsize);
-
 #include "source_map.h"
+#include "surface_frontend.h"
 
 namespace L3i::Surface
 {
+struct ClauseSite
+{
+    Range binding; // Generated declaration token, not a guessed temporary spelling.
+    Range expression;
+};
+
+struct ComprehensionSite
+{
+    size_t comprehension = 0;
+    Range call;
+    std::vector<ClauseSite> clauses;
+    Range projection;
+};
+
 struct LoweredSource
 {
     std::string source;
     SourceMap map;
+    Document document;
+    std::vector<ComprehensionSite> sites;
 };
 
 // Shared compiler/tooling seam: all coordinates in map refer to the original input.
-LoweredSource lower(std::string_view source);
+// Recovery is analysis-only. Strict compilation must reject document errors before parsing.
+// Syntax tooling disables count fusion to retain unary length in the source tree.
+LoweredSource lower(std::string_view source, bool recovery = false, bool fuseLength = true);
 }

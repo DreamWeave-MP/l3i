@@ -167,3 +167,34 @@ fn coordinate_templates_never_rewrite_quoted_user_input() {
     assert_eq!(compiled, listing);
     assert!(compiled.contains(payload), "{compiled}");
 }
+
+#[test]
+fn unfinished_surface_forms_never_compile_or_execute_recovery_holes() {
+    let options = CompileOptions::default();
+    for fragment in [
+        "[for",
+        "[for x",
+        "[for x in",
+        "[for x in xs",
+        "[for x in xs if",
+        "[for x in xs =>",
+        "[for x in xs => x.",
+        "[for x in xs => x",
+        "sum[for x in xs =>",
+        "#[for x in xs =>",
+    ] {
+        let source = format!("return {fragment}");
+        let error = compile(&source, &options).unwrap_err().to_string();
+        assert_eq!(error, disassemble(&source, &options).unwrap_err().to_string());
+        assert!(error.starts_with(":1:"), "{fragment}: {error}");
+        assert!(!error.contains("__l3i_comp_"), "{fragment}: {error}");
+    }
+    let runtime = l3i::Runtime::new().unwrap();
+    let calls = std::rc::Rc::new(std::cell::Cell::new(0));
+    let record = calls.clone();
+    let effect = runtime.bind_function("dreamweave.effect", move || record.set(record.get() + 1)).unwrap();
+    runtime.set_global("effect", &effect).unwrap();
+    let error = runtime.exec("effect()\nreturn [for x in {1} =>").unwrap_err().to_string();
+    assert!(error.contains("expected projection expression"), "{error}");
+    assert_eq!(calls.get(), 0, "strict compilation cannot run any recovery scaffolding");
+}

@@ -1,5 +1,4 @@
-// Standalone, dependency-free tests for L3i's source-level surface syntax pass.
-// Build directly with either GCC or Clang; no Rust/Cargo or Luau checkout is required.
+// Lowering and provenance tests using the canonical stock-token surface frontend.
 
 #include "surface_syntax.h"
 
@@ -14,15 +13,10 @@ namespace
 {
 std::string rewrite(std::string_view source, bool* changed = nullptr)
 {
-    size_t size = 0;
-    char* memory = l3i_rewrite_surface_syntax(source.data(), source.size(), &size);
+    const auto lowered = L3i::Surface::lower(source);
     if (changed)
-        *changed = memory != nullptr;
-    if (!memory)
-        return std::string(source);
-    std::string result(memory, size);
-    std::free(memory);
-    return result;
+        *changed = !lowered.map.empty();
+    return lowered.source;
 }
 
 size_t occurrences(std::string_view text, std::string_view needle)
@@ -290,9 +284,10 @@ int main()
     // A trailing line comment must end before generated code; quoted -- is not a comment.
     {
         const std::string out = rewrite("return [for x in xs -- source\n if x -- filter\n => x -- project\n]");
-        contains(out, "xs -- source\n local");
-        contains(out, "if x -- filter\n then");
-        contains(out, "= x -- project\n if");
+        contains(out, "-- source\n");
+        contains(out, "-- filter\n");
+        contains(out, "-- project\n");
+        contains(out, "if x then");
         const std::string quoted = rewrite("return [for x in xs => '-- not a comment']");
         contains(quoted, "= '-- not a comment' if");
     }
@@ -302,9 +297,9 @@ int main()
         const std::string out = rewrite("local out = -- #\n [for x in xs => x]");
         contains(out, "-- #\n (function()");
         contains(out, "table.create");
-        const std::string unfused = rewrite("return # -- comment\n [for x in xs => x]");
-        contains(unfused, "# -- comment\n (function()");
-        contains(unfused, "table.create");
+        const std::string fused = rewrite("return # -- comment\n [for x in xs => x]");
+        contains(fused, "-- comment\n");
+        assert(fused.find("table.create") == std::string::npos);
     }
 
     // Trivia between the opening bracket and sentinel is accepted.
@@ -319,21 +314,18 @@ int main()
         contains(out, "__l3i_comp_32_1_g0_src");
     }
 
-    // Malformed surface forms are left for stock Luau diagnostics instead of being partially
-    // rewritten into misleading generated code.
+    // Strict lowering never emits executable recovery scaffolding. The compiler reports
+    // the canonical document errors, rather than falling back to another recognizer.
     unchanged("return [for in xs => x]");
     unchanged("return [for x xs => x]");
     unchanged("return [for x in => x]");
     unchanged("return [for x in xs =>]");
     unchanged("return [for x in xs if => x]");
 
-    // C API edge behavior.
-    {
-        size_t n = 123;
-        assert(l3i_rewrite_surface_syntax(nullptr, 0, &n) == nullptr);
-        assert(n == 0);
-        assert(l3i_rewrite_surface_syntax("x", 1, nullptr) == nullptr);
-    }
+    const auto strict = L3i::Surface::lower("return [for x in xs =>]");
+    assert(!strict.document.errors.empty() && strict.sites.empty());
+    const auto recovered = L3i::Surface::lower("return [for x in xs =>]", true);
+    assert(!recovered.document.errors.empty() && recovered.sites.size() == 1);
 
     std::cout << "surface syntax tests passed\n";
 }

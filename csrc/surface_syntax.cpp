@@ -1,466 +1,29 @@
-// L3i surface syntax: eager optimizer-visible list comprehensions.
-//
-// This deliberately lives outside Luau.  L3i recognizes the non-conflicting surface form
-//
-//     [for item in source => project]
-//     [for item in source if predicate => project]
-//     [for x in xs for y in ys => project]
-//
-// and rewrites it to an immediately-invoked Luau function containing explicit numeric loops.
-// Comprehensions always produce dense, non-nil arrays: every accepted projection is evaluated
-// exactly once and a nil projection raises an explicit error. Filters use ordinary Luau truthiness.
-// The unary length form `#[for ... => ...]` is fused to an allocation-free count traversal while
-// preserving projection evaluation and the same non-nil check. JSL also owns the reducer spelling
-// `sum[for ... => ...]`, which fuses projection into an allocation-free numeric accumulation.
-//
-// L3i enables LuauCompileIifeInline, allowing stock Luau to erase the expression wrapper and see
-// essentially the same loop shape a human would write.
-//
-// The `[for ... => ...]` spelling is intentionally not Python's literal spelling.  In Luau, `[[`
-// begins a long string, which makes directly nested Python-style comprehensions lexically hostile.
-// Prefixing the collection expression with `for` gives L3i an unambiguous sentinel and makes
-// nesting natural:
-//
-//     [for row in rows => [for x in row => x * 2]]
-//
-// This remains a source-front-end prototype.  It is independent of Luau internals so the feature
-// does not require a Luau fork.  A later AST/token implementation can preserve the same surface and
-// lowering semantics while adding exact source maps and identity-hygienic locals.
-
+// Semantic lowering of the canonical surface document. Recognition and recovery live
+// exclusively in surface_frontend.cpp; there is no legacy comprehension grammar here.
 #include "surface_syntax.h"
 
-#include <cctype>
-#include <cstdlib>
-#include <cstring>
-#include <string>
-#include <string_view>
+#include <algorithm>
 #include <utility>
-#include <vector>
 
+namespace L3i::Surface
+{
 namespace
 {
-struct Scan
+void shift(Range& range, size_t offset)
 {
-    std::string_view text;
-
-    static bool identStart(char c)
-    {
-        return c == '_' || std::isalpha(static_cast<unsigned char>(c)) != 0;
-    }
-
-    static bool identContinue(char c)
-    {
-        return c == '_' || std::isalnum(static_cast<unsigned char>(c)) != 0;
-    }
-
-    // Returns the byte after a quoted string/backtick, or text.size() on unterminated input.
-    // Backtick interpolation is intentionally opaque in this source-level prototype.
-    size_t quoted(size_t at) const
-    {
-        const char quote = text[at++];
-        while (at < text.size())
-        {
-            if (text[at] == '\\')
-            {
-                at += at + 1 < text.size() ? 2 : 1;
-                continue;
-            }
-            if (text[at++] == quote)
-                return at;
-        }
-        return text.size();
-    }
-
-    // Luau long strings/comments: [=[ ... ]=], with any number of '=' bytes.
-    size_t longBracket(size_t at) const
-    {
-        if (at >= text.size() || text[at] != '[')
-            return at;
-        size_t cursor = at + 1;
-        while (cursor < text.size() && text[cursor] == '=')
-            ++cursor;
-        if (cursor >= text.size() || text[cursor] != '[')
-            return at;
-
-        const size_t equals = cursor - (at + 1);
-        ++cursor;
-        while (cursor < text.size())
-        {
-            if (text[cursor] == ']')
-            {
-                size_t end = cursor + 1;
-                size_t seen = 0;
-                while (end < text.size() && text[end] == '=' && seen < equals)
-                {
-                    ++end;
-                    ++seen;
-                }
-                if (seen == equals && end < text.size() && text[end] == ']')
-                    return end + 1;
-            }
-            ++cursor;
-        }
-        return text.size();
-    }
-
-    size_t comment(size_t at) const
-    {
-        if (at + 1 >= text.size() || text[at] != '-' || text[at + 1] != '-')
-            return at;
-        const size_t longStart = at + 2;
-        const size_t longEnd = longBracket(longStart);
-        if (longEnd != longStart)
-            return longEnd;
-        at += 2;
-        while (at < text.size() && text[at] != '\n')
-            ++at;
-        return at;
-    }
-
-    size_t skipLiteralOrComment(size_t at) const
-    {
-        const char c = text[at];
-        if (c == '\'' || c == '"' || c == '`')
-            return quoted(at);
-        if (c == '-' && at + 1 < text.size() && text[at + 1] == '-')
-            return comment(at);
-        if (c == '[')
-        {
-            const size_t end = longBracket(at);
-            if (end != at)
-                return end;
-        }
-        return at;
-    }
-};
-
-std::string_view trim(std::string_view text)
-{
-    while (!text.empty() && std::isspace(static_cast<unsigned char>(text.front())) != 0)
-        text.remove_prefix(1);
-    while (!text.empty() && std::isspace(static_cast<unsigned char>(text.back())) != 0)
-        text.remove_suffix(1);
-    return text;
+    range.begin += offset;
+    range.end += offset;
 }
 
-bool identifier(std::string_view text)
-{
-    text = trim(text);
-    if (text.empty() || !Scan::identStart(text.front()))
-        return false;
-    for (size_t i = 1; i < text.size(); ++i)
-        if (!Scan::identContinue(text[i]))
-            return false;
-    return true;
-}
-
-bool keywordAt(std::string_view text, size_t at, std::string_view keyword)
-{
-    if (at + keyword.size() > text.size() || text.substr(at, keyword.size()) != keyword)
-        return false;
-    const bool left = at == 0 || !Scan::identContinue(text[at - 1]);
-    const bool right = at + keyword.size() == text.size() || !Scan::identContinue(text[at + keyword.size()]);
-    return left && right;
-}
-
-size_t skipSpaceAndComments(std::string_view text, size_t at)
-{
-    Scan scan{text};
-    for (;;)
-    {
-        while (at < text.size() && std::isspace(static_cast<unsigned char>(text[at])) != 0)
-            ++at;
-        if (at + 1 < text.size() && text[at] == '-' && text[at + 1] == '-')
-        {
-            const size_t end = scan.comment(at);
-            if (end != at)
-            {
-                at = end;
-                continue;
-            }
-        }
-        return at;
-    }
-}
-
-// Finds a keyword at delimiter depth zero.  Keywords inside strings/comments/nested expressions
-// are ignored, and identifier boundaries are required on both sides.
-size_t topKeyword(std::string_view text, std::string_view keyword, size_t begin = 0)
-{
-    Scan scan{text};
-    int paren = 0;
-    int brace = 0;
-    int bracket = 0;
-    for (size_t i = begin; i < text.size();)
-    {
-        const size_t skipped = scan.skipLiteralOrComment(i);
-        if (skipped != i)
-        {
-            i = skipped;
-            continue;
-        }
-        switch (text[i])
-        {
-        case '(':
-            ++paren;
-            ++i;
-            continue;
-        case ')':
-            --paren;
-            ++i;
-            continue;
-        case '{':
-            ++brace;
-            ++i;
-            continue;
-        case '}':
-            --brace;
-            ++i;
-            continue;
-        case '[':
-            ++bracket;
-            ++i;
-            continue;
-        case ']':
-            --bracket;
-            ++i;
-            continue;
-        default:
-            break;
-        }
-
-        if (paren == 0 && brace == 0 && bracket == 0 && keywordAt(text, i, keyword))
-            return i;
-        ++i;
-    }
-    return std::string_view::npos;
-}
-
-// Finds `=>` at delimiter depth zero.  The token is L3i-owned surface syntax, not Luau syntax.
-size_t topArrow(std::string_view text, size_t begin = 0)
-{
-    Scan scan{text};
-    int paren = 0;
-    int brace = 0;
-    int bracket = 0;
-    for (size_t i = begin; i < text.size();)
-    {
-        const size_t skipped = scan.skipLiteralOrComment(i);
-        if (skipped != i)
-        {
-            i = skipped;
-            continue;
-        }
-        switch (text[i])
-        {
-        case '(':
-            ++paren;
-            ++i;
-            continue;
-        case ')':
-            --paren;
-            ++i;
-            continue;
-        case '{':
-            ++brace;
-            ++i;
-            continue;
-        case '}':
-            --brace;
-            ++i;
-            continue;
-        case '[':
-            ++bracket;
-            ++i;
-            continue;
-        case ']':
-            --bracket;
-            ++i;
-            continue;
-        default:
-            break;
-        }
-
-        if (paren == 0 && brace == 0 && bracket == 0 && text[i] == '=' && i + 1 < text.size() && text[i + 1] == '>')
-            return i;
-        ++i;
-    }
-    return std::string_view::npos;
-}
-
-size_t matchingSquare(std::string_view text, size_t open)
-{
-    Scan scan{text};
-    int depth = 1;
-    for (size_t i = open + 1; i < text.size();)
-    {
-        const size_t skipped = scan.skipLiteralOrComment(i);
-        if (skipped != i)
-        {
-            i = skipped;
-            continue;
-        }
-        if (text[i] == '[')
-            ++depth;
-        else if (text[i] == ']' && --depth == 0)
-            return i;
-        ++i;
-    }
-    return std::string_view::npos;
-}
-
-
-enum class Consumer
-{
-    Materialize,
-    Count,
-    Sum,
-};
-
-struct Generator
-{
-    std::string_view binding;
-    std::string_view source;
-    std::vector<std::string_view> predicates;
-    std::string_view clause;
-};
-
-struct Parsed
-{
-    std::vector<Generator> generators;
-    std::string_view project;
-};
-
-// Parses the clause side of:
-//
-//     for x in xs if p(x) for y in ys if q(y) => project
-//
-// Each source/filter expression is delimited only by a top-level `for`, `if`, or the final arrow.
-// Therefore a top-level Luau conditional expression in a source/filter should be parenthesized in
-// this source-level prototype.  Nested conditional expressions are otherwise fine.
-bool parseComprehension(std::string_view content, Parsed& out)
-{
-    const size_t arrow = topArrow(content);
-    if (arrow == std::string_view::npos)
-        return false;
-
-    const std::string_view header = trim(content.substr(0, arrow));
-    out.project = trim(content.substr(arrow + 2));
-    if (header.empty() || out.project.empty())
-        return false;
-
-    size_t cursor = skipSpaceAndComments(header, 0);
-    if (!keywordAt(header, cursor, "for"))
-        return false;
-
-    while (cursor < header.size())
-    {
-        const size_t clauseBegin = cursor;
-        cursor += 3; // for
-        cursor = skipSpaceAndComments(header, cursor);
-
-        const size_t bindingBegin = cursor;
-        if (bindingBegin >= header.size() || !Scan::identStart(header[bindingBegin]))
-            return false;
-        ++cursor;
-        while (cursor < header.size() && Scan::identContinue(header[cursor]))
-            ++cursor;
-        const std::string_view binding = header.substr(bindingBegin, cursor - bindingBegin);
-        if (!identifier(binding))
-            return false;
-
-        cursor = skipSpaceAndComments(header, cursor);
-        if (!keywordAt(header, cursor, "in"))
-            return false;
-        cursor += 2;
-        const size_t sourceBegin = skipSpaceAndComments(header, cursor);
-        if (sourceBegin >= header.size())
-            return false;
-
-        const size_t nextIf = topKeyword(header, "if", sourceBegin);
-        const size_t nextFor = topKeyword(header, "for", sourceBegin);
-        size_t sourceEnd = header.size();
-        if (nextIf != std::string_view::npos && nextIf < sourceEnd)
-            sourceEnd = nextIf;
-        if (nextFor != std::string_view::npos && nextFor < sourceEnd)
-            sourceEnd = nextFor;
-
-        Generator generator;
-        generator.binding = binding;
-        generator.source = trim(header.substr(sourceBegin, sourceEnd - sourceBegin));
-        if (generator.source.empty())
-            return false;
-        cursor = sourceEnd;
-
-        while (cursor < header.size())
-        {
-            cursor = skipSpaceAndComments(header, cursor);
-            if (cursor >= header.size())
-                break;
-            if (keywordAt(header, cursor, "for"))
-                break;
-            if (!keywordAt(header, cursor, "if"))
-                return false;
-
-            cursor += 2;
-            const size_t predicateBegin = skipSpaceAndComments(header, cursor);
-            if (predicateBegin >= header.size())
-                return false;
-            const size_t followingIf = topKeyword(header, "if", predicateBegin);
-            const size_t followingFor = topKeyword(header, "for", predicateBegin);
-            size_t predicateEnd = header.size();
-            if (followingIf != std::string_view::npos && followingIf < predicateEnd)
-                predicateEnd = followingIf;
-            if (followingFor != std::string_view::npos && followingFor < predicateEnd)
-                predicateEnd = followingFor;
-
-            const std::string_view predicate = trim(header.substr(predicateBegin, predicateEnd - predicateBegin));
-            if (predicate.empty())
-                return false;
-            generator.predicates.push_back(predicate);
-            cursor = predicateEnd;
-        }
-
-        generator.clause = header.substr(clauseBegin, cursor - clauseBegin);
-        out.generators.push_back(std::move(generator));
-        cursor = skipSpaceAndComments(header, cursor);
-        if (cursor >= header.size())
-            break;
-        if (!keywordAt(header, cursor, "for"))
-            return false;
-    }
-
-    return !out.generators.empty();
-}
-
-std::string uniqueStem(std::string_view source, size_t offset)
-{
-    // Source text cannot produce a truly hygienic name.  Pick a stem absent from the entire source;
-    // the AST implementation can replace this with identity-based AstLocal nodes later.
-    for (size_t salt = 0;; ++salt)
-    {
-        std::string stem = "__l3i_comp_" + std::to_string(offset);
-        if (salt != 0)
-            stem += "_" + std::to_string(salt);
-        if (source.find(stem) == std::string_view::npos)
-            return stem;
-    }
-}
-
-struct MappedText
+struct Text
 {
     std::string text;
-    std::vector<L3i::Surface::Segment> segments;
-    size_t originBegin = 0;
-    size_t originEnd = 0;
-    size_t anchorBegin = 0;
-    size_t anchorEnd = 0;
+    std::vector<Segment> segments;
+    std::vector<ComprehensionSite> sites;
+    Range anchor;
 
     size_t size() const { return text.size(); }
-    void reserve(size_t size) { text.reserve(size); }
-    void anchor(size_t begin, size_t end) { anchorBegin = begin; anchorEnd = end; }
-
-    void record(L3i::Surface::Segment segment)
+    void record(Segment segment)
     {
         if (segment.begin == segment.end)
             return;
@@ -478,605 +41,266 @@ struct MappedText
         }
         segments.push_back(segment);
     }
-
-    MappedText& operator+=(std::string_view added)
+    Text& operator+=(std::string_view value)
     {
-        const size_t begin = text.size();
-        text.append(added.data(), added.size());
-        record({begin, text.size(), anchorBegin, anchorEnd, false});
+        const size_t begin = size();
+        text.append(value.data(), value.size());
+        record({begin, size(), anchor.begin, anchor.end, false});
         return *this;
     }
-
-    MappedText& operator+=(char added)
+    void append(const Text& value)
     {
-        return *this += std::string_view(&added, 1);
-    }
-
-    MappedText& operator+=(const MappedText& added)
-    {
-        const size_t begin = text.size();
-        text += added.text;
-        for (auto segment : added.segments)
+        const size_t begin = size();
+        text += value.text;
+        for (auto segment : value.segments)
         {
             segment.begin += begin;
             segment.end += begin;
             record(segment);
         }
-        return *this;
-    }
-
-    void copy(std::string_view view, size_t originalOffset)
-    {
-        const size_t begin = text.size();
-        text.append(view.data(), view.size());
-        record({begin, text.size(), originalOffset, originalOffset + view.size(), true});
-    }
-};
-
-MappedText copied(std::string_view view, std::string_view wholeSource)
-{
-    MappedText result;
-    result.originBegin = size_t(view.data() - wholeSource.data());
-    result.originEnd = result.originBegin + view.size();
-    result.copy(view, result.originBegin);
-    return result;
-}
-
-MappedText rewriteRange(std::string_view source, std::string_view wholeSource, size_t baseOffset, bool& changed);
-
-MappedText rewriteSubview(std::string_view view, std::string_view wholeSource, bool& changed)
-{
-    const size_t offset = static_cast<size_t>(view.data() - wholeSource.data());
-    MappedText result = rewriteRange(view, wholeSource, offset, changed);
-    result.anchor(offset + view.size(), offset + view.size());
-    // Clause trimming can remove the newline that terminates a trailing line comment.
-    // Restore that lexical boundary before appending generated statements. Scan literals too:
-    // a textual rfind("--") would misclassify strings and closed long comments.
-    Scan scan{view};
-    for (size_t i = 0; i < view.size();)
-    {
-        const size_t skipped = scan.skipLiteralOrComment(i);
-        if (skipped == view.size() && view[i] == '-' && i + 1 < view.size() && view[i + 1] == '-'
-            && scan.longBracket(i + 2) == i + 2)
-            result += '\n';
-        i = skipped == i ? i + 1 : skipped;
-    }
-    return result;
-}
-
-struct LoweredGenerator
-{
-    MappedText binding;
-    MappedText source;
-    std::vector<MappedText> predicates;
-    size_t begin;
-    size_t end;
-};
-
-void emitProjection(MappedText& result, const std::string& stem, const MappedText& project)
-{
-    result.anchor(project.originBegin, project.originEnd);
-    const std::string value = stem + "_value";
-    result += "local ";
-    result += value;
-    result += " = ";
-    result += project;
-    result += " if ";
-    result += value;
-    result += " == nil then error(\"L3i comprehension projection produced nil; filter nil explicitly\") end ";
-}
-
-void emitGeneratorNest(MappedText& result, const std::vector<LoweredGenerator>& generators, size_t level, const std::string& stem,
-    const std::string& out, const std::string& count, const std::string& sum, const MappedText& project, Consumer consumer)
-{
-    const LoweredGenerator& generator = generators[level];
-    result.anchor(generator.begin, generator.end);
-    const std::string suffix = "_g" + std::to_string(level);
-    const std::string src = stem + suffix + "_src";
-    const std::string len = stem + suffix + "_len";
-    const std::string index = stem + suffix + "_i";
-
-    result += "local ";
-    result += src;
-    result += " = ";
-    result += generator.source;
-    result += " local ";
-    result += len;
-    result += " = #";
-    result += src;
-    result += " for ";
-    result += index;
-    result += " = 1, ";
-    result += len;
-    result += " do local ";
-    result += generator.binding;
-    result += " = ";
-    result += src;
-    result += "[";
-    result += index;
-    result += "] ";
-
-    for (const MappedText& predicate : generator.predicates)
-    {
-        result.anchor(predicate.originBegin, predicate.originEnd);
-        result += "if ";
-        result += predicate;
-        result += " then ";
-    }
-
-    if (level + 1 < generators.size())
-    {
-        emitGeneratorNest(result, generators, level + 1, stem, out, count, sum, project, consumer);
-    }
-    else
-    {
-        emitProjection(result, stem, project);
-        if (consumer == Consumer::Sum)
+        for (auto site : value.sites)
         {
-            result += sum;
-            result += " += ";
-            result += stem;
-            result += "_value ";
-        }
-        else
-        {
-            result += count;
-            result += " += 1 ";
-            if (consumer == Consumer::Materialize)
+            shift(site.call, begin);
+            shift(site.projection, begin);
+            for (auto& clause : site.clauses)
             {
-                result += out;
-                result += "[";
-                result += count;
-                result += "] = ";
-                result += stem;
-                result += "_value ";
+                shift(clause.binding, begin);
+                shift(clause.expression, begin);
             }
+            sites.push_back(std::move(site));
         }
     }
+    void copy(std::string_view source, Range range)
+    {
+        const size_t begin = size();
+        text.append(source.data() + range.begin, range.end - range.begin);
+        record({begin, size(), range.begin, range.end, true});
+    }
+};
 
-    result.anchor(result.originEnd - 1, result.originEnd);
-    for (size_t i = 0; i < generator.predicates.size(); ++i)
-        result += "end ";
-    result += "end ";
-}
-
-MappedText lower(const Parsed& parsed, std::string_view wholeSource, size_t offset, size_t beginOffset, size_t endOffset,
-    bool& nestedChanged, Consumer consumer)
+class Lowerer
 {
-    bool projectChanged = false;
-    const MappedText project = rewriteSubview(parsed.project, wholeSource, projectChanged);
-    nestedChanged = nestedChanged || projectChanged;
+public:
+    Lowerer(std::string_view source, const Document& document, bool recovery, bool fuse)
+        : source(source), document(document), recovery(recovery), fuse(fuse) {}
 
-    std::vector<LoweredGenerator> generators;
-    generators.reserve(parsed.generators.size());
-    for (const Generator& generator : parsed.generators)
+    Text range(Range input)
     {
-        LoweredGenerator lowered;
-        lowered.binding = copied(generator.binding, wholeSource);
-        lowered.begin = size_t(generator.clause.data() - wholeSource.data());
-        lowered.end = lowered.begin + generator.clause.size();
-
-        bool sourceChanged = false;
-        lowered.source = rewriteSubview(generator.source, wholeSource, sourceChanged);
-        nestedChanged = nestedChanged || sourceChanged;
-
-        lowered.predicates.reserve(generator.predicates.size());
-        for (const std::string_view predicate : generator.predicates)
+        Text result;
+        size_t copied = input.begin;
+        auto it = std::lower_bound(document.comprehensions.begin(), document.comprehensions.end(), input.begin,
+            [](const Comprehension& node, size_t begin) { return node.open.begin < begin; });
+        for (; it != document.comprehensions.end() && it->open.begin < input.end; ++it)
         {
-            bool predicateChanged = false;
-            lowered.predicates.push_back(rewriteSubview(predicate, wholeSource, predicateChanged));
-            nestedChanged = nestedChanged || predicateChanged;
+            if (it->range.begin < copied || it->range.end > input.end || it->range.end <= it->range.begin)
+                continue;
+            const bool count = fuse && !it->lengthPrefix.empty() && it->lengthPrefix.begin >= copied;
+            const bool sum = !it->sumPrefix.empty() && it->sumPrefix.begin >= copied;
+            const size_t begin = sum ? it->sumPrefix.begin : count ? it->lengthPrefix.begin : it->range.begin;
+            result.copy(source, {copied, begin});
+            result.append(comprehension(size_t(it - document.comprehensions.begin()), count, sum));
+            copied = it->range.end;
         }
-        generators.push_back(std::move(lowered));
-    }
-
-    const std::string stem = uniqueStem(wholeSource, offset);
-    const std::string out = stem + "_out";
-    const std::string count = stem + "_n";
-    const std::string sum = stem + "_sum";
-
-    // One generator with no filters has an exact output length.  Preserve the strongest possible
-    // lowering shape and write by source index directly: no cursor increment in the hot loop.
-    const bool exactDense = generators.size() == 1 && generators[0].predicates.empty();
-
-    MappedText result;
-    result.originBegin = beginOffset;
-    result.originEnd = endOffset;
-    result.anchor(beginOffset, endOffset);
-    size_t reserve = project.size() + 320;
-    for (const LoweredGenerator& generator : generators)
-    {
-        reserve += generator.binding.size() + generator.source.size() + 96;
-        for (const MappedText& predicate : generator.predicates)
-            reserve += predicate.size() + 16;
-    }
-    result.reserve(reserve);
-    result += "(function() ";
-
-    if (exactDense)
-    {
-        result.anchor(generators[0].begin, generators[0].end);
-        const std::string src = stem + "_g0_src";
-        const std::string len = stem + "_g0_len";
-        const std::string index = stem + "_g0_i";
-        result += "local ";
-        result += src;
-        result += " = ";
-        result += generators[0].source;
-        result += " local ";
-        result += len;
-        result += " = #";
-        result += src;
-        result += " ";
-        if (consumer == Consumer::Count)
-        {
-            result += "local ";
-            result += count;
-            result += " = 0 ";
-        }
-        else if (consumer == Consumer::Sum)
-        {
-            result += "local ";
-            result += sum;
-            result += " = 0 ";
-        }
-        else
-        {
-            result += "local ";
-            result += out;
-            result += " = table.create(";
-            result += len;
-            // table.create's omitted fill parameter infers {unknown} with Luau's new solver.
-            // Give the fresh allocation the unsealed builder type of an empty literal, so indexed
-            // writes infer the checked projection type. typeof's literal is never executed.
-            result += ") :: typeof({}) ";
-        }
-        result += "for ";
-        result += index;
-        result += " = 1, ";
-        result += len;
-        result += " do local ";
-        result += generators[0].binding;
-        result += " = ";
-        result += src;
-        result += "[";
-        result += index;
-        result += "] ";
-        emitProjection(result, stem, project);
-        if (consumer == Consumer::Count)
-        {
-            result += count;
-            result += " += 1 ";
-        }
-        else if (consumer == Consumer::Sum)
-        {
-            result += sum;
-            result += " += ";
-            result += stem;
-            result += "_value ";
-        }
-        else
-        {
-            result += out;
-            result += "[";
-            result += index;
-            result += "] = ";
-            result += stem;
-            result += "_value ";
-        }
-        result.anchor(endOffset - 1, endOffset);
-        result += "end return ";
-        result += consumer == Consumer::Count ? count : consumer == Consumer::Sum ? sum : out;
-        result += " end)()";
+        result.copy(source, {copied, input.end});
         return result;
     }
 
-    // Filtered and/or nested forms use one dense output cursor.  Keep the common one-generator
-    // filtered case just as tight as the handwritten loop: evaluate the source once, preallocate to
-    // its exact upper bound, and avoid a second alias/length pair.
-    if (generators.size() == 1)
+private:
+    std::string_view source;
+    const Document& document;
+    bool recovery;
+    bool fuse;
+
+    std::string stem(size_t offset) const
     {
-        const LoweredGenerator& generator = generators[0];
-        result.anchor(generator.begin, generator.end);
-        const std::string src = stem + "_g0_src";
-        const std::string len = stem + "_g0_len";
-        const std::string index = stem + "_g0_i";
-        result += "local ";
-        result += src;
-        result += " = ";
-        result += generator.source;
-        result += " local ";
-        result += len;
-        result += " = #";
-        result += src;
-        result += " local ";
-        if (consumer == Consumer::Materialize)
+        for (size_t salt = 0;; ++salt)
         {
-            result += out;
-            result += " = table.create(";
-            result += len;
-            result += ") :: typeof({}) local ";
-            result += count;
-            result += " = 0 ";
+            std::string name = "__l3i_comp_" + std::to_string(offset);
+            if (salt)
+                name += "_" + std::to_string(salt);
+            if (source.find(name) == std::string_view::npos)
+                return name;
         }
-        else if (consumer == Consumer::Count)
-        {
-            result += count;
-            result += " = 0 ";
-        }
-        else
-        {
-            result += sum;
-            result += " = 0 ";
-        }
-        result += "for ";
-        result += index;
-        result += " = 1, ";
-        result += len;
-        result += " do local ";
-        result += generator.binding;
-        result += " = ";
-        result += src;
-        result += "[";
-        result += index;
-        result += "] ";
-        for (const MappedText& predicate : generator.predicates)
-        {
-            result.anchor(predicate.originBegin, predicate.originEnd);
-            result += "if ";
-            result += predicate;
-            result += " then ";
-        }
-        emitProjection(result, stem, project);
-        if (consumer == Consumer::Sum)
-        {
-            result += sum;
-            result += " += ";
-            result += stem;
-            result += "_value ";
-        }
-        else
-        {
-            result += count;
-            result += " += 1 ";
-            if (consumer == Consumer::Materialize)
-            {
-                result += out;
-                result += "[";
-                result += count;
-                result += "] = ";
-                result += stem;
-                result += "_value ";
-            }
-        }
-        result.anchor(endOffset - 1, endOffset);
-        for (size_t i = 0; i < generator.predicates.size(); ++i)
-            result += "end ";
-        result += "end ";
-    }
-    else
-    {
-        // Nested generators can have data-dependent cardinality and inner sources may refer to the
-        // outer binding.  Evaluate each source exactly once at its natural nesting level and grow a
-        // dense result table through one output cursor.
-        if (consumer == Consumer::Materialize)
-        {
-            result += "local ";
-            result += out;
-            result += " = {} local ";
-            result += count;
-            result += " = 0 ";
-        }
-        else if (consumer == Consumer::Count)
-        {
-            result += "local ";
-            result += count;
-            result += " = 0 ";
-        }
-        else
-        {
-            result += "local ";
-            result += sum;
-            result += " = 0 ";
-        }
-        emitGeneratorNest(result, generators, 0, stem, out, count, sum, project, consumer);
     }
 
-    result.anchor(endOffset - 1, endOffset);
-    result += "return ";
-    result += consumer == Consumer::Count ? count : consumer == Consumer::Sum ? sum : out;
-    result += " end)()";
-    return result;
-}
-
-bool startsComprehension(std::string_view source, size_t open)
-{
-    // `[` has already been confirmed not to begin a long bracket.  Only `[ <trivia> for` belongs
-    // to this surface language, which keeps ordinary indexing/table expressions on the cheap path.
-    size_t cursor = skipSpaceAndComments(source, open + 1);
-    return cursor < source.size() && keywordAt(source, cursor, "for");
-}
-
-MappedText rewriteRange(std::string_view source, std::string_view wholeSource, size_t baseOffset, bool& changed)
-{
-    Scan scan{source};
-    MappedText result;
-    result.originBegin = baseOffset;
-    result.originEnd = baseOffset + source.size();
-    result.reserve(source.size());
-    size_t copied = 0;
-    size_t lengthPrefix = std::string_view::npos;
-    size_t sumPrefix = std::string_view::npos;
-
-    for (size_t i = 0; i < source.size();)
+    Range expression(Text& out, Range original, std::string_view missing, std::string_view suffix = {})
     {
-        const size_t skipped = scan.skipLiteralOrComment(i);
-        if (skipped != i)
+        out.anchor = original;
+        if (recovery && !original.empty())
         {
-            lengthPrefix = std::string_view::npos;
-            // Comments are trivia and may separate the JSL reducer token from its comprehension.
-            // String literals are expressions, so they terminate any pending reducer prefix.
-            const bool isComment = source[i] == '-' && i + 1 < source.size() && source[i + 1] == '-';
-            if (!isComment)
-                sumPrefix = std::string_view::npos;
-            i = skipped;
-            continue;
+            out.anchor = {original.begin, original.begin};
+            out += "("; // Fence ordinary parser recovery away from generated statements.
+            out.anchor = original;
         }
-        if (source[i] != '[' || scan.longBracket(i) != i)
+        const size_t begin = out.size();
+        if (original.empty())
+            out += missing; // Tooling only: strict lowering never reaches a structural hole.
+        else
+            out.append(range(original));
+        if (!suffix.empty())
         {
-            if (std::isspace(static_cast<unsigned char>(source[i])) != 0)
-            {
-                ++i;
+            out.anchor = {original.end, original.end};
+            out += suffix;
+            out.anchor = original;
+        }
+        const size_t end = out.size();
+        if (recovery && !original.empty())
+        {
+            out.anchor = {original.end, original.end};
+            out += ")";
+            out.anchor = original;
+        }
+        return {begin, end};
+    }
+
+    void projection(Text& out, const Comprehension& node, const std::string& name, ComprehensionSite& site)
+    {
+        out.anchor = node.projection;
+        out += "local " + name + "_value = ";
+        site.projection = expression(out, node.projection, "(nil :: any)", node.projectionSuffix);
+        out += " if " + name + "_value == nil then error(\"L3i comprehension projection produced nil; filter nil explicitly\") end ";
+    }
+
+    void comments(Text& out, const Comprehension& node, size_t begin)
+    {
+        // Preserve trivia removed with surface punctuation. Comments inside expressions
+        // remain copied there; nested expressions preserve their own clause trivia.
+        auto it = std::lower_bound(document.comments.begin(), document.comments.end(), begin,
+            [](Range comment, size_t at) { return comment.begin < at; });
+        bool newline = false;
+        for (; it != document.comments.end() && it->end <= node.range.end; ++it)
+        {
+            bool copied = it->begin >= node.projection.begin && it->end <= node.projection.end;
+            for (const Clause& clause : node.clauses)
+                copied = copied || (it->begin >= clause.expression.begin && it->end <= clause.expression.end);
+            if (copied)
                 continue;
-            }
-
-            if (Scan::identStart(source[i]))
+            if (!newline)
             {
-                const size_t begin = i++;
-                while (i < source.size() && Scan::identContinue(source[i]))
-                    ++i;
-                lengthPrefix = std::string_view::npos;
-                if (source.substr(begin, i - begin) == "sum")
+                out += "\n";
+                newline = true;
+            }
+            out.copy(source, *it);
+            out += "\n";
+        }
+    }
+
+    Text comprehension(size_t index, bool count, bool sum)
+    {
+        const Comprehension& node = document.comprehensions[index];
+        const std::string name = stem(node.open.begin);
+        const bool scalar = count || sum;
+        const std::string output = name + "_out", cursor = name + (sum ? "_sum" : "_n");
+        Text out;
+        out.anchor = {sum ? node.sumPrefix.begin : count ? node.lengthPrefix.begin : node.range.begin, node.range.end};
+        if (node.postfix)
+            out += "["; // Recovery-only index fence; strict compilation rejects the document.
+        const size_t callBegin = out.size();
+        out += "(function() ";
+        comments(out, node, out.anchor.begin);
+        ComprehensionSite site;
+        site.comprehension = index;
+        site.clauses.resize(node.clauses.size());
+        const bool exact = node.clauses.size() == 1 && node.clauses[0].kind == ClauseKind::Generator;
+        size_t generators = 0;
+        for (const Clause& clause : node.clauses)
+            generators += clause.kind == ClauseKind::Generator;
+        if (generators != 1 && !scalar)
+        {
+            out += "local " + output + " = {} ";
+        }
+        // The one-source cases need the source before allocation. Emit them separately
+        // to preserve the proven bytecode shape, not a second recognition path.
+        if (generators == 1)
+        {
+            const Clause& generator = node.clauses.front();
+            out.anchor = generator.range;
+            out += "local " + name + "_g0_src = ";
+            site.clauses[0].expression = expression(out, generator.expression, "({} :: {any})", generator.expressionSuffix);
+            out += " local " + name + "_g0_len = #" + name + "_g0_src ";
+            if (!scalar)
+                out += "local " + output + " = table.create(" + name + "_g0_len) :: typeof({}) ";
+            if (!exact || scalar)
+                out += "local " + cursor + " = 0 ";
+            out += "for " + name + "_g0_i = 1, " + name + "_g0_len do local ";
+            const size_t binding = out.size();
+            if (generator.binding.empty())
+                out += name + "_missing";
+            else
+                out.copy(source, generator.binding);
+            site.clauses[0].binding = {binding, out.size()};
+            out += " = " + name + "_g0_src[" + name + "_g0_i] ";
+            for (size_t i = 1; i < node.clauses.size(); ++i)
+            {
+                out.anchor = node.clauses[i].expression;
+                out += "if ";
+                site.clauses[i].expression = expression(out, node.clauses[i].expression, "true", node.clauses[i].expressionSuffix);
+                out += " then ";
+            }
+            projection(out, node, name, site);
+            if (!exact || scalar)
+                out += cursor + " += " + (sum ? name + "_value " : "1 ");
+            if (!scalar)
+                out += output + "[" + (exact ? name + "_g0_i" : cursor) + "] = " + name + "_value ";
+            out.anchor = node.close;
+            for (size_t i = 1; i < node.clauses.size(); ++i)
+                out += "end ";
+            out += "end ";
+        }
+        else
+        {
+            out += "local " + cursor + " = 0 ";
+            size_t level = 0;
+            for (size_t i = 0; i < node.clauses.size(); ++i)
+            {
+                const Clause& clause = node.clauses[i];
+                out.anchor = clause.range;
+                if (clause.kind == ClauseKind::Filter)
                 {
-                    size_t prior = begin;
-                    while (prior > copied && std::isspace(static_cast<unsigned char>(source[prior - 1])) != 0)
-                        --prior;
-                    const bool memberAccess = prior > copied && (source[prior - 1] == '.' || source[prior - 1] == ':');
-                    sumPrefix = memberAccess ? std::string_view::npos : begin;
+                    out += "if ";
+                    site.clauses[i].expression = expression(out, clause.expression, "true", clause.expressionSuffix);
+                    out += " then ";
+                    continue;
                 }
+                const std::string prefix = name + "_g" + std::to_string(level++);
+                out += "local " + prefix + "_src = ";
+                site.clauses[i].expression = expression(out, clause.expression, "({} :: {any})", clause.expressionSuffix);
+                out += " local " + prefix + "_len = #" + prefix + "_src for " + prefix + "_i = 1, " + prefix + "_len do local ";
+                const size_t binding = out.size();
+                if (clause.binding.empty())
+                    out += prefix + "_missing";
                 else
-                    sumPrefix = std::string_view::npos;
-                continue;
+                    out.copy(source, clause.binding);
+                site.clauses[i].binding = {binding, out.size()};
+                out += " = " + prefix + "_src[" + prefix + "_i] ";
             }
-
-            lengthPrefix = source[i] == '#' ? i : std::string_view::npos;
-            sumPrefix = std::string_view::npos;
-            ++i;
-            continue;
+            projection(out, node, name, site);
+            out += cursor + " += " + (sum ? name + "_value " : "1 ");
+            if (!scalar)
+                out += output + "[" + cursor + "] = " + name + "_value ";
+            out.anchor = node.close;
+            for (size_t i = 0; i < node.clauses.size(); ++i)
+                out += "end ";
         }
-
-        // `[for` is the only collection-expression sentinel.  Do not even match ordinary index
-        // brackets here; continuing the outer scan naturally discovers a nested `[for` while making
-        // the common `array[i]` case nearly free.
-        if (!startsComprehension(source, i))
-        {
-            lengthPrefix = std::string_view::npos;
-            sumPrefix = std::string_view::npos;
-            ++i;
-            continue;
-        }
-
-        const size_t close = matchingSquare(source, i);
-        if (close == std::string_view::npos)
-        {
-            lengthPrefix = std::string_view::npos;
-            sumPrefix = std::string_view::npos;
-            ++i;
-            continue;
-        }
-
-        const std::string_view content = source.substr(i + 1, close - i - 1);
-        Parsed parsed{};
-        if (parseComprehension(content, parsed))
-        {
-            // Fuse the unary length form directly: `#[for ... => ...]` returns the number of
-            // accepted projections without allocating a result table. Projection expressions still
-            // run exactly once and still trip the non-nil invariant, so observable effects match the
-            // materialized comprehension followed by `#`.
-            Consumer consumer = Consumer::Materialize;
-            size_t replaceBegin = i;
-            size_t prefix = i;
-            while (prefix > copied && std::isspace(static_cast<unsigned char>(source[prefix - 1])) != 0)
-                --prefix;
-            // The hash must have been seen as code, not skipped as part of a comment/string.
-            if (prefix > copied && source[prefix - 1] == '#' && lengthPrefix == prefix - 1)
-            {
-                consumer = Consumer::Count;
-                replaceBegin = prefix - 1;
-            }
-            else if (sumPrefix != std::string_view::npos)
-            {
-                consumer = Consumer::Sum;
-                replaceBegin = sumPrefix;
-            }
-
-            result.copy(source.substr(copied, replaceBegin - copied), baseOffset + copied);
-            bool nested = false;
-            result += lower(parsed, wholeSource, baseOffset + i, baseOffset + replaceBegin, baseOffset + close + 1, nested, consumer);
-            changed = true;
-            copied = close + 1;
-            lengthPrefix = std::string_view::npos;
-            sumPrefix = std::string_view::npos;
-            i = close + 1;
-            continue;
-        }
-
-        // Malformed candidate: leave it for stock Luau diagnostics, but keep scanning its interior in
-        // case it contains an independently valid nested comprehension.
-        lengthPrefix = std::string_view::npos;
-        sumPrefix = std::string_view::npos;
-        ++i;
+        out.anchor = node.close;
+        out += "return " + (scalar ? cursor : output) + " end)()";
+        site.call = {callBegin, out.size()};
+        if (node.postfix)
+            out += "]";
+        out.sites.push_back(std::move(site));
+        return out;
     }
-
-    if (!changed)
-        return ::copied(source, wholeSource);
-    result.copy(source.substr(copied), baseOffset + copied);
-    return result;
-}
-} // namespace
-
-L3i::Surface::LoweredSource L3i::Surface::lower(std::string_view input)
-{
-    if (input.find("=>") == std::string_view::npos || input.find('[') == std::string_view::npos
-        || input.find("for") == std::string_view::npos)
-        return {std::string(input), {}};
-    bool changed = false;
-    MappedText output = rewriteRange(input, input, 0, changed);
-    if (!changed)
-        return {std::move(output.text), {}};
-    SourceMap map(input, output.text, std::move(output.segments));
-    return {std::move(output.text), std::move(map)};
+};
 }
 
-static char* rewriteSurfaceSyntax(const char* source, size_t size, size_t* outsize)
+LoweredSource lower(std::string_view source, bool recovery, bool fuseLength)
 {
-    if (outsize)
-        *outsize = 0;
-    if (!source || !outsize)
-        return nullptr;
-
-    std::string_view input(source, size);
-    // Cheap rejection for the overwhelmingly common path.  The exact `[for` sentinel may contain
-    // whitespace/comments, so avoid an expensive regex/search and just require both ingredients.
-    if (input.find("=>") == std::string_view::npos || input.find('[') == std::string_view::npos
-        || input.find("for") == std::string_view::npos)
-        return nullptr;
-
-    const auto lowered = L3i::Surface::lower(input);
-    if (lowered.map.empty())
-        return nullptr;
-    const std::string& output = lowered.source;
-
-    char* memory = static_cast<char*>(std::malloc(output.size()));
-    if (!memory)
-        return nullptr;
-    std::memcpy(memory, output.data(), output.size());
-    *outsize = output.size();
-    return memory;
+    Document document = parseSurface(source);
+    if (document.comprehensions.empty() || (!recovery && !document.errors.empty()))
+        return {std::string(source), {}, std::move(document), {}};
+    Lowerer lowerer(source, document, recovery, fuseLength);
+    Text output = lowerer.range({0, source.size()});
+    SourceMap map(source, output.text, std::move(output.segments));
+    return {std::move(output.text), std::move(map), std::move(document), std::move(output.sites)};
 }
-
-extern "C" char* l3i_rewrite_surface_syntax(const char* source, size_t size, size_t* outsize)
-{
-    if (outsize)
-        *outsize = 0;
-    try
-    {
-        return rewriteSurfaceSyntax(source, size, outsize);
-    }
-    catch (...)
-    {
-        // This legacy text-only seam cannot report allocation failures separately
-        // from unchanged input, but it must never unwind into its Rust test caller.
-        return nullptr;
-    }
 }

@@ -11,26 +11,6 @@ use crate::raw::ffi;
 use crate::stack::Scope;
 use crate::value::{Function, Value};
 
-#[cfg(test)]
-unsafe extern "C" {
-    /// L3i surface syntax pass. Returns malloc-owned rewritten source, or null when unchanged.
-    fn l3i_rewrite_surface_syntax(source: *const c_char, size: usize, outsize: *mut usize) -> *mut c_char;
-}
-
-#[cfg(test)]
-fn rewrite_surface_syntax(source: &str) -> Option<Vec<u8>> {
-    let mut size = 0usize;
-    // SAFETY: source is a valid byte range for the call. The returned allocation, when non-null,
-    // has `size` bytes and uses C malloc; copy it before releasing it with the same CRT `free`.
-    let rewritten = unsafe { l3i_rewrite_surface_syntax(source.as_ptr().cast(), source.len(), &mut size) };
-    if rewritten.is_null() {
-        return None;
-    }
-    let bytes = unsafe { std::slice::from_raw_parts(rewritten.cast::<u8>(), size) }.to_vec();
-    unsafe { ffi::free(rewritten.cast()) };
-    Some(bytes)
-}
-
 /// Luau compiler policy. Defaults match OpenMW: optimisation 2, line info and function names,
 /// no type information, no coverage.
 #[derive(Clone)]
@@ -316,63 +296,3 @@ pub trait LoadScope: Scope + Sized {
 }
 
 impl<S: Scope> LoadScope for S {}
-
-#[cfg(test)]
-mod comprehension_tests {
-    use super::rewrite_surface_syntax;
-
-    #[test]
-    fn leaves_ordinary_luau_untouched() {
-        assert!(rewrite_surface_syntax("local x = values[1]").is_none());
-        assert!(rewrite_surface_syntax("local t = { 1, 2, 3 }").is_none());
-    }
-
-    #[test]
-    fn lowers_dense_list_comprehension() {
-        let lowered = rewrite_surface_syntax("return [for x in values => x * x]").expect("rewritten");
-        let text = String::from_utf8(lowered).unwrap();
-        assert!(text.contains("table.create"), "{text}");
-        assert!(text.contains("for __l3i_comp_7_g0_i = 1"), "{text}");
-        assert!(text.contains("local x = __l3i_comp_7_g0_src[__l3i_comp_7_g0_i]"), "{text}");
-        assert!(text.contains("= x * x"), "{text}");
-    }
-
-    #[test]
-    fn lowers_filter_in_one_loop() {
-        let lowered = rewrite_surface_syntax("return [for x in values if x.active => x.id]").expect("rewritten");
-        let text = String::from_utf8(lowered).unwrap();
-        assert!(text.contains("if x.active then"), "{text}");
-        assert!(text.contains("+= 1"), "{text}");
-        assert_eq!(text.matches("for __l3i_comp_7_g0_i").count(), 1, "{text}");
-    }
-
-    #[test]
-    fn projections_are_nil_checked_once() {
-        let lowered = rewrite_surface_syntax("return [for x in values => maybe(x)]").expect("rewritten");
-        let text = String::from_utf8(lowered).unwrap();
-        assert!(text.contains("local __l3i_comp_7_value = maybe(x)"), "{text}");
-        assert!(text.contains("comprehension projection produced nil"), "{text}");
-        assert_eq!(text.matches("maybe(x)").count(), 1, "{text}");
-    }
-
-    #[test]
-    fn length_form_fuses_without_result_table() {
-        let lowered = rewrite_surface_syntax("return #[for x in values if x.active => effect(x)]").expect("rewritten");
-        let text = String::from_utf8(lowered).unwrap();
-        assert!(!text.contains("table.create"), "{text}");
-        assert!(!text.contains("_out"), "{text}");
-        assert!(text.contains("local __l3i_comp_8_value = effect(x)"), "{text}");
-        assert!(text.contains("return __l3i_comp_8_n"), "{text}");
-    }
-
-    #[test]
-    fn ignores_for_inside_nested_expression_and_strings() {
-        let lowered = rewrite_surface_syntax(
-            "return [for x in values if g({ ok = true }, x) => f({ label = 'for x in nope' }, x)]",
-        )
-        .expect("rewritten");
-        let text = String::from_utf8(lowered).unwrap();
-        assert!(text.contains("'for x in nope'"), "{text}");
-        assert!(text.contains("f({ label = 'for x in nope' }, x)"), "{text}");
-    }
-}

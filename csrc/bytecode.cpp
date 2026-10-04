@@ -35,6 +35,23 @@ char* compileImpl(const char* source, size_t size, lua_CompileOptions* options, 
             std::memcpy(&compileOptions, options, sizeof(compileOptions));
         }
         auto lowered = L3i::Surface::lower(std::string_view(source, size));
+        if (!lowered.document.errors.empty())
+        {
+            const auto& error = lowered.document.errors.front();
+            Luau::Position begin(0, 0), end(0, 0);
+            for (size_t i = 0; i < error.range.end; ++i)
+            {
+                if (i == error.range.begin)
+                    begin = end;
+                if (source[i] == '\n')
+                    end = Luau::Position(end.line + 1, 0);
+                else
+                    ++end.column;
+            }
+            if (error.range.empty())
+                begin = end;
+            throw Luau::ParseError(Luau::Location(begin, end), error.message);
+        }
         Luau::Allocator allocator;
         Luau::AstNameTable names(allocator);
         Luau::ParseResult parsed = Luau::Parser::parse(lowered.source.data(), lowered.source.size(), names, allocator);
