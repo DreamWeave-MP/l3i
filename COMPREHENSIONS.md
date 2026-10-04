@@ -171,11 +171,13 @@ UTF-8 byte columns, CRLF, source snapshots, and cursor requests inside comprehen
 Known line-only references embedded in diagnostic prose are mapped when unambiguous
 and explicitly qualified when lowering has erased that precision.
 
-Other prototype boundaries remain: source-wide textual stem hygiene, grouped
-top-level conditional source/filter expressions, opaque backtick interpolation,
-malformed-form errors delegated to stock Luau, and the raw `@dream/luau` parser
-remaining a stock-Luau parser. Generated `table.create` and `error` references use
-ordinary lexical/global lookup; rebinding standard helpers is not hygienically isolated.
+The old recognizer has been deleted and replaced by one stock-token surface frontend.
+Compilation is strict; Analysis and `@dream/luau` use structural recovery. Ordinary
+conditionals/function literals belong to Luau, and comprehensions inside interpolation
+expressions are recognized. `@dream/luau` now defaults to genuine source nodes rather
+than generated wrappers. See [the surface tooling contract](SURFACE_TOOLING.md).
+Remaining boundaries include textual lowering hygiene, bounded/fatal parser recovery,
+and generated `table.create`/`error` references using ordinary lexical/global lookup.
 
 ## Baseline validation and next boundary
 

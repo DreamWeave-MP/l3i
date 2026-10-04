@@ -1,5 +1,5 @@
 // Standalone allocation-failure probe; never link this global-new override into the VM host.
-// Link with bytecode.cpp, surface_syntax.cpp, source_map.cpp, source_locations.cpp and the
+// Link with bytecode.cpp, surface_frontend.cpp, surface_syntax.cpp, source_map.cpp, source_locations.cpp and the
 // Luau Compiler/Ast/Bytecode/Common archives. See SOURCE_MAPPING.md for the command.
 #include "luacode.h"
 

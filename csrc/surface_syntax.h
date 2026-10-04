@@ -28,7 +28,7 @@ struct LoweredSource
 };
 
 // Shared compiler/tooling seam: all coordinates in map refer to the original input.
-// Recovery is analysis-only. Strict compilation must reject document errors before parsing.
+// Recovery is tooling-only. Strict compilation must reject document errors before parsing.
 // Syntax tooling disables count fusion to retain unary length in the source tree.
 LoweredSource lower(std::string_view source, bool recovery = false, bool fuseLength = true);
 }

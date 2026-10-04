@@ -689,8 +689,9 @@ pub struct ParseReport {
 }
 
 /// Lowers and parses `source` standalone, optionally encoding the Luau AST as JSON.
-/// Diagnostic and AST spans refer to original source. Malformed, unrecognized surface
-/// syntax still uses stock Luau parser recovery; mapping does not add a second parser.
+/// Diagnostic and AST spans refer to original source. The shared surface frontend recovers
+/// incomplete clauses before ordinary Luau parsing; the JSON still describes lowered code.
+/// For source-level comprehension nodes, use the `@dream/luau` syntax extension.
 pub fn parse(source: &str, with_json: bool) -> ParseReport {
     let mut errors: Vec<Diagnostic> = Vec::new();
     let mut json = String::new();

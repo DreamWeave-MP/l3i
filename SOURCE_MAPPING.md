@@ -80,17 +80,19 @@ breakpoint sites. At lower optimization levels generated wrappers and locals may
 remain visible. Coverage includes synthetic instructions on their chosen anchors;
 this is original-line attribution, not a new high-level comprehension coverage model.
 
-Mapping is not parser recovery. A malformed form that the lexical recognizer cannot
-lower is handed to stock Luau, with identity mapping for that untouched text. An
-unfinished comprehension can therefore have poor diagnostics/completion even though
-the coordinates are correct. Removed surface punctuation has only a nearest-copy
-cursor fallback. Grouped conditional-expression and backtick-interpolation limitations
-also remain. The raw `@dream/luau` parser intentionally remains a stock-Luau parser;
-use the Analysis parser for the mapped surface pipeline. CST preservation is not provided.
+Mapping and parsing remain separate powers, but the shared surface frontend now
+provides structural recovery and explicit expression/binding sites. Analysis maps
+hole cursors to their correct scope, preserving typed member completion. `@dream/luau`
+defaults to source-level comprehension nodes; `{dialect = "luau"}` explicitly selects
+stock syntax. The earlier recognizer and its text-only C seam were deleted, not kept
+as compatibility paths. See [SURFACE_TOOLING.md](SURFACE_TOOLING.md) for recovery and
+source-tree contracts. Fatal/resource-limited recovery can retain less tree detail;
+CST preservation is still not provided.
 
 ## Validation
 
-Completed on the pinned Luau 0.740 checkout:
+Mapping-baseline results on the pinned Luau 0.740 checkout, before the canonical
+frontend replacement (current source-tooling behavior is described in SURFACE_TOOLING.md):
 
 | Gate | Result |
 |---|---|
@@ -125,20 +127,25 @@ cargo test --workspace --all-features
 cargo clippy --workspace --all-targets --all-features -- -W clippy::pedantic -D warnings
 ```
 
-The pure lowering/map test is independent of Cargo and Luau:
+The canonical frontend now uses Luau's lexer/parser library. To run its standalone
+frontend and lowering/map tests, link `surface_frontend.cpp` and the relevant test
+with the Cargo-built Ast/Common/VM archives, as in the fault-probe command below.
+There is no dependency-free duplicate recognizer.
 
 ```bash
-g++ -std=c++17 -O2 -Wall -Wextra -Werror -pedantic -Icsrc \
-  csrc/surface_syntax.cpp csrc/source_map.cpp csrc/surface_syntax_test.cpp \
+clang++ -std=c++17 -O1 -fuse-ld=lld -Wall -Wextra -Werror -pedantic \
+  -isystem luau/Ast/include -isystem luau/Common/include -Icsrc \
+  csrc/surface_frontend.cpp csrc/surface_syntax.cpp csrc/source_map.cpp csrc/surface_syntax_test.cpp \
+  -Wl,--start-group "$LUAU_OUT/libluauast.a" "$LUAU_OUT/libluaucommon.a" \
+  "$LUAU_OUT/libluauvm.a" -Wl,--end-group \
   -o /tmp/opencode/l3i-surface-test
 /tmp/opencode/l3i-surface-test
 ```
 
 It also passes under Clang ASan/UBSan. A separate allocation-failure probe ensures
 compiler/disassembler error serialization cannot throw across the C ABI. Its outer
-exception barrier returns null and output size zero without allocating. The legacy
-text-only seam also contains exceptions; its null result still conflates allocation
-failure and unchanged text, so production compilation uses the richer C++ seam.
+exception barrier returns null and output size zero without allocating. The earlier
+text-only seam and its allocation probes were removed with the old recognizer.
 
 To run the fault probe, set `LUAU_OUT` to the current Cargo build script's `OUT_DIR`
 (shown by `cargo build -vv`), containing the Luau archives. Never link the probe's
@@ -148,7 +155,7 @@ global `operator new` override into the Rust host:
 clang++ -std=c++17 -O1 -fuse-ld=lld -Wall -Wextra -Werror -pedantic \
   -isystem luau/Ast/include -isystem luau/Common/include \
   -isystem luau/Compiler/include -isystem luau/Bytecode/include -Icsrc \
-  csrc/compiler_failure_test.cpp csrc/bytecode.cpp csrc/surface_syntax.cpp \
+  csrc/compiler_failure_test.cpp csrc/bytecode.cpp csrc/surface_frontend.cpp csrc/surface_syntax.cpp \
   csrc/source_map.cpp csrc/source_locations.cpp -Wl,--start-group \
   "$LUAU_OUT/libluaucompiler.a" "$LUAU_OUT/libluauast.a" \
   "$LUAU_OUT/libluaubytecode.a" "$LUAU_OUT/libluaucommon.a" \
@@ -158,6 +165,6 @@ clang++ -std=c++17 -O1 -fuse-ld=lld -Wall -Wextra -Werror -pedantic \
 ```
 
 The completed run covered every allocation budget through parse-error and compile-error
-serialization for both entry points, and both legacy rewrite fixtures. All passed.
+serialization for both entry points. All passed.
 
 The generated representation may move. The user's source remains the reference.
