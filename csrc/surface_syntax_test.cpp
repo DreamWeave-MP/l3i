@@ -99,6 +99,11 @@ int main()
         samePosition(whole.end, positionAt(source, source.size()));
         assert(lowered.map.generatedName("__l3i_comp_123_value"));
         assert(!lowered.map.generatedName("sourceRows"));
+        assert(!lowered.map.originalLine(1)); // Several original clause lines share this generated line.
+        const std::string message = "User number 123, text 'at line 999'; opener at line 2";
+        const std::string mappedMessage = lowered.map.referenceText(message, message.rfind("at line 2"), {1, 0});
+        contains(mappedMessage, "User number 123, text 'at line 999'");
+        contains(mappedMessage, "ambiguous source reference");
     }
     {
         const auto plain = L3i::Surface::lower("local xs = {1}\nreturn xs");

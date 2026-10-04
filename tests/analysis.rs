@@ -487,3 +487,120 @@ fn comprehension_json_preserves_lowered_kinds_with_original_expression_and_annot
         format!("\"name\":\"annotated\",\"isConst\":false,\"type\":\"AstLocal\",{}", json_location(identifier_span));
     assert!(json.contains(&local), "missing user local {local}: {json}");
 }
+
+#[test]
+fn parser_eof_and_secondary_references_are_original_not_lowered() {
+    let source = "local xs = [\n for x in {1}\n => x\n]\nfunction broken()\n return xs";
+    for suffix in ["", "\n"] {
+        let source = format!("{source}{suffix}");
+        let parsed = analysis::parse(&source, false);
+        assert_eq!(parsed.errors.len(), 1, "{parsed:?}");
+        let error = &parsed.errors[0];
+        let (line, column) = source_position(&source, source.len());
+        assert_eq!(
+            error.span,
+            analysis::Span { begin_line: line, begin_column: column, end_line: line, end_column: column }
+        );
+        assert!(error.text.contains("to close 'function' at line 5"), "{error:?}");
+    }
+    let analysis = comprehension_analysis(HashMap::from([("eof", source)]), analysis::Solver::New);
+    let checked = analysis.check("eof", false);
+    assert_eq!(checked.diagnostics.len(), 1, "{checked:?}");
+    assert!(checked.diagnostics[0].text.contains("to close 'function' at line 5"), "{checked:?}");
+}
+
+#[test]
+fn duplicate_type_secondary_location_is_remapped_before_formatting() {
+    let source = concat!(
+        "--!strict\nlocal xs = [\n for x in {1}\n => x\n]\n",
+        "type Repeated = number\n",
+        "type Repeated = string\nreturn xs\n",
+    );
+    for solver in [analysis::Solver::New, analysis::Solver::Old] {
+        let analysis = comprehension_analysis(HashMap::from([("duplicate", source)]), solver);
+        let report = analysis.check("duplicate", false);
+        assert_eq!(report.diagnostics.len(), 1, "{report:?}");
+        let error = &report.diagnostics[0];
+        assert_eq!(error.kind, DiagnosticKind::TypeError);
+        assert_eq!(error.span.begin_line, 6, "{error:?}");
+        assert!(error.text.contains("previously defined at line 6"), "{error:?}");
+    }
+}
+
+#[test]
+fn normal_and_autocomplete_caches_share_the_same_mapped_snapshot() {
+    let old = concat!(
+        "--!strict\nlocal rows: {{oldOnly: number}} = {{oldOnly = 1}}\n",
+        "local result = [for row in rows => row.oldOnly]; local wrong: number = 'old error'\nreturn result\n",
+    );
+    let new = concat!(
+        "--!strict\n\nlocal rows: {{newOnly: number}} = {{newOnly = 2}}\n",
+        "local prefix = [for x in {1} => x]; local result = [for row in rows =>\n",
+        "    row.newOnly]; local wrong: number = 'new error'\nreturn result\n",
+    );
+    let plain = "--!strict\nlocal row: {plainOnly: number} = {plainOnly = 3}\nlocal wrong: number = 'plain error'\nreturn row.plainOnly\n";
+    for solver in [analysis::Solver::New, analysis::Solver::Old] {
+        let source = std::rc::Rc::new(std::cell::RefCell::new(old));
+        let analysis = Analysis::new(
+            ChangingSource(source.clone()),
+            AnalysisOptions { solver, retain_full_type_graphs: true, ..AnalysisOptions::default() },
+        )
+        .unwrap();
+        let check = |expected: &str, token: &str| {
+            let report = analysis.check("snapshot", false);
+            assert_eq!(report.diagnostics.len(), 1, "{solver:?}: {report:?}");
+            // The old solver highlights the local statement; the new one highlights its RHS.
+            let marked = if solver == analysis::Solver::Old {
+                format!("local wrong: number = {token}")
+            } else {
+                token.to_owned()
+            };
+            assert_diagnostic_span(&report.diagnostics[0], expected, &marked);
+        };
+        let complete = |expected: &str, property: &str| {
+            let token = format!("row.{property}");
+            let at = expected.find(&token).unwrap() + "row.".len();
+            let (line, column) = source_position(expected, at);
+            let completions = analysis.autocomplete("snapshot", line, column).unwrap();
+            assert_eq!(completions.context, CompletionContext::Property);
+            let properties: Vec<_> = completions
+                .entries
+                .iter()
+                .filter(|entry| entry.kind == CompletionKind::Property)
+                .map(|entry| entry.name.as_str())
+                .collect();
+            assert_eq!(properties, [property], "{solver:?}: {completions:?}");
+        };
+        check(old, "'old error'");
+        complete(old, "oldOnly");
+        *source.borrow_mut() = new;
+        check(old, "'old error'");
+        complete(old, "oldOnly");
+        analysis.mark_dirty("snapshot");
+        complete(new, "newOnly"); // Autocomplete reparses first; normal checking must follow that map.
+        check(new, "'new error'");
+        *source.borrow_mut() = plain;
+        analysis.mark_dirty("snapshot");
+        check(plain, "'plain error'");
+        complete(plain, "plainOnly");
+        *source.borrow_mut() = old;
+        analysis.clear();
+        complete(old, "oldOnly");
+        check(old, "'old error'");
+    }
+}
+
+#[test]
+fn lint_secondary_line_references_are_mapped_without_rewriting_user_numbers() {
+    let source = concat!(
+        "local padding = [\n for x in {1}\n => x\n]\n",
+        "local duplicated = {\n ['at line 999'] = 999,\n ['at line 999'] = 123\n}\nreturn padding, duplicated\n",
+    );
+    let analysis = comprehension_analysis(HashMap::from([("lint_reference", source)]), analysis::Solver::New);
+    let report = analysis.check("lint_reference", true);
+    let duplicate =
+        report.diagnostics.iter().find(|error| error.name == "TableLiteral").expect("duplicate table field");
+    assert!(duplicate.text.contains("'at line 999'"), "{duplicate:?}");
+    assert!(duplicate.text.contains("previously defined at line 6"), "{duplicate:?}");
+    assert_eq!(duplicate.span.begin_line, 6, "{duplicate:?}");
+}

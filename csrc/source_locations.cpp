@@ -248,6 +248,32 @@ private:
 };
 } // namespace
 
+std::string originalParseMessage(std::string text, Position context, const SourceMap& map)
+{
+    // Match known Luau parser templates, never arbitrary numbers in quoted input.
+    const size_t close = text.find(" (to close ");
+    const size_t got = text.find(", got ");
+    if (text.substr(0, 9) == "Expected " && close != std::string::npos && close < got)
+    {
+        const size_t at = text.find(" at ", close);
+        if (at != std::string::npos && at < got)
+            text = map.referenceText(std::move(text), at + 1, context);
+        const size_t suggestion = text.rfind("; did you forget to close ");
+        if (suggestion != std::string::npos && text.back() == '?')
+        {
+            const size_t suggestedAt = text.find(" at ", suggestion);
+            if (suggestedAt != std::string::npos)
+                text = map.referenceText(std::move(text), suggestedAt + 1, context);
+        }
+    }
+    if (text.find("refers to a class and cannot be used as a variable name") != std::string::npos)
+    {
+        const size_t at = text.rfind("on line ");
+        text = map.referenceText(std::move(text), at, context);
+    }
+    return text;
+}
+
 void remapLocations(Luau::ParseResult& result, const SourceMap& map)
 {
     if (map.empty())
@@ -263,8 +289,9 @@ void remapLocations(Luau::ParseResult& result, const SourceMap& map)
     for (Luau::ParseError& error : result.errors)
     {
         Luau::Location location = error.getLocation();
+        std::string message = originalParseMessage(error.getMessage(), {location.begin.line, location.begin.column}, map);
         remapper.remap(location);
-        error = Luau::ParseError(location, error.getMessage());
+        error = Luau::ParseError(location, std::move(message));
     }
     result.lines = map.originalLines();
 }

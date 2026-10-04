@@ -1,6 +1,7 @@
 #include "source_map.h"
 
 #include <algorithm>
+#include <charconv>
 #include <limits>
 #include <utility>
 
@@ -133,5 +134,63 @@ bool SourceMap::generatedName(std::string_view name) const
 unsigned SourceMap::originalLines() const
 {
     return empty() ? 0 : unsigned(originalStarts.size() - 1 + (!original.empty() && original.back() != '\n'));
+}
+
+std::optional<unsigned> SourceMap::originalLine(unsigned line) const
+{
+    if (empty())
+        return line;
+    if (line >= generatedStarts.size())
+        return std::nullopt;
+    const size_t begin = generatedStarts[line];
+    const size_t end = line + 1 < generatedStarts.size() ? generatedStarts[line + 1] : generatedSize;
+    if (begin == generatedSize)
+        return position(original.size(), originalStarts).line;
+    std::optional<unsigned> result;
+    for (const Segment& segment : segments)
+    {
+        if (!segment.copied || segment.end <= begin || segment.begin >= end)
+            continue;
+        const size_t lo = std::max(begin, segment.begin);
+        const size_t hi = std::min(end, segment.end);
+        const unsigned first = position(segment.originalBegin + lo - segment.begin, originalStarts).line;
+        const unsigned last = position(segment.originalBegin + hi - segment.begin - 1, originalStarts).line;
+        if (first != last || (result && *result != first))
+            return std::nullopt;
+        result = first;
+    }
+    return result;
+}
+
+std::string SourceMap::referenceText(std::string text, size_t at, Position context) const
+{
+    if (empty() || at == std::string::npos)
+        return text;
+    const std::string_view tail = std::string_view(text).substr(at);
+    const bool line = tail.substr(0, 8) == "at line " || tail.substr(0, 8) == "on line ";
+    const bool column = tail.substr(0, 10) == "at column " || tail.substr(0, 10) == "on column ";
+    if (!line && !column)
+        return text;
+    const size_t prefix = line ? 8 : 10;
+    unsigned value = 0;
+    const auto parsed = std::from_chars(tail.data() + prefix, tail.data() + tail.size(), value);
+    if (parsed.ec != std::errc() || value == 0)
+        return text;
+    const size_t length = size_t(parsed.ptr - tail.data());
+    std::string replacement;
+    if (line)
+    {
+        const auto original = originalLine(value - 1);
+        replacement = original ? std::string(tail.substr(0, 8)) + std::to_string(*original + 1)
+                               : "within a lowered comprehension (ambiguous source reference)";
+    }
+    else
+    {
+        const Position original = originalPosition({context.line, value - 1});
+        // Same generated line does not imply same original line. Report both coordinates.
+        replacement = "at line " + std::to_string(original.line + 1) + ", column " + std::to_string(original.column + 1);
+    }
+    text.replace(at, length, replacement);
+    return text;
 }
 }

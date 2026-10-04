@@ -614,6 +614,7 @@ void emitGeneratorNest(MappedText& result, const std::vector<LoweredGenerator>& 
         }
     }
 
+    result.anchor(result.originEnd - 1, result.originEnd);
     for (size_t i = 0; i < generator.predicates.size(); ++i)
         result += "end ";
     result += "end ";
@@ -729,6 +730,7 @@ MappedText lower(const Parsed& parsed, std::string_view wholeSource, size_t offs
             result += stem;
             result += "_value ";
         }
+        result.anchor(endOffset - 1, endOffset);
         result += "end return ";
         result += countOnly ? count : out;
         result += " end)()";
@@ -792,6 +794,7 @@ MappedText lower(const Parsed& parsed, std::string_view wholeSource, size_t offs
             result += stem;
             result += "_value ";
         }
+        result.anchor(endOffset - 1, endOffset);
         for (size_t i = 0; i < generator.predicates.size(); ++i)
             result += "end ";
         result += "end ";
@@ -813,6 +816,7 @@ MappedText lower(const Parsed& parsed, std::string_view wholeSource, size_t offs
         emitGeneratorNest(result, generators, 0, stem, out, count, project, countOnly);
     }
 
+    result.anchor(endOffset - 1, endOffset);
     result += "return ";
     result += countOnly ? count : out;
     result += " end)()";

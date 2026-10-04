@@ -125,3 +125,20 @@ fn mapped_runtime_errors_attribute_copied_and_synthetic_operations() {
         .to_string();
     assert!(error.contains("exec:5:"), "{error}");
 }
+
+#[test]
+fn parser_secondary_references_and_eof_use_original_source() {
+    let source = "local xs = [\n for x in {1}\n => x\n]\nfunction broken()\n return xs";
+    for suffix in ["", "\n"] {
+        let source = format!("{source}{suffix}");
+        let expected_line = if suffix.is_empty() { 6 } else { 7 };
+        let error = compile(&source, &CompileOptions::default()).unwrap_err().to_string();
+        assert_eq!(error, disassemble(&source, &CompileOptions::default()).unwrap_err().to_string());
+        assert!(error.starts_with(&format!(":{expected_line}:")), "{error}");
+        assert!(error.contains("to close 'function' at line 5"), "{error}");
+    }
+    let same_line = "local xs = [for x in {1} => x]; function broken() return xs";
+    let column = same_line.find("function broken").unwrap() + 1;
+    let error = compile(same_line, &CompileOptions::default()).unwrap_err().to_string();
+    assert!(error.contains(&format!("to close 'function' at line 1, column {column}")), "{error}");
+}

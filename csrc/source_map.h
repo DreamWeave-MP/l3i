@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -42,6 +43,11 @@ public:
     Position generatedPosition(Position original) const;
     bool generatedName(std::string_view name) const;
     unsigned originalLines() const;
+    // A line-only reference can be ambiguous after several original lines were fused.
+    std::optional<unsigned> originalLine(unsigned generatedLine) const;
+    // Translate one explicitly identified coordinate phrase in engine diagnostic prose.
+    // Never search arbitrary user text for numbers; callers identify known templates.
+    std::string referenceText(std::string text, size_t at, Position generatedContext) const;
 
 private:
     std::string original;

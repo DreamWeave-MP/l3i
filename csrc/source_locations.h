@@ -11,7 +11,8 @@ struct ParseResult;
 namespace L3i::Surface
 {
 // Mutates generated coordinates to original coordinates once per reachable object.
-// Call only once on a parse result. CST coordinates, diagnostic message text, and
-// ParseResult::lines are not changed; SourceMap does not expose original line count.
+// Call only once on a parse result. CST is deliberately not captured by these callers.
+// Known parser coordinate references in prose are translated or explicitly qualified.
 void remapLocations(Luau::ParseResult& result, const SourceMap& map);
+std::string originalParseMessage(std::string text, Position generatedContext, const SourceMap& map);
 }

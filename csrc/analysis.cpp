@@ -140,6 +140,43 @@ namespace
             return Luau::Location{Luau::Position(span.begin.line, span.begin.column), Luau::Position(span.end.line, span.end.column)};
         }
 
+        std::string parseMessage(const Luau::ModuleName& name, const Luau::SyntaxError& error, const Luau::Location& location) const
+        {
+            const auto* map = sourceMap(name);
+            return map ? L3i::Surface::originalParseMessage(error.message, {location.begin.line, location.begin.column}, *map) : error.message;
+        }
+
+        std::string lintMessage(const Luau::ModuleName& name, const Luau::LintWarning& warning) const
+        {
+            const auto* map = sourceMap(name);
+            if (!map || map->empty())
+                return warning.text;
+            switch (warning.code)
+            {
+            case Luau::LintWarning::Code_GlobalUsedAsLocal:
+            case Luau::LintWarning::Code_LocalShadow:
+            case Luau::LintWarning::Code_ImplicitReturn:
+            case Luau::LintWarning::Code_TableLiteral:
+            case Luau::LintWarning::Code_UninitializedLocal:
+            case Luau::LintWarning::Code_DuplicateFunction:
+            case Luau::LintWarning::Code_DuplicateCondition:
+            case Luau::LintWarning::Code_DuplicateLocal:
+            {
+                // These templates append a reference after the (possibly quoted) user name.
+                size_t at = std::string::npos;
+                for (std::string_view phrase : {"at line ", "on line ", "at column ", "on column "})
+                {
+                    const size_t found = warning.text.rfind(phrase);
+                    if (found != std::string::npos && (at == std::string::npos || found > at))
+                        at = found;
+                }
+                return map->referenceText(warning.text, at, {warning.location.begin.line, warning.location.begin.column});
+            }
+            default:
+                return warning.text;
+            }
+        }
+
         std::optional<Luau::SourceCode> readSource(const Luau::ModuleName& name) override
         {
             std::string source;
@@ -312,20 +349,23 @@ int db_analysis_check(db_analysis* analysis, const char* name, size_t name_lengt
             std::string text;
             if (const Luau::SyntaxError* syntax = Luau::get_if<Luau::SyntaxError>(&error.data))
             {
-                text = syntax->message;
+                text = analysis->files.parseMessage(error.moduleName, *syntax, error.location);
                 emit(diagnostic, ctx, DB_DIAG_PARSE_ERROR, error.code(), nullptr, error.moduleName, text,
                     analysis->files.originalLocation(error.moduleName, error.location));
                 continue;
             }
-            text = Luau::toString(error, Luau::TypeErrorToStringOptions{analysis->frontend->fileResolver});
+            Luau::TypeError display = error;
+            if (auto* duplicate = Luau::get_if<Luau::DuplicateTypeDefinition>(&display.data); duplicate && duplicate->previousLocation)
+                duplicate->previousLocation = analysis->files.originalLocation(error.moduleName, *duplicate->previousLocation);
+            text = Luau::toString(display, Luau::TypeErrorToStringOptions{analysis->frontend->fileResolver});
             emit(diagnostic, ctx, DB_DIAG_TYPE_ERROR, error.code(), nullptr, error.moduleName, text,
                 analysis->files.originalLocation(error.moduleName, error.location));
         }
         for (const Luau::LintWarning& warning : result.lintResult.errors)
-            emit(diagnostic, ctx, DB_DIAG_LINT_ERROR, warning.code, Luau::LintWarning::getName(warning.code), module, warning.text,
+            emit(diagnostic, ctx, DB_DIAG_LINT_ERROR, warning.code, Luau::LintWarning::getName(warning.code), module, analysis->files.lintMessage(module, warning),
                 analysis->files.originalLocation(module, warning.location));
         for (const Luau::LintWarning& warning : result.lintResult.warnings)
-            emit(diagnostic, ctx, DB_DIAG_LINT_WARNING, warning.code, Luau::LintWarning::getName(warning.code), module, warning.text,
+            emit(diagnostic, ctx, DB_DIAG_LINT_WARNING, warning.code, Luau::LintWarning::getName(warning.code), module, analysis->files.lintMessage(module, warning),
                 analysis->files.originalLocation(module, warning.location));
         return int(result.errors.size() + result.lintResult.errors.size());
     }
