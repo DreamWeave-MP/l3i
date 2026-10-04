@@ -1,8 +1,9 @@
 # Comprehensions: integration and instruction evidence
 
-Validated on the actual L3i checkout, 2026-10-04, starting from the already-applied
-`88e0636` dense/non-nil prototype. Luau remains stock 0.740, submodule commit
-`c0e346edd89066b44dca174c9f54ce84c746a540`. No additional syntax or reducers were added.
+The comprehension baseline below was validated on the actual L3i checkout, 2026-10-04,
+starting from the already-applied `88e0636` dense/non-nil prototype. Luau remains stock 0.740,
+submodule commit `c0e346edd89066b44dca174c9f54ce84c746a540`. A post-baseline `sum[for ...]`
+JSL reducer prototype is documented at the end; its Cargo gates remain pending.
 
 ## Contract
 
@@ -198,3 +199,54 @@ that would evaluate later effects or encounter nil: that requires an explicit
 different contract or trustworthy effect proof.
 
 Allocation elimination is authorized. Observable evaluation elimination is not.
+
+## Post-baseline JSL reducer experiment: `sum[for ...]`
+
+The next surface experiment builds directly on the hardened comprehension lowering without
+recognizing or rebinding a global helper function:
+
+```luau
+local total = sum[for x in xs if x.active => x.mass]
+```
+
+`sum` is JSL-owned syntax when it consumes a comprehension. It lowers to a numeric accumulator
+initialized to `0`, preserving generator/filter order, exactly-once projection evaluation, errors,
+and the existing non-nil projection guard. No result table is created. Empty input returns `0`.
+Whitespace and comments may separate `sum` from the comprehension.
+
+Conceptually:
+
+```luau
+local total = 0
+for i = 1, #xs do
+    local x = xs[i]
+    if x.active then
+        local value = x.mass
+        if value == nil then
+            error("L3i comprehension projection produced nil; filter nil explicitly")
+        end
+        total += value
+    end
+end
+```
+
+This is deliberately a numeric reducer. Stock Luau typing/arithmetic remains authoritative; L3i
+does not add a second type system or generic additive identity protocol.
+
+The C++ surface pass and source map are validated locally under GCC and Clang warnings-as-errors,
+Clang ASan/UBSan, and 250,000 randomized scanner inputs. Lowered output was also executed through
+a Jess/Luau runtime: filtered, empty, nested and comment-separated forms produced the expected
+results. Bytecode disassembly of the lowered filtered sum has no closure construction or result
+table and differs from the equivalent handwritten loop by the same kind of one-time setup move
+already measured for comprehension expressions.
+
+Rust runtime, disassembly, executed-instruction and Criterion cases are included for the real L3i
+checkout but still require Cargo validation. In particular, the expected invariant is:
+
+```text
+sum[for ...] executed VM instructions == same-contract handwritten fused sum + one setup instruction
+```
+
+The benchmark also compares fused sum against materializing the comprehension and traversing the
+result a second time. Treat any wall-clock claim as secondary to disassembly/instruction evidence,
+just as with the original comprehension campaign.

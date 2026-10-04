@@ -88,6 +88,21 @@ fn comprehension_length_fuses_without_materializing_a_table() {
 }
 
 #[test]
+fn comprehension_sum_reducer_fuses_without_materializing_a_table() {
+    let source = "return sum[for x in values if x % 2 == 0 => x * 2]";
+    let listing = disassemble(source, &CompileOptions::default()).unwrap();
+
+    assert!(!listing.contains("NEWTABLE"), "{listing}");
+    assert!(!listing.contains("SETLIST"), "{listing}");
+    assert!(!listing.contains("NEWCLOSURE"), "{listing}");
+    assert!(!listing.contains("DUPCLOSURE"), "{listing}");
+    assert!(!listing.contains("table.create"), "{listing}");
+    assert!(!listing.contains("SETTABLE"), "{listing}");
+    assert!(listing.contains("JUMPXEQKNIL"), "{listing}");
+    assert!(listing.contains("FORNPREP") && listing.contains("FORNLOOP"), "{listing}");
+}
+
+#[test]
 fn surface_compile_errors_and_disassembly_use_original_lines() {
     let source = "local xs = {1}\nlocal ys = [for x in xs => x * 2]\n\nlocal broken =\n    [for y in ys => y + * 2]";
     let options = CompileOptions::default();

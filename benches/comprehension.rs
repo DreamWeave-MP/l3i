@@ -56,6 +56,7 @@ enum Output {
     Dense,
     Filtered,
     Count,
+    Sum,
 }
 
 fn runtime() -> Runtime {
@@ -102,10 +103,15 @@ fn bench_case(group: &mut BenchmarkGroup<'_, WallTime>, label: &str, body: &str,
     let function = runtime.load_function(&format!("return function() {body} end")).unwrap();
     let expected_len = match output {
         Output::Dense => ITEMS,
-        Output::Filtered | Output::Count => ITEMS / 2,
+        Output::Filtered | Output::Count | Output::Sum => ITEMS / 2,
     };
     let validation = match output {
         Output::Count => format!("assert(result == {expected_len})"),
+        Output::Sum => {
+            let n = ITEMS / 2;
+            let expected_sum = 2 * n * (n + 1); // sum of (2k)*2 for k=1..n
+            format!("assert(result == {expected_sum})")
+        }
         Output::Dense | Output::Filtered => {
             let scale = if matches!(output, Output::Dense) { 2 } else { 4 };
             format!(
@@ -121,7 +127,7 @@ fn bench_case(group: &mut BenchmarkGroup<'_, WallTime>, label: &str, body: &str,
     let stack = runtime.stack();
     let top = stack.top();
     let mut invoke_and_drop = || match output {
-        Output::Count => {
+        Output::Count | Output::Sum => {
             std::hint::black_box(function.invoke::<f64, _>(&stack, ()).unwrap());
         }
         Output::Dense | Output::Filtered => {
@@ -148,7 +154,7 @@ fn bench_case(group: &mut BenchmarkGroup<'_, WallTime>, label: &str, body: &str,
         // those pins, changing heap pressure and liveness, so deliberately do not use it.
         runtime.collect_garbage();
         match output {
-            Output::Count => b.iter(|| function.invoke::<f64, _>(&stack, ()).unwrap()),
+            Output::Count | Output::Sum => b.iter(|| function.invoke::<f64, _>(&stack, ()).unwrap()),
             Output::Dense | Output::Filtered => b.iter(|| function.invoke::<Table, _>(&stack, ()).unwrap()),
         }
         assert_eq!(stack.top(), top);
@@ -159,6 +165,7 @@ fn eager_list_comprehensions(c: &mut Criterion) {
     dense_comparisons(c);
     filtered_comparisons(c);
     count_comparisons(c);
+    sum_comparisons(c);
     callback_comparisons(c);
 }
 
@@ -243,6 +250,37 @@ fn count_comparisons(c: &mut Criterion) {
         Output::Count,
     );
     count.finish();
+}
+
+fn sum_comparisons(c: &mut Criterion) {
+    let mut sum = c.benchmark_group("comprehension_sum");
+    sum.throughput(Throughput::Elements(ITEMS));
+    bench_case(
+        &mut sum,
+        "l3i fused sum nil-checked",
+        "return sum[for x in values if x % 2 == 0 => x * 2]",
+        Output::Sum,
+    );
+    bench_case(
+        &mut sum,
+        "handwritten fused sum nil-checked",
+        &format!(
+            "local src = values local total = 0 \
+                  for i = 1, #src do local x = src[i] if x % 2 == 0 then \
+                  local value = x * 2 {NIL_GUARD} total += value end end return total"
+        ),
+        Output::Sum,
+    );
+    bench_case(
+        &mut sum,
+        "materialized comprehension then sum",
+        &format!(
+            "local projected = [for x in values if x % 2 == 0 => x * 2] local total = 0 \
+                  for i = 1, #projected do total += projected[i] end return total"
+        ),
+        Output::Sum,
+    );
+    sum.finish();
 }
 
 fn callback_comparisons(c: &mut Criterion) {

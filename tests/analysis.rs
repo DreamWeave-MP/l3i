@@ -152,6 +152,23 @@ fn comprehension_numeric_and_record_results_have_precise_inferred_types() {
 }
 
 #[test]
+fn comprehension_sum_reducer_infers_number_and_preserves_filter_refinement() {
+    let source = concat!(
+        "--!strict\n",
+        "local values: { number? } = { 1, 2, 3 }\n",
+        "local total = sum[for x in values if x ~= nil if x > 1 => x * 2]\n",
+        "local check: number = total\n",
+        "return total, check\n",
+    );
+    for solver in [analysis::Solver::New, analysis::Solver::Old] {
+        let analysis = comprehension_analysis(HashMap::from([("sum", source)]), solver);
+        let report = analysis.check("sum", false);
+        assert!(report.is_clean(), "{solver:?}: {report:#?}");
+        assert_binding_type(&analysis, "sum", 4, "total", "number");
+    }
+}
+
+#[test]
 fn comprehension_filters_refine_nullable_elements_and_fields_before_projection() {
     let refined = concat!(
         "--!strict\n",

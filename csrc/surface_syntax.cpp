@@ -10,7 +10,8 @@
 // Comprehensions always produce dense, non-nil arrays: every accepted projection is evaluated
 // exactly once and a nil projection raises an explicit error. Filters use ordinary Luau truthiness.
 // The unary length form `#[for ... => ...]` is fused to an allocation-free count traversal while
-// preserving projection evaluation and the same non-nil check.
+// preserving projection evaluation and the same non-nil check. JSL also owns the reducer spelling
+// `sum[for ... => ...]`, which fuses projection into an allocation-free numeric accumulation.
 //
 // L3i enables LuauCompileIifeInline, allowing stock Luau to erase the expression wrapper and see
 // essentially the same loop shape a human would write.
@@ -308,6 +309,14 @@ size_t matchingSquare(std::string_view text, size_t open)
     return std::string_view::npos;
 }
 
+
+enum class Consumer
+{
+    Materialize,
+    Count,
+    Sum,
+};
+
 struct Generator
 {
     std::string_view binding;
@@ -558,7 +567,7 @@ void emitProjection(MappedText& result, const std::string& stem, const MappedTex
 }
 
 void emitGeneratorNest(MappedText& result, const std::vector<LoweredGenerator>& generators, size_t level, const std::string& stem,
-    const std::string& out, const std::string& count, const MappedText& project, bool countOnly)
+    const std::string& out, const std::string& count, const std::string& sum, const MappedText& project, Consumer consumer)
 {
     const LoweredGenerator& generator = generators[level];
     result.anchor(generator.begin, generator.end);
@@ -597,21 +606,31 @@ void emitGeneratorNest(MappedText& result, const std::vector<LoweredGenerator>& 
 
     if (level + 1 < generators.size())
     {
-        emitGeneratorNest(result, generators, level + 1, stem, out, count, project, countOnly);
+        emitGeneratorNest(result, generators, level + 1, stem, out, count, sum, project, consumer);
     }
     else
     {
         emitProjection(result, stem, project);
-        result += count;
-        result += " += 1 ";
-        if (!countOnly)
+        if (consumer == Consumer::Sum)
         {
-            result += out;
-            result += "[";
-            result += count;
-            result += "] = ";
+            result += sum;
+            result += " += ";
             result += stem;
             result += "_value ";
+        }
+        else
+        {
+            result += count;
+            result += " += 1 ";
+            if (consumer == Consumer::Materialize)
+            {
+                result += out;
+                result += "[";
+                result += count;
+                result += "] = ";
+                result += stem;
+                result += "_value ";
+            }
         }
     }
 
@@ -622,7 +641,7 @@ void emitGeneratorNest(MappedText& result, const std::vector<LoweredGenerator>& 
 }
 
 MappedText lower(const Parsed& parsed, std::string_view wholeSource, size_t offset, size_t beginOffset, size_t endOffset,
-    bool& nestedChanged, bool countOnly)
+    bool& nestedChanged, Consumer consumer)
 {
     bool projectChanged = false;
     const MappedText project = rewriteSubview(parsed.project, wholeSource, projectChanged);
@@ -654,6 +673,7 @@ MappedText lower(const Parsed& parsed, std::string_view wholeSource, size_t offs
     const std::string stem = uniqueStem(wholeSource, offset);
     const std::string out = stem + "_out";
     const std::string count = stem + "_n";
+    const std::string sum = stem + "_sum";
 
     // One generator with no filters has an exact output length.  Preserve the strongest possible
     // lowering shape and write by source index directly: no cursor increment in the hot loop.
@@ -688,10 +708,16 @@ MappedText lower(const Parsed& parsed, std::string_view wholeSource, size_t offs
         result += " = #";
         result += src;
         result += " ";
-        if (countOnly)
+        if (consumer == Consumer::Count)
         {
             result += "local ";
             result += count;
+            result += " = 0 ";
+        }
+        else if (consumer == Consumer::Sum)
+        {
+            result += "local ";
+            result += sum;
             result += " = 0 ";
         }
         else
@@ -717,10 +743,17 @@ MappedText lower(const Parsed& parsed, std::string_view wholeSource, size_t offs
         result += index;
         result += "] ";
         emitProjection(result, stem, project);
-        if (countOnly)
+        if (consumer == Consumer::Count)
         {
             result += count;
             result += " += 1 ";
+        }
+        else if (consumer == Consumer::Sum)
+        {
+            result += sum;
+            result += " += ";
+            result += stem;
+            result += "_value ";
         }
         else
         {
@@ -733,7 +766,7 @@ MappedText lower(const Parsed& parsed, std::string_view wholeSource, size_t offs
         }
         result.anchor(endOffset - 1, endOffset);
         result += "end return ";
-        result += countOnly ? count : out;
+        result += consumer == Consumer::Count ? count : consumer == Consumer::Sum ? sum : out;
         result += " end)()";
         return result;
     }
@@ -757,15 +790,26 @@ MappedText lower(const Parsed& parsed, std::string_view wholeSource, size_t offs
         result += " = #";
         result += src;
         result += " local ";
-        if (!countOnly)
+        if (consumer == Consumer::Materialize)
         {
             result += out;
             result += " = table.create(";
             result += len;
             result += ") :: typeof({}) local ";
+            result += count;
+            result += " = 0 ";
         }
-        result += count;
-        result += " = 0 for ";
+        else if (consumer == Consumer::Count)
+        {
+            result += count;
+            result += " = 0 ";
+        }
+        else
+        {
+            result += sum;
+            result += " = 0 ";
+        }
+        result += "for ";
         result += index;
         result += " = 1, ";
         result += len;
@@ -784,16 +828,26 @@ MappedText lower(const Parsed& parsed, std::string_view wholeSource, size_t offs
             result += " then ";
         }
         emitProjection(result, stem, project);
-        result += count;
-        result += " += 1 ";
-        if (!countOnly)
+        if (consumer == Consumer::Sum)
         {
-            result += out;
-            result += "[";
-            result += count;
-            result += "] = ";
+            result += sum;
+            result += " += ";
             result += stem;
             result += "_value ";
+        }
+        else
+        {
+            result += count;
+            result += " += 1 ";
+            if (consumer == Consumer::Materialize)
+            {
+                result += out;
+                result += "[";
+                result += count;
+                result += "] = ";
+                result += stem;
+                result += "_value ";
+            }
         }
         result.anchor(endOffset - 1, endOffset);
         for (size_t i = 0; i < generator.predicates.size(); ++i)
@@ -805,21 +859,32 @@ MappedText lower(const Parsed& parsed, std::string_view wholeSource, size_t offs
         // Nested generators can have data-dependent cardinality and inner sources may refer to the
         // outer binding.  Evaluate each source exactly once at its natural nesting level and grow a
         // dense result table through one output cursor.
-        if (!countOnly)
+        if (consumer == Consumer::Materialize)
         {
             result += "local ";
             result += out;
-            result += " = {} ";
+            result += " = {} local ";
+            result += count;
+            result += " = 0 ";
         }
-        result += "local ";
-        result += count;
-        result += " = 0 ";
-        emitGeneratorNest(result, generators, 0, stem, out, count, project, countOnly);
+        else if (consumer == Consumer::Count)
+        {
+            result += "local ";
+            result += count;
+            result += " = 0 ";
+        }
+        else
+        {
+            result += "local ";
+            result += sum;
+            result += " = 0 ";
+        }
+        emitGeneratorNest(result, generators, 0, stem, out, count, sum, project, consumer);
     }
 
     result.anchor(endOffset - 1, endOffset);
     result += "return ";
-    result += countOnly ? count : out;
+    result += consumer == Consumer::Count ? count : consumer == Consumer::Sum ? sum : out;
     result += " end)()";
     return result;
 }
@@ -841,6 +906,7 @@ MappedText rewriteRange(std::string_view source, std::string_view wholeSource, s
     result.reserve(source.size());
     size_t copied = 0;
     size_t lengthPrefix = std::string_view::npos;
+    size_t sumPrefix = std::string_view::npos;
 
     for (size_t i = 0; i < source.size();)
     {
@@ -848,13 +914,43 @@ MappedText rewriteRange(std::string_view source, std::string_view wholeSource, s
         if (skipped != i)
         {
             lengthPrefix = std::string_view::npos;
+            // Comments are trivia and may separate the JSL reducer token from its comprehension.
+            // String literals are expressions, so they terminate any pending reducer prefix.
+            const bool isComment = source[i] == '-' && i + 1 < source.size() && source[i + 1] == '-';
+            if (!isComment)
+                sumPrefix = std::string_view::npos;
             i = skipped;
             continue;
         }
         if (source[i] != '[' || scan.longBracket(i) != i)
         {
-            if (std::isspace(static_cast<unsigned char>(source[i])) == 0)
-                lengthPrefix = source[i] == '#' ? i : std::string_view::npos;
+            if (std::isspace(static_cast<unsigned char>(source[i])) != 0)
+            {
+                ++i;
+                continue;
+            }
+
+            if (Scan::identStart(source[i]))
+            {
+                const size_t begin = i++;
+                while (i < source.size() && Scan::identContinue(source[i]))
+                    ++i;
+                lengthPrefix = std::string_view::npos;
+                if (source.substr(begin, i - begin) == "sum")
+                {
+                    size_t prior = begin;
+                    while (prior > copied && std::isspace(static_cast<unsigned char>(source[prior - 1])) != 0)
+                        --prior;
+                    const bool memberAccess = prior > copied && (source[prior - 1] == '.' || source[prior - 1] == ':');
+                    sumPrefix = memberAccess ? std::string_view::npos : begin;
+                }
+                else
+                    sumPrefix = std::string_view::npos;
+                continue;
+            }
+
+            lengthPrefix = source[i] == '#' ? i : std::string_view::npos;
+            sumPrefix = std::string_view::npos;
             ++i;
             continue;
         }
@@ -865,6 +961,7 @@ MappedText rewriteRange(std::string_view source, std::string_view wholeSource, s
         if (!startsComprehension(source, i))
         {
             lengthPrefix = std::string_view::npos;
+            sumPrefix = std::string_view::npos;
             ++i;
             continue;
         }
@@ -873,6 +970,7 @@ MappedText rewriteRange(std::string_view source, std::string_view wholeSource, s
         if (close == std::string_view::npos)
         {
             lengthPrefix = std::string_view::npos;
+            sumPrefix = std::string_view::npos;
             ++i;
             continue;
         }
@@ -885,7 +983,7 @@ MappedText rewriteRange(std::string_view source, std::string_view wholeSource, s
             // accepted projections without allocating a result table. Projection expressions still
             // run exactly once and still trip the non-nil invariant, so observable effects match the
             // materialized comprehension followed by `#`.
-            bool countOnly = false;
+            Consumer consumer = Consumer::Materialize;
             size_t replaceBegin = i;
             size_t prefix = i;
             while (prefix > copied && std::isspace(static_cast<unsigned char>(source[prefix - 1])) != 0)
@@ -893,16 +991,22 @@ MappedText rewriteRange(std::string_view source, std::string_view wholeSource, s
             // The hash must have been seen as code, not skipped as part of a comment/string.
             if (prefix > copied && source[prefix - 1] == '#' && lengthPrefix == prefix - 1)
             {
-                countOnly = true;
+                consumer = Consumer::Count;
                 replaceBegin = prefix - 1;
+            }
+            else if (sumPrefix != std::string_view::npos)
+            {
+                consumer = Consumer::Sum;
+                replaceBegin = sumPrefix;
             }
 
             result.copy(source.substr(copied, replaceBegin - copied), baseOffset + copied);
             bool nested = false;
-            result += lower(parsed, wholeSource, baseOffset + i, baseOffset + replaceBegin, baseOffset + close + 1, nested, countOnly);
+            result += lower(parsed, wholeSource, baseOffset + i, baseOffset + replaceBegin, baseOffset + close + 1, nested, consumer);
             changed = true;
             copied = close + 1;
             lengthPrefix = std::string_view::npos;
+            sumPrefix = std::string_view::npos;
             i = close + 1;
             continue;
         }
@@ -910,6 +1014,7 @@ MappedText rewriteRange(std::string_view source, std::string_view wholeSource, s
         // Malformed candidate: leave it for stock Luau diagnostics, but keep scanning its interior in
         // case it contains an independently valid nested comprehension.
         lengthPrefix = std::string_view::npos;
+        sumPrefix = std::string_view::npos;
         ++i;
     }
 

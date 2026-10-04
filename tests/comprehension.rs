@@ -72,17 +72,27 @@ fn executed_instruction_counts_have_no_per_element_wrapper_overhead() {
             ),
             items,
         );
+        let sum = executed_instructions("return sum[for x in values if x % 2 == 0 => x * 2]", items);
+        let sum_loop = executed_instructions(
+            &format!(
+                "local src = values local total = 0 for i = 1, #src do local x = src[i] \
+             if x % 2 == 0 then local value = x * 2 {guard} total += value end end return total"
+            ),
+            items,
+        );
         let materialized =
             executed_instructions("local out = [for x in values if x % 2 == 0 => x * 2] return #out", items);
         println!(
             "{items} items: dense={dense}, checked loop={dense_loop}, unchecked={unchecked}; \
-                  filtered={filtered}, checked loop={filtered_loop}; count={count}, checked loop={count_loop}, materialized={materialized}"
+                  filtered={filtered}, checked loop={filtered_loop}; count={count}, checked loop={count_loop}; \
+                  sum={sum}, checked loop={sum_loop}; materialized={materialized}"
         );
         // IIFE result-register placement adds a setup MOVE, not an instruction per element.
         assert_eq!(dense, dense_loop + 1);
         assert_eq!(dense_loop, unchecked + u64::from(items), "nil guard costs one instruction per accepted projection");
         assert_eq!(filtered, filtered_loop + 1);
         assert_eq!(count, count_loop + 1);
+        assert_eq!(sum, sum_loop + 1);
     }
 }
 
@@ -252,6 +262,44 @@ fn fused_length_still_rejects_nil_projection() {
             r#"
             local ok, err = pcall(function()
                 return #[for x in { 1, 2 } => if x == 2 then nil else x]
+            end)
+            assert(not ok)
+            assert(string.find(tostring(err), "comprehension projection produced nil", 1, true) ~= nil)
+            "#,
+        )
+        .unwrap();
+}
+
+#[test]
+fn sum_reducer_fuses_without_materializing_and_preserves_effects() {
+    let runtime = Runtime::new().unwrap();
+    runtime
+        .exec(
+            r#"
+            local calls = 0
+            local function project(x)
+                calls += 1
+                return x * 10
+            end
+            local total = sum[for x in { 1, 2, 3, 4 } if x % 2 == 0 => project(x)]
+            assert(total == 60)
+            assert(calls == 2)
+            assert(sum[for x in {} => x] == 0)
+            local nested = sum[for x in { 1, 2 } for y in { x, x + 1 } => y]
+            assert(nested == 8)
+            "#,
+        )
+        .unwrap();
+}
+
+#[test]
+fn sum_reducer_retains_non_nil_projection_contract() {
+    let runtime = Runtime::new().unwrap();
+    runtime
+        .exec(
+            r#"
+            local ok, err = pcall(function()
+                return sum[for x in { 1, 2 } => if x == 2 then nil else x]
             end)
             assert(not ok)
             assert(string.find(tostring(err), "comprehension projection produced nil", 1, true) ~= nil)

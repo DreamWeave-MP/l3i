@@ -106,6 +106,16 @@ int main()
         contains(mappedMessage, "ambiguous source reference");
     }
     {
+        const std::string source = "local total = sum[for x in xs if x.keep => x.value]";
+        const auto lowered = L3i::Surface::lower(source);
+        assert(!lowered.map.empty());
+        copiedSpan(source, lowered, "xs");
+        copiedSpan(source, lowered, "x.keep");
+        copiedSpan(source, lowered, "x.value");
+        contains(lowered.source, "_sum +=");
+        assert(lowered.source.find("table.create") == std::string::npos);
+    }
+    {
         const auto plain = L3i::Surface::lower("local xs = {1}\nreturn xs");
         assert(plain.map.empty());
         samePosition(plain.map.originalPosition({1, 7}), {1, 7});
@@ -174,6 +184,41 @@ int main()
         const std::string out = rewrite("return #   [for x in xs => x]");
         assert(out.find("table.create") == std::string::npos);
         contains(out, "return __l3i_comp_11_n");
+    }
+
+    // JSL-owned sum reduction fuses the comprehension into a scalar accumulator. The projection
+    // still executes exactly once and keeps the dense/non-nil comprehension contract.
+    {
+        const std::string out = rewrite("return sum[for x in xs if accept(x) => effect(x)]");
+        assert(out.find("table.create") == std::string::npos);
+        assert(out.find("_out") == std::string::npos);
+        contains(out, "local __l3i_comp_10_sum = 0");
+        contains(out, "if accept(x) then");
+        contains(out, "local __l3i_comp_10_value = effect(x)");
+        contains(out, "__l3i_comp_10_sum += __l3i_comp_10_value");
+        contains(out, "return __l3i_comp_10_sum");
+        assert(occurrences(out, "effect(x)") == 1);
+    }
+
+    // Empty sums are zero, nested generators remain nested, and inner sources stay data-dependent.
+    {
+        const std::string out = rewrite("return sum[for x in xs for y in children(x) if y.keep => y.value]");
+        assert(out.find("table.create") == std::string::npos);
+        contains(out, "local __l3i_comp_10_sum = 0");
+        const size_t outerLoop = out.find("for __l3i_comp_10_g0_i");
+        const size_t innerSource = out.find("local __l3i_comp_10_g1_src = children(x)");
+        const size_t accumulation = out.find("__l3i_comp_10_sum += __l3i_comp_10_value");
+        assert(outerLoop != std::string::npos && innerSource > outerLoop && accumulation > innerSource);
+    }
+
+    // Whitespace and comments are reducer trivia, so formatting does not silently disable fusion.
+    {
+        const std::string out = rewrite("return sum   [for x in xs => x]");
+        assert(out.find("table.create") == std::string::npos);
+        contains(out, "return __l3i_comp_13_sum");
+        const std::string commented = rewrite("return sum -- reducer trivia\n [for x in xs => x]");
+        assert(commented.find("table.create") == std::string::npos);
+        contains(commented, "_sum = 0");
     }
 
     // Multiple filters remain one traversal and preserve short-circuit order through nested ifs.
