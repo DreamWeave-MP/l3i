@@ -740,17 +740,21 @@ std::string rewriteRange(std::string_view source, std::string_view wholeSource, 
     std::string result;
     result.reserve(source.size());
     size_t copied = 0;
+    size_t lengthPrefix = std::string_view::npos;
 
     for (size_t i = 0; i < source.size();)
     {
         const size_t skipped = scan.skipLiteralOrComment(i);
         if (skipped != i)
         {
+            lengthPrefix = std::string_view::npos;
             i = skipped;
             continue;
         }
         if (source[i] != '[' || scan.longBracket(i) != i)
         {
+            if (std::isspace(static_cast<unsigned char>(source[i])) == 0)
+                lengthPrefix = source[i] == '#' ? i : std::string_view::npos;
             ++i;
             continue;
         }
@@ -760,6 +764,7 @@ std::string rewriteRange(std::string_view source, std::string_view wholeSource, 
         // the common `array[i]` case nearly free.
         if (!startsComprehension(source, i))
         {
+            lengthPrefix = std::string_view::npos;
             ++i;
             continue;
         }
@@ -767,6 +772,7 @@ std::string rewriteRange(std::string_view source, std::string_view wholeSource, 
         const size_t close = matchingSquare(source, i);
         if (close == std::string_view::npos)
         {
+            lengthPrefix = std::string_view::npos;
             ++i;
             continue;
         }
@@ -784,7 +790,8 @@ std::string rewriteRange(std::string_view source, std::string_view wholeSource, 
             size_t prefix = i;
             while (prefix > copied && std::isspace(static_cast<unsigned char>(source[prefix - 1])) != 0)
                 --prefix;
-            if (prefix > copied && source[prefix - 1] == '#')
+            // The hash must have been seen as code, not skipped as part of a comment/string.
+            if (prefix > copied && source[prefix - 1] == '#' && lengthPrefix == prefix - 1)
             {
                 countOnly = true;
                 replaceBegin = prefix - 1;
@@ -795,12 +802,14 @@ std::string rewriteRange(std::string_view source, std::string_view wholeSource, 
             result += lower(parsed, wholeSource, baseOffset + i, nested, countOnly);
             changed = true;
             copied = close + 1;
+            lengthPrefix = std::string_view::npos;
             i = close + 1;
             continue;
         }
 
         // Malformed candidate: leave it for stock Luau diagnostics, but keep scanning its interior in
         // case it contains an independently valid nested comprehension.
+        lengthPrefix = std::string_view::npos;
         ++i;
     }
 

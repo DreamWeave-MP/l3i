@@ -390,3 +390,20 @@ fn trailing_clause_comments_cannot_swallow_generated_code() {
         )
         .unwrap();
 }
+
+#[test]
+fn length_fusion_never_consumes_a_hash_inside_a_preceding_comment() {
+    let runtime = Runtime::new().unwrap();
+    runtime
+        .exec(
+            r"
+        local result = -- #
+            [for x in {1, 2} => x * 2]
+        assert(#result == 2 and result[1] == 2 and result[2] == 4)
+        local count = # -- an intervening comment prevents lexical fusion, not execution
+            [for x in {1, 2} => x]
+        assert(count == 2)
+    ",
+        )
+        .unwrap();
+}

@@ -198,6 +198,16 @@ int main()
         contains(quoted, "= '-- not a comment' if");
     }
 
+    // Length fusion may only consume a hash the scanner saw as code, not one in trivia.
+    {
+        const std::string out = rewrite("local out = -- #\n [for x in xs => x]");
+        contains(out, "-- #\n (function()");
+        contains(out, "table.create");
+        const std::string unfused = rewrite("return # -- comment\n [for x in xs => x]");
+        contains(unfused, "# -- comment\n (function()");
+        contains(unfused, "table.create");
+    }
+
     // Trivia between the opening bracket and sentinel is accepted.
     {
         const std::string out = rewrite("return [ -- hello\n for x in xs => x]");
