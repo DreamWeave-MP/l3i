@@ -29,6 +29,7 @@ mod analysis;
 #[cfg(feature = "bytes")]
 mod bytes;
 mod call;
+mod comprehension;
 mod debug;
 mod direct;
 mod extension;

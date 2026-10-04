@@ -4,6 +4,8 @@
 
 All times are wall-clock means measured by [Criterion.rs](https://github.com/bheisler/criterion.rs) (95 % confidence interval). Debug assertions off, default features (interpreter only).
 
+> The comprehension prototype adds a separate `cargo bench --bench comprehension` target. It now measures dense projection, fused filtering, and allocation-free `#[for ... => ...]` count fusion against their handwritten loop equivalents. Numbers are intentionally not recorded here until run on the real Cargo/Luau checkout.
+
 ## rust_to_luau_call
 
 `Function::invoke` from the host, per call.

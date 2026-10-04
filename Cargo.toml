@@ -133,6 +133,10 @@ name = "intern"
 harness = false
 required-features = ["intern"]
 
+[[bench]]
+name = "comprehension"
+harness = false
+
 [features]
 default = []
 # Luau native code generation: builds Luau's CodeGen library plus the C++ shim that exposes

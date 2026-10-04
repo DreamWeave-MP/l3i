@@ -17,7 +17,10 @@
 #include <Luau/ToString.h>
 #include <Luau/TypeArena.h>
 
+#include "surface_syntax.h"
+
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <exception>
 #include <memory>
@@ -103,6 +106,17 @@ namespace
         static_cast<std::string*>(ctx)->append(data, length);
     }
 
+    std::string rewriteSurfaceSyntax(std::string source)
+    {
+        size_t length = 0;
+        char* rewritten = l3i_rewrite_surface_syntax(source.data(), source.size(), &length);
+        if (rewritten == nullptr)
+            return source;
+        std::string result(rewritten, length);
+        std::free(rewritten);
+        return result;
+    }
+
     struct HostFileResolver : Luau::FileResolver
     {
         db_source_provider provider;
@@ -114,7 +128,7 @@ namespace
             if (!provider.read_source(provider.ctx, name.data(), name.size(), appendToString, &source, &type))
                 return std::nullopt;
             Luau::SourceCode::Type kind = type == 2 ? Luau::SourceCode::Script : Luau::SourceCode::Module;
-            return Luau::SourceCode{std::move(source), kind};
+            return Luau::SourceCode{rewriteSurfaceSyntax(std::move(source)), kind};
         }
 
         std::optional<Luau::ModuleInfo> resolveModule(const Luau::ModuleInfo* context, Luau::AstExpr* node, const Luau::TypeCheckLimits&) override
@@ -346,11 +360,12 @@ int db_parse(const char* source, size_t length, db_diagnostic_fn diagnostic, voi
 {
     try
     {
+        std::string rewritten = rewriteSurfaceSyntax(std::string(source, length));
         Luau::Allocator allocator;
         Luau::AstNameTable names(allocator);
         Luau::ParseOptions options;
         options.captureComments = true;
-        Luau::ParseResult result = Luau::Parser::parse(source, length, names, allocator, options);
+        Luau::ParseResult result = Luau::Parser::parse(rewritten.data(), rewritten.size(), names, allocator, options);
         for (const Luau::ParseError& error : result.errors)
             emit(diagnostic, ctx, DB_DIAG_PARSE_ERROR, 0, nullptr, std::string(), error.getMessage(), error.getLocation());
         if (json != nullptr && result.root != nullptr)

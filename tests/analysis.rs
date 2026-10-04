@@ -96,3 +96,20 @@ fn the_parser_reports_syntax_errors_and_encodes_the_ast_as_json() {
     assert!(report.errors[0].text.contains("Expected identifier"), "{}", report.errors[0].text);
     assert!(report.json.is_none());
 }
+
+#[test]
+fn comprehensions_are_lowered_before_typechecking_and_standalone_parse() {
+    let mut modules = HashMap::new();
+    modules.insert(
+        "comprehension",
+        "--!strict\nlocal values: { number } = { 1, 2, 3 }\nlocal doubled = [for x in values if x > 1 => x * 2]\nlocal first: number = doubled[1]\nlocal rows: { { value: number? } } = { { value = 1 }, {} }\nlocal compact: { number } = [for row in rows if row.value ~= nil => row.value]\nreturn first + #compact\n",
+    );
+    let analysis = Analysis::new(Sources { modules }, AnalysisOptions::default()).unwrap();
+    let report = analysis.check("comprehension", false);
+    assert!(report.is_clean(), "{report:#?}");
+
+    let parsed = analysis::parse("return [for x in values => x * x]", true);
+    assert!(parsed.errors.is_empty(), "{parsed:#?}");
+    let json = parsed.json.expect("json");
+    assert!(json.contains("AstExprFunction") && json.contains("AstStatFor"), "{}", &json[..json.len().min(600)]);
+}

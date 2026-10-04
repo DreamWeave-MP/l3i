@@ -230,6 +230,11 @@ fn main() {
             .file("csrc/analysis.cpp");
         shim.compile("l3ianalysis");
     }
+
+    // L3i-owned surface syntax is deliberately separate from Luau and from the other shims.
+    // Keep this archive last: both Rust compilation and the optional Analysis shim consume it.
+    let mut surface = luau.base.clone();
+    surface.file("csrc/surface_syntax.cpp").compile("l3isurface");
 }
 
 /// Parses the `enum class` bodies the Rust IR layer mirrors and writes them to `OUT_DIR`.

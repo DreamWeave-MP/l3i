@@ -20,3 +20,30 @@ fn disassembly_returns_compile_errors_instead_of_an_error_listing() {
     let error = disassemble("local =", &CompileOptions::default()).unwrap_err().to_string();
     assert!(error.contains("parse error"), "{error}");
 }
+
+#[test]
+fn comprehension_wrapper_is_inlineable_at_l3i_optimization_level() {
+    let source = "local values = { 1, 2, 3, 4 } return [for x in values => x * 2]";
+    let options = CompileOptions::default();
+    assert_eq!(options.optimization_level, 2);
+    let listing = disassemble(source, &options).unwrap();
+
+    // The surface lowering deliberately uses an IIFE because L3i enables
+    // LuauCompileIifeInline. There must be no runtime closure allocation for the wrapper.
+    assert!(!listing.contains("NEWCLOSURE"), "{listing}");
+    assert!(!listing.contains("DUPCLOSURE"), "{listing}");
+    assert!(listing.contains("FORNPREP") && listing.contains("FORNLOOP"), "{listing}");
+}
+
+
+#[test]
+fn comprehension_length_fuses_without_materializing_a_table() {
+    let source = "local values = { 1, 2, 3, 4 } return #[for x in values if x % 2 == 0 => x * 2]";
+    let listing = disassemble(source, &CompileOptions::default()).unwrap();
+
+    assert!(!listing.contains("NEWTABLE"), "{listing}");
+    assert!(!listing.contains("SETLIST"), "{listing}");
+    assert!(!listing.contains("NEWCLOSURE"), "{listing}");
+    assert!(!listing.contains("DUPCLOSURE"), "{listing}");
+    assert!(listing.contains("FORNPREP") && listing.contains("FORNLOOP"), "{listing}");
+}
