@@ -188,6 +188,16 @@ int main()
         contains(out, "= (if flag then left else right)");
     }
 
+    // A trailing line comment must end before generated code; quoted -- is not a comment.
+    {
+        const std::string out = rewrite("return [for x in xs -- source\n if x -- filter\n => x -- project\n]");
+        contains(out, "xs -- source\n local");
+        contains(out, "if x -- filter\n then");
+        contains(out, "= x -- project\n if");
+        const std::string quoted = rewrite("return [for x in xs => '-- not a comment']");
+        contains(quoted, "= '-- not a comment' if");
+    }
+
     // Trivia between the opening bracket and sentinel is accepted.
     {
         const std::string out = rewrite("return [ -- hello\n for x in xs => x]");

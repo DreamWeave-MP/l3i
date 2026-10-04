@@ -364,3 +364,29 @@ fn generated_locals_do_not_capture_adversarial_user_names() {
         ))
         .unwrap();
 }
+
+#[test]
+fn trailing_clause_comments_cannot_swallow_generated_code() {
+    let runtime = Runtime::new().unwrap();
+    runtime
+        .exec(
+            r#"
+        local result = [for x in {1, 2} -- source comment
+            if x > 0 -- filter comment
+            => x * 2 -- projection comment
+        ]
+        assert(#result == 2 and result[1] == 2 and result[2] == 4)
+        assert(#[for x in {1, 2} -- count source
+            if x > 0 -- count filter
+            => x -- count projection
+        ] == 2)
+        local nested = [for x in {1, 2} -- outer source
+            for y in {x} -- inner source
+            if y -- inner filter
+            => y -- nested projection
+        ]
+        assert(#nested == 2 and nested[1] == 1 and nested[2] == 2)
+    "#,
+        )
+        .unwrap();
+}

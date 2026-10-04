@@ -439,7 +439,20 @@ std::string rewriteRange(std::string_view source, std::string_view wholeSource, 
 std::string rewriteSubview(std::string_view view, std::string_view wholeSource, bool& changed)
 {
     const size_t offset = static_cast<size_t>(view.data() - wholeSource.data());
-    return rewriteRange(view, wholeSource, offset, changed);
+    std::string result = rewriteRange(view, wholeSource, offset, changed);
+    // Clause trimming can remove the newline that terminates a trailing line comment.
+    // Restore that lexical boundary before appending generated statements. Scan literals too:
+    // a textual rfind("--") would misclassify strings and closed long comments.
+    Scan scan{view};
+    for (size_t i = 0; i < view.size();)
+    {
+        const size_t skipped = scan.skipLiteralOrComment(i);
+        if (skipped == view.size() && view[i] == '-' && i + 1 < view.size() && view[i + 1] == '-'
+            && scan.longBracket(i + 2) == i + 2)
+            result += '\n';
+        i = skipped == i ? i + 1 : skipped;
+    }
+    return result;
 }
 
 struct LoweredGenerator
