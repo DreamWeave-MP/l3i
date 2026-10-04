@@ -20,6 +20,8 @@
 #include "surface_syntax.h"
 #include "source_locations.h"
 
+#include <algorithm>
+#include <cctype>
 #include <cstdint>
 #include <cstring>
 #include <exception>
@@ -27,6 +29,7 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 
 extern "C" {
@@ -112,12 +115,114 @@ namespace
     {
     }
 
+    struct SourceSnapshot
+    {
+        std::string original;
+        L3i::Surface::LoweredSource lowered;
+    };
+
+    Luau::Location location(L3i::Surface::Span span)
+    {
+        return {Luau::Position(span.begin.line, span.begin.column), Luau::Position(span.end.line, span.end.column)};
+    }
+
+    size_t offset(std::string_view source, Luau::Position position)
+    {
+        size_t at = 0;
+        for (unsigned line = 0; line < position.line && at < source.size(); ++line)
+        {
+            const size_t next = source.find('\n', at);
+            at = next == std::string_view::npos ? source.size() : next + 1;
+        }
+        const size_t newline = source.find('\n', at);
+        const size_t end = newline == std::string_view::npos ? source.size() : newline;
+        return at + std::min(size_t(position.column), end - at);
+    }
+
+    bool overlaps(L3i::Surface::Range range, L3i::Surface::Range other)
+    {
+        // A point at the end of an expression belongs to it too: parser errors
+        // for a copied trailing '.' must not be mistaken for scaffolding errors.
+        return range.empty() ? other.begin <= range.begin && range.begin <= other.end
+                             : range.begin < other.end && other.begin < range.end;
+    }
+
+    bool synthetic(const SourceSnapshot& snapshot, const Luau::Location& loc)
+    {
+        const auto& lowered = snapshot.lowered;
+        const L3i::Surface::Range range{offset(lowered.source, loc.begin), offset(lowered.source, loc.end)};
+        // Innermost site wins; a nested generated call is not a copied expression
+        // merely because its parent expression contains it.
+        const L3i::Surface::ComprehensionSite* inner = nullptr;
+        for (const auto& site : lowered.sites)
+            if (site.call.begin <= range.begin && range.end <= site.call.end &&
+                (!inner || site.call.end - site.call.begin < inner->call.end - inner->call.begin))
+                inner = &site;
+        if (!inner)
+            return false;
+        const auto& node = lowered.document.comprehensions.at(inner->comprehension);
+        if (!node.projection.empty() && overlaps(range, inner->projection))
+            return false;
+        for (size_t i = 0; i < inner->clauses.size(); ++i)
+        {
+            if (!node.clauses[i].expression.empty() && overlaps(range, inner->clauses[i].expression))
+                return false;
+            if (!node.clauses[i].binding.empty() && overlaps(range, inner->clauses[i].binding))
+                return false;
+        }
+        return true;
+    }
+
+    bool recoveryNoise(const SourceSnapshot& snapshot, const Luau::Location& loc)
+    {
+        if (!synthetic(snapshot, loc))
+            return false;
+        const auto span = snapshot.lowered.map.originalSpan({{loc.begin.line, loc.begin.column}, {loc.end.line, loc.end.column}});
+        const size_t begin = snapshot.lowered.map.originalOffset(span.begin);
+        const size_t end = snapshot.lowered.map.originalOffset(span.end);
+        if (begin != end)
+            return false;
+        for (const auto& node : snapshot.lowered.document.comprehensions)
+        {
+            if (node.projection.empty() && begin == node.projection.begin)
+                return true;
+            for (const auto& clause : node.clauses)
+                if ((clause.expression.empty() && begin == clause.expression.begin) ||
+                    (clause.binding.empty() && begin == clause.binding.begin))
+                    return true;
+        }
+        return false;
+    }
+
+    struct GeneratedBindings : Luau::AstVisitor
+    {
+        const SourceSnapshot& snapshot;
+        std::unordered_set<std::string> names;
+        explicit GeneratedBindings(const SourceSnapshot& snapshot) : snapshot(snapshot) {}
+        void add(Luau::AstLocal* local)
+        {
+            if (synthetic(snapshot, local->location))
+                names.insert(local->name.value);
+        }
+        bool visit(Luau::AstStatLocal* stat) override
+        {
+            for (auto* local : stat->vars)
+                add(local);
+            return true;
+        }
+        bool visit(Luau::AstStatFor* stat) override
+        {
+            add(stat->var);
+            return true;
+        }
+    };
+
     struct HostFileResolver : Luau::FileResolver
     {
         db_source_provider provider;
         // Updated only by the frontend's readSource, so cached ASTs keep the map
         // from their source snapshot even after markDirty or an existence probe.
-        std::unordered_map<Luau::ModuleName, L3i::Surface::SourceMap> maps;
+        std::unordered_map<Luau::ModuleName, SourceSnapshot> snapshots;
 
         bool sourceExists(const Luau::ModuleName& name) const
         {
@@ -125,10 +230,16 @@ namespace
             return provider.read_source(provider.ctx, name.data(), name.size(), discardSource, nullptr, &type) != 0;
         }
 
+        const SourceSnapshot* snapshot(const Luau::ModuleName& name) const
+        {
+            auto it = snapshots.find(name);
+            return it == snapshots.end() ? nullptr : &it->second;
+        }
+
         const L3i::Surface::SourceMap* sourceMap(const Luau::ModuleName& name) const
         {
-            auto it = maps.find(name);
-            return it == maps.end() ? nullptr : &it->second;
+            const auto* value = snapshot(name);
+            return value ? &value->lowered.map : nullptr;
         }
 
         Luau::Location originalLocation(const Luau::ModuleName& name, const Luau::Location& location) const
@@ -182,11 +293,18 @@ namespace
             std::string source;
             int type = 0;
             if (!provider.read_source(provider.ctx, name.data(), name.size(), appendToString, &source, &type))
+            {
+                // A failed frontend reread has no new AST. Do not report an old
+                // document's structural errors for a dependency that disappeared.
+                snapshots.erase(name);
                 return std::nullopt;
+            }
             Luau::SourceCode::Type kind = type == 2 ? Luau::SourceCode::Script : Luau::SourceCode::Module;
-            auto lowered = L3i::Surface::lower(source);
-            maps.insert_or_assign(name, std::move(lowered.map));
-            return Luau::SourceCode{std::move(lowered.source), kind};
+            auto lowered = L3i::Surface::lower(source, true);
+            // Luau owns one shared SourceModule cache for both solvers/check modes.
+            // Retain the exact original/lowered pair until that AST is reread.
+            auto it = snapshots.insert_or_assign(name, SourceSnapshot{std::move(source), std::move(lowered)}).first;
+            return Luau::SourceCode{it->second.lowered.source, kind};
         }
 
         std::optional<Luau::ModuleInfo> resolveModule(const Luau::ModuleInfo* context, Luau::AstExpr* node, const Luau::TypeCheckLimits&) override
@@ -251,6 +369,128 @@ namespace
     {
         diagnostic(ctx, kind, code, name, name ? strlen(name) : 0, module.data(), module.size(), text.data(), text.size(), location.begin.line,
             location.begin.column, location.end.line, location.end.column);
+    }
+
+    int emitStructural(const SourceSnapshot& snapshot, const std::string& module, db_diagnostic_fn diagnostic, void* ctx)
+    {
+        for (const auto& error : snapshot.lowered.document.errors)
+            emit(diagnostic, ctx, DB_DIAG_PARSE_ERROR, 0, nullptr, module, error.message,
+                location(snapshot.lowered.map.originalRange(error.range.begin, error.range.end)));
+        return int(snapshot.lowered.document.errors.size());
+    }
+
+    void reachableModules(const Luau::Frontend& frontend, const std::string& name, std::unordered_set<std::string>& seen,
+        std::vector<std::string>& modules)
+    {
+        if (!seen.insert(name).second)
+            return;
+        modules.push_back(name);
+        auto it = frontend.sourceNodes.find(name);
+        if (it == frontend.sourceNodes.end())
+            return;
+        std::vector<std::string> dependencies;
+        for (const auto& dependency : it->second->requireSet)
+            dependencies.push_back(dependency);
+        std::sort(dependencies.begin(), dependencies.end());
+        for (const auto& dependency : dependencies)
+            reachableModules(frontend, dependency, seen, modules);
+    }
+
+    bool trivia(const SourceSnapshot& snapshot, size_t begin, size_t end)
+    {
+        if (begin > end || end > snapshot.original.size())
+            return false;
+        for (size_t at = begin; at < end;)
+        {
+            if (std::isspace(static_cast<unsigned char>(snapshot.original[at])))
+            {
+                ++at;
+                continue;
+            }
+            const auto& comments = snapshot.lowered.document.comments;
+            auto it = std::find_if(comments.begin(), comments.end(), [at](auto range) { return range.begin == at; });
+            if (it == comments.end() || it->end > end)
+                return false;
+            at = it->end;
+        }
+        return true;
+    }
+
+    bool completeExpression(const SourceSnapshot& snapshot, L3i::Surface::Range range)
+    {
+        if (range.empty())
+            return false;
+        std::string text = "return " + snapshot.original.substr(range.begin, range.end - range.begin);
+        // This is validation, not recognition. Nested surface expressions use the
+        // same seam; stock Luau decides whether the resulting expression is complete.
+        auto lowered = L3i::Surface::lower(text, true);
+        if (!lowered.document.errors.empty())
+            return false;
+        Luau::Allocator allocator;
+        Luau::AstNameTable names(allocator);
+        return Luau::Parser::parse(lowered.source.data(), lowered.source.size(), names, allocator).errors.empty();
+    }
+
+    struct CompletionPoint
+    {
+        L3i::Surface::Position generated;
+        const char* keyword = nullptr;
+    };
+
+    CompletionPoint completionPoint(const SourceSnapshot& snapshot, unsigned line, unsigned column)
+    {
+        const auto& lowered = snapshot.lowered;
+        CompletionPoint result{lowered.map.generatedPosition({line, column}), nullptr};
+        const size_t at = lowered.map.empty() ? offset(snapshot.original, Luau::Position(line, column))
+                                             : lowered.map.originalOffset({line, column});
+        // Prefer the innermost surface node at the cursor.
+        const L3i::Surface::ComprehensionSite* inner = nullptr;
+        for (const auto& site : lowered.sites)
+        {
+            const auto& node = lowered.document.comprehensions.at(site.comprehension);
+            if (node.open.end <= at && at <= node.close.begin &&
+                (!inner || node.open.begin > lowered.document.comprehensions[inner->comprehension].open.begin))
+                inner = &site;
+        }
+        if (!inner)
+            return result;
+        const auto& node = lowered.document.comprehensions[inner->comprehension];
+        bool expressionHole = false;
+        for (size_t i = 0; i < node.clauses.size(); ++i)
+        {
+            const auto& clause = node.clauses[i];
+            const size_t after = clause.kind == L3i::Surface::ClauseKind::Filter ? clause.keyword.end
+                : !clause.in.empty() ? clause.in.end : !clause.binding.empty() ? clause.binding.end : clause.keyword.end;
+            if (clause.expression.empty() && at <= clause.expression.begin && trivia(snapshot, after, at))
+            {
+                result.generated = lowered.map.generatedPoint(inner->clauses[i].expression.begin);
+                expressionHole = true;
+            }
+            if (clause.kind == L3i::Surface::ClauseKind::Generator && !clause.binding.empty() && clause.in.empty() &&
+                at <= clause.in.begin && trivia(snapshot, clause.binding.end, at))
+                result.keyword = "in";
+        }
+        // Without an arrow, the cursor can still belong to a copied source or
+        // filter (notably 'record.'). Do not move it to the projection hole.
+        if (!expressionHole && !node.arrow.empty() && node.projection.empty() && at <= node.projection.begin &&
+            trivia(snapshot, node.arrow.end, at))
+            result.generated = lowered.map.generatedPoint(inner->projection.begin);
+        if (!result.keyword && node.arrow.empty() && !node.clauses.empty())
+        {
+            const auto& last = node.clauses.back();
+            if (at <= node.arrow.begin && trivia(snapshot, last.expression.end, at) && completeExpression(snapshot, last.expression))
+            {
+                result.keyword = "=>";
+                // Whitespace after a complete expression is a separator slot,
+                // while the token end itself retains stock expression completion.
+                if (at > last.expression.end && node.projection.empty())
+                    result.generated = lowered.map.generatedPoint(inner->projection.begin);
+            }
+        }
+        if (!result.keyword && node.close.empty() && !node.arrow.empty() &&
+            at <= node.close.begin && trivia(snapshot, node.projection.end, at) && completeExpression(snapshot, node.projection))
+            result.keyword = "]";
+        return result;
     }
 
     void emitInternal(db_diagnostic_fn diagnostic, void* ctx, const std::string& module, const std::string& text)
@@ -327,8 +567,8 @@ void db_analysis_destroy(db_analysis* analysis)
     delete analysis;
 }
 
-// Type checks (and lints) `name`, reporting every diagnostic. Returns the number of type errors
-// plus lint errors, or -1 on an internal failure (reported as a diagnostic too).
+// Type checks (and lints) `name`, reporting every diagnostic. Returns the number of
+// structural, parse, type and lint errors, or -1 on an internal failure (reported too).
 int db_analysis_check(db_analysis* analysis, const char* name, size_t name_length, int lint, db_diagnostic_fn diagnostic, void* ctx)
 {
     std::string module(name, name_length);
@@ -344,8 +584,20 @@ int db_analysis_check(db_analysis* analysis, const char* name, size_t name_lengt
         Luau::FrontendOptions options = analysis->options;
         options.runLintChecks = lint != 0;
         Luau::CheckResult result = analysis->frontend->check(module, options);
+        int errors = 0;
+        std::unordered_set<std::string> seen;
+        std::vector<std::string> modules;
+        reachableModules(*analysis->frontend, module, seen, modules);
+        for (const auto& name : modules)
+            if (const auto* snapshot = analysis->files.snapshot(name))
+                errors += emitStructural(*snapshot, name, diagnostic, ctx);
         for (const Luau::TypeError& error : result.errors)
         {
+            const auto* snapshot = analysis->files.snapshot(error.moduleName);
+            if (snapshot && (recoveryNoise(*snapshot, error.location) ||
+                (Luau::get_if<Luau::UnknownSymbol>(&error.data) && synthetic(*snapshot, error.location))))
+                continue;
+            ++errors;
             std::string text;
             if (const Luau::SyntaxError* syntax = Luau::get_if<Luau::SyntaxError>(&error.data))
             {
@@ -361,13 +613,20 @@ int db_analysis_check(db_analysis* analysis, const char* name, size_t name_lengt
             emit(diagnostic, ctx, DB_DIAG_TYPE_ERROR, error.code(), nullptr, error.moduleName, text,
                 analysis->files.originalLocation(error.moduleName, error.location));
         }
+        const auto* snapshot = analysis->files.snapshot(module);
+        auto emitLint = [&](const Luau::LintWarning& warning, int kind) {
+            if (snapshot && synthetic(*snapshot, warning.location))
+                return;
+            emit(diagnostic, ctx, kind, warning.code, Luau::LintWarning::getName(warning.code), module,
+                analysis->files.lintMessage(module, warning), analysis->files.originalLocation(module, warning.location));
+            if (kind == DB_DIAG_LINT_ERROR)
+                ++errors;
+        };
         for (const Luau::LintWarning& warning : result.lintResult.errors)
-            emit(diagnostic, ctx, DB_DIAG_LINT_ERROR, warning.code, Luau::LintWarning::getName(warning.code), module, analysis->files.lintMessage(module, warning),
-                analysis->files.originalLocation(module, warning.location));
+            emitLint(warning, DB_DIAG_LINT_ERROR);
         for (const Luau::LintWarning& warning : result.lintResult.warnings)
-            emit(diagnostic, ctx, DB_DIAG_LINT_WARNING, warning.code, Luau::LintWarning::getName(warning.code), module, analysis->files.lintMessage(module, warning),
-                analysis->files.originalLocation(module, warning.location));
-        return int(result.errors.size() + result.lintResult.errors.size());
+            emitLint(warning, DB_DIAG_LINT_WARNING);
+        return errors;
     }
     catch (const std::exception& error)
     {
@@ -383,14 +642,14 @@ int db_analysis_check(db_analysis* analysis, const char* name, size_t name_lengt
 
 void db_analysis_mark_dirty(db_analysis* analysis, const char* name, size_t name_length)
 {
-    // Keep maps while the frontend still owns the corresponding cached ASTs.
+    // Keep snapshots while the frontend still owns the corresponding cached ASTs.
     analysis->frontend->markDirty(std::string(name, name_length));
 }
 
 void db_analysis_clear(db_analysis* analysis)
 {
     analysis->frontend->clear();
-    analysis->files.maps.clear();
+    analysis->files.snapshots.clear();
 }
 
 // Autocompletes `name` at (line, column) (0-based), reporting entries. Returns the context kind
@@ -401,21 +660,39 @@ int db_analysis_autocomplete(
     std::string module(name, name_length);
     try
     {
+        if (!analysis->files.sourceExists(module))
+            return -1;
         Luau::FrontendOptions options = analysis->options;
         options.forAutocomplete = true;
         options.retainFullTypeGraphs = true; // autocomplete reads per-term types
         options.runLintChecks = false;
         analysis->frontend->check(module, options);
-        const auto* map = analysis->files.sourceMap(module);
-        const auto cursor = map ? map->generatedPosition({line, column}) : L3i::Surface::Position{line, column};
-        Luau::AutocompleteResult result = Luau::autocomplete(*analysis->frontend, module, Luau::Position(cursor.line, cursor.column),
+        const auto* snapshot = analysis->files.snapshot(module);
+        const auto* sourceModule = analysis->frontend->getSourceModule(module);
+        if (!snapshot || !sourceModule || !sourceModule->root)
+            return -1;
+        const auto point = completionPoint(*snapshot, line, column);
+        Luau::AutocompleteResult result = Luau::autocomplete(*analysis->frontend, module, Luau::Position(point.generated.line, point.generated.column),
             [](std::string, std::optional<const Luau::ExternType*>, std::optional<std::string>) { return std::nullopt; });
+        GeneratedBindings generated(*snapshot);
+        sourceModule->root->visit(&generated);
         for (const auto& [entryName, entry] : result.entryMap)
         {
-            if (map && map->generatedName(entryName))
+            if (generated.names.count(entryName))
                 continue;
             std::string type = entry.type ? Luau::toString(*entry.type) : std::string();
             completion(ctx, entryName.data(), entryName.size(), int(entry.kind), entry.deprecated ? 1 : 0, type.data(), type.size());
+        }
+        // Supplement stock expression/scope completion, never replace property,
+        // type or string completion with surface punctuation suggestions.
+        if (point.keyword && (result.context == Luau::AutocompleteContext::Unknown ||
+            result.context == Luau::AutocompleteContext::Expression || result.context == Luau::AutocompleteContext::Statement ||
+            result.context == Luau::AutocompleteContext::Keyword))
+        {
+            if (!result.entryMap.count(point.keyword))
+                completion(ctx, point.keyword, strlen(point.keyword), int(Luau::AutocompleteEntryKind::Keyword), 0, "", 0);
+            if (result.entryMap.empty())
+                return int(Luau::AutocompleteContext::Keyword);
         }
         return int(result.context);
     }
@@ -431,21 +708,31 @@ int db_parse(const char* source, size_t length, db_diagnostic_fn diagnostic, voi
 {
     try
     {
-        auto lowered = L3i::Surface::lower(std::string_view(source, length));
+        SourceSnapshot snapshot{std::string(source, length), L3i::Surface::lower(std::string_view(source, length), true)};
+        auto& lowered = snapshot.lowered;
         Luau::Allocator allocator;
         Luau::AstNameTable names(allocator);
         Luau::ParseOptions options;
         options.captureComments = true;
         Luau::ParseResult result = Luau::Parser::parse(lowered.source.data(), lowered.source.size(), names, allocator, options);
-        L3i::Surface::remapLocations(result, lowered.map);
+        int errors = emitStructural(snapshot, std::string(), diagnostic, ctx);
         for (const Luau::ParseError& error : result.errors)
-            emit(diagnostic, ctx, DB_DIAG_PARSE_ERROR, 0, nullptr, std::string(), error.getMessage(), error.getLocation());
+        {
+            if (recoveryNoise(snapshot, error.getLocation()))
+                continue;
+            const auto loc = error.getLocation();
+            const std::string text = L3i::Surface::originalParseMessage(error.getMessage(), {loc.begin.line, loc.begin.column}, lowered.map);
+            emit(diagnostic, ctx, DB_DIAG_PARSE_ERROR, 0, nullptr, std::string(), text,
+                location(lowered.map.originalSpan({{loc.begin.line, loc.begin.column}, {loc.end.line, loc.end.column}})));
+            ++errors;
+        }
+        L3i::Surface::remapLocations(result, lowered.map);
         if (json != nullptr && result.root != nullptr)
         {
             std::string text = Luau::toJson(result.root, result.commentLocations);
             json(json_ctx, text.data(), text.size());
         }
-        return int(result.errors.size());
+        return errors;
     }
     catch (const std::exception& error)
     {

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <charconv>
 #include <limits>
+#include <stdexcept>
 #include <utility>
 
 namespace L3i::Surface
@@ -129,6 +130,27 @@ Position SourceMap::generatedPosition(Position origin) const
 bool SourceMap::generatedName(std::string_view name) const
 {
     return !empty() && name.substr(0, 11) == "__l3i_comp_" && original.find(name) == std::string::npos;
+}
+
+Position SourceMap::generatedPoint(size_t at) const
+{
+    if (generatedStarts.empty())
+        throw std::logic_error("generated offset requires a mapped surface document");
+    return position(std::min(at, generatedSize), generatedStarts);
+}
+
+Span SourceMap::originalRange(size_t begin, size_t end) const
+{
+    if (originalStarts.empty())
+        throw std::logic_error("original offset requires a mapped surface document");
+    return {position(std::min(begin, original.size()), originalStarts), position(std::min(end, original.size()), originalStarts)};
+}
+
+size_t SourceMap::originalOffset(Position at) const
+{
+    if (originalStarts.empty())
+        throw std::logic_error("original position requires a mapped surface document");
+    return offset(at, originalStarts, original.size());
 }
 
 unsigned SourceMap::originalLines() const

@@ -635,3 +635,210 @@ fn parser_coordinate_templates_preserve_quoted_class_like_user_text() {
     let report = analysis.check("quoted", false);
     assert!(report.diagnostics.iter().any(|error| error.text.contains(payload)), "{report:?}");
 }
+
+fn complete_at(analysis: &Analysis, module: &str, source: &str, offset: usize) -> analysis::Completions {
+    let (line, column) = source_position(source, offset);
+    let completions = analysis.autocomplete(module, line, column).unwrap();
+    assert!(
+        completions.entries.iter().all(|entry| !entry.name.starts_with("__l3i_comp_")),
+        "generated binding at {line}:{column}: {completions:?}"
+    );
+    completions
+}
+
+#[test]
+fn incomplete_comprehensions_complete_source_globals_in_keyword_and_projection_binding() {
+    let cases = [
+        ("source_hole", "local values: {number} = {1}\nreturn [for x in "),
+        ("in_hole", "local values: {number} = {1}\nreturn [for x "),
+        ("projection_hole", "local values: {number} = {1}\nreturn [for x in values => "),
+    ];
+    for solver in [analysis::Solver::New, analysis::Solver::Old] {
+        let analysis = comprehension_analysis(HashMap::from(cases), solver);
+        for (module, source) in cases {
+            let parsed = analysis::parse(source, false);
+            assert!(!parsed.errors.is_empty(), "{module}: {parsed:?}");
+            let completions = complete_at(&analysis, module, source, source.len());
+            let expected: &[(&str, CompletionKind)] = match module {
+                "source_hole" => &[("values", CompletionKind::Binding), ("math", CompletionKind::Binding)],
+                "in_hole" => &[("in", CompletionKind::Keyword)],
+                _ => &[("x", CompletionKind::Binding), ("values", CompletionKind::Binding)],
+            };
+            for (name, kind) in expected {
+                assert!(
+                    completions.entries.iter().any(|entry| entry.name == *name && entry.kind == *kind),
+                    "{solver:?}: {module}: expected {name}: {completions:?}"
+                );
+            }
+            if module == "source_hole" {
+                assert!(!completions.entries.iter().any(|entry| entry.name == "x"), "{completions:?}");
+            }
+            if module == "projection_hole" {
+                let binding = completions.entries.iter().find(|entry| entry.name == "x").unwrap();
+                assert_eq!(binding.type_text, "number", "{solver:?}: {binding:?}");
+            }
+        }
+    }
+}
+
+#[test]
+fn partial_member_completions_keep_types_in_projection_filter_and_dependent_source() {
+    let prefix = "--!strict\nlocal rows: {{score: number, enabled: boolean, children: {number}}} = {{score = 1, enabled = true, children = {1}}}\n";
+    let cases = [
+        ("projection_dot", "return [for x in rows => x."),
+        ("filter_dot", "return [for x in rows if x."),
+        ("source_dot", "return [for x in rows for child in x."),
+    ];
+    for solver in [analysis::Solver::New, analysis::Solver::Old] {
+        // SourceProvider owns dynamic strings here so the cursor is computed from exactly
+        // the bytes the frontend sees, rather than a hand-maintained generated coordinate.
+        let analysis = Analysis::new(
+            MemberSources(
+                cases.iter().map(|(name, suffix)| ((*name).to_owned(), format!("{prefix}{suffix}"))).collect(),
+            ),
+            AnalysisOptions { solver, retain_full_type_graphs: true, ..AnalysisOptions::default() },
+        )
+        .unwrap();
+        for (module, suffix) in cases {
+            let source = format!("{prefix}{suffix}");
+            let completions = complete_at(&analysis, module, &source, source.len());
+            assert_eq!(completions.context, CompletionContext::Property, "{solver:?}: {module}: {completions:?}");
+            let mut properties: Vec<_> =
+                completions.entries.iter().filter(|e| e.kind == CompletionKind::Property).collect();
+            properties.sort_unstable_by(|a, b| a.name.cmp(&b.name));
+            let names: Vec<_> = properties.iter().map(|e| e.name.as_str()).collect();
+            assert_eq!(names, ["children", "enabled", "score"], "{solver:?}: {module}: {completions:?}");
+            for (entry, expected) in properties.iter().zip(["{number}", "boolean", "number"]) {
+                assert_eq!(entry.type_text, expected, "{solver:?}: {module}: {entry:?}");
+            }
+        }
+    }
+}
+
+struct MemberSources(HashMap<String, String>);
+
+impl SourceProvider for MemberSources {
+    fn read_source(&self, name: &str) -> Option<SourceCode> {
+        self.0.get(name).map(|text| SourceCode { text: text.clone(), is_script: false })
+    }
+    fn module_config(&self, _name: &str) -> ModuleConfig {
+        ModuleConfig { mode: Mode::Strict, ..ModuleConfig::default() }
+    }
+}
+
+#[test]
+fn nested_partial_projection_retains_outer_capture_and_nullable_filter_refinement() {
+    let source = concat!(
+        "--!strict\nlocal rows: {{child: {name: string, score: number}?}} = {}\n",
+        "return [for row in rows if row.child ~= nil => [for x in {row.child} => x.",
+    );
+    let capture = concat!(
+        "--!strict\nlocal rows: {{score: number}} = {}\n",
+        "return [for row in rows => [for x in {1} => function() return row.",
+    );
+    for solver in [analysis::Solver::New, analysis::Solver::Old] {
+        let analysis =
+            comprehension_analysis(HashMap::from([("refined_partial", source), ("capture_partial", capture)]), solver);
+        for (module, text, expected) in
+            [("refined_partial", source, &["name", "score"][..]), ("capture_partial", capture, &["score"][..])]
+        {
+            let completions = complete_at(&analysis, module, text, text.len());
+            assert_eq!(completions.context, CompletionContext::Property, "{solver:?}: {completions:?}");
+            let mut properties: Vec<_> = completions
+                .entries
+                .iter()
+                .filter(|e| e.kind == CompletionKind::Property)
+                .map(|e| e.name.as_str())
+                .collect();
+            properties.sort_unstable();
+            assert_eq!(properties, expected, "{solver:?}: {module}: {completions:?}");
+            assert_eq!(completions.entries.iter().find(|e| e.name == "score").unwrap().type_text, "number");
+        }
+    }
+}
+
+#[test]
+fn copied_source_filter_and_projection_type_errors_are_not_suppressed_by_lowering() {
+    let cases = [
+        (
+            "source_copy",
+            "--!strict\nlocal obj: {items: {number}} = {items = {1}}\nreturn [for x in obj.absent => x]",
+            "obj.absent",
+        ),
+        (
+            "filter_copy",
+            "--!strict\nlocal rows: {{score: number}} = {}\nreturn [for x in rows if x.absent => x.score]",
+            "x.absent",
+        ),
+        (
+            "projection_copy",
+            "--!strict\nlocal rows: {{score: number}} = {}\nreturn [for x in rows => x.absent]",
+            "x.absent",
+        ),
+    ];
+    for solver in [analysis::Solver::New, analysis::Solver::Old] {
+        let analysis = comprehension_analysis(cases.iter().map(|(name, source, _)| (*name, *source)).collect(), solver);
+        for (module, source, marked) in cases {
+            let report = analysis.check(module, false);
+            assert!(!report.is_clean(), "{solver:?}: {module}: {report:?}");
+            assert!(
+                report.diagnostics.iter().all(|error| error.kind == DiagnosticKind::TypeError),
+                "{solver:?}: {report:?}"
+            );
+            let error =
+                report.diagnostics.iter().find(|error| error.text.contains("absent")).expect("copied property error");
+            assert_diagnostic_span(error, source, marked);
+            for error in &report.diagnostics {
+                assert!(!error.text.contains("__l3i_comp_"), "{solver:?}: {module}: {error:?}");
+                let begin = source.lines().nth(error.span.begin_line as usize).unwrap();
+                let end = source.lines().nth(error.span.end_line as usize).unwrap();
+                assert!(
+                    error.span.begin_column as usize <= begin.len() && error.span.end_column as usize <= end.len(),
+                    "{error:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn partial_comprehension_completion_and_error_caches_update_for_both_solvers() {
+    let old = "--!strict\nlocal rows: {{oldOnly: number}} = {}\nreturn [for x in rows => x.";
+    let new = "--!strict\n\nlocal rows: {{newOnly: string}} = {}\nreturn [for x in rows if x.";
+    for solver in [analysis::Solver::New, analysis::Solver::Old] {
+        let source = std::rc::Rc::new(std::cell::RefCell::new(old));
+        let analysis = Analysis::new(
+            ChangingSource(source.clone()),
+            AnalysisOptions { solver, retain_full_type_graphs: true, ..AnalysisOptions::default() },
+        )
+        .unwrap();
+        let check = |text: &str, property: &str, expected_type: &str| {
+            let report = analysis.check("snapshot", false);
+            assert!(!report.is_clean(), "{solver:?}: {report:?}");
+            assert!(report.diagnostics.iter().all(|d| !d.text.contains("__l3i_comp_")), "{report:?}");
+            let parsed = analysis::parse(text, false);
+            let actual: Vec<_> = report
+                .diagnostics
+                .iter()
+                .filter(|d| d.kind == DiagnosticKind::ParseError)
+                .map(|d| (&d.text, d.span))
+                .collect();
+            let expected: Vec<_> = parsed.errors.iter().map(|d| (&d.text, d.span)).collect();
+            assert_eq!(actual, expected, "{solver:?}: cached parse diagnostics");
+            let completions = complete_at(&analysis, "snapshot", text, text.len());
+            assert_eq!(completions.context, CompletionContext::Property);
+            let properties: Vec<_> =
+                completions.entries.iter().filter(|e| e.kind == CompletionKind::Property).collect();
+            assert_eq!(properties.len(), 1, "{solver:?}: {completions:?}");
+            assert_eq!(properties[0].name, property);
+            assert_eq!(properties[0].type_text, expected_type);
+        };
+        check(old, "oldOnly", "number");
+        *source.borrow_mut() = new;
+        analysis.mark_dirty("snapshot");
+        check(new, "newOnly", "string");
+        *source.borrow_mut() = old;
+        analysis.clear();
+        check(old, "oldOnly", "number");
+    }
+}

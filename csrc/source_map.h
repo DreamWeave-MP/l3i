@@ -41,6 +41,10 @@ public:
     Position originalPosition(Position generated) const;
     Span originalSpan(Span generated) const;
     Position generatedPosition(Position original) const;
+    // Offset helpers for tooling sites in a mapped document (not a default identity map).
+    Position generatedPoint(size_t offset) const;
+    Span originalRange(size_t begin, size_t end) const;
+    size_t originalOffset(Position position) const;
     bool generatedName(std::string_view name) const;
     unsigned originalLines() const;
     // A line-only reference can be ambiguous after several original lines were fused.
