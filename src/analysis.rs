@@ -255,7 +255,9 @@ impl Default for AnalysisOptions {
     }
 }
 
-/// A source range, 0-based lines and columns, end exclusive.
+/// A range in original source: 0-based lines and byte columns, end exclusive.
+/// Copied surface expressions retain exact spans; synthetic operations use their
+/// comprehension/clause/projection anchors. Columns are not UTF-16 editor offsets.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub struct Span {
     pub begin_line: u32,
@@ -632,7 +634,9 @@ impl Analysis {
         unsafe { ffi::db_analysis_clear(self.raw) }
     }
 
-    /// Completions at `line`/`column` (0-based) of `module`.
+    /// Completions at an original-source `line` and byte `column` (both 0-based).
+    /// Surface lowering translates the cursor internally and hides generated binding names.
+    /// Coordinates refer to the cached source snapshot until [`Self::mark_dirty`] or [`Self::clear`].
     pub fn autocomplete(&self, module: &str, line: u32, column: u32) -> Result<Completions> {
         let mut entries: Vec<Completion> = Vec::new();
         let context = unsafe {
@@ -678,11 +682,15 @@ impl Drop for Analysis {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ParseReport {
     pub errors: Vec<Diagnostic>,
-    /// The AST as Luau's JSON encoding, when requested and the parse produced a tree.
+    /// The lowered Luau AST as JSON, when requested and the parse produced a tree.
+    /// Its locations refer to original source, but its kinds still include generated
+    /// loops/functions/locals; this is not a surface-language AST or a concrete syntax tree.
     pub json: Option<String>,
 }
 
-/// Parses `source` standalone (`Luau::Parser::parse`), optionally encoding the AST as JSON.
+/// Lowers and parses `source` standalone, optionally encoding the Luau AST as JSON.
+/// Diagnostic and AST spans refer to original source. Malformed, unrecognized surface
+/// syntax still uses stock Luau parser recovery; mapping does not add a second parser.
 pub fn parse(source: &str, with_json: bool) -> ParseReport {
     let mut errors: Vec<Diagnostic> = Vec::new();
     let mut json = String::new();

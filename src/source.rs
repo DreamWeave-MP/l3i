@@ -185,6 +185,8 @@ fn c_array(values: &[CString], storage: &mut Vec<*const c_char>) -> *const *cons
 
 /// Compiles Luau source to bytecode. A compile error is returned as `Error::Runtime` carrying
 /// Luau's message (without a chunk name) rather than as error bytecode.
+/// L3i surface forms are lowered before parsing; compiler errors and emitted debug line
+/// metadata refer to original source. Cached bytecode keeps the metadata it was built with.
 pub fn compile(source: &str, options: &CompileOptions) -> Result<Vec<u8>> {
     let bytes = compile_raw(source, options)?;
     if bytes.first() == Some(&0) {
@@ -196,6 +198,7 @@ pub fn compile(source: &str, options: &CompileOptions) -> Result<Vec<u8>> {
 /// Returns Luau's textual disassembly for `source`, compiled with the same explicit options as
 /// [`compile`]. The output includes every function's bytecode instructions, source lines, locals,
 /// and constants.
+/// Surface forms use original-source lines, including intentional anchors for synthetic code.
 ///
 /// # Errors
 ///

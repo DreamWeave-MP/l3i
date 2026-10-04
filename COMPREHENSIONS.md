@@ -150,9 +150,11 @@ user bindings**, not only assignment acceptance:
 - Removing the nullable filters still fails arithmetic typechecking. The later
   projection guard cannot refine an earlier invalid arithmetic operand.
 
-**Source mapping remains unfinished.** Analysis, standalone Analysis parsing, and
-runtime compilation consume lowered source. Their spans/AST locations/debug lines
-are not mapped back to the original. With zero-based, end-exclusive positions:
+**Original-source mapping is now integrated.** The shared lowerer records exact
+copied spans and deliberate synthetic anchors. Analysis diagnostics, autocomplete
+requests, standalone AST JSON locations, and compiled runtime debug lines use
+original coordinates. See [the mapping contract and validation](SOURCE_MAPPING.md).
+With zero-based byte columns and end-exclusive positions:
 
 ```luau
 --!strict
@@ -161,14 +163,12 @@ local projected = [for x in values => x.missing]
 return projected
 ```
 
-The diagnostic is clear (`Type 'number' does not have key 'missing'`), but reports
-line 2, columns 323–332 instead of original columns 37–46. A same-line trailing
-`local wrong: string = 42` reports columns 561–563 instead of 65–67. In a separate
-next-line control, columns 22–24 remain correct. This does not generalize to
-multiline/nested expansions, where line counts and expression placement can change.
-Autocomplete request positions share this lowered-coordinate problem; the tests
-query an untouched later line. Production tooling needs mappings for copied
-expressions and synthetic spans across compiler, analysis, parser, and debugger.
+The diagnostic (`Type 'number' does not have key 'missing'`) now reports line 2,
+columns 37–46, rather than generated columns 323–332. Same-line trailing errors
+also use original positions. Regression tests cover nested/multiline expressions,
+UTF-8 byte columns, CRLF, source snapshots, and cursor requests inside comprehensions.
+Known line-only references embedded in diagnostic prose are mapped when unambiguous
+and explicitly qualified when lowering has erased that precision.
 
 Other prototype boundaries remain: source-wide textual stem hygiene, grouped
 top-level conditional source/filter expressions, opaque backtick interpolation,
@@ -176,7 +176,10 @@ malformed-form errors delegated to stock Luau, and the raw `@dream/luau` parser
 remaining a stock-Luau parser. Generated `table.create` and `error` references use
 ordinary lexical/global lookup; rebinding standard helpers is not hygienically isolated.
 
-## Validation and next boundary
+## Baseline validation and next boundary
+
+These counts are from the original integration/benchmark pass. The mapping follow-up's
+current validation and remaining tooling boundaries are recorded in [SOURCE_MAPPING.md](SOURCE_MAPPING.md).
 
 - `cargo test`: PASS (79 unit + 140 integration tests).
 - `cargo test --features analysis`: PASS (79 + 148).
