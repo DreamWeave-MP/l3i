@@ -34,16 +34,18 @@ fn comprehension_wrapper_is_inlineable_at_l3i_optimization_level() {
     assert!(!listing.contains("DUPCLOSURE"), "{listing}");
     assert!(listing.contains("FORNPREP") && listing.contains("FORNLOOP"), "{listing}");
 }
-
-
 #[test]
 fn comprehension_length_fuses_without_materializing_a_table() {
-    let source = "local values = { 1, 2, 3, 4 } return #[for x in values if x % 2 == 0 => x * 2]";
+    // Supply the input externally: an input literal legitimately emits NEWTABLE/SETLIST.
+    let source = "return #[for x in values if x % 2 == 0 => x * 2]";
     let listing = disassemble(source, &CompileOptions::default()).unwrap();
 
     assert!(!listing.contains("NEWTABLE"), "{listing}");
     assert!(!listing.contains("SETLIST"), "{listing}");
     assert!(!listing.contains("NEWCLOSURE"), "{listing}");
     assert!(!listing.contains("DUPCLOSURE"), "{listing}");
+    assert!(!listing.contains("table.create"), "{listing}");
+    assert!(!listing.contains("SETTABLE"), "{listing}");
+    assert!(listing.contains("MULK") && listing.contains("JUMPXEQKNIL"), "{listing}");
     assert!(listing.contains("FORNPREP") && listing.contains("FORNLOOP"), "{listing}");
 }

@@ -245,7 +245,7 @@ fn compile_native(source: &str, options: &CompileOptions, disassemble: bool) -> 
     };
 
     let rewritten = rewrite_surface_syntax(source);
-    let compile_source = rewritten.as_deref().unwrap_or_else(|| source.as_bytes());
+    let compile_source = rewritten.as_deref().unwrap_or(source.as_bytes());
 
     let mut size = 0usize;
     // SAFETY: every pointer in `raw` outlives this call (the CStrings and the pointer arrays
