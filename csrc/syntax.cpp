@@ -1830,6 +1830,11 @@ int l3i_luau_parse(lua_State* L, const char* source, size_t length, int flags)
                 SourceMetadata metadata(surfaces);
                 metadata.walk(result.root);
             }
+            if (result.root && lowered.preludeStatements <= result.root->body.size)
+            {
+                result.root->body.data += lowered.preludeStatements;
+                result.root->body.size -= lowered.preludeStatements;
+            }
             L3i::Surface::remapLocations(result, lowered.map);
         }
         else

@@ -209,7 +209,7 @@ namespace
         explicit GeneratedBindings(const SourceSnapshot& snapshot) : snapshot(snapshot) {}
         void add(Luau::AstLocal* local)
         {
-            if (synthetic(snapshot, local->location))
+            if (synthetic(snapshot, local->location) || snapshot.lowered.map.generatedName(local->name.value))
                 names.insert(local->name.value);
         }
         bool visit(Luau::AstStatLocal* stat) override

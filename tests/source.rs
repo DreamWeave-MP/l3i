@@ -82,6 +82,7 @@ fn comprehension_length_fuses_without_materializing_a_table() {
     assert!(!listing.contains("NEWCLOSURE"), "{listing}");
     assert!(!listing.contains("DUPCLOSURE"), "{listing}");
     assert!(!listing.contains("table.create"), "{listing}");
+    assert!(listing.contains("GETUPVAL"), "{listing}");
     assert!(!listing.contains("SETTABLE"), "{listing}");
     assert!(listing.contains("MULK") && listing.contains("JUMPXEQKNIL"), "{listing}");
     assert!(listing.contains("FORNPREP") && listing.contains("FORNLOOP"), "{listing}");
@@ -97,6 +98,7 @@ fn comprehension_sum_reducer_fuses_without_materializing_a_table() {
     assert!(!listing.contains("NEWCLOSURE"), "{listing}");
     assert!(!listing.contains("DUPCLOSURE"), "{listing}");
     assert!(!listing.contains("table.create"), "{listing}");
+    assert!(listing.contains("GETUPVAL"), "{listing}");
     assert!(!listing.contains("SETTABLE"), "{listing}");
     assert!(listing.contains("JUMPXEQKNIL"), "{listing}");
     assert!(listing.contains("FORNPREP") && listing.contains("FORNLOOP"), "{listing}");

@@ -7,6 +7,46 @@ use std::rc::Rc;
 use l3i::debug::{DebugAction, DebugInfo, DebugScope, HookSet, RuntimeHooks};
 use l3i::stack::Stack;
 
+#[test]
+fn language_operations_cannot_be_captured_by_user_bindings() {
+    for consume in ["", "#", "sum"] {
+        let runtime = Runtime::new().unwrap();
+        runtime
+            .exec(&format!(
+                r#"
+            local calls = 0
+            local error = function(_) calls += 1 end
+            local table = {{create = function(_) calls += 1 return {{99}} end}}
+            local ok, message = pcall(function()
+                return {consume}[for x in {{1}} => nil]
+            end)
+            assert(not ok and string.find(tostring(message), "comprehension projection produced nil", 1, true))
+            assert(calls == 0, "generated operations used user bindings")
+        "#
+            ))
+            .unwrap();
+    }
+    let runtime = Runtime::new().unwrap();
+    runtime
+        .exec(
+            r#"
+        local calls = 0
+        local table = {create = function(_) calls += 1 return {99} end}
+        local materialized = [for x in {} => x]
+        local fused = #[for x in {} => x]
+        assert(#materialized == 0 and fused == 0 and calls == 0)
+        local ok, message = pcall(function()
+            return [for error in {function(_) calls += 1 end} => nil]
+        end)
+        assert(not ok and string.find(tostring(message), "comprehension projection produced nil", 1, true))
+        assert(calls == 0)
+        local copied = [for x in {1, 2} => table.create(x)[1]]
+        assert(copied[1] == 99 and copied[2] == 99 and calls == 2, "copied calls must retain lexical lookup")
+    "#,
+        )
+        .unwrap();
+}
+
 struct InstructionCounter(Rc<Cell<u64>>);
 
 impl RuntimeHooks for InstructionCounter {

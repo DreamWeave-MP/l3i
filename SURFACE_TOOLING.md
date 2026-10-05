@@ -72,6 +72,8 @@ suggests missing `in`/`=>`/`]` where relevant, and retains typed member completi
 after a dot in sources, filters, and projections. Nullable filter refinement and
 outer-generator captures survive nested partial expressions. Generated names and
 errors caused solely by empty recovery holes are not presented as user code.
+The lowering-owned operation prelude is likewise absent from the surface tree and
+autocomplete results. Leading comments and hot comments remain before that prelude.
 An unfinished copied member expression still reports its missing identifier even
 when the diagnostic lands on a generated fence sharing another hole's EOF point.
 

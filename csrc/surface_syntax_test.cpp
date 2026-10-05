@@ -115,6 +115,10 @@ int main()
         samePosition(plain.map.originalPosition({1, 7}), {1, 7});
         samePosition(plain.map.generatedPosition({1, 7}), {1, 7});
     }
+    {
+        const auto lowered = L3i::Surface::lower("--!native\n-- leading\nreturn [for x in xs => x]");
+        assert(lowered.source.rfind("--!native\n-- leading\nlocal __l3i_comp_", 0) == 0);
+    }
     // Ordinary Luau and the old Python spelling remain untouched.  Most importantly, Luau's long
     // string syntax no longer has any relationship to comprehension recognition.
     unchanged("return xs[1]");
@@ -129,9 +133,9 @@ int main()
     {
         const std::string out = rewrite("return [for x in values => x * 2]");
         contains(out, "local __l3i_comp_7_g0_src = values");
-        contains(out, "table.create(__l3i_comp_7_g0_len)");
+        contains(out, "_table_create(__l3i_comp_7_g0_len)");
         contains(out, "local __l3i_comp_7_value = x * 2");
-        contains(out, "if __l3i_comp_7_value == nil then error(\"L3i comprehension projection produced nil; filter nil explicitly\") end");
+        contains(out, "_error(\"L3i comprehension projection produced nil; filter nil explicitly\") end");
         contains(out, "__l3i_comp_7_out[__l3i_comp_7_g0_i] = __l3i_comp_7_value");
         assert(occurrences(out, "x * 2") == 1); // projection evaluated exactly once
         assert(occurrences(out, "values") == 1); // source evaluated exactly once
@@ -155,7 +159,7 @@ int main()
     {
         const std::string out = rewrite("return [for x in xs => maybe(x)]");
         contains(out, "local __l3i_comp_7_value = maybe(x)");
-        contains(out, "if __l3i_comp_7_value == nil then error(\"L3i comprehension projection produced nil; filter nil explicitly\") end");
+        contains(out, "_error(\"L3i comprehension projection produced nil; filter nil explicitly\") end");
         assert(occurrences(out, "maybe(x)") == 1);
     }
 

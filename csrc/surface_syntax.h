@@ -25,6 +25,7 @@ struct LoweredSource
     SourceMap map;
     Document document;
     std::vector<ComprehensionSite> sites;
+    size_t preludeStatements = 0;
 };
 
 // Shared compiler/tooling seam: all coordinates in map refer to the original input.

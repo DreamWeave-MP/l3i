@@ -176,8 +176,9 @@ Compilation is strict; Analysis and `@dream/luau` use structural recovery. Ordin
 conditionals/function literals belong to Luau, and comprehensions inside interpolation
 expressions are recognized. `@dream/luau` now defaults to genuine source nodes rather
 than generated wrappers. See [the surface tooling contract](SURFACE_TOOLING.md).
-Remaining boundaries include textual lowering hygiene, bounded/fatal parser recovery,
-and generated `table.create`/`error` references using ordinary lexical/global lookup.
+Remaining boundaries include textual lowering hygiene and bounded/fatal parser recovery.
+Generated allocation and nil-error operations are snapshotted before user declarations,
+so local bindings cannot capture them; copied user expressions retain ordinary lexical lookup.
 
 ## Baseline validation and next boundary
 

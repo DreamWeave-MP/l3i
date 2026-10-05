@@ -3,6 +3,8 @@
 #include "surface_syntax.h"
 
 #include <algorithm>
+#include <cctype>
+#include <unordered_set>
 #include <utility>
 
 namespace L3i::Surface
@@ -82,7 +84,61 @@ class Lowerer
 {
 public:
     Lowerer(std::string_view source, const Document& document, bool recovery, bool fuse)
-        : source(source), document(document), recovery(recovery), fuse(fuse) {}
+        : source(source), document(document), recovery(recovery), fuse(fuse)
+    {
+        for (size_t begin = 0; begin < source.size();)
+        {
+            const unsigned char first = static_cast<unsigned char>(source[begin]);
+            if (!(first == '_' || std::isalpha(first)))
+            {
+                ++begin;
+                continue;
+            }
+            size_t end = begin + 1;
+            while (end < source.size())
+            {
+                const unsigned char next = static_cast<unsigned char>(source[end]);
+                if (!(next == '_' || std::isalnum(next))) break;
+                ++end;
+            }
+            names.emplace(source.substr(begin, end - begin));
+            begin = end;
+        }
+        operations = stem(source.size());
+    }
+
+    Text lower()
+    {
+        Text result;
+        result.anchor = document.comprehensions.front().range;
+        size_t prefix = 0;
+        auto comment = document.comments.begin();
+        for (;;)
+        {
+            while (prefix < source.size() && std::isspace(static_cast<unsigned char>(source[prefix])))
+                ++prefix;
+            while (comment != document.comments.end() && comment->end <= prefix)
+                ++comment;
+            if (comment == document.comments.end() || comment->begin != prefix)
+                break;
+            prefix = comment->end;
+            ++comment;
+        }
+        result.copy(source, {0, prefix});
+        result += "local " + operations + "_error = error ";
+        const bool needsTable = std::any_of(document.comprehensions.begin(), document.comprehensions.end(), [&](const Comprehension& node) {
+            return node.sumPrefix.empty() && (!fuse || node.lengthPrefix.empty());
+        });
+        if (needsTable)
+        {
+            result += "local " + operations + "_table_create = table.create ";
+            preludeStatements = 2;
+        }
+        result.append(range({prefix, source.size()}));
+        return result;
+    }
+
+    size_t prelude() const { return preludeStatements; }
 
     Text range(Range input)
     {
@@ -110,6 +166,9 @@ private:
     const Document& document;
     bool recovery;
     bool fuse;
+    std::unordered_set<std::string_view> names;
+    std::string operations;
+    size_t preludeStatements = 1;
 
     std::string stem(size_t offset) const
     {
@@ -118,7 +177,7 @@ private:
             std::string name = "__l3i_comp_" + std::to_string(offset);
             if (salt)
                 name += "_" + std::to_string(salt);
-            if (source.find(name) == std::string_view::npos)
+            if (!names.count(name))
                 return name;
         }
     }
@@ -158,7 +217,8 @@ private:
         out.anchor = node.projection;
         out += "local " + name + "_value = ";
         site.projection = expression(out, node.projection, "(nil :: any)", node.projectionSuffix);
-        out += " if " + name + "_value == nil then error(\"L3i comprehension projection produced nil; filter nil explicitly\") end ";
+        out += " if " + name + "_value == nil then " + operations
+            + "_error(\"L3i comprehension projection produced nil; filter nil explicitly\") end ";
     }
 
     void comments(Text& out, const Comprehension& node, size_t begin)
@@ -219,7 +279,7 @@ private:
             site.clauses[0].expression = expression(out, generator.expression, "({} :: {any})", generator.expressionSuffix);
             out += " local " + name + "_g0_len = #" + name + "_g0_src ";
             if (!scalar)
-                out += "local " + output + " = table.create(" + name + "_g0_len) :: typeof({}) ";
+                out += "local " + output + " = " + operations + "_table_create(" + name + "_g0_len) :: typeof({}) ";
             if (!exact || scalar)
                 out += "local " + cursor + " = 0 ";
             out += "for " + name + "_g0_i = 1, " + name + "_g0_len do local ";
@@ -297,10 +357,10 @@ LoweredSource lower(std::string_view source, bool recovery, bool fuseLength)
 {
     Document document = parseSurface(source);
     if (document.comprehensions.empty() || (!recovery && !document.errors.empty()))
-        return {std::string(source), {}, std::move(document), {}};
+        return {std::string(source), {}, std::move(document), {}, 0};
     Lowerer lowerer(source, document, recovery, fuseLength);
-    Text output = lowerer.range({0, source.size()});
+    Text output = lowerer.lower();
     SourceMap map(source, output.text, std::move(output.segments));
-    return {std::move(output.text), std::move(map), std::move(document), std::move(output.sites)};
+    return {std::move(output.text), std::move(map), std::move(document), std::move(output.sites), lowerer.prelude()};
 }
 }
