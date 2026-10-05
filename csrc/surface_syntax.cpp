@@ -154,6 +154,11 @@ public:
             result += "local " + operations + "_typeof = typeof ";
             ++preludeStatements;
         }
+        if (!document.slices.empty())
+        {
+            result += "local " + operations + "_buffer = buffer ";
+            ++preludeStatements;
+        }
         const bool needsTable = std::any_of(document.comprehensions.begin(), document.comprehensions.end(), [&](const Comprehension& node) {
             const size_t generators = std::count_if(node.clauses.begin(), node.clauses.end(),
                 [](const Clause& clause) { return clause.kind == ClauseKind::Generator; });
@@ -277,11 +282,17 @@ private:
         return {begin, end};
     }
 
-    void sliceChecks(Text& out, std::string_view prefix, Range sourceRange, Range firstRange, Range lastRange)
+    void sliceChecks(Text& out, std::string_view prefix, Range sourceRange, Range firstRange, Range lastRange,
+        bool allowBuffer = false)
     {
         out.anchor = sourceRange;
-        out += "if " + operations + "_typeof(" + std::string(prefix) + "_src) ~= \"table\" then " +
-            operations + "_error(\"JSL slice source must be a table\") end ";
+        out += "local " + std::string(prefix) + "_kind = " + operations + "_typeof(" + std::string(prefix) + "_src) ";
+        if (allowBuffer)
+            out += "if " + std::string(prefix) + "_kind ~= \"table\" and " + std::string(prefix) +
+                "_kind ~= \"buffer\" then " + operations + "_error(\"JSL slice source must be a table or buffer\") end ";
+        else
+            out += "if " + std::string(prefix) + "_kind ~= \"table\" then " + operations +
+                "_error(\"JSL comprehension slice source must be a table\") end ";
         out.anchor = firstRange;
         out += "if " + operations + "_typeof(" + std::string(prefix) + "_first) ~= \"number\" or " +
             std::string(prefix) + "_first % 1 ~= 0 then " + operations +
@@ -308,8 +319,8 @@ private:
         out += " local " + prefix + "_last = ";
         site.last = expression(out, node.last, "(0 :: number)");
         out += " ";
-        sliceChecks(out, prefix, node.source, node.first, node.last);
-        out += "local " + prefix + "_len = #" + prefix + "_src if " + prefix + "_first < 1 then " + prefix + "_first = 1 end if " + prefix + "_last > " + prefix + "_len then " + prefix + "_last = " + prefix + "_len end local " + prefix + "_n = 0 if " + prefix + "_last >= " + prefix + "_first then " + prefix + "_n = " + prefix + "_last - " + prefix + "_first + 1 end local " + prefix + "_out = " + operations + "_table_create(" + prefix + "_n) :: typeof(" + prefix + "_src) if " + prefix + "_n > 0 then " + operations + "_table_move(" + prefix + "_src, " + prefix + "_first, " + prefix + "_last, 1, " + prefix + "_out) end return " + prefix + "_out end)()";
+        sliceChecks(out, prefix, node.source, node.first, node.last, true);
+        out += "local " + prefix + "_len = 0 if " + prefix + "_kind == \"buffer\" then " + prefix + "_len = " + operations + "_buffer.len(" + prefix + "_src :: any) else " + prefix + "_len = #(" + prefix + "_src :: any) end if " + prefix + "_first < 1 then " + prefix + "_first = 1 end if " + prefix + "_last > " + prefix + "_len then " + prefix + "_last = " + prefix + "_len end local " + prefix + "_n = 0 if " + prefix + "_last >= " + prefix + "_first then " + prefix + "_n = " + prefix + "_last - " + prefix + "_first + 1 end if " + prefix + "_kind == \"buffer\" then local " + prefix + "_out = (" + operations + "_buffer.create(" + prefix + "_n) :: any) :: typeof(" + prefix + "_src) if " + prefix + "_n > 0 then " + operations + "_buffer.copy(" + prefix + "_out :: any, 0, " + prefix + "_src :: any, " + prefix + "_first - 1, " + prefix + "_n) end return " + prefix + "_out else local " + prefix + "_out = (" + operations + "_table_create(" + prefix + "_n) :: any) :: typeof(" + prefix + "_src) if " + prefix + "_n > 0 then " + operations + "_table_move(" + prefix + "_src :: any, " + prefix + "_first, " + prefix + "_last, 1, " + prefix + "_out :: any) end return " + prefix + "_out end end)()";
         site.call = {callBegin, out.size()};
         out.sliceSites.push_back(std::move(site));
         return out;

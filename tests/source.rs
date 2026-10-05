@@ -144,6 +144,13 @@ fn standalone_table_slices_use_bulk_copy() {
 }
 
 #[test]
+fn standalone_buffer_slices_use_bulk_copy() {
+    let listing = disassemble("return values[2:limit]", &CompileOptions::default()).unwrap();
+    assert!(listing.contains("'buffer'") && listing.contains("'copy'") && listing.contains("table.move"), "{listing}");
+    assert!(!listing.contains("FORNPREP") && !listing.contains("FORNLOOP"), "{listing}");
+}
+
+#[test]
 fn surface_compile_errors_and_disassembly_use_original_lines() {
     let source = "local xs = {1}\nlocal ys = [for x in xs => x * 2]\n\nlocal broken =\n    [for y in ys => y + * 2]";
     let options = CompileOptions::default();

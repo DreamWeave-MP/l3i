@@ -122,6 +122,35 @@ fn standalone_slices_materialize_dense_tables_with_single_evaluation() {
 }
 
 #[test]
+fn standalone_buffer_slices_copy_inclusive_one_based_byte_ranges() {
+    let runtime = Runtime::new().unwrap();
+    runtime
+        .exec(
+            r#"
+        local input = buffer.create(5)
+        for i = 0, 4 do buffer.writeu8(input, i, 10 + i) end
+        local builtinBuffer = buffer
+        local calls, captured = 0, 0
+        local function source() calls += 1 return input end
+        local buffer = {
+            create = function() captured += 1 end,
+            copy = function() captured += 1 end,
+            len = function() captured += 1 end,
+        }
+        local part = source()[2:4]
+        assert(calls == 1 and captured == 0)
+        assert(typeof(part) == "buffer" and builtinBuffer.len(part) == 3)
+        assert(builtinBuffer.readu8(part, 0) == 11 and builtinBuffer.readu8(part, 2) == 13)
+        local empty = input[99:100]
+        assert(builtinBuffer.len(empty) == 0)
+        local ok, message = pcall(function() return sum[for byte in input[1:2] => byte] end)
+        assert(not ok and string.find(tostring(message), "comprehension slice source must be a table", 1, true))
+    "#,
+        )
+        .unwrap();
+}
+
+#[test]
 fn slice_sources_and_bounds_have_identical_checked_semantics_for_every_consumer() {
     for expression in [
         "values[first:last]",

@@ -228,6 +228,17 @@ fn standalone_slices_infer_dense_source_element_types() {
 }
 
 #[test]
+fn standalone_buffer_slices_preserve_buffer_type() {
+    let source = "--!strict\nlocal values: buffer = buffer.create(4)\nlocal part = values[1:2]\nreturn part\n";
+    for solver in [analysis::Solver::New, analysis::Solver::Old] {
+        let analysis = comprehension_analysis(HashMap::from([("buffer_slice", source)]), solver);
+        let report = analysis.check("buffer_slice", false);
+        assert!(report.is_clean(), "{solver:?}: {report:#?}");
+        assert_binding_type(&analysis, "buffer_slice", 4, "part", "buffer");
+    }
+}
+
+#[test]
 fn comprehension_filters_refine_nullable_elements_and_fields_before_projection() {
     let refined = concat!(
         "--!strict\n",

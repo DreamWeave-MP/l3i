@@ -278,16 +278,17 @@ Bounds are 1-based, inclusive, finite integers. The source must be a table. The 
 bound, and last bound are evaluated once, left to right, before validation and before measuring
 the source. Invalid sources and bounds fail consistently in materialized and fused forms. Bounds
 are clamped to the source's dense extent; an interval with `last < first` is empty. The initial
-form is intentionally unstepped and table-directed. Standalone slices
-allocate an exactly sized dense result and bulk-copy with a snapshotted `table.move`; they do not
-consult a user binding named `table`. Comprehension lowering instead traverses selected indices
+form is intentionally unstepped. Standalone table slices allocate an exactly sized dense result
+and bulk-copy with a snapshotted `table.move`. Standalone buffer slices preserve the same 1-based
+inclusive surface bounds, translate them to zero-based byte offsets, and bulk-copy with
+`buffer.copy`. They do not consult user bindings named `table` or `buffer`. Table comprehension lowering instead traverses selected indices
 directly. Fused length and sum consumers allocate neither a slice nor a comprehension result.
 Materialized comprehension consumers compact selected elements into their normal dense result,
 preserving projection order and the non-nil guard.
 
 The canonical frontend exports an `ExprSlice` node with original source and bound spans for both
-standalone and generator slices. Buffer and string representation-directed copies remain future
-work; the current form requires a dense table source. Stock Luau indexing wins when the contents
+standalone and generator slices. Buffer generator fusion and string representation-directed copies
+remain future work; comprehension slice sources currently require dense tables. Stock Luau indexing wins when the contents
 are already a valid colon method call, so ambiguous bounds use parentheses: `xs[(first()):(last())]`.
 
 ## Post-baseline JSL reducer experiment: `sum[for ...]`
