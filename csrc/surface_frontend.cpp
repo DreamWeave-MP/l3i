@@ -384,6 +384,38 @@ private:
         clause.zipArguments = std::move(arguments);
         clause.zipStrict = name == "zipStrict";
     }
+    void recognizeSlice(size_t begin, size_t end, Clause& clause)
+    {
+        if (end <= begin || type(end - 1) != ']') return;
+        size_t open = end - 1;
+        int depth = 0;
+        for (;;)
+        {
+            const int token = type(open);
+            if (token == ']') ++depth;
+            else if (token == '[' && --depth == 0) break;
+            if (open == begin) return;
+            --open;
+        }
+        if (open == begin || open + 2 >= end - 1) return;
+        size_t colon = 0;
+        int nested = 0;
+        for (size_t at = open + 1; at + 1 < end; ++at)
+        {
+            const int token = type(at);
+            if (token == '(' || token == '[' || token == '{') ++nested;
+            else if (token == ')' || token == ']' || token == '}') --nested;
+            else if (token == ':' && nested == 0)
+            {
+                if (colon) return;
+                colon = at;
+            }
+        }
+        if (!colon || colon == open + 1 || colon + 1 == end - 1) return;
+        clause.sliceSource = {tokens[begin].range.begin, tokens[open - 1].range.end};
+        clause.sliceFirst = {tokens[open + 1].range.begin, tokens[colon - 1].range.end};
+        clause.sliceLast = {tokens[colon + 1].range.begin, tokens[end - 2].range.end};
+    }
     void comprehension(size_t& i, size_t depth)
     {
         if (limit(i, depth)) return;
@@ -439,6 +471,7 @@ private:
                 recognizeRange(expressionBegin, i, clause);
                 recognizeEnumerate(expressionBegin, i, clause);
                 recognizeZip(expressionBegin, i, clause);
+                recognizeSlice(expressionBegin, i, clause);
                 if (!clause.enumerateArgument.empty() && clause.bindings.size() != 2)
                     error(clause.binding, "JSL enumerate generator requires two bindings");
                 else if (!clause.zipArguments.empty() && clause.bindings.size() != clause.zipArguments.size())

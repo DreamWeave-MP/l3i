@@ -202,6 +202,20 @@ int main()
         assert(d.comprehensions.size() == 1 && !d.errors.empty() && !d.comprehensions[0].complete);
     }
     {
+        const std::string_view s = "[for x in values[first:last] => x]";
+        const auto d = parseSurface(s);
+        assert(d.errors.empty() && d.comprehensions.size() == 1);
+        const auto& clause = d.comprehensions[0].clauses[0];
+        assert(slice(s, clause.sliceSource) == "values");
+        assert(slice(s, clause.sliceFirst) == "first");
+        assert(slice(s, clause.sliceLast) == "last");
+    }
+    for (std::string_view s : {"[for x in values[:last] => x]", "[for x in values[first:] => x]"})
+    {
+        const auto d = parseSurface(s);
+        assert(d.comprehensions.size() == 1 && d.comprehensions[0].clauses[0].sliceSource.empty());
+    }
+    {
         const std::string s = "-- [for fake in xs => fake]\r\nlocal a = '[for fake]'\nlocal b = [==[[for fake]]==]\n"
             "--[=[ [for ignored] ]=]\nlocal c = [ -- trivia\r\n for x -- name\n in xs -- expr\n if x => 'é' ]";
         complete(s);

@@ -60,6 +60,7 @@ using namespace Luau;
     X(KExprRange, "ExprRange") \
     X(KExprEnumerate, "ExprEnumerate") \
     X(KExprZip, "ExprZip") \
+    X(KExprSlice, "ExprSlice") \
     X(SSum, "sum") \
     X(KExprComprehension, "ExprComprehension") \
     X(KComprehensionGenerator, "ComprehensionGenerator") \
@@ -79,6 +80,8 @@ using namespace Luau;
     X(func, "func") \
     X(args, "args") \
     X(strict, "strict") \
+    X(first, "first") \
+    X(last, "last") \
     X(self, "self") \
     X(typeArguments, "typeArguments") \
     X(argLocation, "argLocation") \
@@ -437,6 +440,9 @@ struct SurfaceClause
     std::vector<AstExpr*> rangeArguments;
     std::vector<AstExpr*> zipArguments;
     bool zipStrict = false;
+    AstExpr* sliceSource = nullptr;
+    AstExpr* sliceFirst = nullptr;
+    AstExpr* sliceLast = nullptr;
 };
 struct SurfaceExpression
 {
@@ -511,6 +517,7 @@ public:
             if (clause.rangeArguments.empty()) walk(clause.expression);
             else for (AstExpr* argument : clause.rangeArguments) walk(argument);
             for (AstExpr* argument : clause.zipArguments) walk(argument);
+            walk(clause.sliceSource); walk(clause.sliceFirst); walk(clause.sliceLast);
             if (it->second.record->clauses[i].kind == L3i::Surface::ClauseKind::Generator)
             {
                 ++loopDepth;
@@ -1610,7 +1617,17 @@ public:
                 if (!clause.in.empty()) span(inLocation, location(clause.in));
                 setBool(hasIn, !clause.in.empty());
             }
-            if (!clause.zipArguments.empty())
+            if (!clause.sliceSource.empty())
+            {
+                open(KExprSlice, location(clause.expression), 3);
+                surfaceExpr(ast.sliceSource, clause.sliceSource);
+                popInto(sourceField);
+                surfaceExpr(ast.sliceFirst, clause.sliceFirst);
+                popInto(first);
+                surfaceExpr(ast.sliceLast, clause.sliceLast);
+                popInto(last);
+            }
+            else if (!clause.zipArguments.empty())
             {
                 open(KExprZip, location(clause.expression), 2);
                 setBool(strict, clause.zipStrict);
@@ -1881,6 +1898,9 @@ int l3i_luau_parse(lua_State* L, const char* source, size_t length, int flags)
                     for (const auto& argument : site.clauses[i].zipArguments)
                         surface.clauses[i].zipArguments.push_back(index.expression(argument));
                     surface.clauses[i].zipStrict = lowered.document.comprehensions[site.comprehension].clauses[i].zipStrict;
+                    surface.clauses[i].sliceSource = index.expression(site.clauses[i].sliceSource);
+                    surface.clauses[i].sliceFirst = index.expression(site.clauses[i].sliceFirst);
+                    surface.clauses[i].sliceLast = index.expression(site.clauses[i].sliceLast);
                 }
                 surface.projection = index.expression(site.projection);
                 surfaces.emplace(call, std::move(surface));

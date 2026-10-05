@@ -427,6 +427,23 @@ fn zip_generators_are_source_nodes_with_explicit_mode() {
 }
 
 #[test]
+fn slices_are_source_nodes_with_original_bound_spans() {
+    surface_test(
+        r#"
+        local source = "return [for x in values[first:last] => x]"
+        local r = luau.parse(source)
+        assert(#r.errors == 0)
+        local slice = r.root.body[1].list[1].clauses[1].source
+        assert(slice.kind == 'ExprSlice')
+        span(source, r, slice, 'values[first:last]')
+        span(source, r, slice.source, 'values')
+        span(source, r, slice.first, 'first')
+        span(source, r, slice.last, 'last')
+    "#,
+    );
+}
+
+#[test]
 fn surface_shadowing_and_real_function_captures_exclude_generated_scopes() {
     surface_test(
         r"

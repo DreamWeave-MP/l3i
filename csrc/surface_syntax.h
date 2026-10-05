@@ -13,6 +13,9 @@ struct ClauseSite
     std::vector<Range> rangeArguments;
     std::vector<Range> zipArguments;
     bool zipStrict = false;
+    Range sliceSource;
+    Range sliceFirst;
+    Range sliceLast;
 };
 
 struct ComprehensionSite

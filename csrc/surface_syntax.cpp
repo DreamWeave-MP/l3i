@@ -74,6 +74,9 @@ struct Text
                     shift(argument, begin);
                 for (auto& argument : clause.zipArguments)
                     shift(argument, begin);
+                shift(clause.sliceSource, begin);
+                shift(clause.sliceFirst, begin);
+                shift(clause.sliceLast, begin);
             }
             sites.push_back(std::move(site));
         }
@@ -317,6 +320,48 @@ private:
                 out += "end ";
             out += "end ";
         }
+        else if (generators == 1 && !node.clauses.front().sliceSource.empty())
+        {
+            const Clause& generator = node.clauses.front();
+            const std::string prefix = name + "_g0";
+            out.anchor = generator.range;
+            out += "local " + prefix + "_src = ";
+            const size_t sourceBegin = out.size();
+            expression(out, generator.sliceSource, "({} :: {any})");
+            site.clauses[0].sliceSource = {sourceBegin, out.size()};
+            out += " local " + prefix + "_len = #" + prefix + "_src local " + prefix + "_first = ";
+            const size_t firstBegin = out.size();
+            expression(out, generator.sliceFirst, "(1 :: number)");
+            site.clauses[0].sliceFirst = {firstBegin, out.size()};
+            out += " local " + prefix + "_last = ";
+            const size_t lastBegin = out.size();
+            expression(out, generator.sliceLast, "(0 :: number)");
+            site.clauses[0].sliceLast = {lastBegin, out.size()};
+            out += " if " + prefix + "_first < 1 then " + prefix + "_first = 1 end if " + prefix + "_last > " + prefix + "_len then " + prefix + "_last = " + prefix + "_len end local " + prefix + "_n = 0 if " + prefix + "_last >= " + prefix + "_first then " + prefix + "_n = " + prefix + "_last - " + prefix + "_first + 1 end ";
+            if (!scalar)
+                out += "local " + output + " = " + operations + "_table_create(" + prefix + "_n) :: typeof({}) ";
+            if (!exact || scalar || !generator.sliceSource.empty())
+                out += "local " + cursor + " = 0 ";
+            out += "for " + prefix + "_i = " + prefix + "_first, " + prefix + "_last do local ";
+            const size_t binding = out.size();
+            out.copy(source, generator.binding);
+            site.clauses[0].binding = {binding, out.size()};
+            site.clauses[0].bindings.push_back(site.clauses[0].binding);
+            out += " = " + prefix + "_src[" + prefix + "_i] ";
+            for (size_t i = 1; i < node.clauses.size(); ++i)
+            {
+                out += "if ";
+                site.clauses[i].expression = expression(out, node.clauses[i].expression, "true", node.clauses[i].expressionSuffix);
+                out += " then ";
+            }
+            projection(out, node, name, site);
+            if (!exact || scalar || !generator.sliceSource.empty())
+                out += cursor + " += " + (sum ? name + "_value " : "1 ");
+            if (!scalar)
+                out += output + "[" + (exact && generator.sliceSource.empty() ? prefix + "_i" : cursor) + "] = " + name + "_value ";
+            for (size_t i = 1; i < node.clauses.size(); ++i) out += "end ";
+            out += "end ";
+        }
         else if (generators == 1 && !node.clauses.front().zipArguments.empty())
         {
             const Clause& generator = node.clauses.front();
@@ -455,6 +500,22 @@ private:
                     if (clause.rangeArguments.size() == 2) out += "local " + prefix + "_r2 = 1 ";
                     out += "if " + prefix + "_r2 == 0 then " + operations + "_error(\"JSL range step must not be zero\") end for ";
                 }
+                else if (!clause.sliceSource.empty())
+                {
+                    out += "local " + prefix + "_src = ";
+                    const size_t sourceBegin = out.size();
+                    expression(out, clause.sliceSource, "({} :: {any})");
+                    site.clauses[i].sliceSource = {sourceBegin, out.size()};
+                    out += " local " + prefix + "_len = #" + prefix + "_src local " + prefix + "_first = ";
+                    const size_t firstBegin = out.size();
+                    expression(out, clause.sliceFirst, "(1 :: number)");
+                    site.clauses[i].sliceFirst = {firstBegin, out.size()};
+                    out += " local " + prefix + "_last = ";
+                    const size_t lastBegin = out.size();
+                    expression(out, clause.sliceLast, "(0 :: number)");
+                    site.clauses[i].sliceLast = {lastBegin, out.size()};
+                    out += " if " + prefix + "_first < 1 then " + prefix + "_first = 1 end if " + prefix + "_last > " + prefix + "_len then " + prefix + "_last = " + prefix + "_len end for " + prefix + "_i = " + prefix + "_first, " + prefix + "_last do local ";
+                }
                 else if (!clause.zipArguments.empty())
                 {
                     for (size_t argument = 0; argument < clause.zipArguments.size(); ++argument)
@@ -489,6 +550,14 @@ private:
                     site.clauses[i].binding = {binding, out.size()};
                     site.clauses[i].bindings.push_back(site.clauses[i].binding);
                     out += " = " + prefix + "_r0, " + prefix + "_r1, " + prefix + "_r2 do ";
+                }
+                else if (!clause.sliceSource.empty())
+                {
+                    const size_t binding = out.size();
+                    out.copy(source, clause.binding);
+                    site.clauses[i].binding = {binding, out.size()};
+                    site.clauses[i].bindings.push_back(site.clauses[i].binding);
+                    out += " = " + prefix + "_src[" + prefix + "_i] ";
                 }
                 else if (!clause.zipArguments.empty())
                 {

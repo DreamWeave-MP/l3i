@@ -80,6 +80,26 @@ fn zip_generators_lower_to_indexed_loops_with_explicit_length_rules() {
 }
 
 #[test]
+fn inclusive_slices_fuse_into_comprehension_consumers() {
+    let runtime = Runtime::new().unwrap();
+    runtime
+        .exec(
+            r#"
+        local calls = 0
+        local function source() calls += 1 return {10, 20, 30, 40, 50} end
+        local values = [for x in source()[2:4] => x * 2]
+        assert(calls == 1, 'source')
+        assert(#values == 3, 'length')
+        assert(values[1] == 40 and values[3] == 80, 'values')
+        assert(sum[for x in {1, 2, 3, 4, 5}[2:4] if x > 2 => x] == 7, 'sum')
+        assert(#[for x in {1, 2, 3, 4, 5}[99:100] => x] == 0, 'high')
+        assert(#[for x in {1, 2, 3}[3:1] => x] == 0, 'reverse')
+    "#,
+        )
+        .unwrap();
+}
+
+#[test]
 fn language_operations_cannot_be_captured_by_user_bindings() {
     for consume in ["", "#", "sum"] {
         let runtime = Runtime::new().unwrap();

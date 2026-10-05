@@ -199,6 +199,24 @@ fn enumerate_generators_infer_numeric_index_and_value_bindings() {
 }
 
 #[test]
+fn slices_preserve_source_types_and_infer_fused_results() {
+    let source = concat!(
+        "--!strict\n",
+        "local values: { number } = { 1, 2, 3, 4 }\n",
+        "local selected = [for x in values[2:3] => x * 2]\n",
+        "local total = sum[for x in values[2:3] => x]\n",
+        "return selected, total\n",
+    );
+    for solver in [analysis::Solver::New, analysis::Solver::Old] {
+        let analysis = comprehension_analysis(HashMap::from([("slice", source)]), solver);
+        let report = analysis.check("slice", false);
+        assert!(report.is_clean(), "{solver:?}: {report:#?}");
+        assert_binding_type(&analysis, "slice", 4, "selected", "{number}");
+        assert_binding_type(&analysis, "slice", 5, "total", "number");
+    }
+}
+
+#[test]
 fn comprehension_filters_refine_nullable_elements_and_fields_before_projection() {
     let refined = concat!(
         "--!strict\n",

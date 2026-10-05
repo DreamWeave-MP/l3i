@@ -264,6 +264,26 @@ consumers fuse the same traversal and do not allocate a slice, pair table, itera
 table. Direct source nodes (`ExprEnumerate` and `ExprZip`) retain original argument spans for
 tooling and diagnostics.
 
+## Phase Two: inclusive dense-table slices
+
+The first slice form is a direct comprehension generator source:
+
+```luau
+[for x in values[first:last] => project(x)]
+sum[for x in values[first:last] if accept(x) => project(x)]
+```
+
+Bounds are 1-based and inclusive. The source, first bound, and last bound are evaluated once,
+left to right. Bounds are clamped to the source's dense extent; an interval with `last < first`
+is empty. The initial form is intentionally unstepped and table-directed. It lowers to one
+numeric traversal over the selected indices; fused length and sum consumers allocate neither a
+slice nor a comprehension result. Materialized consumers compact selected elements into their
+normal dense result, preserving projection order and the non-nil guard.
+
+The canonical frontend exports an `ExprSlice` node with original source and bound spans. Slice
+syntax outside a recognized comprehension generator remains ordinary Luau input until a broader
+representation-directed slice expression is specified.
+
 ## Post-baseline JSL reducer experiment: `sum[for ...]`
 
 The next surface experiment builds directly on the hardened comprehension lowering without

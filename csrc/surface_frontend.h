@@ -42,6 +42,11 @@ struct Clause
     // Direct JSL zipShortest/zipStrict generator arguments. Empty for other sources.
     std::vector<Range> zipArguments;
     bool zipStrict = false;
+    // Direct dense-table slice source `source[first:last]`, with inclusive,
+    // 1-based bounds. Empty for ordinary sources.
+    Range sliceSource;
+    Range sliceFirst;
+    Range sliceLast;
     // Recovery-only unmatched ordinary delimiters, closed at the original fence.
     // Not part of expression's source range; strict consumers reject recovery.
     std::string expressionSuffix;
