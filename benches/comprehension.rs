@@ -57,6 +57,8 @@ enum Output {
     Filtered,
     Count,
     Sum,
+    Slice,
+    SliceSum,
 }
 
 fn runtime() -> Runtime {
@@ -103,7 +105,7 @@ fn bench_case(group: &mut BenchmarkGroup<'_, WallTime>, label: &str, body: &str,
     let function = runtime.load_function(&format!("return function() {body} end")).unwrap();
     let expected_len = match output {
         Output::Dense => ITEMS,
-        Output::Filtered | Output::Count | Output::Sum => ITEMS / 2,
+        Output::Filtered | Output::Count | Output::Sum | Output::Slice | Output::SliceSum => ITEMS / 2,
     };
     let validation = match output {
         Output::Count => format!("assert(result == {expected_len})"),
@@ -111,6 +113,18 @@ fn bench_case(group: &mut BenchmarkGroup<'_, WallTime>, label: &str, body: &str,
             let n = ITEMS / 2;
             let expected_sum = 2 * n * (n + 1); // sum of (2k)*2 for k=1..n
             format!("assert(result == {expected_sum})")
+        }
+        Output::SliceSum => {
+            let first = ITEMS / 4 + 1;
+            let last = ITEMS * 3 / 4;
+            let expected_sum = (first + last) * expected_len / 2;
+            format!("assert(result == {expected_sum})")
+        }
+        Output::Slice => {
+            let offset = ITEMS / 4;
+            format!(
+                "assert(#result == {expected_len}) for i = 1, {expected_len} do assert(result[i] == i + {offset}) end"
+            )
         }
         Output::Dense | Output::Filtered => {
             let scale = if matches!(output, Output::Dense) { 2 } else { 4 };
@@ -127,10 +141,10 @@ fn bench_case(group: &mut BenchmarkGroup<'_, WallTime>, label: &str, body: &str,
     let stack = runtime.stack();
     let top = stack.top();
     let mut invoke_and_drop = || match output {
-        Output::Count | Output::Sum => {
+        Output::Count | Output::Sum | Output::SliceSum => {
             std::hint::black_box(function.invoke::<f64, _>(&stack, ()).unwrap());
         }
-        Output::Dense | Output::Filtered => {
+        Output::Dense | Output::Filtered | Output::Slice => {
             drop(std::hint::black_box(function.invoke::<Table, _>(&stack, ()).unwrap()));
         }
     };
@@ -154,8 +168,10 @@ fn bench_case(group: &mut BenchmarkGroup<'_, WallTime>, label: &str, body: &str,
         // those pins, changing heap pressure and liveness, so deliberately do not use it.
         runtime.collect_garbage();
         match output {
-            Output::Count | Output::Sum => b.iter(|| function.invoke::<f64, _>(&stack, ()).unwrap()),
-            Output::Dense | Output::Filtered => b.iter(|| function.invoke::<Table, _>(&stack, ()).unwrap()),
+            Output::Count | Output::Sum | Output::SliceSum => b.iter(|| function.invoke::<f64, _>(&stack, ()).unwrap()),
+            Output::Dense | Output::Filtered | Output::Slice => {
+                b.iter(|| function.invoke::<Table, _>(&stack, ()).unwrap())
+            }
         }
         assert_eq!(stack.top(), top);
     });
@@ -168,17 +184,69 @@ fn eager_list_comprehensions(c: &mut Criterion) {
     sum_comparisons(c);
     callback_comparisons(c);
     indexed_generator_comparisons(c);
+    slice_comparisons(c);
+}
+
+fn slice_comparisons(c: &mut Criterion) {
+    let first = ITEMS / 4 + 1;
+    let last = ITEMS * 3 / 4;
+    let count = ITEMS / 2;
+    let mut slices = c.benchmark_group("comprehension_slices");
+    slices.throughput(Throughput::Elements(count));
+    bench_case(&mut slices, "l3i standalone table.move", &format!("return values[{first}:{last}]"), Output::Slice);
+    bench_case(
+        &mut slices,
+        "handwritten table.move",
+        &format!(
+            "local src = values local out = table.create({count}) table.move(src, {first}, {last}, 1, out) return out"
+        ),
+        Output::Slice,
+    );
+    bench_case(
+        &mut slices,
+        "handwritten scalar copy",
+        &format!(
+            "local src = values local out = table.create({count}) local j = 0 \
+             for i = {first}, {last} do j += 1 out[j] = src[i] end return out"
+        ),
+        Output::Slice,
+    );
+    bench_case(
+        &mut slices,
+        "l3i fused slice sum",
+        &format!("return sum[for x in values[{first}:{last}] => x]"),
+        Output::SliceSum,
+    );
+    bench_case(
+        &mut slices,
+        "handwritten fused checked sum",
+        &format!(
+            "local src = values local first, last = {first}, {last} \
+             if typeof(src) ~= 'table' then error('JSL slice source must be a table') end \
+             if typeof(first) ~= 'number' or first % 1 ~= 0 then error('JSL slice first bound must be a finite integer') end \
+             if typeof(last) ~= 'number' or last % 1 ~= 0 then error('JSL slice last bound must be a finite integer') end \
+             local len = #src if first < 1 then first = 1 end if last > len then last = len end \
+             local total = 0 for i = first, last do \
+             local value = src[i] {NIL_GUARD} total += value end return total"
+        ),
+        Output::SliceSum,
+    );
+    bench_case(
+        &mut slices,
+        "materialized slice then checked sum",
+        &format!(
+            "local part = values[{first}:{last}] local total = 0 \
+             for i = 1, #part do local value = part[i] {NIL_GUARD} total += value end return total"
+        ),
+        Output::SliceSum,
+    );
+    slices.finish();
 }
 
 fn indexed_generator_comparisons(c: &mut Criterion) {
     let mut indexed = c.benchmark_group("comprehension_indexed_generators");
     indexed.throughput(Throughput::Elements(ITEMS));
-    bench_case(
-        &mut indexed,
-        "l3i enumerate",
-        "return [for i, value in enumerate(values) => i + value]",
-        Output::Dense,
-    );
+    bench_case(&mut indexed, "l3i enumerate", "return [for i, value in enumerate(values) => i + value]", Output::Dense);
     bench_case(
         &mut indexed,
         "handwritten enumerate",
