@@ -67,6 +67,8 @@ struct Text
             for (auto& clause : site.clauses)
             {
                 shift(clause.binding, begin);
+                for (auto& binding : clause.bindings)
+                    shift(binding, begin);
                 shift(clause.expression, begin);
                 for (auto& argument : clause.rangeArguments)
                     shift(argument, begin);
@@ -318,20 +320,38 @@ private:
             const Clause& generator = node.clauses.front();
             out.anchor = generator.range;
             out += "local " + name + "_g0_src = ";
-            site.clauses[0].expression = expression(out, generator.expression, "({} :: {any})", generator.expressionSuffix);
+            site.clauses[0].expression = expression(out,
+                generator.enumerateArgument.empty() ? generator.expression : generator.enumerateArgument,
+                "({} :: {any})", generator.expressionSuffix);
             out += " local " + name + "_g0_len = #" + name + "_g0_src ";
             if (!scalar)
                 out += "local " + output + " = " + operations + "_table_create(" + name + "_g0_len) :: typeof({}) ";
             if (!exact || scalar)
                 out += "local " + cursor + " = 0 ";
             out += "for " + name + "_g0_i = 1, " + name + "_g0_len do local ";
-            const size_t binding = out.size();
-            if (generator.binding.empty())
-                out += name + "_missing";
+            if (!generator.enumerateArgument.empty())
+            {
+                for (size_t i = 0; i < generator.bindings.size(); ++i)
+                {
+                    if (i) out += ", ";
+                    const size_t begin = out.size();
+                    out.copy(source, generator.bindings[i]);
+                    site.clauses[0].bindings.push_back({begin, out.size()});
+                }
+                site.clauses[0].binding = site.clauses[0].bindings.front();
+                out += " = " + name + "_g0_i, " + name + "_g0_src[" + name + "_g0_i] ";
+            }
             else
-                out.copy(source, generator.binding);
-            site.clauses[0].binding = {binding, out.size()};
-            out += " = " + name + "_g0_src[" + name + "_g0_i] ";
+            {
+                const size_t binding = out.size();
+                if (generator.binding.empty())
+                    out += name + "_missing";
+                else
+                    out.copy(source, generator.binding);
+                site.clauses[0].binding = {binding, out.size()};
+                site.clauses[0].bindings.push_back(site.clauses[0].binding);
+                out += " = " + name + "_g0_src[" + name + "_g0_i] ";
+            }
             for (size_t i = 1; i < node.clauses.size(); ++i)
             {
                 out.anchor = node.clauses[i].expression;
@@ -381,19 +401,41 @@ private:
                 else
                 {
                     out += "local " + prefix + "_src = ";
-                    site.clauses[i].expression = expression(out, clause.expression, "({} :: {any})", clause.expressionSuffix);
+                    site.clauses[i].expression = expression(out,
+                        clause.enumerateArgument.empty() ? clause.expression : clause.enumerateArgument,
+                        "({} :: {any})", clause.expressionSuffix);
                     out += " local " + prefix + "_len = #" + prefix + "_src for " + prefix + "_i = 1, " + prefix + "_len do local ";
                 }
-                const size_t binding = out.size();
-                if (clause.binding.empty())
-                    out += prefix + "_missing";
-                else
-                    out.copy(source, clause.binding);
-                site.clauses[i].binding = {binding, out.size()};
                 if (!clause.rangeArguments.empty())
+                {
+                    const size_t binding = out.size();
+                    if (clause.binding.empty()) out += prefix + "_missing";
+                    else out.copy(source, clause.binding);
+                    site.clauses[i].binding = {binding, out.size()};
+                    site.clauses[i].bindings.push_back(site.clauses[i].binding);
                     out += " = " + prefix + "_r0, " + prefix + "_r1, " + prefix + "_r2 do ";
+                }
+                else if (!clause.enumerateArgument.empty())
+                {
+                    for (size_t binding = 0; binding < clause.bindings.size(); ++binding)
+                    {
+                        if (binding) out += ", ";
+                        const size_t begin = out.size();
+                        out.copy(source, clause.bindings[binding]);
+                        site.clauses[i].bindings.push_back({begin, out.size()});
+                    }
+                    site.clauses[i].binding = site.clauses[i].bindings.front();
+                    out += " = " + prefix + "_i, " + prefix + "_src[" + prefix + "_i] ";
+                }
                 else
+                {
+                    const size_t binding = out.size();
+                    if (clause.binding.empty()) out += prefix + "_missing";
+                    else out.copy(source, clause.binding);
+                    site.clauses[i].binding = {binding, out.size()};
+                    site.clauses[i].bindings.push_back(site.clauses[i].binding);
                     out += " = " + prefix + "_src[" + prefix + "_i] ";
+                }
             }
             projection(out, node, name, site);
             out += cursor + " += " + (sum ? name + "_value " : "1 ");

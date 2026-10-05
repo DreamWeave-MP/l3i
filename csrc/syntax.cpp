@@ -45,6 +45,7 @@ using namespace Luau;
     X(clauses, "clauses") \
     X(projection, "projection") \
     X(binding, "binding") \
+    X(bindings, "bindings") \
     X(sourceField, "source") \
     X(openLocation, "openLocation") \
     X(closeLocation, "closeLocation") \
@@ -57,6 +58,7 @@ using namespace Luau;
     X(complete, "complete") \
     X(KExprReduction, "ExprReduction") \
     X(KExprRange, "ExprRange") \
+    X(KExprEnumerate, "ExprEnumerate") \
     X(SSum, "sum") \
     X(KExprComprehension, "ExprComprehension") \
     X(KComprehensionGenerator, "ComprehensionGenerator") \
@@ -428,6 +430,7 @@ public:
 struct SurfaceClause
 {
     AstLocal* binding = nullptr;
+    std::vector<AstLocal*> bindings;
     AstExpr* expression = nullptr;
     std::vector<AstExpr*> rangeArguments;
 };
@@ -506,7 +509,8 @@ public:
             if (it->second.record->clauses[i].kind == L3i::Surface::ClauseKind::Generator)
             {
                 ++loopDepth;
-                local(clause.binding);
+                if (clause.bindings.empty()) local(clause.binding);
+                else for (AstLocal* binding : clause.bindings) local(binding);
             }
         }
         walk(it->second.projection);
@@ -1585,15 +1589,29 @@ public:
             const auto& clause = record.clauses[i];
             const auto& ast = surface.clauses[i];
             bool generator = clause.kind == L3i::Surface::ClauseKind::Generator;
-            open(generator ? KComprehensionGenerator : KComprehensionFilter, location(clause.range), generator ? 5 : 2);
+            open(generator ? KComprehensionGenerator : KComprehensionFilter, location(clause.range), generator ? 6 : 2);
             span(keywordLocation, location(clause.keyword));
             if (generator)
             {
                 if (!clause.binding.empty()) setLocal(binding, ast.binding);
+                newTable(int(ast.bindings.size()), 0);
+                for (size_t binding = 0; binding < ast.bindings.size(); ++binding)
+                {
+                    if (ast.bindings[binding]) pushLocal(ast.bindings[binding]);
+                    else lua_pushnil(L);
+                    popAt(int(binding + 1));
+                }
+                popInto(bindings);
                 if (!clause.in.empty()) span(inLocation, location(clause.in));
                 setBool(hasIn, !clause.in.empty());
             }
-            if (clause.rangeArguments.empty())
+            if (!clause.enumerateArgument.empty())
+            {
+                open(KExprEnumerate, location(clause.expression), 1);
+                surfaceExpr(ast.expression, clause.enumerateArgument);
+                popInto(expr);
+            }
+            else if (clause.rangeArguments.empty())
                 surfaceExpr(ast.expression, clause.expression);
             else
             {
@@ -1837,7 +1855,10 @@ int l3i_luau_parse(lua_State* L, const char* source, size_t length, int flags)
                 surface.clauses.resize(surface.record->clauses.size());
                 for (size_t i = 0; i < surface.clauses.size() && i < site.clauses.size(); ++i)
                 {
-                    surface.clauses[i] = {index.binding(site.clauses[i].binding), index.expression(site.clauses[i].expression), {}};
+                    surface.clauses[i].binding = index.binding(site.clauses[i].binding);
+                    surface.clauses[i].expression = index.expression(site.clauses[i].expression);
+                    for (const auto& binding : site.clauses[i].bindings)
+                        surface.clauses[i].bindings.push_back(index.binding(binding));
                     for (const auto& argument : site.clauses[i].rangeArguments)
                         surface.clauses[i].rangeArguments.push_back(index.expression(argument));
                 }

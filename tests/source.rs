@@ -113,6 +113,14 @@ fn numeric_range_sum_is_a_direct_numeric_loop() {
 }
 
 #[test]
+fn enumerate_comprehensions_are_direct_indexed_loops() {
+    let listing = disassemble("return sum[for i, value in enumerate(values) => i + value]", &CompileOptions::default()).unwrap();
+    assert!(listing.contains("FORNPREP") && listing.contains("FORNLOOP"), "{listing}");
+    assert!(!listing.contains("enumerate") && !listing.contains("FORGPREP") && !listing.contains("CLOSURE"), "{listing}");
+    assert!(!listing.contains("NEWTABLE") && !listing.contains("SETLIST"), "{listing}");
+}
+
+#[test]
 fn surface_compile_errors_and_disassembly_use_original_lines() {
     let source = "local xs = {1}\nlocal ys = [for x in xs => x * 2]\n\nlocal broken =\n    [for y in ys => y + * 2]";
     let options = CompileOptions::default();

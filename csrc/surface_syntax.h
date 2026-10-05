@@ -8,6 +8,7 @@ namespace L3i::Surface
 struct ClauseSite
 {
     Range binding; // Generated declaration token, not a guessed temporary spelling.
+    std::vector<Range> bindings;
     Range expression;
     std::vector<Range> rangeArguments;
 };

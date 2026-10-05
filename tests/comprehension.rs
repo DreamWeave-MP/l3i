@@ -33,6 +33,31 @@ fn numeric_range_generators_lower_to_numeric_loops_with_exact_semantics() {
 }
 
 #[test]
+fn enumerate_generators_lower_to_indexed_loops() {
+    let runtime = Runtime::new().unwrap();
+    runtime
+        .exec(
+            r#"
+        local calls = 0
+        local function values()
+            calls += 1
+            return { 4, 5, 6 }
+        end
+        local pairs = [for i, value in enumerate(values()) => i * 10 + value]
+        assert(calls == 1 and #pairs == 3)
+        assert(pairs[1] == 14 and pairs[2] == 25 and pairs[3] == 36)
+        local filtered = [for i, value in enumerate({2, 4, 6}) if i > 1 => value]
+        assert(#filtered == 2 and filtered[1] == 4 and filtered[2] == 6)
+        assert(#[for i, value in enumerate({2, 4, 6}) => i] == 3)
+        assert(sum[for i, value in enumerate({2, 4, 6}) => i + value] == 18)
+        local nested = [for outer in {{7, 8}} for i, value in enumerate(outer) => value + i]
+        assert(#nested == 2 and nested[1] == 8 and nested[2] == 10)
+    "#,
+        )
+        .unwrap();
+}
+
+#[test]
 fn language_operations_cannot_be_captured_by_user_bindings() {
     for consume in ["", "#", "sum"] {
         let runtime = Runtime::new().unwrap();

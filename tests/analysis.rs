@@ -181,6 +181,24 @@ fn numeric_range_generators_infer_numbers_without_a_range_global() {
 }
 
 #[test]
+fn enumerate_generators_infer_numeric_index_and_value_bindings() {
+    let source = concat!(
+        "--!strict\n",
+        "local values: { number } = { 1, 2, 3 }\n",
+        "local pairs = [for i, value in enumerate(values) => i + value]\n",
+        "local total = sum[for i, value in enumerate(values) => i + value]\n",
+        "return pairs, total\n",
+    );
+    for solver in [analysis::Solver::New, analysis::Solver::Old] {
+        let analysis = comprehension_analysis(HashMap::from([("enumerate", source)]), solver);
+        let report = analysis.check("enumerate", false);
+        assert!(report.is_clean(), "{solver:?}: {report:#?}");
+        assert_binding_type(&analysis, "enumerate", 4, "pairs", "{number}");
+        assert_binding_type(&analysis, "enumerate", 5, "total", "number");
+    }
+}
+
+#[test]
 fn comprehension_filters_refine_nullable_elements_and_fields_before_projection() {
     let refined = concat!(
         "--!strict\n",
