@@ -169,6 +169,18 @@ fn comprehension_sum_reducer_infers_number_and_preserves_filter_refinement() {
 }
 
 #[test]
+fn numeric_range_generators_infer_numbers_without_a_range_global() {
+    let source = "--!strict\nlocal values = [for i in range(1, 5) => i * 2]\nlocal total = sum[for i in range(1, 5, 2) => i]\nreturn values, total\n";
+    for solver in [analysis::Solver::New, analysis::Solver::Old] {
+        let analysis = comprehension_analysis(HashMap::from([("range", source)]), solver);
+        let report = analysis.check("range", false);
+        assert!(report.is_clean(), "{solver:?}: {report:#?}");
+        assert_binding_type(&analysis, "range", 3, "values", "{number}");
+        assert_binding_type(&analysis, "range", 3, "total", "number");
+    }
+}
+
+#[test]
 fn comprehension_filters_refine_nullable_elements_and_fields_before_projection() {
     let refined = concat!(
         "--!strict\n",

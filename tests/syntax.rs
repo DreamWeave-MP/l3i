@@ -377,6 +377,21 @@ fn surface_comprehensions_keep_order_dependent_bindings_nested_projection_and_sp
 }
 
 #[test]
+fn numeric_range_generators_are_source_nodes_with_original_arguments() {
+    surface_test(
+        r#"
+        local source = "return [for i in range(1, limit + 1, step) => i]"
+        local r = luau.parse(source)
+        assert(#r.errors == 0)
+        local generator = r.root.body[1].list[1].clauses[1]
+        assert(generator.source.kind == 'ExprRange' and #generator.source.args == 3)
+        span(source, r, generator.source, 'range(1, limit + 1, step)')
+        span(source, r, generator.source.args[2], 'limit + 1')
+    "#,
+    );
+}
+
+#[test]
 fn surface_shadowing_and_real_function_captures_exclude_generated_scopes() {
     surface_test(
         r"

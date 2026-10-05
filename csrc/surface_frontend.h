@@ -30,6 +30,9 @@ struct Clause
     Range binding; // Empty insertion point when missing; never an invented source identifier.
     Range in;
     Range expression;
+    // Direct JSL range(first, last[, step]) generator arguments. Empty for
+    // ordinary source expressions; each range excludes commas and parentheses.
+    std::vector<Range> rangeArguments;
     // Recovery-only unmatched ordinary delimiters, closed at the original fence.
     // Not part of expression's source range; strict consumers reject recovery.
     std::string expressionSuffix;

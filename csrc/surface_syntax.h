@@ -9,6 +9,7 @@ struct ClauseSite
 {
     Range binding; // Generated declaration token, not a guessed temporary spelling.
     Range expression;
+    std::vector<Range> rangeArguments;
 };
 
 struct ComprehensionSite

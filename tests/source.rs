@@ -105,6 +105,14 @@ fn comprehension_sum_reducer_fuses_without_materializing_a_table() {
 }
 
 #[test]
+fn numeric_range_sum_is_a_direct_numeric_loop() {
+    let listing = disassemble("return sum[for i in range(1, limit, 2) => i * 3]", &CompileOptions::default()).unwrap();
+    assert!(listing.contains("FORNPREP") && listing.contains("FORNLOOP"), "{listing}");
+    assert!(!listing.contains("range") && !listing.contains("FORGPREP") && !listing.contains("CLOSURE"), "{listing}");
+    assert!(!listing.contains("NEWTABLE") && !listing.contains("SETTABLE"), "{listing}");
+}
+
+#[test]
 fn surface_compile_errors_and_disassembly_use_original_lines() {
     let source = "local xs = {1}\nlocal ys = [for x in xs => x * 2]\n\nlocal broken =\n    [for y in ys => y + * 2]";
     let options = CompileOptions::default();

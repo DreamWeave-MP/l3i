@@ -68,6 +68,8 @@ struct Text
             {
                 shift(clause.binding, begin);
                 shift(clause.expression, begin);
+                for (auto& argument : clause.rangeArguments)
+                    shift(argument, begin);
             }
             sites.push_back(std::move(site));
         }
@@ -127,7 +129,10 @@ public:
         result.copy(source, {0, prefix});
         result += "local " + operations + "_error = error ";
         const bool needsTable = std::any_of(document.comprehensions.begin(), document.comprehensions.end(), [&](const Comprehension& node) {
-            return node.sumPrefix.empty() && (!fuse || node.lengthPrefix.empty());
+            const size_t generators = std::count_if(node.clauses.begin(), node.clauses.end(),
+                [](const Clause& clause) { return clause.kind == ClauseKind::Generator; });
+            return node.sumPrefix.empty() && (!fuse || node.lengthPrefix.empty()) && generators == 1 &&
+                !node.clauses.empty() && node.clauses.front().rangeArguments.empty();
         });
         if (needsTable)
         {
@@ -271,7 +276,44 @@ private:
         }
         // The one-source cases need the source before allocation. Emit them separately
         // to preserve the proven bytecode shape, not a second recognition path.
-        if (generators == 1)
+        if (generators == 1 && !node.clauses.front().rangeArguments.empty())
+        {
+            const Clause& generator = node.clauses.front();
+            if (!scalar)
+                out += "local " + output + " = {} ";
+            out += "local " + cursor + " = 0 ";
+            const std::string prefix = name + "_g0";
+            for (size_t i = 0; i < generator.rangeArguments.size(); ++i)
+            {
+                out += "local " + prefix + "_r" + std::to_string(i) + " = ";
+                const size_t begin = out.size();
+                expression(out, generator.rangeArguments[i], "(0 :: number)");
+                site.clauses[0].rangeArguments.push_back({begin, out.size()});
+                out += " ";
+            }
+            if (generator.rangeArguments.size() == 2)
+                out += "local " + prefix + "_r2 = 1 ";
+            out += "if " + prefix + "_r2 == 0 then " + operations + "_error(\"JSL range step must not be zero\") end for ";
+            const size_t binding = out.size();
+            if (generator.binding.empty()) out += name + "_missing";
+            else out.copy(source, generator.binding);
+            site.clauses[0].binding = {binding, out.size()};
+            out += " = " + prefix + "_r0, " + prefix + "_r1, " + prefix + "_r2 do ";
+            for (size_t i = 1; i < node.clauses.size(); ++i)
+            {
+                out += "if ";
+                site.clauses[i].expression = expression(out, node.clauses[i].expression, "true", node.clauses[i].expressionSuffix);
+                out += " then ";
+            }
+            projection(out, node, name, site);
+            out += cursor + " += " + (sum ? name + "_value " : "1 ");
+            if (!scalar)
+                out += output + "[" + cursor + "] = " + name + "_value ";
+            for (size_t i = 1; i < node.clauses.size(); ++i)
+                out += "end ";
+            out += "end ";
+        }
+        else if (generators == 1)
         {
             const Clause& generator = node.clauses.front();
             out.anchor = generator.range;
@@ -323,16 +365,35 @@ private:
                     continue;
                 }
                 const std::string prefix = name + "_g" + std::to_string(level++);
-                out += "local " + prefix + "_src = ";
-                site.clauses[i].expression = expression(out, clause.expression, "({} :: {any})", clause.expressionSuffix);
-                out += " local " + prefix + "_len = #" + prefix + "_src for " + prefix + "_i = 1, " + prefix + "_len do local ";
+                if (!clause.rangeArguments.empty())
+                {
+                    for (size_t argument = 0; argument < clause.rangeArguments.size(); ++argument)
+                    {
+                        out += "local " + prefix + "_r" + std::to_string(argument) + " = ";
+                        const size_t begin = out.size();
+                        expression(out, clause.rangeArguments[argument], "(0 :: number)");
+                        site.clauses[i].rangeArguments.push_back({begin, out.size()});
+                        out += " ";
+                    }
+                    if (clause.rangeArguments.size() == 2) out += "local " + prefix + "_r2 = 1 ";
+                    out += "if " + prefix + "_r2 == 0 then " + operations + "_error(\"JSL range step must not be zero\") end for ";
+                }
+                else
+                {
+                    out += "local " + prefix + "_src = ";
+                    site.clauses[i].expression = expression(out, clause.expression, "({} :: {any})", clause.expressionSuffix);
+                    out += " local " + prefix + "_len = #" + prefix + "_src for " + prefix + "_i = 1, " + prefix + "_len do local ";
+                }
                 const size_t binding = out.size();
                 if (clause.binding.empty())
                     out += prefix + "_missing";
                 else
                     out.copy(source, clause.binding);
                 site.clauses[i].binding = {binding, out.size()};
-                out += " = " + prefix + "_src[" + prefix + "_i] ";
+                if (!clause.rangeArguments.empty())
+                    out += " = " + prefix + "_r0, " + prefix + "_r1, " + prefix + "_r2 do ";
+                else
+                    out += " = " + prefix + "_src[" + prefix + "_i] ";
             }
             projection(out, node, name, site);
             out += cursor + " += " + (sum ? name + "_value " : "1 ");

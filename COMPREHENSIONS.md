@@ -219,9 +219,8 @@ evaluated exactly once, from left to right, before that generator begins. A depe
 range is therefore evaluated once per applicable outer iteration. The arguments and
 loop variable retain stock Luau numeric-for typing and runtime conversion behavior.
 
-A zero step is a JSL error rather than a non-progressing loop. A statically literal zero
-is rejected during strict frontend validation; a dynamic zero raises before entering the
-loop. Direction and empty-range behavior otherwise match stock numeric `for`: a positive
+A zero step is a JSL error rather than a non-progressing loop. It raises before entering
+the loop. Direction and empty-range behavior otherwise match stock numeric `for`: a positive
 step with `first > last`, or a negative step with `first < last`, executes no iterations.
 
 `range` is intrinsic only as the direct generator-source spelling above. It does not

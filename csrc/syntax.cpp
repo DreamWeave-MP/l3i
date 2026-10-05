@@ -56,6 +56,7 @@ using namespace Luau;
     X(hasIn, "hasIn") \
     X(complete, "complete") \
     X(KExprReduction, "ExprReduction") \
+    X(KExprRange, "ExprRange") \
     X(SSum, "sum") \
     X(KExprComprehension, "ExprComprehension") \
     X(KComprehensionGenerator, "ComprehensionGenerator") \
@@ -428,6 +429,7 @@ struct SurfaceClause
 {
     AstLocal* binding = nullptr;
     AstExpr* expression = nullptr;
+    std::vector<AstExpr*> rangeArguments;
 };
 struct SurfaceExpression
 {
@@ -499,7 +501,8 @@ public:
         for (size_t i = 0; i < it->second.clauses.size(); ++i)
         {
             const auto& clause = it->second.clauses[i];
-            walk(clause.expression); // A generator's source is outside its own header scope.
+            if (clause.rangeArguments.empty()) walk(clause.expression);
+            else for (AstExpr* argument : clause.rangeArguments) walk(argument);
             if (it->second.record->clauses[i].kind == L3i::Surface::ClauseKind::Generator)
             {
                 ++loopDepth;
@@ -1590,7 +1593,19 @@ public:
                 if (!clause.in.empty()) span(inLocation, location(clause.in));
                 setBool(hasIn, !clause.in.empty());
             }
-            surfaceExpr(ast.expression, clause.expression);
+            if (clause.rangeArguments.empty())
+                surfaceExpr(ast.expression, clause.expression);
+            else
+            {
+                open(KExprRange, location(clause.expression), 1);
+                newTable(int(clause.rangeArguments.size()), 0);
+                for (size_t argument = 0; argument < clause.rangeArguments.size(); ++argument)
+                {
+                    surfaceExpr(ast.rangeArguments[argument], clause.rangeArguments[argument]);
+                    popAt(int(argument + 1));
+                }
+                popInto(args);
+            }
             popInto(generator ? sourceField : condition);
             popAt(int(i + 1));
         }
@@ -1821,7 +1836,11 @@ int l3i_luau_parse(lua_State* L, const char* source, size_t length, int flags)
                 surface.record = &lowered.document.comprehensions[site.comprehension];
                 surface.clauses.resize(surface.record->clauses.size());
                 for (size_t i = 0; i < surface.clauses.size() && i < site.clauses.size(); ++i)
-                    surface.clauses[i] = {index.binding(site.clauses[i].binding), index.expression(site.clauses[i].expression)};
+                {
+                    surface.clauses[i] = {index.binding(site.clauses[i].binding), index.expression(site.clauses[i].expression), {}};
+                    for (const auto& argument : site.clauses[i].rangeArguments)
+                        surface.clauses[i].rangeArguments.push_back(index.expression(argument));
+                }
                 surface.projection = index.expression(site.projection);
                 surfaces.emplace(call, std::move(surface));
             }

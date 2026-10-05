@@ -8,6 +8,31 @@ use l3i::debug::{DebugAction, DebugInfo, DebugScope, HookSet, RuntimeHooks};
 use l3i::stack::Stack;
 
 #[test]
+fn numeric_range_generators_lower_to_numeric_loops_with_exact_semantics() {
+    let runtime = Runtime::new().unwrap();
+    runtime
+        .exec(
+            r#"
+        local range = function() error("captured range") end
+        local events = {}
+        local function bound(label, value) table.insert(events, label) return value end
+        local forward = [for i in range(bound("first", 2), bound("last", 6), bound("step", 2)) => i]
+        assert(#forward == 3 and forward[1] == 2 and forward[2] == 4 and forward[3] == 6)
+        assert(table.concat(events, ",") == "first,last,step")
+        local reverse = [for i in range(5, 1, -2) => i]
+        assert(#reverse == 3 and reverse[1] == 5 and reverse[3] == 1)
+        assert(#[for i in range(1, 5) if i % 2 == 1 => i * 2] == 3)
+        assert(sum[for i in range(1, 5) if i % 2 == 1 => i * 2] == 18)
+        local nested = [for outer in {2, 3} for inner in range(1, outer) => outer * 10 + inner]
+        assert(#nested == 5 and nested[1] == 21 and nested[5] == 33)
+        local ok, message = pcall(function() return [for i in range(1, 2, 0) => i] end)
+        assert(not ok and string.find(tostring(message), "range step must not be zero", 1, true))
+    "#,
+        )
+        .unwrap();
+}
+
+#[test]
 fn language_operations_cannot_be_captured_by_user_bindings() {
     for consume in ["", "#", "sum"] {
         let runtime = Runtime::new().unwrap();
@@ -133,6 +158,21 @@ fn executed_instruction_counts_have_no_per_element_wrapper_overhead() {
         assert_eq!(filtered, filtered_loop + 1);
         assert_eq!(count, count_loop + 1);
         assert_eq!(sum, sum_loop + 1);
+    }
+}
+
+#[test]
+fn numeric_range_sum_matches_handwritten_vm_instructions_exactly() {
+    let guard = "if value == nil then error('L3i comprehension projection produced nil; filter nil explicitly') end";
+    for items in [0, 1, 32, 4096] {
+        let surface = executed_instructions(&format!("return sum[for i in range(1, {items}) => i * 2]"), items);
+        let handwritten = executed_instructions(
+            &format!(
+                "local total = 0 for i = 1, {items} do local value = i * 2 {guard} total += value end return total"
+            ),
+            items,
+        );
+        assert_eq!(surface, handwritten, "{items} items: range={surface}, loop={handwritten}");
     }
 }
 

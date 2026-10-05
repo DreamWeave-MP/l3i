@@ -304,6 +304,33 @@ private:
         }
         return i == start ? point(i) : Range{tokens[start].range.begin, end};
     }
+    void recognizeRange(size_t begin, size_t end, Clause& clause)
+    {
+        if (end < begin + 5 || type(begin) != T::Name || type(begin + 1) != '(' || type(end - 1) != ')' ||
+            source.substr(tokens[begin].range.begin, tokens[begin].range.end - tokens[begin].range.begin) != "range")
+            return;
+        std::vector<Range> arguments;
+        size_t start = begin + 2;
+        int depth = 1;
+        for (size_t at = start; at + 1 < end; ++at)
+        {
+            const int token = type(at);
+            if (token == '(' || token == '[' || token == '{') ++depth;
+            else if (token == ')' || token == ']' || token == '}') --depth;
+            if (token == ',' && depth == 1)
+            {
+                if (at == start) return;
+                arguments.push_back({tokens[start].range.begin, tokens[at - 1].range.end});
+                start = at + 1;
+            }
+        }
+        if (start >= end - 1) return;
+        arguments.push_back({tokens[start].range.begin, tokens[end - 2].range.end});
+        if (arguments.size() == 2 || arguments.size() == 3)
+            clause.rangeArguments = std::move(arguments);
+        else
+            error(clause.expression, "JSL range generator expects two or three arguments");
+    }
     void comprehension(size_t& i, size_t depth)
     {
         if (limit(i, depth)) return;
@@ -338,7 +365,10 @@ private:
                 if (type(i) == T::ReservedIn) clause.in = tokens[i++].range;
                 else error(point(i), "expected 'in' after generator binding");
             }
+            const size_t expressionBegin = i;
             clause.expression = expression(i, depth, false, clause.expressionSuffix);
+            if (clause.kind == ClauseKind::Generator && clause.expressionSuffix.empty())
+                recognizeRange(expressionBegin, i, clause);
             if (clause.expression.empty())
                 error(clause.expression, clause.kind == ClauseKind::Generator ? "expected generator expression" : "expected filter expression");
             clause.range = {clause.keyword.begin, clause.expression.end};

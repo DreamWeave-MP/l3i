@@ -33,6 +33,14 @@ void complete(std::string_view s, size_t count = 1)
 int main()
 {
     {
+        const std::string_view s = "[for i in range(first(), last(), step()) => i]";
+        const auto clause = parseSurface(s).comprehensions[0].clauses[0];
+        assert(clause.rangeArguments.size() == 3);
+        assert(slice(s, clause.rangeArguments[0]) == "first()");
+        assert(slice(s, clause.rangeArguments[1]) == "last()");
+        assert(slice(s, clause.rangeArguments[2]) == "step()");
+    }
+    {
         const std::string s = "local out = [for row in rows() if row.ok for x in row.items if x > 0 => x * 2]";
         complete(s);
         auto c = parseSurface(s).comprehensions[0];

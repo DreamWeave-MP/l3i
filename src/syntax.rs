@@ -32,6 +32,8 @@
 //! The intrinsic `sum[for ...]` is an `ExprReduction` with `op = "sum"` and an inner
 //! `ExprComprehension`; its outer span includes `sum`, while the inner span starts at `[`.
 //! This intrinsic does not refer to any local/global named `sum`; member accesses are excluded.
+//! A direct `range(first, last[, step])` generator source is an `ExprRange`; its arguments
+//! retain original nodes and spans while compilation lowers it to a numeric loop.
 //!
 //! Missing surface expressions are `ExprError` with `isMissing = true` and no children.
 //! Missing tokens have absent optional locations; their insertion spans are zero-width.
@@ -198,6 +200,10 @@ pub const TYPES: &[(&str, &str)] = &[
         "{ kind: \"ComprehensionFilter\", line: number, column: number, endLine: number, endColumn: number, condition: dream_luau_Expr, keywordLocation: dream_luau_Span }",
     ),
     ("dream_luau_ComprehensionClause", "dream_luau_ComprehensionGenerator | dream_luau_ComprehensionFilter"),
+    (
+        "dream_luau_ExprRange",
+        "{ kind: \"ExprRange\", line: number, column: number, endLine: number, endColumn: number, args: { dream_luau_Expr } }",
+    ),
     (
         "dream_luau_ExprComprehension",
         "{ kind: \"ExprComprehension\", line: number, column: number, endLine: number, endColumn: number, clauses: { dream_luau_ComprehensionClause }, projection: dream_luau_Expr, openLocation: dream_luau_Span, closeLocation: dream_luau_Span?, arrowLocation: dream_luau_Span?, hasClose: boolean, hasArrow: boolean, complete: boolean }",
@@ -436,7 +442,7 @@ pub const TYPES: &[(&str, &str)] = &[
     ),
     (
         "dream_luau_Expr",
-        "dream_luau_ExprGroup | dream_luau_ExprConstantNil | dream_luau_ExprConstantBool | dream_luau_ExprConstantNumber | dream_luau_ExprConstantInteger | dream_luau_ExprConstantString | dream_luau_ExprLocal | dream_luau_ExprGlobal | dream_luau_ExprVarargs | dream_luau_ExprCall | dream_luau_ExprIndexName | dream_luau_ExprIndexExpr | dream_luau_ExprFunction | dream_luau_ExprTable | dream_luau_ExprUnary | dream_luau_ExprBinary | dream_luau_ExprTypeAssertion | dream_luau_ExprIfElse | dream_luau_ExprInterpString | dream_luau_ExprInstantiate | dream_luau_ExprError | dream_luau_ExprComprehension | dream_luau_ExprReduction",
+        "dream_luau_ExprGroup | dream_luau_ExprConstantNil | dream_luau_ExprConstantBool | dream_luau_ExprConstantNumber | dream_luau_ExprConstantInteger | dream_luau_ExprConstantString | dream_luau_ExprLocal | dream_luau_ExprGlobal | dream_luau_ExprVarargs | dream_luau_ExprCall | dream_luau_ExprIndexName | dream_luau_ExprIndexExpr | dream_luau_ExprFunction | dream_luau_ExprTable | dream_luau_ExprUnary | dream_luau_ExprBinary | dream_luau_ExprTypeAssertion | dream_luau_ExprIfElse | dream_luau_ExprInterpString | dream_luau_ExprInstantiate | dream_luau_ExprError | dream_luau_ExprRange | dream_luau_ExprComprehension | dream_luau_ExprReduction",
     ),
     (
         "dream_luau_Stat",

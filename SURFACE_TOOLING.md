@@ -19,6 +19,9 @@ The expression exposes ordered `clauses`, a `projection`, `openLocation`, option
 
 - `ComprehensionGenerator`: `binding` (a shared `Local`, absent when missing),
   `source`, `keywordLocation`, optional `inLocation`, and `hasIn`.
+- A direct `range(first, last[, step])` generator source is an `ExprRange` with
+  original-source `args`; it lowers to a numeric loop and never resolves a binding
+  named `range`.
 - `ComprehensionFilter`: `condition` and `keywordLocation`.
 - `#[for ...]`: ordinary `ExprUnary` with a comprehension operand. Allocation fusion
   is a lowering decision, not a mutation of the source tree.
