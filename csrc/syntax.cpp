@@ -451,13 +451,21 @@ struct SurfaceExpression
     AstExpr* projection = nullptr;
 };
 using SurfaceExpressions = std::unordered_map<AstExprCall*, SurfaceExpression>;
+struct SurfaceSlice
+{
+    const L3i::Surface::Slice* record = nullptr;
+    AstExpr* source = nullptr;
+    AstExpr* first = nullptr;
+    AstExpr* last = nullptr;
+};
+using SurfaceSlices = std::unordered_map<AstExprCall*, SurfaceSlice>;
 
 // Traverse the source tree, not the synthetic IIFE/loops. Keep stock AstLocal pointers and
 // binding resolution, but recompute scope metadata using only source functions and loops.
 class SourceMetadata final : public AstVisitor
 {
 public:
-    explicit SourceMetadata(const SurfaceExpressions& surfaces) : surfaces(surfaces) {}
+    SourceMetadata(const SurfaceExpressions& surfaces, const SurfaceSlices& slices) : surfaces(surfaces), slices(slices) {}
     void walk(AstNode* n) { if (n) n->visit(this); }
     void local(AstLocal* n, bool annotation = true)
     {
@@ -509,7 +517,13 @@ public:
     bool visit(AstExprCall* n) override
     {
         auto it = surfaces.find(n);
-        if (it == surfaces.end()) return true;
+        if (it == surfaces.end())
+        {
+            auto slice = slices.find(n);
+            if (slice == slices.end()) return true;
+            walk(slice->second.source); walk(slice->second.first); walk(slice->second.last);
+            return false;
+        }
         unsigned saved = loopDepth;
         for (size_t i = 0; i < it->second.clauses.size(); ++i)
         {
@@ -580,6 +594,7 @@ public:
         return false;
     }
     const SurfaceExpressions& surfaces;
+    const SurfaceSlices& slices;
     std::unordered_set<AstLocal*> seen;
     unsigned functionDepth = 0;
     unsigned loopDepth = 0;
@@ -1035,6 +1050,18 @@ public:
         if (surface != surfaces.end())
         {
             comprehension(surface->second);
+            return false;
+        }
+        auto slice = slices.find(node);
+        if (slice != slices.end())
+        {
+            open(KExprSlice, location(slice->second.record->range), 3);
+            surfaceExpr(slice->second.source, slice->second.record->source);
+            popInto(sourceField);
+            surfaceExpr(slice->second.first, slice->second.record->first);
+            popInto(first);
+            surfaceExpr(slice->second.last, slice->second.record->last);
+            popInto(last);
             return false;
         }
         open(KExprCall, node->location, 5);
@@ -1819,6 +1846,7 @@ public:
     }
 
     SurfaceExpressions surfaces;
+    SurfaceSlices slices;
     const std::vector<ParseError>* parseErrors = nullptr;
 
     lua_State* L;
@@ -1867,6 +1895,7 @@ int l3i_luau_parse(lua_State* L, const char* source, size_t length, int flags)
     ParseResult result;
     L3i::Surface::LoweredSource lowered;
     SurfaceExpressions surfaces;
+    SurfaceSlices sliceSurfaces;
     bool surfaceMode = (flags & L3I_PARSE_LUAU) == 0;
     std::string failure;
     try
@@ -1905,9 +1934,22 @@ int l3i_luau_parse(lua_State* L, const char* source, size_t length, int flags)
                 surface.projection = index.expression(site.projection);
                 surfaces.emplace(call, std::move(surface));
             }
-            if (!surfaces.empty())
+            for (const auto& site : lowered.sliceSites)
             {
-                SourceMetadata metadata(surfaces);
+                if (site.slice >= lowered.document.slices.size()) continue;
+                auto* expr = index.expression(site.call);
+                auto* call = expr ? expr->as<AstExprCall>() : nullptr;
+                if (!call) continue;
+                SurfaceSlice surface;
+                surface.record = &lowered.document.slices[site.slice];
+                surface.source = index.expression(site.source);
+                surface.first = index.expression(site.first);
+                surface.last = index.expression(site.last);
+                sliceSurfaces.emplace(call, surface);
+            }
+            if (!surfaces.empty() || !sliceSurfaces.empty())
+            {
+                SourceMetadata metadata(surfaces, sliceSurfaces);
                 metadata.walk(result.root);
             }
             if (result.root && lowered.preludeStatements <= result.root->body.size)
@@ -1932,6 +1974,7 @@ int l3i_luau_parse(lua_State* L, const char* source, size_t length, int flags)
 
     Builder builder(L, source, length);
     builder.surfaces = std::move(surfaces);
+    builder.slices = std::move(sliceSurfaces);
     if (surfaceMode)
         for (const auto& error : lowered.document.errors)
             result.errors.emplace_back(builder.location(error.range), error.message);
@@ -1940,7 +1983,7 @@ int l3i_luau_parse(lua_State* L, const char* source, size_t length, int flags)
     lua_createtable(L, 0, 8);
     builder.setNode(root, result.root);
     builder.errors(result.errors);
-    if (surfaceMode && !lowered.document.comprehensions.empty()) builder.originalTrivia(names);
+    if (surfaceMode && (!lowered.document.comprehensions.empty() || !lowered.document.slices.empty())) builder.originalTrivia(names);
     else
     {
         builder.comments(result.commentLocations);

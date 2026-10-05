@@ -26,12 +26,22 @@ struct ComprehensionSite
     Range projection;
 };
 
+struct SliceSite
+{
+    size_t slice = 0;
+    Range call;
+    Range source;
+    Range first;
+    Range last;
+};
+
 struct LoweredSource
 {
     std::string source;
     SourceMap map;
     Document document;
     std::vector<ComprehensionSite> sites;
+    std::vector<SliceSite> sliceSites;
     size_t preludeStatements = 0;
 };
 

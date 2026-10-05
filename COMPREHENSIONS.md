@@ -266,23 +266,26 @@ tooling and diagnostics.
 
 ## Phase Two: inclusive dense-table slices
 
-The first slice form is a direct comprehension generator source:
+Dense-table slices are expressions and direct comprehension generator sources:
 
 ```luau
+local part = values[first:last]
 [for x in values[first:last] => project(x)]
 sum[for x in values[first:last] if accept(x) => project(x)]
 ```
 
 Bounds are 1-based and inclusive. The source, first bound, and last bound are evaluated once,
 left to right. Bounds are clamped to the source's dense extent; an interval with `last < first`
-is empty. The initial form is intentionally unstepped and table-directed. It lowers to one
-numeric traversal over the selected indices; fused length and sum consumers allocate neither a
-slice nor a comprehension result. Materialized consumers compact selected elements into their
-normal dense result, preserving projection order and the non-nil guard.
+is empty. The initial form is intentionally unstepped and table-directed. Standalone slices
+allocate an exactly sized dense result and bulk-copy with a snapshotted `table.move`; they do not
+consult a user binding named `table`. Comprehension lowering instead traverses selected indices
+directly. Fused length and sum consumers allocate neither a slice nor a comprehension result.
+Materialized comprehension consumers compact selected elements into their normal dense result,
+preserving projection order and the non-nil guard.
 
-The canonical frontend exports an `ExprSlice` node with original source and bound spans. Slice
-syntax outside a recognized comprehension generator remains ordinary Luau input until a broader
-representation-directed slice expression is specified.
+The canonical frontend exports an `ExprSlice` node with original source and bound spans for both
+standalone and generator slices. Buffer and string representation-directed copies remain future
+work; the current form requires a dense table source.
 
 ## Post-baseline JSL reducer experiment: `sum[for ...]`
 

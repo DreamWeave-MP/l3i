@@ -107,10 +107,14 @@ fn standalone_slices_materialize_dense_tables_with_single_evaluation() {
             r#"
         local calls = 0
         local function source() calls += 1 return {10, 20, 30, 40} end
+        local captured = 0
+        local table = {create = function() captured += 1 return {} end, move = function() captured += 1 end}
         local part = source()[2:3]
-        assert(calls == 1 and #part == 2 and part[1] == 20 and part[2] == 30)
+        assert(calls == 1 and captured == 0 and #part == 2 and part[1] == 20 and part[2] == 30)
         local high = ({1, 2, 3})[99:100]
         assert(#high == 0)
+        local key = {method = function() return 1 end}
+        assert(({9})[key:method()] == 9)
     "#,
         )
         .unwrap();

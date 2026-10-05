@@ -163,6 +163,28 @@ private:
             slice.first = {all[open + 1].range.begin, all[colon - 1].range.end};
             slice.last = {all[colon + 1].range.begin, all[close - 2].range.end};
             slice.range = {slice.source.begin, all[close - 1].range.end};
+            const bool generatorSlice = std::any_of(document.comprehensions.begin(), document.comprehensions.end(),
+                [&](const Comprehension& comprehension) {
+                    return std::any_of(comprehension.clauses.begin(), comprehension.clauses.end(), [&](const Clause& clause) {
+                        return !clause.sliceSource.empty() && clause.expression.begin == slice.range.begin &&
+                            clause.expression.end == slice.range.end;
+                    });
+                });
+            if (generatorSlice) continue;
+            // A colon inside an otherwise valid Luau index can be a method call,
+            // e.g. values[obj:method()]. Stock syntax wins over JSL slicing.
+            if (++prefixCalls > maxPrefixCalls || slice.range.end - slice.range.begin > maxPrefixBytes - prefixBytes)
+            {
+                error({slice.range.end, slice.range.end},
+                    "surface expression prefix work limit exceeded (4096 calls / 8388608 bytes)");
+                return;
+            }
+            prefixBytes += slice.range.end - slice.range.begin;
+            Luau::Allocator expressionAllocator;
+            Luau::AstNameTable expressionNames(expressionAllocator);
+            const auto text = source.substr(slice.range.begin, slice.range.end - slice.range.begin);
+            const auto parsed = Luau::Parser::parseExpr(text.data(), text.size(), expressionNames, expressionAllocator);
+            if (parsed.root && parsed.errors.empty()) continue;
             slice.complete = true;
             document.slices.push_back(slice);
         }

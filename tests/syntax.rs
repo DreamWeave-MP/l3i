@@ -444,6 +444,24 @@ fn slices_are_source_nodes_with_original_bound_spans() {
 }
 
 #[test]
+fn standalone_slices_are_source_nodes_without_generated_scopes() {
+    surface_test(
+        r#"
+        local source = "local values = {1, 2, 3}\nreturn values[1:2]"
+        local r = luau.parse(source)
+        assert(#r.errors == 0)
+        local slice = r.root.body[2].list[1]
+        assert(slice.kind == 'ExprSlice')
+        span(source, r, slice, 'values[1:2]')
+        span(source, r, slice.source, 'values')
+        span(source, r, slice.first, '1')
+        span(source, r, slice.last, '2')
+        assert(slice.source['local'] == r.root.body[1].vars[1])
+    "#,
+    );
+}
+
+#[test]
 fn surface_shadowing_and_real_function_captures_exclude_generated_scopes() {
     surface_test(
         r"

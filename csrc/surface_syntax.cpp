@@ -22,6 +22,7 @@ struct Text
     std::string text;
     std::vector<Segment> segments;
     std::vector<ComprehensionSite> sites;
+    std::vector<SliceSite> sliceSites;
     Range anchor;
 
     size_t size() const { return text.size(); }
@@ -79,6 +80,14 @@ struct Text
                 shift(clause.sliceLast, begin);
             }
             sites.push_back(std::move(site));
+        }
+        for (auto site : value.sliceSites)
+        {
+            shift(site.call, begin);
+            shift(site.source, begin);
+            shift(site.first, begin);
+            shift(site.last, begin);
+            sliceSites.push_back(std::move(site));
         }
     }
     void copy(std::string_view source, Range range)
@@ -146,10 +155,15 @@ public:
             result += "local " + operations + "_table_create = table.create ";
             preludeStatements = 2;
         }
-        if (!document.slices.empty() && !needsTable)
+        if (!document.slices.empty())
         {
-            result += "local " + operations + "_table_create = table.create ";
-            preludeStatements = 2;
+            if (!needsTable)
+            {
+                result += "local " + operations + "_table_create = table.create ";
+                preludeStatements = 2;
+            }
+            result += "local " + operations + "_table_move = table.move ";
+            ++preludeStatements;
         }
         result.append(range({prefix, source.size()}));
         return result;
@@ -256,15 +270,21 @@ private:
     Text slice(size_t index)
     {
         const Slice& node = document.slices[index];
+        const std::string prefix = stem(node.range.begin) + "_slice";
         Text out;
         out.anchor = node.range;
-        out += "(function() local __slice_src = ";
-        expression(out, node.source, "({} :: {any})");
-        out += " local __slice_len = #__slice_src local __slice_first = ";
-        expression(out, node.first, "(1 :: number)");
-        out += " local __slice_last = ";
-        expression(out, node.last, "(0 :: number)");
-        out += " if __slice_first < 1 then __slice_first = 1 end if __slice_last > __slice_len then __slice_last = __slice_len end local __slice_n = 0 if __slice_last >= __slice_first then __slice_n = __slice_last - __slice_first + 1 end local __slice_out = " + operations + "_table_create(__slice_n) local __slice_j = 0 for __slice_i = __slice_first, __slice_last do __slice_j += 1 __slice_out[__slice_j] = __slice_src[__slice_i] end return __slice_out end)()";
+        SliceSite site;
+        site.slice = index;
+        const size_t callBegin = out.size();
+        out += "(function() local " + prefix + "_src = ";
+        site.source = expression(out, node.source, "({} :: {any})");
+        out += " local " + prefix + "_len = #" + prefix + "_src local " + prefix + "_first = ";
+        site.first = expression(out, node.first, "(1 :: number)");
+        out += " local " + prefix + "_last = ";
+        site.last = expression(out, node.last, "(0 :: number)");
+        out += " if " + prefix + "_first < 1 then " + prefix + "_first = 1 end if " + prefix + "_last > " + prefix + "_len then " + prefix + "_last = " + prefix + "_len end local " + prefix + "_n = 0 if " + prefix + "_last >= " + prefix + "_first then " + prefix + "_n = " + prefix + "_last - " + prefix + "_first + 1 end local " + prefix + "_out = " + operations + "_table_create(" + prefix + "_n) :: typeof(" + prefix + "_src) if " + prefix + "_n > 0 then " + operations + "_table_move(" + prefix + "_src, " + prefix + "_first, " + prefix + "_last, 1, " + prefix + "_out) end return " + prefix + "_out end)()";
+        site.call = {callBegin, out.size()};
+        out.sliceSites.push_back(std::move(site));
         return out;
     }
 
@@ -665,11 +685,11 @@ private:
 LoweredSource lower(std::string_view source, bool recovery, bool fuseLength)
 {
     Document document = parseSurface(source);
-    if (document.comprehensions.empty() && document.slices.empty() || (!recovery && !document.errors.empty()))
-        return {std::string(source), {}, std::move(document), {}, 0};
+    if ((document.comprehensions.empty() && document.slices.empty()) || (!recovery && !document.errors.empty()))
+        return {std::string(source), {}, std::move(document), {}, {}, 0};
     Lowerer lowerer(source, document, recovery, fuseLength);
     Text output = lowerer.lower();
     SourceMap map(source, output.text, std::move(output.segments));
-    return {std::move(output.text), std::move(map), std::move(document), std::move(output.sites), lowerer.prelude()};
+    return {std::move(output.text), std::move(map), std::move(document), std::move(output.sites), std::move(output.sliceSites), lowerer.prelude()};
 }
 }

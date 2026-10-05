@@ -209,6 +209,29 @@ int main()
         assert(slice(s, clause.sliceSource) == "values");
         assert(slice(s, clause.sliceFirst) == "first");
         assert(slice(s, clause.sliceLast) == "last");
+        assert(d.slices.empty());
+    }
+    {
+        const std::string_view s = "return source()[first():last()]";
+        const auto d = parseSurface(s);
+        assert(d.errors.empty() && d.slices.size() == 1);
+        assert(slice(s, d.slices[0].source) == "source()");
+        assert(slice(s, d.slices[0].first) == "first()");
+        assert(slice(s, d.slices[0].last) == "last()");
+        assert(slice(s, d.slices[0].range) == "source()[first():last()]");
+    }
+    {
+        const auto d = parseSurface("return values[obj:method()]");
+        assert(d.errors.empty() && d.slices.empty());
+    }
+    {
+        std::string s;
+        for (size_t i = 0; i < 4097; ++i) s += "values[first:last];";
+        const auto d = parseSurface(s);
+        assert(d.slices.size() == 4096 && !d.errors.empty());
+        bool found = false;
+        for (const auto& e : d.errors) found |= e.message.find("work limit") != std::string::npos;
+        assert(found);
     }
     for (std::string_view s : {"[for x in values[:last] => x]", "[for x in values[first:] => x]"})
     {

@@ -217,6 +217,17 @@ fn slices_preserve_source_types_and_infer_fused_results() {
 }
 
 #[test]
+fn standalone_slices_infer_dense_source_element_types() {
+    let source = "--!strict\nlocal values: { number } = { 1, 2, 3 }\nlocal part = values[1:2]\nreturn part\n";
+    for solver in [analysis::Solver::New, analysis::Solver::Old] {
+        let analysis = comprehension_analysis(HashMap::from([("standalone_slice", source)]), solver);
+        let report = analysis.check("standalone_slice", false);
+        assert!(report.is_clean(), "{solver:?}: {report:#?}");
+        assert_binding_type(&analysis, "standalone_slice", 4, "part", "{number}");
+    }
+}
+
+#[test]
 fn comprehension_filters_refine_nullable_elements_and_fields_before_projection() {
     let refined = concat!(
         "--!strict\n",
