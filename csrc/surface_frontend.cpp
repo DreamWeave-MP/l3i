@@ -331,6 +331,28 @@ private:
         else
             error(clause.expression, "JSL range generator expects two or three arguments");
     }
+    void recognizeEnumerate(size_t begin, size_t end, Clause& clause)
+    {
+        if (end < begin + 4 || type(begin) != T::Name || type(begin + 1) != '(' || type(end - 1) != ')' ||
+            source.substr(tokens[begin].range.begin, tokens[begin].range.end - tokens[begin].range.begin) != "enumerate")
+            return;
+        int depth = 1;
+        for (size_t at = begin + 2; at + 1 < end; ++at)
+        {
+            const int token = type(at);
+            if (token == '(' || token == '[' || token == '{') ++depth;
+            else if (token == ')' || token == ']' || token == '}') --depth;
+            if (token == ',' && depth == 1)
+            {
+                error(clause.expression, "JSL enumerate generator expects one argument");
+                return;
+            }
+        }
+        if (begin + 2 == end - 1)
+            error(clause.expression, "JSL enumerate generator expects one argument");
+        else
+            clause.enumerateArgument = {tokens[begin + 2].range.begin, tokens[end - 2].range.end};
+    }
     void comprehension(size_t& i, size_t depth)
     {
         if (limit(i, depth)) return;
@@ -359,7 +381,21 @@ private:
             clause.binding = clause.in = point(i);
             if (clause.kind == ClauseKind::Generator)
             {
-                if (type(i) == T::Name) clause.binding = tokens[i++].range;
+                if (type(i) == T::Name)
+                {
+                    clause.bindings.push_back(tokens[i++].range);
+                    while (type(i) == ',')
+                    {
+                        ++i;
+                        if (type(i) != T::Name)
+                        {
+                            error(point(i), "expected generator binding name after ','");
+                            break;
+                        }
+                        clause.bindings.push_back(tokens[i++].range);
+                    }
+                    clause.binding = clause.bindings.front();
+                }
                 else error(point(i), "expected generator binding name after 'for'");
                 clause.in = point(i);
                 if (type(i) == T::ReservedIn) clause.in = tokens[i++].range;
@@ -368,7 +404,14 @@ private:
             const size_t expressionBegin = i;
             clause.expression = expression(i, depth, false, clause.expressionSuffix);
             if (clause.kind == ClauseKind::Generator && clause.expressionSuffix.empty())
+            {
                 recognizeRange(expressionBegin, i, clause);
+                recognizeEnumerate(expressionBegin, i, clause);
+                if (!clause.enumerateArgument.empty() && clause.bindings.size() != 2)
+                    error(clause.binding, "JSL enumerate generator requires two bindings");
+                else if (clause.enumerateArgument.empty() && clause.bindings.size() > 1)
+                    error(clause.binding, "multiple generator bindings require a recognized multi-value source");
+            }
             if (clause.expression.empty())
                 error(clause.expression, clause.kind == ClauseKind::Generator ? "expected generator expression" : "expected filter expression");
             clause.range = {clause.keyword.begin, clause.expression.end};

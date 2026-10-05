@@ -174,6 +174,21 @@ int main()
         assert(d.comprehensions[0].clauses[0].binding.empty());
     }
     {
+        const std::string_view s = "[for i, value in enumerate(values) => value]";
+        const auto d = parseSurface(s);
+        assert(d.errors.empty() && d.comprehensions.size() == 1);
+        const auto& clause = d.comprehensions[0].clauses[0];
+        assert(clause.bindings.size() == 2);
+        assert(slice(s, clause.bindings[0]) == "i" && slice(s, clause.bindings[1]) == "value");
+        assert(slice(s, clause.enumerateArgument) == "values");
+    }
+    for (std::string_view s : {"[for value in enumerate(values) => value]",
+             "[for a, b in values => a]", "[for a, in enumerate(values) => a]"})
+    {
+        const auto d = parseSurface(s);
+        assert(d.comprehensions.size() == 1 && !d.errors.empty() && !d.comprehensions[0].complete);
+    }
+    {
         const std::string s = "-- [for fake in xs => fake]\r\nlocal a = '[for fake]'\nlocal b = [==[[for fake]]==]\n"
             "--[=[ [for ignored] ]=]\nlocal c = [ -- trivia\r\n for x -- name\n in xs -- expr\n if x => 'é' ]";
         complete(s);

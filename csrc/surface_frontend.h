@@ -27,12 +27,18 @@ struct Clause
     ClauseKind kind = ClauseKind::Generator;
     Range range;
     Range keyword;
-    Range binding; // Empty insertion point when missing; never an invented source identifier.
+    // Ordered source bindings. Empty when missing; never contains invented identifiers.
+    // Ordinary and range generators have one binding; enumerate has exactly two.
+    std::vector<Range> bindings;
+    Range binding; // First binding, retained as the compatibility/tooling shorthand.
     Range in;
     Range expression;
     // Direct JSL range(first, last[, step]) generator arguments. Empty for
     // ordinary source expressions; each range excludes commas and parentheses.
     std::vector<Range> rangeArguments;
+    // Direct JSL enumerate(source) generator argument. Empty for ordinary
+    // source expressions. The range excludes the call parentheses.
+    Range enumerateArgument;
     // Recovery-only unmatched ordinary delimiters, closed at the original fence.
     // Not part of expression's source range; strict consumers reject recovery.
     std::string expressionSuffix;
