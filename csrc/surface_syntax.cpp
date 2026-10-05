@@ -119,7 +119,7 @@ public:
     Text lower()
     {
         Text result;
-        result.anchor = document.comprehensions.front().range;
+        result.anchor = document.comprehensions.empty() ? document.slices.front().range : document.comprehensions.front().range;
         size_t prefix = 0;
         auto comment = document.comments.begin();
         for (;;)
@@ -146,6 +146,11 @@ public:
             result += "local " + operations + "_table_create = table.create ";
             preludeStatements = 2;
         }
+        if (!document.slices.empty() && !needsTable)
+        {
+            result += "local " + operations + "_table_create = table.create ";
+            preludeStatements = 2;
+        }
         result.append(range({prefix, source.size()}));
         return result;
     }
@@ -158,16 +163,40 @@ public:
         size_t copied = input.begin;
         auto it = std::lower_bound(document.comprehensions.begin(), document.comprehensions.end(), input.begin,
             [](const Comprehension& node, size_t begin) { return node.open.begin < begin; });
-        for (; it != document.comprehensions.end() && it->open.begin < input.end; ++it)
+        auto sliceIt = std::lower_bound(document.slices.begin(), document.slices.end(), input.begin,
+            [](const Slice& node, size_t begin) { return node.range.begin < begin; });
+        while ((it != document.comprehensions.end() && it->open.begin < input.end) ||
+            (sliceIt != document.slices.end() && sliceIt->range.begin < input.end))
         {
-            if (it->range.begin < copied || it->range.end > input.end || it->range.end <= it->range.begin)
-                continue;
-            const bool count = fuse && !it->lengthPrefix.empty() && it->lengthPrefix.begin >= copied;
-            const bool sum = !it->sumPrefix.empty() && it->sumPrefix.begin >= copied;
-            const size_t begin = sum ? it->sumPrefix.begin : count ? it->lengthPrefix.begin : it->range.begin;
-            result.copy(source, {copied, begin});
-            result.append(comprehension(size_t(it - document.comprehensions.begin()), count, sum));
-            copied = it->range.end;
+            const bool useComprehension = it != document.comprehensions.end() && it->open.begin < input.end &&
+                (sliceIt == document.slices.end() || sliceIt->range.begin >= it->open.begin);
+            if (useComprehension)
+            {
+                if (it->range.begin < copied || it->range.end > input.end || it->range.end <= it->range.begin)
+                {
+                    ++it;
+                    continue;
+                }
+                const bool count = fuse && !it->lengthPrefix.empty() && it->lengthPrefix.begin >= copied;
+                const bool sum = !it->sumPrefix.empty() && it->sumPrefix.begin >= copied;
+                const size_t begin = sum ? it->sumPrefix.begin : count ? it->lengthPrefix.begin : it->range.begin;
+                result.copy(source, {copied, begin});
+                result.append(comprehension(size_t(it - document.comprehensions.begin()), count, sum));
+                copied = it->range.end;
+                ++it;
+            }
+            else
+            {
+                if (sliceIt->range.begin < copied || sliceIt->range.end > input.end || sliceIt->range.end <= sliceIt->range.begin)
+                {
+                    ++sliceIt;
+                    continue;
+                }
+                result.copy(source, {copied, sliceIt->range.begin});
+                result.append(slice(size_t(sliceIt - document.slices.begin())));
+                copied = sliceIt->range.end;
+                ++sliceIt;
+            }
         }
         result.copy(source, {copied, input.end});
         return result;
@@ -222,6 +251,21 @@ private:
             out.anchor = original;
         }
         return {begin, end};
+    }
+
+    Text slice(size_t index)
+    {
+        const Slice& node = document.slices[index];
+        Text out;
+        out.anchor = node.range;
+        out += "(function() local __slice_src = ";
+        expression(out, node.source, "({} :: {any})");
+        out += " local __slice_len = #__slice_src local __slice_first = ";
+        expression(out, node.first, "(1 :: number)");
+        out += " local __slice_last = ";
+        expression(out, node.last, "(0 :: number)");
+        out += " if __slice_first < 1 then __slice_first = 1 end if __slice_last > __slice_len then __slice_last = __slice_len end local __slice_n = 0 if __slice_last >= __slice_first then __slice_n = __slice_last - __slice_first + 1 end local __slice_out = " + operations + "_table_create(__slice_n) local __slice_j = 0 for __slice_i = __slice_first, __slice_last do __slice_j += 1 __slice_out[__slice_j] = __slice_src[__slice_i] end return __slice_out end)()";
+        return out;
     }
 
     void projection(Text& out, const Comprehension& node, const std::string& name, ComprehensionSite& site)
@@ -621,7 +665,7 @@ private:
 LoweredSource lower(std::string_view source, bool recovery, bool fuseLength)
 {
     Document document = parseSurface(source);
-    if (document.comprehensions.empty() || (!recovery && !document.errors.empty()))
+    if (document.comprehensions.empty() && document.slices.empty() || (!recovery && !document.errors.empty()))
         return {std::string(source), {}, std::move(document), {}, 0};
     Lowerer lowerer(source, document, recovery, fuseLength);
     Text output = lowerer.lower();

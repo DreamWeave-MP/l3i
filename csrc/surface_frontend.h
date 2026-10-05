@@ -72,10 +72,22 @@ struct Comprehension
     bool complete = false;
 };
 
+struct Slice
+{
+    Range range;
+    Range source;
+    Range first;
+    Range last;
+    bool complete = false;
+};
+
 struct Document
 {
     // Flat, sorted by opening offset; nested ranges retain their original offsets.
     std::vector<Comprehension> comprehensions;
+    // Standalone dense-table slices, in source order. Comprehension generator
+    // slices remain represented on their Clause and are excluded here.
+    std::vector<Slice> slices;
     std::vector<Diagnostic> errors;
     // Original Comment/BlockComment/BrokenComment token ranges, in source order.
     // The no-surface fast path may leave this empty; stock parsing owns trivia

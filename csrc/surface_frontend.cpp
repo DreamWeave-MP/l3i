@@ -21,8 +21,13 @@ public:
     Document run()
     {
         // Negative-only shortcut: substring hits are never treated as syntax.
-        if (source.find('[') == std::string_view::npos || source.find("for") == std::string_view::npos)
+        if (source.find('[') == std::string_view::npos)
             return std::move(document);
+        if (source.find("for") == std::string_view::npos)
+        {
+            scanSlices();
+            return std::move(document);
+        }
         std::vector<size_t> lines{0};
         for (size_t i = 0; i < source.size(); ++i)
             if (source[i] == '\n') lines.push_back(i + 1);
@@ -63,7 +68,11 @@ public:
                 {
                     // Plain source has no surface token budget, and doesn't
                     // need retained tokens. Literal/comment hits stay inert.
-                    if (current.type == T::Eof) return std::move(document);
+                    if (current.type == T::Eof)
+                    {
+                        scanSlices();
+                        return std::move(document);
+                    }
                     beforeBeforePrevious = beforePrevious;
                     beforePrevious = previous;
                     previous = current;
@@ -84,6 +93,7 @@ public:
         while (!stopped && type(i) != T::Eof)
             if (isComprehension(i)) comprehension(i, 0);
             else ++i;
+        scanSlices();
         return std::move(document);
     }
 private:
@@ -99,6 +109,67 @@ private:
     T::Type type(size_t i) const { return tokens[std::min(i, tokens.size() - 1)].type; }
     Range point(size_t i) const { return {tokens[i].range.begin, tokens[i].range.begin}; }
     void error(Range r, std::string message) { document.errors.push_back({r, std::move(message)}); }
+    void scanSlices()
+    {
+        Luau::Allocator allocator;
+        Luau::AstNameTable names(allocator);
+        Luau::Lexer lexer(source.data(), source.size(), names);
+        lexer.setSkipComments(false);
+        std::vector<Token> all;
+        std::vector<size_t> lines{0};
+        for (size_t i = 0; i < source.size(); ++i)
+            if (source[i] == '\n') lines.push_back(i + 1);
+        for (;;)
+        {
+            const auto& token = lexer.next();
+            const auto offset = [&](Luau::Position p) { return lines[p.line] + p.column; };
+            if (token.type != T::Comment && token.type != T::BlockComment && token.type != T::BrokenComment)
+                all.push_back({token.type, {offset(token.location.begin), offset(token.location.end)}});
+            if (token.type == T::Eof) break;
+        }
+        for (size_t open = 0; open < all.size(); ++open)
+        {
+            if (all[open].type != '[' || open == 0) continue;
+            size_t close = open + 1;
+            int depth = 1;
+            size_t colon = 0;
+            for (; close < all.size() && depth; ++close)
+            {
+                if (all[close].type == '[') ++depth;
+                else if (all[close].type == ']') --depth;
+                else if (all[close].type == ':' && depth == 1) colon = close;
+            }
+            if (depth || !colon || colon == open + 1 || colon + 1 >= close - 1) continue;
+            size_t start = open - 1;
+            if (all[start].type == ')' || all[start].type == ']' || all[start].type == '}')
+            {
+                const int closing = all[start].type;
+                const int wanted = closing == ')' ? '(' : closing == ']' ? '[' : '{';
+                int nested = 1;
+                while (start > 0 && nested)
+                {
+                    --start;
+                    if (all[start].type == closing) ++nested;
+                    else if (all[start].type == wanted) --nested;
+                }
+                if (nested) continue;
+                if (start > 0 && all[start - 1].type == T::Name) --start;
+            }
+            else if (all[start].type != T::Name && all[start].type != T::Number &&
+                all[start].type != T::QuotedString && all[start].type != T::RawString)
+                continue;
+            Slice slice;
+            slice.source = {all[start].range.begin, all[open - 1].range.end};
+            slice.first = {all[open + 1].range.begin, all[colon - 1].range.end};
+            slice.last = {all[colon + 1].range.begin, all[close - 2].range.end};
+            slice.range = {slice.source.begin, all[close - 1].range.end};
+            slice.complete = true;
+            document.slices.push_back(slice);
+        }
+        std::sort(document.slices.begin(), document.slices.end(), [](const Slice& a, const Slice& b) {
+            return a.range.begin < b.range.begin;
+        });
+    }
     bool isComprehension(size_t i) const { return type(i) == '[' && type(i + 1) == T::ReservedFor; }
     bool isSumPrefix(const Token& token, T::Type preceding) const
     {

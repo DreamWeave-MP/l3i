@@ -100,6 +100,23 @@ fn inclusive_slices_fuse_into_comprehension_consumers() {
 }
 
 #[test]
+fn standalone_slices_materialize_dense_tables_with_single_evaluation() {
+    let runtime = Runtime::new().unwrap();
+    runtime
+        .exec(
+            r#"
+        local calls = 0
+        local function source() calls += 1 return {10, 20, 30, 40} end
+        local part = source()[2:3]
+        assert(calls == 1 and #part == 2 and part[1] == 20 and part[2] == 30)
+        local high = ({1, 2, 3})[99:100]
+        assert(#high == 0)
+    "#,
+        )
+        .unwrap();
+}
+
+#[test]
 fn language_operations_cannot_be_captured_by_user_bindings() {
     for consume in ["", "#", "sum"] {
         let runtime = Runtime::new().unwrap();
