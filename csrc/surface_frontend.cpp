@@ -353,6 +353,37 @@ private:
         else
             clause.enumerateArgument = {tokens[begin + 2].range.begin, tokens[end - 2].range.end};
     }
+    void recognizeZip(size_t begin, size_t end, Clause& clause)
+    {
+        if (end < begin + 4 || type(begin) != T::Name || type(begin + 1) != '(' || type(end - 1) != ')')
+            return;
+        const auto name = source.substr(tokens[begin].range.begin, tokens[begin].range.end - tokens[begin].range.begin);
+        if (name != "zipShortest" && name != "zipStrict") return;
+        std::vector<Range> arguments;
+        size_t start = begin + 2;
+        int depth = 1;
+        for (size_t at = start; at + 1 < end; ++at)
+        {
+            const int token = type(at);
+            if (token == '(' || token == '[' || token == '{') ++depth;
+            else if (token == ')' || token == ']' || token == '}') --depth;
+            if (token == ',' && depth == 1)
+            {
+                if (at == start) return;
+                arguments.push_back({tokens[start].range.begin, tokens[at - 1].range.end});
+                start = at + 1;
+            }
+        }
+        if (start >= end - 1) return;
+        arguments.push_back({tokens[start].range.begin, tokens[end - 2].range.end});
+        if (arguments.size() < 2)
+        {
+            error(clause.expression, "JSL zip generator expects at least two arguments");
+            return;
+        }
+        clause.zipArguments = std::move(arguments);
+        clause.zipStrict = name == "zipStrict";
+    }
     void comprehension(size_t& i, size_t depth)
     {
         if (limit(i, depth)) return;
@@ -407,9 +438,12 @@ private:
             {
                 recognizeRange(expressionBegin, i, clause);
                 recognizeEnumerate(expressionBegin, i, clause);
+                recognizeZip(expressionBegin, i, clause);
                 if (!clause.enumerateArgument.empty() && clause.bindings.size() != 2)
                     error(clause.binding, "JSL enumerate generator requires two bindings");
-                else if (clause.enumerateArgument.empty() && clause.bindings.size() > 1)
+                else if (!clause.zipArguments.empty() && clause.bindings.size() != clause.zipArguments.size())
+                    error(clause.binding, "JSL zip generator binding count must match its arguments");
+                else if (clause.enumerateArgument.empty() && clause.zipArguments.empty() && clause.bindings.size() > 1)
                     error(clause.binding, "multiple generator bindings require a recognized multi-value source");
             }
             if (clause.expression.empty())

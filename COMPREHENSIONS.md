@@ -234,6 +234,36 @@ consumers retain the existing dense/non-nil/eager projection contract. Source no
 recovery, diagnostics, autocomplete, and type analysis continue to come from the canonical
 frontend and refer to the original range arguments.
 
+## Phase Two: indexed `enumerate` and explicit `zip`
+
+Dense array generators may expose their index without allocating pairs:
+
+```luau
+[for i, value in enumerate(values) => i + value]
+```
+
+`enumerate(source)` evaluates `source` once, captures its length once, and lowers to an
+indexed numeric loop from `1` through `#source`. The index and element bindings are numbers
+and values respectively; no iterator, closure, tuple, or generic-for dispatch is created.
+
+Zipping is intentionally split into two named policies:
+
+```luau
+[for a, b in zipShortest(xs, ys) => a + b]
+[for a, b in zipStrict(xs, ys) => a + b]
+```
+
+Both forms evaluate every source once, left to right, and load aligned elements directly by
+index. `zipShortest` traverses through the shortest captured length. `zipStrict` checks all
+captured lengths before entering the loop and raises `JSL zipStrict inputs must have equal lengths`
+on mismatch. Both accept two or more sources and require exactly one binding per source.
+There is no bare `zip` intrinsic, so unequal-length behavior cannot be selected accidentally.
+
+These forms remain eager and preserve the ordinary comprehension nil guard. Length and sum
+consumers fuse the same traversal and do not allocate a slice, pair table, iterator, or result
+table. Direct source nodes (`ExprEnumerate` and `ExprZip`) retain original argument spans for
+tooling and diagnostics.
+
 ## Post-baseline JSL reducer experiment: `sum[for ...]`
 
 The next surface experiment builds directly on the hardened comprehension lowering without

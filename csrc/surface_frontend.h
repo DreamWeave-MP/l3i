@@ -39,6 +39,9 @@ struct Clause
     // Direct JSL enumerate(source) generator argument. Empty for ordinary
     // source expressions. The range excludes the call parentheses.
     Range enumerateArgument;
+    // Direct JSL zipShortest/zipStrict generator arguments. Empty for other sources.
+    std::vector<Range> zipArguments;
+    bool zipStrict = false;
     // Recovery-only unmatched ordinary delimiters, closed at the original fence.
     // Not part of expression's source range; strict consumers reject recovery.
     std::string expressionSuffix;

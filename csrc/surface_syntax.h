@@ -11,6 +11,8 @@ struct ClauseSite
     std::vector<Range> bindings;
     Range expression;
     std::vector<Range> rangeArguments;
+    std::vector<Range> zipArguments;
+    bool zipStrict = false;
 };
 
 struct ComprehensionSite

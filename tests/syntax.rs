@@ -410,6 +410,23 @@ fn enumerate_generators_are_source_nodes_with_two_bindings() {
 }
 
 #[test]
+fn zip_generators_are_source_nodes_with_explicit_mode() {
+    surface_test(
+        r#"
+        local source = "return [for a, b in zipStrict(left, right) => a + b]"
+        local r = luau.parse(source)
+        assert(#r.errors == 0)
+        local generator = r.root.body[1].list[1].clauses[1]
+        assert(generator.source.kind == 'ExprZip' and generator.source.strict and #generator.source.args == 2)
+        assert(#generator.bindings == 2 and generator.binding == generator.bindings[1])
+        span(source, r, generator.source, 'zipStrict(left, right)')
+        span(source, r, generator.source.args[1], 'left')
+        span(source, r, generator.source.args[2], 'right')
+    "#,
+    );
+}
+
+#[test]
 fn surface_shadowing_and_real_function_captures_exclude_generated_scopes() {
     surface_test(
         r"

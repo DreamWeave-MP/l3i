@@ -72,6 +72,8 @@ struct Text
                 shift(clause.expression, begin);
                 for (auto& argument : clause.rangeArguments)
                     shift(argument, begin);
+                for (auto& argument : clause.zipArguments)
+                    shift(argument, begin);
             }
             sites.push_back(std::move(site));
         }
@@ -315,6 +317,61 @@ private:
                 out += "end ";
             out += "end ";
         }
+        else if (generators == 1 && !node.clauses.front().zipArguments.empty())
+        {
+            const Clause& generator = node.clauses.front();
+            const std::string prefix = name + "_g0";
+            out.anchor = generator.range;
+            for (size_t argument = 0; argument < generator.zipArguments.size(); ++argument)
+            {
+                out += "local " + prefix + "_src" + std::to_string(argument) + " = ";
+                const size_t begin = out.size();
+                expression(out, generator.zipArguments[argument], "({} :: {any})");
+                site.clauses[0].zipArguments.push_back({begin, out.size()});
+                out += " local " + prefix + "_len" + std::to_string(argument) + " = #" + prefix + "_src" + std::to_string(argument) + " ";
+            }
+            out += "local " + prefix + "_n = " + prefix + "_len0 ";
+            for (size_t argument = 1; argument < generator.zipArguments.size(); ++argument)
+                out += "if " + prefix + "_len" + std::to_string(argument) + " < " + prefix + "_n then " + prefix + "_n = " + prefix + "_len" + std::to_string(argument) + " end ";
+            if (generator.zipStrict)
+                for (size_t argument = 1; argument < generator.zipArguments.size(); ++argument)
+                    out += "if " + prefix + "_len" + std::to_string(argument) + " ~= " + prefix + "_n then " + operations + "_error(\"JSL zipStrict inputs must have equal lengths\") end ";
+            if (!scalar)
+                out += "local " + output + " = " + operations + "_table_create(" + prefix + "_n) :: typeof({}) ";
+            if (!exact || scalar)
+                out += "local " + cursor + " = 0 ";
+            out += "for " + prefix + "_i = 1, " + prefix + "_n do local ";
+            for (size_t binding = 0; binding < generator.bindings.size(); ++binding)
+            {
+                if (binding) out += ", ";
+                const size_t begin = out.size();
+                out.copy(source, generator.bindings[binding]);
+                site.clauses[0].bindings.push_back({begin, out.size()});
+            }
+            site.clauses[0].binding = site.clauses[0].bindings.front();
+            out += " = ";
+            for (size_t argument = 0; argument < generator.zipArguments.size(); ++argument)
+            {
+                if (argument) out += ", ";
+                out += prefix + "_src" + std::to_string(argument) + "[" + prefix + "_i]";
+            }
+            out += " ";
+            for (size_t i = 1; i < node.clauses.size(); ++i)
+            {
+                out.anchor = node.clauses[i].expression;
+                out += "if ";
+                site.clauses[i].expression = expression(out, node.clauses[i].expression, "true", node.clauses[i].expressionSuffix);
+                out += " then ";
+            }
+            projection(out, node, name, site);
+            if (!exact || scalar)
+                out += cursor + " += " + (sum ? name + "_value " : "1 ");
+            if (!scalar)
+                out += output + "[" + (exact ? prefix + "_i" : cursor) + "] = " + name + "_value ";
+            out.anchor = node.close;
+            for (size_t i = 1; i < node.clauses.size(); ++i) out += "end ";
+            out += "end ";
+        }
         else if (generators == 1)
         {
             const Clause& generator = node.clauses.front();
@@ -398,6 +455,24 @@ private:
                     if (clause.rangeArguments.size() == 2) out += "local " + prefix + "_r2 = 1 ";
                     out += "if " + prefix + "_r2 == 0 then " + operations + "_error(\"JSL range step must not be zero\") end for ";
                 }
+                else if (!clause.zipArguments.empty())
+                {
+                    for (size_t argument = 0; argument < clause.zipArguments.size(); ++argument)
+                    {
+                        out += "local " + prefix + "_src" + std::to_string(argument) + " = ";
+                        const size_t begin = out.size();
+                        expression(out, clause.zipArguments[argument], "({} :: {any})");
+                        site.clauses[i].zipArguments.push_back({begin, out.size()});
+                        out += " local " + prefix + "_len" + std::to_string(argument) + " = #" + prefix + "_src" + std::to_string(argument) + " ";
+                    }
+                    out += "local " + prefix + "_n = " + prefix + "_len0 ";
+                    for (size_t argument = 1; argument < clause.zipArguments.size(); ++argument)
+                        out += "if " + prefix + "_len" + std::to_string(argument) + " < " + prefix + "_n then " + prefix + "_n = " + prefix + "_len" + std::to_string(argument) + " end ";
+                    if (clause.zipStrict)
+                        for (size_t argument = 1; argument < clause.zipArguments.size(); ++argument)
+                            out += "if " + prefix + "_len" + std::to_string(argument) + " ~= " + prefix + "_n then " + operations + "_error(\"JSL zipStrict inputs must have equal lengths\") end ";
+                    out += "for " + prefix + "_i = 1, " + prefix + "_n do local ";
+                }
                 else
                 {
                     out += "local " + prefix + "_src = ";
@@ -414,6 +489,24 @@ private:
                     site.clauses[i].binding = {binding, out.size()};
                     site.clauses[i].bindings.push_back(site.clauses[i].binding);
                     out += " = " + prefix + "_r0, " + prefix + "_r1, " + prefix + "_r2 do ";
+                }
+                else if (!clause.zipArguments.empty())
+                {
+                    for (size_t binding = 0; binding < clause.bindings.size(); ++binding)
+                    {
+                        if (binding) out += ", ";
+                        const size_t begin = out.size();
+                        out.copy(source, clause.bindings[binding]);
+                        site.clauses[i].bindings.push_back({begin, out.size()});
+                    }
+                    site.clauses[i].binding = site.clauses[i].bindings.front();
+                    out += " = ";
+                    for (size_t argument = 0; argument < clause.zipArguments.size(); ++argument)
+                    {
+                        if (argument) out += ", ";
+                        out += prefix + "_src" + std::to_string(argument) + "[" + prefix + "_i]";
+                    }
+                    out += " ";
                 }
                 else if (!clause.enumerateArgument.empty())
                 {

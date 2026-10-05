@@ -58,6 +58,28 @@ fn enumerate_generators_lower_to_indexed_loops() {
 }
 
 #[test]
+fn zip_generators_lower_to_indexed_loops_with_explicit_length_rules() {
+    let runtime = Runtime::new().unwrap();
+    runtime
+        .exec(
+            r#"
+        local calls = 0
+        local function left() calls += 1 return {10, 20, 30} end
+        local shortest = [for a, b in zipShortest(left(), {1, 2}) => a + b]
+        assert(calls == 1 and #shortest == 2 and shortest[1] == 11 and shortest[2] == 22)
+        local strict = [for a, b, c in zipStrict({1, 2}, {10, 20}, {100, 200}) => a + b + c]
+        assert(#strict == 2 and strict[1] == 111 and strict[2] == 222)
+        local ok, message = pcall(function()
+            return [for a, b in zipStrict({1}, {2, 3}) => a + b]
+        end)
+        assert(not ok and string.find(tostring(message), "zipStrict inputs must have equal lengths", 1, true))
+        assert(sum[for a, b in zipShortest({1, 2, 3}, {10, 20}) => a + b] == 33)
+    "#,
+        )
+        .unwrap();
+}
+
+#[test]
 fn language_operations_cannot_be_captured_by_user_bindings() {
     for consume in ["", "#", "sum"] {
         let runtime = Runtime::new().unwrap();

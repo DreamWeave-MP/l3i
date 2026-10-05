@@ -189,6 +189,19 @@ int main()
         assert(d.comprehensions.size() == 1 && !d.errors.empty() && !d.comprehensions[0].complete);
     }
     {
+        const std::string_view s = "[for a, b in zipStrict(left, right) => a + b]";
+        const auto d = parseSurface(s);
+        assert(d.errors.empty() && d.comprehensions.size() == 1);
+        const auto& clause = d.comprehensions[0].clauses[0];
+        assert(clause.zipStrict && clause.zipArguments.size() == 2 && clause.bindings.size() == 2);
+    }
+    for (std::string_view s : {"[for a in zipShortest(xs, ys) => a]",
+             "[for a, b in zipStrict(xs) => a]", "[for a, b in zip(xs, ys) => a]"})
+    {
+        const auto d = parseSurface(s);
+        assert(d.comprehensions.size() == 1 && !d.errors.empty() && !d.comprehensions[0].complete);
+    }
+    {
         const std::string s = "-- [for fake in xs => fake]\r\nlocal a = '[for fake]'\nlocal b = [==[[for fake]]==]\n"
             "--[=[ [for ignored] ]=]\nlocal c = [ -- trivia\r\n for x -- name\n in xs -- expr\n if x => 'é' ]";
         complete(s);
