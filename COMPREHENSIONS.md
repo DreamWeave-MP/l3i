@@ -281,14 +281,17 @@ are clamped to the source's dense extent; an interval with `last < first` is emp
 form is intentionally unstepped. Standalone table slices allocate an exactly sized dense result
 and bulk-copy with a snapshotted `table.move`. Standalone buffer slices preserve the same 1-based
 inclusive surface bounds, translate them to zero-based byte offsets, and bulk-copy with
-`buffer.copy`. They do not consult user bindings named `table` or `buffer`. Table comprehension lowering instead traverses selected indices
-directly. Fused length and sum consumers allocate neither a slice nor a comprehension result.
+`buffer.copy`. They do not consult user bindings named `table` or `buffer`. Direct table and buffer
+comprehension generators instead traverse selected indices directly; buffers read each selected
+byte with `buffer.readu8`. Analysis probes the source with stock Luau types and rechecks a
+representation-specialized lowering, so table element types stay precise while buffer bindings are
+numbers. Fused length and sum consumers allocate neither a slice nor a comprehension result.
 Materialized comprehension consumers compact selected elements into their normal dense result,
 preserving projection order and the non-nil guard.
 
 The canonical frontend exports an `ExprSlice` node with original source and bound spans for both
-standalone and generator slices. Buffer generator fusion and string representation-directed copies
-remain future work; comprehension slice sources currently require dense tables. Stock Luau indexing wins when the contents
+standalone and generator slices. Buffer specialization in dependent/nested generator positions and
+string representation-directed copies remain future work. Stock Luau indexing wins when the contents
 are already a valid colon method call, so ambiguous bounds use parentheses: `xs[(first()):(last())]`.
 
 ## Post-baseline JSL reducer experiment: `sum[for ...]`

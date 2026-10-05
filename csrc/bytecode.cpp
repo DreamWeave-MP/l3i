@@ -34,7 +34,7 @@ char* compileImpl(const char* source, size_t size, lua_CompileOptions* options, 
             static_assert(sizeof(lua_CompileOptions) == sizeof(Luau::CompileOptions), "C and C++ compile options must match");
             std::memcpy(&compileOptions, options, sizeof(compileOptions));
         }
-        auto lowered = L3i::Surface::lower(std::string_view(source, size));
+        auto lowered = L3i::Surface::lower(std::string_view(source, size), false, true, {}, true);
         if (!lowered.document.errors.empty())
         {
             const auto& error = lowered.document.errors.front();

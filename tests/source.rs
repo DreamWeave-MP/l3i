@@ -137,6 +137,13 @@ fn slices_fuse_without_materializing_the_slice() {
 }
 
 #[test]
+fn buffer_slice_sums_fuse_to_direct_byte_reads() {
+    let listing = disassemble("return sum[for byte in values[2:limit] => byte]", &CompileOptions::default()).unwrap();
+    assert!(listing.contains("'readu8'") && listing.contains("FORNPREP") && listing.contains("FORNLOOP"), "{listing}");
+    assert!(!listing.contains("'copy'") && !listing.contains("NEWTABLE") && !listing.contains("SETLIST"), "{listing}");
+}
+
+#[test]
 fn standalone_table_slices_use_bulk_copy() {
     let listing = disassemble("return values[2:limit]", &CompileOptions::default()).unwrap();
     assert!(listing.contains("table.move"), "{listing}");

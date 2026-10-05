@@ -143,8 +143,7 @@ fn standalone_buffer_slices_copy_inclusive_one_based_byte_ranges() {
         assert(builtinBuffer.readu8(part, 0) == 11 and builtinBuffer.readu8(part, 2) == 13)
         local empty = input[99:100]
         assert(builtinBuffer.len(empty) == 0)
-        local ok, message = pcall(function() return sum[for byte in input[1:2] => byte] end)
-        assert(not ok and string.find(tostring(message), "comprehension slice source must be a table", 1, true))
+        assert(sum[for byte in input[1:2] => byte] == 21)
     "#,
         )
         .unwrap();

@@ -16,6 +16,7 @@
 #include <Luau/Parser.h>
 #include <Luau/ToString.h>
 #include <Luau/TypeArena.h>
+#include <Luau/Type.h>
 
 #include "surface_syntax.h"
 #include "source_locations.h"
@@ -228,6 +229,7 @@ namespace
     struct HostFileResolver : Luau::FileResolver
     {
         db_source_provider provider;
+        std::unordered_map<std::string, std::vector<L3i::Surface::Range>> bufferGenerators;
         // Updated only by the frontend's readSource, so cached ASTs keep the map
         // from their source snapshot even after markDirty or an existence probe.
         std::unordered_map<Luau::ModuleName, SourceSnapshot> snapshots;
@@ -308,7 +310,7 @@ namespace
                 return std::nullopt;
             }
             Luau::SourceCode::Type kind = type == 2 ? Luau::SourceCode::Script : Luau::SourceCode::Module;
-            auto lowered = L3i::Surface::lower(source, true);
+            auto lowered = L3i::Surface::lower(source, true, true, bufferGenerators[name]);
             // Luau owns one shared SourceModule cache for both solvers/check modes.
             // Retain the exact original/lowered pair until that AST is reread.
             auto it = snapshots.insert_or_assign(name, SourceSnapshot{std::move(source), std::move(lowered)}).first;
@@ -339,6 +341,58 @@ namespace
             return human;
         }
     };
+
+    Luau::Position positionAt(std::string_view source, size_t offset)
+    {
+        Luau::Position result(0, 0);
+        for (size_t i = 0; i < std::min(offset, source.size()); ++i)
+            if (source[i] == '\n') result = Luau::Position(result.line + 1, 0);
+            else ++result.column;
+        return result;
+    }
+
+    struct ExpressionAt final : Luau::AstVisitor
+    {
+        Luau::Location target;
+        Luau::AstExpr* result = nullptr;
+        explicit ExpressionAt(Luau::Location target) : target(target) {}
+        bool visit(Luau::AstExpr* expression) override
+        {
+            if (expression->location == target)
+                result = expression;
+            return result == nullptr;
+        }
+    };
+
+    bool specializeBufferGenerators(Luau::Frontend& frontend, HostFileResolver& files, const std::string& name)
+    {
+        const auto* snapshot = files.snapshot(name);
+        Luau::SourceModule* sourceModule = frontend.getSourceModule(name);
+        Luau::ModulePtr module = frontend.moduleResolver.getModule(name);
+        if (!snapshot || !sourceModule || !module || !sourceModule->root)
+            return false;
+        std::vector<L3i::Surface::Range> buffers;
+        for (const auto& site : snapshot->lowered.sites)
+            for (size_t i = 0; i < site.clauses.size(); ++i)
+            {
+                const auto& generated = site.clauses[i].sliceSource;
+                const auto& original = snapshot->lowered.document.comprehensions[site.comprehension].clauses[i].sliceSource;
+                if (generated.empty() || original.empty()) continue;
+                ExpressionAt finder({positionAt(snapshot->lowered.source, generated.begin),
+                    positionAt(snapshot->lowered.source, generated.end)});
+                sourceModule->root->visit(&finder);
+                if (!finder.result) continue;
+                if (Luau::TypeId* type = module->astTypes.find(finder.result); type && Luau::isBuffer(*type))
+                    buffers.push_back(original);
+            }
+        auto& current = files.bufferGenerators[name];
+        if (current.size() == buffers.size() && std::equal(current.begin(), current.end(), buffers.begin(),
+            [](L3i::Surface::Range a, L3i::Surface::Range b) { return a.begin == b.begin && a.end == b.end; }))
+            return false;
+        current = std::move(buffers);
+        frontend.markDirty(name);
+        return true;
+    }
 
     struct HostConfigResolver : Luau::ConfigResolver
     {
@@ -592,6 +646,8 @@ int db_analysis_check(db_analysis* analysis, const char* name, size_t name_lengt
         Luau::FrontendOptions options = analysis->options;
         options.runLintChecks = lint != 0;
         Luau::CheckResult result = analysis->frontend->check(module, options);
+        if (specializeBufferGenerators(*analysis->frontend, analysis->files, module))
+            result = analysis->frontend->check(module, options);
         int errors = 0;
         std::unordered_set<std::string> seen;
         std::vector<std::string> modules;

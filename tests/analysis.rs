@@ -239,6 +239,24 @@ fn standalone_buffer_slices_preserve_buffer_type() {
 }
 
 #[test]
+fn buffer_slice_comprehensions_specialize_after_luau_infers_the_source() {
+    let source = concat!(
+        "--!strict\n",
+        "local values: buffer = buffer.create(4)\n",
+        "local bytes = [for byte in values[1:4] => byte * 2]\n",
+        "local total = sum[for byte in values[1:4] => byte]\n",
+        "return bytes, total\n",
+    );
+    for solver in [analysis::Solver::New, analysis::Solver::Old] {
+        let analysis = comprehension_analysis(HashMap::from([("buffer_fusion", source)]), solver);
+        let report = analysis.check("buffer_fusion", false);
+        assert!(report.is_clean(), "{solver:?}: {report:#?}");
+        assert_binding_type(&analysis, "buffer_fusion", 4, "bytes", "{number}");
+        assert_binding_type(&analysis, "buffer_fusion", 5, "total", "number");
+    }
+}
+
+#[test]
 fn comprehension_filters_refine_nullable_elements_and_fields_before_projection() {
     let refined = concat!(
         "--!strict\n",

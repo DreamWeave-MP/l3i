@@ -101,8 +101,10 @@ struct Text
 class Lowerer
 {
 public:
-    Lowerer(std::string_view source, const Document& document, bool recovery, bool fuse)
-        : source(source), document(document), recovery(recovery), fuse(fuse)
+    Lowerer(std::string_view source, const Document& document, bool recovery, bool fuse,
+        const std::vector<Range>& bufferGenerators, bool dynamicGenerators)
+        : source(source), document(document), recovery(recovery), fuse(fuse), bufferGenerators(bufferGenerators),
+          dynamicGenerators(dynamicGenerators)
     {
         for (size_t begin = 0; begin < source.size();)
         {
@@ -154,7 +156,7 @@ public:
             result += "local " + operations + "_typeof = typeof ";
             ++preludeStatements;
         }
-        if (!document.slices.empty())
+        if (!document.slices.empty() || !bufferGenerators.empty() || dynamicGenerators)
         {
             result += "local " + operations + "_buffer = buffer ";
             ++preludeStatements;
@@ -239,6 +241,15 @@ private:
     std::unordered_set<std::string_view> names;
     std::string operations;
     size_t preludeStatements = 1;
+    const std::vector<Range>& bufferGenerators;
+    bool dynamicGenerators;
+
+    bool bufferGenerator(Range sourceRange) const
+    {
+        return std::any_of(bufferGenerators.begin(), bufferGenerators.end(), [&](Range range) {
+            return range.begin == sourceRange.begin && range.end == sourceRange.end;
+        });
+    }
 
     std::string stem(size_t offset) const
     {
@@ -425,6 +436,8 @@ private:
         else if (generators == 1 && !node.clauses.front().sliceSource.empty())
         {
             const Clause& generator = node.clauses.front();
+            const bool bytes = bufferGenerator(generator.sliceSource);
+            const bool dynamic = dynamicGenerators && !bytes;
             const std::string prefix = name + "_g0";
             out.anchor = generator.range;
             out += "local " + prefix + "_src = ";
@@ -440,8 +453,12 @@ private:
             expression(out, generator.sliceLast, "(0 :: number)");
             site.clauses[0].sliceLast = {lastBegin, out.size()};
             out += " ";
-            sliceChecks(out, prefix, generator.sliceSource, generator.sliceFirst, generator.sliceLast);
-            out += "local " + prefix + "_len = #" + prefix + "_src if " + prefix + "_first < 1 then " + prefix + "_first = 1 end if " + prefix + "_last > " + prefix + "_len then " + prefix + "_last = " + prefix + "_len end local " + prefix + "_n = 0 if " + prefix + "_last >= " + prefix + "_first then " + prefix + "_n = " + prefix + "_last - " + prefix + "_first + 1 end ";
+            sliceChecks(out, prefix, generator.sliceSource, generator.sliceFirst, generator.sliceLast, bytes || dynamic);
+            if (dynamic)
+                out += "local " + prefix + "_len = 0 if " + prefix + "_kind == \"buffer\" then " + prefix + "_len = " + operations + "_buffer.len(" + prefix + "_src) else " + prefix + "_len = #" + prefix + "_src end ";
+            else
+                out += "local " + prefix + "_len = " + (bytes ? operations + "_buffer.len(" + prefix + "_src)" : "#" + prefix + "_src") + " ";
+            out += "if " + prefix + "_first < 1 then " + prefix + "_first = 1 end if " + prefix + "_last > " + prefix + "_len then " + prefix + "_last = " + prefix + "_len end local " + prefix + "_n = 0 if " + prefix + "_last >= " + prefix + "_first then " + prefix + "_n = " + prefix + "_last - " + prefix + "_first + 1 end ";
             if (!scalar)
                 out += "local " + output + " = " + operations + "_table_create(" + prefix + "_n) :: typeof({}) ";
             if (!exact || scalar || !generator.sliceSource.empty())
@@ -451,7 +468,9 @@ private:
             out.copy(source, generator.binding);
             site.clauses[0].binding = {binding, out.size()};
             site.clauses[0].bindings.push_back(site.clauses[0].binding);
-            out += " = " + prefix + "_src[" + prefix + "_i] ";
+            out += (bytes ? " = " + operations + "_buffer.readu8(" + prefix + "_src, " + prefix + "_i - 1) "
+                          : dynamic ? " = if " + prefix + "_kind == \"buffer\" then " + operations + "_buffer.readu8(" + prefix + "_src, " + prefix + "_i - 1) else " + prefix + "_src[" + prefix + "_i] "
+                                    : " = " + prefix + "_src[" + prefix + "_i] ");
             for (size_t i = 1; i < node.clauses.size(); ++i)
             {
                 out += "if ";
@@ -724,12 +743,13 @@ private:
 };
 }
 
-LoweredSource lower(std::string_view source, bool recovery, bool fuseLength)
+LoweredSource lower(std::string_view source, bool recovery, bool fuseLength, const std::vector<Range>& bufferGenerators,
+    bool dynamicGenerators)
 {
     Document document = parseSurface(source);
     if ((document.comprehensions.empty() && document.slices.empty()) || (!recovery && !document.errors.empty()))
         return {std::string(source), {}, std::move(document), {}, {}, 0};
-    Lowerer lowerer(source, document, recovery, fuseLength);
+    Lowerer lowerer(source, document, recovery, fuseLength, bufferGenerators, dynamicGenerators);
     Text output = lowerer.lower();
     SourceMap map(source, output.text, std::move(output.segments));
     return {std::move(output.text), std::move(map), std::move(document), std::move(output.sites), std::move(output.sliceSites), lowerer.prelude()};
