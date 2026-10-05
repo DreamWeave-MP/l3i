@@ -167,6 +167,39 @@ fn eager_list_comprehensions(c: &mut Criterion) {
     count_comparisons(c);
     sum_comparisons(c);
     callback_comparisons(c);
+    indexed_generator_comparisons(c);
+}
+
+fn indexed_generator_comparisons(c: &mut Criterion) {
+    let mut indexed = c.benchmark_group("comprehension_indexed_generators");
+    indexed.throughput(Throughput::Elements(ITEMS));
+    bench_case(
+        &mut indexed,
+        "l3i enumerate",
+        "return [for i, value in enumerate(values) => i + value]",
+        Output::Dense,
+    );
+    bench_case(
+        &mut indexed,
+        "handwritten enumerate",
+        "local src = values local n = #src local out = table.create(n) \
+         for i = 1, n do local value = src[i] out[i] = i + value end return out",
+        Output::Dense,
+    );
+    bench_case(
+        &mut indexed,
+        "l3i zipShortest",
+        "return [for a, b in zipShortest(values, values) => a + b]",
+        Output::Dense,
+    );
+    bench_case(
+        &mut indexed,
+        "handwritten zip",
+        "local left, right = values, values local n = math.min(#left, #right) local out = table.create(n) \
+         for i = 1, n do out[i] = left[i] + right[i] end return out",
+        Output::Dense,
+    );
+    indexed.finish();
 }
 
 fn dense_comparisons(c: &mut Criterion) {
