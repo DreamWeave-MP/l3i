@@ -183,6 +183,22 @@ fn mapped_runtime_errors_attribute_copied_and_synthetic_operations() {
 }
 
 #[test]
+fn slice_validation_errors_point_to_the_original_source_and_bound() {
+    let runtime = l3i::Runtime::new().unwrap();
+    let first = runtime
+        .exec("local values = {1, 2, 3}\nreturn values[\n    1.5:\n    2\n]")
+        .unwrap_err()
+        .to_string();
+    assert!(first.contains("exec:3:") && first.contains("slice first bound"), "{first}");
+
+    let source = runtime
+        .exec("local source = 'text'\nreturn sum[for x in source[\n    1:\n    2\n] => x]")
+        .unwrap_err()
+        .to_string();
+    assert!(source.contains("exec:2:") && source.contains("slice source"), "{source}");
+}
+
+#[test]
 fn parser_secondary_references_and_eof_use_original_source() {
     let source = "local xs = [\n for x in {1}\n => x\n]\nfunction broken()\n return xs";
     for suffix in ["", "\n"] {

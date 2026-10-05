@@ -109,12 +109,98 @@ fn standalone_slices_materialize_dense_tables_with_single_evaluation() {
         local function source() calls += 1 return {10, 20, 30, 40} end
         local captured = 0
         local table = {create = function() captured += 1 return {} end, move = function() captured += 1 end}
+        local typeof = function() captured += 1 return "table" end
         local part = source()[2:3]
         assert(calls == 1 and captured == 0 and #part == 2 and part[1] == 20 and part[2] == 30)
         local high = ({1, 2, 3})[99:100]
         assert(#high == 0)
         local key = {method = function() return 1 end}
         assert(({9})[key:method()] == 9)
+    "#,
+        )
+        .unwrap();
+}
+
+#[test]
+fn slice_sources_and_bounds_have_identical_checked_semantics_for_every_consumer() {
+    for expression in [
+        "values[first:last]",
+        "[for x in values[first:last] => x]",
+        "sum[for x in values[first:last] => x]",
+        "#[for x in values[first:last] => x]",
+    ] {
+        let runtime = Runtime::new().unwrap();
+        runtime
+            .exec(&format!(
+                r#"
+            local values = {{10, 20, 30}}
+            local function failure(firstValue, lastValue, expected)
+                first, last = firstValue, lastValue
+                local ok, message = pcall(function() return {expression} end)
+                assert(not ok and string.find(tostring(message), expected, 1, true), tostring(message))
+            end
+            failure(1.5, 2, "slice first bound must be a finite integer")
+            failure(0 / 0, 2, "slice first bound must be a finite integer")
+            failure(math.huge, 2, "slice first bound must be a finite integer")
+            failure("1", 2, "slice first bound must be a finite integer")
+            failure(1, 2.5, "slice last bound must be a finite integer")
+            failure(1, -math.huge, "slice last bound must be a finite integer")
+        "#,
+            ))
+            .unwrap();
+    }
+
+    for expression in ["source[1:1]", "sum[for x in source[1:1] => x]"] {
+        let runtime = Runtime::new().unwrap();
+        runtime
+            .exec(&format!(
+                r#"
+            local source = "not a table"
+            local ok, message = pcall(function() return {expression} end)
+            assert(not ok and string.find(tostring(message), "slice source must be a table", 1, true))
+        "#,
+            ))
+            .unwrap();
+    }
+}
+
+#[test]
+fn slices_evaluate_source_then_bounds_then_length_once() {
+    for expression in ["source()[(first()):(last())]", "sum[for x in source()[(first()):(last())] => x]"] {
+        let runtime = Runtime::new().unwrap();
+        runtime
+            .exec(&format!(
+                r#"
+            local events = {{}}
+            local function mark(name) events[#events + 1] = name end
+            local function source()
+                mark("source")
+                return setmetatable({{10, 20, 30}}, {{__len = function() mark("length") return 3 end}})
+            end
+            local function first() mark("first") return 1 end
+            local function last() mark("last") return 2 end
+            local result = {expression}
+            assert(table.concat(events, ",") == "source,first,last,length", table.concat(events, ","))
+        "#,
+            ))
+            .unwrap();
+    }
+}
+
+#[test]
+fn dependent_slice_generators_recompute_bounds_at_the_nested_loop_position() {
+    let runtime = Runtime::new().unwrap();
+    runtime
+        .exec(
+            r#"
+        local events = {}
+        local rows = {{values = {1, 2, 3}, first = 2}, {values = {10, 20}, first = 1}}
+        local function source(row) events[#events + 1] = "source" .. row.first return row.values end
+        local function first(row) events[#events + 1] = "first" .. row.first return row.first end
+        local function last(row) events[#events + 1] = "last" .. row.first return #row.values end
+        local total = sum[for row in rows for x in source(row)[first(row):last(row)] => x]
+        assert(total == 35)
+        assert(table.concat(events, ",") == "source2,first2,last2,source1,first1,last1")
     "#,
         )
         .unwrap();

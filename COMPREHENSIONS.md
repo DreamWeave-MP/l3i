@@ -274,9 +274,11 @@ local part = values[first:last]
 sum[for x in values[first:last] if accept(x) => project(x)]
 ```
 
-Bounds are 1-based and inclusive. The source, first bound, and last bound are evaluated once,
-left to right. Bounds are clamped to the source's dense extent; an interval with `last < first`
-is empty. The initial form is intentionally unstepped and table-directed. Standalone slices
+Bounds are 1-based, inclusive, finite integers. The source must be a table. The source, first
+bound, and last bound are evaluated once, left to right, before validation and before measuring
+the source. Invalid sources and bounds fail consistently in materialized and fused forms. Bounds
+are clamped to the source's dense extent; an interval with `last < first` is empty. The initial
+form is intentionally unstepped and table-directed. Standalone slices
 allocate an exactly sized dense result and bulk-copy with a snapshotted `table.move`; they do not
 consult a user binding named `table`. Comprehension lowering instead traverses selected indices
 directly. Fused length and sum consumers allocate neither a slice nor a comprehension result.
@@ -285,7 +287,8 @@ preserving projection order and the non-nil guard.
 
 The canonical frontend exports an `ExprSlice` node with original source and bound spans for both
 standalone and generator slices. Buffer and string representation-directed copies remain future
-work; the current form requires a dense table source.
+work; the current form requires a dense table source. Stock Luau indexing wins when the contents
+are already a valid colon method call, so ambiguous bounds use parentheses: `xs[(first()):(last())]`.
 
 ## Post-baseline JSL reducer experiment: `sum[for ...]`
 

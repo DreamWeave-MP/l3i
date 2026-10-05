@@ -144,6 +144,16 @@ public:
         }
         result.copy(source, {0, prefix});
         result += "local " + operations + "_error = error ";
+        const bool hasSlices = !document.slices.empty() ||
+            std::any_of(document.comprehensions.begin(), document.comprehensions.end(), [](const Comprehension& node) {
+                return std::any_of(node.clauses.begin(), node.clauses.end(),
+                    [](const Clause& clause) { return !clause.sliceSource.empty(); });
+            });
+        if (hasSlices)
+        {
+            result += "local " + operations + "_typeof = typeof ";
+            ++preludeStatements;
+        }
         const bool needsTable = std::any_of(document.comprehensions.begin(), document.comprehensions.end(), [&](const Comprehension& node) {
             const size_t generators = std::count_if(node.clauses.begin(), node.clauses.end(),
                 [](const Clause& clause) { return clause.kind == ClauseKind::Generator; });
@@ -153,14 +163,14 @@ public:
         if (needsTable)
         {
             result += "local " + operations + "_table_create = table.create ";
-            preludeStatements = 2;
+            ++preludeStatements;
         }
         if (!document.slices.empty())
         {
             if (!needsTable)
             {
                 result += "local " + operations + "_table_create = table.create ";
-                preludeStatements = 2;
+                ++preludeStatements;
             }
             result += "local " + operations + "_table_move = table.move ";
             ++preludeStatements;
@@ -267,6 +277,21 @@ private:
         return {begin, end};
     }
 
+    void sliceChecks(Text& out, std::string_view prefix, Range sourceRange, Range firstRange, Range lastRange)
+    {
+        out.anchor = sourceRange;
+        out += "if " + operations + "_typeof(" + std::string(prefix) + "_src) ~= \"table\" then " +
+            operations + "_error(\"JSL slice source must be a table\") end ";
+        out.anchor = firstRange;
+        out += "if " + operations + "_typeof(" + std::string(prefix) + "_first) ~= \"number\" or " +
+            std::string(prefix) + "_first % 1 ~= 0 then " + operations +
+            "_error(\"JSL slice first bound must be a finite integer\") end ";
+        out.anchor = lastRange;
+        out += "if " + operations + "_typeof(" + std::string(prefix) + "_last) ~= \"number\" or " +
+            std::string(prefix) + "_last % 1 ~= 0 then " + operations +
+            "_error(\"JSL slice last bound must be a finite integer\") end ";
+    }
+
     Text slice(size_t index)
     {
         const Slice& node = document.slices[index];
@@ -278,11 +303,13 @@ private:
         const size_t callBegin = out.size();
         out += "(function() local " + prefix + "_src = ";
         site.source = expression(out, node.source, "({} :: {any})");
-        out += " local " + prefix + "_len = #" + prefix + "_src local " + prefix + "_first = ";
+        out += " local " + prefix + "_first = ";
         site.first = expression(out, node.first, "(1 :: number)");
         out += " local " + prefix + "_last = ";
         site.last = expression(out, node.last, "(0 :: number)");
-        out += " if " + prefix + "_first < 1 then " + prefix + "_first = 1 end if " + prefix + "_last > " + prefix + "_len then " + prefix + "_last = " + prefix + "_len end local " + prefix + "_n = 0 if " + prefix + "_last >= " + prefix + "_first then " + prefix + "_n = " + prefix + "_last - " + prefix + "_first + 1 end local " + prefix + "_out = " + operations + "_table_create(" + prefix + "_n) :: typeof(" + prefix + "_src) if " + prefix + "_n > 0 then " + operations + "_table_move(" + prefix + "_src, " + prefix + "_first, " + prefix + "_last, 1, " + prefix + "_out) end return " + prefix + "_out end)()";
+        out += " ";
+        sliceChecks(out, prefix, node.source, node.first, node.last);
+        out += "local " + prefix + "_len = #" + prefix + "_src if " + prefix + "_first < 1 then " + prefix + "_first = 1 end if " + prefix + "_last > " + prefix + "_len then " + prefix + "_last = " + prefix + "_len end local " + prefix + "_n = 0 if " + prefix + "_last >= " + prefix + "_first then " + prefix + "_n = " + prefix + "_last - " + prefix + "_first + 1 end local " + prefix + "_out = " + operations + "_table_create(" + prefix + "_n) :: typeof(" + prefix + "_src) if " + prefix + "_n > 0 then " + operations + "_table_move(" + prefix + "_src, " + prefix + "_first, " + prefix + "_last, 1, " + prefix + "_out) end return " + prefix + "_out end)()";
         site.call = {callBegin, out.size()};
         out.sliceSites.push_back(std::move(site));
         return out;
@@ -393,7 +420,7 @@ private:
             const size_t sourceBegin = out.size();
             expression(out, generator.sliceSource, "({} :: {any})");
             site.clauses[0].sliceSource = {sourceBegin, out.size()};
-            out += " local " + prefix + "_len = #" + prefix + "_src local " + prefix + "_first = ";
+            out += " local " + prefix + "_first = ";
             const size_t firstBegin = out.size();
             expression(out, generator.sliceFirst, "(1 :: number)");
             site.clauses[0].sliceFirst = {firstBegin, out.size()};
@@ -401,7 +428,9 @@ private:
             const size_t lastBegin = out.size();
             expression(out, generator.sliceLast, "(0 :: number)");
             site.clauses[0].sliceLast = {lastBegin, out.size()};
-            out += " if " + prefix + "_first < 1 then " + prefix + "_first = 1 end if " + prefix + "_last > " + prefix + "_len then " + prefix + "_last = " + prefix + "_len end local " + prefix + "_n = 0 if " + prefix + "_last >= " + prefix + "_first then " + prefix + "_n = " + prefix + "_last - " + prefix + "_first + 1 end ";
+            out += " ";
+            sliceChecks(out, prefix, generator.sliceSource, generator.sliceFirst, generator.sliceLast);
+            out += "local " + prefix + "_len = #" + prefix + "_src if " + prefix + "_first < 1 then " + prefix + "_first = 1 end if " + prefix + "_last > " + prefix + "_len then " + prefix + "_last = " + prefix + "_len end local " + prefix + "_n = 0 if " + prefix + "_last >= " + prefix + "_first then " + prefix + "_n = " + prefix + "_last - " + prefix + "_first + 1 end ";
             if (!scalar)
                 out += "local " + output + " = " + operations + "_table_create(" + prefix + "_n) :: typeof({}) ";
             if (!exact || scalar || !generator.sliceSource.empty())
@@ -570,7 +599,7 @@ private:
                     const size_t sourceBegin = out.size();
                     expression(out, clause.sliceSource, "({} :: {any})");
                     site.clauses[i].sliceSource = {sourceBegin, out.size()};
-                    out += " local " + prefix + "_len = #" + prefix + "_src local " + prefix + "_first = ";
+                    out += " local " + prefix + "_first = ";
                     const size_t firstBegin = out.size();
                     expression(out, clause.sliceFirst, "(1 :: number)");
                     site.clauses[i].sliceFirst = {firstBegin, out.size()};
@@ -578,7 +607,9 @@ private:
                     const size_t lastBegin = out.size();
                     expression(out, clause.sliceLast, "(0 :: number)");
                     site.clauses[i].sliceLast = {lastBegin, out.size()};
-                    out += " if " + prefix + "_first < 1 then " + prefix + "_first = 1 end if " + prefix + "_last > " + prefix + "_len then " + prefix + "_last = " + prefix + "_len end for " + prefix + "_i = " + prefix + "_first, " + prefix + "_last do local ";
+                    out += " ";
+                    sliceChecks(out, prefix, clause.sliceSource, clause.sliceFirst, clause.sliceLast);
+                    out += "local " + prefix + "_len = #" + prefix + "_src if " + prefix + "_first < 1 then " + prefix + "_first = 1 end if " + prefix + "_last > " + prefix + "_len then " + prefix + "_last = " + prefix + "_len end for " + prefix + "_i = " + prefix + "_first, " + prefix + "_last do local ";
                 }
                 else if (!clause.zipArguments.empty())
                 {

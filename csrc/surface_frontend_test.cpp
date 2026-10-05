@@ -212,13 +212,13 @@ int main()
         assert(d.slices.empty());
     }
     {
-        const std::string_view s = "return source()[first():last()]";
+        const std::string_view s = "return source()[(first()):(last())]";
         const auto d = parseSurface(s);
         assert(d.errors.empty() && d.slices.size() == 1);
         assert(slice(s, d.slices[0].source) == "source()");
-        assert(slice(s, d.slices[0].first) == "first()");
-        assert(slice(s, d.slices[0].last) == "last()");
-        assert(slice(s, d.slices[0].range) == "source()[first():last()]");
+        assert(slice(s, d.slices[0].first) == "(first())");
+        assert(slice(s, d.slices[0].last) == "(last())");
+        assert(slice(s, d.slices[0].range) == "source()[(first()):(last())]");
     }
     {
         const auto d = parseSurface("return values[obj:method()]");
