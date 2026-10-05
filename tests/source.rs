@@ -239,6 +239,10 @@ fn unfinished_surface_forms_never_compile_or_execute_recovery_holes() {
         "[for x in xs => x",
         "sum[for x in xs =>",
         "#[for x in xs =>",
+        "xs[:2]",
+        "xs[1:]",
+        "[for x in xs[:2] => x]",
+        "[for x in xs[1:] => x]",
     ] {
         let source = format!("return {fragment}");
         let error = compile(&source, &options).unwrap_err().to_string();

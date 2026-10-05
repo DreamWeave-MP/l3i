@@ -139,7 +139,7 @@ private:
                 else if (all[close].type == ']') --depth;
                 else if (all[close].type == ':' && depth == 1) colon = close;
             }
-            if (depth || !colon || colon == open + 1 || colon + 1 >= close - 1) continue;
+            if (depth || !colon) continue;
             size_t start = open - 1;
             if (all[start].type == ')' || all[start].type == ']' || all[start].type == '}')
             {
@@ -160,8 +160,12 @@ private:
                 continue;
             Slice slice;
             slice.source = {all[start].range.begin, all[open - 1].range.end};
-            slice.first = {all[open + 1].range.begin, all[colon - 1].range.end};
-            slice.last = {all[colon + 1].range.begin, all[close - 2].range.end};
+            const bool missingFirst = colon == open + 1;
+            const bool missingLast = colon + 1 == close - 1;
+            slice.first = missingFirst ? Range{all[colon].range.begin, all[colon].range.begin}
+                                       : Range{all[open + 1].range.begin, all[colon - 1].range.end};
+            slice.last = missingLast ? Range{all[colon].range.end, all[colon].range.end}
+                                     : Range{all[colon + 1].range.begin, all[close - 2].range.end};
             slice.range = {slice.source.begin, all[close - 1].range.end};
             const bool generatorSlice = std::any_of(document.comprehensions.begin(), document.comprehensions.end(),
                 [&](const Comprehension& comprehension) {
@@ -185,7 +189,9 @@ private:
             const auto text = source.substr(slice.range.begin, slice.range.end - slice.range.begin);
             const auto parsed = Luau::Parser::parseExpr(text.data(), text.size(), expressionNames, expressionAllocator);
             if (parsed.root && parsed.errors.empty()) continue;
-            slice.complete = true;
+            if (missingFirst) error(slice.first, "expected slice first bound before ':'");
+            if (missingLast) error(slice.last, "expected slice last bound after ':'");
+            slice.complete = !missingFirst && !missingLast;
             document.slices.push_back(slice);
         }
         std::sort(document.slices.begin(), document.slices.end(), [](const Slice& a, const Slice& b) {
@@ -490,7 +496,7 @@ private:
             if (open == begin) return;
             --open;
         }
-        if (open == begin || open + 2 >= end - 1) return;
+        if (open == begin) return;
         size_t colon = 0;
         int nested = 0;
         for (size_t at = open + 1; at + 1 < end; ++at)
@@ -504,10 +510,15 @@ private:
                 colon = at;
             }
         }
-        if (!colon || colon == open + 1 || colon + 1 == end - 1) return;
+        if (!colon) return;
         clause.sliceSource = {tokens[begin].range.begin, tokens[open - 1].range.end};
-        clause.sliceFirst = {tokens[open + 1].range.begin, tokens[colon - 1].range.end};
-        clause.sliceLast = {tokens[colon + 1].range.begin, tokens[end - 2].range.end};
+        const bool missingFirst = colon == open + 1;
+        const bool missingLast = colon + 1 == end - 1;
+        clause.sliceFirst = missingFirst ? point(colon) : Range{tokens[open + 1].range.begin, tokens[colon - 1].range.end};
+        clause.sliceLast = missingLast ? Range{tokens[colon].range.end, tokens[colon].range.end}
+                                       : Range{tokens[colon + 1].range.begin, tokens[end - 2].range.end};
+        if (missingFirst) error(clause.sliceFirst, "expected slice first bound before ':'");
+        if (missingLast) error(clause.sliceLast, "expected slice last bound after ':'");
     }
     void comprehension(size_t& i, size_t depth)
     {

@@ -462,6 +462,25 @@ fn standalone_slices_are_source_nodes_without_generated_scopes() {
 }
 
 #[test]
+fn incomplete_slices_keep_missing_bound_nodes_for_editor_recovery() {
+    surface_test(
+        r#"
+        local source = "local xs = {1, 2}\nlocal a = xs[:2]\nlocal b = [for x in xs[1:] => x]"
+        local r = luau.parse(source)
+        assert(#r.errors == 2)
+        local standalone = r.root.body[2].values[1]
+        assert(standalone.kind == 'ExprSlice')
+        assert(standalone.first.kind == 'ExprError' and standalone.first.isMissing)
+        span(source, r, standalone.last, '2')
+        local generator = r.root.body[3].values[1].clauses[1].source
+        assert(generator.kind == 'ExprSlice')
+        span(source, r, generator.first, '1')
+        assert(generator.last.kind == 'ExprError' and generator.last.isMissing)
+    "#,
+    );
+}
+
+#[test]
 fn surface_shadowing_and_real_function_captures_exclude_generated_scopes() {
     surface_test(
         r"

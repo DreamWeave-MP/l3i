@@ -224,6 +224,20 @@ int main()
         const auto d = parseSurface("return values[obj:method()]");
         assert(d.errors.empty() && d.slices.empty());
     }
+    for (std::string_view s : {"return values[:last]", "return values[first:]"})
+    {
+        const auto d = parseSurface(s);
+        assert(d.slices.size() == 1 && d.errors.size() == 1 && !d.slices[0].complete);
+        assert(d.slices[0].first.empty() != d.slices[0].last.empty());
+        assert(d.errors[0].message.find("slice") != std::string::npos);
+    }
+    for (std::string_view s : {"[for x in values[:last] => x]", "[for x in values[first:] => x]"})
+    {
+        const auto d = parseSurface(s);
+        assert(d.comprehensions.size() == 1 && !d.comprehensions[0].complete && d.slices.empty());
+        const auto& clause = d.comprehensions[0].clauses[0];
+        assert(!clause.sliceSource.empty() && (clause.sliceFirst.empty() != clause.sliceLast.empty()));
+    }
     {
         std::string s;
         for (size_t i = 0; i < 4097; ++i) s += "values[first:last];";
