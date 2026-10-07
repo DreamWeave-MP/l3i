@@ -438,11 +438,14 @@ compiled chunks snapshot its alias global `__l3i_data` in the prelude, and the b
 a recognized pipeline calls the data plane once instead of looping:
 
 ```luau
-sum[for x in buf[a:b] => x]                 -- U8:sum(buf, a - 1, n)
+sum[for x in buf[a:b] => x]                 -- U8:sum(buf, a - 1, n), or data.sum above 4,096 elements
 #[for x in buf[a:b] => x]                   -- n
 #[for x in buf[a:b] if x > 127 => x]        -- U8:countGt(buf, a - 1, n, 127)
-min[for x in buf[a:b] => x]                 -- empty check, then U8:min(buf, a - 1, n)
-max[for x in buf[a:b] => x]
+sum[for x in buf[a:b] if x >= limit => x]   -- U8:sumGe(buf, a - 1, n, limit)
+min[for x in buf[a:b] if x ~= 0 => x]       -- U8:minNe(buf, a - 1, n, 0), nil is the empty error
+max[for x in buf[a:b] => x]                 -- U8:max(buf, a - 1, n)
+any[for x in buf[a:b] => x > 200]           -- U8:anyGt(buf, a - 1, n, 200), returned directly
+all[for x in buf[a:b] => x <= limit]        -- U8:allLe(buf, a - 1, n, limit)
 ```
 
 `U8` is the chunk's `dream_data_Kind_u8` receiver for bytes (`__l3i_data.u8()`, annotated in the
@@ -452,8 +455,10 @@ every size (DATA_PLANE.md §2.4); without `jit` the bound method runs once per p
 path computes the number the scalar loop computes, bit for bit.
 
 Recognition is deliberately narrow, because errors and evaluation order are effects: a lone
-leading slice generator, a projection that is exactly the binding, and either no filter or one
-`binding <op> threshold` filter on a count, where the threshold is a number literal or a name
+leading slice generator; for `sum`, `min`, `max` and `#` a projection that is exactly the
+binding with at most one `binding <op> threshold` filter; for `any` and `all` no filter and a
+projection that is exactly such a comparison (their language-level short-circuit is the
+receiver's early exit). The threshold is a number literal or a name
 the compiler has verified to be a local, upvalue or parameter declared outside the
 comprehension (the compile path lowers once, parses, resolves the name, and lowers again). A
 global threshold stays a scalar loop: reading it once rather than per element could be

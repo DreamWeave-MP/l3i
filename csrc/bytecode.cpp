@@ -57,8 +57,9 @@ L3i::Surface::LoweredSource lowerForCompile(std::string_view source)
     {
         const auto site = std::find_if(lowered.sites.begin(), lowered.sites.end(),
             [&](const L3i::Surface::ComprehensionSite& site) { return site.comprehension == index; });
-        if (site == lowered.sites.end() || site->clauses.size() < 2) continue;
-        const auto range = site->clauses[1].expression;
+        if (site == lowered.sites.end()) continue;
+        // A reduction's threshold sits in its filter clause; any/all compare in the projection.
+        const auto range = site->clauses.size() >= 2 ? site->clauses[1].expression : site->projection;
         ExpressionAt finder({positionAt(lowered.source, range.begin), positionAt(lowered.source, range.end)});
         parsed.root->visit(&finder);
         const auto* binary = finder.result ? finder.result->as<Luau::AstExprBinary>() : nullptr;

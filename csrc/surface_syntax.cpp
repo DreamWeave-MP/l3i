@@ -523,6 +523,12 @@ private:
     // the projection exactly its binding, no filter or one `binding <op> literal` filter, and a
     // consumer the data plane computes bit for bit as the scalar loop would (sum, min, max,
     // count). Everything else keeps the fused scalar loop: arbitrary expressions have effects.
+    // How many identifier-threshold candidates one chunk may hand the compiler's second pass.
+    static constexpr size_t maxLocalFilterCandidates = 256;
+    // Below this many elements the receiver's unrolled native sum beats the bound call under
+    // jit; above it the bound call's vectorized loop wins (DATA_PLANE.md §2.4).
+    static constexpr size_t boundSumThreshold = 4096;
+
     struct KnownDataOp
     {
         Consumer consumer = Consumer::Count;
@@ -632,28 +638,44 @@ private:
         if (generator.binding.empty() || generator.bindings.size() > 1 || node.projection.empty()) return std::nullopt;
         const auto text = [&](Range range) { return std::string_view(source).substr(range.begin, range.end - range.begin); };
         const std::string_view name = text(generator.binding);
-        if (trim(text(node.projection)) != name) return std::nullopt;
         KnownDataOp op;
         op.consumer = pipeline.consumer;
-        if (node.clauses.size() == 2)
+        switch (op.consumer)
         {
-            if (op.consumer != Consumer::Count) return std::nullopt;
-            if (!literalComparison(text(node.clauses[1].expression), name, op.comparison, op.threshold)) return std::nullopt;
-            if (!numberLiteral(op.threshold))
+        case Consumer::Sum:
+        case Consumer::Min:
+        case Consumer::Max:
+        case Consumer::Count:
+            // The projection is the binding; an optional filter compares it against a threshold.
+            if (trim(text(node.projection)) != name) return std::nullopt;
+            if (node.clauses.size() == 2 && !literalComparison(text(node.clauses[1].expression), name, op.comparison, op.threshold))
+                return std::nullopt;
+            break;
+        case Consumer::Any:
+        case Consumer::All:
+            // No filter; the projection is the comparison, and the language-level short-circuit
+            // of any/all is the receiver's early exit.
+            if (node.clauses.size() != 1 || !literalComparison(text(node.projection), name, op.comparison, op.threshold))
+                return std::nullopt;
+            break;
+        case Consumer::Materialize:
+        case Consumer::Sink:
+            return std::nullopt;
+        }
+        if (!op.comparison.empty() && !numberLiteral(op.threshold))
+        {
+            // An identifier: only once the compiler has verified it names an outer local, read
+            // once instead of per element with no observable difference. The candidate list is
+            // bounded so hostile input cannot make the compiler's second pass unbounded.
+            op.identifier = true;
+            if (std::find(localFilters.begin(), localFilters.end(), index) == localFilters.end())
             {
-                // An identifier: only once the compiler has verified it names an outer local,
-                // read once instead of per element with no observable difference.
-                op.identifier = true;
-                if (std::find(localFilters.begin(), localFilters.end(), index) == localFilters.end())
-                {
-                    if (std::find(pendingLocalFilters.begin(), pendingLocalFilters.end(), index) == pendingLocalFilters.end())
-                        pendingLocalFilters.push_back(index);
-                    return std::nullopt;
-                }
+                if (pendingLocalFilters.size() < maxLocalFilterCandidates &&
+                    std::find(pendingLocalFilters.begin(), pendingLocalFilters.end(), index) == pendingLocalFilters.end())
+                    pendingLocalFilters.push_back(index);
+                return std::nullopt;
             }
         }
-        else if (op.consumer != Consumer::Count && op.consumer != Consumer::Sum && op.consumer != Consumer::Min && op.consumer != Consumer::Max)
-            return std::nullopt;
         return op;
     }
 
@@ -985,26 +1007,40 @@ private:
                 // 256 bytes); the loop runs zero times and the data plane is not consulted.
                 out += "if " + operations + "_data" +
                     (op->identifier ? " and " + operations + "_typeof(" + op->threshold + ") == \"number\"" : "") + " then ";
+                // `sumGt(span, t)`, `min(span)`, `anyLe(span, t)`: the member and its arguments.
+                const std::string suffix = op->comparison.empty() ? "" : capitalized(op->comparison);
+                const std::string arguments = span + (op->comparison.empty() ? "" : ", " + op->threshold);
+                const std::string guard = "if " + p + "_n > 0 then ";
                 switch (op->consumer)
                 {
                 case Consumer::Count:
-                    out += op->comparison.empty()
-                        ? e.cursor + " = " + p + "_n "
-                        : "if " + p + "_n > 0 then " + e.cursor + " = " + receiver + "count" + capitalized(op->comparison) + "(" + span + ", " + op->threshold + ") end ";
+                    out += op->comparison.empty() ? e.cursor + " = " + p + "_n "
+                                                  : guard + e.cursor + " = " + receiver + "count" + suffix + "(" + arguments + ") end ";
                     break;
                 case Consumer::Sum:
-                    out += "if " + p + "_n > 0 then " + e.cursor + " = " + receiver + "sum(" + span + ") end ";
+                    if (op->comparison.empty())
+                        // Measured crossover: the bound call's vectorized loop wins above the threshold.
+                        out += guard + "if " + p + "_n > " + std::to_string(boundSumThreshold) + " then " + e.cursor + " = " + operations +
+                            "_data.sum(" + p + "_src, \"u8\", " + p + "_first - 1, " + p + "_n) else " + e.cursor + " = " + receiver +
+                            "sum(" + span + ") end end ";
+                    else
+                        out += guard + e.cursor + " = " + receiver + "sum" + suffix + "(" + arguments + ") end ";
                     break;
                 case Consumer::Min:
                 case Consumer::Max:
-                    out += "if " + p + "_n == 0 then " + operations + "_error(\"JSL " + (op->consumer == Consumer::Min ? "min" : "max") +
-                        " reducer received no elements\") end " + e.cursor + " = " + receiver +
-                        (op->consumer == Consumer::Min ? "min" : "max") + "(" + span + ") ";
+                    // nil for an empty span (or no accepted element) is the reducer's empty error.
+                    out += guard + e.cursor + " = " + receiver + (op->consumer == Consumer::Min ? "min" : "max") + suffix + "(" + arguments +
+                        ") end if " + e.cursor + " == nil then " + operations + "_error(\"JSL " +
+                        (op->consumer == Consumer::Min ? "min" : "max") + " reducer received no elements\") end ";
                     break;
-
+                case Consumer::Any:
+                case Consumer::All:
+                    out += "return " + receiver + (op->consumer == Consumer::Any ? "any" : "all") + suffix + "(" + arguments + ") ";
+                    break;
                 default:
                     break;
                 }
+
                 out += "else ";
                 sliceLoop(out, stage, clause, site, true);
                 stages(out, e, from + 1);
