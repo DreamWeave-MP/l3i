@@ -59,6 +59,10 @@ enum Output {
     Sum,
     Slice,
     SliceSum,
+    /// The least transformed even value: 4.
+    Min,
+    /// Whether any value exceeds half the input: true, decided halfway.
+    Any,
 }
 
 fn runtime() -> Runtime {
@@ -67,6 +71,7 @@ fn runtime() -> Runtime {
         .exec(&format!(
             r"values = table.create({ITEMS})
             for i = 1, {ITEMS} do values[i] = i end
+            sink_out = table.create({ITEMS})
             function pred(x) return x % 2 == 0 end
             function transform(x) return x * 2 end
             function filter(src, predicate)
@@ -105,10 +110,18 @@ fn bench_case(group: &mut BenchmarkGroup<'_, WallTime>, label: &str, body: &str,
     let function = runtime.load_function(&format!("return function() {body} end")).unwrap();
     let expected_len = match output {
         Output::Dense => ITEMS,
-        Output::Filtered | Output::Count | Output::Sum | Output::Slice | Output::SliceSum => ITEMS / 2,
+        Output::Filtered
+        | Output::Count
+        | Output::Sum
+        | Output::Slice
+        | Output::SliceSum
+        | Output::Min
+        | Output::Any => ITEMS / 2,
     };
     let validation = match output {
         Output::Count => format!("assert(result == {expected_len})"),
+        Output::Min => "assert(result == 4)".to_owned(),
+        Output::Any => "assert(result == true)".to_owned(),
         Output::Sum => {
             let n = ITEMS / 2;
             let expected_sum = 2 * n * (n + 1); // sum of (2k)*2 for k=1..n
@@ -141,8 +154,11 @@ fn bench_case(group: &mut BenchmarkGroup<'_, WallTime>, label: &str, body: &str,
     let stack = runtime.stack();
     let top = stack.top();
     let mut invoke_and_drop = || match output {
-        Output::Count | Output::Sum | Output::SliceSum => {
+        Output::Count | Output::Sum | Output::SliceSum | Output::Min => {
             std::hint::black_box(function.invoke::<f64, _>(&stack, ()).unwrap());
+        }
+        Output::Any => {
+            std::hint::black_box(function.invoke::<bool, _>(&stack, ()).unwrap());
         }
         Output::Dense | Output::Filtered | Output::Slice => {
             drop(std::hint::black_box(function.invoke::<Table, _>(&stack, ()).unwrap()));
@@ -168,7 +184,10 @@ fn bench_case(group: &mut BenchmarkGroup<'_, WallTime>, label: &str, body: &str,
         // those pins, changing heap pressure and liveness, so deliberately do not use it.
         runtime.collect_garbage();
         match output {
-            Output::Count | Output::Sum | Output::SliceSum => b.iter(|| function.invoke::<f64, _>(&stack, ()).unwrap()),
+            Output::Count | Output::Sum | Output::SliceSum | Output::Min => {
+                b.iter(|| function.invoke::<f64, _>(&stack, ()).unwrap());
+            }
+            Output::Any => b.iter(|| function.invoke::<bool, _>(&stack, ()).unwrap()),
             Output::Dense | Output::Filtered | Output::Slice => {
                 b.iter(|| function.invoke::<Table, _>(&stack, ()).unwrap());
             }
@@ -417,5 +436,76 @@ fn callback_comparisons(c: &mut Criterion) {
     callbacks.finish();
 }
 
-criterion_group!(benches, eager_list_comprehensions);
+fn sink_comparisons(c: &mut Criterion) {
+    let mut sinks = c.benchmark_group("comprehension_sinks");
+    sinks.throughput(Throughput::Elements(ITEMS));
+    // The destination is a persistent table reused across calls, as a steady-state caller holds it.
+    bench_case(
+        &mut sinks,
+        "l3i sink nil-checked",
+        "return into(sink_out)[for x in values if x % 2 == 0 => x * 2]",
+        Output::Filtered,
+    );
+    bench_case(
+        &mut sinks,
+        "handwritten reuse loop nil-checked",
+        &format!(
+            "local src, out = values, sink_out local len = #out local j = 0 \
+             for i = 1, #src do local x = src[i] if x % 2 == 0 then \
+             local value = x * 2 {NIL_GUARD} j += 1 out[j] = value end end \
+             for i = j + 1, len do out[i] = nil end return out"
+        ),
+        Output::Filtered,
+    );
+    bench_case(
+        &mut sinks,
+        "materialize then copy into destination",
+        "local tmp = [for x in values if x % 2 == 0 => x * 2] local out = sink_out local len = #out \
+         table.move(tmp, 1, #tmp, 1, out) for i = #tmp + 1, len do out[i] = nil end return out",
+        Output::Filtered,
+    );
+    sinks.finish();
+}
+
+fn reducer_comparisons(c: &mut Criterion) {
+    let mut reducers = c.benchmark_group("comprehension_reducers");
+    reducers.throughput(Throughput::Elements(ITEMS));
+    bench_case(&mut reducers, "l3i min nil-checked", "return min[for x in values if x % 2 == 0 => x * 2]", Output::Min);
+    bench_case(
+        &mut reducers,
+        "handwritten min nil-checked",
+        &format!(
+            "local src = values local least = nil for i = 1, #src do local x = src[i] if x % 2 == 0 then \
+             local value = x * 2 {NIL_GUARD} if least == nil or value < least then least = value end end end \
+             if least == nil then error('empty') end return least"
+        ),
+        Output::Min,
+    );
+    bench_case(
+        &mut reducers,
+        "materialize then math.min",
+        "local all = [for x in values if x % 2 == 0 => x * 2] return math.min(table.unpack(all))",
+        Output::Min,
+    );
+    let half = ITEMS / 2;
+    bench_case(
+        &mut reducers,
+        "l3i any nil-checked",
+        &format!("return any[for x in values => x > {half}]"),
+        Output::Any,
+    );
+    bench_case(
+        &mut reducers,
+        "handwritten any nil-checked",
+        &format!(
+            "local src = values for i = 1, #src do local value = src[i] > {half} {NIL_GUARD} \
+             if value then return true end end return false"
+        ),
+        Output::Any,
+    );
+    reducers.finish();
+}
+
+criterion_group!(benches, eager_list_comprehensions, sink_comparisons, reducer_comparisons);
+
 criterion_main!(benches);

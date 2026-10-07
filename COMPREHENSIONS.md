@@ -407,6 +407,27 @@ table, no `table.move`, no closure. Analysis types the expression as the destina
 checks each projection against the destination's element type. Buffer destinations are not
 part of this spelling; they belong to the typed data plane.
 
+### Sink and reducer evidence
+
+`cargo bench --bench comprehension -- "comprehension_(sinks|reducers)"`, same harness and
+machine class as the tables below (4,096 integers, the even half accepted; `any` decides at the
+halfway element):
+
+| Case | CPU instructions / call | µs |
+|---|---:|---:|
+| Sink L3i, nil-checked | 1,283,100 | 142.5 |
+| Handwritten destination-reuse loop, nil-checked | 1,281,960 | 141.4 |
+| Materialize, then `table.move` into the destination | 1,345,658 | 157.3 |
+| `min` L3i, nil-checked | 1,246,463 | 154.2 |
+| Handwritten `min` loop, nil-checked | 1,246,403 | 152.9 |
+| Materialize, then `math.min(table.unpack(...))` | 1,476,036 | 155.0 |
+| `any` L3i, nil-checked | 566,738 | 52.9 |
+| Handwritten `any` loop, nil-checked | 566,708 | 52.6 |
+
+The sink costs 1,140 instructions per call over the handwritten reuse loop: the one-time
+destination type check and the per-source `rawequal` aliasing check, nothing per element. `min`
+and `any` are within 60 instructions of their loops.
+
 ## Phase One closure, 2026-10-07
 
 Every gate was rerun on the checkout at `e3cc3a4` plus the closure fixes: `cargo test` (73 unit +
