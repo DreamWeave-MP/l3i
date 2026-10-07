@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdint>
 #include <unordered_set>
 #include <utility>
 
@@ -65,6 +66,7 @@ struct Text
         {
             shift(site.call, begin);
             shift(site.projection, begin);
+            shift(site.sink, begin);
             for (auto& clause : site.clauses)
             {
                 shift(clause.binding, begin);
@@ -125,6 +127,21 @@ public:
             begin = end;
         }
         operations = stem(source.size());
+        // A comprehension inside a sink destination is lowered as part of that destination
+        // expression, so the walk over nodes in opening order must not emit it first.
+        sinkParent.assign(document.comprehensions.size(), SIZE_MAX);
+        for (size_t k = 0; k < document.comprehensions.size(); ++k)
+        {
+            const Comprehension& sink = document.comprehensions[k];
+            if (sink.sinkPrefix.empty()) continue;
+            auto first = std::lower_bound(document.comprehensions.begin(), document.comprehensions.end(), sink.sinkDestination.begin,
+                [](const Comprehension& node, size_t begin) { return node.open.begin < begin; });
+            for (; first != document.comprehensions.end() && first->open.begin < sink.sinkDestination.end; ++first)
+            {
+                const size_t inner = size_t(first - document.comprehensions.begin());
+                if (sinkParent[inner] == SIZE_MAX) sinkParent[inner] = k; // Nearest sink is visited first.
+            }
+        }
     }
 
     Text lower()
@@ -151,9 +168,16 @@ public:
                 return std::any_of(node.clauses.begin(), node.clauses.end(),
                     [](const Clause& clause) { return !clause.sliceSource.empty(); });
             });
-        if (hasSlices)
+        const bool hasSinks = std::any_of(document.comprehensions.begin(), document.comprehensions.end(),
+            [](const Comprehension& node) { return !node.sinkPrefix.empty(); });
+        if (hasSlices || hasSinks)
         {
             result += "local " + operations + "_typeof = typeof ";
+            ++preludeStatements;
+        }
+        if (hasSinks)
+        {
+            result += "local " + operations + "_rawequal = rawequal ";
             ++preludeStatements;
         }
         if (!document.slices.empty() || !bufferGenerators.empty() || dynamicGenerators)
@@ -203,14 +227,19 @@ public:
                 (sliceIt == document.slices.end() || sliceIt->range.begin >= it->open.begin);
             if (useComprehension)
             {
-                if (it->range.begin < copied || it->range.end > input.end || it->range.end <= it->range.begin)
+                const size_t index = size_t(it - document.comprehensions.begin());
+                const size_t parent = sinkParent[index];
+                const bool inDestination = parent != SIZE_MAX && document.comprehensions[parent].sinkPrefix.begin >= input.begin &&
+                    document.comprehensions[parent].range.end <= input.end;
+                if (it->range.begin < copied || it->range.end > input.end || it->range.end <= it->range.begin || inDestination)
                 {
                     ++it;
                     continue;
                 }
                 const bool count = fuse && !it->lengthPrefix.empty() && it->lengthPrefix.begin >= copied;
+                const bool sink = !it->sinkPrefix.empty() && it->sinkPrefix.begin >= copied;
                 const Reducer reducer = !it->reducerPrefix.empty() && it->reducerPrefix.begin >= copied ? it->reducer : Reducer::None;
-                const size_t begin = reducer != Reducer::None ? it->reducerPrefix.begin : count ? it->lengthPrefix.begin : it->range.begin;
+                const size_t begin = sink ? it->sinkPrefix.begin : reducer != Reducer::None ? it->reducerPrefix.begin : count ? it->lengthPrefix.begin : it->range.begin;
                 result.copy(source, {copied, begin});
                 result.append(comprehension(size_t(it - document.comprehensions.begin()), count, reducer));
                 copied = it->range.end;
@@ -240,6 +269,7 @@ private:
     bool fuse;
     std::unordered_set<std::string_view> names;
     std::string operations;
+    std::vector<size_t> sinkParent;
     size_t preludeStatements = 1;
     const std::vector<Range>& bufferGenerators;
     bool dynamicGenerators;
@@ -386,10 +416,12 @@ private:
     // What the pipeline feeds. Materialize builds the dense result; Count and Sum accumulate
     // a number from 0; Min and Max keep the least/greatest projection by Luau ordering and
     // reject an empty pipeline; Any and All return at the first deciding projection.
-    enum class Consumer { Materialize, Count, Sum, Min, Max, Any, All };
+    // Sink writes accepted projections into a caller-owned table and evaluates to it.
+    enum class Consumer { Materialize, Count, Sum, Min, Max, Any, All, Sink };
 
-    static Consumer consumerOf(bool count, Reducer reducer)
+    static Consumer consumerOf(bool count, Reducer reducer, bool sink)
     {
+        if (sink) return Consumer::Sink;
         switch (reducer)
         {
         case Reducer::Sum: return Consumer::Sum;
@@ -413,7 +445,8 @@ private:
         case Consumer::Any:
         case Consumer::All: return "";
         case Consumer::Materialize:
-        case Consumer::Count: break;
+        case Consumer::Count:
+        case Consumer::Sink: break;
         }
         return "_n";
     }
@@ -441,7 +474,7 @@ private:
     Pipeline plan(const Comprehension& node, const std::string& name, bool count, Reducer reducer) const
     {
         Pipeline pipeline;
-        pipeline.consumer = consumerOf(count, reducer);
+        pipeline.consumer = consumerOf(count, reducer, !node.sinkPrefix.empty());
         for (size_t i = 0; i < node.clauses.size(); ++i)
         {
             const Clause& clause = node.clauses[i];
@@ -484,6 +517,11 @@ private:
     // Everything a pipeline walk needs besides the stage list.
     struct Emission
     {
+        Emission(const Comprehension& node, const Pipeline& pipeline, ComprehensionSite& site, std::string name, std::string output,
+            std::string cursor)
+            : node(node), pipeline(pipeline), site(site), name(std::move(name)), output(std::move(output)), cursor(std::move(cursor))
+        {
+        }
         const Comprehension& node;
         const Pipeline& pipeline;
         ComprehensionSite& site;
@@ -495,7 +533,17 @@ private:
         bool needsCursor = false; // False when the loop index is the output index, or no state is kept.
         bool directIndex = false;
         std::string seed = "0";   // The accumulator's initial value.
+        std::string sink;         // The destination local of a sink consumer; empty otherwise.
     };
+
+    // A sink destination may not also be a pipeline source: the pipeline would read elements
+    // it has already overwritten. Checked once per source evaluation, never per element.
+    void aliasCheck(Text& out, const Emission& e, const std::string& sourceLocal)
+    {
+        if (e.sink.empty()) return;
+        out += "if " + operations + "_rawequal(" + sourceLocal + ", " + e.sink + ") then " + operations +
+            "_error(\"JSL sink destination must not be a pipeline source\") end ";
+    }
 
     // The result allocation and accumulator, emitted once the element count is known (sized)
     // or up front when it is not.
@@ -527,6 +575,7 @@ private:
         site.sliceLast = {lastBegin, out.size()};
         out += " ";
         sliceChecks(out, prefix, clause.sliceSource, clause.sliceFirst, clause.sliceLast, bytes || dynamic);
+        aliasCheck(out, e, prefix + "_src");
         if (dynamic)
             out += "local " + prefix + "_len = 0 if " + prefix + "_kind == \"buffer\" then " + prefix + "_len = " + operations + "_buffer.len(" + prefix + "_src) else " + prefix + "_len = #" + prefix + "_src end ";
         else
@@ -587,6 +636,7 @@ private:
                 expression(out, clause.zipArguments[argument], "({} :: {any})");
                 site.zipArguments.push_back({begin, out.size()});
                 out += " local " + prefix + "_len" + std::to_string(argument) + " = #" + prefix + "_src" + std::to_string(argument) + " ";
+                aliasCheck(out, e, prefix + "_src" + std::to_string(argument));
             }
             out += "local " + prefix + "_n = " + prefix + "_len0 ";
             for (size_t argument = 1; argument < clause.zipArguments.size(); ++argument)
@@ -615,6 +665,7 @@ private:
                 stage.kind == SourceKind::Enumerate ? clause.enumerateArgument : clause.expression,
                 "({} :: {any})", clause.expressionSuffix);
             out += " local " + prefix + "_len = #" + prefix + "_src ";
+            aliasCheck(out, e, prefix + "_src");
             if (e.sized)
                 allocation(out, e, prefix + "_len");
             out += "for " + prefix + "_i = 1, " + prefix + "_len do local ";
@@ -650,6 +701,9 @@ private:
             return;
         case Consumer::Sum:
             out += e.cursor + " += " + value + " ";
+            return;
+        case Consumer::Sink:
+            out += e.cursor + " += 1 " + e.sink + "[" + e.cursor + "] = " + value + " ";
             return;
         case Consumer::Min:
         case Consumer::Max:
@@ -691,6 +745,12 @@ private:
             return;
         case Consumer::All:
             out += "return true end)()";
+            return;
+        case Consumer::Sink:
+            // Replace semantics: entries past the written count are cleared so the result is
+            // dense; the destination's prior length was captured before the pipeline ran.
+            out += "for " + e.name + "_i = " + e.cursor + " + 1, " + e.sink + "_len do " + e.sink + "[" + e.name + "_i] = nil end return " +
+                e.sink + " end)()";
             return;
         }
     }
@@ -749,9 +809,12 @@ private:
         const std::string name = stem(node.open.begin);
         const Pipeline pipeline = plan(node, name, count, reducer);
         Text out;
-        out.anchor = {reducer != Reducer::None ? node.reducerPrefix.begin : count ? node.lengthPrefix.begin : node.range.begin, node.range.end};
+        const bool sink = pipeline.consumer == Consumer::Sink;
+        out.anchor = {sink ? node.sinkPrefix.begin : reducer != Reducer::None ? node.reducerPrefix.begin : count ? node.lengthPrefix.begin : node.range.begin, node.range.end};
         if (node.postfix)
             out += "["; // Recovery-only index fence; strict compilation rejects the document.
+        if (node.sinkStatement)
+            out += ";"; // Separate the call from the previous statement; Luau would otherwise call its result.
         const size_t callBegin = out.size();
         out += "(function() ";
         comments(out, node, out.anchor.begin);
@@ -765,13 +828,23 @@ private:
         const bool single = pipeline.single();
         const SourceKind first = single ? pipeline.stages.front().kind : SourceKind::Plain;
         const Consumer consumer = pipeline.consumer;
-        Emission e{node, pipeline, site, name, name + "_out", name + accumulator(consumer)};
+        Emission e(node, pipeline, site, name, name + "_out", name + accumulator(consumer));
         e.scalar = consumer != Consumer::Materialize;
         e.sized = single && first != SourceKind::Range;
         e.directIndex = single && node.clauses.size() == 1 && first != SourceKind::Range && first != SourceKind::Slice;
         e.needsCursor = (consumer != Consumer::Any && consumer != Consumer::All) && (e.scalar || !e.directIndex);
         if (consumer == Consumer::Min || consumer == Consumer::Max)
             e.seed = "nil";
+        if (sink)
+        {
+            // The destination is evaluated exactly once, before any source, and must be a table.
+            e.sink = name + "_into";
+            out.anchor = node.sinkDestination;
+            out += "local " + e.sink + " = ";
+            site.sink = expression(out, node.sinkDestination, "({} :: {any})");
+            out += " if " + operations + "_typeof(" + e.sink + ") ~= \"table\" then " + operations +
+                "_error(\"JSL sink destination must be a table\") end local " + e.sink + "_len = #" + e.sink + " ";
+        }
         if (!e.sized)
             allocation(out, e);
         stages(out, e, 0);

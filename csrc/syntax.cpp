@@ -57,6 +57,8 @@ using namespace Luau;
     X(hasIn, "hasIn") \
     X(complete, "complete") \
     X(KExprReduction, "ExprReduction") \
+    X(KExprSink, "ExprSink") \
+    X(destination, "destination") \
     X(KExprRange, "ExprRange") \
     X(KExprEnumerate, "ExprEnumerate") \
     X(KExprZip, "ExprZip") \
@@ -453,6 +455,7 @@ struct SurfaceExpression
     const L3i::Surface::Comprehension* record = nullptr;
     std::vector<SurfaceClause> clauses;
     AstExpr* projection = nullptr;
+    AstExpr* sink = nullptr;
 };
 using SurfaceExpressions = std::unordered_map<AstExprCall*, SurfaceExpression>;
 struct SurfaceSlice
@@ -1608,6 +1611,15 @@ public:
         const auto& record = *surface.record;
         // The reducer is surface syntax, independent of any local/global named sum.
         // It shares the comprehension's generated site and adds no source function scope.
+        // A sink is likewise surface syntax: `into(destination)` wraps the comprehension and
+        // the destination is an ordinary source expression evaluated before the pipeline.
+        const bool sink = !record.sinkPrefix.empty();
+        if (sink)
+        {
+            open(KExprSink, location({record.sinkPrefix.begin, record.range.end}), 2);
+            surfaceExpr(surface.sink, record.sinkDestination);
+            popInto(destination);
+        }
         const bool reduction = record.reducer != L3i::Surface::Reducer::None;
         if (reduction)
         {
@@ -1703,7 +1715,7 @@ public:
         popInto(clauses);
         surfaceExpr(surface.projection, record.projection);
         popInto(projection);
-        if (reduction) popInto(expr);
+        if (reduction || sink) popInto(expr);
     }
 
     // Always lex the original input for surface trivia, including comments the emitter elides.
@@ -1944,6 +1956,7 @@ int l3i_luau_parse(lua_State* L, const char* source, size_t length, int flags)
                     surface.clauses[i].sliceLast = index.expression(site.clauses[i].sliceLast);
                 }
                 surface.projection = index.expression(site.projection);
+                surface.sink = index.expression(site.sink);
                 surfaces.emplace(call, std::move(surface));
             }
             for (const auto& site : lowered.sliceSites)

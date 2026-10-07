@@ -974,3 +974,34 @@ fn min_max_any_all_reducers_infer_element_and_boolean_types_on_both_solvers() {
         assert_binding_type(&analysis, "reducers", 7, "every", "boolean");
     }
 }
+
+#[test]
+fn sinks_type_as_their_destination_and_check_projections_against_it() {
+    let source = concat!(
+        "--!strict\n",
+        "local values: { number } = { 1, 2, 3 }\n",
+        "local out: { number } = {}\n",
+        "local filled = into(out)[for x in values if x > 1 => x * 2]\n",
+        "local named = into({} :: { string })[for x in values => tostring(x)]\n",
+        "return filled, named\n",
+    );
+    for solver in [analysis::Solver::New, analysis::Solver::Old] {
+        let analysis = comprehension_analysis(HashMap::from([("sink", source)]), solver);
+        let report = analysis.check("sink", false);
+        assert!(report.is_clean(), "{solver:?}: {report:#?}");
+        assert_binding_type(&analysis, "sink", 5, "filled", "{number}");
+        assert_binding_type(&analysis, "sink", 5, "named", "{string}");
+    }
+    let wrong = concat!(
+        "--!strict\n",
+        "local values: { number } = { 1 }\n",
+        "local out: { string } = {}\n",
+        "local filled = into(out)[for x in values => x * 2]\n",
+        "return filled\n",
+    );
+    let analysis = comprehension_analysis(HashMap::from([("wrong", wrong)]), analysis::Solver::New);
+    let report = analysis.check("wrong", false);
+    let error = report.diagnostics.iter().find(|d| d.kind == DiagnosticKind::TypeError).expect("a type error");
+    assert!(error.text.contains("number") && error.text.contains("string"), "{}", error.text);
+    assert_eq!(error.span.begin_line, 3, "{error:?}");
+}

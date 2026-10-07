@@ -530,6 +530,16 @@ fn surface_reduction_and_length_are_source_nodes_and_stock_is_opt_in() {
             assert(node.kind == 'ExprReduction' and node.op == op and node.expr.kind == 'ExprComprehension')
             span(text, luau.parse(text), node, op .. '[for x in {1} => x]')
         end
+        local sinkText = 'return into(out.buffer)[for x in {1} if x => x]'
+        local sinkResult = luau.parse(sinkText)
+        assert(#sinkResult.errors == 0, sinkResult.errors[1] and sinkResult.errors[1].message)
+        local sink = sinkResult.root.body[1].list[1]
+        assert(sink.kind == 'ExprSink' and sink.destination.kind == 'ExprIndexName' and sink.expr.kind == 'ExprComprehension')
+        span(sinkText, sinkResult, sink, 'into(out.buffer)[for x in {1} if x => x]')
+        span(sinkText, sinkResult, sink.destination, 'out.buffer')
+        span(sinkText, sinkResult, sink.expr, '[for x in {1} if x => x]')
+        assert(#luau.parse('return into()[for x in {1} => x]').errors > 0)
+        assert(#luau.parse('return t.into(out)[for x in {1} => x]').errors > 0)
         local member = luau.parse('return math.min[for x in {1} => x]')
         assert(#member.errors > 0 and member.root.body[1].list[1].kind ~= 'ExprReduction')
         assert(#luau.parse(source, {dialect = 'luau'}).errors > 0)

@@ -379,6 +379,34 @@ every nesting level at once. The projection must still not be `nil`; filter nil 
 Internally all five, with `#[...]` and plain materialization, are consumers of one pipeline
 plan, so every generator kind and nesting combination lowers through the same emitter.
 
+## Sinks
+
+```luau
+into(out)[for x in xs if p(x) => f(x)]
+local filled = into(scratch.rows)[for row in rows[a:b] => project(row)]
+```
+
+`into(destination)` immediately before `[for` (trivia allowed, never after `.` or `:`, never a
+binding named `into`) makes the pipeline fill a caller-owned table in place instead of
+allocating a result. The expression evaluates to the destination. Semantics:
+
+- The destination is evaluated exactly once, before any source, and must be a table
+  (`JSL sink destination must be a table`). Its length is captured at that point.
+- Replace, not append: accepted projections are written to `1..n` in pipeline order, then
+  entries `n+1..previous length` are set to `nil`, so the destination is dense afterwards.
+  An empty pipeline leaves an empty table.
+- The non-nil projection rule and evaluation order are those of the comprehension.
+- The destination may not be any generator's source table
+  (`JSL sink destination must not be a pipeline source`), checked with `rawequal` once per
+  source evaluation; the pipeline would otherwise overwrite elements it has yet to read.
+  Reading the destination inside filters or the projection is allowed and unguarded.
+- A sink may stand as a statement; the other pipeline forms are expressions only.
+
+Lowering stores straight into the destination with the running count as index: no result
+table, no `table.move`, no closure. Analysis types the expression as the destination and
+checks each projection against the destination's element type. Buffer destinations are not
+part of this spelling; they belong to the typed data plane.
+
 ## Phase One closure, 2026-10-07
 
 Every gate was rerun on the checkout at `e3cc3a4` plus the closure fixes: `cargo test` (73 unit +

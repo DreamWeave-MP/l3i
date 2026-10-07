@@ -829,3 +829,62 @@ fn reducers_are_syntax_not_bindings() {
         )
         .unwrap();
 }
+
+#[test]
+fn sinks_fill_a_caller_owned_table_in_place_with_replace_semantics() {
+    let runtime = Runtime::new().unwrap();
+    runtime
+        .exec(
+            r"
+        local out = {9, 9, 9, 9, 9}
+        local xs = {1, 2, 3, 4}
+        local result = into(out)[for x in xs if x % 2 == 0 => x * 10]
+        assert(result == out, 'the sink expression evaluates to its destination')
+        assert(#out == 2 and out[1] == 20 and out[2] == 40, 'trailing entries are cleared')
+        assert(out[3] == nil and out[5] == nil)
+        -- Growing past the previous length and writing nothing both stay dense.
+        into(out)[for i in range(1, 6) => i]
+        assert(#out == 6 and out[6] == 6)
+        into(out)[for x in xs if x > 100 => x]
+        assert(#out == 0 and next(out) == nil)
+        -- Every generator kind and nesting feeds the same destination.
+        into(out)[for a, b in zipStrict({1, 2}, {3, 4}) => a * b]
+        assert(#out == 2 and out[1] == 3 and out[2] == 8)
+        into(out)[for i, v in enumerate({5, 6}) => i + v]
+        assert(out[1] == 6 and out[2] == 8)
+        into(out)[for x in {10, 20, 30, 40}[2:3] => x]
+        assert(#out == 2 and out[1] == 20 and out[2] == 30)
+        into(out)[for row in {{1, 2}, {3}} for x in row if x ~= 2 => x]
+        assert(#out == 2 and out[1] == 1 and out[2] == 3)
+        -- The destination is evaluated exactly once, before any source.
+        local events = {}
+        local function dest() table.insert(events, 'dest') return out end
+        local function src() table.insert(events, 'src') return {1} end
+        into(dest())[for x in src() => x]
+        assert(#events == 2 and events[1] == 'dest' and events[2] == 'src')
+        -- Non-nil projection contract and short-circuit-free evaluation are unchanged.
+        local ok, message = pcall(function() return into(out)[for x in {{}} => x.missing] end)
+        assert(not ok and string.find(message, 'produced nil', 1, true), message)
+        -- Misuse is an error, not silent corruption.
+        ok, message = pcall(function() return into(xs)[for x in xs => x] end)
+        assert(not ok and string.find(message, 'JSL sink destination must not be a pipeline source', 1, true), message)
+        ok, message = pcall(function() return into(out)[for row in {xs} for x in out => x] end)
+        assert(not ok and string.find(message, 'must not be a pipeline source', 1, true), message)
+        ok, message = pcall(function() return into(5)[for x in xs => x] end)
+        assert(not ok and string.find(message, 'JSL sink destination must be a table', 1, true), message)
+        ok, message = pcall(function() return into(nil)[for x in xs => x] end)
+        assert(not ok and string.find(message, 'must be a table', 1, true), message)
+        -- Reading the destination inside the projection is the caller's business, not aliasing.
+        out = {100, 200}
+        into(out)[for i in range(1, 2) => out[i] + i]
+        assert(out[1] == 101 and out[2] == 202)
+        -- `into` is syntax: bindings named into are untouched and members are not sinks.
+        local into = 'shadowed'
+        local t = {}
+        t.into = function(x) return x end
+        local shadow = {1}
+        assert(into(shadow)[for x in {7} => x] == shadow and shadow[1] == 7 and into == 'shadowed')
+    ",
+        )
+        .unwrap();
+}

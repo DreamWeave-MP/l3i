@@ -36,9 +36,7 @@ public:
         Luau::Lexer lexer(source.data(), source.size(), names);
         lexer.setSkipComments(false);
         bool surfaceSeen = false;
-        Token previous{T::Eof, {0, 0}};
-        Token beforePrevious{T::Eof, {0, 0}};
-        Token beforeBeforePrevious{T::Eof, {0, 0}};
+        size_t surfaceStart = 0;
         for (;;)
         {
             const auto& token = lexer.next();
@@ -51,38 +49,29 @@ public:
                 // extension token budget, before or after the first opener.
                 continue;
             }
+            // Every code token is retained so a consumer prefix of any length (`into(...)`)
+            // can be read back from the first opener. The extension token budget is charged
+            // from that opener; plain source before it is unbudgeted.
+            tokens.push_back(current);
             if (!surfaceSeen)
             {
-                if (previous.type == '[' && current.type == T::ReservedFor)
+                if (tokens.size() >= 2 && tokens[tokens.size() - 2].type == '[' && current.type == T::ReservedFor)
                 {
                     surfaceSeen = true;
-                    // The first opener is token zero; preserve its real consumer
-                    // predecessor without charging it to the extension budget.
-                    if (beforePrevious.type == '#') firstLengthPrefix = beforePrevious.range;
-                    firstReducer = reducerOf(beforePrevious, beforeBeforePrevious.type);
-                    if (firstReducer != Reducer::None) firstReducerPrefix = beforePrevious.range;
-                    firstPostfix = firstLengthPrefix.empty() && firstReducerPrefix.empty() &&
-                        isPostfix(beforePrevious, beforeBeforePrevious);
-                    tokens.push_back(previous);
+                    surfaceStart = tokens.size() - 2;
                 }
                 else
                 {
-                    // Plain source has no surface token budget, and doesn't
-                    // need retained tokens. Literal/comment hits stay inert.
                     if (current.type == T::Eof)
                     {
                         scanSlices();
                         return std::move(document);
                     }
-                    beforeBeforePrevious = beforePrevious;
-                    beforePrevious = previous;
-                    previous = current;
                     continue;
                 }
             }
-            tokens.push_back(current);
             if (token.type == T::Eof) break;
-            if (tokens.size() >= maxTokens)
+            if (tokens.size() - surfaceStart >= maxTokens)
             {
                 error(tokens.back().range, "surface token limit exceeded (262144 tokens from first comprehension)");
                 tokens.push_back({T::Eof, {tokens.back().range.end, tokens.back().range.end}});
@@ -101,10 +90,7 @@ private:
     std::string_view source;
     std::vector<Token> tokens;
     Document document;
-    Range firstLengthPrefix;
-    Range firstReducerPrefix;
-    Reducer firstReducer = Reducer::None;
-    bool firstPostfix = false;
+
     std::vector<unsigned char> conditionalShapes;
     size_t prefixBytes = 0, prefixCalls = 0;
     bool stopped = false;
@@ -303,8 +289,9 @@ private:
             // A JSL reducer consumer has no stock-Luau expression spelling. Hide
             // it together with its comprehension ONLY in validation; otherwise
             // `sum <trivia> nil` would reject a valid enclosing clause prefix.
-            const size_t originalBegin = !it->reducerPrefix.empty() && it->reducerPrefix.begin >= r.begin
-                ? it->reducerPrefix.begin : it->range.begin;
+            const size_t originalBegin = !it->sinkPrefix.empty() && it->sinkPrefix.begin >= r.begin ? it->sinkPrefix.begin
+                : !it->reducerPrefix.empty() && it->reducerPrefix.begin >= r.begin                      ? it->reducerPrefix.begin
+                                                                                                         : it->range.begin;
             const size_t begin = originalBegin - r.begin, end = it->range.end - r.begin;
             for (size_t j = begin; j < end; ++j)
                 if (text[j] != '\n' && text[j] != '\r') text[j] = ' ';
@@ -535,18 +522,39 @@ private:
         document.comprehensions.emplace_back(); // Parent before children.
         Comprehension c;
         c.lengthPrefix = point(i);
-        if (i == 0 && !firstLengthPrefix.empty()) c.lengthPrefix = firstLengthPrefix;
-        else if (i > 0 && type(i - 1) == '#') c.lengthPrefix = tokens[i - 1].range;
+        if (i > 0 && type(i - 1) == '#') c.lengthPrefix = tokens[i - 1].range;
         c.reducerPrefix = point(i);
-        if (i == 0 && !firstReducerPrefix.empty())
-        {
-            c.reducerPrefix = firstReducerPrefix;
-            c.reducer = firstReducer;
-        }
-        else if (i > 0 && (c.reducer = reducerOf(tokens[i - 1], i > 1 ? type(i - 2) : T::Eof)) != Reducer::None)
+        if (i > 0 && (c.reducer = reducerOf(tokens[i - 1], i > 1 ? type(i - 2) : T::Eof)) != Reducer::None)
             c.reducerPrefix = tokens[i - 1].range;
-        c.postfix = c.lengthPrefix.empty() && c.reducerPrefix.empty() &&
-            (i == 0 ? firstPostfix : isPostfix(tokens[i - 1], i > 1 ? tokens[i - 2] : Token{T::Eof, {0, 0}}));
+        c.sinkPrefix = point(i);
+        c.sinkDestination = point(i);
+        if (i > 0 && type(i - 1) == ')')
+        {
+            // `into(...)` ends at the token before the opener: find its `(` and the Name before.
+            size_t open = i - 1;
+            int nested = 0;
+            for (;; --open)
+            {
+                if (type(open) == ')') ++nested;
+                else if (type(open) == '(' && --nested == 0) break;
+                if (open == 0) { nested = -1; break; }
+            }
+            if (nested == 0 && open > 0 && type(open - 1) == T::Name && (open < 2 || (type(open - 2) != '.' && type(open - 2) != ':')) &&
+                source.substr(tokens[open - 1].range.begin, tokens[open - 1].range.end - tokens[open - 1].range.begin) == "into")
+            {
+                c.sinkPrefix = {tokens[open - 1].range.begin, tokens[i - 1].range.end};
+                c.sinkStatement = open >= 2 && isPostfix(tokens[open - 2], open >= 3 ? tokens[open - 3] : Token{T::Eof, {0, 0}});
+                if (open + 1 < i - 1)
+                    c.sinkDestination = {tokens[open + 1].range.begin, tokens[i - 2].range.end};
+                else
+                {
+                    c.sinkDestination = point(i - 1);
+                    error(c.sinkDestination, "expected sink destination inside into()");
+                }
+            }
+        }
+        c.postfix = c.lengthPrefix.empty() && c.reducerPrefix.empty() && c.sinkPrefix.empty() && i > 0 &&
+            isPostfix(tokens[i - 1], i > 1 ? tokens[i - 2] : Token{T::Eof, {0, 0}});
         c.open = tokens[i++].range;
         // Set the opening immediately so binary search remains ordered even
         // while an ancestor record is still being constructed.

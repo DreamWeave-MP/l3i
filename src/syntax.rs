@@ -32,7 +32,8 @@
 //! A reducer (`sum`, `min`, `max`, `any`, `all` before `[for ...]`) is an `ExprReduction` with
 //! that `op` and an inner `ExprComprehension`; its outer span includes the reducer name, while
 //! the inner span starts at `[`. A reducer never refers to a local/global of its name; member
-//! accesses are excluded.
+//! accesses are excluded. A sink `into(destination)[for ...]` is an `ExprSink` holding the
+//! destination expression and the inner `ExprComprehension`, under the same naming rule.
 //! A direct `range(first, last[, step])` generator source is an `ExprRange`; its arguments
 //! retain original nodes and spans while compilation lowers it to a numeric loop.
 //!
@@ -224,6 +225,10 @@ pub const TYPES: &[(&str, &str)] = &[
     (
         "dream_luau_ExprReduction",
         "{ kind: \"ExprReduction\", line: number, column: number, endLine: number, endColumn: number, op: \"sum\" | \"min\" | \"max\" | \"any\" | \"all\", expr: dream_luau_ExprComprehension }",
+    ),
+    (
+        "dream_luau_ExprSink",
+        "{ kind: \"ExprSink\", line: number, column: number, endLine: number, endColumn: number, destination: dream_luau_Expr, expr: dream_luau_ExprComprehension }",
     ),
     (
         "dream_luau_ExprGroup",
@@ -455,7 +460,7 @@ pub const TYPES: &[(&str, &str)] = &[
     ),
     (
         "dream_luau_Expr",
-        "dream_luau_ExprGroup | dream_luau_ExprConstantNil | dream_luau_ExprConstantBool | dream_luau_ExprConstantNumber | dream_luau_ExprConstantInteger | dream_luau_ExprConstantString | dream_luau_ExprLocal | dream_luau_ExprGlobal | dream_luau_ExprVarargs | dream_luau_ExprCall | dream_luau_ExprIndexName | dream_luau_ExprIndexExpr | dream_luau_ExprFunction | dream_luau_ExprTable | dream_luau_ExprUnary | dream_luau_ExprBinary | dream_luau_ExprTypeAssertion | dream_luau_ExprIfElse | dream_luau_ExprInterpString | dream_luau_ExprInstantiate | dream_luau_ExprError | dream_luau_ExprRange | dream_luau_ExprEnumerate | dream_luau_ExprZip | dream_luau_ExprSlice | dream_luau_ExprComprehension | dream_luau_ExprReduction",
+        "dream_luau_ExprGroup | dream_luau_ExprConstantNil | dream_luau_ExprConstantBool | dream_luau_ExprConstantNumber | dream_luau_ExprConstantInteger | dream_luau_ExprConstantString | dream_luau_ExprLocal | dream_luau_ExprGlobal | dream_luau_ExprVarargs | dream_luau_ExprCall | dream_luau_ExprIndexName | dream_luau_ExprIndexExpr | dream_luau_ExprFunction | dream_luau_ExprTable | dream_luau_ExprUnary | dream_luau_ExprBinary | dream_luau_ExprTypeAssertion | dream_luau_ExprIfElse | dream_luau_ExprInterpString | dream_luau_ExprInstantiate | dream_luau_ExprError | dream_luau_ExprRange | dream_luau_ExprEnumerate | dream_luau_ExprZip | dream_luau_ExprSlice | dream_luau_ExprComprehension | dream_luau_ExprReduction | dream_luau_ExprSink",
     ),
     (
         "dream_luau_Stat",

@@ -296,3 +296,15 @@ fn min_max_any_all_reducers_compile_to_bare_loops() {
         assert!(!listing.contains("FORGPREP") && !listing.contains("NEWCLOSURE"), "{op}: {listing}");
     }
 }
+
+#[test]
+fn sinks_compile_to_direct_destination_stores() {
+    let listing =
+        disassemble("return into(out)[for x in values if x > 1 => x * 2]", &CompileOptions::default()).unwrap();
+    assert!(listing.contains("FORNPREP") && listing.contains("FORNLOOP"), "{listing}");
+    assert!(
+        !listing.contains("NEWTABLE") && !listing.contains("table.create") && !listing.contains("table.move"),
+        "{listing}"
+    );
+    assert!(!listing.contains("FORGPREP") && !listing.contains("NEWCLOSURE"), "{listing}");
+}

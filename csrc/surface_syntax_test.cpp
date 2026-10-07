@@ -211,6 +211,16 @@ int main()
         contains(some, "if __l3i_comp_10_value then return true end");
         contains(some, "end end return false end)()");
     }
+    {
+        const std::string out = rewrite("return into(out)[for x in xs => f(x)]");
+        contains(out, "local __l3i_comp_16_into = out if __l3i_comp_37_typeof(__l3i_comp_16_into) ~= \"table\" then");
+        contains(out, "local __l3i_comp_16_into_len = #__l3i_comp_16_into ");
+        contains(out, "if __l3i_comp_37_rawequal(__l3i_comp_16_g0_src, __l3i_comp_16_into) then");
+        contains(out, "__l3i_comp_16_n += 1 __l3i_comp_16_into[__l3i_comp_16_n] = __l3i_comp_16_value end");
+        contains(out, "for __l3i_comp_16_i = __l3i_comp_16_n + 1, __l3i_comp_16_into_len do __l3i_comp_16_into[__l3i_comp_16_i] = nil end return __l3i_comp_16_into end)()");
+        assert(out.find("table.create") == std::string::npos && out.find("_out") == std::string::npos);
+        assert(occurrences(out, "f(x)") == 1);
+    }
 
     // Empty sums are zero, nested generators remain nested, and inner sources stay data-dependent.
     {

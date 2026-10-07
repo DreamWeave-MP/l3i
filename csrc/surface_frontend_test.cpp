@@ -339,6 +339,30 @@ int main()
             const auto m = parseSurface(member);
             assert(m.comprehensions.size() == 1 && m.comprehensions[0].reducer == Reducer::None && m.comprehensions[0].postfix);
         }
+        for (std::string_view s : {"into(out)[for x in xs => x]", "into (scratch[kind] or make()) -- note\n[for x in xs => x]",
+                 "local into = 1; return #into(out)[for x in xs => x]"})
+        {
+            const auto sink = parseSurface(s);
+            assert(sink.errors.empty() && sink.comprehensions.size() == 1 && !sink.comprehensions[0].postfix);
+            const auto& c = sink.comprehensions[0];
+            assert(slice(s, c.sinkPrefix).substr(0, 4) == "into" && c.sinkPrefix.end <= c.open.begin);
+            assert(!c.sinkDestination.empty() && c.reducer == Reducer::None && c.lengthPrefix.empty());
+        }
+        {
+            const std::string_view s = "into(out)[for x in xs => x]";
+            assert(slice(s, parseSurface(s).comprehensions[0].sinkDestination) == "out");
+        }
+        for (std::string_view s : {"t.into(out)[for x in xs => x]", "t:into(out)[for x in xs => x]", "fill(out)[for x in xs => x]",
+                 "into[for x in xs => x]"})
+        {
+            const auto m = parseSurface(s);
+            assert(m.comprehensions.size() == 1 && m.comprehensions[0].sinkPrefix.empty() && m.comprehensions[0].postfix);
+        }
+        {
+            const auto empty = parseSurface("into()[for x in xs => x]");
+            assert(empty.comprehensions.size() == 1 && !empty.comprehensions[0].sinkPrefix.empty());
+            assert(!empty.errors.empty() && empty.errors[0].message.find("sink destination") != std::string::npos);
+        }
         const auto d = parseSurface("minimum[for x in xs => x]; [for x in xs => x]");
         assert(d.comprehensions.size() == 2 && d.comprehensions[0].reducer == Reducer::None && d.comprehensions[0].postfix);
         assert(d.comprehensions[1].reducer == Reducer::None && !d.comprehensions[1].postfix);

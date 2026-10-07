@@ -172,6 +172,8 @@ namespace
         };
         if (!node.projection.empty() && copiedExpression(inner->projection))
             return false;
+        if (!node.sinkDestination.empty() && copiedExpression(inner->sink))
+            return false;
         for (size_t i = 0; i < inner->clauses.size(); ++i)
         {
             if (!node.clauses[i].expression.empty() && copiedExpression(inner->clauses[i].expression))

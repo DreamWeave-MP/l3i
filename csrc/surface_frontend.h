@@ -68,6 +68,14 @@ struct Comprehension
     // the comprehension range.
     Range reducerPrefix;
     Reducer reducer = Reducer::None;
+    // Immediately preceding `into(destination)`, ignoring trivia, unless `into` follows '.'
+    // or ':'. JSL-owned sink syntax: the pipeline fills the destination table in place and
+    // evaluates to it. Empty when absent. The destination range excludes the parentheses.
+    Range sinkPrefix;
+    Range sinkDestination;
+    // A sink whose `into` follows a token that can end an expression statement, so it begins
+    // a new statement; the lowered call then needs a separator from the previous statement.
+    bool sinkStatement = false;
     Range open;
     Range close;
     Range arrow;
