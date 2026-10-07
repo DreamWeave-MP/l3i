@@ -188,9 +188,13 @@ public:
             });
         if (hasDataOps)
         {
-            // The data plane's alias global; nil when the runtime did not install the extension.
+            // The data plane's alias global (nil when the runtime did not install the extension)
+            // and its byte receiver, annotated so Luau's code generator lowers the calls to
+            // native loops; JSL buffer slices are byte spans.
             result += "local " + operations + "_data = __l3i_data ";
-            ++preludeStatements;
+            result += "local " + operations + "_data_u8: dream_data_Kind = if " + operations + "_data then " + operations +
+                "_data.kind(\"u8\") else nil ";
+            preludeStatements += 2;
         }
 
         if (!document.slices.empty() || !bufferGenerators.empty() || dynamicGenerators)
@@ -514,6 +518,14 @@ private:
         std::string comparison; // Data-plane comparison name; empty without a filter.
         std::string threshold;  // The literal, as written.
     };
+
+    // `gt` to `Gt`: the receiver's comparison-count method suffix.
+    static std::string capitalized(std::string_view name)
+    {
+        std::string result(name);
+        if (!result.empty()) result[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(result[0])));
+        return result;
+    }
 
     static std::string_view trim(std::string_view text)
     {
@@ -910,7 +922,8 @@ private:
                 // The data plane computes this consumer over the normalized byte span exactly
                 // as the scalar loop would; without the runtime extension the loop runs.
                 const std::string& p = stage.prefix;
-                const std::string span = p + "_src, \"u8\", " + p + "_first - 1, " + p + "_n";
+                const std::string span = p + "_src, " + p + "_first - 1, " + p + "_n";
+                const std::string receiver = operations + "_data_u8:";
                 // An empty span after normalization may start past the buffer (`buf[300:400]` of
                 // 256 bytes); the loop runs zero times and the data plane is not consulted.
                 out += "if " + operations + "_data then ";
@@ -919,17 +932,18 @@ private:
                 case Consumer::Count:
                     out += op->comparison.empty()
                         ? e.cursor + " = " + p + "_n "
-                        : "if " + p + "_n > 0 then " + e.cursor + " = " + operations + "_data.count(" + span + ", \"" + op->comparison + "\", " + op->threshold + ") end ";
+                        : "if " + p + "_n > 0 then " + e.cursor + " = " + receiver + "count" + capitalized(op->comparison) + "(" + span + ", " + op->threshold + ") end ";
                     break;
                 case Consumer::Sum:
-                    out += "if " + p + "_n > 0 then " + e.cursor + " = " + operations + "_data.sum(" + span + ") end ";
+                    out += "if " + p + "_n > 0 then " + e.cursor + " = " + receiver + "sum(" + span + ") end ";
                     break;
                 case Consumer::Min:
                 case Consumer::Max:
                     out += "if " + p + "_n == 0 then " + operations + "_error(\"JSL " + (op->consumer == Consumer::Min ? "min" : "max") +
-                        " reducer received no elements\") end " + e.cursor + " = " + operations + "_data." +
+                        " reducer received no elements\") end " + e.cursor + " = " + receiver +
                         (op->consumer == Consumer::Min ? "min" : "max") + "(" + span + ") ";
                     break;
+
                 default:
                     break;
                 }

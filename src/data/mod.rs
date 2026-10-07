@@ -47,6 +47,9 @@
 //! the ordinary JSL prologue, so the explicit API and the recognized form share one
 //! implementation and one semantic contract; see `DATA_PLANE.md`.
 
+#[cfg(feature = "jit")]
+pub mod lowering;
+
 use std::cell::{Cell, RefCell};
 use std::cmp::Ordering;
 
@@ -839,12 +842,156 @@ fn partition(
 }
 
 // ---------------------------------------------------------------------------------------------
+// The typed receiver: the same reductions as methods, lowered to native loops under jit
+// ---------------------------------------------------------------------------------------------
+
+/// Words of scratch in the receiver's payload for the native lowering's loop state.
+const RECEIVER_SCRATCH_WORDS: usize = 4;
+
+/// `dream.data.Kind`, from `data.kind(name)`: a receiver whose methods are the span reductions
+/// for one element kind, `K:sum(buffer, offset, count)` and friends. The bound methods are the
+/// semantic path; under `jit` a namecall on an annotated receiver lowers to a native loop
+/// ([`lowering::KindLowering`]) that keeps its accumulator and index in the scratch words.
+#[repr(C)]
+pub struct KindReceiver {
+    kind: u64,
+    scratch: [Cell<u64>; RECEIVER_SCRATCH_WORDS],
+}
+
+// SAFETY: the payload holds no Lua references.
+unsafe impl crate::userdata::Userdata for KindReceiver {
+    const NAME: &'static str = "dream.data.Kind";
+}
+
+impl KindReceiver {
+    pub fn new(kind: Kind) -> KindReceiver {
+        KindReceiver { kind: kind as u64, scratch: Default::default() }
+    }
+
+    pub fn kind(&self) -> Kind {
+        match self.kind {
+            0 => Kind::U8,
+            1 => Kind::I8,
+            2 => Kind::U16,
+            3 => Kind::I16,
+            4 => Kind::U32,
+            5 => Kind::I32,
+            6 => Kind::F32,
+            _ => Kind::F64,
+        }
+    }
+
+    fn span(&self, what: &str, buffer: &BufferView<'_>, offset: Exact<i64>, count: Exact<i64>) -> Result<Span> {
+        Span::new(what, buffer, self.kind(), offset, count)
+    }
+}
+
+/// Byte offsets native code reads at, pinned here at compile time.
+pub(crate) mod layout {
+    use super::KindReceiver;
+
+    pub const KIND: i32 = 0;
+    pub const SCRATCH: i32 = 8;
+
+    const _: () = {
+        assert!(std::mem::offset_of!(KindReceiver, kind) == KIND as usize);
+        assert!(std::mem::offset_of!(KindReceiver, scratch) == SCRATCH as usize);
+    };
+}
+
+fn describe_kind_receiver(d: &mut ExtensionDescriptor) {
+    let mut receiver = d.userdata::<KindReceiver>("dream.data.Kind");
+    receiver
+        .tag(TagPolicy::Required)
+        .compiler_type(CompilerTypePolicy::Required)
+        .doc("The span reductions for one element kind as methods; native loops under jit.");
+    receiver
+        .method(
+            "sum",
+            |receiver: &KindReceiver, buffer: BufferView<'_>, offset: Exact<i64>, count: Exact<i64>| -> Result<f64> {
+                let span = receiver.span("Kind:sum", &buffer, offset, count)?;
+                let mut total = 0.0;
+                for i in 0..span.count {
+                    total += span.get(i);
+                }
+                Ok(total)
+            },
+        )
+        .signature("(self, buffer: buffer, offset: number, count: number): number")
+        .doc("As data.sum for this kind.");
+    receiver
+        .method(
+            "min",
+            |receiver: &KindReceiver,
+             buffer: BufferView<'_>,
+             offset: Exact<i64>,
+             count: Exact<i64>|
+             -> Result<Option<f64>> {
+                let span = receiver.span("Kind:min", &buffer, offset, count)?;
+                Ok(extreme(&span, false).map(|i| span.get(i)))
+            },
+        )
+        .signature("(self, buffer: buffer, offset: number, count: number): number?")
+        .doc("As data.min for this kind.");
+    receiver
+        .method(
+            "max",
+            |receiver: &KindReceiver,
+             buffer: BufferView<'_>,
+             offset: Exact<i64>,
+             count: Exact<i64>|
+             -> Result<Option<f64>> {
+                let span = receiver.span("Kind:max", &buffer, offset, count)?;
+                Ok(extreme(&span, true).map(|i| span.get(i)))
+            },
+        )
+        .signature("(self, buffer: buffer, offset: number, count: number): number?")
+        .doc("As data.max for this kind.");
+    for (name, comparison) in [
+        ("countEq", Comparison::Eq),
+        ("countNe", Comparison::Ne),
+        ("countLt", Comparison::Lt),
+        ("countLe", Comparison::Le),
+        ("countGt", Comparison::Gt),
+        ("countGe", Comparison::Ge),
+    ] {
+        let what = format!("Kind:{name}");
+        receiver
+            .method(
+                name,
+                move |receiver: &KindReceiver,
+                      buffer: BufferView<'_>,
+                      offset: Exact<i64>,
+                      count: Exact<i64>,
+                      threshold: f64|
+                      -> Result<f64> {
+                    let span = receiver.span(&what, &buffer, offset, count)?;
+                    let mut selected = 0usize;
+                    for i in 0..span.count {
+                        selected += usize::from(comparison.test(span.get(i), threshold));
+                    }
+                    Ok(selected as f64)
+                },
+            )
+            .signature("(self, buffer: buffer, offset: number, count: number, threshold: number): number")
+            .doc("How many elements compare so against threshold; as data.count with that comparison.");
+    }
+}
+
+fn kind(name: &str) -> Result<Owned<KindReceiver>> {
+    Ok(Owned(KindReceiver::new(Kind::parse("data.kind", name)?)))
+}
+
+// ---------------------------------------------------------------------------------------------
 // The extension
 // ---------------------------------------------------------------------------------------------
 
 fn describe_module(module: &mut ModuleDecl) {
-    const SPAN: &str = "buffer: buffer, kind: dream_data_Kind, offset: number, count: number";
+    const SPAN: &str = "buffer: buffer, kind: dream_data_ElementKind, offset: number, count: number";
     module
+        .function("kind", kind)
+        .signature("(kind: dream_data_ElementKind) -> dream_data_Kind")
+        .doc("The receiver whose methods reduce spans of this kind; annotate it (`local U8: dream_data_Kind = data.kind(\"u8\")`) so jit lowers its calls to native loops.")
         .function("sum", sum)
         .signature(format!("({SPAN}) -> number"))
         .doc("The elements added in order into a Luau number; 0 for an empty span.")
@@ -903,9 +1050,15 @@ impl Extension for DataExtension {
     }
 
     fn describe(&self, d: &mut ExtensionDescriptor) -> Result<()> {
-        d.type_alias("dream_data_Kind", "\"u8\" | \"i8\" | \"u16\" | \"i16\" | \"u32\" | \"i32\" | \"f32\" | \"f64\"");
+        d.type_alias(
+            "dream_data_ElementKind",
+            "\"u8\" | \"i8\" | \"u16\" | \"i16\" | \"u32\" | \"i32\" | \"f32\" | \"f64\"",
+        );
         d.type_alias("dream_data_Comparison", "\"eq\" | \"ne\" | \"lt\" | \"le\" | \"gt\" | \"ge\"");
         describe_selection(d);
+        describe_kind_receiver(d);
+        #[cfg(feature = "jit")]
+        d.native_hooks(lowering::KindLowering);
         let module = d.module(MODULE);
         module.doc("Typed spans of buffers reduced, compared into selections, gathered, scattered, filled, combined, ordered and partitioned natively, with no per-element callbacks.");
         describe_module(module);

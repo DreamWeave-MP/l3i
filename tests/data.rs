@@ -4,6 +4,8 @@
 use l3i::Runtime;
 use l3i::data::DataExtension;
 use l3i::extension::{RuntimePlan, RuntimePolicy};
+#[cfg(feature = "jit")]
+use l3i::source::LoadScope;
 
 fn runtime() -> Runtime {
     let plan = RuntimePlan::builder()
@@ -295,9 +297,9 @@ fn recognized_buffer_pipelines_agree_with_the_scalar_loop_and_call_the_data_plan
             "local ok, message = pcall(function() {source} end) table.insert(report, tostring(ok)) table.insert(report, tostring(message))"
         ));
     }
-    // Each chunk snapshots the alias global when it loads: a chunk loaded after the alias is
-    // wrapped counts its calls, one per recognized pipeline, and a chunk loaded after the alias
-    // is removed takes the scalar loop with the same results.
+    // Each chunk snapshots the alias global when it loads and takes one byte receiver from it:
+    // a chunk loaded after the alias is wrapped shows that single access, and a chunk loaded
+    // after the alias is removed takes the scalar loop with the same results.
     let runtime = runtime();
     runtime
         .exec(
@@ -314,10 +316,105 @@ fn recognized_buffer_pipelines_agree_with_the_scalar_loop_and_call_the_data_plan
         .unwrap();
     let pipelines = "return sum[for x in buf[a:b] => x], #[for x in buf[a:b] if x > 3 => x], min[for x in buf[a:b] => x], #[for x in buf[a:b] => x]";
     runtime
-        .exec(&format!("local a, b = 1, 1000 local total, hot, least, n = (function() {pipelines} end)() assert(total == 2997 and hot == 428 and least == 0 and n == 1000, tostring(total) .. ' ' .. tostring(hot)) assert(calls == 3, 'three data-plane calls, the unfiltered count needs none: ' .. calls)"))
+        .exec(&format!("local a, b = 1, 1000 local total, hot, least, n = (function() {pipelines} end)() assert(total == 2997 and hot == 428 and least == 0 and n == 1000, tostring(total) .. ' ' .. tostring(hot)) assert(calls == 1, 'one receiver per chunk; the methods run on it: ' .. calls)"))
         .unwrap();
     runtime.exec("__l3i_data = nil").unwrap(); // A chunk snapshots the alias before its own statements run.
     runtime
-        .exec(&format!("local a, b = 1, 1000 local total, hot, least, n = (function() {pipelines} end)() assert(total == 2997 and hot == 428 and least == 0 and n == 1000) assert(calls == 3, 'no alias, no calls')"))
+        .exec(&format!("local a, b = 1, 1000 local total, hot, least, n = (function() {pipelines} end)() assert(total == 2997 and hot == 428 and least == 0 and n == 1000) assert(calls == 1, 'no alias, no receiver')"))
         .unwrap();
+}
+
+#[test]
+fn kind_receiver_methods_match_the_module_functions() {
+    exec(
+        r"
+        local n = 300
+        local buf = buffer.create(n * 4 + 8)
+        for i = 0, n - 1 do buffer.writef32(buf, 8 + i * 4, ((i * 37) % 251) / 7 - 10) end
+        local F32 = data.kind('f32')
+        assert(F32:sum(buf, 8, n) == data.sum(buf, 'f32', 8, n))
+        assert(F32:min(buf, 8, n) == data.min(buf, 'f32', 8, n) and F32:max(buf, 8, n) == data.max(buf, 'f32', 8, n))
+        assert(F32:min(buf, 8, 0) == nil and F32:sum(buf, 8, 0) == 0)
+        assert(F32:countGt(buf, 8, n, 0) == data.count(buf, 'f32', 8, n, 'gt', 0))
+        assert(F32:countNe(buf, 8, n, 0 / 0) == n and F32:countEq(buf, 8, n, 0 / 0) == 0)
+        local ok, message = pcall(F32.sum, F32, buf, 8, n + 1)
+        assert(not ok and string.find(message, 'Kind:sum: span of 301 f32', 1, true), message)
+        ok, message = pcall(data.kind, 'f16')
+        assert(not ok and string.find(message, 'unknown element kind', 1, true), message)
+    ",
+    );
+}
+
+#[cfg(feature = "jit")]
+#[test]
+fn kind_receiver_reductions_lower_to_native_loops_with_the_bound_semantics() {
+    use l3i::data::lowering::lowered_sites;
+    use l3i::extension::NativeCodePolicy;
+    use l3i::native_code::NativeCodeMode;
+
+    let policy = RuntimePolicy::new()
+        .compat_global("@dream/data", "data")
+        .native_code(NativeCodePolicy { mode: NativeCodeMode::Eager, ..NativeCodePolicy::default() });
+    let plan = RuntimePlan::builder().policy(policy).extension(DataExtension).finalize().unwrap();
+    let runtime = Runtime::from_plan(&plan).unwrap();
+    if !runtime.native_code().expect("built with native code").is_available() {
+        eprintln!("no Luau code generator on this platform; skipping");
+        return;
+    }
+    let before = lowered_sites();
+    // `Runtime::exec` never compiles natively; a chunk loaded through `LoadScope` does under
+    // Eager, and `--!native` makes the compiler emit the type info the hook needs.
+    let stack = runtime.stack();
+    let chunk = stack
+        .load_source("=kinds", r"--!native
+            local kinds = {'u8', 'i8', 'u16', 'i16', 'u32', 'i32', 'f32', 'f64'}
+            local sizes = {u8 = 1, i8 = 1, u16 = 2, i16 = 2, u32 = 4, i32 = 4, f32 = 4, f64 = 8}
+            local n = 1000
+            local nan = 0 / 0
+            for _, name in kinds do
+                local size = sizes[name]
+                local buf = buffer.create(n * size + 5)
+                local write = buffer['write' .. name]
+                for i = 0, n - 1 do
+                    local v = (i * 37) % 251 - (string.sub(name, 1, 1) == 'u' and 0 or 125)
+                    if name == 'f32' or name == 'f64' then v = v / 7 end
+                    write(buf, 5 + i * size, v)
+                end
+                local K: dream_data_Kind = data.kind(name)
+                -- The lowered calls against the module functions (the bound path), per kind.
+                assert(K:sum(buf, 5, n) == data.sum(buf, name, 5, n), name .. ' sum')
+                assert(K:sum(buf, 5 + 10 * size, 0) == 0, name .. ' empty sum')
+                if name == 'f32' or name == 'f64' then
+                    write(buf, 5 + 400 * size, nan)
+                    local total = K:sum(buf, 5, n)
+                    assert(total ~= total and data.sum(buf, name, 5, n) ~= total, name .. ' NaN sum')
+                end
+                local least, greatest = K:min(buf, 5, n), K:max(buf, 5, n)
+                assert(least == data.min(buf, name, 5, n) and greatest == data.max(buf, name, 5, n), name .. ' extrema')
+                assert(K:min(buf, 5, 0) == nil and K:max(buf, 5, 0) == nil, name .. ' empty extrema')
+                for _, op in {'Eq', 'Ne', 'Lt', 'Le', 'Gt', 'Ge'} do
+                    local method = 'count' .. op
+                    local expected = data.count(buf, name, 5, n, string.lower(op), 3)
+                    assert(K[method](K, buf, 5, n, 3) == expected, name .. ' ' .. method)
+                    assert(K[method](K, buf, 5, n, nan) == data.count(buf, name, 5, n, string.lower(op), nan), name .. ' ' .. method .. ' NaN')
+                end
+                if name == 'f32' or name == 'f64' then
+                    -- A leading NaN stays in min/max on both paths; a later one never replaces.
+                    assert(K:min(buf, 5 + 400 * size, 10) ~= K:min(buf, 5 + 400 * size, 10), name .. ' leading NaN')
+                    assert(K:min(buf, 5, 500) == data.min(buf, name, 5, 500), name .. ' later NaN')
+                end
+                -- Misuse leaves native code for the binder, whose errors are the contract.
+                local ok, message = pcall(function() return K:sum(buf, 5, n + 1) end)
+                assert(not ok and string.find(message, 'Kind:sum: span of', 1, true), name .. ': ' .. tostring(message))
+                ok, message = pcall(function() return K:sum(buf, 2.5, 1) end)
+                assert(not ok, name .. ' fractional offset')
+                ok, message = pcall(function() return K:sum('text', 0, 1) end)
+                assert(not ok, name .. ' not a buffer')
+                ok, message = pcall(function() return K:sum(buf, -1, 1) end)
+                assert(not ok and string.find(message, 'negative offset', 1, true), name .. ': ' .. tostring(message))
+            end
+        ", &runtime.compile_options())
+        .unwrap();
+    chunk.invoke::<(), _>(&stack, ()).unwrap();
+    assert!(lowered_sites() > before, "the annotated receiver's calls were lowered");
 }
