@@ -43,6 +43,9 @@ fn runtime(with_data: bool, setup: &str) -> Runtime {
     let plan = if with_data { builder.extension(DataExtension) } else { builder }.finalize().unwrap();
     let runtime = Runtime::from_plan(&plan).unwrap();
     runtime.exec(setup).unwrap();
+    // Native code exits to the interpreter on a global access unless the environment is
+    // marked safe; the inputs are globals, so sandbox them once they exist.
+    runtime.sandbox_globals();
     runtime
 }
 
@@ -215,7 +218,8 @@ fn movement(c: &mut Criterion) {
         let mut group = c.benchmark_group(format!("data_argsort_f32/{n}"));
         group.throughput(Throughput::Elements(n as u64));
         // Keys repeat every 251 elements: many ties, where stability matters.
-        let setup = format!("{} perm = buffer.create(n * 4) order = table.create(n)", setup(n));
+        // Sandboxed globals are read-only tables, so the baseline builds its index table per call.
+        let setup = format!("{} perm = buffer.create(n * 4)", setup(n));
         let expected = n as f64;
         case(
             &mut group,
@@ -230,7 +234,7 @@ fn movement(c: &mut Criterion) {
             "table.sort of an index table with a key comparator (unstable)",
             false,
             &setup,
-            "local keys, o = fbuf, order for i = 1, n do o[i] = i - 1 end \
+            "local keys, o = fbuf, table.create(n) for i = 1, n do o[i] = i - 1 end \
              table.sort(o, function(a, b) return buffer.readf32(keys, a * 4) < buffer.readf32(keys, b * 4) end) return #o",
             expected,
         );

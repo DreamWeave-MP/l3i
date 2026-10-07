@@ -41,6 +41,9 @@ const S_END: i32 = 1;
 const S_ACC: i32 = 2;
 const S_THRESHOLD: i32 = 3;
 
+/// Elements per unrolled `sum` block.
+const UNROLL: usize = 8;
+
 /// `offsetof(Buffer, data)`; the length is the high half of the word at 0.
 const BUFFER_LENGTH_WORD: i64 = 0;
 /// `offsetof(Udata, data)`: what a `BUFFER_READ*` under the userdata tag adds.
@@ -140,6 +143,11 @@ impl Emit<'_, '_> {
     /// The element at the byte cursor (a whole double) as a double.
     fn element(&mut self, kind: Kind, cursor: IrOp) -> IrOp {
         let cursor = self.b.inst(IrCmd::NUM_TO_INT, &[cursor]);
+        self.element_at(kind, cursor)
+    }
+
+    /// The element at an int byte offset as a double.
+    fn element_at(&mut self, kind: Kind, cursor: IrOp) -> IrOp {
         let buffer = self.buffer();
         let tag = self.b.const_tag(LUA_TBUFFER as u8);
         match kind {
@@ -296,12 +304,43 @@ impl NativeCodeHooks for KindLowering {
             }
 
             emit.b.begin_block(head);
+            if member == Member::Sum {
+                // Pure adds unroll: UNROLL elements per block with one cursor and one accumulator
+                // round trip through scratch, which is what bounds the single-step loop.
+                let unrolled = emit.block();
+                let single = emit.block();
+                let cursor = emit.get_num(S_CURSOR);
+                let span = emit.b.const_double((UNROLL as i64 * size) as f64);
+                let reach = emit.b.inst(IrCmd::ADD_NUM, &[cursor, span]);
+                let end = emit.get_num(S_END);
+                let fits = emit.b.cond(IrCondition::LessEqual);
+                emit.b.inst(IrCmd::JUMP_CMP_NUM, &[reach, end, fits, unrolled, single]);
+
+                emit.b.begin_block(unrolled);
+                let cursor = emit.get_num(S_CURSOR);
+                let base = emit.b.inst(IrCmd::NUM_TO_INT, &[cursor]);
+                let mut acc = emit.get_num(S_ACC);
+                for k in 0..UNROLL {
+                    let at = emit.b.const_int((k as i64 * size) as i32);
+                    let offset = emit.b.inst(IrCmd::ADD_INT, &[base, at]);
+                    let value = emit.element_at(*kind, offset);
+                    acc = emit.b.inst(IrCmd::ADD_NUM, &[acc, value]);
+                }
+                emit.set_num(S_ACC, acc);
+                let span = emit.b.const_double((UNROLL as i64 * size) as f64);
+                let next = emit.b.inst(IrCmd::ADD_NUM, &[cursor, span]);
+                emit.set_num(S_CURSOR, next);
+                emit.jump(head);
+
+                emit.b.begin_block(single);
+            }
             let cursor = emit.get_num(S_CURSOR);
             let end = emit.get_num(S_END);
             let more = emit.b.cond(IrCondition::Less);
             emit.b.inst(IrCmd::JUMP_CMP_NUM, &[cursor, end, more, body, finish]);
 
             emit.b.begin_block(body);
+
             let cursor = emit.get_num(S_CURSOR);
             let value = emit.element(*kind, cursor);
             let step = emit.b.const_double(size as f64);

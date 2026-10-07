@@ -352,15 +352,20 @@ fn kind_receiver_reductions_lower_to_native_loops_with_the_bound_semantics() {
     use l3i::extension::NativeCodePolicy;
     use l3i::native_code::NativeCodeMode;
 
-    let policy = RuntimePolicy::new()
-        .compat_global("@dream/data", "data")
-        .native_code(NativeCodePolicy { mode: NativeCodeMode::Eager, ..NativeCodePolicy::default() });
+    let policy = RuntimePolicy::new().compat_global("@dream/data", "data").native_code(NativeCodePolicy {
+        mode: NativeCodeMode::Eager,
+        record_counters: true,
+        ..NativeCodePolicy::default()
+    });
     let plan = RuntimePlan::builder().policy(policy).extension(DataExtension).finalize().unwrap();
     let runtime = Runtime::from_plan(&plan).unwrap();
-    if !runtime.native_code().expect("built with native code").is_available() {
+    let generator = runtime.native_code().expect("built with native code");
+    if !generator.is_available() {
         eprintln!("no Luau code generator on this platform; skipping");
         return;
     }
+    // A safe environment, or every global access would exit native code to the interpreter.
+    runtime.sandbox_globals();
     let before = lowered_sites();
     // `Runtime::exec` never compiles natively; a chunk loaded through `LoadScope` does under
     // Eager, and `--!native` makes the compiler emit the type info the hook needs.
@@ -415,6 +420,12 @@ fn kind_receiver_reductions_lower_to_native_loops_with_the_bound_semantics() {
             end
         ", &runtime.compile_options())
         .unwrap();
+    let stats_before = generator.execution_stats(&stack);
     chunk.invoke::<(), _>(&stack, ()).unwrap();
+    let stats_after = generator.execution_stats(&stack);
     assert!(lowered_sites() > before, "the annotated receiver's calls were lowered");
+    // Eight kinds, each thousands of loop iterations in native blocks (an interpreted run
+    // records a few dozen); the slow paths exit to the binder.
+    let blocks = stats_after.regular_blocks_executed - stats_before.regular_blocks_executed;
+    assert!(blocks > 10_000, "native blocks executed: {blocks}");
 }
