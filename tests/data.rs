@@ -429,6 +429,11 @@ fn kind_receiver_reductions_lower_to_native_loops_with_the_bound_semantics() {
                 local least, greatest = K:min(buf, 5, n), K:max(buf, 5, n)
                 assert(least == data.min(buf, name, 5, n) and greatest == data.max(buf, name, 5, n), name .. ' extrema')
                 assert(K:min(buf, 5, 0) == nil and K:max(buf, 5, 0) == nil, name .. ' empty extrema')
+                -- Real namecalls, so every comparison's native loop runs (indexing K[method] does not lower).
+                assert(K:countEq(buf, 5, n, 3) == data.count(buf, name, 5, n, 'eq', 3) and K:countNe(buf, 5, n, 3) == data.count(buf, name, 5, n, 'ne', 3), name .. ' eq/ne')
+                assert(K:countLt(buf, 5, n, 3) == data.count(buf, name, 5, n, 'lt', 3) and K:countLe(buf, 5, n, 3) == data.count(buf, name, 5, n, 'le', 3), name .. ' lt/le')
+                assert(K:countGt(buf, 5, n, 3) == data.count(buf, name, 5, n, 'gt', 3) and K:countGe(buf, 5, n, 3) == data.count(buf, name, 5, n, 'ge', 3), name .. ' gt/ge')
+                assert(K:countEq(buf, 5, n, nan) == 0 and K:countNe(buf, 5, n, nan) == n and K:countLt(buf, 5, n, nan) == 0 and K:countGe(buf, 5, n, nan) == 0, name .. ' NaN threshold')
                 for _, op in {'Eq', 'Ne', 'Lt', 'Le', 'Gt', 'Ge'} do
                     local method = 'count' .. op
                     local expected = data.count(buf, name, 5, n, string.lower(op), 3)
