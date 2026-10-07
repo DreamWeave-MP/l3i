@@ -43,7 +43,7 @@ Nothing here is a catalogue: tags, atoms, type names and debug-name roots are ho
 
 ```toml
 [dependencies]
-l3i = { version = "1", features = ["jit"] }   # jit, analysis, soft-render, bytes(-codecs, -digests, -text), intern, syntax, fs, process are optional
+l3i = { version = "1", features = ["jit"] }   # jit, analysis, soft-render, bytes(-codecs, -digests, -text), data, intern, syntax, fs, process are optional
 ```
 
 l3i builds only with **clang, lld and cross-language thin LTO**, and Cargo does not inherit a
@@ -106,7 +106,7 @@ Each row is a page of the guide.
 | **Direct access** | Atoms let `GETTABLEKS`/`NAMECALL` reach a native callback with no metatable walk; `DirectPlan` validates Luau's inline cache in O(1) and serves a type under any tag. | [Direct access](https://DreamWeave-MP.github.io/l3i/docs/direct-access/) |
 | **Extensions and plans** | A crate declares its Luau surface once (`describe`), a plan composes crates and assigns every tag, slot and atom (`finalize`), a runtime is built from it (`from_plan`); the plan renders the `.d.luau` and can type check it. | [Extensions](https://DreamWeave-MP.github.io/l3i/docs/extensions/) |
 | **Primitives** | `BytesView`, `BufferView`, `Exact<T>`, `Integer`, `Bits64`, `PackedScalar` with a kind registry, strict `Options` tables, in-place table walks, `Sequence` and `Stream` views. | [Primitives](https://DreamWeave-MP.github.io/l3i/docs/primitives/) |
-| **Built-in extensions** | `@dream/net` (in every plan), `@dream/quat`, `@dream/raster`, `@dream/bytes`, `@dream/intern`, `@dream/luau`, `@dream/soft-render`, `@dream/fs`, `@dream/process`. | [Built-in extensions](https://DreamWeave-MP.github.io/l3i/docs/builtin-extensions/) |
+| **Built-in extensions** | `@dream/net` (in every plan), `@dream/quat`, `@dream/raster`, `@dream/bytes`, `@dream/data`, `@dream/intern`, `@dream/luau`, `@dream/soft-render`, `@dream/fs`, `@dream/process`. | [Built-in extensions](https://DreamWeave-MP.github.io/l3i/docs/builtin-extensions/) |
 | **Native code** | Luau's CodeGen with lowering hooks written in Rust; which call sites lower and why. | [Native code](https://DreamWeave-MP.github.io/l3i/docs/native-code/) |
 | **The rest of the VM** | Coroutines, the debug API, memory and GC controls, libraries, `require`, Luau's analysis frontend. | [Coroutines, debugging and the rest](https://DreamWeave-MP.github.io/l3i/docs/vm/) |
 | **Rust API** | Every public module. | [Rust API](https://DreamWeave-MP.github.io/l3i/docs/api/) |
@@ -119,6 +119,7 @@ Each row is a page of the guide.
 | `dream.quat` | `@dream/quat` | Unit rotations packed into one Luau integer (smallest-three, 18 bits per component) and animation keys; `quat.math()` lowers `rotate` to 21 ns native. |
 | `dream.raster` | `@dream/raster` | RGBA8 colours, clip rectangles and RGBA16 colours as packed integers; `raster.math()` lowers colour arithmetic. |
 | `dream.bytes` (`bytes`) | `@dream/bytes` | For parsing foreign file formats in script: searching, C strings, varints, big-endian and half-float reads lowered natively, plus codecs, digests and text codepages behind `bytes-codecs`, `bytes-digests`, `bytes-text`. |
+| `dream.data` (`data`) | `@dream/data` | The generic bulk-data plane: typed spans of buffers reduced, compared into selections, gathered, scattered, filled, combined, stably argsorted and partitioned natively with no per-element callbacks; reductions also lower to native loops under `jit`, and recognized JSL pipelines over buffer slices use it automatically ([DATA_PLANE.md](DATA_PLANE.md)). |
 | `dream.intern` (`intern`) | `@dream/intern` | Textual identity as dense numbers: pools that intern strings or buffer spans exactly, ASCII case-insensitively, or by their normal form under byte rules (case, replaced bytes, collapsed runs, trimmed ends), folding inside the hash, with no Luau string made for a duplicate. |
 | `dream.luau` (`syntax`) | `@dream/luau` | Luau's own parser for scripts: the syntax tree with exact spans, comments, errors and the token stream, built as tables in native code, typed for strict walkers. |
 | `dream.soft_render` (`soft-render`) | `@dream/soft-render` | dream-soft-render as a CPU rendering device, byte-identical from Luau and from Rust. |
@@ -136,6 +137,7 @@ Each row is a page of the guide.
 | `bytes-digests` | CRC-32 to BLAKE3, one-shot and incremental | `crc32fast`, `xxhash-rust`, RustCrypto, `blake3` |
 | `bytes-text` | Every WHATWG text encoding | `encoding_rs` |
 | `bytes-regex` | Regular expressions over bytes, many ranges in one call | `regex` |
+| `data` | The `@dream/data` extension | none |
 | `intern` | The `@dream/intern` extension | none |
 | `syntax` | The `@dream/luau` extension | none |
 | `fs` | The `@dream/fs` extension | `memmap2`, `walkdir`, `same-file` |
