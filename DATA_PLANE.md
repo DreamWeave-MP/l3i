@@ -110,17 +110,60 @@ shows the allocation matters.
 
 ### 2.3 Execution
 
-Every operation is a bound Rust function invoked once per bulk operation: one host crossing
-amortized over the whole span, element loops in Rust over raw pointers after the single bounds
-check. This is the portable/bound path and the correctness oracle. A Luau CodeGen lowering of
-a span operation into IR is the optional fast path of the established pattern; whether it beats
-the once-per-call bound function is a benchmark question answered in
-[BENCHMARKS.md](BENCHMARKS.md) and below, not a premise.
+Every module function is a bound Rust function invoked once per bulk operation: one host
+crossing amortized over the whole span, element loops in Rust over raw pointers after the single
+bounds check. This is the portable/bound path and the correctness oracle for everything.
 
-No worker threads, no SIMD framework, no second JIT. If Luau's own code generator vectorizes a
-lowered loop, fine.
+The reductions also exist as methods of a typed receiver, `data.kind(name)` (`dream.data.Kind`):
+`K:sum(buffer, offset, count)`, `K:min`, `K:max`, `K:countEq/Ne/Lt/Le/Gt/Ge(buffer, offset,
+count, threshold)`. Bound, they are the same loops. Under the `jit` feature, a call on a receiver
+the script annotated (`local F32: dream_data_Kind = data.kind("f32")`, in a `--!native` chunk)
+is lowered by `src/data/lowering.rs` into Luau IR: the receiver tag, buffer tag, whole
+non-negative bounds and the span's fit are checked first (anything else jumps to the binder,
+whose errors are the contract), then a loop per element kind behind a dispatch on the
+receiver's kind word reads elements with the same `BUFFER_READ*` the `buffer` library lowers
+to and accumulates in double in element order. Loop state lives in the receiver's scratch
+words, since Luau IR has no loop-carried values. This is the established L3i fast-path pattern
+(bytes, intern): one semantic implementation, a bound path, an optional native lowering.
 
-### 2.4 Reaching the data plane from JSL
+No worker threads, no SIMD framework, no second JIT.
+
+### 2.4 Evidence
+
+`cargo bench --features data --bench data` (interpreter) and `--features data,jit` (every
+chunk compiled natively, so the loop baselines are CodeGen loops). i7-10870H, retired
+instructions per call (minimum of five rounds of 64 calls), Criterion median time. `u8` sums and
+`> 127` counts over `n` bytes; the recognized JSL form includes the slice prologue (type checks,
+bounds normalization); the scalar fallback is the same JSL source run without the extension.
+
+Interpreter:
+
+| n | JSL recognized | JSL scalar fallback | explicit `data.sum` / `data.count` | handwritten `readu8` loop |
+|---:|---:|---:|---:|---:|
+| sum 16 | 5,365 (532 ns) | 14,741 (1.21 µs) | 2,434 (205 ns) | 14,637 (1.04 µs) |
+| sum 256 | 9,685 (832 ns) | 171,221 (12.2 µs) | 6,754 (531 ns) | 213,597 (16.6 µs) |
+| sum 4,096 | 78,805 (6.10 µs) | 2,674,901 (191 µs) | 75,874 (5.48 µs) | 3,396,957 (250 µs) |
+| sum 65,536 | 1,184,725 (83.3 µs) | 42,733,784 (3.03 ms) | 1,181,794 (87.6 µs) | 54,330,722 (3.87 ms) |
+| count 16 | 5,704 (557 ns) | 14,971 (1.27 µs) | 2,799 (251 ns) | 15,217 (1.25 µs) |
+| count 256 | 11,944 (1.12 µs) | 176,945 (14.9 µs) | 9,039 (737 ns) | 223,941 (18.8 µs) |
+| count 4,096 | 111,784 (9.08 µs) | 2,768,018 (229 µs) | 108,879 (8.80 µs) | 3,563,260 (285 µs) |
+| count 65,536 | 1,709,224 (136 µs) | 44,226,066 (3.52 ms) | 1,706,319 (139 µs) | 56,992,809 (4.56 ms) |
+
+There is no small-N crossover in the interpreter: at 16 elements the recognized pipeline
+already executes a third of the scalar loop's instructions, and the explicit call a sixth. The
+JSL form carries about 3,000 instructions of prologue over the explicit call, independent of n.
+`compare` into a reused selection then `count()` costs 2 to 4% more than the direct `count`.
+
+| n | explicit `data.sum` f32 | handwritten `readf32` loop | explicit `data.gather` f32 | handwritten indexed copy | stable `data.argsort` f32 | `table.sort` index table, comparator (unstable) |
+|---:|---:|---:|---:|---:|---:|---:|
+| 256 | 6,273 (648 ns) | 223,837 (15.7 µs) | 14,070 (1.20 µs) | 599,977 (49.5 µs) | 63,129 (5.15 µs) | 4,247,685 (369 µs) |
+| 4,096 | | | | | 1,251,732 (106 µs) | 108,144,296 (9.22 ms) |
+| 65,536 | 1,050,753 (116 µs) | 56,952,163 (4.17 ms) | 2,886,390 (238 µs) | 153,094,071 (11.8 ms) | 16,006,037 (1.88 ms) | 2,307,862,971 (199 ms) |
+
+Native code (`jit`): see the table appended below once measured.
+
+
+### 2.5 Reaching the data plane from JSL
 
 The extension publishes its module table under the global `__l3i_data` as well as
 `@dream/data`. A recognized pipeline's lowering snapshots that global in the chunk prelude and
@@ -130,7 +173,7 @@ loop. Recognition is narrow and semantic: the lowered call must compute exactly 
 loop computes, in the same numeric representation and with the same error behaviour, or it is
 not emitted. See COMPREHENSIONS.md, "Recognized data pipelines".
 
-### 2.5 Semantic law
+### 2.6 Semantic law
 
 Errors and evaluation order are effects. An arbitrary JSL expression in a filter or projection
 has unknown effects and is never moved into the data plane; the fused scalar loop is its
