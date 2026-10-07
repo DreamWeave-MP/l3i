@@ -39,6 +39,7 @@ mod fs;
 mod intern;
 mod iterator;
 mod libraries;
+mod lowering;
 mod memory;
 mod metatable;
 mod module;

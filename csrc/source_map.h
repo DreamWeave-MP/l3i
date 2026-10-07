@@ -38,6 +38,8 @@ public:
     SourceMap(std::string_view original, std::string_view generated, std::vector<Segment> segments);
 
     bool empty() const { return segments.empty(); }
+    // The recorded provenance, for lowering snapshots and diagnostics; never mutated after construction.
+    const std::vector<Segment>& provenance() const { return segments; }
     Position originalPosition(Position generated) const;
     Span originalSpan(Span generated) const;
     Position generatedPosition(Position original) const;

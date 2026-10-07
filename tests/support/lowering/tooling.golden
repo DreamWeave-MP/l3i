@@ -1,0 +1,2278 @@
+==== dense
+return [for x in xs => x * 2]
+----
+local __l3i_comp_29_error = error local __l3i_comp_29_table_create = table.create return (function() local __l3i_comp_7_g0_src = (xs) local __l3i_comp_7_g0_len = #__l3i_comp_7_g0_src local __l3i_comp_7_out = __l3i_comp_29_table_create(__l3i_comp_7_g0_len) :: typeof({}) for __l3i_comp_7_g0_i = 1, __l3i_comp_7_g0_len do local x = __l3i_comp_7_g0_src[__l3i_comp_7_g0_i] local __l3i_comp_7_value = (x * 2) if __l3i_comp_7_value == nil then __l3i_comp_29_error("L3i comprehension projection produced nil; filter nil explicitly") end __l3i_comp_7_out[__l3i_comp_7_g0_i] = __l3i_comp_7_value end return __l3i_comp_7_out end)()
+--prelude 2
+--segment 0 82 7 29 synthetic
+--segment 82 89 0 7 copied
+--segment 89 101 7 29 synthetic
+--segment 101 129 8 19 synthetic
+--segment 129 130 17 17 synthetic
+--segment 130 132 17 19 copied
+--segment 132 133 19 19 synthetic
+--segment 133 326 17 19 synthetic
+--segment 326 327 12 13 copied
+--segment 327 369 17 19 synthetic
+--segment 369 396 23 28 synthetic
+--segment 396 397 23 23 synthetic
+--segment 397 402 23 28 copied
+--segment 402 403 28 28 synthetic
+--segment 403 587 23 28 synthetic
+--segment 587 621 28 29 synthetic
+--site 0 call=89,621 projection=397,402
+--clause binding=326,327 expression=130,132
+==== filtered
+return [for x in xs if p(x) => f(x)]
+----
+local __l3i_comp_36_error = error local __l3i_comp_36_table_create = table.create return (function() local __l3i_comp_7_g0_src = (xs) local __l3i_comp_7_g0_len = #__l3i_comp_7_g0_src local __l3i_comp_7_out = __l3i_comp_36_table_create(__l3i_comp_7_g0_len) :: typeof({}) local __l3i_comp_7_n = 0 for __l3i_comp_7_g0_i = 1, __l3i_comp_7_g0_len do local x = __l3i_comp_7_g0_src[__l3i_comp_7_g0_i] if (p(x)) then local __l3i_comp_7_value = (f(x)) if __l3i_comp_7_value == nil then __l3i_comp_36_error("L3i comprehension projection produced nil; filter nil explicitly") end __l3i_comp_7_n += 1 __l3i_comp_7_out[__l3i_comp_7_n] = __l3i_comp_7_value end end return __l3i_comp_7_out end)()
+--prelude 2
+--segment 0 82 7 36 synthetic
+--segment 82 89 0 7 copied
+--segment 89 101 7 36 synthetic
+--segment 101 129 8 19 synthetic
+--segment 129 130 17 17 synthetic
+--segment 130 132 17 19 copied
+--segment 132 133 19 19 synthetic
+--segment 133 351 17 19 synthetic
+--segment 351 352 12 13 copied
+--segment 352 394 17 19 synthetic
+--segment 394 397 23 27 synthetic
+--segment 397 398 23 23 synthetic
+--segment 398 402 23 27 copied
+--segment 402 403 27 27 synthetic
+--segment 403 409 23 27 synthetic
+--segment 409 436 31 35 synthetic
+--segment 436 437 31 31 synthetic
+--segment 437 441 31 35 copied
+--segment 441 442 35 35 synthetic
+--segment 442 643 31 35 synthetic
+--segment 643 681 35 36 synthetic
+--site 0 call=89,681 projection=437,441
+--clause binding=351,352 expression=130,132
+--clause binding=89,89 expression=398,402
+==== two_filters
+return [for x in xs if p(x) if q(x) => f(x)]
+----
+local __l3i_comp_44_error = error local __l3i_comp_44_table_create = table.create return (function() local __l3i_comp_7_g0_src = (xs) local __l3i_comp_7_g0_len = #__l3i_comp_7_g0_src local __l3i_comp_7_out = __l3i_comp_44_table_create(__l3i_comp_7_g0_len) :: typeof({}) local __l3i_comp_7_n = 0 for __l3i_comp_7_g0_i = 1, __l3i_comp_7_g0_len do local x = __l3i_comp_7_g0_src[__l3i_comp_7_g0_i] if (p(x)) then if (q(x)) then local __l3i_comp_7_value = (f(x)) if __l3i_comp_7_value == nil then __l3i_comp_44_error("L3i comprehension projection produced nil; filter nil explicitly") end __l3i_comp_7_n += 1 __l3i_comp_7_out[__l3i_comp_7_n] = __l3i_comp_7_value end end end return __l3i_comp_7_out end)()
+--prelude 2
+--segment 0 82 7 44 synthetic
+--segment 82 89 0 7 copied
+--segment 89 101 7 44 synthetic
+--segment 101 129 8 19 synthetic
+--segment 129 130 17 17 synthetic
+--segment 130 132 17 19 copied
+--segment 132 133 19 19 synthetic
+--segment 133 351 17 19 synthetic
+--segment 351 352 12 13 copied
+--segment 352 394 17 19 synthetic
+--segment 394 397 23 27 synthetic
+--segment 397 398 23 23 synthetic
+--segment 398 402 23 27 copied
+--segment 402 403 27 27 synthetic
+--segment 403 409 23 27 synthetic
+--segment 409 412 31 35 synthetic
+--segment 412 413 31 31 synthetic
+--segment 413 417 31 35 copied
+--segment 417 418 35 35 synthetic
+--segment 418 424 31 35 synthetic
+--segment 424 451 39 43 synthetic
+--segment 451 452 39 39 synthetic
+--segment 452 456 39 43 copied
+--segment 456 457 43 43 synthetic
+--segment 457 658 39 43 synthetic
+--segment 658 700 43 44 synthetic
+--site 0 call=89,700 projection=452,456
+--clause binding=351,352 expression=130,132
+--clause binding=89,89 expression=398,402
+--clause binding=89,89 expression=413,417
+==== count
+return #[for x in xs if p(x) => f(x)]
+----
+local __l3i_comp_37_error = error local __l3i_comp_37_table_create = table.create return #(function() local __l3i_comp_8_g0_src = (xs) local __l3i_comp_8_g0_len = #__l3i_comp_8_g0_src local __l3i_comp_8_out = __l3i_comp_37_table_create(__l3i_comp_8_g0_len) :: typeof({}) local __l3i_comp_8_n = 0 for __l3i_comp_8_g0_i = 1, __l3i_comp_8_g0_len do local x = __l3i_comp_8_g0_src[__l3i_comp_8_g0_i] if (p(x)) then local __l3i_comp_8_value = (f(x)) if __l3i_comp_8_value == nil then __l3i_comp_37_error("L3i comprehension projection produced nil; filter nil explicitly") end __l3i_comp_8_n += 1 __l3i_comp_8_out[__l3i_comp_8_n] = __l3i_comp_8_value end end return __l3i_comp_8_out end)()
+--prelude 2
+--segment 0 82 8 37 synthetic
+--segment 82 90 0 8 copied
+--segment 90 102 8 37 synthetic
+--segment 102 130 9 20 synthetic
+--segment 130 131 18 18 synthetic
+--segment 131 133 18 20 copied
+--segment 133 134 20 20 synthetic
+--segment 134 352 18 20 synthetic
+--segment 352 353 13 14 copied
+--segment 353 395 18 20 synthetic
+--segment 395 398 24 28 synthetic
+--segment 398 399 24 24 synthetic
+--segment 399 403 24 28 copied
+--segment 403 404 28 28 synthetic
+--segment 404 410 24 28 synthetic
+--segment 410 437 32 36 synthetic
+--segment 437 438 32 32 synthetic
+--segment 438 442 32 36 copied
+--segment 442 443 36 36 synthetic
+--segment 443 644 32 36 synthetic
+--segment 644 682 36 37 synthetic
+--site 0 call=90,682 projection=438,442
+--clause binding=352,353 expression=131,133
+--clause binding=90,90 expression=399,403
+==== count_dense
+return #[for x in xs => f(x)]
+----
+local __l3i_comp_29_error = error local __l3i_comp_29_table_create = table.create return #(function() local __l3i_comp_8_g0_src = (xs) local __l3i_comp_8_g0_len = #__l3i_comp_8_g0_src local __l3i_comp_8_out = __l3i_comp_29_table_create(__l3i_comp_8_g0_len) :: typeof({}) for __l3i_comp_8_g0_i = 1, __l3i_comp_8_g0_len do local x = __l3i_comp_8_g0_src[__l3i_comp_8_g0_i] local __l3i_comp_8_value = (f(x)) if __l3i_comp_8_value == nil then __l3i_comp_29_error("L3i comprehension projection produced nil; filter nil explicitly") end __l3i_comp_8_out[__l3i_comp_8_g0_i] = __l3i_comp_8_value end return __l3i_comp_8_out end)()
+--prelude 2
+--segment 0 82 8 29 synthetic
+--segment 82 90 0 8 copied
+--segment 90 102 8 29 synthetic
+--segment 102 130 9 20 synthetic
+--segment 130 131 18 18 synthetic
+--segment 131 133 18 20 copied
+--segment 133 134 20 20 synthetic
+--segment 134 327 18 20 synthetic
+--segment 327 328 13 14 copied
+--segment 328 370 18 20 synthetic
+--segment 370 397 24 28 synthetic
+--segment 397 398 24 24 synthetic
+--segment 398 402 24 28 copied
+--segment 402 403 28 28 synthetic
+--segment 403 587 24 28 synthetic
+--segment 587 621 28 29 synthetic
+--site 0 call=90,621 projection=398,402
+--clause binding=327,328 expression=131,133
+==== sum
+return sum[for x in xs if p(x) => f(x)]
+----
+local __l3i_comp_39_error = error return (function() local __l3i_comp_10_g0_src = (xs) local __l3i_comp_10_g0_len = #__l3i_comp_10_g0_src local __l3i_comp_10_sum = 0 for __l3i_comp_10_g0_i = 1, __l3i_comp_10_g0_len do local x = __l3i_comp_10_g0_src[__l3i_comp_10_g0_i] if (p(x)) then local __l3i_comp_10_value = (f(x)) if __l3i_comp_10_value == nil then __l3i_comp_39_error("L3i comprehension projection produced nil; filter nil explicitly") end __l3i_comp_10_sum += __l3i_comp_10_value end end return __l3i_comp_10_sum end)()
+--prelude 1
+--segment 0 34 10 39 synthetic
+--segment 34 41 0 7 copied
+--segment 41 53 7 39 synthetic
+--segment 53 82 11 22 synthetic
+--segment 82 83 20 20 synthetic
+--segment 83 85 20 22 copied
+--segment 85 86 22 22 synthetic
+--segment 86 224 20 22 synthetic
+--segment 224 225 15 16 copied
+--segment 225 269 20 22 synthetic
+--segment 269 272 26 30 synthetic
+--segment 272 273 26 26 synthetic
+--segment 273 277 26 30 copied
+--segment 277 278 30 30 synthetic
+--segment 278 284 26 30 synthetic
+--segment 284 312 34 38 synthetic
+--segment 312 313 34 34 synthetic
+--segment 313 317 34 38 copied
+--segment 317 318 38 38 synthetic
+--segment 318 487 34 38 synthetic
+--segment 487 526 38 39 synthetic
+--site 0 call=41,526 projection=313,317
+--clause binding=224,225 expression=83,85
+--clause binding=41,41 expression=273,277
+==== sum_dense
+return sum[for x in xs => x]
+----
+local __l3i_comp_28_error = error return (function() local __l3i_comp_10_g0_src = (xs) local __l3i_comp_10_g0_len = #__l3i_comp_10_g0_src local __l3i_comp_10_sum = 0 for __l3i_comp_10_g0_i = 1, __l3i_comp_10_g0_len do local x = __l3i_comp_10_g0_src[__l3i_comp_10_g0_i] local __l3i_comp_10_value = (x) if __l3i_comp_10_value == nil then __l3i_comp_28_error("L3i comprehension projection produced nil; filter nil explicitly") end __l3i_comp_10_sum += __l3i_comp_10_value end return __l3i_comp_10_sum end)()
+--prelude 1
+--segment 0 34 10 28 synthetic
+--segment 34 41 0 7 copied
+--segment 41 53 7 28 synthetic
+--segment 53 82 11 22 synthetic
+--segment 82 83 20 20 synthetic
+--segment 83 85 20 22 copied
+--segment 85 86 22 22 synthetic
+--segment 86 224 20 22 synthetic
+--segment 224 225 15 16 copied
+--segment 225 269 20 22 synthetic
+--segment 269 297 26 27 synthetic
+--segment 297 298 26 26 synthetic
+--segment 298 299 26 27 copied
+--segment 299 300 27 27 synthetic
+--segment 300 469 26 27 synthetic
+--segment 469 504 27 28 synthetic
+--site 0 call=41,504 projection=298,299
+--clause binding=224,225 expression=83,85
+==== count_spaced
+return # -- note
+[for x in xs => x]
+----
+local __l3i_comp_35_error = error local __l3i_comp_35_table_create = table.create return # -- note
+(function() local __l3i_comp_17_g0_src = (xs) local __l3i_comp_17_g0_len = #__l3i_comp_17_g0_src local __l3i_comp_17_out = __l3i_comp_35_table_create(__l3i_comp_17_g0_len) :: typeof({}) for __l3i_comp_17_g0_i = 1, __l3i_comp_17_g0_len do local x = __l3i_comp_17_g0_src[__l3i_comp_17_g0_i] local __l3i_comp_17_value = (x) if __l3i_comp_17_value == nil then __l3i_comp_35_error("L3i comprehension projection produced nil; filter nil explicitly") end __l3i_comp_17_out[__l3i_comp_17_g0_i] = __l3i_comp_17_value end return __l3i_comp_17_out end)()
+--prelude 2
+--segment 0 82 17 35 synthetic
+--segment 82 99 0 17 copied
+--segment 99 111 17 35 synthetic
+--segment 111 140 18 29 synthetic
+--segment 140 141 27 27 synthetic
+--segment 141 143 27 29 copied
+--segment 143 144 29 29 synthetic
+--segment 144 343 27 29 synthetic
+--segment 343 344 22 23 copied
+--segment 344 388 27 29 synthetic
+--segment 388 416 33 34 synthetic
+--segment 416 417 33 33 synthetic
+--segment 417 418 33 34 copied
+--segment 418 419 34 34 synthetic
+--segment 419 607 33 34 synthetic
+--segment 607 642 34 35 synthetic
+--site 0 call=99,642 projection=417,418
+--clause binding=343,344 expression=141,143
+==== sum_spaced
+return sum --[[ note ]] [for x in xs => x]
+----
+local __l3i_comp_42_error = error return (function() 
+--[[ note ]]
+local __l3i_comp_24_g0_src = (xs) local __l3i_comp_24_g0_len = #__l3i_comp_24_g0_src local __l3i_comp_24_sum = 0 for __l3i_comp_24_g0_i = 1, __l3i_comp_24_g0_len do local x = __l3i_comp_24_g0_src[__l3i_comp_24_g0_i] local __l3i_comp_24_value = (x) if __l3i_comp_24_value == nil then __l3i_comp_42_error("L3i comprehension projection produced nil; filter nil explicitly") end __l3i_comp_24_sum += __l3i_comp_24_value end return __l3i_comp_24_sum end)()
+--prelude 1
+--segment 0 34 24 42 synthetic
+--segment 34 41 0 7 copied
+--segment 41 54 7 42 synthetic
+--segment 54 66 11 23 copied
+--segment 66 67 7 42 synthetic
+--segment 67 96 25 36 synthetic
+--segment 96 97 34 34 synthetic
+--segment 97 99 34 36 copied
+--segment 99 100 36 36 synthetic
+--segment 100 238 34 36 synthetic
+--segment 238 239 29 30 copied
+--segment 239 283 34 36 synthetic
+--segment 283 311 40 41 synthetic
+--segment 311 312 40 40 synthetic
+--segment 312 313 40 41 copied
+--segment 313 314 41 41 synthetic
+--segment 314 483 40 41 synthetic
+--segment 483 518 41 42 synthetic
+--site 0 call=41,518 projection=312,313
+--clause binding=238,239 expression=97,99
+==== member_sum_is_not_a_reducer
+return t.sum[for x in xs => x]
+----
+local __l3i_comp_30_error = error local __l3i_comp_30_table_create = table.create return t.sum[(function() local __l3i_comp_12_g0_src = (xs) local __l3i_comp_12_g0_len = #__l3i_comp_12_g0_src local __l3i_comp_12_out = __l3i_comp_30_table_create(__l3i_comp_12_g0_len) :: typeof({}) for __l3i_comp_12_g0_i = 1, __l3i_comp_12_g0_len do local x = __l3i_comp_12_g0_src[__l3i_comp_12_g0_i] local __l3i_comp_12_value = (x) if __l3i_comp_12_value == nil then __l3i_comp_30_error("L3i comprehension projection produced nil; filter nil explicitly") end __l3i_comp_12_out[__l3i_comp_12_g0_i] = __l3i_comp_12_value end return __l3i_comp_12_out end)()]
+--prelude 2
+--segment 0 82 12 30 synthetic
+--segment 82 94 0 12 copied
+--segment 94 107 12 30 synthetic
+--segment 107 136 13 24 synthetic
+--segment 136 137 22 22 synthetic
+--segment 137 139 22 24 copied
+--segment 139 140 24 24 synthetic
+--segment 140 339 22 24 synthetic
+--segment 339 340 17 18 copied
+--segment 340 384 22 24 synthetic
+--segment 384 412 28 29 synthetic
+--segment 412 413 28 28 synthetic
+--segment 413 414 28 29 copied
+--segment 414 415 29 29 synthetic
+--segment 415 603 28 29 synthetic
+--segment 603 639 29 30 synthetic
+--site 0 call=95,638 projection=413,414
+--clause binding=339,340 expression=137,139
+--error 12 13 invalid postfix comprehension; use an explicit parenthesized collection index, e.g. values[([for ...])]
+==== range
+return [for i in range(1, n) => i]
+----
+local __l3i_comp_34_error = error return (function() local __l3i_comp_7_out = {} local __l3i_comp_7_n = 0 local __l3i_comp_7_g0_r0 = (1) local __l3i_comp_7_g0_r1 = (n) local __l3i_comp_7_g0_r2 = 1 if __l3i_comp_7_g0_r2 == 0 then __l3i_comp_34_error("JSL range step must not be zero") end for i = __l3i_comp_7_g0_r0, __l3i_comp_7_g0_r1, __l3i_comp_7_g0_r2 do local __l3i_comp_7_value = (i) if __l3i_comp_7_value == nil then __l3i_comp_34_error("L3i comprehension projection produced nil; filter nil explicitly") end __l3i_comp_7_n += 1 __l3i_comp_7_out[__l3i_comp_7_n] = __l3i_comp_7_value end return __l3i_comp_7_out end)()
+--prelude 1
+--segment 0 34 7 34 synthetic
+--segment 34 41 0 7 copied
+--segment 41 133 7 34 synthetic
+--segment 133 134 23 23 synthetic
+--segment 134 135 23 24 copied
+--segment 135 136 24 24 synthetic
+--segment 136 164 23 24 synthetic
+--segment 164 165 26 26 synthetic
+--segment 165 166 26 27 copied
+--segment 166 167 27 27 synthetic
+--segment 167 292 26 27 synthetic
+--segment 292 293 12 13 copied
+--segment 293 358 26 27 synthetic
+--segment 358 385 32 33 synthetic
+--segment 385 386 32 32 synthetic
+--segment 386 387 32 33 copied
+--segment 387 388 33 33 synthetic
+--segment 388 593 32 33 synthetic
+--segment 593 623 33 34 synthetic
+--site 0 call=41,623 projection=386,387
+--clause binding=292,293 expression=41,41 range=133,136 range=164,167
+==== range_step
+return [for i in range(a, b, s) => i * 2]
+----
+local __l3i_comp_41_error = error return (function() local __l3i_comp_7_out = {} local __l3i_comp_7_n = 0 local __l3i_comp_7_g0_r0 = (a) local __l3i_comp_7_g0_r1 = (b) local __l3i_comp_7_g0_r2 = (s) if __l3i_comp_7_g0_r2 == 0 then __l3i_comp_41_error("JSL range step must not be zero") end for i = __l3i_comp_7_g0_r0, __l3i_comp_7_g0_r1, __l3i_comp_7_g0_r2 do local __l3i_comp_7_value = (i * 2) if __l3i_comp_7_value == nil then __l3i_comp_41_error("L3i comprehension projection produced nil; filter nil explicitly") end __l3i_comp_7_n += 1 __l3i_comp_7_out[__l3i_comp_7_n] = __l3i_comp_7_value end return __l3i_comp_7_out end)()
+--prelude 1
+--segment 0 34 7 41 synthetic
+--segment 34 41 0 7 copied
+--segment 41 133 7 41 synthetic
+--segment 133 134 23 23 synthetic
+--segment 134 135 23 24 copied
+--segment 135 136 24 24 synthetic
+--segment 136 164 23 24 synthetic
+--segment 164 165 26 26 synthetic
+--segment 165 166 26 27 copied
+--segment 166 167 27 27 synthetic
+--segment 167 195 26 27 synthetic
+--segment 195 196 29 29 synthetic
+--segment 196 197 29 30 copied
+--segment 197 198 30 30 synthetic
+--segment 198 294 29 30 synthetic
+--segment 294 295 12 13 copied
+--segment 295 360 29 30 synthetic
+--segment 360 387 35 40 synthetic
+--segment 387 388 35 35 synthetic
+--segment 388 393 35 40 copied
+--segment 393 394 40 40 synthetic
+--segment 394 599 35 40 synthetic
+--segment 599 629 40 41 synthetic
+--site 0 call=41,629 projection=388,393
+--clause binding=294,295 expression=41,41 range=133,136 range=164,167 range=195,198
+==== range_filtered
+return [for i in range(1, n) if i % 2 == 0 => i]
+----
+local __l3i_comp_48_error = error return (function() local __l3i_comp_7_out = {} local __l3i_comp_7_n = 0 local __l3i_comp_7_g0_r0 = (1) local __l3i_comp_7_g0_r1 = (n) local __l3i_comp_7_g0_r2 = 1 if __l3i_comp_7_g0_r2 == 0 then __l3i_comp_48_error("JSL range step must not be zero") end for i = __l3i_comp_7_g0_r0, __l3i_comp_7_g0_r1, __l3i_comp_7_g0_r2 do if (i % 2 == 0) then local __l3i_comp_7_value = (i) if __l3i_comp_7_value == nil then __l3i_comp_48_error("L3i comprehension projection produced nil; filter nil explicitly") end __l3i_comp_7_n += 1 __l3i_comp_7_out[__l3i_comp_7_n] = __l3i_comp_7_value end end return __l3i_comp_7_out end)()
+--prelude 1
+--segment 0 34 7 48 synthetic
+--segment 34 41 0 7 copied
+--segment 41 133 7 48 synthetic
+--segment 133 134 23 23 synthetic
+--segment 134 135 23 24 copied
+--segment 135 136 24 24 synthetic
+--segment 136 164 23 24 synthetic
+--segment 164 165 26 26 synthetic
+--segment 165 166 26 27 copied
+--segment 166 167 27 27 synthetic
+--segment 167 292 26 27 synthetic
+--segment 292 293 12 13 copied
+--segment 293 361 26 27 synthetic
+--segment 361 362 32 32 synthetic
+--segment 362 372 32 42 copied
+--segment 372 373 42 42 synthetic
+--segment 373 379 32 42 synthetic
+--segment 379 406 46 47 synthetic
+--segment 406 407 46 46 synthetic
+--segment 407 408 46 47 copied
+--segment 408 409 47 47 synthetic
+--segment 409 618 46 47 synthetic
+--segment 618 648 47 48 synthetic
+--site 0 call=41,648 projection=407,408
+--clause binding=292,293 expression=41,41 range=133,136 range=164,167
+--clause binding=41,41 expression=362,372
+==== range_count
+return #[for i in range(1, n) => i]
+----
+local __l3i_comp_35_error = error return #(function() local __l3i_comp_8_out = {} local __l3i_comp_8_n = 0 local __l3i_comp_8_g0_r0 = (1) local __l3i_comp_8_g0_r1 = (n) local __l3i_comp_8_g0_r2 = 1 if __l3i_comp_8_g0_r2 == 0 then __l3i_comp_35_error("JSL range step must not be zero") end for i = __l3i_comp_8_g0_r0, __l3i_comp_8_g0_r1, __l3i_comp_8_g0_r2 do local __l3i_comp_8_value = (i) if __l3i_comp_8_value == nil then __l3i_comp_35_error("L3i comprehension projection produced nil; filter nil explicitly") end __l3i_comp_8_n += 1 __l3i_comp_8_out[__l3i_comp_8_n] = __l3i_comp_8_value end return __l3i_comp_8_out end)()
+--prelude 1
+--segment 0 34 8 35 synthetic
+--segment 34 42 0 8 copied
+--segment 42 134 8 35 synthetic
+--segment 134 135 24 24 synthetic
+--segment 135 136 24 25 copied
+--segment 136 137 25 25 synthetic
+--segment 137 165 24 25 synthetic
+--segment 165 166 27 27 synthetic
+--segment 166 167 27 28 copied
+--segment 167 168 28 28 synthetic
+--segment 168 293 27 28 synthetic
+--segment 293 294 13 14 copied
+--segment 294 359 27 28 synthetic
+--segment 359 386 33 34 synthetic
+--segment 386 387 33 33 synthetic
+--segment 387 388 33 34 copied
+--segment 388 389 34 34 synthetic
+--segment 389 594 33 34 synthetic
+--segment 594 624 34 35 synthetic
+--site 0 call=42,624 projection=387,388
+--clause binding=293,294 expression=42,42 range=134,137 range=165,168
+==== range_sum
+return sum[for i in range(1, n, 2) => i]
+----
+local __l3i_comp_40_error = error return (function() local __l3i_comp_10_sum = 0 local __l3i_comp_10_g0_r0 = (1) local __l3i_comp_10_g0_r1 = (n) local __l3i_comp_10_g0_r2 = (2) if __l3i_comp_10_g0_r2 == 0 then __l3i_comp_40_error("JSL range step must not be zero") end for i = __l3i_comp_10_g0_r0, __l3i_comp_10_g0_r1, __l3i_comp_10_g0_r2 do local __l3i_comp_10_value = (i) if __l3i_comp_10_value == nil then __l3i_comp_40_error("L3i comprehension projection produced nil; filter nil explicitly") end __l3i_comp_10_sum += __l3i_comp_10_value end return __l3i_comp_10_sum end)()
+--prelude 1
+--segment 0 34 10 40 synthetic
+--segment 34 41 0 7 copied
+--segment 41 109 7 40 synthetic
+--segment 109 110 26 26 synthetic
+--segment 110 111 26 27 copied
+--segment 111 112 27 27 synthetic
+--segment 112 141 26 27 synthetic
+--segment 141 142 29 29 synthetic
+--segment 142 143 29 30 copied
+--segment 143 144 30 30 synthetic
+--segment 144 173 29 30 synthetic
+--segment 173 174 32 32 synthetic
+--segment 174 175 32 33 copied
+--segment 175 176 33 33 synthetic
+--segment 176 273 32 33 synthetic
+--segment 273 274 15 16 copied
+--segment 274 342 32 33 synthetic
+--segment 342 370 38 39 synthetic
+--segment 370 371 38 38 synthetic
+--segment 371 372 38 39 copied
+--segment 372 373 39 39 synthetic
+--segment 373 546 38 39 synthetic
+--segment 546 577 39 40 synthetic
+--site 0 call=41,577 projection=371,372
+--clause binding=273,274 expression=41,41 range=109,112 range=141,144 range=173,176
+==== enumerate
+return [for i, v in enumerate(xs) => i + v]
+----
+local __l3i_comp_43_error = error local __l3i_comp_43_table_create = table.create return (function() local __l3i_comp_7_g0_src = (xs) local __l3i_comp_7_g0_len = #__l3i_comp_7_g0_src local __l3i_comp_7_out = __l3i_comp_43_table_create(__l3i_comp_7_g0_len) :: typeof({}) for __l3i_comp_7_g0_i = 1, __l3i_comp_7_g0_len do local i, v = __l3i_comp_7_g0_i, __l3i_comp_7_g0_src[__l3i_comp_7_g0_i] local __l3i_comp_7_value = (i + v) if __l3i_comp_7_value == nil then __l3i_comp_43_error("L3i comprehension projection produced nil; filter nil explicitly") end __l3i_comp_7_out[__l3i_comp_7_g0_i] = __l3i_comp_7_value end return __l3i_comp_7_out end)()
+--prelude 2
+--segment 0 82 7 43 synthetic
+--segment 82 89 0 7 copied
+--segment 89 101 7 43 synthetic
+--segment 101 129 8 33 synthetic
+--segment 129 130 30 30 synthetic
+--segment 130 132 30 32 copied
+--segment 132 133 32 32 synthetic
+--segment 133 326 30 32 synthetic
+--segment 326 327 12 13 copied
+--segment 327 329 30 32 synthetic
+--segment 329 330 15 16 copied
+--segment 330 391 30 32 synthetic
+--segment 391 418 37 42 synthetic
+--segment 418 419 37 37 synthetic
+--segment 419 424 37 42 copied
+--segment 424 425 42 42 synthetic
+--segment 425 609 37 42 synthetic
+--segment 609 643 42 43 synthetic
+--site 0 call=89,643 projection=419,424
+--clause binding=326,327 binding=329,330 expression=130,132
+==== enumerate_filtered
+return [for i, v in enumerate(xs) if i > 1 => v]
+----
+local __l3i_comp_48_error = error local __l3i_comp_48_table_create = table.create return (function() local __l3i_comp_7_g0_src = (xs) local __l3i_comp_7_g0_len = #__l3i_comp_7_g0_src local __l3i_comp_7_out = __l3i_comp_48_table_create(__l3i_comp_7_g0_len) :: typeof({}) local __l3i_comp_7_n = 0 for __l3i_comp_7_g0_i = 1, __l3i_comp_7_g0_len do local i, v = __l3i_comp_7_g0_i, __l3i_comp_7_g0_src[__l3i_comp_7_g0_i] if (i > 1) then local __l3i_comp_7_value = (v) if __l3i_comp_7_value == nil then __l3i_comp_48_error("L3i comprehension projection produced nil; filter nil explicitly") end __l3i_comp_7_n += 1 __l3i_comp_7_out[__l3i_comp_7_n] = __l3i_comp_7_value end end return __l3i_comp_7_out end)()
+--prelude 2
+--segment 0 82 7 48 synthetic
+--segment 82 89 0 7 copied
+--segment 89 101 7 48 synthetic
+--segment 101 129 8 33 synthetic
+--segment 129 130 30 30 synthetic
+--segment 130 132 30 32 copied
+--segment 132 133 32 32 synthetic
+--segment 133 351 30 32 synthetic
+--segment 351 352 12 13 copied
+--segment 352 354 30 32 synthetic
+--segment 354 355 15 16 copied
+--segment 355 416 30 32 synthetic
+--segment 416 419 37 42 synthetic
+--segment 419 420 37 37 synthetic
+--segment 420 425 37 42 copied
+--segment 425 426 42 42 synthetic
+--segment 426 432 37 42 synthetic
+--segment 432 459 46 47 synthetic
+--segment 459 460 46 46 synthetic
+--segment 460 461 46 47 copied
+--segment 461 462 47 47 synthetic
+--segment 462 663 46 47 synthetic
+--segment 663 701 47 48 synthetic
+--site 0 call=89,701 projection=460,461
+--clause binding=351,352 binding=354,355 expression=130,132
+--clause binding=89,89 expression=420,425
+==== enumerate_sum
+return sum[for i, v in enumerate(xs) => i * v]
+----
+local __l3i_comp_46_error = error return (function() local __l3i_comp_10_g0_src = (xs) local __l3i_comp_10_g0_len = #__l3i_comp_10_g0_src local __l3i_comp_10_sum = 0 for __l3i_comp_10_g0_i = 1, __l3i_comp_10_g0_len do local i, v = __l3i_comp_10_g0_i, __l3i_comp_10_g0_src[__l3i_comp_10_g0_i] local __l3i_comp_10_value = (i * v) if __l3i_comp_10_value == nil then __l3i_comp_46_error("L3i comprehension projection produced nil; filter nil explicitly") end __l3i_comp_10_sum += __l3i_comp_10_value end return __l3i_comp_10_sum end)()
+--prelude 1
+--segment 0 34 10 46 synthetic
+--segment 34 41 0 7 copied
+--segment 41 53 7 46 synthetic
+--segment 53 82 11 36 synthetic
+--segment 82 83 33 33 synthetic
+--segment 83 85 33 35 copied
+--segment 85 86 35 35 synthetic
+--segment 86 224 33 35 synthetic
+--segment 224 225 15 16 copied
+--segment 225 227 33 35 synthetic
+--segment 227 228 18 19 copied
+--segment 228 292 33 35 synthetic
+--segment 292 320 40 45 synthetic
+--segment 320 321 40 40 synthetic
+--segment 321 326 40 45 copied
+--segment 326 327 45 45 synthetic
+--segment 327 496 40 45 synthetic
+--segment 496 531 45 46 synthetic
+--site 0 call=41,531 projection=321,326
+--clause binding=224,225 binding=227,228 expression=83,85
+==== zip_shortest
+return [for a, b in zipShortest(xs, ys) => a + b]
+----
+local __l3i_comp_49_error = error local __l3i_comp_49_table_create = table.create return (function() local __l3i_comp_7_g0_src0 = (xs) local __l3i_comp_7_g0_len0 = #__l3i_comp_7_g0_src0 local __l3i_comp_7_g0_src1 = (ys) local __l3i_comp_7_g0_len1 = #__l3i_comp_7_g0_src1 local __l3i_comp_7_g0_n = __l3i_comp_7_g0_len0 if __l3i_comp_7_g0_len1 < __l3i_comp_7_g0_n then __l3i_comp_7_g0_n = __l3i_comp_7_g0_len1 end local __l3i_comp_7_out = __l3i_comp_49_table_create(__l3i_comp_7_g0_n) :: typeof({}) for __l3i_comp_7_g0_i = 1, __l3i_comp_7_g0_n do local a, b = __l3i_comp_7_g0_src0[__l3i_comp_7_g0_i], __l3i_comp_7_g0_src1[__l3i_comp_7_g0_i] local __l3i_comp_7_value = (a + b) if __l3i_comp_7_value == nil then __l3i_comp_49_error("L3i comprehension projection produced nil; filter nil explicitly") end __l3i_comp_7_out[__l3i_comp_7_g0_i] = __l3i_comp_7_value end return __l3i_comp_7_out end)()
+--prelude 2
+--segment 0 82 7 49 synthetic
+--segment 82 89 0 7 copied
+--segment 89 101 7 49 synthetic
+--segment 101 130 8 39 synthetic
+--segment 130 131 32 32 synthetic
+--segment 131 133 32 34 copied
+--segment 133 134 34 34 synthetic
+--segment 134 215 32 34 synthetic
+--segment 215 216 36 36 synthetic
+--segment 216 218 36 38 copied
+--segment 218 219 38 38 synthetic
+--segment 219 551 36 38 synthetic
+--segment 551 552 12 13 copied
+--segment 552 554 36 38 synthetic
+--segment 554 555 15 16 copied
+--segment 555 639 36 38 synthetic
+--segment 639 666 43 48 synthetic
+--segment 666 667 43 43 synthetic
+--segment 667 672 43 48 copied
+--segment 672 673 48 48 synthetic
+--segment 673 857 43 48 synthetic
+--segment 857 891 48 49 synthetic
+--site 0 call=89,891 projection=667,672
+--clause binding=551,552 binding=554,555 expression=89,89 zip=130,134 zip=215,219
+==== zip_three
+return [for a, b, c in zipShortest(xs, ys, zs) => a + b + c]
+----
+local __l3i_comp_60_error = error local __l3i_comp_60_table_create = table.create return (function() local __l3i_comp_7_g0_src0 = (xs) local __l3i_comp_7_g0_len0 = #__l3i_comp_7_g0_src0 local __l3i_comp_7_g0_src1 = (ys) local __l3i_comp_7_g0_len1 = #__l3i_comp_7_g0_src1 local __l3i_comp_7_g0_src2 = (zs) local __l3i_comp_7_g0_len2 = #__l3i_comp_7_g0_src2 local __l3i_comp_7_g0_n = __l3i_comp_7_g0_len0 if __l3i_comp_7_g0_len1 < __l3i_comp_7_g0_n then __l3i_comp_7_g0_n = __l3i_comp_7_g0_len1 end if __l3i_comp_7_g0_len2 < __l3i_comp_7_g0_n then __l3i_comp_7_g0_n = __l3i_comp_7_g0_len2 end local __l3i_comp_7_out = __l3i_comp_60_table_create(__l3i_comp_7_g0_n) :: typeof({}) for __l3i_comp_7_g0_i = 1, __l3i_comp_7_g0_n do local a, b, c = __l3i_comp_7_g0_src0[__l3i_comp_7_g0_i], __l3i_comp_7_g0_src1[__l3i_comp_7_g0_i], __l3i_comp_7_g0_src2[__l3i_comp_7_g0_i] local __l3i_comp_7_value = (a + b + c) if __l3i_comp_7_value == nil then __l3i_comp_60_error("L3i comprehension projection produced nil; filter nil explicitly") end __l3i_comp_7_out[__l3i_comp_7_g0_i] = __l3i_comp_7_value end return __l3i_comp_7_out end)()
+--prelude 2
+--segment 0 82 7 60 synthetic
+--segment 82 89 0 7 copied
+--segment 89 101 7 60 synthetic
+--segment 101 130 8 46 synthetic
+--segment 130 131 35 35 synthetic
+--segment 131 133 35 37 copied
+--segment 133 134 37 37 synthetic
+--segment 134 215 35 37 synthetic
+--segment 215 216 39 39 synthetic
+--segment 216 218 39 41 copied
+--segment 218 219 41 41 synthetic
+--segment 219 300 39 41 synthetic
+--segment 300 301 43 43 synthetic
+--segment 301 303 43 45 copied
+--segment 303 304 45 45 synthetic
+--segment 304 730 43 45 synthetic
+--segment 730 731 12 13 copied
+--segment 731 733 43 45 synthetic
+--segment 733 734 15 16 copied
+--segment 734 736 43 45 synthetic
+--segment 736 737 18 19 copied
+--segment 737 862 43 45 synthetic
+--segment 862 889 50 59 synthetic
+--segment 889 890 50 50 synthetic
+--segment 890 899 50 59 copied
+--segment 899 900 59 59 synthetic
+--segment 900 1084 50 59 synthetic
+--segment 1084 1118 59 60 synthetic
+--site 0 call=89,1118 projection=890,899
+--clause binding=730,731 binding=733,734 binding=736,737 expression=89,89 zip=130,134 zip=215,219 zip=300,304
+==== zip_strict
+return [for a, b in zipStrict(xs, ys) => a * b]
+----
+local __l3i_comp_47_error = error local __l3i_comp_47_table_create = table.create return (function() local __l3i_comp_7_g0_src0 = (xs) local __l3i_comp_7_g0_len0 = #__l3i_comp_7_g0_src0 local __l3i_comp_7_g0_src1 = (ys) local __l3i_comp_7_g0_len1 = #__l3i_comp_7_g0_src1 local __l3i_comp_7_g0_n = __l3i_comp_7_g0_len0 if __l3i_comp_7_g0_len1 < __l3i_comp_7_g0_n then __l3i_comp_7_g0_n = __l3i_comp_7_g0_len1 end if __l3i_comp_7_g0_len1 ~= __l3i_comp_7_g0_n then __l3i_comp_47_error("JSL zipStrict inputs must have equal lengths") end local __l3i_comp_7_out = __l3i_comp_47_table_create(__l3i_comp_7_g0_n) :: typeof({}) for __l3i_comp_7_g0_i = 1, __l3i_comp_7_g0_n do local a, b = __l3i_comp_7_g0_src0[__l3i_comp_7_g0_i], __l3i_comp_7_g0_src1[__l3i_comp_7_g0_i] local __l3i_comp_7_value = (a * b) if __l3i_comp_7_value == nil then __l3i_comp_47_error("L3i comprehension projection produced nil; filter nil explicitly") end __l3i_comp_7_out[__l3i_comp_7_g0_i] = __l3i_comp_7_value end return __l3i_comp_7_out end)()
+--prelude 2
+--segment 0 82 7 47 synthetic
+--segment 82 89 0 7 copied
+--segment 89 101 7 47 synthetic
+--segment 101 130 8 37 synthetic
+--segment 130 131 30 30 synthetic
+--segment 131 133 30 32 copied
+--segment 133 134 32 32 synthetic
+--segment 134 215 30 32 synthetic
+--segment 215 216 34 34 synthetic
+--segment 216 218 34 36 copied
+--segment 218 219 36 36 synthetic
+--segment 219 673 34 36 synthetic
+--segment 673 674 12 13 copied
+--segment 674 676 34 36 synthetic
+--segment 676 677 15 16 copied
+--segment 677 761 34 36 synthetic
+--segment 761 788 41 46 synthetic
+--segment 788 789 41 41 synthetic
+--segment 789 794 41 46 copied
+--segment 794 795 46 46 synthetic
+--segment 795 979 41 46 synthetic
+--segment 979 1013 46 47 synthetic
+--site 0 call=89,1013 projection=789,794
+--clause binding=673,674 binding=676,677 expression=89,89 zip=130,134 zip=215,219
+==== zip_filtered_sum
+return sum[for a, b in zipStrict(xs, ys) if a > b => a - b]
+----
+local __l3i_comp_59_error = error return (function() local __l3i_comp_10_g0_src0 = (xs) local __l3i_comp_10_g0_len0 = #__l3i_comp_10_g0_src0 local __l3i_comp_10_g0_src1 = (ys) local __l3i_comp_10_g0_len1 = #__l3i_comp_10_g0_src1 local __l3i_comp_10_g0_n = __l3i_comp_10_g0_len0 if __l3i_comp_10_g0_len1 < __l3i_comp_10_g0_n then __l3i_comp_10_g0_n = __l3i_comp_10_g0_len1 end if __l3i_comp_10_g0_len1 ~= __l3i_comp_10_g0_n then __l3i_comp_59_error("JSL zipStrict inputs must have equal lengths") end local __l3i_comp_10_sum = 0 for __l3i_comp_10_g0_i = 1, __l3i_comp_10_g0_n do local a, b = __l3i_comp_10_g0_src0[__l3i_comp_10_g0_i], __l3i_comp_10_g0_src1[__l3i_comp_10_g0_i] if (a > b) then local __l3i_comp_10_value = (a - b) if __l3i_comp_10_value == nil then __l3i_comp_59_error("L3i comprehension projection produced nil; filter nil explicitly") end __l3i_comp_10_sum += __l3i_comp_10_value end end return __l3i_comp_10_sum end)()
+--prelude 1
+--segment 0 34 10 59 synthetic
+--segment 34 41 0 7 copied
+--segment 41 53 7 59 synthetic
+--segment 53 83 11 40 synthetic
+--segment 83 84 33 33 synthetic
+--segment 84 86 33 35 copied
+--segment 86 87 35 35 synthetic
+--segment 87 171 33 35 synthetic
+--segment 171 172 37 37 synthetic
+--segment 172 174 37 39 copied
+--segment 174 175 39 39 synthetic
+--segment 175 584 37 39 synthetic
+--segment 584 585 15 16 copied
+--segment 585 587 37 39 synthetic
+--segment 587 588 18 19 copied
+--segment 588 676 37 39 synthetic
+--segment 676 679 44 49 synthetic
+--segment 679 680 44 44 synthetic
+--segment 680 685 44 49 copied
+--segment 685 686 49 49 synthetic
+--segment 686 692 44 49 synthetic
+--segment 692 720 53 58 synthetic
+--segment 720 721 53 53 synthetic
+--segment 721 726 53 58 copied
+--segment 726 727 58 58 synthetic
+--segment 727 896 53 58 synthetic
+--segment 896 935 58 59 synthetic
+--site 0 call=41,935 projection=721,726
+--clause binding=584,585 binding=587,588 expression=41,41 zip=83,87 zip=171,175
+--clause binding=41,41 expression=680,685
+==== zip_count
+return #[for a, b in zipShortest(xs, ys) => a]
+----
+local __l3i_comp_46_error = error local __l3i_comp_46_table_create = table.create return #(function() local __l3i_comp_8_g0_src0 = (xs) local __l3i_comp_8_g0_len0 = #__l3i_comp_8_g0_src0 local __l3i_comp_8_g0_src1 = (ys) local __l3i_comp_8_g0_len1 = #__l3i_comp_8_g0_src1 local __l3i_comp_8_g0_n = __l3i_comp_8_g0_len0 if __l3i_comp_8_g0_len1 < __l3i_comp_8_g0_n then __l3i_comp_8_g0_n = __l3i_comp_8_g0_len1 end local __l3i_comp_8_out = __l3i_comp_46_table_create(__l3i_comp_8_g0_n) :: typeof({}) for __l3i_comp_8_g0_i = 1, __l3i_comp_8_g0_n do local a, b = __l3i_comp_8_g0_src0[__l3i_comp_8_g0_i], __l3i_comp_8_g0_src1[__l3i_comp_8_g0_i] local __l3i_comp_8_value = (a) if __l3i_comp_8_value == nil then __l3i_comp_46_error("L3i comprehension projection produced nil; filter nil explicitly") end __l3i_comp_8_out[__l3i_comp_8_g0_i] = __l3i_comp_8_value end return __l3i_comp_8_out end)()
+--prelude 2
+--segment 0 82 8 46 synthetic
+--segment 82 90 0 8 copied
+--segment 90 102 8 46 synthetic
+--segment 102 131 9 40 synthetic
+--segment 131 132 33 33 synthetic
+--segment 132 134 33 35 copied
+--segment 134 135 35 35 synthetic
+--segment 135 216 33 35 synthetic
+--segment 216 217 37 37 synthetic
+--segment 217 219 37 39 copied
+--segment 219 220 39 39 synthetic
+--segment 220 552 37 39 synthetic
+--segment 552 553 13 14 copied
+--segment 553 555 37 39 synthetic
+--segment 555 556 16 17 copied
+--segment 556 640 37 39 synthetic
+--segment 640 667 44 45 synthetic
+--segment 667 668 44 44 synthetic
+--segment 668 669 44 45 copied
+--segment 669 670 45 45 synthetic
+--segment 670 854 44 45 synthetic
+--segment 854 888 45 46 synthetic
+--site 0 call=90,888 projection=668,669
+--clause binding=552,553 binding=555,556 expression=90,90 zip=131,135 zip=216,220
+==== slice_generator
+return [for x in xs[first:last] => x]
+----
+local __l3i_comp_37_error = error local __l3i_comp_37_typeof = typeof local __l3i_comp_37_table_create = table.create return (function() local __l3i_comp_7_g0_src = (xs) local __l3i_comp_7_g0_first = (first) local __l3i_comp_7_g0_last = (last) local __l3i_comp_7_g0_kind = __l3i_comp_37_typeof(__l3i_comp_7_g0_src) if __l3i_comp_7_g0_kind ~= "table" then __l3i_comp_37_error("JSL comprehension slice source must be a table") end if __l3i_comp_37_typeof(__l3i_comp_7_g0_first) ~= "number" or __l3i_comp_7_g0_first % 1 ~= 0 then __l3i_comp_37_error("JSL slice first bound must be a finite integer") end if __l3i_comp_37_typeof(__l3i_comp_7_g0_last) ~= "number" or __l3i_comp_7_g0_last % 1 ~= 0 then __l3i_comp_37_error("JSL slice last bound must be a finite integer") end local __l3i_comp_7_g0_len = #__l3i_comp_7_g0_src if __l3i_comp_7_g0_first < 1 then __l3i_comp_7_g0_first = 1 end if __l3i_comp_7_g0_last > __l3i_comp_7_g0_len then __l3i_comp_7_g0_last = __l3i_comp_7_g0_len end local __l3i_comp_7_g0_n = 0 if __l3i_comp_7_g0_last >= __l3i_comp_7_g0_first then __l3i_comp_7_g0_n = __l3i_comp_7_g0_last - __l3i_comp_7_g0_first + 1 end local __l3i_comp_7_out = __l3i_comp_37_table_create(__l3i_comp_7_g0_n) :: typeof({}) local __l3i_comp_7_n = 0 for __l3i_comp_7_g0_i = __l3i_comp_7_g0_first, __l3i_comp_7_g0_last do local x = __l3i_comp_7_g0_src[__l3i_comp_7_g0_i] local __l3i_comp_7_value = (x) if __l3i_comp_7_value == nil then __l3i_comp_37_error("L3i comprehension projection produced nil; filter nil explicitly") end __l3i_comp_7_n += 1 __l3i_comp_7_out[__l3i_comp_7_n] = __l3i_comp_7_value end return __l3i_comp_7_out end)()
+--prelude 3
+--segment 0 118 7 37 synthetic
+--segment 118 125 0 7 copied
+--segment 125 137 7 37 synthetic
+--segment 137 165 8 31 synthetic
+--segment 165 166 17 17 synthetic
+--segment 166 168 17 19 copied
+--segment 168 169 19 19 synthetic
+--segment 169 200 17 19 synthetic
+--segment 200 201 20 20 synthetic
+--segment 201 206 20 25 copied
+--segment 206 207 25 25 synthetic
+--segment 207 237 20 25 synthetic
+--segment 237 238 26 26 synthetic
+--segment 238 242 26 30 copied
+--segment 242 243 30 30 synthetic
+--segment 243 244 26 30 synthetic
+--segment 244 429 17 19 synthetic
+--segment 429 601 20 25 synthetic
+--segment 601 1323 26 30 synthetic
+--segment 1323 1324 12 13 copied
+--segment 1324 1366 26 30 synthetic
+--segment 1366 1393 35 36 synthetic
+--segment 1393 1394 35 35 synthetic
+--segment 1394 1395 35 36 copied
+--segment 1395 1396 36 36 synthetic
+--segment 1396 1601 35 36 synthetic
+--segment 1601 1631 36 37 synthetic
+--site 0 call=125,1631 projection=1394,1395
+--clause binding=1323,1324 expression=125,125 sliceSource=165,169 sliceFirst=200,207 sliceLast=237,243
+==== slice_generator_filtered
+return [for x in xs[first:last] if p(x) => f(x)]
+----
+local __l3i_comp_48_error = error local __l3i_comp_48_typeof = typeof local __l3i_comp_48_table_create = table.create return (function() local __l3i_comp_7_g0_src = (xs) local __l3i_comp_7_g0_first = (first) local __l3i_comp_7_g0_last = (last) local __l3i_comp_7_g0_kind = __l3i_comp_48_typeof(__l3i_comp_7_g0_src) if __l3i_comp_7_g0_kind ~= "table" then __l3i_comp_48_error("JSL comprehension slice source must be a table") end if __l3i_comp_48_typeof(__l3i_comp_7_g0_first) ~= "number" or __l3i_comp_7_g0_first % 1 ~= 0 then __l3i_comp_48_error("JSL slice first bound must be a finite integer") end if __l3i_comp_48_typeof(__l3i_comp_7_g0_last) ~= "number" or __l3i_comp_7_g0_last % 1 ~= 0 then __l3i_comp_48_error("JSL slice last bound must be a finite integer") end local __l3i_comp_7_g0_len = #__l3i_comp_7_g0_src if __l3i_comp_7_g0_first < 1 then __l3i_comp_7_g0_first = 1 end if __l3i_comp_7_g0_last > __l3i_comp_7_g0_len then __l3i_comp_7_g0_last = __l3i_comp_7_g0_len end local __l3i_comp_7_g0_n = 0 if __l3i_comp_7_g0_last >= __l3i_comp_7_g0_first then __l3i_comp_7_g0_n = __l3i_comp_7_g0_last - __l3i_comp_7_g0_first + 1 end local __l3i_comp_7_out = __l3i_comp_48_table_create(__l3i_comp_7_g0_n) :: typeof({}) local __l3i_comp_7_n = 0 for __l3i_comp_7_g0_i = __l3i_comp_7_g0_first, __l3i_comp_7_g0_last do local x = __l3i_comp_7_g0_src[__l3i_comp_7_g0_i] if (p(x)) then local __l3i_comp_7_value = (f(x)) if __l3i_comp_7_value == nil then __l3i_comp_48_error("L3i comprehension projection produced nil; filter nil explicitly") end __l3i_comp_7_n += 1 __l3i_comp_7_out[__l3i_comp_7_n] = __l3i_comp_7_value end end return __l3i_comp_7_out end)()
+--prelude 3
+--segment 0 118 7 48 synthetic
+--segment 118 125 0 7 copied
+--segment 125 137 7 48 synthetic
+--segment 137 165 8 31 synthetic
+--segment 165 166 17 17 synthetic
+--segment 166 168 17 19 copied
+--segment 168 169 19 19 synthetic
+--segment 169 200 17 19 synthetic
+--segment 200 201 20 20 synthetic
+--segment 201 206 20 25 copied
+--segment 206 207 25 25 synthetic
+--segment 207 237 20 25 synthetic
+--segment 237 238 26 26 synthetic
+--segment 238 242 26 30 copied
+--segment 242 243 30 30 synthetic
+--segment 243 244 26 30 synthetic
+--segment 244 429 17 19 synthetic
+--segment 429 601 20 25 synthetic
+--segment 601 1323 26 30 synthetic
+--segment 1323 1324 12 13 copied
+--segment 1324 1369 26 30 synthetic
+--segment 1369 1370 35 35 synthetic
+--segment 1370 1374 35 39 copied
+--segment 1374 1375 39 39 synthetic
+--segment 1375 1381 35 39 synthetic
+--segment 1381 1408 43 47 synthetic
+--segment 1408 1409 43 43 synthetic
+--segment 1409 1413 43 47 copied
+--segment 1413 1414 47 47 synthetic
+--segment 1414 1623 43 47 synthetic
+--segment 1623 1653 47 48 synthetic
+--site 0 call=125,1653 projection=1409,1413
+--clause binding=1323,1324 expression=125,125 sliceSource=165,169 sliceFirst=200,207 sliceLast=237,243
+--clause binding=125,125 expression=1370,1374
+==== slice_generator_count
+return #[for x in xs[2:limit] => x]
+----
+local __l3i_comp_35_error = error local __l3i_comp_35_typeof = typeof local __l3i_comp_35_table_create = table.create return #(function() local __l3i_comp_8_g0_src = (xs) local __l3i_comp_8_g0_first = (2) local __l3i_comp_8_g0_last = (limit) local __l3i_comp_8_g0_kind = __l3i_comp_35_typeof(__l3i_comp_8_g0_src) if __l3i_comp_8_g0_kind ~= "table" then __l3i_comp_35_error("JSL comprehension slice source must be a table") end if __l3i_comp_35_typeof(__l3i_comp_8_g0_first) ~= "number" or __l3i_comp_8_g0_first % 1 ~= 0 then __l3i_comp_35_error("JSL slice first bound must be a finite integer") end if __l3i_comp_35_typeof(__l3i_comp_8_g0_last) ~= "number" or __l3i_comp_8_g0_last % 1 ~= 0 then __l3i_comp_35_error("JSL slice last bound must be a finite integer") end local __l3i_comp_8_g0_len = #__l3i_comp_8_g0_src if __l3i_comp_8_g0_first < 1 then __l3i_comp_8_g0_first = 1 end if __l3i_comp_8_g0_last > __l3i_comp_8_g0_len then __l3i_comp_8_g0_last = __l3i_comp_8_g0_len end local __l3i_comp_8_g0_n = 0 if __l3i_comp_8_g0_last >= __l3i_comp_8_g0_first then __l3i_comp_8_g0_n = __l3i_comp_8_g0_last - __l3i_comp_8_g0_first + 1 end local __l3i_comp_8_out = __l3i_comp_35_table_create(__l3i_comp_8_g0_n) :: typeof({}) local __l3i_comp_8_n = 0 for __l3i_comp_8_g0_i = __l3i_comp_8_g0_first, __l3i_comp_8_g0_last do local x = __l3i_comp_8_g0_src[__l3i_comp_8_g0_i] local __l3i_comp_8_value = (x) if __l3i_comp_8_value == nil then __l3i_comp_35_error("L3i comprehension projection produced nil; filter nil explicitly") end __l3i_comp_8_n += 1 __l3i_comp_8_out[__l3i_comp_8_n] = __l3i_comp_8_value end return __l3i_comp_8_out end)()
+--prelude 3
+--segment 0 118 8 35 synthetic
+--segment 118 126 0 8 copied
+--segment 126 138 8 35 synthetic
+--segment 138 166 9 29 synthetic
+--segment 166 167 18 18 synthetic
+--segment 167 169 18 20 copied
+--segment 169 170 20 20 synthetic
+--segment 170 201 18 20 synthetic
+--segment 201 202 21 21 synthetic
+--segment 202 203 21 22 copied
+--segment 203 204 22 22 synthetic
+--segment 204 234 21 22 synthetic
+--segment 234 235 23 23 synthetic
+--segment 235 240 23 28 copied
+--segment 240 241 28 28 synthetic
+--segment 241 242 23 28 synthetic
+--segment 242 427 18 20 synthetic
+--segment 427 599 21 22 synthetic
+--segment 599 1321 23 28 synthetic
+--segment 1321 1322 13 14 copied
+--segment 1322 1364 23 28 synthetic
+--segment 1364 1391 33 34 synthetic
+--segment 1391 1392 33 33 synthetic
+--segment 1392 1393 33 34 copied
+--segment 1393 1394 34 34 synthetic
+--segment 1394 1599 33 34 synthetic
+--segment 1599 1629 34 35 synthetic
+--site 0 call=126,1629 projection=1392,1393
+--clause binding=1321,1322 expression=126,126 sliceSource=166,170 sliceFirst=201,204 sliceLast=234,241
+==== slice_generator_sum
+return sum[for x in xs[a:b] if x > 0 => x]
+----
+local __l3i_comp_42_error = error local __l3i_comp_42_typeof = typeof return (function() local __l3i_comp_10_g0_src = (xs) local __l3i_comp_10_g0_first = (a) local __l3i_comp_10_g0_last = (b) local __l3i_comp_10_g0_kind = __l3i_comp_42_typeof(__l3i_comp_10_g0_src) if __l3i_comp_10_g0_kind ~= "table" then __l3i_comp_42_error("JSL comprehension slice source must be a table") end if __l3i_comp_42_typeof(__l3i_comp_10_g0_first) ~= "number" or __l3i_comp_10_g0_first % 1 ~= 0 then __l3i_comp_42_error("JSL slice first bound must be a finite integer") end if __l3i_comp_42_typeof(__l3i_comp_10_g0_last) ~= "number" or __l3i_comp_10_g0_last % 1 ~= 0 then __l3i_comp_42_error("JSL slice last bound must be a finite integer") end local __l3i_comp_10_g0_len = #__l3i_comp_10_g0_src if __l3i_comp_10_g0_first < 1 then __l3i_comp_10_g0_first = 1 end if __l3i_comp_10_g0_last > __l3i_comp_10_g0_len then __l3i_comp_10_g0_last = __l3i_comp_10_g0_len end local __l3i_comp_10_g0_n = 0 if __l3i_comp_10_g0_last >= __l3i_comp_10_g0_first then __l3i_comp_10_g0_n = __l3i_comp_10_g0_last - __l3i_comp_10_g0_first + 1 end local __l3i_comp_10_sum = 0 for __l3i_comp_10_g0_i = __l3i_comp_10_g0_first, __l3i_comp_10_g0_last do local x = __l3i_comp_10_g0_src[__l3i_comp_10_g0_i] if (x > 0) then local __l3i_comp_10_value = (x) if __l3i_comp_10_value == nil then __l3i_comp_42_error("L3i comprehension projection produced nil; filter nil explicitly") end __l3i_comp_10_sum += __l3i_comp_10_value end end return __l3i_comp_10_sum end)()
+--prelude 2
+--segment 0 70 10 42 synthetic
+--segment 70 77 0 7 copied
+--segment 77 89 7 42 synthetic
+--segment 89 118 11 27 synthetic
+--segment 118 119 20 20 synthetic
+--segment 119 121 20 22 copied
+--segment 121 122 22 22 synthetic
+--segment 122 154 20 22 synthetic
+--segment 154 155 23 23 synthetic
+--segment 155 156 23 24 copied
+--segment 156 157 24 24 synthetic
+--segment 157 188 23 24 synthetic
+--segment 188 189 25 25 synthetic
+--segment 189 190 25 26 copied
+--segment 190 191 26 26 synthetic
+--segment 191 192 25 26 synthetic
+--segment 192 380 20 22 synthetic
+--segment 380 554 23 24 synthetic
+--segment 554 1213 25 26 synthetic
+--segment 1213 1214 15 16 copied
+--segment 1214 1261 25 26 synthetic
+--segment 1261 1262 31 31 synthetic
+--segment 1262 1267 31 36 copied
+--segment 1267 1268 36 36 synthetic
+--segment 1268 1274 31 36 synthetic
+--segment 1274 1302 40 41 synthetic
+--segment 1302 1303 40 40 synthetic
+--segment 1303 1304 40 41 copied
+--segment 1304 1305 41 41 synthetic
+--segment 1305 1482 40 41 synthetic
+--segment 1482 1513 41 42 synthetic
+--site 0 call=77,1513 projection=1303,1304
+--clause binding=1213,1214 expression=77,77 sliceSource=118,122 sliceFirst=154,157 sliceLast=188,191
+--clause binding=77,77 expression=1262,1267
+==== slice_generator_call_source
+return [for x in source()[2:4] => x * 2]
+----
+local __l3i_comp_40_error = error local __l3i_comp_40_typeof = typeof local __l3i_comp_40_table_create = table.create return (function() local __l3i_comp_7_g0_src = (source()) local __l3i_comp_7_g0_first = (2) local __l3i_comp_7_g0_last = (4) local __l3i_comp_7_g0_kind = __l3i_comp_40_typeof(__l3i_comp_7_g0_src) if __l3i_comp_7_g0_kind ~= "table" then __l3i_comp_40_error("JSL comprehension slice source must be a table") end if __l3i_comp_40_typeof(__l3i_comp_7_g0_first) ~= "number" or __l3i_comp_7_g0_first % 1 ~= 0 then __l3i_comp_40_error("JSL slice first bound must be a finite integer") end if __l3i_comp_40_typeof(__l3i_comp_7_g0_last) ~= "number" or __l3i_comp_7_g0_last % 1 ~= 0 then __l3i_comp_40_error("JSL slice last bound must be a finite integer") end local __l3i_comp_7_g0_len = #__l3i_comp_7_g0_src if __l3i_comp_7_g0_first < 1 then __l3i_comp_7_g0_first = 1 end if __l3i_comp_7_g0_last > __l3i_comp_7_g0_len then __l3i_comp_7_g0_last = __l3i_comp_7_g0_len end local __l3i_comp_7_g0_n = 0 if __l3i_comp_7_g0_last >= __l3i_comp_7_g0_first then __l3i_comp_7_g0_n = __l3i_comp_7_g0_last - __l3i_comp_7_g0_first + 1 end local __l3i_comp_7_out = __l3i_comp_40_table_create(__l3i_comp_7_g0_n) :: typeof({}) local __l3i_comp_7_n = 0 for __l3i_comp_7_g0_i = __l3i_comp_7_g0_first, __l3i_comp_7_g0_last do local x = __l3i_comp_7_g0_src[__l3i_comp_7_g0_i] local __l3i_comp_7_value = (x * 2) if __l3i_comp_7_value == nil then __l3i_comp_40_error("L3i comprehension projection produced nil; filter nil explicitly") end __l3i_comp_7_n += 1 __l3i_comp_7_out[__l3i_comp_7_n] = __l3i_comp_7_value end return __l3i_comp_7_out end)()
+--prelude 3
+--segment 0 118 7 40 synthetic
+--segment 118 125 0 7 copied
+--segment 125 137 7 40 synthetic
+--segment 137 165 8 30 synthetic
+--segment 165 166 17 17 synthetic
+--segment 166 174 17 25 copied
+--segment 174 175 25 25 synthetic
+--segment 175 206 17 25 synthetic
+--segment 206 207 26 26 synthetic
+--segment 207 208 26 27 copied
+--segment 208 209 27 27 synthetic
+--segment 209 239 26 27 synthetic
+--segment 239 240 28 28 synthetic
+--segment 240 241 28 29 copied
+--segment 241 242 29 29 synthetic
+--segment 242 243 28 29 synthetic
+--segment 243 428 17 25 synthetic
+--segment 428 600 26 27 synthetic
+--segment 600 1322 28 29 synthetic
+--segment 1322 1323 12 13 copied
+--segment 1323 1365 28 29 synthetic
+--segment 1365 1392 34 39 synthetic
+--segment 1392 1393 34 34 synthetic
+--segment 1393 1398 34 39 copied
+--segment 1398 1399 39 39 synthetic
+--segment 1399 1604 34 39 synthetic
+--segment 1604 1634 39 40 synthetic
+--site 0 call=125,1634 projection=1393,1398
+--clause binding=1322,1323 expression=125,125 sliceSource=165,175 sliceFirst=206,209 sliceLast=239,242
+==== slice_generator_parenthesized_bounds
+return [for x in xs[(first()):(last())] => x]
+----
+local __l3i_comp_45_error = error local __l3i_comp_45_typeof = typeof local __l3i_comp_45_table_create = table.create return (function() local __l3i_comp_7_g0_src = (xs) local __l3i_comp_7_g0_first = ((first())) local __l3i_comp_7_g0_last = ((last())) local __l3i_comp_7_g0_kind = __l3i_comp_45_typeof(__l3i_comp_7_g0_src) if __l3i_comp_7_g0_kind ~= "table" then __l3i_comp_45_error("JSL comprehension slice source must be a table") end if __l3i_comp_45_typeof(__l3i_comp_7_g0_first) ~= "number" or __l3i_comp_7_g0_first % 1 ~= 0 then __l3i_comp_45_error("JSL slice first bound must be a finite integer") end if __l3i_comp_45_typeof(__l3i_comp_7_g0_last) ~= "number" or __l3i_comp_7_g0_last % 1 ~= 0 then __l3i_comp_45_error("JSL slice last bound must be a finite integer") end local __l3i_comp_7_g0_len = #__l3i_comp_7_g0_src if __l3i_comp_7_g0_first < 1 then __l3i_comp_7_g0_first = 1 end if __l3i_comp_7_g0_last > __l3i_comp_7_g0_len then __l3i_comp_7_g0_last = __l3i_comp_7_g0_len end local __l3i_comp_7_g0_n = 0 if __l3i_comp_7_g0_last >= __l3i_comp_7_g0_first then __l3i_comp_7_g0_n = __l3i_comp_7_g0_last - __l3i_comp_7_g0_first + 1 end local __l3i_comp_7_out = __l3i_comp_45_table_create(__l3i_comp_7_g0_n) :: typeof({}) local __l3i_comp_7_n = 0 for __l3i_comp_7_g0_i = __l3i_comp_7_g0_first, __l3i_comp_7_g0_last do local x = __l3i_comp_7_g0_src[__l3i_comp_7_g0_i] local __l3i_comp_7_value = (x) if __l3i_comp_7_value == nil then __l3i_comp_45_error("L3i comprehension projection produced nil; filter nil explicitly") end __l3i_comp_7_n += 1 __l3i_comp_7_out[__l3i_comp_7_n] = __l3i_comp_7_value end return __l3i_comp_7_out end)()
+--prelude 3
+--segment 0 118 7 45 synthetic
+--segment 118 125 0 7 copied
+--segment 125 137 7 45 synthetic
+--segment 137 165 8 39 synthetic
+--segment 165 166 17 17 synthetic
+--segment 166 168 17 19 copied
+--segment 168 169 19 19 synthetic
+--segment 169 200 17 19 synthetic
+--segment 200 201 20 20 synthetic
+--segment 201 210 20 29 copied
+--segment 210 211 29 29 synthetic
+--segment 211 241 20 29 synthetic
+--segment 241 242 30 30 synthetic
+--segment 242 250 30 38 copied
+--segment 250 251 38 38 synthetic
+--segment 251 252 30 38 synthetic
+--segment 252 437 17 19 synthetic
+--segment 437 609 20 29 synthetic
+--segment 609 1331 30 38 synthetic
+--segment 1331 1332 12 13 copied
+--segment 1332 1374 30 38 synthetic
+--segment 1374 1401 43 44 synthetic
+--segment 1401 1402 43 43 synthetic
+--segment 1402 1403 43 44 copied
+--segment 1403 1404 44 44 synthetic
+--segment 1404 1609 43 44 synthetic
+--segment 1609 1639 44 45 synthetic
+--site 0 call=125,1639 projection=1402,1403
+--clause binding=1331,1332 expression=125,125 sliceSource=165,169 sliceFirst=200,211 sliceLast=241,251
+==== slice_standalone
+return xs[first:last]
+----
+local __l3i_comp_21_error = error local __l3i_comp_21_typeof = typeof local __l3i_comp_21_buffer = buffer local __l3i_comp_21_table_create = table.create local __l3i_comp_21_table_move = table.move return (function() local __l3i_comp_7_slice_src = (xs) local __l3i_comp_7_slice_first = (first) local __l3i_comp_7_slice_last = (last) local __l3i_comp_7_slice_kind = __l3i_comp_21_typeof(__l3i_comp_7_slice_src) if __l3i_comp_7_slice_kind ~= "table" and __l3i_comp_7_slice_kind ~= "buffer" then __l3i_comp_21_error("JSL slice source must be a table or buffer") end if __l3i_comp_21_typeof(__l3i_comp_7_slice_first) ~= "number" or __l3i_comp_7_slice_first % 1 ~= 0 then __l3i_comp_21_error("JSL slice first bound must be a finite integer") end if __l3i_comp_21_typeof(__l3i_comp_7_slice_last) ~= "number" or __l3i_comp_7_slice_last % 1 ~= 0 then __l3i_comp_21_error("JSL slice last bound must be a finite integer") end local __l3i_comp_7_slice_len = 0 if __l3i_comp_7_slice_kind == "buffer" then __l3i_comp_7_slice_len = __l3i_comp_21_buffer.len(__l3i_comp_7_slice_src :: any) else __l3i_comp_7_slice_len = #(__l3i_comp_7_slice_src :: any) end if __l3i_comp_7_slice_first < 1 then __l3i_comp_7_slice_first = 1 end if __l3i_comp_7_slice_last > __l3i_comp_7_slice_len then __l3i_comp_7_slice_last = __l3i_comp_7_slice_len end local __l3i_comp_7_slice_n = 0 if __l3i_comp_7_slice_last >= __l3i_comp_7_slice_first then __l3i_comp_7_slice_n = __l3i_comp_7_slice_last - __l3i_comp_7_slice_first + 1 end if __l3i_comp_7_slice_kind == "buffer" then local __l3i_comp_7_slice_out = (__l3i_comp_21_buffer.create(__l3i_comp_7_slice_n) :: any) :: typeof(__l3i_comp_7_slice_src) if __l3i_comp_7_slice_n > 0 then __l3i_comp_21_buffer.copy(__l3i_comp_7_slice_out :: any, 0, __l3i_comp_7_slice_src :: any, __l3i_comp_7_slice_first - 1, __l3i_comp_7_slice_n) end return __l3i_comp_7_slice_out else local __l3i_comp_7_slice_out = (__l3i_comp_21_table_create(__l3i_comp_7_slice_n) :: any) :: typeof(__l3i_comp_7_slice_src) if __l3i_comp_7_slice_n > 0 then __l3i_comp_21_table_move(__l3i_comp_7_slice_src :: any, __l3i_comp_7_slice_first, __l3i_comp_7_slice_last, 1, __l3i_comp_7_slice_out :: any) end return __l3i_comp_7_slice_out end end)()
+--prelude 5
+--segment 0 198 7 21 synthetic
+--segment 198 205 0 7 copied
+--segment 205 248 7 21 synthetic
+--segment 248 249 7 7 synthetic
+--segment 249 251 7 9 copied
+--segment 251 252 9 9 synthetic
+--segment 252 286 7 9 synthetic
+--segment 286 287 10 10 synthetic
+--segment 287 292 10 15 copied
+--segment 292 293 15 15 synthetic
+--segment 293 326 10 15 synthetic
+--segment 326 327 16 16 synthetic
+--segment 327 331 16 20 copied
+--segment 331 332 20 20 synthetic
+--segment 332 333 16 20 synthetic
+--segment 333 563 7 9 synthetic
+--segment 563 741 10 15 synthetic
+--segment 741 2218 16 20 synthetic
+--slice 0 call=205,2218 source=249,251 first=287,292 last=327,331
+==== slice_standalone_in_expression
+local part = values[2:n]
+return #part + 1
+----
+local __l3i_comp_41_error = error local __l3i_comp_41_typeof = typeof local __l3i_comp_41_buffer = buffer local __l3i_comp_41_table_create = table.create local __l3i_comp_41_table_move = table.move local part = (function() local __l3i_comp_13_slice_src = (values) local __l3i_comp_13_slice_first = (2) local __l3i_comp_13_slice_last = (n) local __l3i_comp_13_slice_kind = __l3i_comp_41_typeof(__l3i_comp_13_slice_src) if __l3i_comp_13_slice_kind ~= "table" and __l3i_comp_13_slice_kind ~= "buffer" then __l3i_comp_41_error("JSL slice source must be a table or buffer") end if __l3i_comp_41_typeof(__l3i_comp_13_slice_first) ~= "number" or __l3i_comp_13_slice_first % 1 ~= 0 then __l3i_comp_41_error("JSL slice first bound must be a finite integer") end if __l3i_comp_41_typeof(__l3i_comp_13_slice_last) ~= "number" or __l3i_comp_13_slice_last % 1 ~= 0 then __l3i_comp_41_error("JSL slice last bound must be a finite integer") end local __l3i_comp_13_slice_len = 0 if __l3i_comp_13_slice_kind == "buffer" then __l3i_comp_13_slice_len = __l3i_comp_41_buffer.len(__l3i_comp_13_slice_src :: any) else __l3i_comp_13_slice_len = #(__l3i_comp_13_slice_src :: any) end if __l3i_comp_13_slice_first < 1 then __l3i_comp_13_slice_first = 1 end if __l3i_comp_13_slice_last > __l3i_comp_13_slice_len then __l3i_comp_13_slice_last = __l3i_comp_13_slice_len end local __l3i_comp_13_slice_n = 0 if __l3i_comp_13_slice_last >= __l3i_comp_13_slice_first then __l3i_comp_13_slice_n = __l3i_comp_13_slice_last - __l3i_comp_13_slice_first + 1 end if __l3i_comp_13_slice_kind == "buffer" then local __l3i_comp_13_slice_out = (__l3i_comp_41_buffer.create(__l3i_comp_13_slice_n) :: any) :: typeof(__l3i_comp_13_slice_src) if __l3i_comp_13_slice_n > 0 then __l3i_comp_41_buffer.copy(__l3i_comp_13_slice_out :: any, 0, __l3i_comp_13_slice_src :: any, __l3i_comp_13_slice_first - 1, __l3i_comp_13_slice_n) end return __l3i_comp_13_slice_out else local __l3i_comp_13_slice_out = (__l3i_comp_41_table_create(__l3i_comp_13_slice_n) :: any) :: typeof(__l3i_comp_13_slice_src) if __l3i_comp_13_slice_n > 0 then __l3i_comp_41_table_move(__l3i_comp_13_slice_src :: any, __l3i_comp_13_slice_first, __l3i_comp_13_slice_last, 1, __l3i_comp_13_slice_out :: any) end return __l3i_comp_13_slice_out end end)()
+return #part + 1
+--prelude 5
+--segment 0 198 13 24 synthetic
+--segment 198 211 0 13 copied
+--segment 211 255 13 24 synthetic
+--segment 255 256 13 13 synthetic
+--segment 256 262 13 19 copied
+--segment 262 263 19 19 synthetic
+--segment 263 298 13 19 synthetic
+--segment 298 299 20 20 synthetic
+--segment 299 300 20 21 copied
+--segment 300 301 21 21 synthetic
+--segment 301 335 20 21 synthetic
+--segment 335 336 22 22 synthetic
+--segment 336 337 22 23 copied
+--segment 337 338 23 23 synthetic
+--segment 338 339 22 23 synthetic
+--segment 339 573 13 19 synthetic
+--segment 573 753 20 21 synthetic
+--segment 753 2269 22 23 synthetic
+--segment 2269 2286 24 41 copied
+--slice 0 call=211,2269 source=256,262 first=299,300 last=336,337
+==== slice_standalone_call_source
+return make()[i:j]
+----
+local __l3i_comp_18_error = error local __l3i_comp_18_typeof = typeof local __l3i_comp_18_buffer = buffer local __l3i_comp_18_table_create = table.create local __l3i_comp_18_table_move = table.move return (function() local __l3i_comp_7_slice_src = (make()) local __l3i_comp_7_slice_first = (i) local __l3i_comp_7_slice_last = (j) local __l3i_comp_7_slice_kind = __l3i_comp_18_typeof(__l3i_comp_7_slice_src) if __l3i_comp_7_slice_kind ~= "table" and __l3i_comp_7_slice_kind ~= "buffer" then __l3i_comp_18_error("JSL slice source must be a table or buffer") end if __l3i_comp_18_typeof(__l3i_comp_7_slice_first) ~= "number" or __l3i_comp_7_slice_first % 1 ~= 0 then __l3i_comp_18_error("JSL slice first bound must be a finite integer") end if __l3i_comp_18_typeof(__l3i_comp_7_slice_last) ~= "number" or __l3i_comp_7_slice_last % 1 ~= 0 then __l3i_comp_18_error("JSL slice last bound must be a finite integer") end local __l3i_comp_7_slice_len = 0 if __l3i_comp_7_slice_kind == "buffer" then __l3i_comp_7_slice_len = __l3i_comp_18_buffer.len(__l3i_comp_7_slice_src :: any) else __l3i_comp_7_slice_len = #(__l3i_comp_7_slice_src :: any) end if __l3i_comp_7_slice_first < 1 then __l3i_comp_7_slice_first = 1 end if __l3i_comp_7_slice_last > __l3i_comp_7_slice_len then __l3i_comp_7_slice_last = __l3i_comp_7_slice_len end local __l3i_comp_7_slice_n = 0 if __l3i_comp_7_slice_last >= __l3i_comp_7_slice_first then __l3i_comp_7_slice_n = __l3i_comp_7_slice_last - __l3i_comp_7_slice_first + 1 end if __l3i_comp_7_slice_kind == "buffer" then local __l3i_comp_7_slice_out = (__l3i_comp_18_buffer.create(__l3i_comp_7_slice_n) :: any) :: typeof(__l3i_comp_7_slice_src) if __l3i_comp_7_slice_n > 0 then __l3i_comp_18_buffer.copy(__l3i_comp_7_slice_out :: any, 0, __l3i_comp_7_slice_src :: any, __l3i_comp_7_slice_first - 1, __l3i_comp_7_slice_n) end return __l3i_comp_7_slice_out else local __l3i_comp_7_slice_out = (__l3i_comp_18_table_create(__l3i_comp_7_slice_n) :: any) :: typeof(__l3i_comp_7_slice_src) if __l3i_comp_7_slice_n > 0 then __l3i_comp_18_table_move(__l3i_comp_7_slice_src :: any, __l3i_comp_7_slice_first, __l3i_comp_7_slice_last, 1, __l3i_comp_7_slice_out :: any) end return __l3i_comp_7_slice_out end end)()
+--prelude 5
+--segment 0 198 7 18 synthetic
+--segment 198 205 0 7 copied
+--segment 205 248 7 18 synthetic
+--segment 248 249 7 7 synthetic
+--segment 249 255 7 13 copied
+--segment 255 256 13 13 synthetic
+--segment 256 290 7 13 synthetic
+--segment 290 291 14 14 synthetic
+--segment 291 292 14 15 copied
+--segment 292 293 15 15 synthetic
+--segment 293 326 14 15 synthetic
+--segment 326 327 16 16 synthetic
+--segment 327 328 16 17 copied
+--segment 328 329 17 17 synthetic
+--segment 329 330 16 17 synthetic
+--segment 330 560 7 13 synthetic
+--segment 560 738 14 15 synthetic
+--segment 738 2215 16 17 synthetic
+--slice 0 call=205,2215 source=249,255 first=291,292 last=327,328
+==== slice_standalone_twice
+return xs[1:2], ys[3:4]
+----
+local __l3i_comp_23_error = error local __l3i_comp_23_typeof = typeof local __l3i_comp_23_buffer = buffer local __l3i_comp_23_table_create = table.create local __l3i_comp_23_table_move = table.move return (function() local __l3i_comp_7_slice_src = (xs) local __l3i_comp_7_slice_first = (1) local __l3i_comp_7_slice_last = (2) local __l3i_comp_7_slice_kind = __l3i_comp_23_typeof(__l3i_comp_7_slice_src) if __l3i_comp_7_slice_kind ~= "table" and __l3i_comp_7_slice_kind ~= "buffer" then __l3i_comp_23_error("JSL slice source must be a table or buffer") end if __l3i_comp_23_typeof(__l3i_comp_7_slice_first) ~= "number" or __l3i_comp_7_slice_first % 1 ~= 0 then __l3i_comp_23_error("JSL slice first bound must be a finite integer") end if __l3i_comp_23_typeof(__l3i_comp_7_slice_last) ~= "number" or __l3i_comp_7_slice_last % 1 ~= 0 then __l3i_comp_23_error("JSL slice last bound must be a finite integer") end local __l3i_comp_7_slice_len = 0 if __l3i_comp_7_slice_kind == "buffer" then __l3i_comp_7_slice_len = __l3i_comp_23_buffer.len(__l3i_comp_7_slice_src :: any) else __l3i_comp_7_slice_len = #(__l3i_comp_7_slice_src :: any) end if __l3i_comp_7_slice_first < 1 then __l3i_comp_7_slice_first = 1 end if __l3i_comp_7_slice_last > __l3i_comp_7_slice_len then __l3i_comp_7_slice_last = __l3i_comp_7_slice_len end local __l3i_comp_7_slice_n = 0 if __l3i_comp_7_slice_last >= __l3i_comp_7_slice_first then __l3i_comp_7_slice_n = __l3i_comp_7_slice_last - __l3i_comp_7_slice_first + 1 end if __l3i_comp_7_slice_kind == "buffer" then local __l3i_comp_7_slice_out = (__l3i_comp_23_buffer.create(__l3i_comp_7_slice_n) :: any) :: typeof(__l3i_comp_7_slice_src) if __l3i_comp_7_slice_n > 0 then __l3i_comp_23_buffer.copy(__l3i_comp_7_slice_out :: any, 0, __l3i_comp_7_slice_src :: any, __l3i_comp_7_slice_first - 1, __l3i_comp_7_slice_n) end return __l3i_comp_7_slice_out else local __l3i_comp_7_slice_out = (__l3i_comp_23_table_create(__l3i_comp_7_slice_n) :: any) :: typeof(__l3i_comp_7_slice_src) if __l3i_comp_7_slice_n > 0 then __l3i_comp_23_table_move(__l3i_comp_7_slice_src :: any, __l3i_comp_7_slice_first, __l3i_comp_7_slice_last, 1, __l3i_comp_7_slice_out :: any) end return __l3i_comp_7_slice_out end end)(), (function() local __l3i_comp_16_slice_src = (ys) local __l3i_comp_16_slice_first = (3) local __l3i_comp_16_slice_last = (4) local __l3i_comp_16_slice_kind = __l3i_comp_23_typeof(__l3i_comp_16_slice_src) if __l3i_comp_16_slice_kind ~= "table" and __l3i_comp_16_slice_kind ~= "buffer" then __l3i_comp_23_error("JSL slice source must be a table or buffer") end if __l3i_comp_23_typeof(__l3i_comp_16_slice_first) ~= "number" or __l3i_comp_16_slice_first % 1 ~= 0 then __l3i_comp_23_error("JSL slice first bound must be a finite integer") end if __l3i_comp_23_typeof(__l3i_comp_16_slice_last) ~= "number" or __l3i_comp_16_slice_last % 1 ~= 0 then __l3i_comp_23_error("JSL slice last bound must be a finite integer") end local __l3i_comp_16_slice_len = 0 if __l3i_comp_16_slice_kind == "buffer" then __l3i_comp_16_slice_len = __l3i_comp_23_buffer.len(__l3i_comp_16_slice_src :: any) else __l3i_comp_16_slice_len = #(__l3i_comp_16_slice_src :: any) end if __l3i_comp_16_slice_first < 1 then __l3i_comp_16_slice_first = 1 end if __l3i_comp_16_slice_last > __l3i_comp_16_slice_len then __l3i_comp_16_slice_last = __l3i_comp_16_slice_len end local __l3i_comp_16_slice_n = 0 if __l3i_comp_16_slice_last >= __l3i_comp_16_slice_first then __l3i_comp_16_slice_n = __l3i_comp_16_slice_last - __l3i_comp_16_slice_first + 1 end if __l3i_comp_16_slice_kind == "buffer" then local __l3i_comp_16_slice_out = (__l3i_comp_23_buffer.create(__l3i_comp_16_slice_n) :: any) :: typeof(__l3i_comp_16_slice_src) if __l3i_comp_16_slice_n > 0 then __l3i_comp_23_buffer.copy(__l3i_comp_16_slice_out :: any, 0, __l3i_comp_16_slice_src :: any, __l3i_comp_16_slice_first - 1, __l3i_comp_16_slice_n) end return __l3i_comp_16_slice_out else local __l3i_comp_16_slice_out = (__l3i_comp_23_table_create(__l3i_comp_16_slice_n) :: any) :: typeof(__l3i_comp_16_slice_src) if __l3i_comp_16_slice_n > 0 then __l3i_comp_23_table_move(__l3i_comp_16_slice_src :: any, __l3i_comp_16_slice_first, __l3i_comp_16_slice_last, 1, __l3i_comp_16_slice_out :: any) end return __l3i_comp_16_slice_out end end)()
+--prelude 5
+--segment 0 198 7 14 synthetic
+--segment 198 205 0 7 copied
+--segment 205 248 7 14 synthetic
+--segment 248 249 7 7 synthetic
+--segment 249 251 7 9 copied
+--segment 251 252 9 9 synthetic
+--segment 252 286 7 9 synthetic
+--segment 286 287 10 10 synthetic
+--segment 287 288 10 11 copied
+--segment 288 289 11 11 synthetic
+--segment 289 322 10 11 synthetic
+--segment 322 323 12 12 synthetic
+--segment 323 324 12 13 copied
+--segment 324 325 13 13 synthetic
+--segment 325 326 12 13 synthetic
+--segment 326 556 7 9 synthetic
+--segment 556 734 10 11 synthetic
+--segment 734 2211 12 13 synthetic
+--segment 2211 2213 14 16 copied
+--segment 2213 2257 16 23 synthetic
+--segment 2257 2258 16 16 synthetic
+--segment 2258 2260 16 18 copied
+--segment 2260 2261 18 18 synthetic
+--segment 2261 2296 16 18 synthetic
+--segment 2296 2297 19 19 synthetic
+--segment 2297 2298 19 20 copied
+--segment 2298 2299 20 20 synthetic
+--segment 2299 2333 19 20 synthetic
+--segment 2333 2334 21 21 synthetic
+--segment 2334 2335 21 22 copied
+--segment 2335 2336 22 22 synthetic
+--segment 2336 2337 21 22 synthetic
+--segment 2337 2571 16 18 synthetic
+--segment 2571 2751 19 20 synthetic
+--segment 2751 4267 21 22 synthetic
+--slice 0 call=205,2211 source=249,251 first=287,288 last=323,324
+--slice 1 call=2213,4267 source=2258,2260 first=2297,2298 last=2334,2335
+==== slice_inside_comprehension_source
+return [for x in f(xs[1:2]) => x]
+----
+local __l3i_comp_33_error = error local __l3i_comp_33_typeof = typeof local __l3i_comp_33_buffer = buffer local __l3i_comp_33_table_create = table.create local __l3i_comp_33_table_move = table.move return (function() local __l3i_comp_7_g0_src = (f((function() local __l3i_comp_19_slice_src = (xs) local __l3i_comp_19_slice_first = (1) local __l3i_comp_19_slice_last = (2) local __l3i_comp_19_slice_kind = __l3i_comp_33_typeof(__l3i_comp_19_slice_src) if __l3i_comp_19_slice_kind ~= "table" and __l3i_comp_19_slice_kind ~= "buffer" then __l3i_comp_33_error("JSL slice source must be a table or buffer") end if __l3i_comp_33_typeof(__l3i_comp_19_slice_first) ~= "number" or __l3i_comp_19_slice_first % 1 ~= 0 then __l3i_comp_33_error("JSL slice first bound must be a finite integer") end if __l3i_comp_33_typeof(__l3i_comp_19_slice_last) ~= "number" or __l3i_comp_19_slice_last % 1 ~= 0 then __l3i_comp_33_error("JSL slice last bound must be a finite integer") end local __l3i_comp_19_slice_len = 0 if __l3i_comp_19_slice_kind == "buffer" then __l3i_comp_19_slice_len = __l3i_comp_33_buffer.len(__l3i_comp_19_slice_src :: any) else __l3i_comp_19_slice_len = #(__l3i_comp_19_slice_src :: any) end if __l3i_comp_19_slice_first < 1 then __l3i_comp_19_slice_first = 1 end if __l3i_comp_19_slice_last > __l3i_comp_19_slice_len then __l3i_comp_19_slice_last = __l3i_comp_19_slice_len end local __l3i_comp_19_slice_n = 0 if __l3i_comp_19_slice_last >= __l3i_comp_19_slice_first then __l3i_comp_19_slice_n = __l3i_comp_19_slice_last - __l3i_comp_19_slice_first + 1 end if __l3i_comp_19_slice_kind == "buffer" then local __l3i_comp_19_slice_out = (__l3i_comp_33_buffer.create(__l3i_comp_19_slice_n) :: any) :: typeof(__l3i_comp_19_slice_src) if __l3i_comp_19_slice_n > 0 then __l3i_comp_33_buffer.copy(__l3i_comp_19_slice_out :: any, 0, __l3i_comp_19_slice_src :: any, __l3i_comp_19_slice_first - 1, __l3i_comp_19_slice_n) end return __l3i_comp_19_slice_out else local __l3i_comp_19_slice_out = (__l3i_comp_33_table_create(__l3i_comp_19_slice_n) :: any) :: typeof(__l3i_comp_19_slice_src) if __l3i_comp_19_slice_n > 0 then __l3i_comp_33_table_move(__l3i_comp_19_slice_src :: any, __l3i_comp_19_slice_first, __l3i_comp_19_slice_last, 1, __l3i_comp_19_slice_out :: any) end return __l3i_comp_19_slice_out end end)())) local __l3i_comp_7_g0_len = #__l3i_comp_7_g0_src local __l3i_comp_7_out = __l3i_comp_33_table_create(__l3i_comp_7_g0_len) :: typeof({}) for __l3i_comp_7_g0_i = 1, __l3i_comp_7_g0_len do local x = __l3i_comp_7_g0_src[__l3i_comp_7_g0_i] local __l3i_comp_7_value = (x) if __l3i_comp_7_value == nil then __l3i_comp_33_error("L3i comprehension projection produced nil; filter nil explicitly") end __l3i_comp_7_out[__l3i_comp_7_g0_i] = __l3i_comp_7_value end return __l3i_comp_7_out end)()
+--prelude 5
+--segment 0 198 7 33 synthetic
+--segment 198 205 0 7 copied
+--segment 205 217 7 33 synthetic
+--segment 217 245 8 27 synthetic
+--segment 245 246 17 17 synthetic
+--segment 246 248 17 19 copied
+--segment 248 292 19 26 synthetic
+--segment 292 293 19 19 synthetic
+--segment 293 295 19 21 copied
+--segment 295 296 21 21 synthetic
+--segment 296 331 19 21 synthetic
+--segment 331 332 22 22 synthetic
+--segment 332 333 22 23 copied
+--segment 333 334 23 23 synthetic
+--segment 334 368 22 23 synthetic
+--segment 368 369 24 24 synthetic
+--segment 369 370 24 25 copied
+--segment 370 371 25 25 synthetic
+--segment 371 372 24 25 synthetic
+--segment 372 606 19 21 synthetic
+--segment 606 786 22 23 synthetic
+--segment 786 2302 24 25 synthetic
+--segment 2302 2303 26 27 copied
+--segment 2303 2304 27 27 synthetic
+--segment 2304 2497 17 27 synthetic
+--segment 2497 2498 12 13 copied
+--segment 2498 2540 17 27 synthetic
+--segment 2540 2567 31 32 synthetic
+--segment 2567 2568 31 31 synthetic
+--segment 2568 2569 31 32 copied
+--segment 2569 2570 32 32 synthetic
+--segment 2570 2754 31 32 synthetic
+--segment 2754 2788 32 33 synthetic
+--site 0 call=205,2788 projection=2568,2569
+--clause binding=2497,2498 expression=246,2303
+--slice 0 call=248,2302 source=293,295 first=332,333 last=369,370
+==== slice_of_comprehension
+return [for x in xs => x][1:2]
+----
+local __l3i_comp_30_error = error local __l3i_comp_30_typeof = typeof local __l3i_comp_30_buffer = buffer local __l3i_comp_30_table_create = table.create local __l3i_comp_30_table_move = table.move return (function() local __l3i_comp_7_g0_src = (xs) local __l3i_comp_7_g0_len = #__l3i_comp_7_g0_src local __l3i_comp_7_out = __l3i_comp_30_table_create(__l3i_comp_7_g0_len) :: typeof({}) for __l3i_comp_7_g0_i = 1, __l3i_comp_7_g0_len do local x = __l3i_comp_7_g0_src[__l3i_comp_7_g0_i] local __l3i_comp_7_value = (x) if __l3i_comp_7_value == nil then __l3i_comp_30_error("L3i comprehension projection produced nil; filter nil explicitly") end __l3i_comp_7_out[__l3i_comp_7_g0_i] = __l3i_comp_7_value end return __l3i_comp_7_out end)()[1:2]
+--prelude 5
+--segment 0 198 7 25 synthetic
+--segment 198 205 0 7 copied
+--segment 205 217 7 25 synthetic
+--segment 217 245 8 19 synthetic
+--segment 245 246 17 17 synthetic
+--segment 246 248 17 19 copied
+--segment 248 249 19 19 synthetic
+--segment 249 442 17 19 synthetic
+--segment 442 443 12 13 copied
+--segment 443 485 17 19 synthetic
+--segment 485 512 23 24 synthetic
+--segment 512 513 23 23 synthetic
+--segment 513 514 23 24 copied
+--segment 514 515 24 24 synthetic
+--segment 515 699 23 24 synthetic
+--segment 699 733 24 25 synthetic
+--segment 733 738 25 30 copied
+--site 0 call=205,733 projection=513,514
+--clause binding=442,443 expression=246,248
+==== comprehension_in_slice_bound
+return xs[1:#[for x in ys => x]]
+----
+local __l3i_comp_32_error = error local __l3i_comp_32_typeof = typeof local __l3i_comp_32_buffer = buffer local __l3i_comp_32_table_create = table.create local __l3i_comp_32_table_move = table.move return (function() local __l3i_comp_7_slice_src = (xs) local __l3i_comp_7_slice_first = (1) local __l3i_comp_7_slice_last = (#(function() local __l3i_comp_13_g0_src = (ys) local __l3i_comp_13_g0_len = #__l3i_comp_13_g0_src local __l3i_comp_13_out = __l3i_comp_32_table_create(__l3i_comp_13_g0_len) :: typeof({}) for __l3i_comp_13_g0_i = 1, __l3i_comp_13_g0_len do local x = __l3i_comp_13_g0_src[__l3i_comp_13_g0_i] local __l3i_comp_13_value = (x) if __l3i_comp_13_value == nil then __l3i_comp_32_error("L3i comprehension projection produced nil; filter nil explicitly") end __l3i_comp_13_out[__l3i_comp_13_g0_i] = __l3i_comp_13_value end return __l3i_comp_13_out end)()) local __l3i_comp_7_slice_kind = __l3i_comp_32_typeof(__l3i_comp_7_slice_src) if __l3i_comp_7_slice_kind ~= "table" and __l3i_comp_7_slice_kind ~= "buffer" then __l3i_comp_32_error("JSL slice source must be a table or buffer") end if __l3i_comp_32_typeof(__l3i_comp_7_slice_first) ~= "number" or __l3i_comp_7_slice_first % 1 ~= 0 then __l3i_comp_32_error("JSL slice first bound must be a finite integer") end if __l3i_comp_32_typeof(__l3i_comp_7_slice_last) ~= "number" or __l3i_comp_7_slice_last % 1 ~= 0 then __l3i_comp_32_error("JSL slice last bound must be a finite integer") end local __l3i_comp_7_slice_len = 0 if __l3i_comp_7_slice_kind == "buffer" then __l3i_comp_7_slice_len = __l3i_comp_32_buffer.len(__l3i_comp_7_slice_src :: any) else __l3i_comp_7_slice_len = #(__l3i_comp_7_slice_src :: any) end if __l3i_comp_7_slice_first < 1 then __l3i_comp_7_slice_first = 1 end if __l3i_comp_7_slice_last > __l3i_comp_7_slice_len then __l3i_comp_7_slice_last = __l3i_comp_7_slice_len end local __l3i_comp_7_slice_n = 0 if __l3i_comp_7_slice_last >= __l3i_comp_7_slice_first then __l3i_comp_7_slice_n = __l3i_comp_7_slice_last - __l3i_comp_7_slice_first + 1 end if __l3i_comp_7_slice_kind == "buffer" then local __l3i_comp_7_slice_out = (__l3i_comp_32_buffer.create(__l3i_comp_7_slice_n) :: any) :: typeof(__l3i_comp_7_slice_src) if __l3i_comp_7_slice_n > 0 then __l3i_comp_32_buffer.copy(__l3i_comp_7_slice_out :: any, 0, __l3i_comp_7_slice_src :: any, __l3i_comp_7_slice_first - 1, __l3i_comp_7_slice_n) end return __l3i_comp_7_slice_out else local __l3i_comp_7_slice_out = (__l3i_comp_32_table_create(__l3i_comp_7_slice_n) :: any) :: typeof(__l3i_comp_7_slice_src) if __l3i_comp_7_slice_n > 0 then __l3i_comp_32_table_move(__l3i_comp_7_slice_src :: any, __l3i_comp_7_slice_first, __l3i_comp_7_slice_last, 1, __l3i_comp_7_slice_out :: any) end return __l3i_comp_7_slice_out end end)()
+--prelude 5
+--segment 0 198 13 31 synthetic
+--segment 198 205 0 7 copied
+--segment 205 248 7 32 synthetic
+--segment 248 249 7 7 synthetic
+--segment 249 251 7 9 copied
+--segment 251 252 9 9 synthetic
+--segment 252 286 7 9 synthetic
+--segment 286 287 10 10 synthetic
+--segment 287 288 10 11 copied
+--segment 288 289 11 11 synthetic
+--segment 289 322 10 11 synthetic
+--segment 322 323 12 12 synthetic
+--segment 323 324 12 13 copied
+--segment 324 336 13 31 synthetic
+--segment 336 365 14 25 synthetic
+--segment 365 366 23 23 synthetic
+--segment 366 368 23 25 copied
+--segment 368 369 25 25 synthetic
+--segment 369 568 23 25 synthetic
+--segment 568 569 18 19 copied
+--segment 569 613 23 25 synthetic
+--segment 613 641 29 30 synthetic
+--segment 641 642 29 29 synthetic
+--segment 642 643 29 30 copied
+--segment 643 644 30 30 synthetic
+--segment 644 832 29 30 synthetic
+--segment 832 867 30 31 synthetic
+--segment 867 868 31 31 synthetic
+--segment 868 869 12 31 synthetic
+--segment 869 1099 7 9 synthetic
+--segment 1099 1277 10 11 synthetic
+--segment 1277 2754 12 31 synthetic
+--site 0 call=324,867 projection=642,643
+--clause binding=568,569 expression=366,368
+--slice 0 call=205,2754 source=249,251 first=287,288 last=323,867
+==== index_is_not_a_slice
+return xs[i], obj[key:method()]
+----
+return xs[i], obj[key:method()]
+--prelude 0
+==== nested_two_generators
+return [for x in xs for y in ys => {x, y}]
+----
+local __l3i_comp_42_error = error return (function() local __l3i_comp_7_out = {} local __l3i_comp_7_n = 0 local __l3i_comp_7_g0_src = (xs) local __l3i_comp_7_g0_len = #__l3i_comp_7_g0_src for __l3i_comp_7_g0_i = 1, __l3i_comp_7_g0_len do local x = __l3i_comp_7_g0_src[__l3i_comp_7_g0_i] local __l3i_comp_7_g1_src = (ys) local __l3i_comp_7_g1_len = #__l3i_comp_7_g1_src for __l3i_comp_7_g1_i = 1, __l3i_comp_7_g1_len do local y = __l3i_comp_7_g1_src[__l3i_comp_7_g1_i] local __l3i_comp_7_value = ({x, y}) if __l3i_comp_7_value == nil then __l3i_comp_42_error("L3i comprehension projection produced nil; filter nil explicitly") end __l3i_comp_7_n += 1 __l3i_comp_7_out[__l3i_comp_7_n] = __l3i_comp_7_value end end return __l3i_comp_7_out end)()
+--prelude 1
+--segment 0 34 7 42 synthetic
+--segment 34 41 0 7 copied
+--segment 41 106 7 42 synthetic
+--segment 106 134 8 19 synthetic
+--segment 134 135 17 17 synthetic
+--segment 135 137 17 19 copied
+--segment 137 138 19 19 synthetic
+--segment 138 244 17 19 synthetic
+--segment 244 245 12 13 copied
+--segment 245 287 17 19 synthetic
+--segment 287 315 20 31 synthetic
+--segment 315 316 29 29 synthetic
+--segment 316 318 29 31 copied
+--segment 318 319 31 31 synthetic
+--segment 319 425 29 31 synthetic
+--segment 425 426 24 25 copied
+--segment 426 468 29 31 synthetic
+--segment 468 495 35 41 synthetic
+--segment 495 496 35 35 synthetic
+--segment 496 502 35 41 copied
+--segment 502 503 41 41 synthetic
+--segment 503 704 35 41 synthetic
+--segment 704 742 41 42 synthetic
+--site 0 call=41,742 projection=496,502
+--clause binding=244,245 expression=135,137
+--clause binding=425,426 expression=316,318
+==== nested_filter_between
+return [for x in xs if p(x) for y in children(x) if q(y) => f(x, y)]
+----
+local __l3i_comp_68_error = error return (function() local __l3i_comp_7_out = {} local __l3i_comp_7_n = 0 local __l3i_comp_7_g0_src = (xs) local __l3i_comp_7_g0_len = #__l3i_comp_7_g0_src for __l3i_comp_7_g0_i = 1, __l3i_comp_7_g0_len do local x = __l3i_comp_7_g0_src[__l3i_comp_7_g0_i] if (p(x)) then local __l3i_comp_7_g1_src = (children(x)) local __l3i_comp_7_g1_len = #__l3i_comp_7_g1_src for __l3i_comp_7_g1_i = 1, __l3i_comp_7_g1_len do local y = __l3i_comp_7_g1_src[__l3i_comp_7_g1_i] if (q(y)) then local __l3i_comp_7_value = (f(x, y)) if __l3i_comp_7_value == nil then __l3i_comp_68_error("L3i comprehension projection produced nil; filter nil explicitly") end __l3i_comp_7_n += 1 __l3i_comp_7_out[__l3i_comp_7_n] = __l3i_comp_7_value end end end end return __l3i_comp_7_out end)()
+--prelude 1
+--segment 0 34 7 68 synthetic
+--segment 34 41 0 7 copied
+--segment 41 106 7 68 synthetic
+--segment 106 134 8 19 synthetic
+--segment 134 135 17 17 synthetic
+--segment 135 137 17 19 copied
+--segment 137 138 19 19 synthetic
+--segment 138 244 17 19 synthetic
+--segment 244 245 12 13 copied
+--segment 245 287 17 19 synthetic
+--segment 287 290 20 27 synthetic
+--segment 290 291 23 23 synthetic
+--segment 291 295 23 27 copied
+--segment 295 296 27 27 synthetic
+--segment 296 302 23 27 synthetic
+--segment 302 330 28 48 synthetic
+--segment 330 331 37 37 synthetic
+--segment 331 342 37 48 copied
+--segment 342 343 48 48 synthetic
+--segment 343 449 37 48 synthetic
+--segment 449 450 32 33 copied
+--segment 450 492 37 48 synthetic
+--segment 492 495 49 56 synthetic
+--segment 495 496 52 52 synthetic
+--segment 496 500 52 56 copied
+--segment 500 501 56 56 synthetic
+--segment 501 507 52 56 synthetic
+--segment 507 534 60 67 synthetic
+--segment 534 535 60 60 synthetic
+--segment 535 542 60 67 copied
+--segment 542 543 67 67 synthetic
+--segment 543 744 60 67 synthetic
+--segment 744 790 67 68 synthetic
+--site 0 call=41,790 projection=535,542
+--clause binding=244,245 expression=135,137
+--clause binding=41,41 expression=291,295
+--clause binding=449,450 expression=331,342
+--clause binding=41,41 expression=496,500
+==== nested_range_inner
+return [for x in xs for i in range(1, x) => i]
+----
+local __l3i_comp_46_error = error return (function() local __l3i_comp_7_out = {} local __l3i_comp_7_n = 0 local __l3i_comp_7_g0_src = (xs) local __l3i_comp_7_g0_len = #__l3i_comp_7_g0_src for __l3i_comp_7_g0_i = 1, __l3i_comp_7_g0_len do local x = __l3i_comp_7_g0_src[__l3i_comp_7_g0_i] local __l3i_comp_7_g1_r0 = (1) local __l3i_comp_7_g1_r1 = (x) local __l3i_comp_7_g1_r2 = 1 if __l3i_comp_7_g1_r2 == 0 then __l3i_comp_46_error("JSL range step must not be zero") end for i = __l3i_comp_7_g1_r0, __l3i_comp_7_g1_r1, __l3i_comp_7_g1_r2 do local __l3i_comp_7_value = (i) if __l3i_comp_7_value == nil then __l3i_comp_46_error("L3i comprehension projection produced nil; filter nil explicitly") end __l3i_comp_7_n += 1 __l3i_comp_7_out[__l3i_comp_7_n] = __l3i_comp_7_value end end return __l3i_comp_7_out end)()
+--prelude 1
+--segment 0 34 7 46 synthetic
+--segment 34 41 0 7 copied
+--segment 41 106 7 46 synthetic
+--segment 106 134 8 19 synthetic
+--segment 134 135 17 17 synthetic
+--segment 135 137 17 19 copied
+--segment 137 138 19 19 synthetic
+--segment 138 244 17 19 synthetic
+--segment 244 245 12 13 copied
+--segment 245 287 17 19 synthetic
+--segment 287 314 20 40 synthetic
+--segment 314 315 35 35 synthetic
+--segment 315 316 35 36 copied
+--segment 316 317 36 36 synthetic
+--segment 317 345 35 36 synthetic
+--segment 345 346 38 38 synthetic
+--segment 346 347 38 39 copied
+--segment 347 348 39 39 synthetic
+--segment 348 473 38 39 synthetic
+--segment 473 474 24 25 copied
+--segment 474 539 38 39 synthetic
+--segment 539 566 44 45 synthetic
+--segment 566 567 44 44 synthetic
+--segment 567 568 44 45 copied
+--segment 568 569 45 45 synthetic
+--segment 569 770 44 45 synthetic
+--segment 770 808 45 46 synthetic
+--site 0 call=41,808 projection=567,568
+--clause binding=244,245 expression=135,137
+--clause binding=473,474 expression=41,41 range=314,317 range=345,348
+==== nested_range_outer
+return [for i in range(1, n) for x in xs => i * x]
+----
+local __l3i_comp_50_error = error return (function() local __l3i_comp_7_out = {} local __l3i_comp_7_n = 0 local __l3i_comp_7_g0_r0 = (1) local __l3i_comp_7_g0_r1 = (n) local __l3i_comp_7_g0_r2 = 1 if __l3i_comp_7_g0_r2 == 0 then __l3i_comp_50_error("JSL range step must not be zero") end for i = __l3i_comp_7_g0_r0, __l3i_comp_7_g0_r1, __l3i_comp_7_g0_r2 do local __l3i_comp_7_g1_src = (xs) local __l3i_comp_7_g1_len = #__l3i_comp_7_g1_src for __l3i_comp_7_g1_i = 1, __l3i_comp_7_g1_len do local x = __l3i_comp_7_g1_src[__l3i_comp_7_g1_i] local __l3i_comp_7_value = (i * x) if __l3i_comp_7_value == nil then __l3i_comp_50_error("L3i comprehension projection produced nil; filter nil explicitly") end __l3i_comp_7_n += 1 __l3i_comp_7_out[__l3i_comp_7_n] = __l3i_comp_7_value end end return __l3i_comp_7_out end)()
+--prelude 1
+--segment 0 34 7 50 synthetic
+--segment 34 41 0 7 copied
+--segment 41 106 7 50 synthetic
+--segment 106 133 8 28 synthetic
+--segment 133 134 23 23 synthetic
+--segment 134 135 23 24 copied
+--segment 135 136 24 24 synthetic
+--segment 136 164 23 24 synthetic
+--segment 164 165 26 26 synthetic
+--segment 165 166 26 27 copied
+--segment 166 167 27 27 synthetic
+--segment 167 292 26 27 synthetic
+--segment 292 293 12 13 copied
+--segment 293 358 26 27 synthetic
+--segment 358 386 29 40 synthetic
+--segment 386 387 38 38 synthetic
+--segment 387 389 38 40 copied
+--segment 389 390 40 40 synthetic
+--segment 390 496 38 40 synthetic
+--segment 496 497 33 34 copied
+--segment 497 539 38 40 synthetic
+--segment 539 566 44 49 synthetic
+--segment 566 567 44 44 synthetic
+--segment 567 572 44 49 copied
+--segment 572 573 49 49 synthetic
+--segment 573 774 44 49 synthetic
+--segment 774 812 49 50 synthetic
+--site 0 call=41,812 projection=567,572
+--clause binding=292,293 expression=41,41 range=133,136 range=164,167
+--clause binding=496,497 expression=387,389
+==== nested_slice_inner
+return [for row in rows for x in row[1:limit] => x]
+----
+local __l3i_comp_51_error = error local __l3i_comp_51_typeof = typeof return (function() local __l3i_comp_7_out = {} local __l3i_comp_7_n = 0 local __l3i_comp_7_g0_src = (rows) local __l3i_comp_7_g0_len = #__l3i_comp_7_g0_src for __l3i_comp_7_g0_i = 1, __l3i_comp_7_g0_len do local row = __l3i_comp_7_g0_src[__l3i_comp_7_g0_i] local __l3i_comp_7_g1_src = (row) local __l3i_comp_7_g1_first = (1) local __l3i_comp_7_g1_last = (limit) local __l3i_comp_7_g1_kind = __l3i_comp_51_typeof(__l3i_comp_7_g1_src) if __l3i_comp_7_g1_kind ~= "table" then __l3i_comp_51_error("JSL comprehension slice source must be a table") end if __l3i_comp_51_typeof(__l3i_comp_7_g1_first) ~= "number" or __l3i_comp_7_g1_first % 1 ~= 0 then __l3i_comp_51_error("JSL slice first bound must be a finite integer") end if __l3i_comp_51_typeof(__l3i_comp_7_g1_last) ~= "number" or __l3i_comp_7_g1_last % 1 ~= 0 then __l3i_comp_51_error("JSL slice last bound must be a finite integer") end local __l3i_comp_7_g1_len = #__l3i_comp_7_g1_src if __l3i_comp_7_g1_first < 1 then __l3i_comp_7_g1_first = 1 end if __l3i_comp_7_g1_last > __l3i_comp_7_g1_len then __l3i_comp_7_g1_last = __l3i_comp_7_g1_len end for __l3i_comp_7_g1_i = __l3i_comp_7_g1_first, __l3i_comp_7_g1_last do local x = __l3i_comp_7_g1_src[__l3i_comp_7_g1_i] local __l3i_comp_7_value = (x) if __l3i_comp_7_value == nil then __l3i_comp_51_error("L3i comprehension projection produced nil; filter nil explicitly") end __l3i_comp_7_n += 1 __l3i_comp_7_out[__l3i_comp_7_n] = __l3i_comp_7_value end end return __l3i_comp_7_out end)()
+--prelude 2
+--segment 0 70 7 51 synthetic
+--segment 70 77 0 7 copied
+--segment 77 142 7 51 synthetic
+--segment 142 170 8 23 synthetic
+--segment 170 171 19 19 synthetic
+--segment 171 175 19 23 copied
+--segment 175 176 23 23 synthetic
+--segment 176 282 19 23 synthetic
+--segment 282 285 12 15 copied
+--segment 285 327 19 23 synthetic
+--segment 327 355 24 45 synthetic
+--segment 355 356 33 33 synthetic
+--segment 356 359 33 36 copied
+--segment 359 360 36 36 synthetic
+--segment 360 391 33 36 synthetic
+--segment 391 392 37 37 synthetic
+--segment 392 393 37 38 copied
+--segment 393 394 38 38 synthetic
+--segment 394 424 37 38 synthetic
+--segment 424 425 39 39 synthetic
+--segment 425 430 39 44 copied
+--segment 430 431 44 44 synthetic
+--segment 431 432 39 44 synthetic
+--segment 432 617 33 36 synthetic
+--segment 617 789 37 38 synthetic
+--segment 789 1246 39 44 synthetic
+--segment 1246 1247 28 29 copied
+--segment 1247 1289 39 44 synthetic
+--segment 1289 1316 49 50 synthetic
+--segment 1316 1317 49 49 synthetic
+--segment 1317 1318 49 50 copied
+--segment 1318 1319 50 50 synthetic
+--segment 1319 1520 49 50 synthetic
+--segment 1520 1558 50 51 synthetic
+--site 0 call=77,1558 projection=1317,1318
+--clause binding=282,285 expression=171,175
+--clause binding=1246,1247 expression=77,77 sliceSource=355,360 sliceFirst=391,394 sliceLast=424,431
+==== nested_slice_outer
+return [for row in rows[1:n] for x in row => x]
+----
+local __l3i_comp_47_error = error local __l3i_comp_47_typeof = typeof return (function() local __l3i_comp_7_out = {} local __l3i_comp_7_n = 0 local __l3i_comp_7_g0_src = (rows) local __l3i_comp_7_g0_first = (1) local __l3i_comp_7_g0_last = (n) local __l3i_comp_7_g0_kind = __l3i_comp_47_typeof(__l3i_comp_7_g0_src) if __l3i_comp_7_g0_kind ~= "table" then __l3i_comp_47_error("JSL comprehension slice source must be a table") end if __l3i_comp_47_typeof(__l3i_comp_7_g0_first) ~= "number" or __l3i_comp_7_g0_first % 1 ~= 0 then __l3i_comp_47_error("JSL slice first bound must be a finite integer") end if __l3i_comp_47_typeof(__l3i_comp_7_g0_last) ~= "number" or __l3i_comp_7_g0_last % 1 ~= 0 then __l3i_comp_47_error("JSL slice last bound must be a finite integer") end local __l3i_comp_7_g0_len = #__l3i_comp_7_g0_src if __l3i_comp_7_g0_first < 1 then __l3i_comp_7_g0_first = 1 end if __l3i_comp_7_g0_last > __l3i_comp_7_g0_len then __l3i_comp_7_g0_last = __l3i_comp_7_g0_len end for __l3i_comp_7_g0_i = __l3i_comp_7_g0_first, __l3i_comp_7_g0_last do local row = __l3i_comp_7_g0_src[__l3i_comp_7_g0_i] local __l3i_comp_7_g1_src = (row) local __l3i_comp_7_g1_len = #__l3i_comp_7_g1_src for __l3i_comp_7_g1_i = 1, __l3i_comp_7_g1_len do local x = __l3i_comp_7_g1_src[__l3i_comp_7_g1_i] local __l3i_comp_7_value = (x) if __l3i_comp_7_value == nil then __l3i_comp_47_error("L3i comprehension projection produced nil; filter nil explicitly") end __l3i_comp_7_n += 1 __l3i_comp_7_out[__l3i_comp_7_n] = __l3i_comp_7_value end end return __l3i_comp_7_out end)()
+--prelude 2
+--segment 0 70 7 47 synthetic
+--segment 70 77 0 7 copied
+--segment 77 142 7 47 synthetic
+--segment 142 170 8 28 synthetic
+--segment 170 171 19 19 synthetic
+--segment 171 175 19 23 copied
+--segment 175 176 23 23 synthetic
+--segment 176 207 19 23 synthetic
+--segment 207 208 24 24 synthetic
+--segment 208 209 24 25 copied
+--segment 209 210 25 25 synthetic
+--segment 210 240 24 25 synthetic
+--segment 240 241 26 26 synthetic
+--segment 241 242 26 27 copied
+--segment 242 243 27 27 synthetic
+--segment 243 244 26 27 synthetic
+--segment 244 429 19 23 synthetic
+--segment 429 601 24 25 synthetic
+--segment 601 1058 26 27 synthetic
+--segment 1058 1061 12 15 copied
+--segment 1061 1103 26 27 synthetic
+--segment 1103 1131 29 41 synthetic
+--segment 1131 1132 38 38 synthetic
+--segment 1132 1135 38 41 copied
+--segment 1135 1136 41 41 synthetic
+--segment 1136 1242 38 41 synthetic
+--segment 1242 1243 33 34 copied
+--segment 1243 1285 38 41 synthetic
+--segment 1285 1312 45 46 synthetic
+--segment 1312 1313 45 45 synthetic
+--segment 1313 1314 45 46 copied
+--segment 1314 1315 46 46 synthetic
+--segment 1315 1516 45 46 synthetic
+--segment 1516 1554 46 47 synthetic
+--site 0 call=77,1554 projection=1313,1314
+--clause binding=1058,1061 expression=77,77 sliceSource=170,176 sliceFirst=207,210 sliceLast=240,243
+--clause binding=1242,1243 expression=1132,1135
+==== nested_zip_inner
+return [for x in xs for a, b in zipStrict(x.l, x.r) => a + b]
+----
+local __l3i_comp_61_error = error return (function() local __l3i_comp_7_out = {} local __l3i_comp_7_n = 0 local __l3i_comp_7_g0_src = (xs) local __l3i_comp_7_g0_len = #__l3i_comp_7_g0_src for __l3i_comp_7_g0_i = 1, __l3i_comp_7_g0_len do local x = __l3i_comp_7_g0_src[__l3i_comp_7_g0_i] local __l3i_comp_7_g1_src0 = (x.l) local __l3i_comp_7_g1_len0 = #__l3i_comp_7_g1_src0 local __l3i_comp_7_g1_src1 = (x.r) local __l3i_comp_7_g1_len1 = #__l3i_comp_7_g1_src1 local __l3i_comp_7_g1_n = __l3i_comp_7_g1_len0 if __l3i_comp_7_g1_len1 < __l3i_comp_7_g1_n then __l3i_comp_7_g1_n = __l3i_comp_7_g1_len1 end if __l3i_comp_7_g1_len1 ~= __l3i_comp_7_g1_n then __l3i_comp_61_error("JSL zipStrict inputs must have equal lengths") end for __l3i_comp_7_g1_i = 1, __l3i_comp_7_g1_n do local a, b = __l3i_comp_7_g1_src0[__l3i_comp_7_g1_i], __l3i_comp_7_g1_src1[__l3i_comp_7_g1_i] local __l3i_comp_7_value = (a + b) if __l3i_comp_7_value == nil then __l3i_comp_61_error("L3i comprehension projection produced nil; filter nil explicitly") end __l3i_comp_7_n += 1 __l3i_comp_7_out[__l3i_comp_7_n] = __l3i_comp_7_value end end return __l3i_comp_7_out end)()
+--prelude 1
+--segment 0 34 7 61 synthetic
+--segment 34 41 0 7 copied
+--segment 41 106 7 61 synthetic
+--segment 106 134 8 19 synthetic
+--segment 134 135 17 17 synthetic
+--segment 135 137 17 19 copied
+--segment 137 138 19 19 synthetic
+--segment 138 244 17 19 synthetic
+--segment 244 245 12 13 copied
+--segment 245 287 17 19 synthetic
+--segment 287 316 20 51 synthetic
+--segment 316 317 42 42 synthetic
+--segment 317 320 42 45 copied
+--segment 320 321 45 45 synthetic
+--segment 321 402 42 45 synthetic
+--segment 402 403 47 47 synthetic
+--segment 403 406 47 50 copied
+--segment 406 407 50 50 synthetic
+--segment 407 776 47 50 synthetic
+--segment 776 777 24 25 copied
+--segment 777 779 47 50 synthetic
+--segment 779 780 27 28 copied
+--segment 780 864 47 50 synthetic
+--segment 864 891 55 60 synthetic
+--segment 891 892 55 55 synthetic
+--segment 892 897 55 60 copied
+--segment 897 898 60 60 synthetic
+--segment 898 1099 55 60 synthetic
+--segment 1099 1137 60 61 synthetic
+--site 0 call=41,1137 projection=892,897
+--clause binding=244,245 expression=135,137
+--clause binding=776,777 binding=779,780 expression=41,41 zip=316,321 zip=402,407
+==== nested_enumerate_inner
+return [for outer in rows for i, v in enumerate(outer) => v + i]
+----
+local __l3i_comp_64_error = error return (function() local __l3i_comp_7_out = {} local __l3i_comp_7_n = 0 local __l3i_comp_7_g0_src = (rows) local __l3i_comp_7_g0_len = #__l3i_comp_7_g0_src for __l3i_comp_7_g0_i = 1, __l3i_comp_7_g0_len do local outer = __l3i_comp_7_g0_src[__l3i_comp_7_g0_i] local __l3i_comp_7_g1_src = (outer) local __l3i_comp_7_g1_len = #__l3i_comp_7_g1_src for __l3i_comp_7_g1_i = 1, __l3i_comp_7_g1_len do local i, v = __l3i_comp_7_g1_i, __l3i_comp_7_g1_src[__l3i_comp_7_g1_i] local __l3i_comp_7_value = (v + i) if __l3i_comp_7_value == nil then __l3i_comp_64_error("L3i comprehension projection produced nil; filter nil explicitly") end __l3i_comp_7_n += 1 __l3i_comp_7_out[__l3i_comp_7_n] = __l3i_comp_7_value end end return __l3i_comp_7_out end)()
+--prelude 1
+--segment 0 34 7 64 synthetic
+--segment 34 41 0 7 copied
+--segment 41 106 7 64 synthetic
+--segment 106 134 8 25 synthetic
+--segment 134 135 21 21 synthetic
+--segment 135 139 21 25 copied
+--segment 139 140 25 25 synthetic
+--segment 140 246 21 25 synthetic
+--segment 246 251 12 17 copied
+--segment 251 293 21 25 synthetic
+--segment 293 321 26 54 synthetic
+--segment 321 322 48 48 synthetic
+--segment 322 327 48 53 copied
+--segment 327 328 53 53 synthetic
+--segment 328 434 48 53 synthetic
+--segment 434 435 30 31 copied
+--segment 435 437 48 53 synthetic
+--segment 437 438 33 34 copied
+--segment 438 499 48 53 synthetic
+--segment 499 526 58 63 synthetic
+--segment 526 527 58 58 synthetic
+--segment 527 532 58 63 copied
+--segment 532 533 63 63 synthetic
+--segment 533 734 58 63 synthetic
+--segment 734 772 63 64 synthetic
+--site 0 call=41,772 projection=527,532
+--clause binding=246,251 expression=135,139
+--clause binding=434,435 binding=437,438 expression=322,327
+==== nested_enumerate_outer
+return [for i, row in enumerate(rows) for x in row => i * x]
+----
+local __l3i_comp_60_error = error return (function() local __l3i_comp_7_out = {} local __l3i_comp_7_n = 0 local __l3i_comp_7_g0_src = (rows) local __l3i_comp_7_g0_len = #__l3i_comp_7_g0_src for __l3i_comp_7_g0_i = 1, __l3i_comp_7_g0_len do local i, row = __l3i_comp_7_g0_i, __l3i_comp_7_g0_src[__l3i_comp_7_g0_i] local __l3i_comp_7_g1_src = (row) local __l3i_comp_7_g1_len = #__l3i_comp_7_g1_src for __l3i_comp_7_g1_i = 1, __l3i_comp_7_g1_len do local x = __l3i_comp_7_g1_src[__l3i_comp_7_g1_i] local __l3i_comp_7_value = (i * x) if __l3i_comp_7_value == nil then __l3i_comp_60_error("L3i comprehension projection produced nil; filter nil explicitly") end __l3i_comp_7_n += 1 __l3i_comp_7_out[__l3i_comp_7_n] = __l3i_comp_7_value end end return __l3i_comp_7_out end)()
+--prelude 1
+--segment 0 34 7 60 synthetic
+--segment 34 41 0 7 copied
+--segment 41 106 7 60 synthetic
+--segment 106 134 8 37 synthetic
+--segment 134 135 32 32 synthetic
+--segment 135 139 32 36 copied
+--segment 139 140 36 36 synthetic
+--segment 140 246 32 36 synthetic
+--segment 246 247 12 13 copied
+--segment 247 249 32 36 synthetic
+--segment 249 252 15 18 copied
+--segment 252 313 32 36 synthetic
+--segment 313 341 38 50 synthetic
+--segment 341 342 47 47 synthetic
+--segment 342 345 47 50 copied
+--segment 345 346 50 50 synthetic
+--segment 346 452 47 50 synthetic
+--segment 452 453 42 43 copied
+--segment 453 495 47 50 synthetic
+--segment 495 522 54 59 synthetic
+--segment 522 523 54 54 synthetic
+--segment 523 528 54 59 copied
+--segment 528 529 59 59 synthetic
+--segment 529 730 54 59 synthetic
+--segment 730 768 59 60 synthetic
+--site 0 call=41,768 projection=523,528
+--clause binding=246,247 binding=249,252 expression=135,139
+--clause binding=452,453 expression=342,345
+==== nested_count
+return #[for x in xs for y in ys if x < y => 1]
+----
+local __l3i_comp_47_error = error return #(function() local __l3i_comp_8_out = {} local __l3i_comp_8_n = 0 local __l3i_comp_8_g0_src = (xs) local __l3i_comp_8_g0_len = #__l3i_comp_8_g0_src for __l3i_comp_8_g0_i = 1, __l3i_comp_8_g0_len do local x = __l3i_comp_8_g0_src[__l3i_comp_8_g0_i] local __l3i_comp_8_g1_src = (ys) local __l3i_comp_8_g1_len = #__l3i_comp_8_g1_src for __l3i_comp_8_g1_i = 1, __l3i_comp_8_g1_len do local y = __l3i_comp_8_g1_src[__l3i_comp_8_g1_i] if (x < y) then local __l3i_comp_8_value = (1) if __l3i_comp_8_value == nil then __l3i_comp_47_error("L3i comprehension projection produced nil; filter nil explicitly") end __l3i_comp_8_n += 1 __l3i_comp_8_out[__l3i_comp_8_n] = __l3i_comp_8_value end end end return __l3i_comp_8_out end)()
+--prelude 1
+--segment 0 34 8 47 synthetic
+--segment 34 42 0 8 copied
+--segment 42 107 8 47 synthetic
+--segment 107 135 9 20 synthetic
+--segment 135 136 18 18 synthetic
+--segment 136 138 18 20 copied
+--segment 138 139 20 20 synthetic
+--segment 139 245 18 20 synthetic
+--segment 245 246 13 14 copied
+--segment 246 288 18 20 synthetic
+--segment 288 316 21 32 synthetic
+--segment 316 317 30 30 synthetic
+--segment 317 319 30 32 copied
+--segment 319 320 32 32 synthetic
+--segment 320 426 30 32 synthetic
+--segment 426 427 25 26 copied
+--segment 427 469 30 32 synthetic
+--segment 469 472 33 41 synthetic
+--segment 472 473 36 36 synthetic
+--segment 473 478 36 41 copied
+--segment 478 479 41 41 synthetic
+--segment 479 485 36 41 synthetic
+--segment 485 512 45 46 synthetic
+--segment 512 513 45 45 synthetic
+--segment 513 514 45 46 copied
+--segment 514 515 46 46 synthetic
+--segment 515 716 45 46 synthetic
+--segment 716 758 46 47 synthetic
+--site 0 call=42,758 projection=513,514
+--clause binding=245,246 expression=136,138
+--clause binding=426,427 expression=317,319
+--clause binding=42,42 expression=473,478
+==== nested_sum
+return sum[for x in xs for y in ys => x * y]
+----
+local __l3i_comp_44_error = error return (function() local __l3i_comp_10_sum = 0 local __l3i_comp_10_g0_src = (xs) local __l3i_comp_10_g0_len = #__l3i_comp_10_g0_src for __l3i_comp_10_g0_i = 1, __l3i_comp_10_g0_len do local x = __l3i_comp_10_g0_src[__l3i_comp_10_g0_i] local __l3i_comp_10_g1_src = (ys) local __l3i_comp_10_g1_len = #__l3i_comp_10_g1_src for __l3i_comp_10_g1_i = 1, __l3i_comp_10_g1_len do local y = __l3i_comp_10_g1_src[__l3i_comp_10_g1_i] local __l3i_comp_10_value = (x * y) if __l3i_comp_10_value == nil then __l3i_comp_44_error("L3i comprehension projection produced nil; filter nil explicitly") end __l3i_comp_10_sum += __l3i_comp_10_value end end return __l3i_comp_10_sum end)()
+--prelude 1
+--segment 0 34 10 44 synthetic
+--segment 34 41 0 7 copied
+--segment 41 81 7 44 synthetic
+--segment 81 110 11 22 synthetic
+--segment 110 111 20 20 synthetic
+--segment 111 113 20 22 copied
+--segment 113 114 22 22 synthetic
+--segment 114 224 20 22 synthetic
+--segment 224 225 15 16 copied
+--segment 225 269 20 22 synthetic
+--segment 269 298 23 34 synthetic
+--segment 298 299 32 32 synthetic
+--segment 299 301 32 34 copied
+--segment 301 302 34 34 synthetic
+--segment 302 412 32 34 synthetic
+--segment 412 413 27 28 copied
+--segment 413 457 32 34 synthetic
+--segment 457 485 38 43 synthetic
+--segment 485 486 38 38 synthetic
+--segment 486 491 38 43 copied
+--segment 491 492 43 43 synthetic
+--segment 492 661 38 43 synthetic
+--segment 661 700 43 44 synthetic
+--site 0 call=41,700 projection=486,491
+--clause binding=224,225 expression=111,113
+--clause binding=412,413 expression=299,301
+==== nested_three
+return [for x in xs for y in ys for z in zs => x + y + z]
+----
+local __l3i_comp_57_error = error return (function() local __l3i_comp_7_out = {} local __l3i_comp_7_n = 0 local __l3i_comp_7_g0_src = (xs) local __l3i_comp_7_g0_len = #__l3i_comp_7_g0_src for __l3i_comp_7_g0_i = 1, __l3i_comp_7_g0_len do local x = __l3i_comp_7_g0_src[__l3i_comp_7_g0_i] local __l3i_comp_7_g1_src = (ys) local __l3i_comp_7_g1_len = #__l3i_comp_7_g1_src for __l3i_comp_7_g1_i = 1, __l3i_comp_7_g1_len do local y = __l3i_comp_7_g1_src[__l3i_comp_7_g1_i] local __l3i_comp_7_g2_src = (zs) local __l3i_comp_7_g2_len = #__l3i_comp_7_g2_src for __l3i_comp_7_g2_i = 1, __l3i_comp_7_g2_len do local z = __l3i_comp_7_g2_src[__l3i_comp_7_g2_i] local __l3i_comp_7_value = (x + y + z) if __l3i_comp_7_value == nil then __l3i_comp_57_error("L3i comprehension projection produced nil; filter nil explicitly") end __l3i_comp_7_n += 1 __l3i_comp_7_out[__l3i_comp_7_n] = __l3i_comp_7_value end end end return __l3i_comp_7_out end)()
+--prelude 1
+--segment 0 34 7 57 synthetic
+--segment 34 41 0 7 copied
+--segment 41 106 7 57 synthetic
+--segment 106 134 8 19 synthetic
+--segment 134 135 17 17 synthetic
+--segment 135 137 17 19 copied
+--segment 137 138 19 19 synthetic
+--segment 138 244 17 19 synthetic
+--segment 244 245 12 13 copied
+--segment 245 287 17 19 synthetic
+--segment 287 315 20 31 synthetic
+--segment 315 316 29 29 synthetic
+--segment 316 318 29 31 copied
+--segment 318 319 31 31 synthetic
+--segment 319 425 29 31 synthetic
+--segment 425 426 24 25 copied
+--segment 426 468 29 31 synthetic
+--segment 468 496 32 43 synthetic
+--segment 496 497 41 41 synthetic
+--segment 497 499 41 43 copied
+--segment 499 500 43 43 synthetic
+--segment 500 606 41 43 synthetic
+--segment 606 607 36 37 copied
+--segment 607 649 41 43 synthetic
+--segment 649 676 47 56 synthetic
+--segment 676 677 47 47 synthetic
+--segment 677 686 47 56 copied
+--segment 686 687 56 56 synthetic
+--segment 687 888 47 56 synthetic
+--segment 888 930 56 57 synthetic
+--site 0 call=41,930 projection=677,686
+--clause binding=244,245 expression=135,137
+--clause binding=425,426 expression=316,318
+--clause binding=606,607 expression=497,499
+==== comprehension_in_projection
+return [for row in rows => [for x in row => x * 2]]
+----
+local __l3i_comp_51_error = error local __l3i_comp_51_table_create = table.create return (function() local __l3i_comp_7_g0_src = (rows) local __l3i_comp_7_g0_len = #__l3i_comp_7_g0_src local __l3i_comp_7_out = __l3i_comp_51_table_create(__l3i_comp_7_g0_len) :: typeof({}) for __l3i_comp_7_g0_i = 1, __l3i_comp_7_g0_len do local row = __l3i_comp_7_g0_src[__l3i_comp_7_g0_i] local __l3i_comp_7_value = ((function() local __l3i_comp_27_g0_src = (row) local __l3i_comp_27_g0_len = #__l3i_comp_27_g0_src local __l3i_comp_27_out = __l3i_comp_51_table_create(__l3i_comp_27_g0_len) :: typeof({}) for __l3i_comp_27_g0_i = 1, __l3i_comp_27_g0_len do local x = __l3i_comp_27_g0_src[__l3i_comp_27_g0_i] local __l3i_comp_27_value = (x * 2) if __l3i_comp_27_value == nil then __l3i_comp_51_error("L3i comprehension projection produced nil; filter nil explicitly") end __l3i_comp_27_out[__l3i_comp_27_g0_i] = __l3i_comp_27_value end return __l3i_comp_27_out end)()) if __l3i_comp_7_value == nil then __l3i_comp_51_error("L3i comprehension projection produced nil; filter nil explicitly") end __l3i_comp_7_out[__l3i_comp_7_g0_i] = __l3i_comp_7_value end return __l3i_comp_7_out end)()
+--prelude 2
+--segment 0 82 7 51 synthetic
+--segment 82 89 0 7 copied
+--segment 89 101 7 51 synthetic
+--segment 101 129 8 23 synthetic
+--segment 129 130 19 19 synthetic
+--segment 130 134 19 23 copied
+--segment 134 135 23 23 synthetic
+--segment 135 328 19 23 synthetic
+--segment 328 331 12 15 copied
+--segment 331 373 19 23 synthetic
+--segment 373 400 27 50 synthetic
+--segment 400 401 27 27 synthetic
+--segment 401 413 27 50 synthetic
+--segment 413 442 28 40 synthetic
+--segment 442 443 37 37 synthetic
+--segment 443 446 37 40 copied
+--segment 446 447 40 40 synthetic
+--segment 447 646 37 40 synthetic
+--segment 646 647 32 33 copied
+--segment 647 691 37 40 synthetic
+--segment 691 719 44 49 synthetic
+--segment 719 720 44 44 synthetic
+--segment 720 725 44 49 copied
+--segment 725 726 49 49 synthetic
+--segment 726 914 44 49 synthetic
+--segment 914 949 49 50 synthetic
+--segment 949 950 50 50 synthetic
+--segment 950 1134 27 50 synthetic
+--segment 1134 1168 50 51 synthetic
+--site 1 call=401,949 projection=720,725
+--clause binding=646,647 expression=443,446
+--site 0 call=89,1168 projection=401,949
+--clause binding=328,331 expression=130,134
+==== comprehension_in_source
+return [for x in [for y in ys => y + 1] => x * 2]
+----
+local __l3i_comp_49_error = error local __l3i_comp_49_table_create = table.create return (function() local __l3i_comp_7_g0_src = ((function() local __l3i_comp_17_g0_src = (ys) local __l3i_comp_17_g0_len = #__l3i_comp_17_g0_src local __l3i_comp_17_out = __l3i_comp_49_table_create(__l3i_comp_17_g0_len) :: typeof({}) for __l3i_comp_17_g0_i = 1, __l3i_comp_17_g0_len do local y = __l3i_comp_17_g0_src[__l3i_comp_17_g0_i] local __l3i_comp_17_value = (y + 1) if __l3i_comp_17_value == nil then __l3i_comp_49_error("L3i comprehension projection produced nil; filter nil explicitly") end __l3i_comp_17_out[__l3i_comp_17_g0_i] = __l3i_comp_17_value end return __l3i_comp_17_out end)()) local __l3i_comp_7_g0_len = #__l3i_comp_7_g0_src local __l3i_comp_7_out = __l3i_comp_49_table_create(__l3i_comp_7_g0_len) :: typeof({}) for __l3i_comp_7_g0_i = 1, __l3i_comp_7_g0_len do local x = __l3i_comp_7_g0_src[__l3i_comp_7_g0_i] local __l3i_comp_7_value = (x * 2) if __l3i_comp_7_value == nil then __l3i_comp_49_error("L3i comprehension projection produced nil; filter nil explicitly") end __l3i_comp_7_out[__l3i_comp_7_g0_i] = __l3i_comp_7_value end return __l3i_comp_7_out end)()
+--prelude 2
+--segment 0 82 7 49 synthetic
+--segment 82 89 0 7 copied
+--segment 89 101 7 49 synthetic
+--segment 101 129 8 39 synthetic
+--segment 129 130 17 17 synthetic
+--segment 130 142 17 39 synthetic
+--segment 142 171 18 29 synthetic
+--segment 171 172 27 27 synthetic
+--segment 172 174 27 29 copied
+--segment 174 175 29 29 synthetic
+--segment 175 374 27 29 synthetic
+--segment 374 375 22 23 copied
+--segment 375 419 27 29 synthetic
+--segment 419 447 33 38 synthetic
+--segment 447 448 33 33 synthetic
+--segment 448 453 33 38 copied
+--segment 453 454 38 38 synthetic
+--segment 454 642 33 38 synthetic
+--segment 642 677 38 39 synthetic
+--segment 677 678 39 39 synthetic
+--segment 678 871 17 39 synthetic
+--segment 871 872 12 13 copied
+--segment 872 914 17 39 synthetic
+--segment 914 941 43 48 synthetic
+--segment 941 942 43 43 synthetic
+--segment 942 947 43 48 copied
+--segment 947 948 48 48 synthetic
+--segment 948 1132 43 48 synthetic
+--segment 1132 1166 48 49 synthetic
+--site 1 call=130,677 projection=448,453
+--clause binding=374,375 expression=172,174
+--site 0 call=89,1166 projection=942,947
+--clause binding=871,872 expression=130,677
+==== comprehension_in_filter
+return [for x in xs if #[for y in x.items => y] > 0 => x]
+----
+local __l3i_comp_57_error = error local __l3i_comp_57_table_create = table.create return (function() local __l3i_comp_7_g0_src = (xs) local __l3i_comp_7_g0_len = #__l3i_comp_7_g0_src local __l3i_comp_7_out = __l3i_comp_57_table_create(__l3i_comp_7_g0_len) :: typeof({}) local __l3i_comp_7_n = 0 for __l3i_comp_7_g0_i = 1, __l3i_comp_7_g0_len do local x = __l3i_comp_7_g0_src[__l3i_comp_7_g0_i] if (#(function() local __l3i_comp_24_g0_src = (x.items) local __l3i_comp_24_g0_len = #__l3i_comp_24_g0_src local __l3i_comp_24_out = __l3i_comp_57_table_create(__l3i_comp_24_g0_len) :: typeof({}) for __l3i_comp_24_g0_i = 1, __l3i_comp_24_g0_len do local y = __l3i_comp_24_g0_src[__l3i_comp_24_g0_i] local __l3i_comp_24_value = (y) if __l3i_comp_24_value == nil then __l3i_comp_57_error("L3i comprehension projection produced nil; filter nil explicitly") end __l3i_comp_24_out[__l3i_comp_24_g0_i] = __l3i_comp_24_value end return __l3i_comp_24_out end)() > 0) then local __l3i_comp_7_value = (x) if __l3i_comp_7_value == nil then __l3i_comp_57_error("L3i comprehension projection produced nil; filter nil explicitly") end __l3i_comp_7_n += 1 __l3i_comp_7_out[__l3i_comp_7_n] = __l3i_comp_7_value end end return __l3i_comp_7_out end)()
+--prelude 2
+--segment 0 82 7 57 synthetic
+--segment 82 89 0 7 copied
+--segment 89 101 7 57 synthetic
+--segment 101 129 8 19 synthetic
+--segment 129 130 17 17 synthetic
+--segment 130 132 17 19 copied
+--segment 132 133 19 19 synthetic
+--segment 133 351 17 19 synthetic
+--segment 351 352 12 13 copied
+--segment 352 394 17 19 synthetic
+--segment 394 397 23 51 synthetic
+--segment 397 398 23 23 synthetic
+--segment 398 399 23 24 copied
+--segment 399 411 24 47 synthetic
+--segment 411 440 25 41 synthetic
+--segment 440 441 34 34 synthetic
+--segment 441 448 34 41 copied
+--segment 448 449 41 41 synthetic
+--segment 449 648 34 41 synthetic
+--segment 648 649 29 30 copied
+--segment 649 693 34 41 synthetic
+--segment 693 721 45 46 synthetic
+--segment 721 722 45 45 synthetic
+--segment 722 723 45 46 copied
+--segment 723 724 46 46 synthetic
+--segment 724 912 45 46 synthetic
+--segment 912 947 46 47 synthetic
+--segment 947 951 47 51 copied
+--segment 951 952 51 51 synthetic
+--segment 952 958 23 51 synthetic
+--segment 958 985 55 56 synthetic
+--segment 985 986 55 55 synthetic
+--segment 986 987 55 56 copied
+--segment 987 988 56 56 synthetic
+--segment 988 1189 55 56 synthetic
+--segment 1189 1227 56 57 synthetic
+--site 1 call=399,947 projection=722,723
+--clause binding=648,649 expression=441,448
+--site 0 call=89,1227 projection=986,987
+--clause binding=351,352 expression=130,132
+--clause binding=89,89 expression=398,951
+==== comments_inside
+return [for x in xs -- source note
+    if p(x) -- filter note
+    => f(x) -- projection note
+]
+----
+local __l3i_comp_94_error = error local __l3i_comp_94_table_create = table.create return (function() 
+-- source note
+-- filter note
+-- projection note
+local __l3i_comp_7_g0_src = (xs) local __l3i_comp_7_g0_len = #__l3i_comp_7_g0_src local __l3i_comp_7_out = __l3i_comp_94_table_create(__l3i_comp_7_g0_len) :: typeof({}) local __l3i_comp_7_n = 0 for __l3i_comp_7_g0_i = 1, __l3i_comp_7_g0_len do local x = __l3i_comp_7_g0_src[__l3i_comp_7_g0_i] if (p(x)) then local __l3i_comp_7_value = (f(x)) if __l3i_comp_7_value == nil then __l3i_comp_94_error("L3i comprehension projection produced nil; filter nil explicitly") end __l3i_comp_7_n += 1 __l3i_comp_7_out[__l3i_comp_7_n] = __l3i_comp_7_value end end return __l3i_comp_7_out end)()
+--prelude 2
+--segment 0 82 7 94 synthetic
+--segment 82 89 0 7 copied
+--segment 89 102 7 94 synthetic
+--segment 102 116 20 34 copied
+--segment 116 117 7 94 synthetic
+--segment 117 131 47 61 copied
+--segment 131 132 7 94 synthetic
+--segment 132 150 74 92 copied
+--segment 150 151 7 94 synthetic
+--segment 151 179 8 19 synthetic
+--segment 179 180 17 17 synthetic
+--segment 180 182 17 19 copied
+--segment 182 183 19 19 synthetic
+--segment 183 401 17 19 synthetic
+--segment 401 402 12 13 copied
+--segment 402 444 17 19 synthetic
+--segment 444 447 42 46 synthetic
+--segment 447 448 42 42 synthetic
+--segment 448 452 42 46 copied
+--segment 452 453 46 46 synthetic
+--segment 453 459 42 46 synthetic
+--segment 459 486 69 73 synthetic
+--segment 486 487 69 69 synthetic
+--segment 487 491 69 73 copied
+--segment 491 492 73 73 synthetic
+--segment 492 693 69 73 synthetic
+--segment 693 731 93 94 synthetic
+--site 0 call=89,731 projection=487,491
+--clause binding=401,402 expression=180,182
+--clause binding=89,89 expression=448,452
+==== leading_comments
+--!native
+-- leading
+return [for x in xs => x]
+----
+--!native
+-- leading
+local __l3i_comp_46_error = error local __l3i_comp_46_table_create = table.create return (function() local __l3i_comp_28_g0_src = (xs) local __l3i_comp_28_g0_len = #__l3i_comp_28_g0_src local __l3i_comp_28_out = __l3i_comp_46_table_create(__l3i_comp_28_g0_len) :: typeof({}) for __l3i_comp_28_g0_i = 1, __l3i_comp_28_g0_len do local x = __l3i_comp_28_g0_src[__l3i_comp_28_g0_i] local __l3i_comp_28_value = (x) if __l3i_comp_28_value == nil then __l3i_comp_46_error("L3i comprehension projection produced nil; filter nil explicitly") end __l3i_comp_28_out[__l3i_comp_28_g0_i] = __l3i_comp_28_value end return __l3i_comp_28_out end)()
+--prelude 2
+--segment 0 21 0 21 copied
+--segment 21 103 28 46 synthetic
+--segment 103 110 21 28 copied
+--segment 110 122 28 46 synthetic
+--segment 122 151 29 40 synthetic
+--segment 151 152 38 38 synthetic
+--segment 152 154 38 40 copied
+--segment 154 155 40 40 synthetic
+--segment 155 354 38 40 synthetic
+--segment 354 355 33 34 copied
+--segment 355 399 38 40 synthetic
+--segment 399 427 44 45 synthetic
+--segment 427 428 44 44 synthetic
+--segment 428 429 44 45 copied
+--segment 429 430 45 45 synthetic
+--segment 430 618 44 45 synthetic
+--segment 618 653 45 46 synthetic
+--site 0 call=110,653 projection=428,429
+--clause binding=354,355 expression=152,154
+==== multiline
+local out = [
+    for x in values[
+        first:
+        last
+    ]
+    if accept(x)
+    => project(x)
+]
+return out
+----
+local __l3i_comp_116_error = error local __l3i_comp_116_typeof = typeof local __l3i_comp_116_table_create = table.create local out = (function() local __l3i_comp_12_g0_src = (values) local __l3i_comp_12_g0_first = (first) local __l3i_comp_12_g0_last = (last) local __l3i_comp_12_g0_kind = __l3i_comp_116_typeof(__l3i_comp_12_g0_src) if __l3i_comp_12_g0_kind ~= "table" then __l3i_comp_116_error("JSL comprehension slice source must be a table") end if __l3i_comp_116_typeof(__l3i_comp_12_g0_first) ~= "number" or __l3i_comp_12_g0_first % 1 ~= 0 then __l3i_comp_116_error("JSL slice first bound must be a finite integer") end if __l3i_comp_116_typeof(__l3i_comp_12_g0_last) ~= "number" or __l3i_comp_12_g0_last % 1 ~= 0 then __l3i_comp_116_error("JSL slice last bound must be a finite integer") end local __l3i_comp_12_g0_len = #__l3i_comp_12_g0_src if __l3i_comp_12_g0_first < 1 then __l3i_comp_12_g0_first = 1 end if __l3i_comp_12_g0_last > __l3i_comp_12_g0_len then __l3i_comp_12_g0_last = __l3i_comp_12_g0_len end local __l3i_comp_12_g0_n = 0 if __l3i_comp_12_g0_last >= __l3i_comp_12_g0_first then __l3i_comp_12_g0_n = __l3i_comp_12_g0_last - __l3i_comp_12_g0_first + 1 end local __l3i_comp_12_out = __l3i_comp_116_table_create(__l3i_comp_12_g0_n) :: typeof({}) local __l3i_comp_12_n = 0 for __l3i_comp_12_g0_i = __l3i_comp_12_g0_first, __l3i_comp_12_g0_last do local x = __l3i_comp_12_g0_src[__l3i_comp_12_g0_i] if (accept(x)) then local __l3i_comp_12_value = (project(x)) if __l3i_comp_12_value == nil then __l3i_comp_116_error("L3i comprehension projection produced nil; filter nil explicitly") end __l3i_comp_12_n += 1 __l3i_comp_12_out[__l3i_comp_12_n] = __l3i_comp_12_value end end return __l3i_comp_12_out end)()
+return out
+--prelude 3
+--segment 0 121 12 105 synthetic
+--segment 121 133 0 12 copied
+--segment 133 145 12 105 synthetic
+--segment 145 174 18 68 synthetic
+--segment 174 175 27 27 synthetic
+--segment 175 181 27 33 copied
+--segment 181 182 33 33 synthetic
+--segment 182 214 27 33 synthetic
+--segment 214 215 43 43 synthetic
+--segment 215 220 43 48 copied
+--segment 220 221 48 48 synthetic
+--segment 221 252 43 48 synthetic
+--segment 252 253 58 58 synthetic
+--segment 253 257 58 62 copied
+--segment 257 258 62 62 synthetic
+--segment 258 259 58 62 synthetic
+--segment 259 449 27 33 synthetic
+--segment 449 625 43 48 synthetic
+--segment 625 1372 58 62 synthetic
+--segment 1372 1373 22 23 copied
+--segment 1373 1420 58 62 synthetic
+--segment 1420 1421 76 76 synthetic
+--segment 1421 1430 76 85 copied
+--segment 1430 1431 85 85 synthetic
+--segment 1431 1437 76 85 synthetic
+--segment 1437 1465 93 103 synthetic
+--segment 1465 1466 93 93 synthetic
+--segment 1466 1476 93 103 copied
+--segment 1476 1477 103 103 synthetic
+--segment 1477 1692 93 103 synthetic
+--segment 1692 1723 104 105 synthetic
+--segment 1723 1734 105 116 copied
+--site 0 call=133,1723 projection=1466,1476
+--clause binding=1372,1373 expression=133,133 sliceSource=174,182 sliceFirst=214,221 sliceLast=252,258
+--clause binding=133,133 expression=1421,1430
+==== hygiene_offset_collision
+local __l3i_comp_7 = 1
+return [for x in xs => x + __l3i_comp_7]
+----
+local __l3i_comp_63_error = error local __l3i_comp_63_table_create = table.create local __l3i_comp_7 = 1
+return (function() local __l3i_comp_30_g0_src = (xs) local __l3i_comp_30_g0_len = #__l3i_comp_30_g0_src local __l3i_comp_30_out = __l3i_comp_63_table_create(__l3i_comp_30_g0_len) :: typeof({}) for __l3i_comp_30_g0_i = 1, __l3i_comp_30_g0_len do local x = __l3i_comp_30_g0_src[__l3i_comp_30_g0_i] local __l3i_comp_30_value = (x + __l3i_comp_7) if __l3i_comp_30_value == nil then __l3i_comp_63_error("L3i comprehension projection produced nil; filter nil explicitly") end __l3i_comp_30_out[__l3i_comp_30_g0_i] = __l3i_comp_30_value end return __l3i_comp_30_out end)()
+--prelude 2
+--segment 0 82 30 63 synthetic
+--segment 82 112 0 30 copied
+--segment 112 124 30 63 synthetic
+--segment 124 153 31 42 synthetic
+--segment 153 154 40 40 synthetic
+--segment 154 156 40 42 copied
+--segment 156 157 42 42 synthetic
+--segment 157 356 40 42 synthetic
+--segment 356 357 35 36 copied
+--segment 357 401 40 42 synthetic
+--segment 401 429 46 62 synthetic
+--segment 429 430 46 46 synthetic
+--segment 430 446 46 62 copied
+--segment 446 447 62 62 synthetic
+--segment 447 635 46 62 synthetic
+--segment 635 670 62 63 synthetic
+--site 0 call=112,670 projection=430,446
+--clause binding=356,357 expression=154,156
+==== hygiene_user_names
+local error, table, buffer, typeof = 1, 2, 3, 4
+return [for x in xs[1:2] => x]
+----
+local __l3i_comp_78_error = error local __l3i_comp_78_typeof = typeof local __l3i_comp_78_table_create = table.create local error, table, buffer, typeof = 1, 2, 3, 4
+return (function() local __l3i_comp_55_g0_src = (xs) local __l3i_comp_55_g0_first = (1) local __l3i_comp_55_g0_last = (2) local __l3i_comp_55_g0_kind = __l3i_comp_78_typeof(__l3i_comp_55_g0_src) if __l3i_comp_55_g0_kind ~= "table" then __l3i_comp_78_error("JSL comprehension slice source must be a table") end if __l3i_comp_78_typeof(__l3i_comp_55_g0_first) ~= "number" or __l3i_comp_55_g0_first % 1 ~= 0 then __l3i_comp_78_error("JSL slice first bound must be a finite integer") end if __l3i_comp_78_typeof(__l3i_comp_55_g0_last) ~= "number" or __l3i_comp_55_g0_last % 1 ~= 0 then __l3i_comp_78_error("JSL slice last bound must be a finite integer") end local __l3i_comp_55_g0_len = #__l3i_comp_55_g0_src if __l3i_comp_55_g0_first < 1 then __l3i_comp_55_g0_first = 1 end if __l3i_comp_55_g0_last > __l3i_comp_55_g0_len then __l3i_comp_55_g0_last = __l3i_comp_55_g0_len end local __l3i_comp_55_g0_n = 0 if __l3i_comp_55_g0_last >= __l3i_comp_55_g0_first then __l3i_comp_55_g0_n = __l3i_comp_55_g0_last - __l3i_comp_55_g0_first + 1 end local __l3i_comp_55_out = __l3i_comp_78_table_create(__l3i_comp_55_g0_n) :: typeof({}) local __l3i_comp_55_n = 0 for __l3i_comp_55_g0_i = __l3i_comp_55_g0_first, __l3i_comp_55_g0_last do local x = __l3i_comp_55_g0_src[__l3i_comp_55_g0_i] local __l3i_comp_55_value = (x) if __l3i_comp_55_value == nil then __l3i_comp_78_error("L3i comprehension projection produced nil; filter nil explicitly") end __l3i_comp_55_n += 1 __l3i_comp_55_out[__l3i_comp_55_n] = __l3i_comp_55_value end return __l3i_comp_55_out end)()
+--prelude 3
+--segment 0 118 55 78 synthetic
+--segment 118 173 0 55 copied
+--segment 173 185 55 78 synthetic
+--segment 185 214 56 72 synthetic
+--segment 214 215 65 65 synthetic
+--segment 215 217 65 67 copied
+--segment 217 218 67 67 synthetic
+--segment 218 250 65 67 synthetic
+--segment 250 251 68 68 synthetic
+--segment 251 252 68 69 copied
+--segment 252 253 69 69 synthetic
+--segment 253 284 68 69 synthetic
+--segment 284 285 70 70 synthetic
+--segment 285 286 70 71 copied
+--segment 286 287 71 71 synthetic
+--segment 287 288 70 71 synthetic
+--segment 288 476 65 67 synthetic
+--segment 476 650 68 69 synthetic
+--segment 650 1394 70 71 synthetic
+--segment 1394 1395 60 61 copied
+--segment 1395 1439 70 71 synthetic
+--segment 1439 1467 76 77 synthetic
+--segment 1467 1468 76 76 synthetic
+--segment 1468 1469 76 77 copied
+--segment 1469 1470 77 77 synthetic
+--segment 1470 1680 76 77 synthetic
+--segment 1680 1711 77 78 synthetic
+--site 0 call=173,1711 projection=1468,1469
+--clause binding=1394,1395 expression=173,173 sliceSource=214,218 sliceFirst=250,253 sliceLast=284,287
+==== interpolated_string
+return `count {#[for x in xs => x]} items`
+----
+local __l3i_comp_42_error = error local __l3i_comp_42_table_create = table.create return `count {#(function() local __l3i_comp_16_g0_src = (xs) local __l3i_comp_16_g0_len = #__l3i_comp_16_g0_src local __l3i_comp_16_out = __l3i_comp_42_table_create(__l3i_comp_16_g0_len) :: typeof({}) for __l3i_comp_16_g0_i = 1, __l3i_comp_16_g0_len do local x = __l3i_comp_16_g0_src[__l3i_comp_16_g0_i] local __l3i_comp_16_value = (x) if __l3i_comp_16_value == nil then __l3i_comp_42_error("L3i comprehension projection produced nil; filter nil explicitly") end __l3i_comp_16_out[__l3i_comp_16_g0_i] = __l3i_comp_16_value end return __l3i_comp_16_out end)()} items`
+--prelude 2
+--segment 0 82 16 34 synthetic
+--segment 82 98 0 16 copied
+--segment 98 110 16 34 synthetic
+--segment 110 139 17 28 synthetic
+--segment 139 140 26 26 synthetic
+--segment 140 142 26 28 copied
+--segment 142 143 28 28 synthetic
+--segment 143 342 26 28 synthetic
+--segment 342 343 21 22 copied
+--segment 343 387 26 28 synthetic
+--segment 387 415 32 33 synthetic
+--segment 415 416 32 32 synthetic
+--segment 416 417 32 33 copied
+--segment 417 418 33 33 synthetic
+--segment 418 606 32 33 synthetic
+--segment 606 641 33 34 synthetic
+--segment 641 649 34 42 copied
+--site 0 call=98,641 projection=416,417
+--clause binding=342,343 expression=140,142
+==== string_literal_is_not_syntax
+return '[for x in xs => x]', [==[[for y in ys]]==]
+----
+return '[for x in xs => x]', [==[[for y in ys]]==]
+--prelude 0
+==== two_comprehensions
+return [for x in xs => x], sum[for y in ys => y]
+----
+local __l3i_comp_48_error = error local __l3i_comp_48_table_create = table.create return (function() local __l3i_comp_7_g0_src = (xs) local __l3i_comp_7_g0_len = #__l3i_comp_7_g0_src local __l3i_comp_7_out = __l3i_comp_48_table_create(__l3i_comp_7_g0_len) :: typeof({}) for __l3i_comp_7_g0_i = 1, __l3i_comp_7_g0_len do local x = __l3i_comp_7_g0_src[__l3i_comp_7_g0_i] local __l3i_comp_7_value = (x) if __l3i_comp_7_value == nil then __l3i_comp_48_error("L3i comprehension projection produced nil; filter nil explicitly") end __l3i_comp_7_out[__l3i_comp_7_g0_i] = __l3i_comp_7_value end return __l3i_comp_7_out end)(), (function() local __l3i_comp_30_g0_src = (ys) local __l3i_comp_30_g0_len = #__l3i_comp_30_g0_src local __l3i_comp_30_sum = 0 for __l3i_comp_30_g0_i = 1, __l3i_comp_30_g0_len do local y = __l3i_comp_30_g0_src[__l3i_comp_30_g0_i] local __l3i_comp_30_value = (y) if __l3i_comp_30_value == nil then __l3i_comp_48_error("L3i comprehension projection produced nil; filter nil explicitly") end __l3i_comp_30_sum += __l3i_comp_30_value end return __l3i_comp_30_sum end)()
+--prelude 2
+--segment 0 82 7 25 synthetic
+--segment 82 89 0 7 copied
+--segment 89 101 7 25 synthetic
+--segment 101 129 8 19 synthetic
+--segment 129 130 17 17 synthetic
+--segment 130 132 17 19 copied
+--segment 132 133 19 19 synthetic
+--segment 133 326 17 19 synthetic
+--segment 326 327 12 13 copied
+--segment 327 369 17 19 synthetic
+--segment 369 396 23 24 synthetic
+--segment 396 397 23 23 synthetic
+--segment 397 398 23 24 copied
+--segment 398 399 24 24 synthetic
+--segment 399 583 23 24 synthetic
+--segment 583 617 24 25 synthetic
+--segment 617 619 25 27 copied
+--segment 619 631 27 48 synthetic
+--segment 631 660 31 42 synthetic
+--segment 660 661 40 40 synthetic
+--segment 661 663 40 42 copied
+--segment 663 664 42 42 synthetic
+--segment 664 802 40 42 synthetic
+--segment 802 803 35 36 copied
+--segment 803 847 40 42 synthetic
+--segment 847 875 46 47 synthetic
+--segment 875 876 46 46 synthetic
+--segment 876 877 46 47 copied
+--segment 877 878 47 47 synthetic
+--segment 878 1047 46 47 synthetic
+--segment 1047 1082 47 48 synthetic
+--site 0 call=89,617 projection=397,398
+--clause binding=326,327 expression=130,132
+--site 1 call=619,1082 projection=876,877
+--clause binding=802,803 expression=661,663
+==== missing_binding_filter_only
+return [for in xs if p => 1]
+----
+local __l3i_comp_28_error = error local __l3i_comp_28_table_create = table.create return (function() local __l3i_comp_7_g0_src = (xs) local __l3i_comp_7_g0_len = #__l3i_comp_7_g0_src local __l3i_comp_7_out = __l3i_comp_28_table_create(__l3i_comp_7_g0_len) :: typeof({}) local __l3i_comp_7_n = 0 for __l3i_comp_7_g0_i = 1, __l3i_comp_7_g0_len do local __l3i_comp_7_missing = __l3i_comp_7_g0_src[__l3i_comp_7_g0_i] if (p) then local __l3i_comp_7_value = (1) if __l3i_comp_7_value == nil then __l3i_comp_28_error("L3i comprehension projection produced nil; filter nil explicitly") end __l3i_comp_7_n += 1 __l3i_comp_7_out[__l3i_comp_7_n] = __l3i_comp_7_value end end return __l3i_comp_7_out end)()
+--prelude 2
+--segment 0 82 7 28 synthetic
+--segment 82 89 0 7 copied
+--segment 89 101 7 28 synthetic
+--segment 101 129 8 17 synthetic
+--segment 129 130 15 15 synthetic
+--segment 130 132 15 17 copied
+--segment 132 133 17 17 synthetic
+--segment 133 413 15 17 synthetic
+--segment 413 416 21 22 synthetic
+--segment 416 417 21 21 synthetic
+--segment 417 418 21 22 copied
+--segment 418 419 22 22 synthetic
+--segment 419 425 21 22 synthetic
+--segment 425 452 26 27 synthetic
+--segment 452 453 26 26 synthetic
+--segment 453 454 26 27 copied
+--segment 454 455 27 27 synthetic
+--segment 455 656 26 27 synthetic
+--segment 656 694 27 28 synthetic
+--site 0 call=89,694 projection=453,454
+--clause binding=351,371 expression=130,132
+--clause binding=89,89 expression=417,418
+--error 12 12 expected generator binding name after 'for'
+==== unfinished_for
+return [for
+----
+local __l3i_comp_11_error = error local __l3i_comp_11_table_create = table.create return (function() local __l3i_comp_7_g0_src = ({} :: {any}) local __l3i_comp_7_g0_len = #__l3i_comp_7_g0_src local __l3i_comp_7_out = __l3i_comp_11_table_create(__l3i_comp_7_g0_len) :: typeof({}) for __l3i_comp_7_g0_i = 1, __l3i_comp_7_g0_len do local __l3i_comp_7_missing = __l3i_comp_7_g0_src[__l3i_comp_7_g0_i] local __l3i_comp_7_value = (nil :: any) if __l3i_comp_7_value == nil then __l3i_comp_11_error("L3i comprehension projection produced nil; filter nil explicitly") end __l3i_comp_7_out[__l3i_comp_7_g0_i] = __l3i_comp_7_value end return __l3i_comp_7_out end)()
+--prelude 2
+--segment 0 82 7 11 synthetic
+--segment 82 89 0 7 copied
+--segment 89 101 7 11 synthetic
+--segment 101 129 8 11 synthetic
+--segment 129 654 11 11 synthetic
+--site 0 call=89,654 projection=424,436
+--clause binding=335,355 expression=129,142
+--error 11 11 expected generator binding name after 'for'
+--error 11 11 expected 'in' after generator binding
+--error 11 11 expected generator expression
+--error 11 11 expected '=>' and projection expression
+--error 11 11 expected ']' to close comprehension
+==== unfinished_binding
+return [for x
+----
+local __l3i_comp_13_error = error local __l3i_comp_13_table_create = table.create return (function() local __l3i_comp_7_g0_src = ({} :: {any}) local __l3i_comp_7_g0_len = #__l3i_comp_7_g0_src local __l3i_comp_7_out = __l3i_comp_13_table_create(__l3i_comp_7_g0_len) :: typeof({}) for __l3i_comp_7_g0_i = 1, __l3i_comp_7_g0_len do local x = __l3i_comp_7_g0_src[__l3i_comp_7_g0_i] local __l3i_comp_7_value = (nil :: any) if __l3i_comp_7_value == nil then __l3i_comp_13_error("L3i comprehension projection produced nil; filter nil explicitly") end __l3i_comp_7_out[__l3i_comp_7_g0_i] = __l3i_comp_7_value end return __l3i_comp_7_out end)()
+--prelude 2
+--segment 0 82 7 13 synthetic
+--segment 82 89 0 7 copied
+--segment 89 101 7 13 synthetic
+--segment 101 129 8 13 synthetic
+--segment 129 335 13 13 synthetic
+--segment 335 336 12 13 copied
+--segment 336 635 13 13 synthetic
+--site 0 call=89,635 projection=405,417
+--clause binding=335,336 expression=129,142
+--error 13 13 expected 'in' after generator binding
+--error 13 13 expected generator expression
+--error 13 13 expected '=>' and projection expression
+--error 13 13 expected ']' to close comprehension
+==== unfinished_in
+return [for x in
+----
+local __l3i_comp_16_error = error local __l3i_comp_16_table_create = table.create return (function() local __l3i_comp_7_g0_src = ({} :: {any}) local __l3i_comp_7_g0_len = #__l3i_comp_7_g0_src local __l3i_comp_7_out = __l3i_comp_16_table_create(__l3i_comp_7_g0_len) :: typeof({}) for __l3i_comp_7_g0_i = 1, __l3i_comp_7_g0_len do local x = __l3i_comp_7_g0_src[__l3i_comp_7_g0_i] local __l3i_comp_7_value = (nil :: any) if __l3i_comp_7_value == nil then __l3i_comp_16_error("L3i comprehension projection produced nil; filter nil explicitly") end __l3i_comp_7_out[__l3i_comp_7_g0_i] = __l3i_comp_7_value end return __l3i_comp_7_out end)()
+--prelude 2
+--segment 0 82 7 16 synthetic
+--segment 82 89 0 7 copied
+--segment 89 101 7 16 synthetic
+--segment 101 129 8 16 synthetic
+--segment 129 335 16 16 synthetic
+--segment 335 336 12 13 copied
+--segment 336 635 16 16 synthetic
+--site 0 call=89,635 projection=405,417
+--clause binding=335,336 expression=129,142
+--error 16 16 expected generator expression
+--error 16 16 expected '=>' and projection expression
+--error 16 16 expected ']' to close comprehension
+==== unfinished_source
+return [for x in xs
+----
+local __l3i_comp_19_error = error local __l3i_comp_19_table_create = table.create return (function() local __l3i_comp_7_g0_src = (xs) local __l3i_comp_7_g0_len = #__l3i_comp_7_g0_src local __l3i_comp_7_out = __l3i_comp_19_table_create(__l3i_comp_7_g0_len) :: typeof({}) for __l3i_comp_7_g0_i = 1, __l3i_comp_7_g0_len do local x = __l3i_comp_7_g0_src[__l3i_comp_7_g0_i] local __l3i_comp_7_value = (nil :: any) if __l3i_comp_7_value == nil then __l3i_comp_19_error("L3i comprehension projection produced nil; filter nil explicitly") end __l3i_comp_7_out[__l3i_comp_7_g0_i] = __l3i_comp_7_value end return __l3i_comp_7_out end)()
+--prelude 2
+--segment 0 82 7 19 synthetic
+--segment 82 89 0 7 copied
+--segment 89 101 7 19 synthetic
+--segment 101 129 8 19 synthetic
+--segment 129 130 17 17 synthetic
+--segment 130 132 17 19 copied
+--segment 132 133 19 19 synthetic
+--segment 133 326 17 19 synthetic
+--segment 326 327 12 13 copied
+--segment 327 369 17 19 synthetic
+--segment 369 626 19 19 synthetic
+--site 0 call=89,626 projection=396,408
+--clause binding=326,327 expression=130,132
+--error 19 19 expected '=>' and projection expression
+--error 19 19 expected ']' to close comprehension
+==== unfinished_filter
+return [for x in xs if
+----
+local __l3i_comp_22_error = error local __l3i_comp_22_table_create = table.create return (function() local __l3i_comp_7_g0_src = (xs) local __l3i_comp_7_g0_len = #__l3i_comp_7_g0_src local __l3i_comp_7_out = __l3i_comp_22_table_create(__l3i_comp_7_g0_len) :: typeof({}) local __l3i_comp_7_n = 0 for __l3i_comp_7_g0_i = 1, __l3i_comp_7_g0_len do local x = __l3i_comp_7_g0_src[__l3i_comp_7_g0_i] if true then local __l3i_comp_7_value = (nil :: any) if __l3i_comp_7_value == nil then __l3i_comp_22_error("L3i comprehension projection produced nil; filter nil explicitly") end __l3i_comp_7_n += 1 __l3i_comp_7_out[__l3i_comp_7_n] = __l3i_comp_7_value end end return __l3i_comp_7_out end)()
+--prelude 2
+--segment 0 82 7 22 synthetic
+--segment 82 89 0 7 copied
+--segment 89 101 7 22 synthetic
+--segment 101 129 8 19 synthetic
+--segment 129 130 17 17 synthetic
+--segment 130 132 17 19 copied
+--segment 132 133 19 19 synthetic
+--segment 133 351 17 19 synthetic
+--segment 351 352 12 13 copied
+--segment 352 394 17 19 synthetic
+--segment 394 685 22 22 synthetic
+--site 0 call=89,685 projection=434,446
+--clause binding=351,352 expression=130,132
+--clause binding=89,89 expression=397,401
+--error 22 22 expected filter expression
+--error 22 22 expected '=>' and projection expression
+--error 22 22 expected ']' to close comprehension
+==== unfinished_arrow
+return [for x in xs =>
+----
+local __l3i_comp_22_error = error local __l3i_comp_22_table_create = table.create return (function() local __l3i_comp_7_g0_src = (xs) local __l3i_comp_7_g0_len = #__l3i_comp_7_g0_src local __l3i_comp_7_out = __l3i_comp_22_table_create(__l3i_comp_7_g0_len) :: typeof({}) for __l3i_comp_7_g0_i = 1, __l3i_comp_7_g0_len do local x = __l3i_comp_7_g0_src[__l3i_comp_7_g0_i] local __l3i_comp_7_value = (nil :: any) if __l3i_comp_7_value == nil then __l3i_comp_22_error("L3i comprehension projection produced nil; filter nil explicitly") end __l3i_comp_7_out[__l3i_comp_7_g0_i] = __l3i_comp_7_value end return __l3i_comp_7_out end)()
+--prelude 2
+--segment 0 82 7 22 synthetic
+--segment 82 89 0 7 copied
+--segment 89 101 7 22 synthetic
+--segment 101 129 8 19 synthetic
+--segment 129 130 17 17 synthetic
+--segment 130 132 17 19 copied
+--segment 132 133 19 19 synthetic
+--segment 133 326 17 19 synthetic
+--segment 326 327 12 13 copied
+--segment 327 369 17 19 synthetic
+--segment 369 626 22 22 synthetic
+--site 0 call=89,626 projection=396,408
+--clause binding=326,327 expression=130,132
+--error 22 22 expected projection expression after '=>'
+--error 22 22 expected ']' to close comprehension
+==== unfinished_member
+return [for x in xs => x.
+----
+local __l3i_comp_25_error = error local __l3i_comp_25_table_create = table.create return (function() local __l3i_comp_7_g0_src = (xs) local __l3i_comp_7_g0_len = #__l3i_comp_7_g0_src local __l3i_comp_7_out = __l3i_comp_25_table_create(__l3i_comp_7_g0_len) :: typeof({}) for __l3i_comp_7_g0_i = 1, __l3i_comp_7_g0_len do local x = __l3i_comp_7_g0_src[__l3i_comp_7_g0_i] local __l3i_comp_7_value = (x.) if __l3i_comp_7_value == nil then __l3i_comp_25_error("L3i comprehension projection produced nil; filter nil explicitly") end __l3i_comp_7_out[__l3i_comp_7_g0_i] = __l3i_comp_7_value end return __l3i_comp_7_out end)()
+--prelude 2
+--segment 0 82 7 25 synthetic
+--segment 82 89 0 7 copied
+--segment 89 101 7 25 synthetic
+--segment 101 129 8 19 synthetic
+--segment 129 130 17 17 synthetic
+--segment 130 132 17 19 copied
+--segment 132 133 19 19 synthetic
+--segment 133 326 17 19 synthetic
+--segment 326 327 12 13 copied
+--segment 327 369 17 19 synthetic
+--segment 369 396 23 25 synthetic
+--segment 396 397 23 23 synthetic
+--segment 397 399 23 25 copied
+--segment 399 400 25 25 synthetic
+--segment 400 584 23 25 synthetic
+--segment 584 618 25 25 synthetic
+--site 0 call=89,618 projection=397,399
+--clause binding=326,327 expression=130,132
+--error 25 25 expected ']' to close comprehension
+==== unfinished_range
+return [for i in range(1, => i]
+----
+local __l3i_comp_31_error = error local __l3i_comp_31_table_create = table.create return (function() local __l3i_comp_7_g0_src = (range(1,)) local __l3i_comp_7_g0_len = #__l3i_comp_7_g0_src local __l3i_comp_7_out = __l3i_comp_31_table_create(__l3i_comp_7_g0_len) :: typeof({}) for __l3i_comp_7_g0_i = 1, __l3i_comp_7_g0_len do local i = __l3i_comp_7_g0_src[__l3i_comp_7_g0_i] local __l3i_comp_7_value = (i) if __l3i_comp_7_value == nil then __l3i_comp_31_error("L3i comprehension projection produced nil; filter nil explicitly") end __l3i_comp_7_out[__l3i_comp_7_g0_i] = __l3i_comp_7_value end return __l3i_comp_7_out end)()
+--prelude 2
+--segment 0 82 7 31 synthetic
+--segment 82 89 0 7 copied
+--segment 89 101 7 31 synthetic
+--segment 101 129 8 25 synthetic
+--segment 129 130 17 17 synthetic
+--segment 130 138 17 25 copied
+--segment 138 140 25 25 synthetic
+--segment 140 333 17 25 synthetic
+--segment 333 334 12 13 copied
+--segment 334 376 17 25 synthetic
+--segment 376 403 29 30 synthetic
+--segment 403 404 29 29 synthetic
+--segment 404 405 29 30 copied
+--segment 405 406 30 30 synthetic
+--segment 406 590 29 30 synthetic
+--segment 590 624 30 31 synthetic
+--site 0 call=89,624 projection=404,405
+--clause binding=333,334 expression=130,139
+--error 26 26 expected ')' to close expression delimiter
+==== unfinished_slice_first
+return xs[:n]
+----
+local __l3i_comp_13_error = error local __l3i_comp_13_typeof = typeof local __l3i_comp_13_buffer = buffer local __l3i_comp_13_table_create = table.create local __l3i_comp_13_table_move = table.move return (function() local __l3i_comp_7_slice_src = (xs) local __l3i_comp_7_slice_first = (1 :: number) local __l3i_comp_7_slice_last = (n) local __l3i_comp_7_slice_kind = __l3i_comp_13_typeof(__l3i_comp_7_slice_src) if __l3i_comp_7_slice_kind ~= "table" and __l3i_comp_7_slice_kind ~= "buffer" then __l3i_comp_13_error("JSL slice source must be a table or buffer") end if __l3i_comp_13_typeof(__l3i_comp_7_slice_first) ~= "number" or __l3i_comp_7_slice_first % 1 ~= 0 then __l3i_comp_13_error("JSL slice first bound must be a finite integer") end if __l3i_comp_13_typeof(__l3i_comp_7_slice_last) ~= "number" or __l3i_comp_7_slice_last % 1 ~= 0 then __l3i_comp_13_error("JSL slice last bound must be a finite integer") end local __l3i_comp_7_slice_len = 0 if __l3i_comp_7_slice_kind == "buffer" then __l3i_comp_7_slice_len = __l3i_comp_13_buffer.len(__l3i_comp_7_slice_src :: any) else __l3i_comp_7_slice_len = #(__l3i_comp_7_slice_src :: any) end if __l3i_comp_7_slice_first < 1 then __l3i_comp_7_slice_first = 1 end if __l3i_comp_7_slice_last > __l3i_comp_7_slice_len then __l3i_comp_7_slice_last = __l3i_comp_7_slice_len end local __l3i_comp_7_slice_n = 0 if __l3i_comp_7_slice_last >= __l3i_comp_7_slice_first then __l3i_comp_7_slice_n = __l3i_comp_7_slice_last - __l3i_comp_7_slice_first + 1 end if __l3i_comp_7_slice_kind == "buffer" then local __l3i_comp_7_slice_out = (__l3i_comp_13_buffer.create(__l3i_comp_7_slice_n) :: any) :: typeof(__l3i_comp_7_slice_src) if __l3i_comp_7_slice_n > 0 then __l3i_comp_13_buffer.copy(__l3i_comp_7_slice_out :: any, 0, __l3i_comp_7_slice_src :: any, __l3i_comp_7_slice_first - 1, __l3i_comp_7_slice_n) end return __l3i_comp_7_slice_out else local __l3i_comp_7_slice_out = (__l3i_comp_13_table_create(__l3i_comp_7_slice_n) :: any) :: typeof(__l3i_comp_7_slice_src) if __l3i_comp_7_slice_n > 0 then __l3i_comp_13_table_move(__l3i_comp_7_slice_src :: any, __l3i_comp_7_slice_first, __l3i_comp_7_slice_last, 1, __l3i_comp_7_slice_out :: any) end return __l3i_comp_7_slice_out end end)()
+--prelude 5
+--segment 0 198 7 13 synthetic
+--segment 198 205 0 7 copied
+--segment 205 248 7 13 synthetic
+--segment 248 249 7 7 synthetic
+--segment 249 251 7 9 copied
+--segment 251 252 9 9 synthetic
+--segment 252 286 7 9 synthetic
+--segment 286 332 10 10 synthetic
+--segment 332 333 11 11 synthetic
+--segment 333 334 11 12 copied
+--segment 334 335 12 12 synthetic
+--segment 335 336 11 12 synthetic
+--segment 336 566 7 9 synthetic
+--segment 566 744 10 10 synthetic
+--segment 744 2221 11 12 synthetic
+--slice 0 call=205,2221 source=249,251 first=286,299 last=333,334
+--error 10 10 expected slice first bound before ':'
+==== unfinished_slice_last
+return xs[a:]
+----
+local __l3i_comp_13_error = error local __l3i_comp_13_typeof = typeof local __l3i_comp_13_buffer = buffer local __l3i_comp_13_table_create = table.create local __l3i_comp_13_table_move = table.move return (function() local __l3i_comp_7_slice_src = (xs) local __l3i_comp_7_slice_first = (a) local __l3i_comp_7_slice_last = (0 :: number) local __l3i_comp_7_slice_kind = __l3i_comp_13_typeof(__l3i_comp_7_slice_src) if __l3i_comp_7_slice_kind ~= "table" and __l3i_comp_7_slice_kind ~= "buffer" then __l3i_comp_13_error("JSL slice source must be a table or buffer") end if __l3i_comp_13_typeof(__l3i_comp_7_slice_first) ~= "number" or __l3i_comp_7_slice_first % 1 ~= 0 then __l3i_comp_13_error("JSL slice first bound must be a finite integer") end if __l3i_comp_13_typeof(__l3i_comp_7_slice_last) ~= "number" or __l3i_comp_7_slice_last % 1 ~= 0 then __l3i_comp_13_error("JSL slice last bound must be a finite integer") end local __l3i_comp_7_slice_len = 0 if __l3i_comp_7_slice_kind == "buffer" then __l3i_comp_7_slice_len = __l3i_comp_13_buffer.len(__l3i_comp_7_slice_src :: any) else __l3i_comp_7_slice_len = #(__l3i_comp_7_slice_src :: any) end if __l3i_comp_7_slice_first < 1 then __l3i_comp_7_slice_first = 1 end if __l3i_comp_7_slice_last > __l3i_comp_7_slice_len then __l3i_comp_7_slice_last = __l3i_comp_7_slice_len end local __l3i_comp_7_slice_n = 0 if __l3i_comp_7_slice_last >= __l3i_comp_7_slice_first then __l3i_comp_7_slice_n = __l3i_comp_7_slice_last - __l3i_comp_7_slice_first + 1 end if __l3i_comp_7_slice_kind == "buffer" then local __l3i_comp_7_slice_out = (__l3i_comp_13_buffer.create(__l3i_comp_7_slice_n) :: any) :: typeof(__l3i_comp_7_slice_src) if __l3i_comp_7_slice_n > 0 then __l3i_comp_13_buffer.copy(__l3i_comp_7_slice_out :: any, 0, __l3i_comp_7_slice_src :: any, __l3i_comp_7_slice_first - 1, __l3i_comp_7_slice_n) end return __l3i_comp_7_slice_out else local __l3i_comp_7_slice_out = (__l3i_comp_13_table_create(__l3i_comp_7_slice_n) :: any) :: typeof(__l3i_comp_7_slice_src) if __l3i_comp_7_slice_n > 0 then __l3i_comp_13_table_move(__l3i_comp_7_slice_src :: any, __l3i_comp_7_slice_first, __l3i_comp_7_slice_last, 1, __l3i_comp_7_slice_out :: any) end return __l3i_comp_7_slice_out end end)()
+--prelude 5
+--segment 0 198 7 13 synthetic
+--segment 198 205 0 7 copied
+--segment 205 248 7 13 synthetic
+--segment 248 249 7 7 synthetic
+--segment 249 251 7 9 copied
+--segment 251 252 9 9 synthetic
+--segment 252 286 7 9 synthetic
+--segment 286 287 10 10 synthetic
+--segment 287 288 10 11 copied
+--segment 288 289 11 11 synthetic
+--segment 289 322 10 11 synthetic
+--segment 322 336 12 12 synthetic
+--segment 336 566 7 9 synthetic
+--segment 566 744 10 11 synthetic
+--segment 744 2221 12 12 synthetic
+--slice 0 call=205,2221 source=249,251 first=287,288 last=322,335
+--error 12 12 expected slice last bound after ':'
+==== unfinished_slice_generator
+return [for x in xs[:n] => x]
+----
+local __l3i_comp_29_error = error local __l3i_comp_29_typeof = typeof local __l3i_comp_29_table_create = table.create return (function() local __l3i_comp_7_g0_src = (xs) local __l3i_comp_7_g0_first = (1 :: number) local __l3i_comp_7_g0_last = (n) local __l3i_comp_7_g0_kind = __l3i_comp_29_typeof(__l3i_comp_7_g0_src) if __l3i_comp_7_g0_kind ~= "table" then __l3i_comp_29_error("JSL comprehension slice source must be a table") end if __l3i_comp_29_typeof(__l3i_comp_7_g0_first) ~= "number" or __l3i_comp_7_g0_first % 1 ~= 0 then __l3i_comp_29_error("JSL slice first bound must be a finite integer") end if __l3i_comp_29_typeof(__l3i_comp_7_g0_last) ~= "number" or __l3i_comp_7_g0_last % 1 ~= 0 then __l3i_comp_29_error("JSL slice last bound must be a finite integer") end local __l3i_comp_7_g0_len = #__l3i_comp_7_g0_src if __l3i_comp_7_g0_first < 1 then __l3i_comp_7_g0_first = 1 end if __l3i_comp_7_g0_last > __l3i_comp_7_g0_len then __l3i_comp_7_g0_last = __l3i_comp_7_g0_len end local __l3i_comp_7_g0_n = 0 if __l3i_comp_7_g0_last >= __l3i_comp_7_g0_first then __l3i_comp_7_g0_n = __l3i_comp_7_g0_last - __l3i_comp_7_g0_first + 1 end local __l3i_comp_7_out = __l3i_comp_29_table_create(__l3i_comp_7_g0_n) :: typeof({}) local __l3i_comp_7_n = 0 for __l3i_comp_7_g0_i = __l3i_comp_7_g0_first, __l3i_comp_7_g0_last do local x = __l3i_comp_7_g0_src[__l3i_comp_7_g0_i] local __l3i_comp_7_value = (x) if __l3i_comp_7_value == nil then __l3i_comp_29_error("L3i comprehension projection produced nil; filter nil explicitly") end __l3i_comp_7_n += 1 __l3i_comp_7_out[__l3i_comp_7_n] = __l3i_comp_7_value end return __l3i_comp_7_out end)()
+--prelude 3
+--segment 0 118 7 29 synthetic
+--segment 118 125 0 7 copied
+--segment 125 137 7 29 synthetic
+--segment 137 165 8 23 synthetic
+--segment 165 166 17 17 synthetic
+--segment 166 168 17 19 copied
+--segment 168 169 19 19 synthetic
+--segment 169 200 17 19 synthetic
+--segment 200 243 20 20 synthetic
+--segment 243 244 21 21 synthetic
+--segment 244 245 21 22 copied
+--segment 245 246 22 22 synthetic
+--segment 246 247 21 22 synthetic
+--segment 247 432 17 19 synthetic
+--segment 432 604 20 20 synthetic
+--segment 604 1326 21 22 synthetic
+--segment 1326 1327 12 13 copied
+--segment 1327 1369 21 22 synthetic
+--segment 1369 1396 27 28 synthetic
+--segment 1396 1397 27 27 synthetic
+--segment 1397 1398 27 28 copied
+--segment 1398 1399 28 28 synthetic
+--segment 1399 1604 27 28 synthetic
+--segment 1604 1634 28 29 synthetic
+--site 0 call=125,1634 projection=1397,1398
+--clause binding=1326,1327 expression=125,125 sliceSource=165,169 sliceFirst=200,213 sliceLast=243,246
+--error 20 20 expected slice first bound before ':'
+==== unfinished_sum
+return sum[for x in
+----
+local __l3i_comp_19_error = error return (function() local __l3i_comp_10_g0_src = ({} :: {any}) local __l3i_comp_10_g0_len = #__l3i_comp_10_g0_src local __l3i_comp_10_sum = 0 for __l3i_comp_10_g0_i = 1, __l3i_comp_10_g0_len do local x = __l3i_comp_10_g0_src[__l3i_comp_10_g0_i] local __l3i_comp_10_value = (nil :: any) if __l3i_comp_10_value == nil then __l3i_comp_19_error("L3i comprehension projection produced nil; filter nil explicitly") end __l3i_comp_10_sum += __l3i_comp_10_value end return __l3i_comp_10_sum end)()
+--prelude 1
+--segment 0 34 10 19 synthetic
+--segment 34 41 0 7 copied
+--segment 41 53 7 19 synthetic
+--segment 53 82 11 19 synthetic
+--segment 82 233 19 19 synthetic
+--segment 233 234 15 16 copied
+--segment 234 522 19 19 synthetic
+--site 0 call=41,522 projection=306,318
+--clause binding=233,234 expression=82,95
+--error 19 19 expected generator expression
+--error 19 19 expected '=>' and projection expression
+--error 19 19 expected ']' to close comprehension
+==== unmatched_call_in_source
+return [for x in f( => x]
+----
+local __l3i_comp_25_error = error local __l3i_comp_25_table_create = table.create return (function() local __l3i_comp_7_g0_src = (f()) local __l3i_comp_7_g0_len = #__l3i_comp_7_g0_src local __l3i_comp_7_out = __l3i_comp_25_table_create(__l3i_comp_7_g0_len) :: typeof({}) for __l3i_comp_7_g0_i = 1, __l3i_comp_7_g0_len do local x = __l3i_comp_7_g0_src[__l3i_comp_7_g0_i] local __l3i_comp_7_value = (x) if __l3i_comp_7_value == nil then __l3i_comp_25_error("L3i comprehension projection produced nil; filter nil explicitly") end __l3i_comp_7_out[__l3i_comp_7_g0_i] = __l3i_comp_7_value end return __l3i_comp_7_out end)()
+--prelude 2
+--segment 0 82 7 25 synthetic
+--segment 82 89 0 7 copied
+--segment 89 101 7 25 synthetic
+--segment 101 129 8 19 synthetic
+--segment 129 130 17 17 synthetic
+--segment 130 132 17 19 copied
+--segment 132 134 19 19 synthetic
+--segment 134 327 17 19 synthetic
+--segment 327 328 12 13 copied
+--segment 328 370 17 19 synthetic
+--segment 370 397 23 24 synthetic
+--segment 397 398 23 23 synthetic
+--segment 398 399 23 24 copied
+--segment 399 400 24 24 synthetic
+--segment 400 584 23 24 synthetic
+--segment 584 618 24 25 synthetic
+--site 0 call=89,618 projection=398,399
+--clause binding=327,328 expression=130,133
+--error 20 20 expected ')' to close expression delimiter
+==== unmatched_call_in_projection
+return [for x in xs => g(x]
+----
+local __l3i_comp_27_error = error local __l3i_comp_27_table_create = table.create return (function() local __l3i_comp_7_g0_src = (xs) local __l3i_comp_7_g0_len = #__l3i_comp_7_g0_src local __l3i_comp_7_out = __l3i_comp_27_table_create(__l3i_comp_7_g0_len) :: typeof({}) for __l3i_comp_7_g0_i = 1, __l3i_comp_7_g0_len do local x = __l3i_comp_7_g0_src[__l3i_comp_7_g0_i] local __l3i_comp_7_value = (g(x)) if __l3i_comp_7_value == nil then __l3i_comp_27_error("L3i comprehension projection produced nil; filter nil explicitly") end __l3i_comp_7_out[__l3i_comp_7_g0_i] = __l3i_comp_7_value end return __l3i_comp_7_out end)()
+--prelude 2
+--segment 0 82 7 27 synthetic
+--segment 82 89 0 7 copied
+--segment 89 101 7 27 synthetic
+--segment 101 129 8 19 synthetic
+--segment 129 130 17 17 synthetic
+--segment 130 132 17 19 copied
+--segment 132 133 19 19 synthetic
+--segment 133 326 17 19 synthetic
+--segment 326 327 12 13 copied
+--segment 327 369 17 19 synthetic
+--segment 369 396 23 26 synthetic
+--segment 396 397 23 23 synthetic
+--segment 397 400 23 26 copied
+--segment 400 402 26 26 synthetic
+--segment 402 586 23 26 synthetic
+--segment 586 620 26 27 synthetic
+--site 0 call=89,620 projection=397,401
+--clause binding=326,327 expression=130,132
+--error 26 26 expected ')' to close expression delimiter
+==== postfix_index
+return xs[for x in ys => x]
+----
+local __l3i_comp_27_error = error local __l3i_comp_27_table_create = table.create return xs[(function() local __l3i_comp_9_g0_src = (ys) local __l3i_comp_9_g0_len = #__l3i_comp_9_g0_src local __l3i_comp_9_out = __l3i_comp_27_table_create(__l3i_comp_9_g0_len) :: typeof({}) for __l3i_comp_9_g0_i = 1, __l3i_comp_9_g0_len do local x = __l3i_comp_9_g0_src[__l3i_comp_9_g0_i] local __l3i_comp_9_value = (x) if __l3i_comp_9_value == nil then __l3i_comp_27_error("L3i comprehension projection produced nil; filter nil explicitly") end __l3i_comp_9_out[__l3i_comp_9_g0_i] = __l3i_comp_9_value end return __l3i_comp_9_out end)()]
+--prelude 2
+--segment 0 82 9 27 synthetic
+--segment 82 91 0 9 copied
+--segment 91 104 9 27 synthetic
+--segment 104 132 10 21 synthetic
+--segment 132 133 19 19 synthetic
+--segment 133 135 19 21 copied
+--segment 135 136 21 21 synthetic
+--segment 136 329 19 21 synthetic
+--segment 329 330 14 15 copied
+--segment 330 372 19 21 synthetic
+--segment 372 399 25 26 synthetic
+--segment 399 400 25 25 synthetic
+--segment 400 401 25 26 copied
+--segment 401 402 26 26 synthetic
+--segment 402 586 25 26 synthetic
+--segment 586 621 26 27 synthetic
+--site 0 call=92,620 projection=400,401
+--clause binding=329,330 expression=133,135
+--error 9 10 invalid postfix comprehension; use an explicit parenthesized collection index, e.g. values[([for ...])]
+==== unfinished_nested
+return [for x in xs for y in
+----
+local __l3i_comp_28_error = error return (function() local __l3i_comp_7_out = {} local __l3i_comp_7_n = 0 local __l3i_comp_7_g0_src = (xs) local __l3i_comp_7_g0_len = #__l3i_comp_7_g0_src for __l3i_comp_7_g0_i = 1, __l3i_comp_7_g0_len do local x = __l3i_comp_7_g0_src[__l3i_comp_7_g0_i] local __l3i_comp_7_g1_src = ({} :: {any}) local __l3i_comp_7_g1_len = #__l3i_comp_7_g1_src for __l3i_comp_7_g1_i = 1, __l3i_comp_7_g1_len do local y = __l3i_comp_7_g1_src[__l3i_comp_7_g1_i] local __l3i_comp_7_value = (nil :: any) if __l3i_comp_7_value == nil then __l3i_comp_28_error("L3i comprehension projection produced nil; filter nil explicitly") end __l3i_comp_7_n += 1 __l3i_comp_7_out[__l3i_comp_7_n] = __l3i_comp_7_value end end return __l3i_comp_7_out end)()
+--prelude 1
+--segment 0 34 7 28 synthetic
+--segment 34 41 0 7 copied
+--segment 41 106 7 28 synthetic
+--segment 106 134 8 19 synthetic
+--segment 134 135 17 17 synthetic
+--segment 135 137 17 19 copied
+--segment 137 138 19 19 synthetic
+--segment 138 244 17 19 synthetic
+--segment 244 245 12 13 copied
+--segment 245 287 17 19 synthetic
+--segment 287 315 20 28 synthetic
+--segment 315 434 28 28 synthetic
+--segment 434 435 24 25 copied
+--segment 435 755 28 28 synthetic
+--site 0 call=41,755 projection=504,516
+--clause binding=244,245 expression=135,137
+--clause binding=434,435 expression=315,328
+--error 28 28 expected generator expression
+--error 28 28 expected '=>' and projection expression
+--error 28 28 expected ']' to close comprehension

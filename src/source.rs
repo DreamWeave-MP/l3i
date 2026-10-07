@@ -191,6 +191,46 @@ pub fn disassemble(source: &str, options: &CompileOptions) -> Result<String> {
     String::from_utf8(output).map_err(|_| Error::runtime("Luau disassembler returned invalid UTF-8"))
 }
 
+/// Which consumer's lowering policy a [`lowering_snapshot`] reproduces.
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LoweringMode {
+    /// Strict compilation: no recovery, length fusion, runtime representation dispatch.
+    Compile,
+    /// Analysis with stock types: recovery, length fusion, no buffer specialization.
+    Analysis,
+    /// Analysis after every slice generator source was typed as a buffer.
+    AnalysisBuffers,
+    /// `@dream/luau` syntax tooling: recovery, unary length kept in the tree.
+    Tooling,
+}
+
+/// The lowerer's complete output for `source` under `mode`: generated text, provenance
+/// segments, tooling sites, and structural errors, as one text. A test fixture, not an API:
+/// the golden tests pin it so lowering refactors prove they changed nothing observable.
+#[doc(hidden)]
+pub fn lowering_snapshot(source: &str, mode: LoweringMode) -> Result<String> {
+    let (recovery, fuse, dynamic, buffers) = match mode {
+        LoweringMode::Compile => (0, 1, 1, 0),
+        LoweringMode::Analysis => (1, 1, 0, 0),
+        LoweringMode::AnalysisBuffers => (1, 1, 0, 1),
+        LoweringMode::Tooling => (1, 0, 0, 0),
+    };
+    let mut size = 0usize;
+    // SAFETY: the source outlives the call; the shim catches every exception and reports
+    // failure as null with size zero, and a non-null result is `size` malloc'd bytes we free.
+    let dump = unsafe {
+        ffi::l3i_surface_dump(source.as_ptr().cast(), source.len(), recovery, fuse, dynamic, buffers, &mut size)
+    };
+    if dump.is_null() {
+        return Err(Error::runtime("surface lowering snapshot failed"));
+    }
+    // SAFETY: `dump` is `size` valid bytes owned by us until `free`.
+    let bytes = unsafe { std::slice::from_raw_parts(dump.cast::<u8>(), size) }.to_vec();
+    unsafe { ffi::free(dump.cast()) };
+    String::from_utf8(bytes).map_err(|_| Error::runtime("surface lowering snapshot is not UTF-8"))
+}
+
 /// Compiles to bytecode, returning Luau's error bytecode (leading NUL byte) as-is so that
 /// `luau_load` reports the failure with the chunk name, as OpenMW's `loadBytecode` does.
 pub(crate) fn compile_raw(source: &str, options: &CompileOptions) -> Result<Vec<u8>> {
