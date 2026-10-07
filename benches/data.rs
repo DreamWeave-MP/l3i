@@ -184,6 +184,14 @@ fn counts(c: &mut Criterion) {
         );
         case(
             &mut group,
+            "receiver selectGt into a reused selection, then count (IR loop under jit)",
+            true,
+            &setup,
+            "local K: dream_data_Kind_u8 = U8 local s = K:selectGt(buf, 0, n, 127, sel) return s:count()",
+            expected_count(n),
+        );
+        case(
+            &mut group,
             "receiver countGt (IR loop under jit)",
             true,
             &setup,

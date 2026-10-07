@@ -95,7 +95,7 @@ values beyond ±2^63 saturate before the wrap); `f32` rounds on write; `f64` is 
 | `min`, `max` | span | number or nil | nil | a leading NaN stays; later NaNs never replace (Luau `<`/`>`) | n/a | bounds |
 | `argmin`, `argmax` | span | zero-based position or nil | nil | as `min`/`max` | n/a | bounds |
 | `count` | span | number of elements satisfying `cmp` | `0` | every comparison false except `ne` (IEEE) | n/a | bounds, comparison name |
-| `compare` | span | selection of positions satisfying `cmp`; into `into` (resized) or new | empty selection | as `count` | `into` may be any selection | bounds |
+| `compare`, `K:select<cmp>` | span | selection of positions satisfying `cmp`; into `into` (resized) or new | empty selection | as `count` | `into` may be any selection | bounds |
 | `Selection:intersect/union/xor/difference` | two selections of one length | selection; into `into` or new | — | — | `into` may be either operand | lengths differ |
 | `Selection:complement` | selection | selection | — | — | `into` may be the source | — |
 | `Selection:count/len/get/any/all/clear` | selection | number / boolean / nothing | `all` of nothing is true | — | — | — |
@@ -130,6 +130,11 @@ thirty-nine members: `sum`, `min`, `max` over the whole span, and each of `sum`,
 …) over the elements that compare so against a threshold argument. The module functions
 `data.sum/min/max(…, comparison?, threshold?)`, `data.count`, `data.any` and `data.all` are the
 same reductions by name; bound, both spellings run one shared element loop.
+
+Each receiver also has `selectEq/Ne/Lt/Le/Gt/Ge(buffer, offset, count, threshold, selection)`:
+`compare` written into a caller selection, which it resizes to `count` and returns. Under `jit`
+the loop sets bits straight into the selection's words (its length word and words pointer sit at
+fixed payload offsets); a selection of another length takes the bound path, which resizes it.
 
 Under the `jit` feature a call on a receiver the script annotated with its class (`local F:
 dream_data_Kind_f32 = data.f32()`, in a `--!native` chunk) is lowered by `src/data/lowering.rs`

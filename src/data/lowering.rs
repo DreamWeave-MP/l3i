@@ -60,7 +60,21 @@ const BUFFER_LENGTH_WORD: i64 = 0;
 /// `offsetof(Udata, data)`: what a `BUFFER_READ*` under the userdata tag adds.
 const UDATA_DATA: i64 = 16;
 
-fn member_of(name: &str) -> Option<Reduction> {
+/// A lowered member: a reduction, or a comparison into a selection.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Member {
+    Reduce(Reduction),
+    Select(Comparison),
+}
+
+fn member_of(name: &str) -> Option<Member> {
+    if let Some(suffix) = name.strip_prefix("select") {
+        return Comparison::ALL.into_iter().find(|comparison| comparison.suffix() == suffix).map(Member::Select);
+    }
+    reduction_of(name).map(Member::Reduce)
+}
+
+fn reduction_of(name: &str) -> Option<Reduction> {
     let (op, rest) = [
         ("sum", ReductionOp::Sum),
         ("min", ReductionOp::Min),
@@ -82,8 +96,17 @@ fn member_of(name: &str) -> Option<Reduction> {
 }
 
 /// Arguments including the receiver.
-fn params(member: Reduction) -> c_int {
-    if member.filter.is_some() { 5 } else { 4 }
+fn params(member: Member) -> c_int {
+    match member {
+        Member::Reduce(reduction) => {
+            if reduction.filter.is_some() {
+                5
+            } else {
+                4
+            }
+        }
+        Member::Select(_) => 6,
+    }
 }
 
 /// The IR condition for a comparison and whether its branches are swapped: Luau's number
@@ -501,10 +524,10 @@ impl NativeCodeHooks for KindLowering {
         if typed_receiver(context, userdata_type).is_none() {
             return bytecode_type::ANY;
         }
-        match member_of(member).map(|member| member.op) {
-            Some(ReductionOp::Sum | ReductionOp::Count) => bytecode_type::NUMBER,
-            Some(ReductionOp::Any | ReductionOp::All) => bytecode_type::BOOLEAN,
-            Some(ReductionOp::Min | ReductionOp::Max) | None => bytecode_type::ANY,
+        match member_of(member) {
+            Some(Member::Reduce(Reduction { op: ReductionOp::Sum | ReductionOp::Count, .. })) => bytecode_type::NUMBER,
+            Some(Member::Reduce(Reduction { op: ReductionOp::Any | ReductionOp::All, .. })) => bytecode_type::BOOLEAN,
+            Some(Member::Reduce(_) | Member::Select(_)) | None => bytecode_type::ANY,
         }
     }
 
@@ -543,11 +566,31 @@ impl NativeCodeHooks for KindLowering {
         emit.b.load_and_check_tag(buffer_reg, LUA_TBUFFER as u8, slow);
         let (offset64, offset_number) = emit.whole(offset_reg, slow);
         let (count64, _) = emit.whole(count_reg, slow);
-        if member.filter.is_some() {
+        let filtered = match member {
+            Member::Reduce(reduction) => reduction.filter.is_some(),
+            Member::Select(_) => true,
+        };
+        if filtered {
             let threshold_reg = emit.b.vm_reg(site.arg_res_reg + 5);
             emit.b.load_and_check_tag(threshold_reg, LUA_TNUMBER as u8, slow);
             let threshold = emit.b.inst(IrCmd::LOAD_DOUBLE, &[threshold_reg]);
             emit.set_num(S_THRESHOLD, threshold);
+        }
+        let selection_reg = site.arg_res_reg + 6;
+        if let Member::Select(_) = member {
+            // The selection must be a tagged Selection whose length is already `count`; the
+            // binder resizes otherwise.
+            let Some(selection_tag) = context.tag_of::<super::Selection>() else { return false };
+            let selection = emit.b.vm_reg(selection_reg);
+            let pointer = emit.b.inst(IrCmd::LOAD_POINTER, &[selection]);
+            let selection_tag = emit.b.const_int(i32::from(selection_tag));
+            emit.b.inst(IrCmd::CHECK_USERDATA_TAG, &[pointer, selection_tag, slow]);
+            let at = emit.b.const_int(super::selection_layout::LEN);
+            let udata = emit.b.const_tag(LUA_TUSERDATA as u8);
+            let len = emit.b.inst(IrCmd::BUFFER_READI64, &[pointer, at, udata]);
+            let count64 = emit.int64_of(count_reg);
+            let same = emit.b.cond(IrCondition::Equal);
+            emit.b.inst(IrCmd::CHECK_CMP_INT64, &[len, count64, same, slow]);
         }
         // The span must fit: offset + count * stride <= length, in int64 so nothing wraps.
         // Stricter than the binder's last-element rule for a stride above the element size; a
@@ -570,7 +613,10 @@ impl NativeCodeHooks for KindLowering {
 
         for (variant, step) in [(contiguous, Some(size)), (strided, None)] {
             emit.b.begin_block(variant);
-            emit.reduction_loop(member, kind, step, count_reg);
+            match member {
+                Member::Reduce(reduction) => emit.reduction_loop(reduction, kind, step, count_reg),
+                Member::Select(comparison) => emit.select_loop(comparison, kind, step, count_reg, selection_reg),
+            }
         }
 
         emit.b.begin_block(slow);
@@ -580,5 +626,119 @@ impl NativeCodeHooks for KindLowering {
         emit.b.begin_block(done);
         LOWERED.fetch_add(1, Ordering::Relaxed);
         true
+    }
+}
+
+impl Emit<'_, '_> {
+    /// `K:select<cmp>(buffer, offset, count, threshold, selection)`: the selection's length
+    /// must already be `count` (the binder resizes otherwise), its words are cleared, then
+    /// every element that compares so sets its bit. The element index rides in `S_SEEN`.
+    fn select_loop(
+        &mut self,
+        comparison: Comparison,
+        kind: Kind,
+        step: Option<i64>,
+        count_reg: c_int,
+        selection_reg: c_int,
+    ) {
+        let clear = self.block();
+        let clear_body = self.block();
+        let head = self.block();
+        let body = self.block();
+        let finish = self.block();
+        // Clear ceil(count / 64) words, counting words in S_ACC.
+        self.set_const(S_ACC, 0.0);
+        self.set_const(S_SEEN, 0.0);
+        self.jump(clear);
+
+        self.b.begin_block(clear);
+        let word = self.get_num(S_ACC);
+        let count = self.b.vm_reg(count_reg);
+        let count = self.b.inst(IrCmd::LOAD_DOUBLE, &[count]);
+        let sixty_four = self.b.const_double(64.0);
+        let words = self.b.inst(IrCmd::MUL_NUM, &[word, sixty_four]);
+        let more = self.b.cond(IrCondition::Less);
+        self.b.inst(IrCmd::JUMP_CMP_NUM, &[words, count, more, clear_body, head]);
+
+        self.b.begin_block(clear_body);
+        let word = self.get_num(S_ACC);
+        let address = self.word_address(selection_reg, word);
+        let zero64 = self.b.const_int64(0);
+        let zero = self.b.const_int(0);
+        let udata = self.b.const_tag(LUA_TUSERDATA as u8);
+        self.b.inst(IrCmd::BUFFER_WRITEI64, &[address, zero, zero64, udata]);
+        let one = self.b.const_double(1.0);
+        let next = self.b.inst(IrCmd::ADD_NUM, &[word, one]);
+        self.set_num(S_ACC, next);
+        self.jump(clear);
+
+        self.b.begin_block(head);
+        let cursor = self.get_num(S_CURSOR);
+        let end = self.get_num(S_END);
+        let more = self.b.cond(IrCondition::Less);
+        self.b.inst(IrCmd::JUMP_CMP_NUM, &[cursor, end, more, body, finish]);
+
+        self.b.begin_block(body);
+        let hit = self.block();
+        let miss = self.block();
+        let cursor = self.get_num(S_CURSOR);
+        let value = self.element(kind, cursor);
+        let step_value = self.step(step);
+        let next = self.b.inst(IrCmd::ADD_NUM, &[cursor, step_value]);
+        self.set_num(S_CURSOR, next);
+        self.test(comparison, value, hit, miss);
+
+        self.b.begin_block(hit);
+        let index = self.get_num(S_SEEN);
+        let index64 = self.b.inst(IrCmd::NUM_TO_INT64, &[index]);
+        let six = self.b.const_int64(6);
+        let word_index = self.b.inst(IrCmd::BITRSHIFT_INT64, &[index64, six]);
+        let word_number = self.b.inst(IrCmd::INT64_TO_NUM, &[word_index]);
+        let address = self.word_address(selection_reg, word_number);
+        let zero = self.b.const_int(0);
+        let udata = self.b.const_tag(LUA_TUSERDATA as u8);
+        let current = self.b.inst(IrCmd::BUFFER_READI64, &[address, zero, udata]);
+        let mask63 = self.b.const_int64(63);
+        let bit = self.b.inst(IrCmd::BITAND_INT64, &[index64, mask63]);
+        let one64 = self.b.const_int64(1);
+        let flag = self.b.inst(IrCmd::BITLSHIFT_INT64, &[one64, bit]);
+        let updated = self.b.inst(IrCmd::BITOR_INT64, &[current, flag]);
+        let address = self.word_address(selection_reg, word_number);
+        self.b.inst(IrCmd::BUFFER_WRITEI64, &[address, zero, updated, udata]);
+        self.jump(miss);
+
+        self.b.begin_block(miss);
+        let index = self.get_num(S_SEEN);
+        let one = self.b.const_double(1.0);
+        let next_index = self.b.inst(IrCmd::ADD_NUM, &[index, one]);
+        self.set_num(S_SEEN, next_index);
+        self.jump(head);
+
+        self.b.begin_block(finish);
+        // The selection itself is the result.
+        let result = self.b.vm_reg(self.result);
+        let selection = self.b.vm_reg(selection_reg);
+        let pointer = self.b.inst(IrCmd::LOAD_POINTER, &[selection]);
+        self.b.inst(IrCmd::STORE_POINTER, &[result, pointer]);
+        let tag = self.b.const_tag(LUA_TUSERDATA as u8);
+        self.b.inst(IrCmd::STORE_TAG, &[result, tag]);
+        let done = self.done;
+        self.jump(done);
+    }
+
+    /// The address of word `word` (a whole double) of the selection's bitset, as the pointer
+    /// operand of a userdata-tagged read or write at offset 0.
+    fn word_address(&mut self, selection_reg: c_int, word: IrOp) -> IrOp {
+        let selection = self.b.vm_reg(selection_reg);
+        let payload = self.b.inst(IrCmd::LOAD_POINTER, &[selection]);
+        let at = self.b.const_int(super::selection_layout::WORDS);
+        let udata = self.b.const_tag(LUA_TUSERDATA as u8);
+        let words = self.b.inst(IrCmd::BUFFER_READI64, &[payload, at, udata]);
+        let word64 = self.b.inst(IrCmd::NUM_TO_INT64, &[word]);
+        let three = self.b.const_int64(3);
+        let bytes = self.b.inst(IrCmd::BITLSHIFT_INT64, &[word64, three]);
+        let address = self.b.inst(IrCmd::ADD_INT64, &[words, bytes]);
+        let adjust = self.b.const_int64(-UDATA_DATA);
+        self.b.inst(IrCmd::ADD_INT64, &[address, adjust])
     }
 }

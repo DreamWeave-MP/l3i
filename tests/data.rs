@@ -601,3 +601,57 @@ fn every_receiver_member_lowers_and_agrees_with_the_module_functions() {
     }
     assert!(total_blocks > 20_000, "native blocks executed: {total_blocks}");
 }
+
+#[test]
+fn receiver_selections_match_compare_for_every_kind() {
+    exec(
+        r"
+        local kinds = {'u8', 'i8', 'u16', 'i16', 'u32', 'i32', 'f32', 'f64'}
+        local sizes = {u8 = 1, i8 = 1, u16 = 2, i16 = 2, u32 = 4, i32 = 4, f32 = 4, f64 = 8}
+        for _, name in kinds do
+            local size, n = sizes[name], 200
+            local buf = buffer.create(n * size + 3)
+            for i = 0, n - 1 do buffer['write' .. name](buf, 3 + i * size, (i * 37) % 13 - (string.sub(name, 1, 1) == 'u' and 0 or 6)) end
+            local K = data.kind(name)
+            local mine, theirs = data.selection(1), data.selection(1)
+            for _, op in {'Eq', 'Ne', 'Lt', 'Le', 'Gt', 'Ge'} do
+                assert(K['select' .. op](K, buf, 3, n, 2, mine) == mine, name .. ' returns the selection')
+                data.compare(buf, name, 3, n, string.lower(op), 2, theirs)
+                assert(mine:len() == n and mine:xor(theirs):count() == 0, name .. ' select' .. op)
+            end
+            assert(K:selectGt(buf, 3, 0, 2, mine):len() == 0, name .. ' empty')
+        end
+    ",
+    );
+}
+
+#[cfg(feature = "jit")]
+#[test]
+fn receiver_selections_lower_to_native_loops() {
+    let Some((runtime, before)) = native_runtime() else { return };
+    let chunk = per_kind_chunk(
+        r"
+        local name, size = '{name}', {size}
+        local n = 1500
+        local buf = buffer.create(n * size + 3)
+        for i = 0, n - 1 do buffer['write' .. name](buf, 3 + i * size, (i * 37) % 13 - (string.sub(name, 1, 1) == 'u' and 0 or 6)) end
+        local K: dream_data_Kind_{name} = {ctor}()
+        local S: dream_data_Kind_{name} = {ctor}(size * 2)
+        local mine, theirs = data.selection(n), data.selection(1)
+        local a = K:selectGt(buf, 3, n, 2, mine)
+        data.compare(buf, name, 3, n, 'gt', 2, theirs)
+        assert(a == mine and mine:xor(theirs):count() == 0 and mine:count() == theirs:count(), name .. ' selectGt native')
+        local b = K:selectEq(buf, 3, n, 0, mine)
+        data.compare(buf, name, 3, n, 'eq', 0, theirs)
+        assert(mine:xor(theirs):count() == 0, name .. ' selectEq native')
+        -- A strided receiver and a selection of the wrong length (resized by the binder).
+        local half = data.selection(3)
+        S:selectNe(buf, 3, n // 2, 1, half)
+        data.compare(buf, name .. '@' .. (size * 2), 3, n // 2, 'ne', 1, theirs)
+        assert(half:len() == n // 2 and half:xor(theirs):count() == 0, name .. ' strided select')
+        ",
+    );
+    let blocks = run_native(&runtime, &chunk);
+    assert!(l3i::data::lowering::lowered_sites() > before, "the select calls were lowered");
+    assert!(blocks > 5_000, "native blocks executed: {blocks}");
+}

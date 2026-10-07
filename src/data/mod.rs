@@ -384,9 +384,28 @@ impl Comparison {
 /// bitset. Produced by `compare`, combined with the boolean algebra, counted, iterated as an
 /// index vector. One selection serves as reusable output for any number of operations over
 /// spans of the same length.
+#[repr(C)]
 pub struct Selection {
+    /// How many positions the selection covers; native code reads it at offset 0.
     len: Cell<usize>,
+    /// The bitset's storage, re-synced whenever `bits` reallocates; native code reads it at
+    /// offset 8 and writes words through it while the Vec is not otherwise borrowed (a native
+    /// loop runs inside one call, which borrows nothing).
+    words: Cell<*mut u64>,
     bits: RefCell<Vec<u64>>,
+}
+
+/// Byte offsets native code reads a selection at.
+pub(crate) mod selection_layout {
+    use super::Selection;
+
+    pub const LEN: i32 = 0;
+    pub const WORDS: i32 = 8;
+
+    const _: () = {
+        assert!(std::mem::offset_of!(Selection, len) == LEN as usize);
+        assert!(std::mem::offset_of!(Selection, words) == WORDS as usize);
+    };
 }
 
 // SAFETY: the payload holds no Lua references.
@@ -396,7 +415,15 @@ unsafe impl crate::userdata::Userdata for Selection {
 
 impl Selection {
     pub fn new(len: usize) -> Selection {
-        Selection { len: Cell::new(len), bits: RefCell::new(vec![0; len.div_ceil(64)]) }
+        let mut bits = vec![0; len.div_ceil(64)];
+        Selection { len: Cell::new(len), words: Cell::new(bits.as_mut_ptr()), bits: RefCell::new(bits) }
+    }
+
+    /// Replaces the storage and re-syncs the pointer native code reads.
+    fn set_bits(&self, words: Vec<u64>) {
+        let mut bits = self.bits.borrow_mut();
+        *bits = words;
+        self.words.set(bits.as_mut_ptr());
     }
 
     pub fn len(&self) -> usize {
@@ -409,9 +436,12 @@ impl Selection {
 
     /// Resizes to `len` positions, all unselected.
     fn reset(&self, len: usize) {
-        let mut bits = self.bits.borrow_mut();
-        bits.clear();
-        bits.resize(len.div_ceil(64), 0);
+        {
+            let mut bits = self.bits.borrow_mut();
+            bits.clear();
+            bits.resize(len.div_ceil(64), 0);
+            self.words.set(bits.as_mut_ptr());
+        }
         self.len.set(len);
     }
 
@@ -676,7 +706,7 @@ fn combine(
     // (the script may pass one selection twice) and never borrows one RefCell twice.
     let words: Vec<u64> = left.bits.borrow().iter().zip(right.bits.borrow().iter()).map(|(a, b)| op(*a, *b)).collect();
     let target = Target::prepare(into, left.len());
-    *target.selection().bits.borrow_mut() = words;
+    target.selection().set_bits(words);
     target.selection().trim();
     target.finish(call, 3)
 }
@@ -739,7 +769,7 @@ fn describe_selection(d: &mut ExtensionDescriptor) {
         .method("complement", |source: &Selection, call: &Call<'_>, into: Option<&Selection>| -> Result<StackResults> {
             let words: Vec<u64> = source.bits.borrow().iter().map(|word| !word).collect();
             let target = Target::prepare(into, source.len());
-            *target.selection().bits.borrow_mut() = words;
+            target.selection().set_bits(words);
             target.selection().trim();
             target.finish(call, 2)
         })
@@ -1179,6 +1209,45 @@ fn describe_typed<const K: u8>(d: &mut ExtensionDescriptor) {
                 format!("(self, buffer: buffer, offset: number, count: number): {}", op.result_type())
             })
             .doc(op.doc(filter));
+    }
+    describe_select::<K>(&mut receiver);
+}
+
+/// `K:selectGt(buffer, offset, count, threshold, selection)`: the positions whose element
+/// compares so, written into the caller's selection (resized to `count`), which is returned.
+fn describe_select<const K: u8>(receiver: &mut crate::extension::UserdataBuilder<'_, Typed<K>>) {
+    for comparison in Comparison::ALL {
+        let name = format!("select{}", comparison.suffix());
+        let what = format!("Kind:{name}");
+        receiver
+            .method(
+                name.as_str(),
+                move |receiver: &Typed<K>,
+                      call: &Call<'_>,
+                      buffer: BufferView<'_>,
+                      offset: Exact<i64>,
+                      count: Exact<i64>,
+                      threshold: f64,
+                      selection: &Selection|
+                      -> Result<StackResults> {
+                    let span = receiver.span(&what, &buffer, offset, count)?;
+                    selection.reset(span.count);
+                    {
+                        let mut bits = selection.bits.borrow_mut();
+                        for (word, chunk) in bits.iter_mut().zip((0..span.count).step_by(64)) {
+                            let mut mask = 0u64;
+                            for bit in 0..64.min(span.count - chunk) {
+                                mask |= u64::from(comparison.test(span.get(chunk + bit), threshold)) << bit;
+                            }
+                            *word = mask;
+                        }
+                    }
+                    Push::push_only(&call.arg(6), call)?;
+                    Ok(StackResults)
+                },
+            )
+            .signature("(self, buffer: buffer, offset: number, count: number, threshold: number, selection: dream_data_Selection): dream_data_Selection")
+            .doc(format!("The positions whose element compares {} against threshold, written into selection (resized to count) and returned.", comparison.name()));
     }
 }
 
