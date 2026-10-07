@@ -1035,3 +1035,23 @@ fn buffer_sinks_type_their_projections_as_numbers() {
     assert!(error.text.contains("string") && error.text.contains("number"), "{}", error.text);
     assert_eq!(error.span.begin_line, 3, "{error:?}");
 }
+
+#[test]
+fn typed_slices_infer_numbers_and_buffers() {
+    let source = concat!(
+        "--!strict\n",
+        "local samples = buffer.create(64)\n",
+        "local doubled = [for v in samples[1:16, \"f32\"] => v * 2]\n",
+        "local total = sum[for v in samples[1:4, \"f32@16\"] if v > 0 => v]\n",
+        "local part = samples[1:4, \"f32\"]\n",
+        "return doubled, total, part\n",
+    );
+    for solver in [analysis::Solver::New, analysis::Solver::Old] {
+        let analysis = comprehension_analysis(HashMap::from([("typed", source)]), solver);
+        let report = analysis.check("typed", false);
+        assert!(report.is_clean(), "{solver:?}: {report:#?}");
+        assert_binding_type(&analysis, "typed", 5, "doubled", "{number}");
+        assert_binding_type(&analysis, "typed", 5, "total", "number");
+        assert_binding_type(&analysis, "typed", 5, "part", "buffer");
+    }
+}

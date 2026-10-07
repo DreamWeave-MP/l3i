@@ -51,6 +51,9 @@ struct Clause
     Range sliceSource;
     Range sliceFirst;
     Range sliceLast;
+    // A typed slice `source[first:last, "kind"]`: the kind string literal (quotes included; a
+    // kind or `kind@stride` layout). The source must then be a buffer read as that layout.
+    Range sliceKind;
     // Recovery-only unmatched ordinary delimiters, closed at the original fence.
     // Not part of expression's source range; strict consumers reject recovery.
     std::string expressionSuffix;
@@ -97,6 +100,7 @@ struct Slice
     Range source;
     Range first;
     Range last;
+    Range kind; // The kind literal of a typed slice `source[first:last, "kind"]`; empty otherwise.
     bool complete = false;
 };
 

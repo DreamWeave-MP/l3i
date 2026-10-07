@@ -131,6 +131,17 @@ private:
                 else if (all[close].type == ':' && depth == 1) colon = close;
             }
             if (depth || !colon) continue;
+            // An optional `, "kind"` after the last bound makes the slice typed.
+            size_t comma = 0;
+            int nested = 0;
+            for (size_t at = colon + 1; at + 1 < close; ++at)
+            {
+                const int token = all[at].type;
+                if (token == '(' || token == '[' || token == '{') ++nested;
+                else if (token == ')' || token == ']' || token == '}') --nested;
+                else if (token == ',' && nested == 0 && !comma) comma = at;
+            }
+            const size_t lastEnd = comma ? comma - 1 : close - 2;
             size_t start = open - 1;
             if (all[start].type == ')' || all[start].type == ']' || all[start].type == '}')
             {
@@ -152,12 +163,20 @@ private:
             Slice slice;
             slice.source = {all[start].range.begin, all[open - 1].range.end};
             const bool missingFirst = colon == open + 1;
-            const bool missingLast = colon + 1 == close - 1;
+            const bool missingLast = colon == lastEnd;
             slice.first = missingFirst ? Range{all[colon].range.begin, all[colon].range.begin}
                                        : Range{all[open + 1].range.begin, all[colon - 1].range.end};
             slice.last = missingLast ? Range{all[colon].range.end, all[colon].range.end}
-                                     : Range{all[colon + 1].range.begin, all[close - 2].range.end};
+                                     : Range{all[colon + 1].range.begin, all[lastEnd].range.end};
             slice.range = {slice.source.begin, all[close - 1].range.end};
+            bool badKind = false;
+            if (comma)
+            {
+                if (comma + 1 == close - 2 && all[comma + 1].type == T::QuotedString && bufferKindLiteral(all[comma + 1].range))
+                    slice.kind = all[comma + 1].range;
+                else
+                    badKind = true;
+            }
             const bool generatorSlice = std::any_of(document.comprehensions.begin(), document.comprehensions.end(),
                 [&](const Comprehension& comprehension) {
                     return std::any_of(comprehension.clauses.begin(), comprehension.clauses.end(), [&](const Clause& clause) {
@@ -182,7 +201,10 @@ private:
             if (parsed.root && parsed.errors.empty()) continue;
             if (missingFirst) error(slice.first, "expected slice first bound before ':'");
             if (missingLast) error(slice.last, "expected slice last bound after ':'");
-            slice.complete = !missingFirst && !missingLast;
+            if (badKind)
+                error(comma + 1 < close - 1 ? Range{all[comma + 1].range.begin, all[close - 2].range.end} : Range{all[comma].range.begin, all[comma].range.begin},
+                    "slice element kind must be a string literal naming an element kind, e.g. \"f32\" or \"f32@16\"");
+            slice.complete = !missingFirst && !missingLast && !badKind;
             document.slices.push_back(slice);
         }
         std::sort(document.slices.begin(), document.slices.end(), [](const Slice& a, const Slice& b) {
@@ -211,12 +233,22 @@ private:
         const std::string_view kind = text.substr(0, at);
         if (std::find(std::begin(kinds), std::end(kinds), kind) == std::end(kinds)) return false;
         if (at == std::string_view::npos) return true;
-        const std::string_view stride = text.substr(at + 1);
-        if (stride.empty() || stride.size() > 9) return false;
-        for (const char c : stride)
-            if (!std::isdigit(static_cast<unsigned char>(c))) return false;
+        // `kind@stride` or `kind@stride+offset`: digits only, the field inside the stride.
+        const std::string_view rest = text.substr(at + 1);
+        const size_t plus = rest.find('+');
+        const std::string_view stride = rest.substr(0, plus);
+        const std::string_view offset = plus == std::string_view::npos ? std::string_view() : rest.substr(plus + 1);
+        const auto digits = [](std::string_view digits) {
+            if (digits.empty() || digits.size() > 9) return false;
+            for (const char c : digits)
+                if (!std::isdigit(static_cast<unsigned char>(c))) return false;
+            return true;
+        };
+        if (!digits(stride) || (plus != std::string_view::npos && !digits(offset))) return false;
         const size_t size = kind == "u8" || kind == "i8" ? 1 : kind == "u16" || kind == "i16" ? 2 : kind == "f64" ? 8 : 4;
-        return std::stoul(std::string(stride)) >= size;
+        const size_t strideBytes = std::stoul(std::string(stride));
+        const size_t offsetBytes = offset.empty() ? 0 : std::stoul(std::string(offset));
+        return strideBytes >= size && offsetBytes + size <= strideBytes;
     }
     bool arrow(size_t i) const
     {
@@ -526,15 +558,35 @@ private:
             }
         }
         if (!colon) return;
+        // An optional `, "kind"` after the last bound makes the slice typed.
+        size_t comma = 0;
+        nested = 0;
+        for (size_t at = colon + 1; at + 1 < end; ++at)
+        {
+            const int token = type(at);
+            if (token == '(' || token == '[' || token == '{') ++nested;
+            else if (token == ')' || token == ']' || token == '}') --nested;
+            else if (token == ',' && nested == 0 && !comma) comma = at;
+        }
+        const size_t lastEnd = comma ? comma - 1 : end - 2; // Last token of the last bound.
         clause.sliceSource = {tokens[begin].range.begin, tokens[open - 1].range.end};
         const bool missingFirst = colon == open + 1;
-        const bool missingLast = colon + 1 == end - 1;
+        const bool missingLast = colon == lastEnd;
         clause.sliceFirst = missingFirst ? point(colon) : Range{tokens[open + 1].range.begin, tokens[colon - 1].range.end};
         clause.sliceLast = missingLast ? Range{tokens[colon].range.end, tokens[colon].range.end}
-                                       : Range{tokens[colon + 1].range.begin, tokens[end - 2].range.end};
+                                       : Range{tokens[colon + 1].range.begin, tokens[lastEnd].range.end};
         if (missingFirst) error(clause.sliceFirst, "expected slice first bound before ':'");
         if (missingLast) error(clause.sliceLast, "expected slice last bound after ':'");
+        if (comma)
+        {
+            if (comma + 1 == end - 2 && type(comma + 1) == T::QuotedString && bufferKindLiteral(tokens[comma + 1].range))
+                clause.sliceKind = tokens[comma + 1].range;
+            else
+                error(comma + 1 < end - 1 ? Range{tokens[comma + 1].range.begin, tokens[end - 2].range.end} : point(comma),
+                    "slice element kind must be a string literal naming an element kind, e.g. \"f32\" or \"f32@16\"");
+        }
     }
+
     void comprehension(size_t& i, size_t depth)
     {
         if (limit(i, depth)) return;

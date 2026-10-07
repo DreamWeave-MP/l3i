@@ -290,8 +290,18 @@ numbers. Fused length and sum consumers allocate neither a slice nor a comprehen
 Materialized comprehension consumers compact selected elements into their normal dense result,
 preserving projection order and the non-nil guard.
 
+A slice may name the element kind its buffer source is read as, `samples[a:b, "f32"]` or a
+`kind@stride` layout such as `bodies[1:n, "f32@16"]` (one f32 field of 16-byte records). The
+bounds are then element indices (1-based, inclusive, clamped to the element count), the source
+must be a buffer (`JSL typed slice source must be a buffer`), a generator binding is the
+element as `buffer.read<kind>` returns it, and a standalone typed slice copies the elements into
+a new contiguous buffer (`buffer.copy` for a contiguous layout, an element loop for a strided
+one). The kind must be a string literal; typed slices never dispatch on representation, and
+recognized pipelines over them lower to the data plane receiver of that layout. An untyped
+buffer slice remains a byte slice.
+
 The canonical frontend exports an `ExprSlice` node with original source and bound spans for both
-standalone and generator slices. Buffer specialization in dependent/nested generator positions and
+standalone and generator slices, with `elementKind` for a typed slice. Buffer specialization in dependent/nested generator positions and
 string representation-directed copies remain future work. Stock Luau indexing wins when the contents
 are already a valid colon method call, so ambiguous bounds use parentheses: `xs[(first()):(last())]`.
 
@@ -446,6 +456,7 @@ min[for x in buf[a:b] if x ~= 0 => x]       -- U8:minNe(buf, a - 1, n, 0), nil i
 max[for x in buf[a:b] => x]                 -- U8:max(buf, a - 1, n)
 any[for x in buf[a:b] => x > 200]           -- U8:anyGt(buf, a - 1, n, 200), returned directly
 all[for x in buf[a:b] => x <= limit]        -- U8:allLe(buf, a - 1, n, limit)
+sum[for v in bodies[1:n, "f32@16"] => v]    -- F32_16:sum(bodies, 0, n) on a dream_data_Kind_f32 receiver
 ```
 
 `U8` is the chunk's `dream_data_Kind_u8` receiver for bytes (`__l3i_data.u8()`, annotated in the

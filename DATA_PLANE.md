@@ -69,9 +69,10 @@ module, tests, docs. No new recognizer, no new loop emitter.
 
 A **span** is `(buffer, kind, offset, count)`: `count` elements of `kind` starting `offset`
 bytes into a Luau buffer. Kinds are the `buffer` library's own little-endian representations:
-`u8 i8 u16 i16 u32 i32 f32 f64`, optionally with a stride: `f32@16` is one f32 field of every
-16-byte record, the layout packed records take in buffers (a simulated body, an entity slot, a
-token record). A span is validated once, before any element is read (offset and count
+`u8 i8 u16 i16 u32 i32 f32 f64`, optionally with a stride and a field offset: `f32@16` is the
+first f32 of every 16-byte record and `f32@16+12` the field twelve bytes in, the layout packed
+records take in buffers (a simulated body, an entity slot, a token record). The offset adds to
+the span offset; the receivers carry the stride and take the field through the offset argument. A span is validated once, before any element is read (offset and count
 non-negative, `offset + (count − 1) × stride + size ≤ length`), and is a descriptor, never an
 allocation. Element-wise operations (`add`, `scale`, `clamp`, `fill`) take the layout for every
 operand, so a record field updates in place; `gather` reads a possibly strided field into a

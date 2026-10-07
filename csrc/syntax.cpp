@@ -1065,13 +1065,18 @@ public:
         auto slice = slices.find(node);
         if (slice != slices.end())
         {
-            open(KExprSlice, location(slice->second.record->range), 3);
+            open(KExprSlice, location(slice->second.record->range), 4);
             surfaceExpr(slice->second.source, slice->second.record->source);
             popInto(sourceField);
             surfaceExpr(slice->second.first, slice->second.record->first);
             popInto(first);
             surfaceExpr(slice->second.last, slice->second.record->last);
             popInto(last);
+            if (const auto kind = slice->second.record->kind; !kind.empty())
+            {
+                lua_pushlstring(L, source + kind.begin + 1, kind.end - kind.begin - 2);
+                popInto(elementKind);
+            }
             return false;
         }
         open(KExprCall, node->location, 5);
@@ -1683,13 +1688,18 @@ public:
             }
             if (!clause.sliceSource.empty())
             {
-                open(KExprSlice, location(clause.expression), 3);
+                open(KExprSlice, location(clause.expression), 4);
                 surfaceExpr(ast.sliceSource, clause.sliceSource);
                 popInto(sourceField);
                 surfaceExpr(ast.sliceFirst, clause.sliceFirst);
                 popInto(first);
                 surfaceExpr(ast.sliceLast, clause.sliceLast);
                 popInto(last);
+                if (!clause.sliceKind.empty())
+                {
+                    lua_pushlstring(L, source + clause.sliceKind.begin + 1, clause.sliceKind.end - clause.sliceKind.begin - 2);
+                    popInto(elementKind);
+                }
             }
             else if (!clause.zipArguments.empty())
             {

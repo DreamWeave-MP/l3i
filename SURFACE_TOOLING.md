@@ -23,6 +23,8 @@ The expression exposes ordered `clauses`, a `projection`, `openLocation`, option
   original-source `args`; it lowers to a numeric loop and never resolves a binding
   named `range`.
 - `ComprehensionFilter`: `condition` and `keywordLocation`.
+- `ExprSlice`: `source`, `first`, `last`, and `elementKind` (the literal's content) for a typed
+  slice `source[first:last, "f32@16+12"]`, in generator and standalone positions alike.
 - `#[for ...]`: ordinary `ExprUnary` with a comprehension operand. Allocation fusion
   is a lowering decision, not a mutation of the source tree.
 - Reducers: `ExprReduction {op = "sum" | "min" | "max" | "any" | "all", expr =

@@ -185,10 +185,22 @@ impl Kind {
 pub struct Layout {
     pub kind: Kind,
     pub stride: usize,
+    /// Bytes from the span offset to the element: a field's position inside a record,
+    /// `"f32@16+12"`. Zero for a plain kind.
+    pub offset: usize,
 }
 
 impl Layout {
     pub fn parse(what: &str, name: &str) -> Result<Layout> {
+        let (name, offset) = match name.split_once('+') {
+            Some((name, offset)) => (
+                name,
+                offset.parse::<usize>().map_err(|_| {
+                    Error::runtime(format!("{what}: field offset '{offset}' must be a whole number of bytes"))
+                })?,
+            ),
+            None => (name, 0),
+        };
         let (kind, stride) = match name.split_once('@') {
             Some((kind, stride)) => {
                 let kind = Kind::parse(what, kind)?;
@@ -206,11 +218,17 @@ impl Layout {
                 (kind, kind.size())
             }
         };
-        Ok(Layout { kind, stride })
+        if offset + kind.size() > stride {
+            return Err(Error::runtime(format!(
+                "{what}: field offset {offset} does not leave room for {} inside a stride of {stride}",
+                kind.name()
+            )));
+        }
+        Ok(Layout { kind, stride, offset })
     }
 
     pub fn contiguous(kind: Kind) -> Layout {
-        Layout { kind, stride: kind.size() }
+        Layout { kind, stride: kind.size(), offset: 0 }
     }
 }
 
@@ -226,9 +244,10 @@ struct Span {
 
 impl Span {
     fn new(what: &str, buffer: &BufferView<'_>, layout: Layout, offset: Exact<i64>, count: Exact<i64>) -> Result<Span> {
-        let Layout { kind, stride } = layout;
-        let offset =
-            usize::try_from(offset.0).map_err(|_| Error::runtime(format!("{what}: negative offset {}", offset.0)))?;
+        let Layout { kind, stride, offset: field } = layout;
+        let offset = usize::try_from(offset.0)
+            .map_err(|_| Error::runtime(format!("{what}: negative offset {}", offset.0)))?
+            + field;
         let count =
             usize::try_from(count.0).map_err(|_| Error::runtime(format!("{what}: negative count {}", count.0)))?;
         // The last element ends at offset + (count - 1) * stride + size; an empty span needs
@@ -1099,7 +1118,7 @@ impl<const K: u8> Typed<K> {
     }
 
     pub fn layout(&self) -> Layout {
-        Layout { kind: Self::KIND, stride: self.stride as usize }
+        Layout { kind: Self::KIND, stride: self.stride as usize, offset: 0 }
     }
 
     fn span(&self, what: &str, buffer: &BufferView<'_>, offset: Exact<i64>, count: Exact<i64>) -> Result<Span> {

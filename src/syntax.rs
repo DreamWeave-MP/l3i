@@ -35,6 +35,7 @@
 //! accesses are excluded. A sink `into(destination[, "kind"[, offset]])[for ...]` is an
 //! `ExprSink` holding the destination expression, a buffer sink's element kind and offset, and
 //! the inner `ExprComprehension`, under the same naming rule.
+//! A typed slice `source[first:last, "kind"]` is an `ExprSlice` carrying `elementKind`.
 //! A direct `range(first, last[, step])` generator source is an `ExprRange`; its arguments
 //! retain original nodes and spans while compilation lowers it to a numeric loop.
 //!
@@ -217,7 +218,7 @@ pub const TYPES: &[(&str, &str)] = &[
     ),
     (
         "dream_luau_ExprSlice",
-        "{ kind: \"ExprSlice\", line: number, column: number, endLine: number, endColumn: number, source: dream_luau_Expr, first: dream_luau_Expr, last: dream_luau_Expr }",
+        "{ kind: \"ExprSlice\", line: number, column: number, endLine: number, endColumn: number, source: dream_luau_Expr, first: dream_luau_Expr, last: dream_luau_Expr, elementKind: string? }",
     ),
     (
         "dream_luau_ExprComprehension",

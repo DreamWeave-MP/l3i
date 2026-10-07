@@ -538,6 +538,16 @@ fn surface_reduction_and_length_are_source_nodes_and_stock_is_opt_in() {
         span(sinkText, sinkResult, sink, 'into(out.buffer)[for x in {1} if x => x]')
         span(sinkText, sinkResult, sink.destination, 'out.buffer')
         span(sinkText, sinkResult, sink.expr, '[for x in {1} if x => x]')
+        local typedText = 'return [for v in samples[1:4, \'f32@16+12\'] => v], samples[1:2, \'u8\']'
+        local typedResult = luau.parse(typedText)
+        assert(#typedResult.errors == 0, typedResult.errors[1] and typedResult.errors[1].message)
+        local typedGenerator = typedResult.root.body[1].list[1].clauses[1].source
+        assert(typedGenerator.kind == 'ExprSlice' and typedGenerator.elementKind == 'f32@16+12')
+        local typedStandalone = typedResult.root.body[1].list[2]
+        assert(typedStandalone.kind == 'ExprSlice' and typedStandalone.elementKind == 'u8')
+        span(typedText, typedResult, typedStandalone, 'samples[1:2, \'u8\']')
+        assert(luau.parse('return samples[1:2]').root.body[1].list[1].elementKind == nil)
+        assert(#luau.parse('return samples[1:2, \'f16\']').errors > 0 and #luau.parse('return samples[1:2, kind]').errors > 0)
         local bufferText = 'return into(out, \'f32@16\', 8)[for x in {1} => x]'
         local bufferSink = luau.parse(bufferText).root.body[1].list[1]
         assert(bufferSink.kind == 'ExprSink' and bufferSink.elementKind == 'f32@16' and bufferSink.offset.kind == 'ExprConstantNumber')

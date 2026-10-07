@@ -323,6 +323,20 @@ fn recognized_buffer_pipelines_agree_with_the_scalar_loop_and_call_the_data_plan
         note(tostring(all[for x in buf[1:256] => x ~= nothing]))
         ok, message = pcall(function() return any[for x in buf[1:256] => x > text] end)
         note(tostring(ok) .. ':' .. tostring(message))
+        -- Typed slices: contiguous f32 samples and a strided f32 field of 16-byte records.
+        local samples = buffer.create(64 * 4)
+        for i = 0, 63 do buffer.writef32(samples, i * 4, ((i * 37) % 251) / 7 - 15) end
+        local bodies = buffer.create(40 * 16)
+        for i = 0, 39 do buffer.writef32(bodies, i * 16 + 12, ((i * 11) % 23) - 5) end
+        note(sum[for v in samples[1:64, 'f32'] => v])
+        note(sum[for v in samples[10:200, 'f32'] if v > limit => v])
+        note(#[for v in samples[1:64, 'f32'] if v >= 0 => v] .. ':' .. #[for v in samples[1:64, 'f32'] => v])
+        note(min[for v in samples[1:64, 'f32'] => v] .. ':' .. max[for v in samples[5:40, 'f32'] if v < 10 => v])
+        note(tostring(any[for v in samples[1:64, 'f32'] => v > 20]) .. tostring(all[for v in samples[1:64, 'f32'] => v > -20]))
+        note(sum[for v in bodies[1:40, 'f32@16'] => v] .. ':' .. #[for v in bodies[1:40, 'f32@16'] if v > 0 => v])
+        note(min[for v in bodies[1:40, 'f32@16'] if v ~= -5 => v] .. ':' .. tostring(any[for v in bodies[1:40, 'f32@16'] => v == 17]))
+        ok, message = pcall(function() return min[for v in samples[1:64, 'f32'] if v > 1000 => v] end)
+        note(tostring(ok) .. ':' .. tostring(message))
         note(min[for x in buf[1:256] => x])
         note(max[for x in buf[3:9] => x])
         note(min[for x in buf[200:300] => x])
@@ -522,6 +536,12 @@ fn strided_layouts_read_one_field_of_packed_records() {
         assert(not ok and string.find(message, 'stride', 1, true), message)
         ok, message = pcall(data.sum, motion, 'f32@x', 0, 1)
         assert(not ok and string.find(message, 'stride', 1, true), message)
+        -- A field offset inside the layout addresses the field from the span offset.
+        assert(data.sum(motion, 'f32@16+12', 4, n) == sumVy and data.max(motion, 'f32@16+12', 4, n) == maxVy, 'offset layout')
+        ok, message = pcall(data.sum, motion, 'f32@16+14', 4, n)
+        assert(not ok and string.find(message, 'does not leave room', 1, true), message)
+        ok, message = pcall(data.sum, motion, 'f32@16+x', 4, n)
+        assert(not ok and string.find(message, 'field offset', 1, true), message)
         -- Strided outputs too: scale the vx column in place, fill the vy column.
         data.scale(motion, 'f32@16', 4 + 8, n, 2, motion, 4 + 8)
         assert(buffer.readf32(motion, 4 + 8) == 0 and buffer.readf32(motion, 4 + 16 + 8) == 1, 'scaled vx')

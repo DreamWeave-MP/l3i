@@ -946,3 +946,62 @@ fn buffer_sinks_write_typed_elements_into_caller_buffers() {
         )
         .unwrap();
 }
+
+#[test]
+fn typed_slices_read_buffers_as_a_layout_and_copy_contiguously() {
+    let runtime = Runtime::new().unwrap();
+    runtime
+        .exec(
+            r"
+        local kinds = {'u8', 'i8', 'u16', 'i16', 'u32', 'i32', 'f32', 'f64'}
+        local sizes = {u8 = 1, i8 = 1, u16 = 2, i16 = 2, u32 = 4, i32 = 4, f32 = 4, f64 = 8}
+        for _, name in kinds do
+            local size = sizes[name]
+            local buf = buffer.create(10 * size)
+            local write, read = buffer['write' .. name], buffer['read' .. name]
+            for i = 0, 9 do write(buf, i * size, (name == 'f32' or name == 'f64') and i / 4 or i) end
+            -- Elements 3..5 (1-based), read as the kind.
+            local got = {}
+            if name == 'u8' then got = [for v in buf[3:5, 'u8'] => v]
+            elseif name == 'i8' then got = [for v in buf[3:5, 'i8'] => v]
+            elseif name == 'u16' then got = [for v in buf[3:5, 'u16'] => v]
+            elseif name == 'i16' then got = [for v in buf[3:5, 'i16'] => v]
+            elseif name == 'u32' then got = [for v in buf[3:5, 'u32'] => v]
+            elseif name == 'i32' then got = [for v in buf[3:5, 'i32'] => v]
+            elseif name == 'f32' then got = [for v in buf[3:5, 'f32'] => v]
+            else got = [for v in buf[3:5, 'f64'] => v] end
+            assert(#got == 3 and got[1] == read(buf, 2 * size) and got[3] == read(buf, 4 * size), name)
+        end
+        -- Bounds are element indices, clamped to the element count, not byte lengths.
+        local samples = buffer.create(16)
+        for i = 0, 3 do buffer.writef32(samples, i * 4, i + 0.5) end
+        assert(#[for v in samples[1:100, 'f32'] => v] == 4 and #[for v in samples[5:9, 'f32'] => v] == 0)
+        assert(sum[for v in samples[2:3, 'f32'] => v] == 4 and min[for v in samples[1:4, 'f32'] if v > 1 => v] == 1.5)
+        assert(any[for v in samples[1:4, 'f32'] => v > 3] and not all[for v in samples[1:4, 'f32'] => v > 3])
+        -- Strided: one field of 16-byte records.
+        local bodies = buffer.create(3 * 16)
+        for i = 0, 2 do buffer.writef32(bodies, i * 16 + 12, i * 10) buffer.writef32(bodies, i * 16, -1) end
+        local vy = [for v in bodies[1:3, 'f32@16+12'] => v]
+        assert(#vy == 3 and vy[1] == 0 and vy[3] == 20, 'strided read of the field at +12')
+        assert(sum[for v in bodies[1:3, 'f32@16+12'] => v] == 30 and sum[for v in bodies[1:3, 'f32@16'] => v] == -3)
+        assert(#[for v in bodies[1:3, 'f32@16+12'] if v > 5 => v] == 2)
+        -- Standalone typed slices copy elements into a new contiguous buffer.
+        local part = samples[2:3, 'f32']
+        assert(type(part) == 'buffer' and buffer.len(part) == 8 and buffer.readf32(part, 0) == 1.5 and buffer.readf32(part, 4) == 2.5)
+        local column = bodies[1:3, 'f32@16+12']
+        assert(buffer.len(column) == 12 and buffer.readf32(column, 4) == 10 and buffer.readf32(column, 8) == 20, 'strided copy')
+        assert(buffer.len(samples[9:9, 'f32']) == 0)
+        -- A typed slice source must be a buffer; bounds keep their checks.
+        local ok, message = pcall(function() return [for v in ({1, 2})[1:2, 'f32'] => v] end)
+        assert(not ok and string.find(message, 'JSL typed slice source must be a buffer', 1, true), message)
+        ok, message = pcall(function() return ({1})[1:1, 'u8'] end)
+        assert(not ok and string.find(message, 'must be a buffer', 1, true), message)
+        ok, message = pcall(function() return [for v in samples[1.5:2, 'f32'] => v] end)
+        assert(not ok and string.find(message, 'first bound must be a finite integer', 1, true), message)
+        -- Nested typed slices and typed slices in dependent positions read the same way.
+        local rows = {{data = samples}, {data = samples}}
+        assert(#[for row in rows for v in row.data[1:2, 'f32'] => v] == 4)
+    ",
+        )
+        .unwrap();
+}

@@ -401,6 +401,23 @@ int main()
             const auto beyond = parseSurface(deep);
             assert(beyond.comprehensions.size() == 1 && beyond.comprehensions[0].sinkPrefix.empty() && beyond.comprehensions[0].postfix);
         }
+        {
+            // Typed slices: an element kind literal after the last bound, in both positions.
+            const std::string_view s = "[for v in samples[a:b, \"f32@16\"] => v]; local part = samples[1:n, \"u8\"]";
+            const auto d = parseSurface(s);
+            assert(d.errors.empty() && d.comprehensions.size() == 1 && d.slices.size() == 1);
+            const auto& clause = d.comprehensions[0].clauses[0];
+            assert(slice(s, clause.sliceKind) == "\"f32@16\"" && slice(s, clause.sliceLast) == "b" && slice(s, clause.sliceSource) == "samples");
+            assert(slice(s, d.slices[0].kind) == "\"u8\"" && slice(s, d.slices[0].last) == "n" && d.slices[0].complete);
+            for (std::string_view bad : {"[for v in samples[a:b, \"f16\"] => v]", "[for v in samples[a:b, kind] => v]",
+                     "[for v in samples[a:b, \"f32@2\"] => v]", "local p = samples[1:2, 3]", "local p = samples[1:2, \"u8\", 4]"})
+            {
+                const auto e = parseSurface(bad);
+                assert(!e.errors.empty());
+            }
+            const auto missing = parseSurface("[for v in samples[a:, \"f32\"] => v]");
+            assert(missing.comprehensions.size() == 1 && !missing.errors.empty() && slice("[for v in samples[a:, \"f32\"] => v]", missing.comprehensions[0].clauses[0].sliceKind) == "\"f32\"");
+        }
         const auto d = parseSurface("minimum[for x in xs => x]; [for x in xs => x]");
         assert(d.comprehensions.size() == 2 && d.comprehensions[0].reducer == Reducer::None && d.comprehensions[0].postfix);
         assert(d.comprehensions[1].reducer == Reducer::None && !d.comprehensions[1].postfix);

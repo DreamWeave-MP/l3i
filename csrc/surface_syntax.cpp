@@ -183,26 +183,38 @@ public:
             result += "local " + operations + "_rawequal = rawequal ";
             ++preludeStatements;
         }
-        bool hasDataOps = false;
+        // One receiver per distinct layout the recognized pipelines read (byte slices are u8).
+        std::vector<SliceLayout> layouts;
         for (size_t index = 0; dynamicGenerators && index < document.comprehensions.size(); ++index)
         {
             const Comprehension& node = document.comprehensions[index];
-            hasDataOps = knownDataOp(node, plan(node, {}, fuse && !node.lengthPrefix.empty(), node.reducer), index).has_value() || hasDataOps;
+            if (!knownDataOp(node, plan(node, {}, fuse && !node.lengthPrefix.empty(), node.reducer), index)) continue;
+            const auto layout = sliceLayout(node.clauses.front().sliceKind).value_or(SliceLayout{"u8", 1, 1});
+            if (std::none_of(layouts.begin(), layouts.end(), [&](const SliceLayout& known) { return known.receiver() == layout.receiver(); }))
+                layouts.push_back(layout);
         }
-        if (hasDataOps)
+        if (!layouts.empty())
         {
             // The data plane's alias global (nil when the runtime did not install the extension)
-            // and its byte receiver, annotated so Luau's code generator lowers the calls to
-            // native loops; JSL buffer slices are byte spans.
+            // and the receivers, annotated so Luau's code generator lowers the calls.
             result += "local " + operations + "_data = __l3i_data ";
-            result += "local " + operations + "_data_u8: dream_data_Kind_u8 = if " + operations + "_data then " + operations +
-                "_data.u8() else nil ";
-            preludeStatements += 2;
+            ++preludeStatements;
+            for (const SliceLayout& layout : layouts)
+            {
+                result += "local " + operations + layout.receiver() + ": dream_data_Kind_" + layout.kind + " = if " + operations +
+                    "_data then " + operations + "_data." + layout.kind + "(" +
+                    (layout.stride == layout.size ? "" : std::to_string(layout.stride)) + ") else nil ";
+                ++preludeStatements;
+            }
         }
+
 
         const bool hasBufferSinks = std::any_of(document.comprehensions.begin(), document.comprehensions.end(),
             [](const Comprehension& node) { return !node.sinkKind.empty(); });
-        if (!document.slices.empty() || !bufferGenerators.empty() || dynamicGenerators || hasBufferSinks)
+        const bool hasTypedSlices = std::any_of(document.comprehensions.begin(), document.comprehensions.end(), [](const Comprehension& node) {
+            return std::any_of(node.clauses.begin(), node.clauses.end(), [](const Clause& clause) { return !clause.sliceKind.empty(); });
+        });
+        if (!document.slices.empty() || !bufferGenerators.empty() || dynamicGenerators || hasBufferSinks || hasTypedSlices)
         {
             result += "local " + operations + "_buffer = buffer ";
             ++preludeStatements;
@@ -362,6 +374,11 @@ private:
         else
             out += "if " + std::string(prefix) + "_kind ~= \"table\" then " + operations +
                 "_error(\"JSL comprehension slice source must be a table\") end ";
+        boundChecks(out, prefix, firstRange, lastRange);
+    }
+
+    void boundChecks(Text& out, std::string_view prefix, Range firstRange, Range lastRange)
+    {
         out.anchor = firstRange;
         out += "if " + operations + "_typeof(" + std::string(prefix) + "_first) ~= \"number\" or " +
             std::string(prefix) + "_first % 1 ~= 0 then " + operations +
@@ -388,6 +405,32 @@ private:
         out += " local " + prefix + "_last = ";
         site.last = expression(out, node.last, "(0 :: number)");
         out += " ";
+        if (const auto typed = sliceLayout(node.kind))
+        {
+            // A typed slice copies elements of the layout into a new contiguous buffer: one
+            // `buffer.copy` when the layout is contiguous, else an element loop.
+            out.anchor = node.source;
+            out += "if " + operations + "_typeof(" + prefix + "_src) ~= \"buffer\" then " + operations +
+                "_error(\"JSL typed slice source must be a buffer\") end ";
+            boundChecks(out, prefix, node.first, node.last);
+            const std::string size = std::to_string(typed->size), stride = std::to_string(typed->stride);
+            out += "local " + prefix + "_len = " + typed->count(operations + "_buffer.len(" + prefix + "_src)") + " if " + prefix +
+                "_first < 1 then " + prefix + "_first = 1 end if " + prefix + "_last > " + prefix + "_len then " + prefix + "_last = " +
+                prefix + "_len end local " + prefix + "_n = 0 if " + prefix + "_last >= " + prefix + "_first then " + prefix + "_n = " +
+                prefix + "_last - " + prefix + "_first + 1 end local " + prefix + "_out = " + operations + "_buffer.create(" + prefix +
+                "_n * " + size + ") ";
+            if (typed->contiguous())
+                out += "if " + prefix + "_n > 0 then " + operations + "_buffer.copy(" + prefix + "_out, 0, " + prefix + "_src, (" + prefix +
+                    "_first - 1) * " + size + ", " + prefix + "_n * " + size + ") end ";
+            else
+                out += "for " + prefix + "_i = 0, " + prefix + "_n - 1 do " + operations + "_buffer.write" + typed->kind + "(" + prefix +
+                    "_out, " + prefix + "_i * " + size + ", " + operations + "_buffer.read" + typed->kind + "(" + prefix + "_src, " +
+                    typed->at(prefix + "_first + " + prefix + "_i") + ")) end ";
+            out += "return " + prefix + "_out end)()";
+            site.call = {callBegin, out.size()};
+            out.sliceSites.push_back(std::move(site));
+            return out;
+        }
         sliceChecks(out, prefix, node.source, node.first, node.last, true);
         out += "local " + prefix + "_len = 0 if " + prefix + "_kind == \"buffer\" then " + prefix + "_len = " + operations + "_buffer.len(" + prefix + "_src :: any) else " + prefix + "_len = #(" + prefix + "_src :: any) end if " + prefix + "_first < 1 then " + prefix + "_first = 1 end if " + prefix + "_last > " + prefix + "_len then " + prefix + "_last = " + prefix + "_len end local " + prefix + "_n = 0 if " + prefix + "_last >= " + prefix + "_first then " + prefix + "_n = " + prefix + "_last - " + prefix + "_first + 1 end if " + prefix + "_kind == \"buffer\" then local " + prefix + "_out = (" + operations + "_buffer.create(" + prefix + "_n) :: any) :: typeof(" + prefix + "_src) if " + prefix + "_n > 0 then " + operations + "_buffer.copy(" + prefix + "_out :: any, 0, " + prefix + "_src :: any, " + prefix + "_first - 1, " + prefix + "_n) end return " + prefix + "_out else local " + prefix + "_out = (" + operations + "_table_create(" + prefix + "_n) :: any) :: typeof(" + prefix + "_src) if " + prefix + "_n > 0 then " + operations + "_table_move(" + prefix + "_src :: any, " + prefix + "_first, " + prefix + "_last, 1, " + prefix + "_out :: any) end return " + prefix + "_out end end)()";
         site.call = {callBegin, out.size()};
@@ -749,15 +792,65 @@ private:
             out += "local " + e.cursor + " = " + e.seed + " ";
     }
 
+    // The element layout a typed slice names: `"f32"` or `"f32@16"`, validated by the frontend.
+    struct SliceLayout
+    {
+        std::string kind;
+        size_t size = 1;
+        size_t stride = 1;
+        size_t offset = 0; // The field's position inside each record, `f32@16+12`.
+        bool contiguous() const { return stride == size && offset == 0; }
+        // The lowering-owned receiver local for this layout, `_data_f32` or `_data_f32_16`; the
+        // field offset is an argument, not part of the receiver.
+        std::string receiver() const { return "_data_" + kind + (stride == size ? "" : "_" + std::to_string(stride)); }
+        std::string name() const { return stride == size ? kind : kind + "@" + std::to_string(stride); }
+        // How many elements a buffer of `length` bytes holds: the last element's bytes must fit,
+        // so `(length - offset - size) // stride + 1`, or zero when even the first does not.
+        std::string count(const std::string& length) const
+        {
+            const std::string room = length + " - " + std::to_string(offset + size);
+            return "(if " + room + " < 0 then 0 else (" + room + ") // " + std::to_string(stride) + " + 1)";
+        }
+        // The byte position of element `index` (a generated expression, 1-based).
+        std::string at(const std::string& index) const
+        {
+            std::string position = "(" + index + " - 1)";
+            if (stride != 1) position += " * " + std::to_string(stride);
+            if (offset) position += " + " + std::to_string(offset);
+            return position;
+        }
+    };
+
+    std::optional<SliceLayout> sliceLayout(Range literal) const
+    {
+        if (literal.empty()) return std::nullopt;
+        std::string_view text = std::string_view(source).substr(literal.begin + 1, literal.end - literal.begin - 2);
+        SliceLayout layout;
+        if (const size_t plus = text.find('+'); plus != std::string_view::npos)
+        {
+            layout.offset = size_t(std::stoul(std::string(text.substr(plus + 1))));
+            text = text.substr(0, plus);
+        }
+        const size_t at = text.find('@');
+        layout.kind = std::string(text.substr(0, at));
+        layout.size = layout.kind == "u8" || layout.kind == "i8" ? 1 : layout.kind == "u16" || layout.kind == "i16" ? 2 : layout.kind == "f64" ? 8 : 4;
+        layout.stride = at == std::string_view::npos ? layout.size : size_t(std::stoul(std::string(text.substr(at + 1))));
+        return layout;
+    }
+
+
     // A slice source evaluated and bounded: the loop below reads `P_src[P_i]` or, for bytes,
-    // `buffer.readu8(P_src, P_i - 1)`. Representation specialization exists only for a leading
-    // generator: Analysis types it (bytes) or compilation dispatches on the runtime kind.
-    void sliceSetup(Text& out, const Stage& stage, const Clause& clause, ClauseSite& site, Emission& e, bool bytes, bool dynamic)
+    // `buffer.readu8(P_src, P_i - 1)`, or for a typed slice `buffer.read<kind>(P_src, (P_i - 1)
+    // * stride)`. Representation specialization exists only for a leading generator: Analysis
+    // types it (bytes), the kind literal names it (typed), or compilation dispatches on the
+    // runtime kind.
+    void sliceSetup(Text& out, const Stage& stage, const Clause& clause, ClauseSite& site, Emission& e, bool bytes, bool dynamic,
+        const SliceLayout* typed = nullptr)
     {
         const std::string& prefix = stage.prefix;
         out += "local " + prefix + "_src = ";
         const size_t sourceBegin = out.size();
-        expression(out, clause.sliceSource, "({} :: {any})");
+        expression(out, clause.sliceSource, typed ? "(buffer.create(0) :: buffer)" : "({} :: {any})");
         site.sliceSource = {sourceBegin, out.size()};
         out += " local " + prefix + "_first = ";
         const size_t firstBegin = out.size();
@@ -768,9 +861,19 @@ private:
         expression(out, clause.sliceLast, "(0 :: number)");
         site.sliceLast = {lastBegin, out.size()};
         out += " ";
-        sliceChecks(out, prefix, clause.sliceSource, clause.sliceFirst, clause.sliceLast, bytes || dynamic);
+        if (typed)
+        {
+            out.anchor = clause.sliceSource;
+            out += "if " + operations + "_typeof(" + prefix + "_src) ~= \"buffer\" then " + operations +
+                "_error(\"JSL typed slice source must be a buffer\") end ";
+            boundChecks(out, prefix, clause.sliceFirst, clause.sliceLast);
+        }
+        else
+            sliceChecks(out, prefix, clause.sliceSource, clause.sliceFirst, clause.sliceLast, bytes || dynamic);
         aliasCheck(out, e, prefix + "_src");
-        if (dynamic)
+        if (typed)
+            out += "local " + prefix + "_len = " + typed->count(operations + "_buffer.len(" + prefix + "_src)") + " ";
+        else if (dynamic)
             out += "local " + prefix + "_len = 0 if " + prefix + "_kind == \"buffer\" then " + prefix + "_len = " + operations + "_buffer.len(" + prefix + "_src) else " + prefix + "_len = #" + prefix + "_src end ";
         else
             out += "local " + prefix + "_len = " + (bytes ? operations + "_buffer.len(" + prefix + "_src)" : "#" + prefix + "_src") + " ";
@@ -782,12 +885,15 @@ private:
         }
     }
 
-    void sliceLoop(Text& out, const Stage& stage, const Clause& clause, ClauseSite& site, bool bytes)
+    void sliceLoop(Text& out, const Stage& stage, const Clause& clause, ClauseSite& site, bool bytes, const SliceLayout* typed = nullptr)
     {
         const std::string& prefix = stage.prefix;
         out += "for " + prefix + "_i = " + prefix + "_first, " + prefix + "_last do local ";
         bindings(out, clause, site);
-        out += bytes ? " = " + operations + "_buffer.readu8(" + prefix + "_src, " + prefix + "_i - 1) " : " = " + prefix + "_src[" + prefix + "_i] ";
+        if (typed)
+            out += " = " + operations + "_buffer.read" + typed->kind + "(" + prefix + "_src, " + typed->at(prefix + "_i") + ") ";
+        else
+            out += bytes ? " = " + operations + "_buffer.readu8(" + prefix + "_src, " + prefix + "_i - 1) " : " = " + prefix + "_src[" + prefix + "_i] ";
     }
 
     // One generator stage: evaluate its source once, open the loop, declare the bindings.
@@ -816,9 +922,10 @@ private:
         }
         case SourceKind::Slice:
         {
-            const bool bytes = e.sized && bufferGenerator(clause.sliceSource);
-            sliceSetup(out, stage, clause, site, e, bytes, false);
-            sliceLoop(out, stage, clause, site, bytes);
+            const auto typed = sliceLayout(clause.sliceKind);
+            const bool bytes = !typed && e.sized && bufferGenerator(clause.sliceSource);
+            sliceSetup(out, stage, clause, site, e, bytes, false, typed ? &*typed : nullptr);
+            sliceLoop(out, stage, clause, site, bytes, typed ? &*typed : nullptr);
             return;
         }
         case SourceKind::Zip:
@@ -963,7 +1070,56 @@ private:
         }
     }
 
+    // The data-plane form of a recognized pipeline over a slice of `layout`, opened as
+    // `if <data available> then ... ` for the caller to close with the scalar fallback. The
+    // receiver's native loops (DATA_PLANE.md §2.4) beat the bound calls at every size except
+    // the unfiltered sum above `boundSumThreshold`, which the bound call's vectorized loop wins.
+    void dataOp(Text& out, Emission& e, const Stage& stage, const KnownDataOp& op, const SliceLayout& layout)
+    {
+        const std::string& p = stage.prefix;
+        const std::string offset = layout.contiguous() && layout.stride == 1 ? p + "_first - 1" : layout.at(p + "_first");
+        const std::string span = p + "_src, " + offset + ", " + p + "_n";
+        const std::string receiver = operations + layout.receiver() + ":";
+        // An empty span after normalization may start past the buffer (`buf[300:400]` of 256
+        // bytes); the loop runs zero times and the data plane is not consulted.
+        out += "if " + operations + "_data" +
+            (op.identifier ? " and " + operations + "_typeof(" + op.threshold + ") == \"number\"" : "") + " then ";
+        // `sumGt(span, t)`, `min(span)`, `anyLe(span, t)`: the member and its arguments.
+        const std::string suffix = op.comparison.empty() ? "" : capitalized(op.comparison);
+        const std::string arguments = span + (op.comparison.empty() ? "" : ", " + op.threshold);
+        const std::string guard = "if " + p + "_n > 0 then ";
+        switch (op.consumer)
+        {
+        case Consumer::Count:
+            out += op.comparison.empty() ? e.cursor + " = " + p + "_n "
+                                         : guard + e.cursor + " = " + receiver + "count" + suffix + "(" + arguments + ") end ";
+            break;
+        case Consumer::Sum:
+            if (op.comparison.empty())
+                out += guard + "if " + p + "_n > " + std::to_string(boundSumThreshold) + " then " + e.cursor + " = " + operations +
+                    "_data.sum(" + p + "_src, \"" + layout.name() + "\", " + offset + ", " + p + "_n) else " + e.cursor + " = " +
+                    receiver + "sum(" + span + ") end end ";
+            else
+                out += guard + e.cursor + " = " + receiver + "sum" + suffix + "(" + arguments + ") end ";
+            break;
+        case Consumer::Min:
+        case Consumer::Max:
+            // nil for an empty span (or no accepted element) is the reducer's empty error.
+            out += guard + e.cursor + " = " + receiver + (op.consumer == Consumer::Min ? "min" : "max") + suffix + "(" + arguments +
+                ") end if " + e.cursor + " == nil then " + operations + "_error(\"JSL " +
+                (op.consumer == Consumer::Min ? "min" : "max") + " reducer received no elements\") end ";
+            break;
+        case Consumer::Any:
+        case Consumer::All:
+            out += "return " + receiver + (op.consumer == Consumer::Any ? "any" : "all") + suffix + "(" + arguments + ") ";
+            break;
+        default:
+            break;
+        }
+    }
+
     // Stages `from` onward, then the step, then the closers: a recursive walk so that one
+
     // stage may emit the rest of the pipeline under more than one representation.
     void stages(Text& out, Emission& e, size_t from)
     {
@@ -988,6 +1144,31 @@ private:
             out += "end ";
             return;
         }
+        const auto typed = stage.kind == SourceKind::Slice ? sliceLayout(clause.sliceKind) : std::nullopt;
+        if (typed && e.sized)
+        {
+            // A typed slice reads a buffer as its layout: one loop, no representation dispatch,
+            // and the data plane when the pipeline is a known operation.
+            sliceSetup(out, stage, clause, site, e, false, false, &*typed);
+            const auto op = dynamicGenerators ? knownDataOp(e.node, e.pipeline, e.index) : std::nullopt;
+            if (op)
+            {
+                dataOp(out, e, stage, *op, *typed);
+                out += "else ";
+                sliceLoop(out, stage, clause, site, false, &*typed);
+                stages(out, e, from + 1);
+                out.anchor = e.node.close;
+                out += "end end ";
+            }
+            else
+            {
+                sliceLoop(out, stage, clause, site, false, &*typed);
+                stages(out, e, from + 1);
+                out.anchor = e.node.close;
+                out += "end ";
+            }
+            return;
+        }
         if (stage.kind == SourceKind::Slice && e.sized && dynamicGenerators && !bufferGenerator(clause.sliceSource))
         {
             // Compilation has no types: dispatch on the runtime representation once, outside
@@ -996,51 +1177,9 @@ private:
             out += "if " + stage.prefix + "_kind == \"buffer\" then ";
             if (const auto op = knownDataOp(e.node, e.pipeline, e.index))
             {
-                // The data plane computes this consumer over the normalized byte span exactly
-                // as the scalar loop would; without the runtime extension the loop runs.
-                const std::string& p = stage.prefix;
-                // Measured (DATA_PLANE.md §2.4): the receiver's unrolled native loops beat the bound
-                // calls at every size under jit, and bound they are the same loops.
-                const std::string span = p + "_src, " + p + "_first - 1, " + p + "_n";
-                const std::string receiver = operations + "_data_u8:";
-                // An empty span after normalization may start past the buffer (`buf[300:400]` of
-                // 256 bytes); the loop runs zero times and the data plane is not consulted.
-                out += "if " + operations + "_data" +
-                    (op->identifier ? " and " + operations + "_typeof(" + op->threshold + ") == \"number\"" : "") + " then ";
-                // `sumGt(span, t)`, `min(span)`, `anyLe(span, t)`: the member and its arguments.
-                const std::string suffix = op->comparison.empty() ? "" : capitalized(op->comparison);
-                const std::string arguments = span + (op->comparison.empty() ? "" : ", " + op->threshold);
-                const std::string guard = "if " + p + "_n > 0 then ";
-                switch (op->consumer)
-                {
-                case Consumer::Count:
-                    out += op->comparison.empty() ? e.cursor + " = " + p + "_n "
-                                                  : guard + e.cursor + " = " + receiver + "count" + suffix + "(" + arguments + ") end ";
-                    break;
-                case Consumer::Sum:
-                    if (op->comparison.empty())
-                        // Measured crossover: the bound call's vectorized loop wins above the threshold.
-                        out += guard + "if " + p + "_n > " + std::to_string(boundSumThreshold) + " then " + e.cursor + " = " + operations +
-                            "_data.sum(" + p + "_src, \"u8\", " + p + "_first - 1, " + p + "_n) else " + e.cursor + " = " + receiver +
-                            "sum(" + span + ") end end ";
-                    else
-                        out += guard + e.cursor + " = " + receiver + "sum" + suffix + "(" + arguments + ") end ";
-                    break;
-                case Consumer::Min:
-                case Consumer::Max:
-                    // nil for an empty span (or no accepted element) is the reducer's empty error.
-                    out += guard + e.cursor + " = " + receiver + (op->consumer == Consumer::Min ? "min" : "max") + suffix + "(" + arguments +
-                        ") end if " + e.cursor + " == nil then " + operations + "_error(\"JSL " +
-                        (op->consumer == Consumer::Min ? "min" : "max") + " reducer received no elements\") end ";
-                    break;
-                case Consumer::Any:
-                case Consumer::All:
-                    out += "return " + receiver + (op->consumer == Consumer::Any ? "any" : "all") + suffix + "(" + arguments + ") ";
-                    break;
-                default:
-                    break;
-                }
-
+                // JSL byte slices are u8 spans; the data plane computes this consumer over the
+                // normalized span exactly as the scalar loop would.
+                dataOp(out, e, stage, *op, SliceLayout{"u8", 1, 1});
                 out += "else ";
                 sliceLoop(out, stage, clause, site, true);
                 stages(out, e, from + 1);
