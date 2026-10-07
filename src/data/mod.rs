@@ -1465,6 +1465,10 @@ impl Reduction {
                 Answer::Number(total)
             }
             ReductionOp::Count => Answer::Number((0..span.count).filter(|&i| accept(span.get(i))).count() as f64),
+            ReductionOp::Min | ReductionOp::Max if self.filter.is_none() => {
+                // The specialized scan: half the instructions of the generic path below.
+                extreme(span, self.op == ReductionOp::Max).map_or(Answer::Nil, |i| Answer::Number(span.get(i)))
+            }
             ReductionOp::Min | ReductionOp::Max => {
                 let mut best: Option<f64> = None;
                 for i in 0..span.count {

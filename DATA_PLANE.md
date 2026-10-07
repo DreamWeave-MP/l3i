@@ -162,23 +162,27 @@ instructions per call (minimum of five rounds of 64 calls), Criterion median tim
 `> 127` counts over `n` bytes; the recognized JSL form includes the slice prologue (type checks,
 bounds normalization); the scalar fallback is the same JSL source run without the extension.
 
-Interpreter:
+Interpreter (final run; globals sandboxed, which lets the interpreter take the `buffer.readu8`
+fastcall, so Luau's own loops are about three times faster here than in an unsandboxed
+environment, and these are the fair baselines):
 
 | n | JSL recognized | JSL scalar fallback | explicit `data.sum` / `data.count` | handwritten `readu8` loop |
 |---:|---:|---:|---:|---:|
-| sum 16 | 5,365 (532 ns) | 14,741 (1.21 µs) | 2,434 (205 ns) | 14,637 (1.04 µs) |
-| sum 256 | 9,685 (832 ns) | 171,221 (12.2 µs) | 6,754 (531 ns) | 213,597 (16.6 µs) |
-| sum 4,096 | 78,805 (6.10 µs) | 2,674,901 (191 µs) | 75,874 (5.48 µs) | 3,396,957 (250 µs) |
-| sum 65,536 | 1,184,725 (83.3 µs) | 42,733,784 (3.03 ms) | 1,181,794 (87.6 µs) | 54,330,722 (3.87 ms) |
-| count 16 | 5,704 (557 ns) | 14,971 (1.27 µs) | 2,799 (251 ns) | 15,217 (1.25 µs) |
-| count 256 | 11,944 (1.12 µs) | 176,945 (14.9 µs) | 9,039 (737 ns) | 223,941 (18.8 µs) |
-| count 4,096 | 111,784 (9.08 µs) | 2,768,018 (229 µs) | 108,879 (8.80 µs) | 3,563,260 (285 µs) |
-| count 65,536 | 1,709,224 (136 µs) | 44,226,066 (3.52 ms) | 1,706,319 (139 µs) | 56,992,809 (4.56 ms) |
+| sum 16 | 3,907 (431 ns) | 7,395 (778 ns) | 1,945 (238 ns) | 4,540 (586 ns) |
+| sum 256 | 7,027 (733 ns) | 77,235 (6.26 µs) | 5,065 (510 ns) | 56,860 (4.45 µs) |
+| sum 4,096 | 56,947 (5.10 µs) | 1,194,675 (89.8 µs) | 54,985 (5.94 µs) | 893,980 (62.0 µs) |
+| sum 65,536 | 855,746 (89.2 µs) | 19,073,717 (1.40 ms) | 853,705 (82.5 µs) | 14,287,901 (1.00 ms) |
+| count 16 | 3,918 (647 ns) | 7,625 (804 ns) | 2,156 (216 ns) | 5,120 (692 ns) |
+| count 256 | 7,278 (787 ns) | 82,959 (7.91 µs) | 6,716 (656 ns) | 67,204 (5.56 µs) |
+| count 4,096 | 61,038 (5.39 µs) | 1,287,792 (108 µs) | 79,676 (7.12 µs) | 1,060,282 (84.9 µs) |
+| count 65,536 | 921,198 (84.7 µs) | 20,565,998 (1.75 ms) | 1,247,036 (113 µs) | 16,949,988 (1.33 ms) |
 
 There is no small-N crossover in the interpreter: at 16 elements the recognized pipeline
-already executes a third of the scalar loop's instructions, and the explicit call a sixth. The
-JSL form carries about 3,000 instructions of prologue over the explicit call, independent of n.
-`compare` into a reused selection then `count()` costs 2 to 4% more than the direct `count`.
+already runs ahead of the handwritten loop, and the explicit call at well under half its
+instructions. The JSL form carries about 2,000 instructions of prologue over the explicit call,
+independent of n. `compare` into a reused selection then `count()` costs 2 to 4% more than the
+direct `count`.
+
 
 | n | explicit `data.sum` f32 | handwritten `readf32` loop | explicit `data.gather` f32 | handwritten indexed copy | stable `data.argsort` f32 | `table.sort` index table, comparator (unstable) |
 |---:|---:|---:|---:|---:|---:|---:|
@@ -244,8 +248,18 @@ What the machine shape says:
   for all three (never worse than 2.6× better than Luau's own native loop); a size-based switch
   for large sums is the one tuning left on the table, deliberately, until a workload shows it.
 - `argsort` through caller scratch allocates nothing but reads keys from the span on every
-  compare, so it runs 30% slower than the allocating sort at 65,536 elements (2.31 ms versus
-  1.78 ms) and about even at 256. Use it where allocation, not latency, is the cost.
+  compare, so it runs 25% slower than the allocating sort at 65,536 elements (2.56 ms versus
+  2.06 ms) and about even at 256. Use it where allocation, not latency, is the cost.
+- Typed receivers (final run, 65,536 bytes): JSL recognized sum 61.7 µs (the size dispatch
+  takes the bound path there), count 81.7 µs on the receiver against 78.1 µs bound, min 66.8 µs
+  on the receiver against 143 µs bound; at 16 bytes the receiver count runs in 88 ns against
+  110 ns for the handwritten native loop. Luau's own loops remain at 184 to 212 µs.
+- Writing comparisons into a selection from the native loop (`K:selectGt`) is a measured
+  negative: a read-modify-write of the bitset word per hit through the selection's words pointer
+  costs 222 µs at 65,536 bytes against 83 µs for the native count and 78 µs for the bound
+  `compare` followed by `count`. The member stays (it is correct, and composes selections
+  without a bound call) but `data.compare` is the recommended path; folding eight compares into
+  one word write needs a branch-free compare the IR does not offer.
 - `compare` into a reused selection then `count()` costs within 5% of the direct count at
   every size, so composing selections is not a performance trade.
 
