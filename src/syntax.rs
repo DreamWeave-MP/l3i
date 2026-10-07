@@ -29,9 +29,10 @@
 //! ordered `ComprehensionGenerator` / `ComprehensionFilter` clauses and a projection; generator
 //! sources precede their binding's scope. Scope depths and upvalues exclude generated functions.
 //! `#[for ...]` remains an `ExprUnary` around an `ExprComprehension`.
-//! The intrinsic `sum[for ...]` is an `ExprReduction` with `op = "sum"` and an inner
-//! `ExprComprehension`; its outer span includes `sum`, while the inner span starts at `[`.
-//! This intrinsic does not refer to any local/global named `sum`; member accesses are excluded.
+//! A reducer (`sum`, `min`, `max`, `any`, `all` before `[for ...]`) is an `ExprReduction` with
+//! that `op` and an inner `ExprComprehension`; its outer span includes the reducer name, while
+//! the inner span starts at `[`. A reducer never refers to a local/global of its name; member
+//! accesses are excluded.
 //! A direct `range(first, last[, step])` generator source is an `ExprRange`; its arguments
 //! retain original nodes and spans while compilation lowers it to a numeric loop.
 //!
@@ -222,7 +223,7 @@ pub const TYPES: &[(&str, &str)] = &[
     ),
     (
         "dream_luau_ExprReduction",
-        "{ kind: \"ExprReduction\", line: number, column: number, endLine: number, endColumn: number, op: \"sum\", expr: dream_luau_ExprComprehension }",
+        "{ kind: \"ExprReduction\", line: number, column: number, endLine: number, endColumn: number, op: \"sum\" | \"min\" | \"max\" | \"any\" | \"all\", expr: dream_luau_ExprComprehension }",
     ),
     (
         "dream_luau_ExprGroup",

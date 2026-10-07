@@ -62,6 +62,10 @@ using namespace Luau;
     X(KExprZip, "ExprZip") \
     X(KExprSlice, "ExprSlice") \
     X(SSum, "sum") \
+    X(SMin, "min") \
+    X(SMax, "max") \
+    X(SAny, "any") \
+    X(SAll, "all") \
     X(KExprComprehension, "ExprComprehension") \
     X(KComprehensionGenerator, "ComprehensionGenerator") \
     X(KComprehensionFilter, "ComprehensionFilter") \
@@ -1604,11 +1608,19 @@ public:
         const auto& record = *surface.record;
         // The reducer is surface syntax, independent of any local/global named sum.
         // It shares the comprehension's generated site and adds no source function scope.
-        const bool reduction = !record.sumPrefix.empty();
+        const bool reduction = record.reducer != L3i::Surface::Reducer::None;
         if (reduction)
         {
-            open(KExprReduction, location({record.sumPrefix.begin, record.range.end}), 2);
-            setString(op, SSum);
+            open(KExprReduction, location({record.reducerPrefix.begin, record.range.end}), 2);
+            switch (record.reducer)
+            {
+            case L3i::Surface::Reducer::Min: setString(op, SMin); break;
+            case L3i::Surface::Reducer::Max: setString(op, SMax); break;
+            case L3i::Surface::Reducer::Any: setString(op, SAny); break;
+            case L3i::Surface::Reducer::All: setString(op, SAll); break;
+            case L3i::Surface::Reducer::Sum:
+            case L3i::Surface::Reducer::None: setString(op, SSum); break;
+            }
         }
         open(KExprComprehension, location(record.range), 8);
         span(openLocation, location(record.open));

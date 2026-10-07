@@ -197,6 +197,20 @@ int main()
         contains(out, "return __l3i_comp_10_sum");
         assert(occurrences(out, "effect(x)") == 1);
     }
+    {
+        const std::string out = rewrite("return min[for x in xs => cost(x)]");
+        contains(out, "local __l3i_comp_10_min = nil");
+        contains(out, "if __l3i_comp_10_min == nil or __l3i_comp_10_value < __l3i_comp_10_min then __l3i_comp_10_min = __l3i_comp_10_value end");
+        contains(out, "end return if __l3i_comp_10_min == nil then __l3i_comp_34_error(\"JSL min reducer received no elements\") else __l3i_comp_10_min end)()");
+        assert(occurrences(out, "cost(x)") == 1 && out.find("table.create") == std::string::npos);
+        const std::string every = rewrite("return all[for x in xs => ok(x)]");
+        contains(every, "if not __l3i_comp_10_value then return false end");
+        contains(every, "end return true end)()");
+        assert(every.find("_n = 0") == std::string::npos && every.find("_out") == std::string::npos);
+        const std::string some = rewrite("return any[for x in xs if p(x) => q(x)]");
+        contains(some, "if __l3i_comp_10_value then return true end");
+        contains(some, "end end return false end)()");
+    }
 
     // Empty sums are zero, nested generators remain nested, and inner sources stay data-dependent.
     {

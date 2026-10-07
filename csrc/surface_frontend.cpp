@@ -59,8 +59,9 @@ public:
                     // The first opener is token zero; preserve its real consumer
                     // predecessor without charging it to the extension budget.
                     if (beforePrevious.type == '#') firstLengthPrefix = beforePrevious.range;
-                    if (isSumPrefix(beforePrevious, beforeBeforePrevious.type)) firstSumPrefix = beforePrevious.range;
-                    firstPostfix = firstLengthPrefix.empty() && firstSumPrefix.empty() &&
+                    firstReducer = reducerOf(beforePrevious, beforeBeforePrevious.type);
+                    if (firstReducer != Reducer::None) firstReducerPrefix = beforePrevious.range;
+                    firstPostfix = firstLengthPrefix.empty() && firstReducerPrefix.empty() &&
                         isPostfix(beforePrevious, beforeBeforePrevious);
                     tokens.push_back(previous);
                 }
@@ -101,7 +102,8 @@ private:
     std::vector<Token> tokens;
     Document document;
     Range firstLengthPrefix;
-    Range firstSumPrefix;
+    Range firstReducerPrefix;
+    Reducer firstReducer = Reducer::None;
     bool firstPostfix = false;
     std::vector<unsigned char> conditionalShapes;
     size_t prefixBytes = 0, prefixCalls = 0;
@@ -199,10 +201,16 @@ private:
         });
     }
     bool isComprehension(size_t i) const { return type(i) == '[' && type(i + 1) == T::ReservedFor; }
-    bool isSumPrefix(const Token& token, T::Type preceding) const
+    Reducer reducerOf(const Token& token, T::Type preceding) const
     {
-        return token.type == T::Name && preceding != '.' && preceding != ':' &&
-            source.substr(token.range.begin, token.range.end - token.range.begin) == "sum";
+        if (token.type != T::Name || preceding == '.' || preceding == ':') return Reducer::None;
+        const auto name = source.substr(token.range.begin, token.range.end - token.range.begin);
+        if (name == "sum") return Reducer::Sum;
+        if (name == "min") return Reducer::Min;
+        if (name == "max") return Reducer::Max;
+        if (name == "any") return Reducer::Any;
+        if (name == "all") return Reducer::All;
+        return Reducer::None;
     }
     bool arrow(size_t i) const
     {
@@ -292,11 +300,11 @@ private:
         for (; it != document.comprehensions.end() && it->open.begin < r.end; ++it)
         {
             if (it->range.begin < covered || it->range.end > r.end || it->range.end - it->range.begin < 3) continue;
-            // The JSL sum consumer has no stock-Luau expression spelling. Hide
+            // A JSL reducer consumer has no stock-Luau expression spelling. Hide
             // it together with its comprehension ONLY in validation; otherwise
             // `sum <trivia> nil` would reject a valid enclosing clause prefix.
-            const size_t originalBegin = !it->sumPrefix.empty() && it->sumPrefix.begin >= r.begin
-                ? it->sumPrefix.begin : it->range.begin;
+            const size_t originalBegin = !it->reducerPrefix.empty() && it->reducerPrefix.begin >= r.begin
+                ? it->reducerPrefix.begin : it->range.begin;
             const size_t begin = originalBegin - r.begin, end = it->range.end - r.begin;
             for (size_t j = begin; j < end; ++j)
                 if (text[j] != '\n' && text[j] != '\r') text[j] = ' ';
@@ -529,10 +537,15 @@ private:
         c.lengthPrefix = point(i);
         if (i == 0 && !firstLengthPrefix.empty()) c.lengthPrefix = firstLengthPrefix;
         else if (i > 0 && type(i - 1) == '#') c.lengthPrefix = tokens[i - 1].range;
-        c.sumPrefix = point(i);
-        if (i == 0 && !firstSumPrefix.empty()) c.sumPrefix = firstSumPrefix;
-        else if (i > 0 && isSumPrefix(tokens[i - 1], i > 1 ? type(i - 2) : T::Eof)) c.sumPrefix = tokens[i - 1].range;
-        c.postfix = c.lengthPrefix.empty() && c.sumPrefix.empty() &&
+        c.reducerPrefix = point(i);
+        if (i == 0 && !firstReducerPrefix.empty())
+        {
+            c.reducerPrefix = firstReducerPrefix;
+            c.reducer = firstReducer;
+        }
+        else if (i > 0 && (c.reducer = reducerOf(tokens[i - 1], i > 1 ? type(i - 2) : T::Eof)) != Reducer::None)
+            c.reducerPrefix = tokens[i - 1].range;
+        c.postfix = c.lengthPrefix.empty() && c.reducerPrefix.empty() &&
             (i == 0 ? firstPostfix : isPostfix(tokens[i - 1], i > 1 ? tokens[i - 2] : Token{T::Eof, {0, 0}}));
         c.open = tokens[i++].range;
         // Set the opening immediately so binary search remains ordered even

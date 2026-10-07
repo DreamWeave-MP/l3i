@@ -25,9 +25,9 @@ The expression exposes ordered `clauses`, a `projection`, `openLocation`, option
 - `ComprehensionFilter`: `condition` and `keywordLocation`.
 - `#[for ...]`: ordinary `ExprUnary` with a comprehension operand. Allocation fusion
   is a lowering decision, not a mutation of the source tree.
-- The already-existing `sum[for ...]` intrinsic: `ExprReduction {op = "sum", expr =
-  ExprComprehension}`. Its span includes `sum`; the child starts at `[`. A binding
-  named `sum` is not consulted by this intrinsic, and member access is not a reducer.
+- Reducers: `ExprReduction {op = "sum" | "min" | "max" | "any" | "all", expr =
+  ExprComprehension}`. Its span includes the reducer name; the child starts at `[`. A
+  binding with the reducer's name is not consulted, and member access is not a reducer.
 
 All spans slice the original source using the existing one-based byte-column,
 inclusive-end API. A zero-width insertion point has `endColumn = column - 1` on its

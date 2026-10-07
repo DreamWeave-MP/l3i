@@ -3,6 +3,7 @@
 #include <iostream>
 #include <string>
 #include <string_view>
+#include <utility>
 using namespace L3i::Surface;
 namespace
 {
@@ -264,8 +265,8 @@ int main()
         const auto d = parseSurface(s);
         assert(d.errors.empty() && d.comprehensions.size() == 1);
         const auto& c = d.comprehensions[0];
-        assert(slice(s, c.sumPrefix) == "sum" && c.sumPrefix.end <= c.open.begin);
-        assert(c.sumPrefix.begin == s.rfind("sum"));
+        assert(slice(s, c.reducerPrefix) == "sum" && c.reducerPrefix.end <= c.open.begin);
+        assert(c.reducerPrefix.begin == s.rfind("sum"));
         assert(c.lengthPrefix.empty() && c.range.begin == c.open.begin);
     }
     for (std::string_view s : {"values.sum[for x in xs => x]", "values . sum [for x in xs => x]",
@@ -282,7 +283,7 @@ int main()
         const bool postfix = s.substr(0, 2) != "--";
         assert(d.comprehensions[0].postfix == postfix && d.errors.empty() == !postfix);
         assert(d.comprehensions[0].complete == !postfix);
-        assert(d.comprehensions[0].sumPrefix.empty());
+        assert(d.comprehensions[0].reducerPrefix.empty());
         assert(d.comprehensions[0].range.begin == d.comprehensions[0].open.begin);
     }
     {
@@ -292,9 +293,9 @@ int main()
         assert(d.comprehensions.size() == 4 && !d.errors.empty());
         assert(d.comprehensions[0].complete && d.comprehensions[1].complete && d.comprehensions[2].complete);
         assert(d.comprehensions[3].postfix && !d.comprehensions[3].complete);
-        for (size_t i = 0; i < 3; ++i) assert(slice(s, d.comprehensions[i].sumPrefix) == "sum");
-        assert(d.comprehensions[2].sumPrefix.begin == s.find("sum [for z"));
-        assert(d.comprehensions[3].sumPrefix.empty());
+        for (size_t i = 0; i < 3; ++i) assert(slice(s, d.comprehensions[i].reducerPrefix) == "sum");
+        assert(d.comprehensions[2].reducerPrefix.begin == s.find("sum [for z"));
+        assert(d.comprehensions[3].reducerPrefix.empty());
         assert(slice(s, d.comprehensions[0].clauses[0].expression) == "source()");
         assert(slice(s, d.comprehensions[0].clauses[1].expression) == "accept(x)");
         assert(slice(s, d.comprehensions[1].clauses[0].expression) == "children(x)");
@@ -308,21 +309,39 @@ int main()
         const auto d = parseSurface(s);
         assert(d.errors.empty() && d.comprehensions.size() == 1);
         const auto& c = d.comprehensions[0];
-        assert(slice(s, c.sumPrefix) == "sum");
+        assert(slice(s, c.reducerPrefix) == "sum");
         assert(slice(s, c.clauses[0].binding) == "sum");
         assert(slice(s, c.clauses[0].expression) == "{}");
         assert(slice(s, c.clauses[1].expression) == "accept(sum)");
         assert(slice(s, c.projection) == "effect(sum)");
         const auto ordinary = parseSurface("[for sum in xs => sum]");
-        assert(ordinary.comprehensions[0].sumPrefix.empty());
+        assert(ordinary.comprehensions[0].reducerPrefix.empty());
         assert(ordinary.comprehensions[0].lengthPrefix.empty());
     }
     {
         const std::string_view s = "sum#[for x in xs => x]; #sum[for y in ys => y]";
         const auto d = parseSurface(s);
         assert(d.errors.empty() && d.comprehensions.size() == 2);
-        assert(slice(s, d.comprehensions[0].lengthPrefix) == "#" && d.comprehensions[0].sumPrefix.empty());
-        assert(d.comprehensions[1].lengthPrefix.empty() && slice(s, d.comprehensions[1].sumPrefix) == "sum");
+        assert(slice(s, d.comprehensions[0].lengthPrefix) == "#" && d.comprehensions[0].reducerPrefix.empty());
+        assert(d.comprehensions[1].lengthPrefix.empty() && slice(s, d.comprehensions[1].reducerPrefix) == "sum");
+    }
+    {
+        // Every reducer spelling is one record kind; member access and other names are not reducers.
+        const std::pair<std::string_view, Reducer> reducers[] = {{"sum", Reducer::Sum}, {"min", Reducer::Min},
+            {"max", Reducer::Max}, {"any", Reducer::Any}, {"all", Reducer::All}};
+        for (const auto& [name, kind] : reducers)
+        {
+            const std::string s = std::string(name) + " -- trivia\n[for x in xs => x]";
+            const auto d = parseSurface(s);
+            assert(d.errors.empty() && d.comprehensions.size() == 1);
+            assert(d.comprehensions[0].reducer == kind && slice(s, d.comprehensions[0].reducerPrefix) == name);
+            const std::string member = "t." + std::string(name) + "[for x in xs => x]";
+            const auto m = parseSurface(member);
+            assert(m.comprehensions.size() == 1 && m.comprehensions[0].reducer == Reducer::None && m.comprehensions[0].postfix);
+        }
+        const auto d = parseSurface("minimum[for x in xs => x]; [for x in xs => x]");
+        assert(d.comprehensions.size() == 2 && d.comprehensions[0].reducer == Reducer::None && d.comprehensions[0].postfix);
+        assert(d.comprehensions[1].reducer == Reducer::None && !d.comprehensions[1].postfix);
     }
     for (std::string_view s : {"#[for x in xs => x]", "# -- hash in trivia: #\n[for x in xs => x]",
              "# --[=[ block # ]=] [ -- opener trivia #\nfor x in xs => x]", "##[for x in xs => x]"})
@@ -551,7 +570,7 @@ int main()
         const auto d = parseSurface(s);
         assert(d.comprehensions.size() == 1 && !d.errors.empty());
         const auto& c = d.comprehensions[0];
-        assert(c.postfix && !c.complete && c.sumPrefix.empty() && c.lengthPrefix.empty());
+        assert(c.postfix && !c.complete && c.reducerPrefix.empty() && c.lengthPrefix.empty());
         assert(c.range.begin == c.open.begin && slice(s, c.projection) == "x");
         assert(d.errors[0].range.begin == c.open.begin);
         assert(d.errors[0].message.find("explicit parenthesized collection index") != std::string::npos);

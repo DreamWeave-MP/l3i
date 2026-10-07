@@ -22,6 +22,10 @@ struct Diagnostic
 
 enum class ClauseKind { Generator, Filter };
 
+// The JSL reducer consuming a comprehension: `sum`, `min`, `max` accumulate every accepted
+// projection; `any` and `all` are language-level short-circuit reducers.
+enum class Reducer { None, Sum, Min, Max, Any, All };
+
 struct Clause
 {
     ClauseKind kind = ClauseKind::Generator;
@@ -58,10 +62,12 @@ struct Comprehension
     // Immediately preceding real '#' token, ignoring comment trivia. Empty
     // when absent; unary length stays separate from the comprehension range.
     Range lengthPrefix;
-    // Immediately preceding code Name 'sum', ignoring trivia, unless preceded
-    // by '.' or ':'. JSL-owned reducer syntax, not a lexical/global helper call.
-    // Empty when absent; the consumer is excluded from the comprehension range.
-    Range sumPrefix;
+    // Immediately preceding code Name naming a reducer (`sum`, `min`, `max`, `any`,
+    // `all`), ignoring trivia, unless preceded by '.' or ':'. JSL-owned reducer syntax,
+    // not a lexical/global helper call. Empty when absent; the consumer is excluded from
+    // the comprehension range.
+    Range reducerPrefix;
+    Reducer reducer = Reducer::None;
     Range open;
     Range close;
     Range arrow;

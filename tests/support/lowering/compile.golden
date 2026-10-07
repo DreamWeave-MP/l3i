@@ -204,6 +204,198 @@ return t.sum[for x in xs => x]
 return t.sum[for x in xs => x]
 --prelude 0
 --error 12 13 invalid postfix comprehension; use an explicit parenthesized collection index, e.g. values[([for ...])]
+==== min
+return min[for x in xs if p(x) => f(x)]
+----
+local __l3i_comp_39_error = error local __l3i_comp_39_buffer = buffer return (function() local __l3i_comp_10_g0_src = xs local __l3i_comp_10_g0_len = #__l3i_comp_10_g0_src local __l3i_comp_10_min = nil for __l3i_comp_10_g0_i = 1, __l3i_comp_10_g0_len do local x = __l3i_comp_10_g0_src[__l3i_comp_10_g0_i] if p(x) then local __l3i_comp_10_value = f(x) if __l3i_comp_10_value == nil then __l3i_comp_39_error("L3i comprehension projection produced nil; filter nil explicitly") end if __l3i_comp_10_min == nil or __l3i_comp_10_value < __l3i_comp_10_min then __l3i_comp_10_min = __l3i_comp_10_value end end end return if __l3i_comp_10_min == nil then __l3i_comp_39_error("JSL min reducer received no elements") else __l3i_comp_10_min end)()
+--prelude 2
+--segment 0 70 10 39 synthetic
+--segment 70 77 0 7 copied
+--segment 77 89 7 39 synthetic
+--segment 89 118 11 22 synthetic
+--segment 118 120 20 22 copied
+--segment 120 260 20 22 synthetic
+--segment 260 261 15 16 copied
+--segment 261 305 20 22 synthetic
+--segment 305 308 23 30 synthetic
+--segment 308 312 26 30 copied
+--segment 312 318 26 30 synthetic
+--segment 318 346 34 38 synthetic
+--segment 346 350 34 38 copied
+--segment 350 598 34 38 synthetic
+--segment 598 735 38 39 synthetic
+--site 0 call=77,735 projection=346,350
+--clause binding=260,261 expression=118,120
+--clause binding=77,77 expression=308,312
+==== max_dense
+return max[for x in xs => x.score]
+----
+local __l3i_comp_34_error = error local __l3i_comp_34_buffer = buffer return (function() local __l3i_comp_10_g0_src = xs local __l3i_comp_10_g0_len = #__l3i_comp_10_g0_src local __l3i_comp_10_max = nil for __l3i_comp_10_g0_i = 1, __l3i_comp_10_g0_len do local x = __l3i_comp_10_g0_src[__l3i_comp_10_g0_i] local __l3i_comp_10_value = x.score if __l3i_comp_10_value == nil then __l3i_comp_34_error("L3i comprehension projection produced nil; filter nil explicitly") end if __l3i_comp_10_max == nil or __l3i_comp_10_value > __l3i_comp_10_max then __l3i_comp_10_max = __l3i_comp_10_value end end return if __l3i_comp_10_max == nil then __l3i_comp_34_error("JSL max reducer received no elements") else __l3i_comp_10_max end)()
+--prelude 2
+--segment 0 70 10 34 synthetic
+--segment 70 77 0 7 copied
+--segment 77 89 7 34 synthetic
+--segment 89 118 11 22 synthetic
+--segment 118 120 20 22 copied
+--segment 120 260 20 22 synthetic
+--segment 260 261 15 16 copied
+--segment 261 305 20 22 synthetic
+--segment 305 333 26 33 synthetic
+--segment 333 340 26 33 copied
+--segment 340 588 26 33 synthetic
+--segment 588 721 33 34 synthetic
+--site 0 call=77,721 projection=333,340
+--clause binding=260,261 expression=118,120
+==== any
+return any[for x in xs if p(x) => q(x)]
+----
+local __l3i_comp_39_error = error local __l3i_comp_39_buffer = buffer return (function() local __l3i_comp_10_g0_src = xs local __l3i_comp_10_g0_len = #__l3i_comp_10_g0_src for __l3i_comp_10_g0_i = 1, __l3i_comp_10_g0_len do local x = __l3i_comp_10_g0_src[__l3i_comp_10_g0_i] if p(x) then local __l3i_comp_10_value = q(x) if __l3i_comp_10_value == nil then __l3i_comp_39_error("L3i comprehension projection produced nil; filter nil explicitly") end if __l3i_comp_10_value then return true end end end return false end)()
+--prelude 2
+--segment 0 70 10 39 synthetic
+--segment 70 77 0 7 copied
+--segment 77 89 7 39 synthetic
+--segment 89 118 11 22 synthetic
+--segment 118 120 20 22 copied
+--segment 120 230 20 22 synthetic
+--segment 230 231 15 16 copied
+--segment 231 275 20 22 synthetic
+--segment 275 278 23 30 synthetic
+--segment 278 282 26 30 copied
+--segment 282 288 26 30 synthetic
+--segment 288 316 34 38 synthetic
+--segment 316 320 34 38 copied
+--segment 320 492 34 38 synthetic
+--segment 492 519 38 39 synthetic
+--site 0 call=77,519 projection=316,320
+--clause binding=230,231 expression=118,120
+--clause binding=77,77 expression=278,282
+==== all_dense
+return all[for x in xs => x.ok]
+----
+local __l3i_comp_31_error = error local __l3i_comp_31_buffer = buffer return (function() local __l3i_comp_10_g0_src = xs local __l3i_comp_10_g0_len = #__l3i_comp_10_g0_src for __l3i_comp_10_g0_i = 1, __l3i_comp_10_g0_len do local x = __l3i_comp_10_g0_src[__l3i_comp_10_g0_i] local __l3i_comp_10_value = x.ok if __l3i_comp_10_value == nil then __l3i_comp_31_error("L3i comprehension projection produced nil; filter nil explicitly") end if not __l3i_comp_10_value then return false end end return true end)()
+--prelude 2
+--segment 0 70 10 31 synthetic
+--segment 70 77 0 7 copied
+--segment 77 89 7 31 synthetic
+--segment 89 118 11 22 synthetic
+--segment 118 120 20 22 copied
+--segment 120 230 20 22 synthetic
+--segment 230 231 15 16 copied
+--segment 231 275 20 22 synthetic
+--segment 275 303 26 30 synthetic
+--segment 303 307 26 30 copied
+--segment 307 484 26 30 synthetic
+--segment 484 506 30 31 synthetic
+--site 0 call=77,506 projection=303,307
+--clause binding=230,231 expression=118,120
+==== min_range
+return min[for i in range(1, n) => cost(i)]
+----
+local __l3i_comp_43_error = error local __l3i_comp_43_buffer = buffer return (function() local __l3i_comp_10_min = nil local __l3i_comp_10_g0_r0 = 1 local __l3i_comp_10_g0_r1 = n local __l3i_comp_10_g0_r2 = 1 if __l3i_comp_10_g0_r2 == 0 then __l3i_comp_43_error("JSL range step must not be zero") end for i = __l3i_comp_10_g0_r0, __l3i_comp_10_g0_r1, __l3i_comp_10_g0_r2 do local __l3i_comp_10_value = cost(i) if __l3i_comp_10_value == nil then __l3i_comp_43_error("L3i comprehension projection produced nil; filter nil explicitly") end if __l3i_comp_10_min == nil or __l3i_comp_10_value < __l3i_comp_10_min then __l3i_comp_10_min = __l3i_comp_10_value end end return if __l3i_comp_10_min == nil then __l3i_comp_43_error("JSL min reducer received no elements") else __l3i_comp_10_min end)()
+--prelude 2
+--segment 0 70 10 43 synthetic
+--segment 70 77 0 7 copied
+--segment 77 119 7 43 synthetic
+--segment 119 147 11 31 synthetic
+--segment 147 148 26 27 copied
+--segment 148 177 26 27 synthetic
+--segment 177 178 29 30 copied
+--segment 178 305 29 30 synthetic
+--segment 305 306 15 16 copied
+--segment 306 374 29 30 synthetic
+--segment 374 402 35 42 synthetic
+--segment 402 409 35 42 copied
+--segment 409 657 35 42 synthetic
+--segment 657 790 42 43 synthetic
+--site 0 call=77,790 projection=402,409
+--clause binding=305,306 expression=77,77 range=147,148 range=177,178
+==== max_slice
+return max[for x in xs[a:b] => x]
+----
+local __l3i_comp_33_error = error local __l3i_comp_33_typeof = typeof local __l3i_comp_33_buffer = buffer return (function() local __l3i_comp_10_g0_src = xs local __l3i_comp_10_g0_first = a local __l3i_comp_10_g0_last = b local __l3i_comp_10_g0_kind = __l3i_comp_33_typeof(__l3i_comp_10_g0_src) if __l3i_comp_10_g0_kind ~= "table" and __l3i_comp_10_g0_kind ~= "buffer" then __l3i_comp_33_error("JSL slice source must be a table or buffer") end if __l3i_comp_33_typeof(__l3i_comp_10_g0_first) ~= "number" or __l3i_comp_10_g0_first % 1 ~= 0 then __l3i_comp_33_error("JSL slice first bound must be a finite integer") end if __l3i_comp_33_typeof(__l3i_comp_10_g0_last) ~= "number" or __l3i_comp_10_g0_last % 1 ~= 0 then __l3i_comp_33_error("JSL slice last bound must be a finite integer") end local __l3i_comp_10_g0_len = 0 if __l3i_comp_10_g0_kind == "buffer" then __l3i_comp_10_g0_len = __l3i_comp_33_buffer.len(__l3i_comp_10_g0_src) else __l3i_comp_10_g0_len = #__l3i_comp_10_g0_src end if __l3i_comp_10_g0_first < 1 then __l3i_comp_10_g0_first = 1 end if __l3i_comp_10_g0_last > __l3i_comp_10_g0_len then __l3i_comp_10_g0_last = __l3i_comp_10_g0_len end local __l3i_comp_10_g0_n = 0 if __l3i_comp_10_g0_last >= __l3i_comp_10_g0_first then __l3i_comp_10_g0_n = __l3i_comp_10_g0_last - __l3i_comp_10_g0_first + 1 end local __l3i_comp_10_max = nil if __l3i_comp_10_g0_kind == "buffer" then for __l3i_comp_10_g0_i = __l3i_comp_10_g0_first, __l3i_comp_10_g0_last do local x = __l3i_comp_33_buffer.readu8(__l3i_comp_10_g0_src, __l3i_comp_10_g0_i - 1) local __l3i_comp_10_value = x if __l3i_comp_10_value == nil then __l3i_comp_33_error("L3i comprehension projection produced nil; filter nil explicitly") end if __l3i_comp_10_max == nil or __l3i_comp_10_value > __l3i_comp_10_max then __l3i_comp_10_max = __l3i_comp_10_value end end else for __l3i_comp_10_g0_i = __l3i_comp_10_g0_first, __l3i_comp_10_g0_last do local x = __l3i_comp_10_g0_src[__l3i_comp_10_g0_i] local __l3i_comp_10_value = x if __l3i_comp_10_value == nil then __l3i_comp_33_error("L3i comprehension projection produced nil; filter nil explicitly") end if __l3i_comp_10_max == nil or __l3i_comp_10_value > __l3i_comp_10_max then __l3i_comp_10_max = __l3i_comp_10_value end end end return if __l3i_comp_10_max == nil then __l3i_comp_33_error("JSL max reducer received no elements") else __l3i_comp_10_max end)()
+--prelude 3
+--segment 0 106 10 33 synthetic
+--segment 106 113 0 7 copied
+--segment 113 125 7 33 synthetic
+--segment 125 154 11 27 synthetic
+--segment 154 156 20 22 copied
+--segment 156 188 20 22 synthetic
+--segment 188 189 23 24 copied
+--segment 189 220 23 24 synthetic
+--segment 220 221 25 26 copied
+--segment 221 222 25 26 synthetic
+--segment 222 444 20 22 synthetic
+--segment 444 618 23 24 synthetic
+--segment 618 1467 25 26 synthetic
+--segment 1467 1468 15 16 copied
+--segment 1468 1545 25 26 synthetic
+--segment 1545 1573 31 32 synthetic
+--segment 1573 1574 31 32 copied
+--segment 1574 1822 31 32 synthetic
+--segment 1822 1831 32 33 synthetic
+--segment 1831 1911 11 27 synthetic
+--segment 1911 1912 15 16 copied
+--segment 1912 1956 11 27 synthetic
+--segment 1956 1984 31 32 synthetic
+--segment 1984 1985 31 32 copied
+--segment 1985 2233 31 32 synthetic
+--segment 2233 2370 32 33 synthetic
+--site 0 call=113,2370 projection=1984,1985
+--clause binding=1467,1468 binding=1911,1912 expression=113,113 sliceSource=154,156 sliceFirst=188,189 sliceLast=220,221
+==== any_nested
+return any[for x in xs for y in ys => x == y]
+----
+local __l3i_comp_45_error = error local __l3i_comp_45_buffer = buffer return (function() local __l3i_comp_10_g0_src = xs local __l3i_comp_10_g0_len = #__l3i_comp_10_g0_src for __l3i_comp_10_g0_i = 1, __l3i_comp_10_g0_len do local x = __l3i_comp_10_g0_src[__l3i_comp_10_g0_i] local __l3i_comp_10_g1_src = ys local __l3i_comp_10_g1_len = #__l3i_comp_10_g1_src for __l3i_comp_10_g1_i = 1, __l3i_comp_10_g1_len do local y = __l3i_comp_10_g1_src[__l3i_comp_10_g1_i] local __l3i_comp_10_value = x == y if __l3i_comp_10_value == nil then __l3i_comp_45_error("L3i comprehension projection produced nil; filter nil explicitly") end if __l3i_comp_10_value then return true end end end return false end)()
+--prelude 2
+--segment 0 70 10 45 synthetic
+--segment 70 77 0 7 copied
+--segment 77 89 7 45 synthetic
+--segment 89 118 11 22 synthetic
+--segment 118 120 20 22 copied
+--segment 120 230 20 22 synthetic
+--segment 230 231 15 16 copied
+--segment 231 275 20 22 synthetic
+--segment 275 304 23 34 synthetic
+--segment 304 306 32 34 copied
+--segment 306 416 32 34 synthetic
+--segment 416 417 27 28 copied
+--segment 417 461 32 34 synthetic
+--segment 461 489 38 44 synthetic
+--segment 489 495 38 44 copied
+--segment 495 667 38 44 synthetic
+--segment 667 694 44 45 synthetic
+--site 0 call=77,694 projection=489,495
+--clause binding=230,231 expression=118,120
+--clause binding=416,417 expression=304,306
+==== all_zip
+return all[for a, b in zipStrict(xs, ys) => a <= b]
+----
+local __l3i_comp_51_error = error local __l3i_comp_51_buffer = buffer return (function() local __l3i_comp_10_g0_src0 = xs local __l3i_comp_10_g0_len0 = #__l3i_comp_10_g0_src0 local __l3i_comp_10_g0_src1 = ys local __l3i_comp_10_g0_len1 = #__l3i_comp_10_g0_src1 local __l3i_comp_10_g0_n = __l3i_comp_10_g0_len0 if __l3i_comp_10_g0_len1 < __l3i_comp_10_g0_n then __l3i_comp_10_g0_n = __l3i_comp_10_g0_len1 end if __l3i_comp_10_g0_len1 ~= __l3i_comp_10_g0_n then __l3i_comp_51_error("JSL zipStrict inputs must have equal lengths") end for __l3i_comp_10_g0_i = 1, __l3i_comp_10_g0_n do local a, b = __l3i_comp_10_g0_src0[__l3i_comp_10_g0_i], __l3i_comp_10_g0_src1[__l3i_comp_10_g0_i] local __l3i_comp_10_value = a <= b if __l3i_comp_10_value == nil then __l3i_comp_51_error("L3i comprehension projection produced nil; filter nil explicitly") end if not __l3i_comp_10_value then return false end end return true end)()
+--prelude 2
+--segment 0 70 10 51 synthetic
+--segment 70 77 0 7 copied
+--segment 77 89 7 51 synthetic
+--segment 89 119 11 40 synthetic
+--segment 119 121 33 35 copied
+--segment 121 205 33 35 synthetic
+--segment 205 207 37 39 copied
+--segment 207 588 37 39 synthetic
+--segment 588 589 15 16 copied
+--segment 589 591 37 39 synthetic
+--segment 591 592 18 19 copied
+--segment 592 680 37 39 synthetic
+--segment 680 708 44 50 synthetic
+--segment 708 714 44 50 copied
+--segment 714 891 44 50 synthetic
+--segment 891 913 50 51 synthetic
+--site 0 call=77,913 projection=708,714
+--clause binding=588,589 binding=591,592 expression=77,77 zip=119,121 zip=205,207
+==== member_min_is_not_a_reducer
+return math.min[for x in xs => x]
+----
+return math.min[for x in xs => x]
+--prelude 0
+--error 15 16 invalid postfix comprehension; use an explicit parenthesized collection index, e.g. values[([for ...])]
 ==== range
 return [for i in range(1, n) => i]
 ----

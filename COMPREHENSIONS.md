@@ -346,6 +346,39 @@ The benchmark also compares fused sum against materializing the comprehension an
 result a second time. Treat any wall-clock claim as secondary to disassembly/instruction evidence,
 just as with the original comprehension campaign.
 
+## Reducers
+
+Five reducers consume a comprehension. Each is JSL syntax: a Name immediately before `[for`,
+with trivia allowed between, never preceded by `.` or `:`, and never resolved against a binding
+of that name. Every reducer lowers to one traversal of the pipeline with no result table, no
+iterator and no closure; the pipeline's generator, filter and projection semantics (order,
+exactly-once projection, Luau truthiness filters, the non-nil projection guard) are unchanged.
+
+| Reducer | Result | Empty pipeline | Per accepted projection |
+|---|---|---|---|
+| `sum[...]` | number | `0` | `total += value` |
+| `min[...]` | first least projection | error `JSL min reducer received no elements` | `if acc == nil or value < acc then acc = value end` |
+| `max[...]` | first greatest projection | error `JSL max reducer received no elements` | `if acc == nil or value > acc then acc = value end` |
+| `any[...]` | boolean | `false` | `if value then return true end` |
+| `all[...]` | boolean | `true` | `if not value then return false end` |
+
+`min` and `max` order with Luau `<` and `>`: numbers, strings, and `__lt`/`__le` metamethods
+work; mixed or unordered operands raise the ordinary comparison error. A NaN that arrives first
+stays (nothing compares below or above it); later NaNs never replace. Ties keep the first. The
+empty case is an error rather than `nil` because the language has no silent nil result; a
+seeded form can be added as a distinct spelling if a consumer needs one. Analysis types the
+result as the projection's element type on both solvers: the epilogue is an if-expression whose
+error branch has type `never`.
+
+`any` and `all` are **language-level short-circuit reducers**, not transparent allocation
+removal. They stop at the first deciding projection, which means later generators, filters and
+projections do not execute. An eager comprehension passed to a function would have evaluated
+them all; code that relies on those effects must not use `any`/`all`. The early exit leaves
+every nesting level at once. The projection must still not be `nil`; filter nil explicitly.
+
+Internally all five, with `#[...]` and plain materialization, are consumers of one pipeline
+plan, so every generator kind and nesting combination lowers through the same emitter.
+
 ## Phase One closure, 2026-10-07
 
 Every gate was rerun on the checkout at `e3cc3a4` plus the closure fixes: `cargo test` (73 unit +

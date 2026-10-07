@@ -737,3 +737,95 @@ fn length_fusion_never_consumes_a_hash_inside_a_preceding_comment() {
         )
         .unwrap();
 }
+
+#[test]
+fn min_and_max_reducers_follow_luau_ordering_and_reject_empty_pipelines() {
+    let runtime = Runtime::new().unwrap();
+    runtime
+        .exec(
+            r"
+        local values = {5, 3, 9, 3, 7}
+        assert(min[for x in values => x] == 3 and max[for x in values => x] == 9)
+        assert(min[for x in values if x > 4 => x * 10] == 50)
+        assert(max[for x in values if x > 4 => x * 10] == 90)
+        assert(min[for i in range(1, 5) => -i] == -5 and max[for i in range(1, 5) => -i] == -1)
+        assert(min[for x in values[2:4] => x] == 3 and max[for x in values[2:4] => x] == 9)
+        assert(min[for w in {'pear', 'apple', 'fig'} => w] == 'apple')
+        assert(max[for w in {'pear', 'apple', 'fig'} => w] == 'pear')
+        assert(min[for x in {4} => x] == 4 and max[for x in {4} => x] == 4)
+        assert(min[for x in {false} => x] == false and max[for x in {true} => x] == true)
+        assert(not pcall(function() return min[for x in values => false] end), 'booleans do not order')
+        -- A NaN that arrives first is sticky; later NaNs never replace, exactly like a `<` loop.
+        local nan = 0 / 0
+        assert(min[for x in {nan, 1, 2} => x] ~= min[for x in {nan, 1, 2} => x])
+        assert(min[for x in {1, nan, 0} => x] == 0 and max[for x in {1, nan, 5} => x] == 5)
+        -- Empty pipelines are errors, not nil: the language has no silent nil result.
+        local ok, message = pcall(function() return min[for x in {} => x] end)
+        assert(not ok and string.find(message, 'JSL min reducer received no elements', 1, true), message)
+        ok, message = pcall(function() return max[for x in values if x > 100 => x] end)
+        assert(not ok and string.find(message, 'JSL max reducer received no elements', 1, true), message)
+        -- The projection contract is unchanged: nil is rejected, not skipped.
+        ok, message = pcall(function() return min[for x in {{}} => x.missing] end)
+        assert(not ok and string.find(message, 'produced nil', 1, true), message)
+        -- Mixed types fail where a handwritten comparison would.
+        ok = pcall(function() return max[for x in {1, 'two'} => x] end)
+        assert(not ok)
+    ",
+        )
+        .unwrap();
+}
+
+#[test]
+fn any_and_all_reducers_short_circuit_at_the_first_deciding_projection() {
+    let runtime = Runtime::new().unwrap();
+    runtime
+        .exec(
+            r"
+        local events = {}
+        local function seen(x) table.insert(events, x) return x end
+        assert(any[for x in {1, 2, 3, 4} => seen(x) > 1] == true)
+        assert(#events == 2, 'any stops at the first truthy projection')
+        events = {}
+        assert(all[for x in {2, 4, 5, 6} => seen(x) % 2 == 0] == false)
+        assert(#events == 3, 'all stops at the first falsy projection')
+        events = {}
+        assert(any[for x in {1, 2} => seen(x) > 5] == false and #events == 2)
+        events = {}
+        assert(all[for x in {2, 4} => seen(x) % 2 == 0] == true and #events == 2)
+        -- Empty pipelines: any is false, all is true.
+        assert(any[for x in {} => x] == false and all[for x in {} => x] == true)
+        -- Luau truthiness: only nil and false are falsy; nil projections are still rejected.
+        assert(all[for x in {0, '', {}} => x] == true)
+        assert(any[for x in {false, false} => x] == false)
+        local ok, message = pcall(function() return any[for x in {{}} => x.missing] end)
+        assert(not ok and string.find(message, 'produced nil', 1, true), message)
+        -- Short-circuit exits every nesting level and leaves no partial state behind.
+        events = {}
+        assert(any[for x in {1, 2} for y in {10, 20} => seen(x * y) == 20] == true and #events == 2)
+        assert(all[for a, b in zipStrict({1, 2}, {1, 3}) => a == b] == false)
+        assert(any[for i in range(1, 3) if i > 1 => i == 3] == true)
+        assert(all[for x in {1, 2, 3}[2:3] => x > 1] == true)
+        -- Filters run before the projection decides; a rejected element never decides.
+        events = {}
+        assert(all[for x in {1, 2, 3} if seen(x) > 1 => x > 1] == true and #events == 3)
+    ",
+        )
+        .unwrap();
+}
+
+#[test]
+fn reducers_are_syntax_not_bindings() {
+    let runtime = Runtime::new().unwrap();
+    runtime
+        .exec(
+            r"
+        local min, max, any, all = 'shadowed', 'shadowed', 'shadowed', 'shadowed'
+        assert(min[for x in {3, 1, 2} => x] == 1 and max[for x in {3, 1, 2} => x] == 3)
+        assert(any[for x in {false, 1} => x] == true and all[for x in {false, 1} => x] == false)
+        local t = {min = function() return 'member' end}
+        assert(t.min(1) == 'member')
+        assert(min == 'shadowed')
+    ",
+        )
+        .unwrap();
+}

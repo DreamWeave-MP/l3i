@@ -524,6 +524,14 @@ fn surface_reduction_and_length_are_source_nodes_and_stock_is_opt_in() {
         span(source, r, reduction.expr, '[for x in {1} => x]')
         assert(length.kind == 'ExprUnary' and length.op == '#' and length.expr.kind == 'ExprComprehension')
         span(source, r, length, '#[for y in {2} => y]')
+        for _, op in {'min', 'max', 'any', 'all'} do
+            local text = 'return ' .. op .. '[for x in {1} => x]'
+            local node = luau.parse(text).root.body[1].list[1]
+            assert(node.kind == 'ExprReduction' and node.op == op and node.expr.kind == 'ExprComprehension')
+            span(text, luau.parse(text), node, op .. '[for x in {1} => x]')
+        end
+        local member = luau.parse('return math.min[for x in {1} => x]')
+        assert(#member.errors > 0 and member.root.body[1].list[1].kind ~= 'ExprReduction')
         assert(#luau.parse(source, {dialect = 'luau'}).errors > 0)
         assert(not pcall(luau.parse, source, {dialect = 'unknown'}))
         local ordinary = 'local x = {1}; for _, n in x do local f = function() return n end; print(f()) end'

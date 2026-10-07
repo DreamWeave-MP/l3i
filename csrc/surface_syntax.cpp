@@ -163,7 +163,7 @@ public:
         }
         // Sized materialization is the one shape that preallocates (see Pipeline::single).
         const bool needsTable = std::any_of(document.comprehensions.begin(), document.comprehensions.end(), [&](const Comprehension& node) {
-            const Pipeline pipeline = plan(node, {}, fuse && !node.lengthPrefix.empty(), !node.sumPrefix.empty());
+            const Pipeline pipeline = plan(node, {}, fuse && !node.lengthPrefix.empty(), node.reducer);
             return pipeline.consumer == Consumer::Materialize && pipeline.single() &&
                 pipeline.stages.front().kind != SourceKind::Range;
         });
@@ -209,10 +209,10 @@ public:
                     continue;
                 }
                 const bool count = fuse && !it->lengthPrefix.empty() && it->lengthPrefix.begin >= copied;
-                const bool sum = !it->sumPrefix.empty() && it->sumPrefix.begin >= copied;
-                const size_t begin = sum ? it->sumPrefix.begin : count ? it->lengthPrefix.begin : it->range.begin;
+                const Reducer reducer = !it->reducerPrefix.empty() && it->reducerPrefix.begin >= copied ? it->reducer : Reducer::None;
+                const size_t begin = reducer != Reducer::None ? it->reducerPrefix.begin : count ? it->lengthPrefix.begin : it->range.begin;
                 result.copy(source, {copied, begin});
-                result.append(comprehension(size_t(it - document.comprehensions.begin()), count, sum));
+                result.append(comprehension(size_t(it - document.comprehensions.begin()), count, reducer));
                 copied = it->range.end;
                 ++it;
             }
@@ -383,7 +383,40 @@ private:
         return SourceKind::Plain;
     }
 
-    enum class Consumer { Materialize, Count, Sum };
+    // What the pipeline feeds. Materialize builds the dense result; Count and Sum accumulate
+    // a number from 0; Min and Max keep the least/greatest projection by Luau ordering and
+    // reject an empty pipeline; Any and All return at the first deciding projection.
+    enum class Consumer { Materialize, Count, Sum, Min, Max, Any, All };
+
+    static Consumer consumerOf(bool count, Reducer reducer)
+    {
+        switch (reducer)
+        {
+        case Reducer::Sum: return Consumer::Sum;
+        case Reducer::Min: return Consumer::Min;
+        case Reducer::Max: return Consumer::Max;
+        case Reducer::Any: return Consumer::Any;
+        case Reducer::All: return Consumer::All;
+        case Reducer::None: break;
+        }
+        return count ? Consumer::Count : Consumer::Materialize;
+    }
+
+    // The accumulator's generated suffix; empty for consumers that keep no state.
+    static const char* accumulator(Consumer consumer)
+    {
+        switch (consumer)
+        {
+        case Consumer::Sum: return "_sum";
+        case Consumer::Min: return "_min";
+        case Consumer::Max: return "_max";
+        case Consumer::Any:
+        case Consumer::All: return "";
+        case Consumer::Materialize:
+        case Consumer::Count: break;
+        }
+        return "_n";
+    }
 
     // One clause of the pipeline: a generator over a source, or a filter.
     struct Stage
@@ -405,10 +438,10 @@ private:
         bool single() const { return generators == 1 && !stages.empty() && stages.front().generator; }
     };
 
-    Pipeline plan(const Comprehension& node, const std::string& name, bool count, bool sum) const
+    Pipeline plan(const Comprehension& node, const std::string& name, bool count, Reducer reducer) const
     {
         Pipeline pipeline;
-        pipeline.consumer = sum ? Consumer::Sum : count ? Consumer::Count : Consumer::Materialize;
+        pipeline.consumer = consumerOf(count, reducer);
         for (size_t i = 0; i < node.clauses.size(); ++i)
         {
             const Clause& clause = node.clauses[i];
@@ -448,17 +481,6 @@ private:
         site.bindings.push_back(site.binding);
     }
 
-    // The result allocation and cursor, emitted once the element count is known (sized) or
-    // up front when it is not.
-    void allocation(Text& out, const std::string& output, const std::string& cursor, bool scalar, bool needsCursor,
-        const std::string& size = {})
-    {
-        if (!scalar)
-            out += "local " + output + " = " + (size.empty() ? "{} " : operations + "_table_create(" + size + ") :: typeof({}) ");
-        if (needsCursor)
-            out += "local " + cursor + " = 0 ";
-    }
-
     // Everything a pipeline walk needs besides the stage list.
     struct Emission
     {
@@ -470,9 +492,20 @@ private:
         std::string cursor;
         bool scalar = false;
         bool sized = false;       // A lone leading generator: allocate once its count is known.
-        bool needsCursor = false; // False only when the loop index is the output index.
+        bool needsCursor = false; // False when the loop index is the output index, or no state is kept.
         bool directIndex = false;
+        std::string seed = "0";   // The accumulator's initial value.
     };
+
+    // The result allocation and accumulator, emitted once the element count is known (sized)
+    // or up front when it is not.
+    void allocation(Text& out, const Emission& e, const std::string& size = {})
+    {
+        if (!e.scalar)
+            out += "local " + e.output + " = " + (size.empty() ? "{} " : operations + "_table_create(" + size + ") :: typeof({}) ");
+        if (e.needsCursor)
+            out += "local " + e.cursor + " = " + e.seed + " ";
+    }
 
     // A slice source evaluated and bounded: the loop below reads `P_src[P_i]` or, for bytes,
     // `buffer.readu8(P_src, P_i - 1)`. Representation specialization exists only for a leading
@@ -502,7 +535,7 @@ private:
         if (e.sized)
         {
             out += "local " + prefix + "_n = 0 if " + prefix + "_last >= " + prefix + "_first then " + prefix + "_n = " + prefix + "_last - " + prefix + "_first + 1 end ";
-            allocation(out, e.output, e.cursor, e.scalar, e.needsCursor, prefix + "_n");
+            allocation(out, e, prefix + "_n");
         }
     }
 
@@ -562,7 +595,7 @@ private:
                 for (size_t argument = 1; argument < clause.zipArguments.size(); ++argument)
                     out += "if " + prefix + "_len" + std::to_string(argument) + " ~= " + prefix + "_n then " + operations + "_error(\"JSL zipStrict inputs must have equal lengths\") end ";
             if (e.sized)
-                allocation(out, e.output, e.cursor, e.scalar, e.needsCursor, prefix + "_n");
+                allocation(out, e, prefix + "_n");
             out += "for " + prefix + "_i = 1, " + prefix + "_n do local ";
             bindings(out, clause, site);
             out += " = ";
@@ -583,7 +616,7 @@ private:
                 "({} :: {any})", clause.expressionSuffix);
             out += " local " + prefix + "_len = #" + prefix + "_src ";
             if (e.sized)
-                allocation(out, e.output, e.cursor, e.scalar, e.needsCursor, prefix + "_len");
+                allocation(out, e, prefix + "_len");
             out += "for " + prefix + "_i = 1, " + prefix + "_len do local ";
             if (stage.kind == SourceKind::Enumerate)
             {
@@ -600,14 +633,66 @@ private:
         }
     }
 
-    // The consumer's per-element step: the projection, then accumulate, count or store.
+    // The consumer's per-element step: the projection, then what the consumer does with it.
     void step(Text& out, Emission& e)
     {
         projection(out, e.node, e.name, e.site);
-        if (e.needsCursor)
-            out += e.cursor + " += " + (e.pipeline.consumer == Consumer::Sum ? e.name + "_value " : "1 ");
-        if (!e.scalar)
-            out += e.output + "[" + (e.directIndex ? e.pipeline.stages.front().prefix + "_i" : e.cursor) + "] = " + e.name + "_value ";
+        const std::string value = e.name + "_value";
+        switch (e.pipeline.consumer)
+        {
+        case Consumer::Materialize:
+            if (e.needsCursor)
+                out += e.cursor + " += 1 ";
+            out += e.output + "[" + (e.directIndex ? e.pipeline.stages.front().prefix + "_i" : e.cursor) + "] = " + value + " ";
+            return;
+        case Consumer::Count:
+            out += e.cursor + " += 1 ";
+            return;
+        case Consumer::Sum:
+            out += e.cursor + " += " + value + " ";
+            return;
+        case Consumer::Min:
+        case Consumer::Max:
+            // Luau ordering, as a handwritten loop would compare: a NaN that arrives first
+            // stays; later NaNs never replace. The accumulator is nil only while empty.
+            out += "if " + e.cursor + " == nil or " + value + (e.pipeline.consumer == Consumer::Min ? " < " : " > ") + e.cursor +
+                " then " + e.cursor + " = " + value + " end ";
+            return;
+        case Consumer::Any:
+            out += "if " + value + " then return true end ";
+            return;
+        case Consumer::All:
+            out += "if not " + value + " then return false end ";
+            return;
+        }
+    }
+
+    // What the pipeline returns once every stage has run.
+    void epilogue(Text& out, const Emission& e)
+    {
+        switch (e.pipeline.consumer)
+        {
+        case Consumer::Materialize:
+            out += "return " + e.output + " end)()";
+            return;
+        case Consumer::Count:
+        case Consumer::Sum:
+            out += "return " + e.cursor + " end)()";
+            return;
+        case Consumer::Min:
+        case Consumer::Max:
+            // An if-expression, not a guard statement: its error branch has type never, so
+            // both Luau solvers type the result as the element type rather than optional.
+            out += "return if " + e.cursor + " == nil then " + operations + "_error(\"JSL " +
+                (e.pipeline.consumer == Consumer::Min ? "min" : "max") + " reducer received no elements\") else " + e.cursor + " end)()";
+            return;
+        case Consumer::Any:
+            out += "return false end)()";
+            return;
+        case Consumer::All:
+            out += "return true end)()";
+            return;
+        }
     }
 
     // Stages `from` onward, then the step, then the closers: a recursive walk so that one
@@ -658,13 +743,13 @@ private:
         out += "end ";
     }
 
-    Text comprehension(size_t index, bool count, bool sum)
+    Text comprehension(size_t index, bool count, Reducer reducer)
     {
         const Comprehension& node = document.comprehensions[index];
         const std::string name = stem(node.open.begin);
-        const Pipeline pipeline = plan(node, name, count, sum);
+        const Pipeline pipeline = plan(node, name, count, reducer);
         Text out;
-        out.anchor = {sum ? node.sumPrefix.begin : count ? node.lengthPrefix.begin : node.range.begin, node.range.end};
+        out.anchor = {reducer != Reducer::None ? node.reducerPrefix.begin : count ? node.lengthPrefix.begin : node.range.begin, node.range.end};
         if (node.postfix)
             out += "["; // Recovery-only index fence; strict compilation rejects the document.
         const size_t callBegin = out.size();
@@ -679,16 +764,19 @@ private:
         // is the output index and no cursor is needed. Everything else counts as it goes.
         const bool single = pipeline.single();
         const SourceKind first = single ? pipeline.stages.front().kind : SourceKind::Plain;
-        Emission e{node, pipeline, site, name, name + "_out", name + (sum ? "_sum" : "_n")};
-        e.scalar = pipeline.consumer != Consumer::Materialize;
+        const Consumer consumer = pipeline.consumer;
+        Emission e{node, pipeline, site, name, name + "_out", name + accumulator(consumer)};
+        e.scalar = consumer != Consumer::Materialize;
         e.sized = single && first != SourceKind::Range;
         e.directIndex = single && node.clauses.size() == 1 && first != SourceKind::Range && first != SourceKind::Slice;
-        e.needsCursor = e.scalar || !e.directIndex;
+        e.needsCursor = (consumer != Consumer::Any && consumer != Consumer::All) && (e.scalar || !e.directIndex);
+        if (consumer == Consumer::Min || consumer == Consumer::Max)
+            e.seed = "nil";
         if (!e.sized)
-            allocation(out, e.output, e.cursor, e.scalar, e.needsCursor);
+            allocation(out, e);
         stages(out, e, 0);
         out.anchor = node.close;
-        out += "return " + (e.scalar ? e.cursor : e.output) + " end)()";
+        epilogue(out, e);
         site.call = {callBegin, out.size()};
         if (node.postfix)
             out += "]";

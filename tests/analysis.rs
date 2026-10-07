@@ -951,3 +951,26 @@ fn partial_comprehension_completion_and_error_caches_update_for_both_solvers() {
         check(old, "oldOnly", "number");
     }
 }
+
+#[test]
+fn min_max_any_all_reducers_infer_element_and_boolean_types_on_both_solvers() {
+    let source = concat!(
+        "--!strict\n",
+        "local values: { number } = { 1, 2, 3 }\n",
+        "local names: { string } = { 'a', 'b' }\n",
+        "local least = min[for x in values if x > 1 => x * 2]\n",
+        "local greatest = max[for name in names => name]\n",
+        "local some = any[for x in values => x > 2]\n",
+        "local every = all[for i, x in enumerate(values) => x >= i]\n",
+        "return least, greatest, some, every\n",
+    );
+    for solver in [analysis::Solver::New, analysis::Solver::Old] {
+        let analysis = comprehension_analysis(HashMap::from([("reducers", source)]), solver);
+        let report = analysis.check("reducers", false);
+        assert!(report.is_clean(), "{solver:?}: {report:#?}");
+        assert_binding_type(&analysis, "reducers", 7, "least", "number");
+        assert_binding_type(&analysis, "reducers", 7, "greatest", "string");
+        assert_binding_type(&analysis, "reducers", 7, "some", "boolean");
+        assert_binding_type(&analysis, "reducers", 7, "every", "boolean");
+    }
+}

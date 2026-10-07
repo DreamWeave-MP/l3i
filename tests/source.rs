@@ -281,3 +281,18 @@ fn unfinished_surface_forms_never_compile_or_execute_recovery_holes() {
     assert!(error.contains("expected projection expression"), "{error}");
     assert_eq!(calls.get(), 0, "strict compilation cannot run any recovery scaffolding");
 }
+
+#[test]
+fn min_max_any_all_reducers_compile_to_bare_loops() {
+    for op in ["min", "max", "any", "all"] {
+        let listing =
+            disassemble(&format!("return {op}[for x in values if x > 1 => x * 2]"), &CompileOptions::default())
+                .unwrap();
+        assert!(listing.contains("FORNPREP") && listing.contains("FORNLOOP"), "{op}: {listing}");
+        assert!(
+            !listing.contains("NEWTABLE") && !listing.contains("SETLIST") && !listing.contains("table.create"),
+            "{op}: {listing}"
+        );
+        assert!(!listing.contains("FORGPREP") && !listing.contains("NEWCLOSURE"), "{op}: {listing}");
+    }
+}
