@@ -195,8 +195,8 @@ public:
             // and its byte receiver, annotated so Luau's code generator lowers the calls to
             // native loops; JSL buffer slices are byte spans.
             result += "local " + operations + "_data = __l3i_data ";
-            result += "local " + operations + "_data_u8: dream_data_Kind = if " + operations + "_data then " + operations +
-                "_data.kind(\"u8\") else nil ";
+            result += "local " + operations + "_data_u8: dream_data_Kind_u8 = if " + operations + "_data then " + operations +
+                "_data.u8() else nil ";
             preludeStatements += 2;
         }
 

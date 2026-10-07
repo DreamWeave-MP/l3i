@@ -121,17 +121,30 @@ Every module function is a bound Rust function invoked once per bulk operation: 
 crossing amortized over the whole span, element loops in Rust over raw pointers after the single
 bounds check. This is the portable/bound path and the correctness oracle for everything.
 
-The reductions also exist as methods of a typed receiver, `data.kind(name)` (`dream.data.Kind`):
-`K:sum(buffer, offset, count)`, `K:min`, `K:max`, `K:countEq/Ne/Lt/Le/Gt/Ge(buffer, offset,
-count, threshold)`. Bound, they are the same loops. Under the `jit` feature, a call on a receiver
-the script annotated (`local F32: dream_data_Kind = data.kind("f32")`, in a `--!native` chunk)
-is lowered by `src/data/lowering.rs` into Luau IR: the receiver tag, buffer tag, whole
-non-negative bounds and the span's fit are checked first (anything else jumps to the binder,
-whose errors are the contract), then a loop per element kind behind a dispatch on the
-receiver's kind word reads elements with the same `BUFFER_READ*` the `buffer` library lowers
-to and accumulates in double in element order. Loop state lives in the receiver's scratch
-words, since Luau IR has no loop-carried values. This is the established L3i fast-path pattern
+The reductions also exist as methods of **typed receivers**, one class per element kind
+(`dream_data_Kind_u8` … `dream_data_Kind_f64`, from `data.u8(stride?)` … `data.f64(stride?)`, or
+`data.kind("f32@16")` when the layout is only known at run time). Every receiver has the same
+thirty-nine members: `sum`, `min`, `max` over the whole span, and each of `sum`, `min`, `max`,
+`count`, `any`, `all` with a comparison suffix (`sumGt`, `minLe`, `countEq`, `anyNe`, `allGe`
+…) over the elements that compare so against a threshold argument. The module functions
+`data.sum/min/max(…, comparison?, threshold?)`, `data.count`, `data.any` and `data.all` are the
+same reductions by name; bound, both spellings run one shared element loop.
+
+Under the `jit` feature a call on a receiver the script annotated with its class (`local F:
+dream_data_Kind_f32 = data.f32()`, in a `--!native` chunk) is lowered by `src/data/lowering.rs`
+into Luau IR: the receiver tag, buffer tag, whole non-negative bounds and the span's fit are
+checked first (anything else jumps to the binder, whose errors are the contract), then the
+loop reads elements with the same `BUFFER_READ*` the `buffer` library lowers to and
+accumulates in double in element order. The element kind is the receiver's *type*, so a site
+compiles exactly one loop pair, contiguous (constant steps, eight elements unrolled per cursor
+round trip) and strided (the simple loop stepping by the value's stride); a single untyped
+receiver dispatching on a kind word was tried first and cost sixteen loops per site, enough to
+push a function with a hundred sites past Luau's 32K-block limit, which silently leaves the
+whole function interpreted. Loop state lives in the receiver's scratch words, since Luau IR has
+no loop-carried values, and the VM's own registers are memory on the Lua stack, so parking
+state there would be the same round trip. This is the established L3i fast-path pattern
 (bytes, intern): one semantic implementation, a bound path, an optional native lowering.
+
 
 No worker threads, no SIMD framework, no second JIT.
 

@@ -6,6 +6,8 @@ use l3i::data::DataExtension;
 use l3i::extension::{RuntimePlan, RuntimePolicy};
 #[cfg(feature = "jit")]
 use l3i::source::LoadScope;
+#[cfg(feature = "jit")]
+use std::fmt::Write as _;
 
 fn runtime() -> Runtime {
     let plan = RuntimePlan::builder()
@@ -372,13 +374,12 @@ fn kind_receiver_methods_match_the_module_functions() {
     );
 }
 
+/// A native-code runtime with the data plane, counters on and globals sandboxed (native code
+/// exits on a global access otherwise), or None where the platform has no code generator.
 #[cfg(feature = "jit")]
-#[test]
-fn kind_receiver_reductions_lower_to_native_loops_with_the_bound_semantics() {
-    use l3i::data::lowering::lowered_sites;
+fn native_runtime() -> Option<(Runtime, usize)> {
     use l3i::extension::NativeCodePolicy;
     use l3i::native_code::NativeCodeMode;
-
     let policy = RuntimePolicy::new().compat_global("@dream/data", "data").native_code(NativeCodePolicy {
         mode: NativeCodeMode::Eager,
         record_counters: true,
@@ -386,85 +387,96 @@ fn kind_receiver_reductions_lower_to_native_loops_with_the_bound_semantics() {
     });
     let plan = RuntimePlan::builder().policy(policy).extension(DataExtension).finalize().unwrap();
     let runtime = Runtime::from_plan(&plan).unwrap();
-    let generator = runtime.native_code().expect("built with native code");
-    if !generator.is_available() {
+    if !runtime.native_code().expect("built with native code").is_available() {
         eprintln!("no Luau code generator on this platform; skipping");
-        return;
+        return None;
     }
-    // A safe environment, or every global access would exit native code to the interpreter.
     runtime.sandbox_globals();
-    let before = lowered_sites();
-    // `Runtime::exec` never compiles natively; a chunk loaded through `LoadScope` does under
-    // Eager, and `--!native` makes the compiler emit the type info the hook needs.
+    let before = l3i::data::lowering::lowered_sites();
+    Some((runtime, before))
+}
+
+/// `body` once per kind with `{name}`, `{size}` and `{ctor}` filled in, as a `--!native`
+/// chunk; the receivers are annotated with their typed class so the calls lower.
+#[cfg(feature = "jit")]
+fn per_kind_chunk(body: &str) -> String {
+    let mut chunk = String::from("--!native\nlocal nan = 0 / 0\n");
+    for (name, size) in [("u8", 1), ("i8", 1), ("u16", 2), ("i16", 2), ("u32", 4), ("i32", 4), ("f32", 4), ("f64", 8)] {
+        chunk.push_str("do\n");
+        chunk.push_str(
+            &body
+                .replace("{name}", name)
+                .replace("{size}", &size.to_string())
+                .replace("{ctor}", &format!("data.{name}")),
+        );
+        chunk.push_str("\nend\n");
+    }
+    chunk
+}
+
+/// Runs a native chunk and returns how many native blocks it executed.
+#[cfg(feature = "jit")]
+fn run_native(runtime: &Runtime, chunk: &str) -> u64 {
+    let generator = runtime.native_code().unwrap();
     let stack = runtime.stack();
-    let chunk = stack
-        .load_source("=kinds", r"--!native
-            local kinds = {'u8', 'i8', 'u16', 'i16', 'u32', 'i32', 'f32', 'f64'}
-            local sizes = {u8 = 1, i8 = 1, u16 = 2, i16 = 2, u32 = 4, i32 = 4, f32 = 4, f64 = 8}
-            local n = 1000
-            local nan = 0 / 0
-            for _, name in kinds do
-                local size = sizes[name]
-                local buf = buffer.create(n * size + 5)
-                local write = buffer['write' .. name]
-                for i = 0, n - 1 do
-                    local v = (i * 37) % 251 - (string.sub(name, 1, 1) == 'u' and 0 or 125)
-                    if name == 'f32' or name == 'f64' then v = v / 7 end
-                    write(buf, 5 + i * size, v)
-                end
-                local K: dream_data_Kind = data.kind(name)
-                -- A strided layout over the same bytes: every other element.
-                local S: dream_data_Kind = data.kind(name .. '@' .. (size * 2))
-                assert(S:sum(buf, 5, n // 2) == data.sum(buf, name .. '@' .. (size * 2), 5, n // 2), name .. ' strided sum')
-                assert(S:countGt(buf, 5, n // 2, 3) == data.count(buf, name .. '@' .. (size * 2), 5, n // 2, 'gt', 3), name .. ' strided count')
-                assert(S:min(buf, 5, n // 2) == data.min(buf, name .. '@' .. (size * 2), 5, n // 2), name .. ' strided min')
-                -- The lowered calls against the module functions (the bound path), per kind.
-                assert(K:sum(buf, 5, n) == data.sum(buf, name, 5, n), name .. ' sum')
-                assert(K:sum(buf, 5 + 10 * size, 0) == 0, name .. ' empty sum')
-                if name == 'f32' or name == 'f64' then
-                    write(buf, 5 + 400 * size, nan)
-                    local total = K:sum(buf, 5, n)
-                    assert(total ~= total and data.sum(buf, name, 5, n) ~= total, name .. ' NaN sum')
-                end
-                local least, greatest = K:min(buf, 5, n), K:max(buf, 5, n)
-                assert(least == data.min(buf, name, 5, n) and greatest == data.max(buf, name, 5, n), name .. ' extrema')
-                assert(K:min(buf, 5, 0) == nil and K:max(buf, 5, 0) == nil, name .. ' empty extrema')
-                -- Real namecalls, so every comparison's native loop runs (indexing K[method] does not lower).
-                assert(K:countEq(buf, 5, n, 3) == data.count(buf, name, 5, n, 'eq', 3) and K:countNe(buf, 5, n, 3) == data.count(buf, name, 5, n, 'ne', 3), name .. ' eq/ne')
-                assert(K:countLt(buf, 5, n, 3) == data.count(buf, name, 5, n, 'lt', 3) and K:countLe(buf, 5, n, 3) == data.count(buf, name, 5, n, 'le', 3), name .. ' lt/le')
-                assert(K:countGt(buf, 5, n, 3) == data.count(buf, name, 5, n, 'gt', 3) and K:countGe(buf, 5, n, 3) == data.count(buf, name, 5, n, 'ge', 3), name .. ' gt/ge')
-                assert(K:countEq(buf, 5, n, nan) == 0 and K:countNe(buf, 5, n, nan) == n and K:countLt(buf, 5, n, nan) == 0 and K:countGe(buf, 5, n, nan) == 0, name .. ' NaN threshold')
-                for _, op in {'Eq', 'Ne', 'Lt', 'Le', 'Gt', 'Ge'} do
-                    local method = 'count' .. op
-                    local expected = data.count(buf, name, 5, n, string.lower(op), 3)
-                    assert(K[method](K, buf, 5, n, 3) == expected, name .. ' ' .. method)
-                    assert(K[method](K, buf, 5, n, nan) == data.count(buf, name, 5, n, string.lower(op), nan), name .. ' ' .. method .. ' NaN')
-                end
-                if name == 'f32' or name == 'f64' then
-                    -- A leading NaN stays in min/max on both paths; a later one never replaces.
-                    assert(K:min(buf, 5 + 400 * size, 10) ~= K:min(buf, 5 + 400 * size, 10), name .. ' leading NaN')
-                    assert(K:min(buf, 5, 500) == data.min(buf, name, 5, 500), name .. ' later NaN')
-                end
-                -- Misuse leaves native code for the binder, whose errors are the contract.
-                local ok, message = pcall(function() return K:sum(buf, 5, n + 1) end)
-                assert(not ok and string.find(message, 'Kind:sum: span of', 1, true), name .. ': ' .. tostring(message))
-                ok, message = pcall(function() return K:sum(buf, 2.5, 1) end)
-                assert(not ok, name .. ' fractional offset')
-                ok, message = pcall(function() return K:sum('text', 0, 1) end)
-                assert(not ok, name .. ' not a buffer')
-                ok, message = pcall(function() return K:sum(buf, -1, 1) end)
-                assert(not ok and string.find(message, 'negative offset', 1, true), name .. ': ' .. tostring(message))
-            end
-        ", &runtime.compile_options())
-        .unwrap();
-    let stats_before = generator.execution_stats(&stack);
-    chunk.invoke::<(), _>(&stack, ()).unwrap();
-    let stats_after = generator.execution_stats(&stack);
-    assert!(lowered_sites() > before, "the annotated receiver's calls were lowered");
+    let function = stack.load_source("=native", chunk, &runtime.compile_options()).unwrap();
+    let before = generator.execution_stats(&stack).regular_blocks_executed;
+    function.invoke::<(), _>(&stack, ()).unwrap();
+    generator.execution_stats(&stack).regular_blocks_executed - before
+}
+
+#[cfg(feature = "jit")]
+#[test]
+fn kind_receiver_reductions_lower_to_native_loops_with_the_bound_semantics() {
+    let Some((runtime, before)) = native_runtime() else { return };
+    let chunk = per_kind_chunk(
+        r"
+        local name, size = '{name}', {size}
+        local n = 1000
+        local buf = buffer.create(n * size + 5)
+        local write = buffer['write' .. name]
+        for i = 0, n - 1 do
+            local v = (i * 37) % 251 - (string.sub(name, 1, 1) == 'u' and 0 or 125)
+            if name == 'f32' or name == 'f64' then v = v / 7 end
+            write(buf, 5 + i * size, v)
+        end
+        local K: dream_data_Kind_{name} = {ctor}()
+        local S: dream_data_Kind_{name} = {ctor}(size * 2)
+        -- The lowered calls against the module functions (the bound path), per kind.
+        assert(K:sum(buf, 5, n) == data.sum(buf, name, 5, n), name .. ' sum')
+        assert(K:sum(buf, 5 + 10 * size, 0) == 0, name .. ' empty sum')
+        assert(S:sum(buf, 5, n // 2) == data.sum(buf, name .. '@' .. (size * 2), 5, n // 2), name .. ' strided sum')
+        assert(S:countGt(buf, 5, n // 2, 3) == data.count(buf, name .. '@' .. (size * 2), 5, n // 2, 'gt', 3), name .. ' strided count')
+        assert(S:min(buf, 5, n // 2) == data.min(buf, name .. '@' .. (size * 2), 5, n // 2), name .. ' strided min')
+        if name == 'f32' or name == 'f64' then
+            write(buf, 5 + 400 * size, nan)
+            local total = K:sum(buf, 5, n)
+            assert(total ~= total and data.sum(buf, name, 5, n) ~= total, name .. ' NaN sum')
+        end
+        local least, greatest = K:min(buf, 5, n), K:max(buf, 5, n)
+        assert(least == data.min(buf, name, 5, n) and greatest == data.max(buf, name, 5, n), name .. ' extrema')
+        assert(K:min(buf, 5, 0) == nil and K:max(buf, 5, 0) == nil, name .. ' empty extrema')
+        if name == 'f32' or name == 'f64' then
+            -- A leading NaN stays in min/max on both paths; a later one never replaces.
+            assert(K:min(buf, 5 + 400 * size, 10) ~= K:min(buf, 5 + 400 * size, 10), name .. ' leading NaN')
+            assert(K:min(buf, 5, 500) == data.min(buf, name, 5, 500), name .. ' later NaN')
+        end
+        -- Misuse leaves native code for the binder, whose errors are the contract.
+        local ok, message = pcall(function() return K:sum(buf, 5, n + 1) end)
+        assert(not ok and string.find(message, 'Kind:sum: span of', 1, true), name .. ': ' .. tostring(message))
+        ok, message = pcall(function() return K:sum(buf, 2.5, 1) end)
+        assert(not ok, name .. ' fractional offset')
+        ok, message = pcall(function() return K:sum('text', 0, 1) end)
+        assert(not ok, name .. ' not a buffer')
+        ok, message = pcall(function() return K:sum(buf, -1, 1) end)
+        assert(not ok and string.find(message, 'negative offset', 1, true), name .. ': ' .. tostring(message))
+        ",
+    );
+    let blocks = run_native(&runtime, &chunk);
+    assert!(l3i::data::lowering::lowered_sites() > before, "the annotated receivers' calls were lowered");
     // Eight kinds, each thousands of loop iterations in native blocks (an interpreted run
     // records a few dozen); the slow paths exit to the binder.
-    let blocks = stats_after.regular_blocks_executed - stats_before.regular_blocks_executed;
-    assert!(blocks > 10_000, "native blocks executed: {blocks}");
+    assert!(blocks > 5_000, "native blocks executed: {blocks}");
 }
 
 #[test]
@@ -510,4 +522,48 @@ fn strided_layouts_read_one_field_of_packed_records() {
         assert(buffer.readf32(xs, 0) == n - 1 and buffer.readf32(xs, 4) == n - 2, 'gathered x by sorted y')
     ",
     );
+}
+
+/// Every receiver member spelled as a real namecall, against the module function with the
+/// same operation and comparison, for every kind, with a NaN threshold and an empty span too.
+/// One chunk per operation keeps each function under Luau's per-function block limit.
+#[cfg(feature = "jit")]
+#[test]
+fn every_receiver_member_lowers_and_agrees_with_the_module_functions() {
+    let Some((runtime, _)) = native_runtime() else { return };
+    let mut total_blocks = 0;
+    for op in ["sum", "min", "max", "count", "any", "all"] {
+        let mut checks = String::new();
+        for comparison in ["Eq", "Ne", "Lt", "Le", "Gt", "Ge"] {
+            let lower = comparison.to_lowercase();
+            writeln!(
+                checks,
+                "do local got = K:{op}{comparison}(buf, 5, n, 3) local want = data.{op}(buf, name, 5, n, '{lower}', 3) \
+                 assert(got == want or (got ~= got and want ~= want), name .. ' {op}{comparison}: ' .. tostring(got) .. ' vs ' .. tostring(want)) \
+                 got = K:{op}{comparison}(buf, 5, n, nan) want = data.{op}(buf, name, 5, n, '{lower}', nan) \
+                 assert(got == want or (got ~= got and want ~= want), name .. ' {op}{comparison} NaN threshold') \
+                 got = K:{op}{comparison}(buf, 5, 0, 3) want = data.{op}(buf, name, 5, 0, '{lower}', 3) \
+                 assert(got == want, name .. ' {op}{comparison} empty: ' .. tostring(got) .. ' vs ' .. tostring(want)) end"
+            )
+            .unwrap();
+        }
+        let chunk = per_kind_chunk(&format!(
+            "local name, size = '{{name}}', {{size}}\n\
+             local n = 777\n\
+             local buf = buffer.create(n * size + 5)\n\
+             local write = buffer['write' .. name]\n\
+             for i = 0, n - 1 do\n\
+                 local v = (i * 37) % 11 - (string.sub(name, 1, 1) == 'u' and 0 or 5)\n\
+                 if name == 'f32' or name == 'f64' then v = v / 3 end\n\
+                 write(buf, 5 + i * size, v)\n\
+             end\n\
+             if name == 'f64' then write(buf, 5 + 401 * size, nan) end\n\
+             local K: dream_data_Kind_{{name}} = {{ctor}}()\n\
+             {checks}\
+             local S: dream_data_Kind_{{name}} = {{ctor}}(size * 2)\n\
+             assert(S:{op}Gt(buf, 5, n // 2, 1) == data.{op}(buf, name .. '@' .. (size * 2), 5, n // 2, 'gt', 1), name .. ' strided {op}')\n"
+        ));
+        total_blocks += run_native(&runtime, &chunk);
+    }
+    assert!(total_blocks > 20_000, "native blocks executed: {total_blocks}");
 }

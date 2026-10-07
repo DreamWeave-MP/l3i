@@ -469,13 +469,69 @@ impl Target<'_> {
 // Reductions
 // ---------------------------------------------------------------------------------------------
 
-fn sum(buffer: BufferView<'_>, kind: &str, offset: Exact<i64>, count: Exact<i64>) -> Result<f64> {
-    let span = Span::new("data.sum", &buffer, Layout::parse("data.sum", kind)?, offset, count)?;
-    let mut total = 0.0;
-    for i in 0..span.count {
-        total += span.get(i);
-    }
-    Ok(total)
+/// A module reduction: the span, then an optional comparison and threshold selecting the
+/// elements it ranges over (`count`, `any` and `all` require them).
+#[allow(clippy::too_many_arguments)]
+fn reduce(
+    call: &Call<'_>,
+    what: &str,
+    op: ReductionOp,
+    buffer: &BufferView<'_>,
+    kind: &str,
+    offset: Exact<i64>,
+    count: Exact<i64>,
+    comparison: Option<&str>,
+    threshold: Option<f64>,
+) -> Result<StackResults> {
+    let span = Span::new(what, buffer, Layout::parse(what, kind)?, offset, count)?;
+    let filter = match (comparison, threshold) {
+        (Some(comparison), Some(_)) => Some(Comparison::parse(what, comparison)?),
+        (Some(_), None) => return Err(Error::runtime(format!("{what}: a comparison needs a threshold"))),
+        (None, _) if matches!(op, ReductionOp::Count | ReductionOp::Any | ReductionOp::All) => {
+            return Err(Error::runtime(format!("{what}: a comparison and threshold are required")));
+        }
+        (None, _) => None,
+    };
+    Reduction { op, filter }.run(&span, threshold.unwrap_or(0.0)).push(call)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn sum(
+    call: &Call<'_>,
+    buffer: BufferView<'_>,
+    kind: &str,
+    offset: Exact<i64>,
+    count: Exact<i64>,
+    comparison: Option<&str>,
+    threshold: Option<f64>,
+) -> Result<StackResults> {
+    reduce(call, "data.sum", ReductionOp::Sum, &buffer, kind, offset, count, comparison, threshold)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn any(
+    call: &Call<'_>,
+    buffer: BufferView<'_>,
+    kind: &str,
+    offset: Exact<i64>,
+    count: Exact<i64>,
+    comparison: &str,
+    threshold: f64,
+) -> Result<StackResults> {
+    reduce(call, "data.any", ReductionOp::Any, &buffer, kind, offset, count, Some(comparison), Some(threshold))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn all(
+    call: &Call<'_>,
+    buffer: BufferView<'_>,
+    kind: &str,
+    offset: Exact<i64>,
+    count: Exact<i64>,
+    comparison: &str,
+    threshold: f64,
+) -> Result<StackResults> {
+    reduce(call, "data.all", ReductionOp::All, &buffer, kind, offset, count, Some(comparison), Some(threshold))
 }
 
 /// The index of the first least (or greatest) element by Luau `<` (`>`): a NaN that arrives
@@ -496,14 +552,30 @@ fn extreme(span: &Span, greatest: bool) -> Option<usize> {
     Some(best)
 }
 
-fn min(buffer: BufferView<'_>, kind: &str, offset: Exact<i64>, count: Exact<i64>) -> Result<Option<f64>> {
-    let span = Span::new("data.min", &buffer, Layout::parse("data.min", kind)?, offset, count)?;
-    Ok(extreme(&span, false).map(|i| span.get(i)))
+#[allow(clippy::too_many_arguments)]
+fn min(
+    call: &Call<'_>,
+    buffer: BufferView<'_>,
+    kind: &str,
+    offset: Exact<i64>,
+    count: Exact<i64>,
+    comparison: Option<&str>,
+    threshold: Option<f64>,
+) -> Result<StackResults> {
+    reduce(call, "data.min", ReductionOp::Min, &buffer, kind, offset, count, comparison, threshold)
 }
 
-fn max(buffer: BufferView<'_>, kind: &str, offset: Exact<i64>, count: Exact<i64>) -> Result<Option<f64>> {
-    let span = Span::new("data.max", &buffer, Layout::parse("data.max", kind)?, offset, count)?;
-    Ok(extreme(&span, true).map(|i| span.get(i)))
+#[allow(clippy::too_many_arguments)]
+fn max(
+    call: &Call<'_>,
+    buffer: BufferView<'_>,
+    kind: &str,
+    offset: Exact<i64>,
+    count: Exact<i64>,
+    comparison: Option<&str>,
+    threshold: Option<f64>,
+) -> Result<StackResults> {
+    reduce(call, "data.max", ReductionOp::Max, &buffer, kind, offset, count, comparison, threshold)
 }
 
 fn argmin(buffer: BufferView<'_>, kind: &str, offset: Exact<i64>, count: Exact<i64>) -> Result<Option<f64>> {
@@ -980,18 +1052,34 @@ fn partition(
 }
 
 // ---------------------------------------------------------------------------------------------
-// The typed receiver: the same reductions as methods, lowered to native loops under jit
+// The typed receivers: the same reductions as methods, lowered to native loops under jit
 // ---------------------------------------------------------------------------------------------
 
-/// Words of scratch in the receiver's payload for the native lowering's loop state.
-const RECEIVER_SCRATCH_WORDS: usize = 4;
+/// Words of scratch in a receiver's payload for the native lowering's loop state.
+const RECEIVER_SCRATCH_WORDS: usize = 5;
 
-/// `dream.data.Kind`, from `data.kind(name)`: a receiver whose methods are the span reductions
-/// for one element kind, `K:sum(buffer, offset, count)` and friends. The bound methods are the
-/// semantic path; under `jit` a namecall on an annotated receiver lowers to a native loop
-/// ([`lowering::KindLowering`]) that keeps its accumulator and index in the scratch words.
+/// The kinds by index, the order [`Kind`] is declared in; `Typed<K>` is the receiver for
+/// `KINDS[K]`.
+pub const KINDS: [Kind; 8] = [Kind::U8, Kind::I8, Kind::U16, Kind::I16, Kind::U32, Kind::I32, Kind::F32, Kind::F64];
+const KIND_TYPE_NAMES: [&str; 8] = [
+    "dream.data.Kind.u8",
+    "dream.data.Kind.i8",
+    "dream.data.Kind.u16",
+    "dream.data.Kind.i16",
+    "dream.data.Kind.u32",
+    "dream.data.Kind.i32",
+    "dream.data.Kind.f32",
+    "dream.data.Kind.f64",
+];
+
+/// `dream.data.Kind.<kind>`, from `data.u8()` and friends (or `data.kind(name)`): a receiver
+/// whose methods are the span reductions for one element kind, `K:sum(buffer, offset, count)`,
+/// `K:countGt(buffer, offset, count, threshold)` and so on. The element kind is part of the
+/// *type*, so under `jit` a call on a receiver the script annotated (`local F: dream_data_Kind_f32
+/// = data.f32()`) lowers to exactly one native loop pair ([`lowering::KindLowering`]); the
+/// stride is a run-time property of the value. The bound methods are the semantic path.
 #[repr(C)]
-pub struct KindReceiver {
+pub struct Typed<const K: u8> {
     kind: u64,
     /// The stride in bytes, as a double so native code adds it to its cursor directly.
     stride: f64,
@@ -999,30 +1087,19 @@ pub struct KindReceiver {
 }
 
 // SAFETY: the payload holds no Lua references.
-unsafe impl crate::userdata::Userdata for KindReceiver {
-    const NAME: &'static str = "dream.data.Kind";
+unsafe impl<const K: u8> crate::userdata::Userdata for Typed<K> {
+    const NAME: &'static str = KIND_TYPE_NAMES[K as usize];
 }
 
-impl KindReceiver {
-    pub fn new(layout: Layout) -> KindReceiver {
-        KindReceiver { kind: layout.kind as u64, stride: layout.stride as f64, scratch: Default::default() }
+impl<const K: u8> Typed<K> {
+    pub const KIND: Kind = KINDS[K as usize];
+
+    pub fn new(stride: usize) -> Typed<K> {
+        Typed { kind: u64::from(K), stride: stride as f64, scratch: Default::default() }
     }
 
     pub fn layout(&self) -> Layout {
-        Layout { kind: self.kind(), stride: self.stride as usize }
-    }
-
-    pub fn kind(&self) -> Kind {
-        match self.kind {
-            0 => Kind::U8,
-            1 => Kind::I8,
-            2 => Kind::U16,
-            3 => Kind::I16,
-            4 => Kind::U32,
-            5 => Kind::I32,
-            6 => Kind::F32,
-            _ => Kind::F64,
-        }
+        Layout { kind: Self::KIND, stride: self.stride as usize }
     }
 
     fn span(&self, what: &str, buffer: &BufferView<'_>, offset: Exact<i64>, count: Exact<i64>) -> Result<Span> {
@@ -1032,100 +1109,298 @@ impl KindReceiver {
 
 /// Byte offsets native code reads at, pinned here at compile time.
 pub(crate) mod layout {
-    use super::KindReceiver;
+    use super::Typed;
 
     pub const KIND: i32 = 0;
     pub const STRIDE: i32 = 8;
     pub const SCRATCH: i32 = 16;
 
     const _: () = {
-        assert!(std::mem::offset_of!(KindReceiver, kind) == KIND as usize);
-        assert!(std::mem::offset_of!(KindReceiver, stride) == STRIDE as usize);
-        assert!(std::mem::offset_of!(KindReceiver, scratch) == SCRATCH as usize);
+        assert!(std::mem::offset_of!(Typed<0>, kind) == KIND as usize);
+        assert!(std::mem::offset_of!(Typed<0>, stride) == STRIDE as usize);
+        assert!(std::mem::offset_of!(Typed<0>, scratch) == SCRATCH as usize);
     };
 }
 
-fn describe_kind_receiver(d: &mut ExtensionDescriptor) {
-    let mut receiver = d.userdata::<KindReceiver>("dream.data.Kind");
-    receiver
-        .tag(TagPolicy::Required)
-        .compiler_type(CompilerTypePolicy::Required)
-        .doc("The span reductions for one element kind as methods; native loops under jit.");
-    receiver
-        .method(
-            "sum",
-            |receiver: &KindReceiver, buffer: BufferView<'_>, offset: Exact<i64>, count: Exact<i64>| -> Result<f64> {
-                let span = receiver.span("Kind:sum", &buffer, offset, count)?;
-                let mut total = 0.0;
-                for i in 0..span.count {
-                    total += span.get(i);
-                }
-                Ok(total)
-            },
-        )
-        .signature("(self, buffer: buffer, offset: number, count: number): number")
-        .doc("As data.sum for this kind.");
-    receiver
-        .method(
-            "min",
-            |receiver: &KindReceiver,
-             buffer: BufferView<'_>,
-             offset: Exact<i64>,
-             count: Exact<i64>|
-             -> Result<Option<f64>> {
-                let span = receiver.span("Kind:min", &buffer, offset, count)?;
-                Ok(extreme(&span, false).map(|i| span.get(i)))
-            },
-        )
-        .signature("(self, buffer: buffer, offset: number, count: number): number?")
-        .doc("As data.min for this kind.");
-    receiver
-        .method(
-            "max",
-            |receiver: &KindReceiver,
-             buffer: BufferView<'_>,
-             offset: Exact<i64>,
-             count: Exact<i64>|
-             -> Result<Option<f64>> {
-                let span = receiver.span("Kind:max", &buffer, offset, count)?;
-                Ok(extreme(&span, true).map(|i| span.get(i)))
-            },
-        )
-        .signature("(self, buffer: buffer, offset: number, count: number): number?")
-        .doc("As data.max for this kind.");
-    for (name, comparison) in [
-        ("countEq", Comparison::Eq),
-        ("countNe", Comparison::Ne),
-        ("countLt", Comparison::Lt),
-        ("countLe", Comparison::Le),
-        ("countGt", Comparison::Gt),
-        ("countGe", Comparison::Ge),
-    ] {
+fn describe_typed<const K: u8>(d: &mut ExtensionDescriptor) {
+    let mut receiver = d.userdata::<Typed<K>>(KIND_TYPE_NAMES[K as usize]);
+    receiver.tag(TagPolicy::Preferred).compiler_type(CompilerTypePolicy::Preferred).doc(format!(
+        "The span reductions for {} elements as methods; native loops under jit.",
+        KINDS[K as usize].name()
+    ));
+    for (op, filter) in Reduction::MEMBERS {
+        let name = op.member_name(filter);
         let what = format!("Kind:{name}");
+        let reduction = Reduction { op, filter };
         receiver
             .method(
-                name,
-                move |receiver: &KindReceiver,
+                name.as_str(),
+                move |receiver: &Typed<K>,
+                      call: &Call<'_>,
                       buffer: BufferView<'_>,
                       offset: Exact<i64>,
                       count: Exact<i64>,
-                      threshold: f64|
-                      -> Result<f64> {
+                      threshold: Option<f64>|
+                      -> Result<StackResults> {
                     let span = receiver.span(&what, &buffer, offset, count)?;
-                    let mut selected = 0usize;
-                    for i in 0..span.count {
-                        selected += usize::from(comparison.test(span.get(i), threshold));
-                    }
-                    Ok(selected as f64)
+                    let threshold = match (filter, threshold) {
+                        (Some(_), Some(threshold)) => threshold,
+                        (Some(_), None) => return Err(Error::runtime(format!("{what}: missing threshold"))),
+                        (None, _) => 0.0,
+                    };
+                    reduction.run(&span, threshold).push(call)
                 },
             )
-            .signature("(self, buffer: buffer, offset: number, count: number, threshold: number): number")
-            .doc("How many elements compare so against threshold; as data.count with that comparison.");
+            .signature(if filter.is_some() {
+                format!(
+                    "(self, buffer: buffer, offset: number, count: number, threshold: number): {}",
+                    op.result_type()
+                )
+            } else {
+                format!("(self, buffer: buffer, offset: number, count: number): {}", op.result_type())
+            })
+            .doc(op.doc(filter));
     }
 }
 
-fn kind(name: &str) -> Result<Owned<KindReceiver>> {
-    Ok(Owned(KindReceiver::new(Layout::parse("data.kind", name)?)))
+/// The stride a receiver constructor was given, validated for its kind.
+fn receiver_stride(what: &str, kind: Kind, stride: Option<Exact<i64>>) -> Result<usize> {
+    match stride {
+        None => Ok(kind.size()),
+        Some(stride) => usize::try_from(stride.0).ok().filter(|stride| *stride >= kind.size()).ok_or_else(|| {
+            Error::runtime(format!("{what}: stride must be at least {} bytes for {}", kind.size(), kind.name()))
+        }),
+    }
+}
+
+/// `data.kind("f32@16")`: the receiver for a layout, as a value of the matching typed class.
+fn kind(call: &Call<'_>, name: &str) -> Result<StackResults> {
+    let layout = Layout::parse("data.kind", name)?;
+    macro_rules! push {
+        ($($index:literal),*) => {
+            match layout.kind {
+                $(kind if kind == KINDS[$index] => crate::userdata::push_owned(call.stack(), Typed::<$index>::new(layout.stride))?,)*
+                _ => unreachable!("every kind has a receiver type"),
+            }
+        };
+    }
+    push!(0, 1, 2, 3, 4, 5, 6, 7);
+    Ok(StackResults)
+}
+
+fn describe_receivers(d: &mut ExtensionDescriptor) {
+    describe_typed::<0>(d);
+    describe_typed::<1>(d);
+    describe_typed::<2>(d);
+    describe_typed::<3>(d);
+    describe_typed::<4>(d);
+    describe_typed::<5>(d);
+    describe_typed::<6>(d);
+    describe_typed::<7>(d);
+    d.type_alias(
+        "dream_data_Kind",
+        "dream_data_Kind_u8 | dream_data_Kind_i8 | dream_data_Kind_u16 | dream_data_Kind_i16 | dream_data_Kind_u32 | dream_data_Kind_i32 | dream_data_Kind_f32 | dream_data_Kind_f64",
+    );
+}
+
+/// `data.u8(stride?)` and friends: a receiver whose static type names its kind.
+fn describe_constructors(module: &mut ModuleDecl) {
+    macro_rules! constructor {
+        ($index:literal, $name:literal) => {
+            module
+                .function($name, |stride: Option<Exact<i64>>| -> Result<Owned<Typed<$index>>> {
+                    Ok(Owned(Typed::<$index>::new(receiver_stride(concat!("data.", $name), KINDS[$index], stride)?)))
+                })
+                .signature(concat!("(stride: number?) -> dream_data_Kind_", $name))
+                .doc(concat!("The ", $name, " receiver, contiguous or at the given byte stride; annotate the local with its type so jit lowers its calls."));
+        };
+    }
+    constructor!(0, "u8");
+    constructor!(1, "i8");
+    constructor!(2, "u16");
+    constructor!(3, "i16");
+    constructor!(4, "u32");
+    constructor!(5, "i32");
+    constructor!(6, "f32");
+    constructor!(7, "f64");
+}
+
+/// A reduction over the elements that satisfy an optional comparison: the receiver's members.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReductionOp {
+    Sum,
+    Min,
+    Max,
+    Count,
+    Any,
+    All,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Reduction {
+    pub op: ReductionOp,
+    pub filter: Option<Comparison>,
+}
+
+/// What a reduction answers.
+enum Answer {
+    Number(f64),
+    Nil,
+    Bool(bool),
+}
+
+impl Answer {
+    fn push(self, call: &Call<'_>) -> Result<StackResults> {
+        match self {
+            Answer::Number(value) => Push::push_only(&value, call)?,
+            Answer::Nil => {
+                call.stack().push_nil();
+            }
+            Answer::Bool(value) => Push::push_only(&value, call)?,
+        }
+        Ok(StackResults)
+    }
+}
+
+impl ReductionOp {
+    const ALL: [ReductionOp; 6] =
+        [ReductionOp::Sum, ReductionOp::Min, ReductionOp::Max, ReductionOp::Count, ReductionOp::Any, ReductionOp::All];
+
+    fn name(self) -> &'static str {
+        match self {
+            ReductionOp::Sum => "sum",
+            ReductionOp::Min => "min",
+            ReductionOp::Max => "max",
+            ReductionOp::Count => "count",
+            ReductionOp::Any => "any",
+            ReductionOp::All => "all",
+        }
+    }
+
+    /// `sum`, `sumGt`, `countEq`, `anyLt`: the operation then the capitalized comparison.
+    pub fn member_name(self, filter: Option<Comparison>) -> String {
+        match filter {
+            None => self.name().to_owned(),
+            Some(comparison) => format!("{}{}", self.name(), comparison.suffix()),
+        }
+    }
+
+    fn result_type(self) -> &'static str {
+        match self {
+            ReductionOp::Sum | ReductionOp::Count => "number",
+            ReductionOp::Min | ReductionOp::Max => "number?",
+            ReductionOp::Any | ReductionOp::All => "boolean",
+        }
+    }
+
+    fn doc(self, filter: Option<Comparison>) -> String {
+        let subject = match filter {
+            None => "every element".to_owned(),
+            Some(comparison) => format!("the elements that compare {} against threshold", comparison.name()),
+        };
+        match self {
+            ReductionOp::Sum => format!("The sum of {subject}, added in order into a Luau number; 0 when none."),
+            ReductionOp::Min => {
+                format!("The first least of {subject} by Luau <, or nil when none; a leading NaN stays.")
+            }
+            ReductionOp::Max => format!("The first greatest of {subject} by Luau >, or nil when none."),
+            ReductionOp::Count => format!("How many of {subject}."),
+            ReductionOp::Any => format!("Whether any of {subject} exists; stops at the first."),
+            ReductionOp::All => format!(
+                "Whether every element compares {} against threshold; stops at the first that does not.",
+                filter.map_or("", Comparison::name)
+            ),
+        }
+    }
+}
+
+impl Comparison {
+    pub const ALL: [Comparison; 6] =
+        [Comparison::Eq, Comparison::Ne, Comparison::Lt, Comparison::Le, Comparison::Gt, Comparison::Ge];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Comparison::Eq => "eq",
+            Comparison::Ne => "ne",
+            Comparison::Lt => "lt",
+            Comparison::Le => "le",
+            Comparison::Gt => "gt",
+            Comparison::Ge => "ge",
+        }
+    }
+
+    pub fn suffix(self) -> &'static str {
+        match self {
+            Comparison::Eq => "Eq",
+            Comparison::Ne => "Ne",
+            Comparison::Lt => "Lt",
+            Comparison::Le => "Le",
+            Comparison::Gt => "Gt",
+            Comparison::Ge => "Ge",
+        }
+    }
+}
+
+impl Reduction {
+    /// Every member: the unfiltered sum/min/max, and each operation with each comparison
+    /// (count, any and all need one).
+    const MEMBERS: [(ReductionOp, Option<Comparison>); 39] = {
+        let mut members = [(ReductionOp::Sum, None); 39];
+        members[1] = (ReductionOp::Min, None);
+        members[2] = (ReductionOp::Max, None);
+        let mut at = 3;
+        let mut op = 0;
+        while op < 6 {
+            let mut comparison = 0;
+            while comparison < 6 {
+                members[at] = (ReductionOp::ALL[op], Some(Comparison::ALL[comparison]));
+                at += 1;
+                comparison += 1;
+            }
+            op += 1;
+        }
+        members
+    };
+
+    /// The bound semantics, element by element in order: the oracle for the native loops.
+    fn run(self, span: &Span, threshold: f64) -> Answer {
+        let accept = |value: f64| self.filter.is_none_or(|comparison| comparison.test(value, threshold));
+        match self.op {
+            ReductionOp::Sum => {
+                let mut total = 0.0;
+                for i in 0..span.count {
+                    let value = span.get(i);
+                    if accept(value) {
+                        total += value;
+                    }
+                }
+                Answer::Number(total)
+            }
+            ReductionOp::Count => Answer::Number((0..span.count).filter(|&i| accept(span.get(i))).count() as f64),
+            ReductionOp::Min | ReductionOp::Max => {
+                let mut best: Option<f64> = None;
+                for i in 0..span.count {
+                    let value = span.get(i);
+                    if !accept(value) {
+                        continue;
+                    }
+                    best = Some(match best {
+                        None => value,
+                        Some(current) => {
+                            if if self.op == ReductionOp::Min { value < current } else { value > current } {
+                                value
+                            } else {
+                                current
+                            }
+                        }
+                    });
+                }
+                best.map_or(Answer::Nil, Answer::Number)
+            }
+            ReductionOp::Any => Answer::Bool((0..span.count).any(|i| accept(span.get(i)))),
+            ReductionOp::All => Answer::Bool((0..span.count).all(|i| accept(span.get(i)))),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1138,16 +1413,22 @@ fn describe_module(module: &mut ModuleDecl) {
     module
         .function("kind", kind)
         .signature("(kind: dream_data_ElementKind) -> dream_data_Kind")
-        .doc("The receiver whose methods reduce spans of this kind; annotate it (`local U8: dream_data_Kind = data.kind(\"u8\")`) so jit lowers its calls to native loops.")
+        .doc("The receiver for a kind or layout named at run time (one of the typed receivers); prefer data.u8() and friends, whose static type lets jit lower the calls.")
         .function("sum", sum)
-        .signature(format!("({SPAN}) -> number"))
-        .doc("The elements added in order into a Luau number; 0 for an empty span.")
+        .signature(format!("({SPAN}, comparison: dream_data_Comparison?, threshold: number?) -> number"))
+        .doc("The elements (those satisfying the comparison, when given) added in order into a Luau number; 0 when none.")
         .function("min", min)
-        .signature(format!("({SPAN}) -> number?"))
-        .doc("The first least element by Luau <, or nil for an empty span; a leading NaN stays.")
+        .signature(format!("({SPAN}, comparison: dream_data_Comparison?, threshold: number?) -> number?"))
+        .doc("The first least element (among those satisfying the comparison, when given) by Luau <, or nil when none; a leading NaN stays.")
         .function("max", max)
-        .signature(format!("({SPAN}) -> number?"))
-        .doc("The first greatest element by Luau >, or nil for an empty span.")
+        .signature(format!("({SPAN}, comparison: dream_data_Comparison?, threshold: number?) -> number?"))
+        .doc("The first greatest element (among those satisfying the comparison, when given) by Luau >, or nil when none.")
+        .function("any", any)
+        .signature(format!("({SPAN}, comparison: dream_data_Comparison, threshold: number) -> boolean"))
+        .doc("Whether any element satisfies the comparison; stops at the first.")
+        .function("all", all)
+        .signature(format!("({SPAN}, comparison: dream_data_Comparison, threshold: number) -> boolean"))
+        .doc("Whether every element satisfies the comparison; stops at the first that does not.")
         .function("argmin", argmin)
         .signature(format!("({SPAN}) -> number?"))
         .doc("The zero-based position of the first least element, or nil.")
@@ -1203,12 +1484,13 @@ impl Extension for DataExtension {
         );
         d.type_alias("dream_data_Comparison", "\"eq\" | \"ne\" | \"lt\" | \"le\" | \"gt\" | \"ge\"");
         describe_selection(d);
-        describe_kind_receiver(d);
+        describe_receivers(d);
         #[cfg(feature = "jit")]
         d.native_hooks(lowering::KindLowering);
         let module = d.module(MODULE);
         module.doc("Typed spans of buffers reduced, compared into selections, gathered, scattered, filled, combined, ordered and partitioned natively, with no per-element callbacks.");
         describe_module(module);
+        describe_constructors(module);
         Ok(())
     }
 

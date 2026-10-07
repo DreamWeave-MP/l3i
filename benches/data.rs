@@ -101,7 +101,7 @@ fn case(
 fn setup(n: usize) -> String {
     format!(
         "n = {n} buf = buffer.create(n) for i = 0, n - 1 do buffer.writeu8(buf, i, (i * 37) % 251) end \
-         fbuf = buffer.create(n * 4) for i = 0, n - 1 do buffer.writef32(fbuf, i * 4, ((i * 37) % 251) / 7) end sel = data and data.selection(n) U8 = data and data.kind('u8')"
+         fbuf = buffer.create(n * 4) for i = 0, n - 1 do buffer.writef32(fbuf, i * 4, ((i * 37) % 251) / 7) end sel = data and data.selection(n) U8 = data and data.u8()"
     )
 }
 
@@ -187,7 +187,7 @@ fn counts(c: &mut Criterion) {
             "receiver countGt (IR loop under jit)",
             true,
             &setup,
-            "local K: dream_data_Kind = U8 local c = K:countGt(buf, 0, n, 127) return c",
+            "local K: dream_data_Kind_u8 = U8 local c = K:countGt(buf, 0, n, 127) return c",
             expected_count(n),
         );
         group.finish();
@@ -203,7 +203,7 @@ fn counts(c: &mut Criterion) {
             "receiver min (IR loop under jit)",
             true,
             &setup,
-            "local K: dream_data_Kind = U8 local least = K:min(buf, 0, n) return least",
+            "local K: dream_data_Kind_u8 = U8 local least = K:min(buf, 0, n) return least",
             expected,
         );
         case(

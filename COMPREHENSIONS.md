@@ -445,8 +445,8 @@ min[for x in buf[a:b] => x]                 -- empty check, then U8:min(buf, a -
 max[for x in buf[a:b] => x]
 ```
 
-`U8` is the chunk's `dream_data_Kind` receiver for bytes (`__l3i_data.kind("u8")`, annotated in
-the prelude), so with the `jit` feature each recognized call compiles to the receiver's
+`U8` is the chunk's `dream_data_Kind_u8` receiver for bytes (`__l3i_data.u8()`, annotated in the
+prelude), so with the `jit` feature each recognized call compiles to the receiver's
 unrolled native loop, measured faster than the bound call and than Luau's own native loop at
 every size (DATA_PLANE.md §2.4); without `jit` the bound method runs once per pipeline. Every
 path computes the number the scalar loop computes, bit for bit.
