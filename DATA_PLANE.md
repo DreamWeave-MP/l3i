@@ -170,10 +170,15 @@ global access). The recognized JSL sum now runs the receiver's unrolled IR loop
 | sum 256 | 2,773 (376 ns) | 9,639 (879 ns) | 5,995 (476 ns) | 9,075 (793 ns) |
 | sum 4,096 | 25,333 (4.39 µs) | 136,359 (12.7 µs) | 75,115 (6.00 µs) | 131,955 (11.8 µs) |
 | sum 65,536 | 386,293 (69.1 µs) | 2,163,879 (184 µs) | 1,181,035 (94.4 µs) | 2,098,035 (194 µs) |
-| count 16 | 1,563 (137 ns) | 1,749 (143 ns) | 1,960 (177 ns) | 1,393 (109 ns) |
-| count 256 | 6,115 (771 ns) | 10,259 (922 ns) | 8,200 (655 ns) | 9,183 (848 ns) |
-| count 4,096 | 78,919 (10.3 µs) | 146,384 (14.6 µs) | 108,040 (8.14 µs) | 133,788 (13.3 µs) |
-| count 65,536 | 1,243,831 (170 µs) | 2,324,444 (234 µs) | 1,705,480 (130 µs) | 2,127,528 (204 µs) |
+| count 16 | 1,143 (89 ns) ¹ | 1,749 (143 ns) | 1,960 (166 ns) | 1,393 (108 ns) |
+| count 256 | 4,392 (377 ns) ¹ | 10,259 (922 ns) | 8,200 (659 ns) | 9,183 (874 ns) |
+| count 4,096 | 56,350 (5.21 µs) ¹ | 146,384 (14.6 µs) | 108,040 (8.20 µs) | 133,788 (13.3 µs) |
+| count 65,536 | 887,717 (85.8 µs) ¹ | 2,324,444 (234 µs) | 1,705,480 (127 µs) | 2,127,528 (210 µs) |
+| min 256 | 4,084 (333 ns) ¹ | | 9,348 (670 ns) | 10,350 (880 ns) |
+| min 65,536 | 787,444 (64.1 µs) ¹ | | 2,033,028 (126 µs) | 2,425,710 (214 µs) |
+
+¹ The receiver's IR loop called directly (`K:countGt`, `K:min` on an annotated local), which is
+what the JSL bridge emits; the JSL rows above carry the slice prologue on top.
 
 | n | explicit `data.sum` f32 | `readf32` CodeGen loop | `data.gather` f32 | indexed copy, CodeGen | stable `data.argsort` | `table.sort` comparator, CodeGen (unstable) |
 |---:|---:|---:|---:|---:|---:|---:|
@@ -194,13 +199,16 @@ What the machine shape says:
 - Unrolling the pure-add `sum` body to eight elements per block (one cursor and one
   accumulator round trip per eight) cut it to 6 instructions per byte and 69 µs: faster than
   the bound call at every size, and at 16 elements within the noise of the handwritten native
-  loop, with no call overhead left to amortize.
-- `count`, `min` and `max` branch per element, which ends an IR block, so they cannot unroll
-  the same way (`SELECT_NUM` is equality-only and the min/max instructions do not keep the
-  loop's NaN rule). Their IR loops still execute fewer instructions than the bound call but
-  lose in time above a few hundred elements. The JSL bridge therefore lowers sums to the
-  receiver and counts and extrema to the bound functions; the explicit receiver remains for
-  scripts that measure otherwise.
+  loop, with no call overhead left to amortize. The receiver`s count and min loops called
+  directly beat the handwritten native loop even at 16 elements.
+- `count`, `min` and `max` branch per element, which ends an IR block, so they cannot fold
+  into one block (`SELECT_NUM` is equality-only and the min/max instructions do not keep the
+  loop's NaN rule). They unroll instead as a chain of one block per element with the cursor
+  advanced once per eight and the accumulator touched only on a hit or a replacement. That
+  halves their time too: count 86 µs and min 64 µs at 65,536 against 127 µs and 126 µs bound.
+  The JSL bridge lowers every recognized consumer to the receiver.
+- A namecall in tail position (`return K:sum(...)`) compiles with a multi-value result count,
+  which the hook declines; assign the result first. The bridge always assigns.
 - `compare` into a reused selection then `count()` costs within 5% of the direct count at
   every size, so composing selections is not a performance trade.
 

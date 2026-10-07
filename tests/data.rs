@@ -297,10 +297,10 @@ fn recognized_buffer_pipelines_agree_with_the_scalar_loop_and_call_the_data_plan
             "local ok, message = pcall(function() {source} end) table.insert(report, tostring(ok)) table.insert(report, tostring(message))"
         ));
     }
-    // Each chunk snapshots the alias global when it loads and takes one byte receiver from it
-    // (the sum's path); counts and extrema call the module functions. A chunk loaded after the
-    // alias is wrapped shows those accesses; one loaded after it is removed takes the scalar
-    // loop with the same results.
+    // Each chunk snapshots the alias global when it loads and takes one byte receiver from it;
+    // every recognized call runs on that receiver. A chunk loaded after the alias is wrapped
+    // shows that single access; one loaded after it is removed takes the scalar loop with the
+    // same results.
     let runtime = runtime();
     runtime
         .exec(
@@ -317,11 +317,11 @@ fn recognized_buffer_pipelines_agree_with_the_scalar_loop_and_call_the_data_plan
         .unwrap();
     let pipelines = "return sum[for x in buf[a:b] => x], #[for x in buf[a:b] if x > 3 => x], min[for x in buf[a:b] => x], #[for x in buf[a:b] => x]";
     runtime
-        .exec(&format!("local a, b = 1, 1000 local total, hot, least, n = (function() {pipelines} end)() assert(total == 2997 and hot == 428 and least == 0 and n == 1000, tostring(total) .. ' ' .. tostring(hot)) assert(calls == 3, 'the receiver for the sum, then count and min through the module: ' .. calls)"))
+        .exec(&format!("local a, b = 1, 1000 local total, hot, least, n = (function() {pipelines} end)() assert(total == 2997 and hot == 428 and least == 0 and n == 1000, tostring(total) .. ' ' .. tostring(hot)) assert(calls == 1, 'one receiver per chunk carries every recognized call: ' .. calls)"))
         .unwrap();
     runtime.exec("__l3i_data = nil").unwrap(); // A chunk snapshots the alias before its own statements run.
     runtime
-        .exec(&format!("local a, b = 1, 1000 local total, hot, least, n = (function() {pipelines} end)() assert(total == 2997 and hot == 428 and least == 0 and n == 1000) assert(calls == 3, 'no alias, no calls')"))
+        .exec(&format!("local a, b = 1, 1000 local total, hot, least, n = (function() {pipelines} end)() assert(total == 2997 and hot == 428 and least == 0 and n == 1000) assert(calls == 1, 'no alias, no receiver')"))
         .unwrap();
 }
 

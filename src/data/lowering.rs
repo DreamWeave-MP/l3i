@@ -146,6 +146,15 @@ impl Emit<'_, '_> {
         self.element_at(kind, cursor)
     }
 
+    /// Element `k` of an unrolled pass whose cursor has already advanced by `UNROLL` elements.
+    fn unrolled_element(&mut self, kind: Kind, k: usize, size: i64) -> IrOp {
+        let cursor = self.get_num(S_CURSOR);
+        let base = self.b.inst(IrCmd::NUM_TO_INT, &[cursor]);
+        let back = self.b.const_int(-((UNROLL - k) as i64 * size) as i32);
+        let offset = self.b.inst(IrCmd::ADD_INT, &[base, back]);
+        self.element_at(kind, offset)
+    }
+
     /// The element at an int byte offset as a double.
     fn element_at(&mut self, kind: Kind, cursor: IrOp) -> IrOp {
         let buffer = self.buffer();
@@ -304,9 +313,12 @@ impl NativeCodeHooks for KindLowering {
             }
 
             emit.b.begin_block(head);
-            if member == Member::Sum {
-                // Pure adds unroll: UNROLL elements per block with one cursor and one accumulator
-                // round trip through scratch, which is what bounds the single-step loop.
+            {
+                // UNROLL elements per pass with one cursor round trip through scratch (the
+                // single-step loop pays one per element, and that latency bounds it). Pure
+                // adds fold in one block; comparisons branch, which ends an IR block, so they
+                // chain one block per element with the cursor already advanced and the
+                // accumulator touched only on a hit or a replacement.
                 let unrolled = emit.block();
                 let single = emit.block();
                 let cursor = emit.get_num(S_CURSOR);
@@ -318,22 +330,63 @@ impl NativeCodeHooks for KindLowering {
 
                 emit.b.begin_block(unrolled);
                 let cursor = emit.get_num(S_CURSOR);
-                let base = emit.b.inst(IrCmd::NUM_TO_INT, &[cursor]);
-                let mut acc = emit.get_num(S_ACC);
-                for k in 0..UNROLL {
-                    let at = emit.b.const_int((k as i64 * size) as i32);
-                    let offset = emit.b.inst(IrCmd::ADD_INT, &[base, at]);
-                    let value = emit.element_at(*kind, offset);
-                    acc = emit.b.inst(IrCmd::ADD_NUM, &[acc, value]);
-                }
-                emit.set_num(S_ACC, acc);
                 let span = emit.b.const_double((UNROLL as i64 * size) as f64);
                 let next = emit.b.inst(IrCmd::ADD_NUM, &[cursor, span]);
                 emit.set_num(S_CURSOR, next);
-                emit.jump(head);
+                match member {
+                    Member::Sum => {
+                        let base = emit.b.inst(IrCmd::NUM_TO_INT, &[cursor]);
+                        let mut acc = emit.get_num(S_ACC);
+                        for k in 0..UNROLL {
+                            let at = emit.b.const_int((k as i64 * size) as i32);
+                            let offset = emit.b.inst(IrCmd::ADD_INT, &[base, at]);
+                            let value = emit.element_at(*kind, offset);
+                            acc = emit.b.inst(IrCmd::ADD_NUM, &[acc, value]);
+                        }
+                        emit.set_num(S_ACC, acc);
+                        emit.jump(head);
+                    }
+                    Member::Count(_) | Member::Min | Member::Max => {
+                        // Element k sits (UNROLL - k) elements before the advanced cursor.
+                        let chain: Vec<IrOp> = (0..UNROLL).map(|_| emit.block()).collect();
+                        emit.jump(chain[0]);
+                        for k in 0..UNROLL {
+                            let next_block = if k + 1 < UNROLL { chain[k + 1] } else { head };
+                            let hit = emit.block();
+                            emit.b.begin_block(chain[k]);
+                            let value = emit.unrolled_element(*kind, k, size);
+                            match member {
+                                Member::Count(comparison) => {
+                                    let threshold = emit.get_num(S_THRESHOLD);
+                                    let holds = emit.b.cond(condition(comparison));
+                                    emit.b.inst(IrCmd::JUMP_CMP_NUM, &[value, threshold, holds, hit, next_block]);
+                                    emit.b.begin_block(hit);
+                                    let acc = emit.get_num(S_ACC);
+                                    let one = emit.b.const_double(1.0);
+                                    let counted = emit.b.inst(IrCmd::ADD_NUM, &[acc, one]);
+                                    emit.set_num(S_ACC, counted);
+                                }
+                                _ => {
+                                    let acc = emit.get_num(S_ACC);
+                                    let better = emit.b.cond(if member == Member::Min {
+                                        IrCondition::Less
+                                    } else {
+                                        IrCondition::Greater
+                                    });
+                                    emit.b.inst(IrCmd::JUMP_CMP_NUM, &[value, acc, better, hit, next_block]);
+                                    emit.b.begin_block(hit);
+                                    let value = emit.unrolled_element(*kind, k, size);
+                                    emit.set_num(S_ACC, value);
+                                }
+                            }
+                            emit.jump(next_block);
+                        }
+                    }
+                }
 
                 emit.b.begin_block(single);
             }
+
             let cursor = emit.get_num(S_CURSOR);
             let end = emit.get_num(S_END);
             let more = emit.b.cond(IrCondition::Less);

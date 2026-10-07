@@ -101,7 +101,7 @@ fn case(
 fn setup(n: usize) -> String {
     format!(
         "n = {n} buf = buffer.create(n) for i = 0, n - 1 do buffer.writeu8(buf, i, (i * 37) % 251) end \
-         fbuf = buffer.create(n * 4) for i = 0, n - 1 do buffer.writef32(fbuf, i * 4, ((i * 37) % 251) / 7) end sel = data and data.selection(n)"
+         fbuf = buffer.create(n * 4) for i = 0, n - 1 do buffer.writef32(fbuf, i * 4, ((i * 37) % 251) / 7) end sel = data and data.selection(n) U8 = data and data.kind('u8')"
     )
 }
 
@@ -181,6 +181,38 @@ fn counts(c: &mut Criterion) {
             &setup,
             "local b, c = buf, 0 for i = 0, n - 1 do if buffer.readu8(b, i) > 127 then c += 1 end end return c",
             expected_count(n),
+        );
+        case(
+            &mut group,
+            "receiver countGt (IR loop under jit)",
+            true,
+            &setup,
+            "local K: dream_data_Kind = U8 local c = K:countGt(buf, 0, n, 127) return c",
+            expected_count(n),
+        );
+        group.finish();
+    }
+    for n in [256usize, 65536] {
+        let mut group = c.benchmark_group(format!("data_min_u8/{n}"));
+        group.throughput(Throughput::Elements(n as u64));
+        let setup = setup(n);
+        let expected = (0..n).map(|i| ((i * 37) % 251) as f64).fold(f64::INFINITY, f64::min);
+        case(&mut group, "explicit data.min", true, &setup, "return data.min(buf, 'u8', 0, n)", expected);
+        case(
+            &mut group,
+            "receiver min (IR loop under jit)",
+            true,
+            &setup,
+            "local K: dream_data_Kind = U8 local least = K:min(buf, 0, n) return least",
+            expected,
+        );
+        case(
+            &mut group,
+            "handwritten readu8 loop",
+            false,
+            &setup,
+            "local b, least = buf, nil for i = 0, n - 1 do local v = buffer.readu8(b, i) if least == nil or v < least then least = v end end return least",
+            expected,
         );
         group.finish();
     }
