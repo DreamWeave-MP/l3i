@@ -459,11 +459,64 @@ private:
             out += "local " + cursor + " = 0 ";
     }
 
+    // Everything a pipeline walk needs besides the stage list.
+    struct Emission
+    {
+        const Comprehension& node;
+        const Pipeline& pipeline;
+        ComprehensionSite& site;
+        std::string name;
+        std::string output;
+        std::string cursor;
+        bool scalar = false;
+        bool sized = false;       // A lone leading generator: allocate once its count is known.
+        bool needsCursor = false; // False only when the loop index is the output index.
+        bool directIndex = false;
+    };
+
+    // A slice source evaluated and bounded: the loop below reads `P_src[P_i]` or, for bytes,
+    // `buffer.readu8(P_src, P_i - 1)`. Representation specialization exists only for a leading
+    // generator: Analysis types it (bytes) or compilation dispatches on the runtime kind.
+    void sliceSetup(Text& out, const Stage& stage, const Clause& clause, ClauseSite& site, Emission& e, bool bytes, bool dynamic)
+    {
+        const std::string& prefix = stage.prefix;
+        out += "local " + prefix + "_src = ";
+        const size_t sourceBegin = out.size();
+        expression(out, clause.sliceSource, "({} :: {any})");
+        site.sliceSource = {sourceBegin, out.size()};
+        out += " local " + prefix + "_first = ";
+        const size_t firstBegin = out.size();
+        expression(out, clause.sliceFirst, "(1 :: number)");
+        site.sliceFirst = {firstBegin, out.size()};
+        out += " local " + prefix + "_last = ";
+        const size_t lastBegin = out.size();
+        expression(out, clause.sliceLast, "(0 :: number)");
+        site.sliceLast = {lastBegin, out.size()};
+        out += " ";
+        sliceChecks(out, prefix, clause.sliceSource, clause.sliceFirst, clause.sliceLast, bytes || dynamic);
+        if (dynamic)
+            out += "local " + prefix + "_len = 0 if " + prefix + "_kind == \"buffer\" then " + prefix + "_len = " + operations + "_buffer.len(" + prefix + "_src) else " + prefix + "_len = #" + prefix + "_src end ";
+        else
+            out += "local " + prefix + "_len = " + (bytes ? operations + "_buffer.len(" + prefix + "_src)" : "#" + prefix + "_src") + " ";
+        out += "if " + prefix + "_first < 1 then " + prefix + "_first = 1 end if " + prefix + "_last > " + prefix + "_len then " + prefix + "_last = " + prefix + "_len end ";
+        if (e.sized)
+        {
+            out += "local " + prefix + "_n = 0 if " + prefix + "_last >= " + prefix + "_first then " + prefix + "_n = " + prefix + "_last - " + prefix + "_first + 1 end ";
+            allocation(out, e.output, e.cursor, e.scalar, e.needsCursor, prefix + "_n");
+        }
+    }
+
+    void sliceLoop(Text& out, const Stage& stage, const Clause& clause, ClauseSite& site, bool bytes)
+    {
+        const std::string& prefix = stage.prefix;
+        out += "for " + prefix + "_i = " + prefix + "_first, " + prefix + "_last do local ";
+        bindings(out, clause, site);
+        out += bytes ? " = " + operations + "_buffer.readu8(" + prefix + "_src, " + prefix + "_i - 1) " : " = " + prefix + "_src[" + prefix + "_i] ";
+    }
+
     // One generator stage: evaluate its source once, open the loop, declare the bindings.
-    // `sized` generators (a lone leading generator) emit the result allocation between the
-    // length computation and the loop.
-    void generator(Text& out, const Stage& stage, const Clause& clause, ClauseSite& site, const std::string& name, bool sized,
-        const std::string& output, const std::string& cursor, bool scalar, bool needsCursor)
+    // Sized generators emit the result allocation between the length computation and the loop.
+    void generator(Text& out, const Stage& stage, const Clause& clause, ClauseSite& site, Emission& e)
     {
         const std::string& prefix = stage.prefix;
         switch (stage.kind)
@@ -481,45 +534,15 @@ private:
             if (clause.rangeArguments.size() == 2)
                 out += "local " + prefix + "_r2 = 1 ";
             out += "if " + prefix + "_r2 == 0 then " + operations + "_error(\"JSL range step must not be zero\") end for ";
-            bindings(out, clause, site, (sized ? name : prefix) + "_missing");
+            bindings(out, clause, site, (e.sized ? e.name : prefix) + "_missing");
             out += " = " + prefix + "_r0, " + prefix + "_r1, " + prefix + "_r2 do ";
             return;
         }
         case SourceKind::Slice:
         {
-            // Representation specialization exists only for a leading generator: Analysis
-            // types it (bytes) or compilation dispatches on the runtime kind (dynamic).
-            const bool bytes = sized && bufferGenerator(clause.sliceSource);
-            const bool dynamic = sized && dynamicGenerators && !bytes;
-            out += "local " + prefix + "_src = ";
-            const size_t sourceBegin = out.size();
-            expression(out, clause.sliceSource, "({} :: {any})");
-            site.sliceSource = {sourceBegin, out.size()};
-            out += " local " + prefix + "_first = ";
-            const size_t firstBegin = out.size();
-            expression(out, clause.sliceFirst, "(1 :: number)");
-            site.sliceFirst = {firstBegin, out.size()};
-            out += " local " + prefix + "_last = ";
-            const size_t lastBegin = out.size();
-            expression(out, clause.sliceLast, "(0 :: number)");
-            site.sliceLast = {lastBegin, out.size()};
-            out += " ";
-            sliceChecks(out, prefix, clause.sliceSource, clause.sliceFirst, clause.sliceLast, bytes || dynamic);
-            if (dynamic)
-                out += "local " + prefix + "_len = 0 if " + prefix + "_kind == \"buffer\" then " + prefix + "_len = " + operations + "_buffer.len(" + prefix + "_src) else " + prefix + "_len = #" + prefix + "_src end ";
-            else
-                out += "local " + prefix + "_len = " + (bytes ? operations + "_buffer.len(" + prefix + "_src)" : "#" + prefix + "_src") + " ";
-            out += "if " + prefix + "_first < 1 then " + prefix + "_first = 1 end if " + prefix + "_last > " + prefix + "_len then " + prefix + "_last = " + prefix + "_len end ";
-            if (sized)
-            {
-                out += "local " + prefix + "_n = 0 if " + prefix + "_last >= " + prefix + "_first then " + prefix + "_n = " + prefix + "_last - " + prefix + "_first + 1 end ";
-                allocation(out, output, cursor, scalar, needsCursor, prefix + "_n");
-            }
-            out += "for " + prefix + "_i = " + prefix + "_first, " + prefix + "_last do local ";
-            bindings(out, clause, site);
-            out += (bytes ? " = " + operations + "_buffer.readu8(" + prefix + "_src, " + prefix + "_i - 1) "
-                          : dynamic ? " = if " + prefix + "_kind == \"buffer\" then " + operations + "_buffer.readu8(" + prefix + "_src, " + prefix + "_i - 1) else " + prefix + "_src[" + prefix + "_i] "
-                                    : " = " + prefix + "_src[" + prefix + "_i] ");
+            const bool bytes = e.sized && bufferGenerator(clause.sliceSource);
+            sliceSetup(out, stage, clause, site, e, bytes, false);
+            sliceLoop(out, stage, clause, site, bytes);
             return;
         }
         case SourceKind::Zip:
@@ -538,8 +561,8 @@ private:
             if (clause.zipStrict)
                 for (size_t argument = 1; argument < clause.zipArguments.size(); ++argument)
                     out += "if " + prefix + "_len" + std::to_string(argument) + " ~= " + prefix + "_n then " + operations + "_error(\"JSL zipStrict inputs must have equal lengths\") end ";
-            if (sized)
-                allocation(out, output, cursor, scalar, needsCursor, prefix + "_n");
+            if (e.sized)
+                allocation(out, e.output, e.cursor, e.scalar, e.needsCursor, prefix + "_n");
             out += "for " + prefix + "_i = 1, " + prefix + "_n do local ";
             bindings(out, clause, site);
             out += " = ";
@@ -559,8 +582,8 @@ private:
                 stage.kind == SourceKind::Enumerate ? clause.enumerateArgument : clause.expression,
                 "({} :: {any})", clause.expressionSuffix);
             out += " local " + prefix + "_len = #" + prefix + "_src ";
-            if (sized)
-                allocation(out, output, cursor, scalar, needsCursor, prefix + "_len");
+            if (e.sized)
+                allocation(out, e.output, e.cursor, e.scalar, e.needsCursor, prefix + "_len");
             out += "for " + prefix + "_i = 1, " + prefix + "_len do local ";
             if (stage.kind == SourceKind::Enumerate)
             {
@@ -569,7 +592,7 @@ private:
             }
             else
             {
-                bindings(out, clause, site, (sized ? name : prefix) + "_missing");
+                bindings(out, clause, site, (e.sized ? e.name : prefix) + "_missing");
                 out += " = " + prefix + "_src[" + prefix + "_i] ";
             }
             return;
@@ -577,13 +600,69 @@ private:
         }
     }
 
+    // The consumer's per-element step: the projection, then accumulate, count or store.
+    void step(Text& out, Emission& e)
+    {
+        projection(out, e.node, e.name, e.site);
+        if (e.needsCursor)
+            out += e.cursor + " += " + (e.pipeline.consumer == Consumer::Sum ? e.name + "_value " : "1 ");
+        if (!e.scalar)
+            out += e.output + "[" + (e.directIndex ? e.pipeline.stages.front().prefix + "_i" : e.cursor) + "] = " + e.name + "_value ";
+    }
+
+    // Stages `from` onward, then the step, then the closers: a recursive walk so that one
+    // stage may emit the rest of the pipeline under more than one representation.
+    void stages(Text& out, Emission& e, size_t from)
+    {
+        if (from == e.pipeline.stages.size())
+        {
+            step(out, e);
+            return;
+        }
+        const Stage& stage = e.pipeline.stages[from];
+        const Clause& clause = e.node.clauses[stage.clause];
+        ClauseSite& site = e.site.clauses[stage.clause];
+        // Synthetic scaffolding of a clause is attributed to that clause; the loop closers to
+        // the closing bracket. Copied user expressions keep their own provenance.
+        out.anchor = clause.range;
+        if (!stage.generator)
+        {
+            out += "if ";
+            site.expression = expression(out, clause.expression, "true", clause.expressionSuffix);
+            out += " then ";
+            stages(out, e, from + 1);
+            out.anchor = e.node.close;
+            out += "end ";
+            return;
+        }
+        if (stage.kind == SourceKind::Slice && e.sized && dynamicGenerators && !bufferGenerator(clause.sliceSource))
+        {
+            // Compilation has no types: dispatch on the runtime representation once, outside
+            // the loop, and traverse each representation with its own specialized loop.
+            sliceSetup(out, stage, clause, site, e, false, true);
+            out += "if " + stage.prefix + "_kind == \"buffer\" then ";
+            sliceLoop(out, stage, clause, site, true);
+            stages(out, e, from + 1);
+            out.anchor = e.node.close;
+            out += "end else ";
+            out.anchor = clause.range;
+            sliceLoop(out, stage, clause, site, false);
+            stages(out, e, from + 1);
+            out.anchor = e.node.close;
+            out += "end end ";
+            return;
+        }
+        generator(out, stage, clause, site, e);
+        stages(out, e, from + 1);
+        out.anchor = e.node.close;
+        out += "end ";
+    }
+
     Text comprehension(size_t index, bool count, bool sum)
     {
         const Comprehension& node = document.comprehensions[index];
         const std::string name = stem(node.open.begin);
         const Pipeline pipeline = plan(node, name, count, sum);
-        const bool scalar = pipeline.consumer != Consumer::Materialize;
-        const std::string output = name + "_out", cursor = name + (sum ? "_sum" : "_n");
         Text out;
         out.anchor = {sum ? node.sumPrefix.begin : count ? node.lengthPrefix.begin : node.range.begin, node.range.end};
         if (node.postfix)
@@ -600,37 +679,16 @@ private:
         // is the output index and no cursor is needed. Everything else counts as it goes.
         const bool single = pipeline.single();
         const SourceKind first = single ? pipeline.stages.front().kind : SourceKind::Plain;
-        const bool sized = single && first != SourceKind::Range;
-        const bool directIndex = single && node.clauses.size() == 1 && first != SourceKind::Range && first != SourceKind::Slice;
-        const bool needsCursor = scalar || !directIndex;
-        if (!sized)
-            allocation(out, output, cursor, scalar, needsCursor);
-        for (const Stage& stage : pipeline.stages)
-        {
-            const Clause& clause = node.clauses[stage.clause];
-            ClauseSite& clauseSite = site.clauses[stage.clause];
-            // Synthetic scaffolding of a clause is attributed to that clause; the loop closers to
-            // the closing bracket. Copied user expressions keep their own provenance.
-            out.anchor = clause.range;
-            if (!stage.generator)
-            {
-                out += "if ";
-                clauseSite.expression = expression(out, clause.expression, "true", clause.expressionSuffix);
-                out += " then ";
-                continue;
-            }
-            generator(out, stage, clause, clauseSite, name, sized, output, cursor, scalar, needsCursor);
-        }
-        projection(out, node, name, site);
-        if (needsCursor)
-            out += cursor + " += " + (sum ? name + "_value " : "1 ");
-        if (!scalar)
-            out += output + "[" + (directIndex ? pipeline.stages.front().prefix + "_i" : cursor) + "] = " + name + "_value ";
+        Emission e{node, pipeline, site, name, name + "_out", name + (sum ? "_sum" : "_n")};
+        e.scalar = pipeline.consumer != Consumer::Materialize;
+        e.sized = single && first != SourceKind::Range;
+        e.directIndex = single && node.clauses.size() == 1 && first != SourceKind::Range && first != SourceKind::Slice;
+        e.needsCursor = e.scalar || !e.directIndex;
+        if (!e.sized)
+            allocation(out, e.output, e.cursor, e.scalar, e.needsCursor);
+        stages(out, e, 0);
         out.anchor = node.close;
-        for (size_t i = 0; i < node.clauses.size(); ++i)
-            out += "end ";
-        out.anchor = node.close;
-        out += "return " + (scalar ? cursor : output) + " end)()";
+        out += "return " + (e.scalar ? e.cursor : e.output) + " end)()";
         site.call = {callBegin, out.size()};
         if (node.postfix)
             out += "]";

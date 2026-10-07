@@ -415,6 +415,20 @@ guard plus the index binding, not wrapper overhead. The slice rows expose a real
 fused slice sum executes 30% more CPU instructions than the handwritten range reduction and more
 than materializing the slice first. The cause is in the compile-time lowering, which has no type
 information and dispatches on the source representation inside the loop (`if kind == "buffer"
-then buffer.readu8(...) else src[i]`) for every element. The fix is to hoist that dispatch out
-of the loop; it is the next lowering commit.
+then buffer.readu8(...) else src[i]`) for every element.
+
+Hoisting that dispatch fixed it. The compile-time lowering now tests the representation once
+and emits one specialized loop per representation (the rest of the pipeline is emitted under
+each; Analysis and tooling, which have types or no dispatch, are unchanged). Remeasured on the
+same harness:
+
+| Case | CPU instructions / call | µs |
+|---|---:|---:|
+| Fused slice sum L3i | 401,004 | 32.4 |
+| Handwritten fused checked slice sum | 401,202 | 34.3 |
+| Materialized slice, then checked sum | 437,693 | 38.3 |
+
+The fused form is now at parity with the handwritten range reduction (198 fewer instructions:
+the handwritten baseline recomputes `typeof` through a global lookup) and 8% below materializing
+first, with the slice allocation gone.
 
