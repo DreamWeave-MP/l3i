@@ -161,11 +161,11 @@ public:
             result += "local " + operations + "_buffer = buffer ";
             ++preludeStatements;
         }
+        // Sized materialization is the one shape that preallocates (see Pipeline::single).
         const bool needsTable = std::any_of(document.comprehensions.begin(), document.comprehensions.end(), [&](const Comprehension& node) {
-            const size_t generators = std::count_if(node.clauses.begin(), node.clauses.end(),
-                [](const Clause& clause) { return clause.kind == ClauseKind::Generator; });
-            return node.sumPrefix.empty() && (!fuse || node.lengthPrefix.empty()) && generators == 1 &&
-                !node.clauses.empty() && node.clauses.front().rangeArguments.empty();
+            const Pipeline pipeline = plan(node, {}, fuse && !node.lengthPrefix.empty(), !node.sumPrefix.empty());
+            return pipeline.consumer == Consumer::Materialize && pipeline.single() &&
+                pipeline.stages.front().kind != SourceKind::Range;
         });
         if (needsTable)
         {
@@ -370,11 +370,219 @@ private:
         }
     }
 
+    // What a generator iterates. Every surface source form is one of these; lowering a
+    // pipeline is then one walk over its stages rather than one emitter per combination.
+    enum class SourceKind { Plain, Enumerate, Range, Zip, Slice };
+
+    static SourceKind kindOf(const Clause& clause)
+    {
+        if (!clause.rangeArguments.empty()) return SourceKind::Range;
+        if (!clause.sliceSource.empty()) return SourceKind::Slice;
+        if (!clause.zipArguments.empty()) return SourceKind::Zip;
+        if (!clause.enumerateArgument.empty()) return SourceKind::Enumerate;
+        return SourceKind::Plain;
+    }
+
+    enum class Consumer { Materialize, Count, Sum };
+
+    // One clause of the pipeline: a generator over a source, or a filter.
+    struct Stage
+    {
+        size_t clause = 0; // Index into the comprehension's clauses.
+        bool generator = false;
+        SourceKind kind = SourceKind::Plain; // Generators only.
+        std::string prefix;                  // Generators only: the loop's generated name stem.
+    };
+
+    // The collection pipeline a comprehension denotes: ordered stages feeding one consumer.
+    struct Pipeline
+    {
+        Consumer consumer = Consumer::Materialize;
+        std::vector<Stage> stages;
+        size_t generators = 0;
+        // One generator leading the pipeline: its element count is known before allocation
+        // and (with no filters) its loop index is the output index.
+        bool single() const { return generators == 1 && !stages.empty() && stages.front().generator; }
+    };
+
+    Pipeline plan(const Comprehension& node, const std::string& name, bool count, bool sum) const
+    {
+        Pipeline pipeline;
+        pipeline.consumer = sum ? Consumer::Sum : count ? Consumer::Count : Consumer::Materialize;
+        for (size_t i = 0; i < node.clauses.size(); ++i)
+        {
+            const Clause& clause = node.clauses[i];
+            Stage stage;
+            stage.clause = i;
+            stage.generator = clause.kind == ClauseKind::Generator;
+            if (stage.generator)
+            {
+                stage.kind = kindOf(clause);
+                stage.prefix = name + "_g" + std::to_string(pipeline.generators++);
+            }
+            pipeline.stages.push_back(std::move(stage));
+        }
+        return pipeline;
+    }
+
+    // The loop variable declaration for a generator: its user bindings copied verbatim, or
+    // the recovery-only placeholder when a binding is missing and a placeholder is requested.
+    void bindings(Text& out, const Clause& clause, ClauseSite& site, const std::string& missing = {})
+    {
+        if (clause.bindings.size() > 1)
+        {
+            for (size_t i = 0; i < clause.bindings.size(); ++i)
+            {
+                if (i) out += ", ";
+                const size_t begin = out.size();
+                out.copy(source, clause.bindings[i]);
+                site.bindings.push_back({begin, out.size()});
+            }
+            site.binding = site.bindings.front();
+            return;
+        }
+        const size_t begin = out.size();
+        if (clause.binding.empty() && !missing.empty()) out += missing;
+        else out.copy(source, clause.binding);
+        site.binding = {begin, out.size()};
+        site.bindings.push_back(site.binding);
+    }
+
+    // The result allocation and cursor, emitted once the element count is known (sized) or
+    // up front when it is not.
+    void allocation(Text& out, const std::string& output, const std::string& cursor, bool scalar, bool needsCursor,
+        const std::string& size = {})
+    {
+        if (!scalar)
+            out += "local " + output + " = " + (size.empty() ? "{} " : operations + "_table_create(" + size + ") :: typeof({}) ");
+        if (needsCursor)
+            out += "local " + cursor + " = 0 ";
+    }
+
+    // One generator stage: evaluate its source once, open the loop, declare the bindings.
+    // `sized` generators (a lone leading generator) emit the result allocation between the
+    // length computation and the loop.
+    void generator(Text& out, const Stage& stage, const Clause& clause, ClauseSite& site, const std::string& name, bool sized,
+        const std::string& output, const std::string& cursor, bool scalar, bool needsCursor)
+    {
+        const std::string& prefix = stage.prefix;
+        switch (stage.kind)
+        {
+        case SourceKind::Range:
+        {
+            for (size_t i = 0; i < clause.rangeArguments.size(); ++i)
+            {
+                out += "local " + prefix + "_r" + std::to_string(i) + " = ";
+                const size_t begin = out.size();
+                expression(out, clause.rangeArguments[i], "(0 :: number)");
+                site.rangeArguments.push_back({begin, out.size()});
+                out += " ";
+            }
+            if (clause.rangeArguments.size() == 2)
+                out += "local " + prefix + "_r2 = 1 ";
+            out += "if " + prefix + "_r2 == 0 then " + operations + "_error(\"JSL range step must not be zero\") end for ";
+            bindings(out, clause, site, (sized ? name : prefix) + "_missing");
+            out += " = " + prefix + "_r0, " + prefix + "_r1, " + prefix + "_r2 do ";
+            return;
+        }
+        case SourceKind::Slice:
+        {
+            // Representation specialization exists only for a leading generator: Analysis
+            // types it (bytes) or compilation dispatches on the runtime kind (dynamic).
+            const bool bytes = sized && bufferGenerator(clause.sliceSource);
+            const bool dynamic = sized && dynamicGenerators && !bytes;
+            out += "local " + prefix + "_src = ";
+            const size_t sourceBegin = out.size();
+            expression(out, clause.sliceSource, "({} :: {any})");
+            site.sliceSource = {sourceBegin, out.size()};
+            out += " local " + prefix + "_first = ";
+            const size_t firstBegin = out.size();
+            expression(out, clause.sliceFirst, "(1 :: number)");
+            site.sliceFirst = {firstBegin, out.size()};
+            out += " local " + prefix + "_last = ";
+            const size_t lastBegin = out.size();
+            expression(out, clause.sliceLast, "(0 :: number)");
+            site.sliceLast = {lastBegin, out.size()};
+            out += " ";
+            sliceChecks(out, prefix, clause.sliceSource, clause.sliceFirst, clause.sliceLast, bytes || dynamic);
+            if (dynamic)
+                out += "local " + prefix + "_len = 0 if " + prefix + "_kind == \"buffer\" then " + prefix + "_len = " + operations + "_buffer.len(" + prefix + "_src) else " + prefix + "_len = #" + prefix + "_src end ";
+            else
+                out += "local " + prefix + "_len = " + (bytes ? operations + "_buffer.len(" + prefix + "_src)" : "#" + prefix + "_src") + " ";
+            out += "if " + prefix + "_first < 1 then " + prefix + "_first = 1 end if " + prefix + "_last > " + prefix + "_len then " + prefix + "_last = " + prefix + "_len end ";
+            if (sized)
+            {
+                out += "local " + prefix + "_n = 0 if " + prefix + "_last >= " + prefix + "_first then " + prefix + "_n = " + prefix + "_last - " + prefix + "_first + 1 end ";
+                allocation(out, output, cursor, scalar, needsCursor, prefix + "_n");
+            }
+            out += "for " + prefix + "_i = " + prefix + "_first, " + prefix + "_last do local ";
+            bindings(out, clause, site);
+            out += (bytes ? " = " + operations + "_buffer.readu8(" + prefix + "_src, " + prefix + "_i - 1) "
+                          : dynamic ? " = if " + prefix + "_kind == \"buffer\" then " + operations + "_buffer.readu8(" + prefix + "_src, " + prefix + "_i - 1) else " + prefix + "_src[" + prefix + "_i] "
+                                    : " = " + prefix + "_src[" + prefix + "_i] ");
+            return;
+        }
+        case SourceKind::Zip:
+        {
+            for (size_t argument = 0; argument < clause.zipArguments.size(); ++argument)
+            {
+                out += "local " + prefix + "_src" + std::to_string(argument) + " = ";
+                const size_t begin = out.size();
+                expression(out, clause.zipArguments[argument], "({} :: {any})");
+                site.zipArguments.push_back({begin, out.size()});
+                out += " local " + prefix + "_len" + std::to_string(argument) + " = #" + prefix + "_src" + std::to_string(argument) + " ";
+            }
+            out += "local " + prefix + "_n = " + prefix + "_len0 ";
+            for (size_t argument = 1; argument < clause.zipArguments.size(); ++argument)
+                out += "if " + prefix + "_len" + std::to_string(argument) + " < " + prefix + "_n then " + prefix + "_n = " + prefix + "_len" + std::to_string(argument) + " end ";
+            if (clause.zipStrict)
+                for (size_t argument = 1; argument < clause.zipArguments.size(); ++argument)
+                    out += "if " + prefix + "_len" + std::to_string(argument) + " ~= " + prefix + "_n then " + operations + "_error(\"JSL zipStrict inputs must have equal lengths\") end ";
+            if (sized)
+                allocation(out, output, cursor, scalar, needsCursor, prefix + "_n");
+            out += "for " + prefix + "_i = 1, " + prefix + "_n do local ";
+            bindings(out, clause, site);
+            out += " = ";
+            for (size_t argument = 0; argument < clause.zipArguments.size(); ++argument)
+            {
+                if (argument) out += ", ";
+                out += prefix + "_src" + std::to_string(argument) + "[" + prefix + "_i]";
+            }
+            out += " ";
+            return;
+        }
+        case SourceKind::Enumerate:
+        case SourceKind::Plain:
+        {
+            out += "local " + prefix + "_src = ";
+            site.expression = expression(out,
+                stage.kind == SourceKind::Enumerate ? clause.enumerateArgument : clause.expression,
+                "({} :: {any})", clause.expressionSuffix);
+            out += " local " + prefix + "_len = #" + prefix + "_src ";
+            if (sized)
+                allocation(out, output, cursor, scalar, needsCursor, prefix + "_len");
+            out += "for " + prefix + "_i = 1, " + prefix + "_len do local ";
+            if (stage.kind == SourceKind::Enumerate)
+            {
+                bindings(out, clause, site);
+                out += " = " + prefix + "_i, " + prefix + "_src[" + prefix + "_i] ";
+            }
+            else
+            {
+                bindings(out, clause, site, (sized ? name : prefix) + "_missing");
+                out += " = " + prefix + "_src[" + prefix + "_i] ";
+            }
+            return;
+        }
+        }
+    }
+
     Text comprehension(size_t index, bool count, bool sum)
     {
         const Comprehension& node = document.comprehensions[index];
         const std::string name = stem(node.open.begin);
-        const bool scalar = count || sum;
+        const Pipeline pipeline = plan(node, name, count, sum);
+        const bool scalar = pipeline.consumer != Consumer::Materialize;
         const std::string output = name + "_out", cursor = name + (sum ? "_sum" : "_n");
         Text out;
         out.anchor = {sum ? node.sumPrefix.begin : count ? node.lengthPrefix.begin : node.range.begin, node.range.end};
@@ -386,352 +594,45 @@ private:
         ComprehensionSite site;
         site.comprehension = index;
         site.clauses.resize(node.clauses.size());
-        const bool exact = node.clauses.size() == 1 && node.clauses[0].kind == ClauseKind::Generator;
-        size_t generators = 0;
-        for (const Clause& clause : node.clauses)
-            generators += clause.kind == ClauseKind::Generator;
-        if (generators != 1 && !scalar)
+
+        // A lone leading generator knows its element count before allocating, except a
+        // numeric range, which keeps the growing-table shape; with no filters its loop index
+        // is the output index and no cursor is needed. Everything else counts as it goes.
+        const bool single = pipeline.single();
+        const SourceKind first = single ? pipeline.stages.front().kind : SourceKind::Plain;
+        const bool sized = single && first != SourceKind::Range;
+        const bool directIndex = single && node.clauses.size() == 1 && first != SourceKind::Range && first != SourceKind::Slice;
+        const bool needsCursor = scalar || !directIndex;
+        // Legacy anchor placement differs by leading source kind; a later commit normalizes it.
+        const bool anchoredClauses = !single || first == SourceKind::Zip || first == SourceKind::Plain || first == SourceKind::Enumerate;
+        if (!sized)
+            allocation(out, output, cursor, scalar, needsCursor);
+        for (const Stage& stage : pipeline.stages)
         {
-            out += "local " + output + " = {} ";
-        }
-        // The one-source cases need the source before allocation. Emit them separately
-        // to preserve the proven bytecode shape, not a second recognition path.
-        if (generators == 1 && !node.clauses.front().rangeArguments.empty())
-        {
-            const Clause& generator = node.clauses.front();
-            if (!scalar)
-                out += "local " + output + " = {} ";
-            out += "local " + cursor + " = 0 ";
-            const std::string prefix = name + "_g0";
-            for (size_t i = 0; i < generator.rangeArguments.size(); ++i)
+            const Clause& clause = node.clauses[stage.clause];
+            ClauseSite& clauseSite = site.clauses[stage.clause];
+            if (!stage.generator)
             {
-                out += "local " + prefix + "_r" + std::to_string(i) + " = ";
-                const size_t begin = out.size();
-                expression(out, generator.rangeArguments[i], "(0 :: number)");
-                site.clauses[0].rangeArguments.push_back({begin, out.size()});
-                out += " ";
-            }
-            if (generator.rangeArguments.size() == 2)
-                out += "local " + prefix + "_r2 = 1 ";
-            out += "if " + prefix + "_r2 == 0 then " + operations + "_error(\"JSL range step must not be zero\") end for ";
-            const size_t binding = out.size();
-            if (generator.binding.empty()) out += name + "_missing";
-            else out.copy(source, generator.binding);
-            site.clauses[0].binding = {binding, out.size()};
-            out += " = " + prefix + "_r0, " + prefix + "_r1, " + prefix + "_r2 do ";
-            for (size_t i = 1; i < node.clauses.size(); ++i)
-            {
+                if (!single) out.anchor = clause.range;
+                else if (anchoredClauses) out.anchor = clause.expression;
                 out += "if ";
-                site.clauses[i].expression = expression(out, node.clauses[i].expression, "true", node.clauses[i].expressionSuffix);
+                clauseSite.expression = expression(out, clause.expression, "true", clause.expressionSuffix);
                 out += " then ";
+                continue;
             }
-            projection(out, node, name, site);
-            out += cursor + " += " + (sum ? name + "_value " : "1 ");
-            if (!scalar)
-                out += output + "[" + cursor + "] = " + name + "_value ";
-            for (size_t i = 1; i < node.clauses.size(); ++i)
-                out += "end ";
-            out += "end ";
-        }
-        else if (generators == 1 && !node.clauses.front().sliceSource.empty())
-        {
-            const Clause& generator = node.clauses.front();
-            const bool bytes = bufferGenerator(generator.sliceSource);
-            const bool dynamic = dynamicGenerators && !bytes;
-            const std::string prefix = name + "_g0";
-            out.anchor = generator.range;
-            out += "local " + prefix + "_src = ";
-            const size_t sourceBegin = out.size();
-            expression(out, generator.sliceSource, "({} :: {any})");
-            site.clauses[0].sliceSource = {sourceBegin, out.size()};
-            out += " local " + prefix + "_first = ";
-            const size_t firstBegin = out.size();
-            expression(out, generator.sliceFirst, "(1 :: number)");
-            site.clauses[0].sliceFirst = {firstBegin, out.size()};
-            out += " local " + prefix + "_last = ";
-            const size_t lastBegin = out.size();
-            expression(out, generator.sliceLast, "(0 :: number)");
-            site.clauses[0].sliceLast = {lastBegin, out.size()};
-            out += " ";
-            sliceChecks(out, prefix, generator.sliceSource, generator.sliceFirst, generator.sliceLast, bytes || dynamic);
-            if (dynamic)
-                out += "local " + prefix + "_len = 0 if " + prefix + "_kind == \"buffer\" then " + prefix + "_len = " + operations + "_buffer.len(" + prefix + "_src) else " + prefix + "_len = #" + prefix + "_src end ";
-            else
-                out += "local " + prefix + "_len = " + (bytes ? operations + "_buffer.len(" + prefix + "_src)" : "#" + prefix + "_src") + " ";
-            out += "if " + prefix + "_first < 1 then " + prefix + "_first = 1 end if " + prefix + "_last > " + prefix + "_len then " + prefix + "_last = " + prefix + "_len end local " + prefix + "_n = 0 if " + prefix + "_last >= " + prefix + "_first then " + prefix + "_n = " + prefix + "_last - " + prefix + "_first + 1 end ";
-            if (!scalar)
-                out += "local " + output + " = " + operations + "_table_create(" + prefix + "_n) :: typeof({}) ";
-            if (!exact || scalar || !generator.sliceSource.empty())
-                out += "local " + cursor + " = 0 ";
-            out += "for " + prefix + "_i = " + prefix + "_first, " + prefix + "_last do local ";
-            const size_t binding = out.size();
-            out.copy(source, generator.binding);
-            site.clauses[0].binding = {binding, out.size()};
-            site.clauses[0].bindings.push_back(site.clauses[0].binding);
-            out += (bytes ? " = " + operations + "_buffer.readu8(" + prefix + "_src, " + prefix + "_i - 1) "
-                          : dynamic ? " = if " + prefix + "_kind == \"buffer\" then " + operations + "_buffer.readu8(" + prefix + "_src, " + prefix + "_i - 1) else " + prefix + "_src[" + prefix + "_i] "
-                                    : " = " + prefix + "_src[" + prefix + "_i] ");
-            for (size_t i = 1; i < node.clauses.size(); ++i)
-            {
-                out += "if ";
-                site.clauses[i].expression = expression(out, node.clauses[i].expression, "true", node.clauses[i].expressionSuffix);
-                out += " then ";
-            }
-            projection(out, node, name, site);
-            if (!exact || scalar || !generator.sliceSource.empty())
-                out += cursor + " += " + (sum ? name + "_value " : "1 ");
-            if (!scalar)
-                out += output + "[" + (exact && generator.sliceSource.empty() ? prefix + "_i" : cursor) + "] = " + name + "_value ";
-            for (size_t i = 1; i < node.clauses.size(); ++i) out += "end ";
-            out += "end ";
-        }
-        else if (generators == 1 && !node.clauses.front().zipArguments.empty())
-        {
-            const Clause& generator = node.clauses.front();
-            const std::string prefix = name + "_g0";
-            out.anchor = generator.range;
-            for (size_t argument = 0; argument < generator.zipArguments.size(); ++argument)
-            {
-                out += "local " + prefix + "_src" + std::to_string(argument) + " = ";
-                const size_t begin = out.size();
-                expression(out, generator.zipArguments[argument], "({} :: {any})");
-                site.clauses[0].zipArguments.push_back({begin, out.size()});
-                out += " local " + prefix + "_len" + std::to_string(argument) + " = #" + prefix + "_src" + std::to_string(argument) + " ";
-            }
-            out += "local " + prefix + "_n = " + prefix + "_len0 ";
-            for (size_t argument = 1; argument < generator.zipArguments.size(); ++argument)
-                out += "if " + prefix + "_len" + std::to_string(argument) + " < " + prefix + "_n then " + prefix + "_n = " + prefix + "_len" + std::to_string(argument) + " end ";
-            if (generator.zipStrict)
-                for (size_t argument = 1; argument < generator.zipArguments.size(); ++argument)
-                    out += "if " + prefix + "_len" + std::to_string(argument) + " ~= " + prefix + "_n then " + operations + "_error(\"JSL zipStrict inputs must have equal lengths\") end ";
-            if (!scalar)
-                out += "local " + output + " = " + operations + "_table_create(" + prefix + "_n) :: typeof({}) ";
-            if (!exact || scalar)
-                out += "local " + cursor + " = 0 ";
-            out += "for " + prefix + "_i = 1, " + prefix + "_n do local ";
-            for (size_t binding = 0; binding < generator.bindings.size(); ++binding)
-            {
-                if (binding) out += ", ";
-                const size_t begin = out.size();
-                out.copy(source, generator.bindings[binding]);
-                site.clauses[0].bindings.push_back({begin, out.size()});
-            }
-            site.clauses[0].binding = site.clauses[0].bindings.front();
-            out += " = ";
-            for (size_t argument = 0; argument < generator.zipArguments.size(); ++argument)
-            {
-                if (argument) out += ", ";
-                out += prefix + "_src" + std::to_string(argument) + "[" + prefix + "_i]";
-            }
-            out += " ";
-            for (size_t i = 1; i < node.clauses.size(); ++i)
-            {
-                out.anchor = node.clauses[i].expression;
-                out += "if ";
-                site.clauses[i].expression = expression(out, node.clauses[i].expression, "true", node.clauses[i].expressionSuffix);
-                out += " then ";
-            }
-            projection(out, node, name, site);
-            if (!exact || scalar)
-                out += cursor + " += " + (sum ? name + "_value " : "1 ");
-            if (!scalar)
-                out += output + "[" + (exact ? prefix + "_i" : cursor) + "] = " + name + "_value ";
-            out.anchor = node.close;
-            for (size_t i = 1; i < node.clauses.size(); ++i) out += "end ";
-            out += "end ";
-        }
-        else if (generators == 1)
-        {
-            const Clause& generator = node.clauses.front();
-            out.anchor = generator.range;
-            out += "local " + name + "_g0_src = ";
-            site.clauses[0].expression = expression(out,
-                generator.enumerateArgument.empty() ? generator.expression : generator.enumerateArgument,
-                "({} :: {any})", generator.expressionSuffix);
-            out += " local " + name + "_g0_len = #" + name + "_g0_src ";
-            if (!scalar)
-                out += "local " + output + " = " + operations + "_table_create(" + name + "_g0_len) :: typeof({}) ";
-            if (!exact || scalar)
-                out += "local " + cursor + " = 0 ";
-            out += "for " + name + "_g0_i = 1, " + name + "_g0_len do local ";
-            if (!generator.enumerateArgument.empty())
-            {
-                for (size_t i = 0; i < generator.bindings.size(); ++i)
-                {
-                    if (i) out += ", ";
-                    const size_t begin = out.size();
-                    out.copy(source, generator.bindings[i]);
-                    site.clauses[0].bindings.push_back({begin, out.size()});
-                }
-                site.clauses[0].binding = site.clauses[0].bindings.front();
-                out += " = " + name + "_g0_i, " + name + "_g0_src[" + name + "_g0_i] ";
-            }
-            else
-            {
-                const size_t binding = out.size();
-                if (generator.binding.empty())
-                    out += name + "_missing";
-                else
-                    out.copy(source, generator.binding);
-                site.clauses[0].binding = {binding, out.size()};
-                site.clauses[0].bindings.push_back(site.clauses[0].binding);
-                out += " = " + name + "_g0_src[" + name + "_g0_i] ";
-            }
-            for (size_t i = 1; i < node.clauses.size(); ++i)
-            {
-                out.anchor = node.clauses[i].expression;
-                out += "if ";
-                site.clauses[i].expression = expression(out, node.clauses[i].expression, "true", node.clauses[i].expressionSuffix);
-                out += " then ";
-            }
-            projection(out, node, name, site);
-            if (!exact || scalar)
-                out += cursor + " += " + (sum ? name + "_value " : "1 ");
-            if (!scalar)
-                out += output + "[" + (exact ? name + "_g0_i" : cursor) + "] = " + name + "_value ";
-            out.anchor = node.close;
-            for (size_t i = 1; i < node.clauses.size(); ++i)
-                out += "end ";
-            out += "end ";
-        }
-        else
-        {
-            out += "local " + cursor + " = 0 ";
-            size_t level = 0;
-            for (size_t i = 0; i < node.clauses.size(); ++i)
-            {
-                const Clause& clause = node.clauses[i];
+            if (!single || first != SourceKind::Range)
                 out.anchor = clause.range;
-                if (clause.kind == ClauseKind::Filter)
-                {
-                    out += "if ";
-                    site.clauses[i].expression = expression(out, clause.expression, "true", clause.expressionSuffix);
-                    out += " then ";
-                    continue;
-                }
-                const std::string prefix = name + "_g" + std::to_string(level++);
-                if (!clause.rangeArguments.empty())
-                {
-                    for (size_t argument = 0; argument < clause.rangeArguments.size(); ++argument)
-                    {
-                        out += "local " + prefix + "_r" + std::to_string(argument) + " = ";
-                        const size_t begin = out.size();
-                        expression(out, clause.rangeArguments[argument], "(0 :: number)");
-                        site.clauses[i].rangeArguments.push_back({begin, out.size()});
-                        out += " ";
-                    }
-                    if (clause.rangeArguments.size() == 2) out += "local " + prefix + "_r2 = 1 ";
-                    out += "if " + prefix + "_r2 == 0 then " + operations + "_error(\"JSL range step must not be zero\") end for ";
-                }
-                else if (!clause.sliceSource.empty())
-                {
-                    out += "local " + prefix + "_src = ";
-                    const size_t sourceBegin = out.size();
-                    expression(out, clause.sliceSource, "({} :: {any})");
-                    site.clauses[i].sliceSource = {sourceBegin, out.size()};
-                    out += " local " + prefix + "_first = ";
-                    const size_t firstBegin = out.size();
-                    expression(out, clause.sliceFirst, "(1 :: number)");
-                    site.clauses[i].sliceFirst = {firstBegin, out.size()};
-                    out += " local " + prefix + "_last = ";
-                    const size_t lastBegin = out.size();
-                    expression(out, clause.sliceLast, "(0 :: number)");
-                    site.clauses[i].sliceLast = {lastBegin, out.size()};
-                    out += " ";
-                    sliceChecks(out, prefix, clause.sliceSource, clause.sliceFirst, clause.sliceLast);
-                    out += "local " + prefix + "_len = #" + prefix + "_src if " + prefix + "_first < 1 then " + prefix + "_first = 1 end if " + prefix + "_last > " + prefix + "_len then " + prefix + "_last = " + prefix + "_len end for " + prefix + "_i = " + prefix + "_first, " + prefix + "_last do local ";
-                }
-                else if (!clause.zipArguments.empty())
-                {
-                    for (size_t argument = 0; argument < clause.zipArguments.size(); ++argument)
-                    {
-                        out += "local " + prefix + "_src" + std::to_string(argument) + " = ";
-                        const size_t begin = out.size();
-                        expression(out, clause.zipArguments[argument], "({} :: {any})");
-                        site.clauses[i].zipArguments.push_back({begin, out.size()});
-                        out += " local " + prefix + "_len" + std::to_string(argument) + " = #" + prefix + "_src" + std::to_string(argument) + " ";
-                    }
-                    out += "local " + prefix + "_n = " + prefix + "_len0 ";
-                    for (size_t argument = 1; argument < clause.zipArguments.size(); ++argument)
-                        out += "if " + prefix + "_len" + std::to_string(argument) + " < " + prefix + "_n then " + prefix + "_n = " + prefix + "_len" + std::to_string(argument) + " end ";
-                    if (clause.zipStrict)
-                        for (size_t argument = 1; argument < clause.zipArguments.size(); ++argument)
-                            out += "if " + prefix + "_len" + std::to_string(argument) + " ~= " + prefix + "_n then " + operations + "_error(\"JSL zipStrict inputs must have equal lengths\") end ";
-                    out += "for " + prefix + "_i = 1, " + prefix + "_n do local ";
-                }
-                else
-                {
-                    out += "local " + prefix + "_src = ";
-                    site.clauses[i].expression = expression(out,
-                        clause.enumerateArgument.empty() ? clause.expression : clause.enumerateArgument,
-                        "({} :: {any})", clause.expressionSuffix);
-                    out += " local " + prefix + "_len = #" + prefix + "_src for " + prefix + "_i = 1, " + prefix + "_len do local ";
-                }
-                if (!clause.rangeArguments.empty())
-                {
-                    const size_t binding = out.size();
-                    if (clause.binding.empty()) out += prefix + "_missing";
-                    else out.copy(source, clause.binding);
-                    site.clauses[i].binding = {binding, out.size()};
-                    site.clauses[i].bindings.push_back(site.clauses[i].binding);
-                    out += " = " + prefix + "_r0, " + prefix + "_r1, " + prefix + "_r2 do ";
-                }
-                else if (!clause.sliceSource.empty())
-                {
-                    const size_t binding = out.size();
-                    out.copy(source, clause.binding);
-                    site.clauses[i].binding = {binding, out.size()};
-                    site.clauses[i].bindings.push_back(site.clauses[i].binding);
-                    out += " = " + prefix + "_src[" + prefix + "_i] ";
-                }
-                else if (!clause.zipArguments.empty())
-                {
-                    for (size_t binding = 0; binding < clause.bindings.size(); ++binding)
-                    {
-                        if (binding) out += ", ";
-                        const size_t begin = out.size();
-                        out.copy(source, clause.bindings[binding]);
-                        site.clauses[i].bindings.push_back({begin, out.size()});
-                    }
-                    site.clauses[i].binding = site.clauses[i].bindings.front();
-                    out += " = ";
-                    for (size_t argument = 0; argument < clause.zipArguments.size(); ++argument)
-                    {
-                        if (argument) out += ", ";
-                        out += prefix + "_src" + std::to_string(argument) + "[" + prefix + "_i]";
-                    }
-                    out += " ";
-                }
-                else if (!clause.enumerateArgument.empty())
-                {
-                    for (size_t binding = 0; binding < clause.bindings.size(); ++binding)
-                    {
-                        if (binding) out += ", ";
-                        const size_t begin = out.size();
-                        out.copy(source, clause.bindings[binding]);
-                        site.clauses[i].bindings.push_back({begin, out.size()});
-                    }
-                    site.clauses[i].binding = site.clauses[i].bindings.front();
-                    out += " = " + prefix + "_i, " + prefix + "_src[" + prefix + "_i] ";
-                }
-                else
-                {
-                    const size_t binding = out.size();
-                    if (clause.binding.empty()) out += prefix + "_missing";
-                    else out.copy(source, clause.binding);
-                    site.clauses[i].binding = {binding, out.size()};
-                    site.clauses[i].bindings.push_back(site.clauses[i].binding);
-                    out += " = " + prefix + "_src[" + prefix + "_i] ";
-                }
-            }
-            projection(out, node, name, site);
-            out += cursor + " += " + (sum ? name + "_value " : "1 ");
-            if (!scalar)
-                out += output + "[" + cursor + "] = " + name + "_value ";
-            out.anchor = node.close;
-            for (size_t i = 0; i < node.clauses.size(); ++i)
-                out += "end ";
+            generator(out, stage, clause, clauseSite, name, sized, output, cursor, scalar, needsCursor);
         }
+        projection(out, node, name, site);
+        if (needsCursor)
+            out += cursor + " += " + (sum ? name + "_value " : "1 ");
+        if (!scalar)
+            out += output + "[" + (directIndex ? pipeline.stages.front().prefix + "_i" : cursor) + "] = " + name + "_value ";
+        if (anchoredClauses)
+            out.anchor = node.close;
+        for (size_t i = 0; i < node.clauses.size(); ++i)
+            out += "end ";
         out.anchor = node.close;
         out += "return " + (scalar ? cursor : output) + " end)()";
         site.call = {callBegin, out.size()};
