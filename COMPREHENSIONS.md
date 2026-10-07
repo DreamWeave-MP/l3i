@@ -2,8 +2,9 @@
 
 The comprehension baseline below was validated on the actual L3i checkout, 2026-10-04,
 starting from the already-applied `88e0636` dense/non-nil prototype. Luau remains stock 0.740,
-submodule commit `c0e346edd89066b44dca174c9f54ce84c746a540`. A post-baseline `sum[for ...]`
-JSL reducer prototype is documented at the end; its Cargo gates remain pending.
+submodule commit `c0e346edd89066b44dca174c9f54ce84c746a540`. The `sum[for ...]` reducer
+documented at the end has since passed every gate; the Phase One closure section records the
+current numbers for every lowering family.
 
 ## Contract
 
@@ -334,8 +335,8 @@ results. Bytecode disassembly of the lowered filtered sum has no closure constru
 table and differs from the equivalent handwritten loop by the same kind of one-time setup move
 already measured for comprehension expressions.
 
-Rust runtime, disassembly, executed-instruction and Criterion cases are included for the real L3i
-checkout but still require Cargo validation. In particular, the expected invariant is:
+The Rust runtime, disassembly, executed-instruction and Criterion cases pass on the real checkout
+(see the closure below). The invariant holds at every tested size:
 
 ```text
 sum[for ...] executed VM instructions == same-contract handwritten fused sum + one setup instruction
@@ -344,3 +345,76 @@ sum[for ...] executed VM instructions == same-contract handwritten fused sum + o
 The benchmark also compares fused sum against materializing the comprehension and traversing the
 result a second time. Treat any wall-clock claim as secondary to disassembly/instruction evidence,
 just as with the original comprehension campaign.
+
+## Phase One closure, 2026-10-07
+
+Every gate was rerun on the checkout at `e3cc3a4` plus the closure fixes: `cargo test` (73 unit +
+169 integration), `--features analysis` (73 + 202), `--workspace --all-features` (82 + 269),
+all-target all-feature pedantic Clippy, rustfmt, all-feature rustdoc, the standalone canonical
+frontend and lowering suites under GCC-style warnings-as-errors and Clang ASan/UBSan, and the
+compiler/disassembler allocation-failure probe. Two drifts were found and fixed: three Clippy
+sites and rustfmt drift in the slice test suites, and one stale standalone assertion that
+predated structural recovery of `xs[:n]` bounds.
+
+Executed VM instructions (deterministic single-step counts) are unchanged from the table above;
+the sum consumer matches the fused count consumer exactly: 8 / 12 / 184 / 22,536 at 0 / 1 / 32 /
+4,096 items against 7 / 11 / 183 / 22,535 for the same-contract handwritten loop.
+
+### Lowering is now one pipeline plan
+
+Every comprehension is planned as ordered stages (generators over a source kind: plain,
+enumerate, range, zip, slice; and filters) feeding one consumer (materialize, count, sum), and
+one emitter walks that plan. The five parallel emitters for single-range, single-slice,
+single-zip, single-plain and nested shapes are gone. The refactor was proven by lowering
+snapshots: `tests/lowering.rs` pins generated text, provenance segments, tooling sites and
+structural errors for 76 surface shapes under the compile, Analysis, Analysis-with-buffer-types
+and syntax-tooling policies, and the snapshots were byte-identical before and after. The only
+later change is deliberate: synthetic scaffolding is now attributed to its own clause for every
+source kind (numeric ranges and slices previously inherited a neighbouring anchor), which moved
+provenance segments and no generated text.
+
+### Retired CPU instructions and timings, all families
+
+Same harness and machine class as the table above (i7-10870H, interpreter, 4,096 integers, seven
+rounds of 128 calls; the minimum round is reported). Criterion estimates are the midpoint of the
+95% interval.
+
+| Case | CPU instructions / call | µs |
+|---|---:|---:|
+| Dense L3i, nil-checked | 1,082,592 | 77.6 |
+| Dense handwritten, unchecked | 939,531 | 65.0 |
+| Dense handwritten, nil-checked | 1,082,901 | 82.6 |
+| Filtered L3i, nil-checked | 1,318,120 | 144.9 |
+| Filtered handwritten, unchecked | 1,246,710 | 130.7 |
+| Filtered handwritten, nil-checked | 1,318,402 | 143.6 |
+| Growing `table.insert`, unchecked | 2,563,589 | 229.8 |
+| Fused length L3i | 1,160,402 | 126.8 |
+| Materialized L3i, then length | 1,317,984 | 144.0 |
+| Handwritten fused count | 1,160,372 | 130.9 |
+| Fused sum L3i | 1,166,546 | 129.8 |
+| Handwritten fused sum | 1,166,516 | 130.8 |
+| Materialized comprehension, then sum | 1,657,394 | 170.5 |
+| Callback L3i fusion | 3,120,601 | 270.9 |
+| Callback handwritten fusion | 3,120,875 | 297.1 |
+| Callback fused helper | 3,121,272 | 257.8 |
+| Two-pass filter then map | 3,431,503 | 277.4 |
+| `enumerate` L3i, nil-checked | 1,197,299 | 85.2 |
+| `enumerate` handwritten, unchecked | 931,327 | 65.2 |
+| `zipShortest` L3i, nil-checked | 1,287,762 | 94.7 |
+| Zip handwritten, unchecked | 1,145,223 | 85.3 |
+| Standalone table slice L3i (`table.move`) | 40,527 | 3.92 |
+| Handwritten `table.move` | 38,582 | 3.85 |
+| Handwritten scalar slice copy | 459,932 | 33.2 |
+| Fused slice sum L3i | 519,730 | 47.0 |
+| Handwritten fused checked slice sum | 401,202 | 32.2 |
+| Materialized slice, then checked sum | 437,672 | 36.9 |
+
+Dense, filtered, count and sum fusion remain within 0.03% of the same-contract handwritten loop.
+The `enumerate` and zip baselines are deliberately unchecked loops, so their gap is the non-nil
+guard plus the index binding, not wrapper overhead. The slice rows expose a real regression: the
+fused slice sum executes 30% more CPU instructions than the handwritten range reduction and more
+than materializing the slice first. The cause is in the compile-time lowering, which has no type
+information and dispatches on the source representation inside the loop (`if kind == "buffer"
+then buffer.readu8(...) else src[i]`) for every element. The fix is to hoist that dispatch out
+of the loop; it is the next lowering commit.
+

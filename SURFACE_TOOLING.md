@@ -126,13 +126,14 @@ The existing executed-instruction tests still compare dense, filtered, count, an
 sum lowering with checked handwritten loops: one setup instruction, no per-element
 wrapper overhead. Nil checks and projection effects remain mandatory.
 
-Validated on the real checkout with Luau 0.740:
+Validated on the real checkout with Luau 0.740 (rerun 2026-10-07; the lowering snapshot
+suite in `tests/lowering.rs` now pins generated text, provenance and sites for every shape):
 
 | Gate | Result |
 |---|---|
-| `cargo test --workspace` | PASS — 73 unit + 150 integration |
-| `cargo test --features analysis` | PASS — 73 + 177 |
-| `cargo test --workspace --all-features` | PASS — 82 + 236 |
+| `cargo test --workspace` | PASS — 73 unit + 169 integration |
+| `cargo test --features analysis` | PASS — 73 + 202 |
+| `cargo test --workspace --all-features` | PASS — 82 + 269 |
 | All-target/all-feature strict pedantic Clippy | PASS |
 | Formatting and all-feature rustdoc | PASS |
 | Standalone canonical frontend, ASan/UBSan | PASS |
