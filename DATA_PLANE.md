@@ -160,7 +160,54 @@ JSL form carries about 3,000 instructions of prologue over the explicit call, in
 | 4,096 | | | | | 1,251,732 (106 µs) | 108,144,296 (9.22 ms) |
 | 65,536 | 1,050,753 (116 µs) | 56,952,163 (4.17 ms) | 2,886,390 (238 µs) | 153,094,071 (11.8 ms) | 16,006,037 (1.88 ms) | 2,307,862,971 (199 ms) |
 
-Native code (`jit`): see the table appended below once measured.
+Native code (`jit`, every chunk compiled, globals sandboxed so native code never exits on a
+global access). The recognized JSL sum now runs the receiver's unrolled IR loop
+(`src/data/lowering.rs`); the handwritten and fallback loops are Luau CodeGen loops.
+
+| n | JSL recognized (IR loop) | JSL scalar fallback (CodeGen loop) | explicit `data.sum` (bound) | handwritten `readu8` (CodeGen loop) |
+|---:|---:|---:|---:|---:|
+| sum 16 | 1,363 (124 ns) | 1,719 (151 ns) | 1,675 (138 ns) | 1,395 (117 ns) |
+| sum 256 | 2,773 (376 ns) | 9,639 (879 ns) | 5,995 (476 ns) | 9,075 (793 ns) |
+| sum 4,096 | 25,333 (4.39 µs) | 136,359 (12.7 µs) | 75,115 (6.00 µs) | 131,955 (11.8 µs) |
+| sum 65,536 | 386,293 (69.1 µs) | 2,163,879 (184 µs) | 1,181,035 (94.4 µs) | 2,098,035 (194 µs) |
+| count 16 | 1,563 (137 ns) | 1,749 (143 ns) | 1,960 (177 ns) | 1,393 (109 ns) |
+| count 256 | 6,115 (771 ns) | 10,259 (922 ns) | 8,200 (655 ns) | 9,183 (848 ns) |
+| count 4,096 | 78,919 (10.3 µs) | 146,384 (14.6 µs) | 108,040 (8.14 µs) | 133,788 (13.3 µs) |
+| count 65,536 | 1,243,831 (170 µs) | 2,324,444 (234 µs) | 1,705,480 (130 µs) | 2,127,528 (204 µs) |
+
+| n | explicit `data.sum` f32 | `readf32` CodeGen loop | `data.gather` f32 | indexed copy, CodeGen | stable `data.argsort` | `table.sort` comparator, CodeGen (unstable) |
+|---:|---:|---:|---:|---:|---:|---:|
+| 256 | 5,514 (432 ns) | 9,843 (849 ns) | 12,913 (982 ns) | 13,184 (1.28 µs) | 63,111 (4.80 µs) | 1,138,409 (99.6 µs) |
+| 4,096 | | | | | 1,275,925 (100 µs) | 28,714,511 (2.20 ms) |
+| 65,536 | 1,049,994 (83.6 µs) | 2,294,643 (193 µs) | 2,885,233 (201 µs) | 3,146,624 (339 µs) | 16,327,107 (1.75 ms) | 612,840,657 (52.4 ms) |
+
+What the machine shape says:
+
+- Luau's own CodeGen loop costs about 32 instructions per byte (`FORNLOOP`, the `readu8`
+  fastcall with its checks, the number add through a VM register). The bound Rust loop costs
+  about 18 per byte including its once-per-call argument parsing, and wins in time from 256
+  elements up.
+- The first IR loop kept its cursor and accumulator in the receiver's scratch (Luau IR has no
+  loop-carried values), so every element paid three memory round trips: fewer instructions than
+  the bound call (17 per byte) but slower in time at 65,536 (161 µs versus 115 µs) because the
+  loop was latency bound on store-to-load forwarding.
+- Unrolling the pure-add `sum` body to eight elements per block (one cursor and one
+  accumulator round trip per eight) cut it to 6 instructions per byte and 69 µs: faster than
+  the bound call at every size, and at 16 elements within the noise of the handwritten native
+  loop, with no call overhead left to amortize.
+- `count`, `min` and `max` branch per element, which ends an IR block, so they cannot unroll
+  the same way (`SELECT_NUM` is equality-only and the min/max instructions do not keep the
+  loop's NaN rule). Their IR loops still execute fewer instructions than the bound call but
+  lose in time above a few hundred elements. The JSL bridge therefore lowers sums to the
+  receiver and counts and extrema to the bound functions; the explicit receiver remains for
+  scripts that measure otherwise.
+- `compare` into a reused selection then `count()` costs within 5% of the direct count at
+  every size, so composing selections is not a performance trade.
+
+Interpreter and native agree on the ordering of everything else: the bound data-plane
+operations beat the best obvious Luau by 2× (gather, native) to 300× (stable argsort against a
+comparator sort, native) and never lose, down to 16 elements.
+
 
 
 ### 2.5 Reaching the data plane from JSL

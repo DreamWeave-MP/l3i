@@ -416,15 +416,17 @@ a recognized pipeline calls the data plane once instead of looping:
 ```luau
 sum[for x in buf[a:b] => x]                 -- U8:sum(buf, a - 1, n)
 #[for x in buf[a:b] => x]                   -- n
-#[for x in buf[a:b] if x > 127 => x]        -- U8:countGt(buf, a - 1, n, 127)
-min[for x in buf[a:b] => x]                 -- empty check, then U8:min(buf, a - 1, n)
+#[for x in buf[a:b] if x > 127 => x]        -- data.count(buf, "u8", a - 1, n, "gt", 127)
+min[for x in buf[a:b] => x]                 -- empty check, then data.min(buf, "u8", a - 1, n)
 max[for x in buf[a:b] => x]
 ```
 
 `U8` is the chunk's `dream_data_Kind` receiver for bytes (`__l3i_data.kind("u8")`, annotated in
-the prelude), so with the `jit` feature each recognized call site compiles to a native loop
-through the receiver's CodeGen lowering, and without it the bound method runs once per
-pipeline. Both paths compute the number the scalar loop computes, bit for bit.
+the prelude), so with the `jit` feature a recognized sum compiles to the receiver's unrolled
+native loop, and without it the bound method runs once per pipeline. Counts and extrema call
+the bound module functions (`data.count`, `data.min`, `data.max`), which measured faster than
+their single-step native loops above a few hundred elements (DATA_PLANE.md §2.4). Every path
+computes the number the scalar loop computes, bit for bit.
 
 Recognition is deliberately narrow, because errors and evaluation order are effects: a lone
 leading slice generator, a projection that is exactly the binding, and either no filter or one
