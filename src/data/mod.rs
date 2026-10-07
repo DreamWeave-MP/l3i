@@ -9,7 +9,7 @@
 //! where `kind` names the element representation (`"u8"`, `"i8"`, `"u16"`, `"i16"`, `"u32"`,
 //! `"i32"`, `"f32"`, `"f64"`, little-endian as the `buffer` library reads them), `offset` is a
 //! byte offset and `count` an element count. A kind may carry a stride, `"f32@16"`: one f32
-//! field of every 16-byte record, which is how packed records (a physics body, an entity slot)
+//! field of every 16-byte record, which is how packed records (a simulated body, an entity slot)
 //! live in buffers; the default stride is the element size. Every span is bounds-checked once,
 //! before any element is touched; a span that does not fit raises before the operation starts.
 //! Spans are descriptors, not objects: nothing is allocated to name one.
@@ -179,7 +179,7 @@ impl Kind {
 
 /// An element kind with the distance between consecutive elements: `"f32"` is contiguous
 /// (stride = size); `"f32@16"` is one f32 field of a 16-byte record, the shape packed records
-/// take in buffers (a physics body, an entity slot). A stride below the element size is an
+/// take in buffers (a simulated body, an entity slot). A stride below the element size is an
 /// error; a stride above it skips the rest of the record.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Layout {

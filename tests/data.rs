@@ -466,7 +466,7 @@ fn kind_receiver_reductions_lower_to_native_loops_with_the_bound_semantics() {
 fn strided_layouts_read_one_field_of_packed_records() {
     exec(
         r"
-        -- A physics-style record: x, y, vx, vy as f32, 16 bytes each; 300 bodies after a 4-byte header.
+        -- A simulation record: x, y, vx, vy as f32, 16 bytes each; 300 bodies after a 4-byte header.
         local n = 300
         local motion = buffer.create(4 + n * 16)
         local sumVy, maxVy = 0, nil

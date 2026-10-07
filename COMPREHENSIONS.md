@@ -330,7 +330,7 @@ does not add a second type system or generic additive identity protocol.
 
 The C++ surface pass and source map are validated locally under GCC and Clang warnings-as-errors,
 Clang ASan/UBSan, and 250,000 randomized scanner inputs. Lowered output was also executed through
-a Jess/Luau runtime: filtered, empty, nested and comment-separated forms produced the expected
+an embedding Luau runtime: filtered, empty, nested and comment-separated forms produced the expected
 results. Bytecode disassembly of the lowered filtered sum has no closure construction or result
 table and differs from the equivalent handwritten loop by the same kind of one-time setup move
 already measured for comprehension expressions.

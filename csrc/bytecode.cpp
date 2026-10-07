@@ -133,7 +133,7 @@ char* compileImpl(const char* source, size_t size, lua_CompileOptions* options, 
     catch (const std::exception& error)
     {
         // Match luau_compile's in-band error convention so Rust can translate compiler failures
-        // into ordinary Jess errors without allowing a C++ exception across the FFI boundary.
+        // into ordinary host errors without allowing a C++ exception across the FFI boundary.
         output.push_back('\0');
         output += error.what();
     }

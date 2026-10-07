@@ -774,7 +774,7 @@ impl ExtensionDescriptor {
 }
 
 /// Execution policy for runtimes made from a plan: the VM's configuration and what scripts may
-/// do. Not a Jess Profile; the exact preset names are host vocabulary.
+/// do. Not a host profile object; the exact preset names are host vocabulary.
 #[derive(Clone, Debug)]
 pub struct RuntimePolicy {
     /// Extra debug-name roots beside the ones extension identities imply.

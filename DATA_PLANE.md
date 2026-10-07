@@ -70,8 +70,8 @@ module, tests, docs. No new recognizer, no new loop emitter.
 A **span** is `(buffer, kind, offset, count)`: `count` elements of `kind` starting `offset`
 bytes into a Luau buffer. Kinds are the `buffer` library's own little-endian representations:
 `u8 i8 u16 i16 u32 i32 f32 f64`, optionally with a stride: `f32@16` is one f32 field of every
-16-byte record, the layout of packed records in this ecosystem (physics bodies, entity slots,
-token records). A span is validated once, before any element is read (offset and count
+16-byte record, the layout packed records take in buffers (a simulated body, an entity slot, a
+token record). A span is validated once, before any element is read (offset and count
 non-negative, `offset + (count − 1) × stride + size ≤ length`), and is a descriptor, never an
 allocation. Element-wise operations (`add`, `scale`, `clamp`, `fill`) take the layout for every
 operand, so a record field updates in place; `gather` reads a possibly strided field into a
@@ -112,7 +112,7 @@ values beyond ±2^63 saturate before the wrap); `f32` rounds on write; `f64` is 
 the keys paired with positions, so the buffer is read once and `out` may overlap the keys. With
 a caller scratch (`count × 4` bytes) it is a bottom-up merge of the index vector between `out`
 and the scratch, reading keys from the span as it compares: no allocation in steady state, which
-is the shape recast's navmesh builder hand-rolls in Luau; keys, `out` and scratch must then not
+is the shape a spatial-index builder otherwise hand-rolls in Luau; keys, `out` and scratch must then not
 overlap, and the call refuses them if they do.
 
 ### 2.3 Execution
@@ -243,11 +243,11 @@ correct and final form. Only `KnownDataOp` stages (the binding itself, a compari
 binding against a literal) are eligible. The explicit API stays first-class: nothing requires
 JSL recognition to reach the fast path.
 
-## 3. What the consumer ecosystem asked for
+## 3. What real workloads asked for
 
-The `jpk` packages were read for the shapes this plane must serve, and each shipped: strided
-layouts (16-byte physics bodies, 8-byte entity slots, 12-byte token records read by field),
-`argsort` through caller scratch (recast's navmesh builder hand-rolls that stable merge),
-buffer sinks (physics writes filtered index lists into a caller buffer with a capacity), and
-thresholds held in locals (every comparison in those loops is against a local). Nothing on the
-original list remains deferred.
+Hot loops in downstream code were read for the shapes this plane must serve, and each shipped:
+strided layouts (16-byte simulation bodies, 8-byte entity slots, 12-byte token records read by
+field), `argsort` through caller scratch (a spatial-index builder otherwise hand-rolls that
+stable merge), buffer sinks (a spatial query writes a filtered index list into a caller buffer
+with a capacity), and thresholds held in locals (every comparison in those loops is against a
+local). Nothing on the original list remains deferred.
