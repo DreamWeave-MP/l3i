@@ -36,7 +36,7 @@ local __l3i_comp_36_error = error local __l3i_comp_36_table_create = table.creat
 --segment 133 351 17 19 synthetic
 --segment 351 352 12 13 copied
 --segment 352 394 17 19 synthetic
---segment 394 397 23 27 synthetic
+--segment 394 397 20 27 synthetic
 --segment 397 398 23 23 synthetic
 --segment 398 402 23 27 copied
 --segment 402 403 27 27 synthetic
@@ -65,12 +65,12 @@ local __l3i_comp_44_error = error local __l3i_comp_44_table_create = table.creat
 --segment 133 351 17 19 synthetic
 --segment 351 352 12 13 copied
 --segment 352 394 17 19 synthetic
---segment 394 397 23 27 synthetic
+--segment 394 397 20 27 synthetic
 --segment 397 398 23 23 synthetic
 --segment 398 402 23 27 copied
 --segment 402 403 27 27 synthetic
 --segment 403 409 23 27 synthetic
---segment 409 412 31 35 synthetic
+--segment 409 412 28 35 synthetic
 --segment 412 413 31 31 synthetic
 --segment 413 417 31 35 copied
 --segment 417 418 35 35 synthetic
@@ -100,7 +100,7 @@ local __l3i_comp_37_error = error return (function() local __l3i_comp_8_g0_src =
 --segment 85 216 18 20 synthetic
 --segment 216 217 13 14 copied
 --segment 217 259 18 20 synthetic
---segment 259 262 24 28 synthetic
+--segment 259 262 21 28 synthetic
 --segment 262 263 24 24 synthetic
 --segment 263 267 24 28 copied
 --segment 267 268 28 28 synthetic
@@ -152,7 +152,7 @@ local __l3i_comp_39_error = error return (function() local __l3i_comp_10_g0_src 
 --segment 86 224 20 22 synthetic
 --segment 224 225 15 16 copied
 --segment 225 269 20 22 synthetic
---segment 269 272 26 30 synthetic
+--segment 269 272 23 30 synthetic
 --segment 272 273 26 26 synthetic
 --segment 273 277 26 30 copied
 --segment 277 278 30 30 synthetic
@@ -275,7 +275,8 @@ local __l3i_comp_34_error = error return (function() local __l3i_comp_7_out = {}
 --prelude 1
 --segment 0 34 7 34 synthetic
 --segment 34 41 0 7 copied
---segment 41 133 7 34 synthetic
+--segment 41 106 7 34 synthetic
+--segment 106 133 8 28 synthetic
 --segment 133 134 23 23 synthetic
 --segment 134 135 23 24 copied
 --segment 135 136 24 24 synthetic
@@ -290,8 +291,8 @@ local __l3i_comp_34_error = error return (function() local __l3i_comp_7_out = {}
 --segment 385 386 32 32 synthetic
 --segment 386 387 32 33 copied
 --segment 387 388 33 33 synthetic
---segment 388 593 32 33 synthetic
---segment 593 623 33 34 synthetic
+--segment 388 589 32 33 synthetic
+--segment 589 623 33 34 synthetic
 --site 0 call=41,623 projection=386,387
 --clause binding=292,293 expression=41,41 range=133,136 range=164,167
 ==== range_step
@@ -301,7 +302,8 @@ local __l3i_comp_41_error = error return (function() local __l3i_comp_7_out = {}
 --prelude 1
 --segment 0 34 7 41 synthetic
 --segment 34 41 0 7 copied
---segment 41 133 7 41 synthetic
+--segment 41 106 7 41 synthetic
+--segment 106 133 8 31 synthetic
 --segment 133 134 23 23 synthetic
 --segment 134 135 23 24 copied
 --segment 135 136 24 24 synthetic
@@ -320,8 +322,8 @@ local __l3i_comp_41_error = error return (function() local __l3i_comp_7_out = {}
 --segment 387 388 35 35 synthetic
 --segment 388 393 35 40 copied
 --segment 393 394 40 40 synthetic
---segment 394 599 35 40 synthetic
---segment 599 629 40 41 synthetic
+--segment 394 595 35 40 synthetic
+--segment 595 629 40 41 synthetic
 --site 0 call=41,629 projection=388,393
 --clause binding=294,295 expression=41,41 range=133,136 range=164,167 range=195,198
 ==== range_filtered
@@ -331,7 +333,8 @@ local __l3i_comp_48_error = error return (function() local __l3i_comp_7_out = {}
 --prelude 1
 --segment 0 34 7 48 synthetic
 --segment 34 41 0 7 copied
---segment 41 133 7 48 synthetic
+--segment 41 106 7 48 synthetic
+--segment 106 133 8 28 synthetic
 --segment 133 134 23 23 synthetic
 --segment 134 135 23 24 copied
 --segment 135 136 24 24 synthetic
@@ -341,7 +344,8 @@ local __l3i_comp_48_error = error return (function() local __l3i_comp_7_out = {}
 --segment 166 167 27 27 synthetic
 --segment 167 292 26 27 synthetic
 --segment 292 293 12 13 copied
---segment 293 361 26 27 synthetic
+--segment 293 358 26 27 synthetic
+--segment 358 361 29 42 synthetic
 --segment 361 362 32 32 synthetic
 --segment 362 372 32 42 copied
 --segment 372 373 42 42 synthetic
@@ -350,8 +354,8 @@ local __l3i_comp_48_error = error return (function() local __l3i_comp_7_out = {}
 --segment 406 407 46 46 synthetic
 --segment 407 408 46 47 copied
 --segment 408 409 47 47 synthetic
---segment 409 618 46 47 synthetic
---segment 618 648 47 48 synthetic
+--segment 409 610 46 47 synthetic
+--segment 610 648 47 48 synthetic
 --site 0 call=41,648 projection=407,408
 --clause binding=292,293 expression=41,41 range=133,136 range=164,167
 --clause binding=41,41 expression=362,372
@@ -362,7 +366,8 @@ local __l3i_comp_35_error = error return (function() local __l3i_comp_8_n = 0 lo
 --prelude 1
 --segment 0 34 8 35 synthetic
 --segment 34 41 0 7 copied
---segment 41 105 7 35 synthetic
+--segment 41 78 7 35 synthetic
+--segment 78 105 9 29 synthetic
 --segment 105 106 24 24 synthetic
 --segment 106 107 24 25 copied
 --segment 107 108 25 25 synthetic
@@ -377,8 +382,8 @@ local __l3i_comp_35_error = error return (function() local __l3i_comp_8_n = 0 lo
 --segment 357 358 33 33 synthetic
 --segment 358 359 33 34 copied
 --segment 359 360 34 34 synthetic
---segment 360 511 33 34 synthetic
---segment 511 539 34 35 synthetic
+--segment 360 507 33 34 synthetic
+--segment 507 539 34 35 synthetic
 --site 0 call=41,539 projection=358,359
 --clause binding=264,265 expression=41,41 range=105,108 range=136,139
 ==== range_sum
@@ -388,7 +393,8 @@ local __l3i_comp_40_error = error return (function() local __l3i_comp_10_sum = 0
 --prelude 1
 --segment 0 34 10 40 synthetic
 --segment 34 41 0 7 copied
---segment 41 109 7 40 synthetic
+--segment 41 81 7 40 synthetic
+--segment 81 109 11 34 synthetic
 --segment 109 110 26 26 synthetic
 --segment 110 111 26 27 copied
 --segment 111 112 27 27 synthetic
@@ -407,8 +413,8 @@ local __l3i_comp_40_error = error return (function() local __l3i_comp_10_sum = 0
 --segment 370 371 38 38 synthetic
 --segment 371 372 38 39 copied
 --segment 372 373 39 39 synthetic
---segment 373 546 38 39 synthetic
---segment 546 577 39 40 synthetic
+--segment 373 542 38 39 synthetic
+--segment 542 577 39 40 synthetic
 --site 0 call=41,577 projection=371,372
 --clause binding=273,274 expression=41,41 range=109,112 range=141,144 range=173,176
 ==== enumerate
@@ -453,7 +459,7 @@ local __l3i_comp_48_error = error local __l3i_comp_48_table_create = table.creat
 --segment 352 354 30 32 synthetic
 --segment 354 355 15 16 copied
 --segment 355 416 30 32 synthetic
---segment 416 419 37 42 synthetic
+--segment 416 419 34 42 synthetic
 --segment 419 420 37 37 synthetic
 --segment 420 425 37 42 copied
 --segment 425 426 42 42 synthetic
@@ -606,7 +612,7 @@ local __l3i_comp_59_error = error return (function() local __l3i_comp_10_g0_src0
 --segment 585 587 37 39 synthetic
 --segment 587 588 18 19 copied
 --segment 588 676 37 39 synthetic
---segment 676 679 44 49 synthetic
+--segment 676 679 41 49 synthetic
 --segment 679 680 44 44 synthetic
 --segment 680 685 44 49 copied
 --segment 685 686 49 49 synthetic
@@ -679,8 +685,8 @@ local __l3i_comp_37_error = error local __l3i_comp_37_typeof = typeof local __l3
 --segment 1393 1394 35 35 synthetic
 --segment 1394 1395 35 36 copied
 --segment 1395 1396 36 36 synthetic
---segment 1396 1601 35 36 synthetic
---segment 1601 1631 36 37 synthetic
+--segment 1396 1597 35 36 synthetic
+--segment 1597 1631 36 37 synthetic
 --site 0 call=125,1631 projection=1394,1395
 --clause binding=1323,1324 expression=125,125 sliceSource=165,169 sliceFirst=200,207 sliceLast=237,243
 ==== slice_generator_filtered
@@ -708,7 +714,8 @@ local __l3i_comp_48_error = error local __l3i_comp_48_typeof = typeof local __l3
 --segment 429 601 20 25 synthetic
 --segment 601 1323 26 30 synthetic
 --segment 1323 1324 12 13 copied
---segment 1324 1369 26 30 synthetic
+--segment 1324 1366 26 30 synthetic
+--segment 1366 1369 32 39 synthetic
 --segment 1369 1370 35 35 synthetic
 --segment 1370 1374 35 39 copied
 --segment 1374 1375 39 39 synthetic
@@ -717,8 +724,8 @@ local __l3i_comp_48_error = error local __l3i_comp_48_typeof = typeof local __l3
 --segment 1408 1409 43 43 synthetic
 --segment 1409 1413 43 47 copied
 --segment 1413 1414 47 47 synthetic
---segment 1414 1623 43 47 synthetic
---segment 1623 1653 47 48 synthetic
+--segment 1414 1615 43 47 synthetic
+--segment 1615 1653 47 48 synthetic
 --site 0 call=125,1653 projection=1409,1413
 --clause binding=1323,1324 expression=125,125 sliceSource=165,169 sliceFirst=200,207 sliceLast=237,243
 --clause binding=125,125 expression=1370,1374
@@ -752,8 +759,8 @@ local __l3i_comp_35_error = error local __l3i_comp_35_typeof = typeof return (fu
 --segment 1257 1258 33 33 synthetic
 --segment 1258 1259 33 34 copied
 --segment 1259 1260 34 34 synthetic
---segment 1260 1411 33 34 synthetic
---segment 1411 1439 34 35 synthetic
+--segment 1260 1407 33 34 synthetic
+--segment 1407 1439 34 35 synthetic
 --site 0 call=77,1439 projection=1258,1259
 --clause binding=1187,1188 expression=77,77 sliceSource=117,121 sliceFirst=152,155 sliceLast=185,192
 ==== slice_generator_sum
@@ -781,7 +788,8 @@ local __l3i_comp_42_error = error local __l3i_comp_42_typeof = typeof return (fu
 --segment 380 554 23 24 synthetic
 --segment 554 1213 25 26 synthetic
 --segment 1213 1214 15 16 copied
---segment 1214 1261 25 26 synthetic
+--segment 1214 1258 25 26 synthetic
+--segment 1258 1261 28 36 synthetic
 --segment 1261 1262 31 31 synthetic
 --segment 1262 1267 31 36 copied
 --segment 1267 1268 36 36 synthetic
@@ -790,8 +798,8 @@ local __l3i_comp_42_error = error local __l3i_comp_42_typeof = typeof return (fu
 --segment 1302 1303 40 40 synthetic
 --segment 1303 1304 40 41 copied
 --segment 1304 1305 41 41 synthetic
---segment 1305 1482 40 41 synthetic
---segment 1482 1513 41 42 synthetic
+--segment 1305 1474 40 41 synthetic
+--segment 1474 1513 41 42 synthetic
 --site 0 call=77,1513 projection=1303,1304
 --clause binding=1213,1214 expression=77,77 sliceSource=118,122 sliceFirst=154,157 sliceLast=188,191
 --clause binding=77,77 expression=1262,1267
@@ -825,8 +833,8 @@ local __l3i_comp_40_error = error local __l3i_comp_40_typeof = typeof local __l3
 --segment 1392 1393 34 34 synthetic
 --segment 1393 1398 34 39 copied
 --segment 1398 1399 39 39 synthetic
---segment 1399 1604 34 39 synthetic
---segment 1604 1634 39 40 synthetic
+--segment 1399 1600 34 39 synthetic
+--segment 1600 1634 39 40 synthetic
 --site 0 call=125,1634 projection=1393,1398
 --clause binding=1322,1323 expression=125,125 sliceSource=165,175 sliceFirst=206,209 sliceLast=239,242
 ==== slice_generator_parenthesized_bounds
@@ -859,8 +867,8 @@ local __l3i_comp_45_error = error local __l3i_comp_45_typeof = typeof local __l3
 --segment 1401 1402 43 43 synthetic
 --segment 1402 1403 43 44 copied
 --segment 1403 1404 44 44 synthetic
---segment 1404 1609 43 44 synthetic
---segment 1609 1639 44 45 synthetic
+--segment 1404 1605 43 44 synthetic
+--segment 1605 1639 44 45 synthetic
 --site 0 call=125,1639 projection=1402,1403
 --clause binding=1331,1332 expression=125,125 sliceSource=165,169 sliceFirst=200,211 sliceLast=241,251
 ==== slice_standalone
@@ -1618,7 +1626,7 @@ local __l3i_comp_57_error = error local __l3i_comp_57_table_create = table.creat
 --segment 133 351 17 19 synthetic
 --segment 351 352 12 13 copied
 --segment 352 394 17 19 synthetic
---segment 394 397 23 51 synthetic
+--segment 394 397 20 51 synthetic
 --segment 397 398 23 23 synthetic
 --segment 398 410 23 47 synthetic
 --segment 410 439 25 41 synthetic
@@ -1676,7 +1684,7 @@ local __l3i_comp_7_g0_src = (xs) local __l3i_comp_7_g0_len = #__l3i_comp_7_g0_sr
 --segment 183 401 17 19 synthetic
 --segment 401 402 12 13 copied
 --segment 402 444 17 19 synthetic
---segment 444 447 42 46 synthetic
+--segment 444 447 39 46 synthetic
 --segment 447 448 42 42 synthetic
 --segment 448 452 42 46 copied
 --segment 452 453 46 46 synthetic
@@ -1752,7 +1760,8 @@ return out
 --segment 449 625 43 48 synthetic
 --segment 625 1372 58 62 synthetic
 --segment 1372 1373 22 23 copied
---segment 1373 1420 58 62 synthetic
+--segment 1373 1417 58 62 synthetic
+--segment 1417 1420 73 85 synthetic
 --segment 1420 1421 76 76 synthetic
 --segment 1421 1430 76 85 copied
 --segment 1430 1431 85 85 synthetic
@@ -1761,8 +1770,8 @@ return out
 --segment 1465 1466 93 93 synthetic
 --segment 1466 1476 93 103 copied
 --segment 1476 1477 103 103 synthetic
---segment 1477 1692 93 103 synthetic
---segment 1692 1723 104 105 synthetic
+--segment 1477 1684 93 103 synthetic
+--segment 1684 1723 104 105 synthetic
 --segment 1723 1734 105 116 copied
 --site 0 call=133,1723 projection=1466,1476
 --clause binding=1372,1373 expression=133,133 sliceSource=174,182 sliceFirst=214,221 sliceLast=252,258
@@ -1824,8 +1833,8 @@ return (function() local __l3i_comp_55_g0_src = (xs) local __l3i_comp_55_g0_firs
 --segment 1467 1468 76 76 synthetic
 --segment 1468 1469 76 77 copied
 --segment 1469 1470 77 77 synthetic
---segment 1470 1680 76 77 synthetic
---segment 1680 1711 77 78 synthetic
+--segment 1470 1676 76 77 synthetic
+--segment 1676 1711 77 78 synthetic
 --site 0 call=173,1711 projection=1468,1469
 --clause binding=1394,1395 expression=173,173 sliceSource=214,218 sliceFirst=250,253 sliceLast=284,287
 ==== interpolated_string
@@ -1910,7 +1919,7 @@ local __l3i_comp_28_error = error local __l3i_comp_28_table_create = table.creat
 --segment 130 132 15 17 copied
 --segment 132 133 17 17 synthetic
 --segment 133 413 15 17 synthetic
---segment 413 416 21 22 synthetic
+--segment 413 416 18 22 synthetic
 --segment 416 417 21 21 synthetic
 --segment 417 418 21 22 copied
 --segment 418 419 22 22 synthetic
@@ -2012,7 +2021,8 @@ local __l3i_comp_22_error = error local __l3i_comp_22_table_create = table.creat
 --segment 133 351 17 19 synthetic
 --segment 351 352 12 13 copied
 --segment 352 394 17 19 synthetic
---segment 394 685 22 22 synthetic
+--segment 394 397 20 22 synthetic
+--segment 397 685 22 22 synthetic
 --site 0 call=89,685 projection=434,446
 --clause binding=351,352 expression=130,132
 --clause binding=89,89 expression=397,401
@@ -2158,8 +2168,8 @@ local __l3i_comp_29_error = error local __l3i_comp_29_typeof = typeof local __l3
 --segment 1396 1397 27 27 synthetic
 --segment 1397 1398 27 28 copied
 --segment 1398 1399 28 28 synthetic
---segment 1399 1604 27 28 synthetic
---segment 1604 1634 28 29 synthetic
+--segment 1399 1600 27 28 synthetic
+--segment 1600 1634 28 29 synthetic
 --site 0 call=125,1634 projection=1397,1398
 --clause binding=1326,1327 expression=125,125 sliceSource=165,169 sliceFirst=200,213 sliceLast=243,246
 --error 20 20 expected slice first bound before ':'

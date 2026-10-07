@@ -603,25 +603,22 @@ private:
         const bool sized = single && first != SourceKind::Range;
         const bool directIndex = single && node.clauses.size() == 1 && first != SourceKind::Range && first != SourceKind::Slice;
         const bool needsCursor = scalar || !directIndex;
-        // Legacy anchor placement differs by leading source kind; a later commit normalizes it.
-        const bool anchoredClauses = !single || first == SourceKind::Zip || first == SourceKind::Plain || first == SourceKind::Enumerate;
         if (!sized)
             allocation(out, output, cursor, scalar, needsCursor);
         for (const Stage& stage : pipeline.stages)
         {
             const Clause& clause = node.clauses[stage.clause];
             ClauseSite& clauseSite = site.clauses[stage.clause];
+            // Synthetic scaffolding of a clause is attributed to that clause; the loop closers to
+            // the closing bracket. Copied user expressions keep their own provenance.
+            out.anchor = clause.range;
             if (!stage.generator)
             {
-                if (!single) out.anchor = clause.range;
-                else if (anchoredClauses) out.anchor = clause.expression;
                 out += "if ";
                 clauseSite.expression = expression(out, clause.expression, "true", clause.expressionSuffix);
                 out += " then ";
                 continue;
             }
-            if (!single || first != SourceKind::Range)
-                out.anchor = clause.range;
             generator(out, stage, clause, clauseSite, name, sized, output, cursor, scalar, needsCursor);
         }
         projection(out, node, name, site);
@@ -629,8 +626,7 @@ private:
             out += cursor + " += " + (sum ? name + "_value " : "1 ");
         if (!scalar)
             out += output + "[" + (directIndex ? pipeline.stages.front().prefix + "_i" : cursor) + "] = " + name + "_value ";
-        if (anchoredClauses)
-            out.anchor = node.close;
+        out.anchor = node.close;
         for (size_t i = 0; i < node.clauses.size(); ++i)
             out += "end ";
         out.anchor = node.close;
