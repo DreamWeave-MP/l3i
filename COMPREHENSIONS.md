@@ -429,7 +429,12 @@ path computes the number the scalar loop computes, bit for bit.
 
 Recognition is deliberately narrow, because errors and evaluation order are effects: a lone
 leading slice generator, a projection that is exactly the binding, and either no filter or one
-`binding <op> literal` filter on a count. The source, both bounds, every type check and the
+`binding <op> threshold` filter on a count, where the threshold is a number literal or a name
+the compiler has verified to be a local, upvalue or parameter declared outside the
+comprehension (the compile path lowers once, parses, resolves the name, and lowers again). A
+global threshold stays a scalar loop: reading it once rather than per element could be
+observable. A verified name is still guarded at run time, `typeof(limit) == "number"`, so a
+non-number threshold takes the scalar loop and raises exactly its comparison error. The source, both bounds, every type check and the
 bounds normalization still run in the ordinary JSL prologue, so what raises, and when, is
 identical. The byte values are summed in `f64` in element order, exactly as the loop adds
 `buffer.readu8` results, so results are bit-identical; `min`/`max` keep the loop's `<`/`>`

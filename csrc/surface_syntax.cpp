@@ -106,9 +106,9 @@ class Lowerer
 {
 public:
     Lowerer(std::string_view source, const Document& document, bool recovery, bool fuse,
-        const std::vector<Range>& bufferGenerators, bool dynamicGenerators)
+        const std::vector<Range>& bufferGenerators, bool dynamicGenerators, const std::vector<size_t>& localFilters)
         : source(source), document(document), recovery(recovery), fuse(fuse), bufferGenerators(bufferGenerators),
-          dynamicGenerators(dynamicGenerators)
+          dynamicGenerators(dynamicGenerators), localFilters(localFilters)
     {
         for (size_t begin = 0; begin < source.size();)
         {
@@ -182,10 +182,12 @@ public:
             result += "local " + operations + "_rawequal = rawequal ";
             ++preludeStatements;
         }
-        const bool hasDataOps = dynamicGenerators && std::any_of(document.comprehensions.begin(), document.comprehensions.end(),
-            [&](const Comprehension& node) {
-                return knownDataOp(node, plan(node, {}, fuse && !node.lengthPrefix.empty(), node.reducer)).has_value();
-            });
+        bool hasDataOps = false;
+        for (size_t index = 0; dynamicGenerators && index < document.comprehensions.size(); ++index)
+        {
+            const Comprehension& node = document.comprehensions[index];
+            hasDataOps = knownDataOp(node, plan(node, {}, fuse && !node.lengthPrefix.empty(), node.reducer), index).has_value() || hasDataOps;
+        }
         if (hasDataOps)
         {
             // The data plane's alias global (nil when the runtime did not install the extension)
@@ -290,6 +292,12 @@ private:
     size_t preludeStatements = 1;
     const std::vector<Range>& bufferGenerators;
     bool dynamicGenerators;
+    const std::vector<size_t>& localFilters;
+
+public:
+    std::vector<size_t> pendingLocalFilters;
+
+private:
 
     bool bufferGenerator(Range sourceRange) const
     {
@@ -516,8 +524,21 @@ private:
     {
         Consumer consumer = Consumer::Count;
         std::string comparison; // Data-plane comparison name; empty without a filter.
-        std::string threshold;  // The literal, as written.
+        std::string threshold;  // The literal or identifier, as written.
+        bool identifier = false; // The threshold is an identifier verified to be an outer local.
     };
+
+    static bool identifierName(std::string_view text)
+    {
+        if (text.empty() || !(std::isalpha(static_cast<unsigned char>(text.front())) || text.front() == '_')) return false;
+        for (const char c : text)
+            if (!(std::isalnum(static_cast<unsigned char>(c)) || c == '_')) return false;
+        static constexpr std::string_view keywords[] = {"and", "break", "do", "else", "elseif", "end", "false", "for", "function",
+            "if", "in", "local", "nil", "not", "or", "repeat", "return", "then", "true", "until", "while", "continue"};
+        for (const auto keyword : keywords)
+            if (text == keyword) return false;
+        return true;
+    }
 
     // `gt` to `Gt`: the receiver's comparison-count method suffix.
     static std::string capitalized(std::string_view name)
@@ -554,7 +575,7 @@ private:
             }
         if (comparison.empty()) return false;
         text = trim(text);
-        if (!numberLiteral(text)) return false;
+        if (!numberLiteral(text) && !(identifierName(text) && text != name)) return false;
         threshold = std::string(text);
         return true;
     }
@@ -601,7 +622,7 @@ private:
     }
 
 
-    std::optional<KnownDataOp> knownDataOp(const Comprehension& node, const Pipeline& pipeline) const
+    std::optional<KnownDataOp> knownDataOp(const Comprehension& node, const Pipeline& pipeline, size_t index)
     {
         if (!pipeline.single() || pipeline.stages.front().kind != SourceKind::Slice || node.clauses.size() > 2) return std::nullopt;
         const Clause& generator = node.clauses.front();
@@ -615,6 +636,18 @@ private:
         {
             if (op.consumer != Consumer::Count) return std::nullopt;
             if (!literalComparison(text(node.clauses[1].expression), name, op.comparison, op.threshold)) return std::nullopt;
+            if (!numberLiteral(op.threshold))
+            {
+                // An identifier: only once the compiler has verified it names an outer local,
+                // read once instead of per element with no observable difference.
+                op.identifier = true;
+                if (std::find(localFilters.begin(), localFilters.end(), index) == localFilters.end())
+                {
+                    if (std::find(pendingLocalFilters.begin(), pendingLocalFilters.end(), index) == pendingLocalFilters.end())
+                        pendingLocalFilters.push_back(index);
+                    return std::nullopt;
+                }
+            }
         }
         else if (op.consumer != Consumer::Count && op.consumer != Consumer::Sum && op.consumer != Consumer::Min && op.consumer != Consumer::Max)
             return std::nullopt;
@@ -649,8 +682,9 @@ private:
     struct Emission
     {
         Emission(const Comprehension& node, const Pipeline& pipeline, ComprehensionSite& site, std::string name, std::string output,
-            std::string cursor)
-            : node(node), pipeline(pipeline), site(site), name(std::move(name)), output(std::move(output)), cursor(std::move(cursor))
+            std::string cursor, size_t index)
+            : node(node), pipeline(pipeline), site(site), name(std::move(name)), output(std::move(output)), cursor(std::move(cursor)),
+              index(index)
         {
         }
         const Comprehension& node;
@@ -659,6 +693,7 @@ private:
         std::string name;
         std::string output;
         std::string cursor;
+        size_t index; // The comprehension's index in the document.
         bool scalar = false;
         bool sized = false;       // A lone leading generator: allocate once its count is known.
         bool needsCursor = false; // False when the loop index is the output index, or no state is kept.
@@ -917,7 +952,7 @@ private:
             // the loop, and traverse each representation with its own specialized loop.
             sliceSetup(out, stage, clause, site, e, false, true);
             out += "if " + stage.prefix + "_kind == \"buffer\" then ";
-            if (const auto op = knownDataOp(e.node, e.pipeline))
+            if (const auto op = knownDataOp(e.node, e.pipeline, e.index))
             {
                 // The data plane computes this consumer over the normalized byte span exactly
                 // as the scalar loop would; without the runtime extension the loop runs.
@@ -928,7 +963,8 @@ private:
                 const std::string receiver = operations + "_data_u8:";
                 // An empty span after normalization may start past the buffer (`buf[300:400]` of
                 // 256 bytes); the loop runs zero times and the data plane is not consulted.
-                out += "if " + operations + "_data then ";
+                out += "if " + operations + "_data" +
+                    (op->identifier ? " and " + operations + "_typeof(" + op->threshold + ") == \"number\"" : "") + " then ";
                 switch (op->consumer)
                 {
                 case Consumer::Count:
@@ -1001,7 +1037,7 @@ private:
         const bool single = pipeline.single();
         const SourceKind first = single ? pipeline.stages.front().kind : SourceKind::Plain;
         const Consumer consumer = pipeline.consumer;
-        Emission e(node, pipeline, site, name, name + "_out", name + accumulator(consumer));
+        Emission e(node, pipeline, site, name, name + "_out", name + accumulator(consumer), index);
         e.scalar = consumer != Consumer::Materialize;
         e.sized = single && first != SourceKind::Range;
         e.directIndex = single && node.clauses.size() == 1 && first != SourceKind::Range && first != SourceKind::Slice;
@@ -1033,14 +1069,15 @@ private:
 }
 
 LoweredSource lower(std::string_view source, bool recovery, bool fuseLength, const std::vector<Range>& bufferGenerators,
-    bool dynamicGenerators)
+    bool dynamicGenerators, const std::vector<size_t>& localFilters)
 {
     Document document = parseSurface(source);
     if ((document.comprehensions.empty() && document.slices.empty()) || (!recovery && !document.errors.empty()))
-        return {std::string(source), {}, std::move(document), {}, {}, 0};
-    Lowerer lowerer(source, document, recovery, fuseLength, bufferGenerators, dynamicGenerators);
+        return {std::string(source), {}, std::move(document), {}, {}, 0, {}};
+    Lowerer lowerer(source, document, recovery, fuseLength, bufferGenerators, dynamicGenerators, localFilters);
     Text output = lowerer.lower();
     SourceMap map(source, output.text, std::move(output.segments));
-    return {std::move(output.text), std::move(map), std::move(document), std::move(output.sites), std::move(output.sliceSites), lowerer.prelude()};
+    return {std::move(output.text), std::move(map), std::move(document), std::move(output.sites), std::move(output.sliceSites),
+        lowerer.prelude(), std::move(lowerer.pendingLocalFilters)};
 }
 }

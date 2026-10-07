@@ -44,11 +44,16 @@ struct LoweredSource
     std::vector<ComprehensionSite> sites;
     std::vector<SliceSite> sliceSites;
     size_t preludeStatements = 0;
+    // Comprehensions whose recognized data shape compares the binding against an identifier.
+    // They lower to the scalar loop until the compiler verifies the identifier is a local
+    // declared outside the comprehension and lowers again naming them in `localFilters`.
+    std::vector<size_t> pendingLocalFilters;
 };
 
 // Shared compiler/tooling seam: all coordinates in map refer to the original input.
 // Recovery is tooling-only. Strict compilation must reject document errors before parsing.
 // Syntax tooling disables count fusion to retain unary length in the source tree.
 LoweredSource lower(std::string_view source, bool recovery = false, bool fuseLength = true,
-    const std::vector<Range>& bufferGenerators = {}, bool dynamicGenerators = false);
+    const std::vector<Range>& bufferGenerators = {}, bool dynamicGenerators = false,
+    const std::vector<size_t>& localFilters = {});
 }

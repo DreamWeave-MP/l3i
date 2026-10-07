@@ -39,7 +39,15 @@ const CORPUS: &[(&str, &str)] = &[
     ("data_min", "return min[for x in samples[first:last] => x]"),
     ("data_max_spaced", "return max[for x in buf[a:b] => x ]"),
     ("data_not_binding_projection", "return sum[for x in buf[a:b] => x * 2]"),
-    ("data_not_literal_filter", "return #[for x in buf[a:b] if x > limit => x]"),
+    ("data_global_threshold_is_not_recognized", "return #[for x in buf[a:b] if x > limit => x]"),
+    ("data_local_threshold", "local limit = 127\nreturn #[for x in buf[a:b] if x > limit => x]"),
+    ("data_upvalue_threshold", "local limit = 9\nreturn function() return #[for x in buf[a:b] if x <= limit => x] end"),
+    ("data_parameter_threshold", "return function(limit) return #[for x in buf[a:b] if x ~= limit => x] end"),
+    ("data_binding_is_not_a_threshold", "local x = 1\nreturn #[for x in buf[a:b] if x > x => x]"),
+    (
+        "data_later_local_is_a_global",
+        "return #[for x in buf[a:b] if x > limit => x], (function() local limit = 1 return limit end)()",
+    ),
     ("data_not_sum_with_filter", "return sum[for x in buf[a:b] if x > 1 => x]"),
     ("data_not_any", "return any[for x in buf[a:b] => x]"),
     // Sinks.

@@ -6,15 +6,76 @@
 #include "source_locations.h"
 #include "surface_syntax.h"
 
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 #include <exception>
 #include <string>
+#include <string_view>
+#include <vector>
 
 namespace
 {
+Luau::Position positionAt(std::string_view text, size_t offset)
+{
+    Luau::Position result(0, 0);
+    for (size_t i = 0; i < std::min(offset, text.size()); ++i)
+        if (text[i] == '\n') result = Luau::Position(result.line + 1, 0);
+        else ++result.column;
+    return result;
+}
+
+struct ExpressionAt final : Luau::AstVisitor
+{
+    Luau::Location target;
+    Luau::AstExpr* result = nullptr;
+    explicit ExpressionAt(Luau::Location target) : target(target) {}
+    bool visit(Luau::AstExpr* expression) override
+    {
+        if (expression->location == target) result = expression;
+        return result == nullptr;
+    }
+};
+
+// The compile-path lowering. A recognized pipeline whose filter compares the binding against
+// an identifier is lowered as a scalar loop first; the parsed lowering then tells whether that
+// identifier is a local (or upvalue) declared outside the comprehension, in which case reading
+// it once is indistinguishable from reading it per element and the pipeline is lowered again
+// as a data operation. Globals, and anything the parse cannot resolve, keep the loop.
+L3i::Surface::LoweredSource lowerForCompile(std::string_view source)
+{
+    auto lowered = L3i::Surface::lower(source, false, true, {}, true);
+    if (lowered.pendingLocalFilters.empty() || !lowered.document.errors.empty())
+        return lowered;
+    Luau::Allocator allocator;
+    Luau::AstNameTable names(allocator);
+    Luau::ParseResult parsed = Luau::Parser::parse(lowered.source.data(), lowered.source.size(), names, allocator);
+    if (!parsed.root || !parsed.errors.empty())
+        return lowered;
+    std::vector<size_t> verified;
+    for (const size_t index : lowered.pendingLocalFilters)
+    {
+        const auto site = std::find_if(lowered.sites.begin(), lowered.sites.end(),
+            [&](const L3i::Surface::ComprehensionSite& site) { return site.comprehension == index; });
+        if (site == lowered.sites.end() || site->clauses.size() < 2) continue;
+        const auto range = site->clauses[1].expression;
+        ExpressionAt finder({positionAt(lowered.source, range.begin), positionAt(lowered.source, range.end)});
+        parsed.root->visit(&finder);
+        const auto* binary = finder.result ? finder.result->as<Luau::AstExprBinary>() : nullptr;
+        const auto* local = binary ? binary->right->as<Luau::AstExprLocal>() : nullptr;
+        if (!local) continue;
+        // Declared before the generated call begins: an outer local, not a loop binding.
+        if (local->local->location.begin < positionAt(lowered.source, site->call.begin))
+            verified.push_back(index);
+    }
+    if (verified.empty())
+        return lowered;
+    return L3i::Surface::lower(source, false, true, {}, true, verified);
+}
+
 char* compileImpl(const char* source, size_t size, lua_CompileOptions* options, size_t* outsize, bool dump)
 {
+
     if (!outsize)
         return nullptr;
 
@@ -34,7 +95,7 @@ char* compileImpl(const char* source, size_t size, lua_CompileOptions* options, 
             static_assert(sizeof(lua_CompileOptions) == sizeof(Luau::CompileOptions), "C and C++ compile options must match");
             std::memcpy(&compileOptions, options, sizeof(compileOptions));
         }
-        auto lowered = L3i::Surface::lower(std::string_view(source, size), false, true, {}, true);
+        auto lowered = lowerForCompile(std::string_view(source, size));
         if (!lowered.document.errors.empty())
         {
             const auto& error = lowered.document.errors.front();
@@ -143,7 +204,9 @@ std::string dumpImpl(std::string_view source, bool recovery, bool fuseLength, bo
                 if (!clause.sliceSource.empty())
                     buffers.push_back(clause.sliceSource);
     }
-    const auto lowered = L3i::Surface::lower(source, recovery, fuseLength, buffers, dynamic);
+    // The compile policy takes the compiler's own two-pass path so snapshots show what compiles.
+    const auto lowered = !recovery && fuseLength && dynamic && !bufferAll ? lowerForCompile(source)
+                                                                        : L3i::Surface::lower(source, recovery, fuseLength, buffers, dynamic);
     std::string out = lowered.source;
     out += "\n--prelude ";
     out += std::to_string(lowered.preludeStatements);

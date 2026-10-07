@@ -292,6 +292,21 @@ fn recognized_buffer_pipelines_agree_with_the_scalar_loop_and_call_the_data_plan
         note(#[for x in buf[1:256] if x <= 0x10 => x])
         note(#[for x in buf[1:256] if x > -1 => x])
         note(#[for x in buf[5:5] if x > 0 => x])
+        local limit = 100
+        note(#[for x in buf[1:256] if x > limit => x])
+        note(#[for x in buf[1:256] if x <= limit => x])
+        local function withUpvalue() return #[for x in buf[1:256] if x >= limit => x] end
+        note(withUpvalue())
+        local function withParameter(bound) return #[for x in buf[20:200] if x ~= bound => x] end
+        note(withParameter(37) .. ':' .. withParameter(nil))
+        threshold = 50
+        note(#[for x in buf[1:256] if x < threshold => x])
+        local text = 'ten'
+        local ok, message = pcall(function() return #[for x in buf[1:256] if x > text => x] end)
+        note(tostring(ok) .. ':' .. tostring(message))
+        local nothing = nil
+        ok, message = pcall(function() return #[for x in buf[1:256] if x == nothing => x] end)
+        note(tostring(ok) .. ':' .. tostring(message))
         note(min[for x in buf[1:256] => x])
         note(max[for x in buf[3:9] => x])
         note(min[for x in buf[200:300] => x])

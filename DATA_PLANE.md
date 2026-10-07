@@ -251,9 +251,3 @@ brief's rule is to earn operations from evidence, not from plausible consumers.
 - **Buffer sinks.** `into(buffer)[...]` needs an element kind the JSL surface cannot yet spell,
   and a nil-projection rule for a representation that has no nil. The consumer exists in the
   plan (`Consumer::Sink`); the spelling waits for a use that fixes the semantics.
-- **Filters against variables in recognized pipelines.** `#[for x in buf[a:b] if x > limit
-  => x]` is not recognized because the compile path has no scope information: `limit` could be
-  a global with a metamethod, so reading it once instead of per element would be a semantic
-  change. Analysis knows whether it is a plain local; carrying that knowledge to the compile
-  path is a new seam (the Analysis-only `bufferGenerators` list shows the shape). Worth doing
-  when a real pipeline needs it; the scalar loop it gets today is already native under `jit`.
