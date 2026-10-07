@@ -157,6 +157,10 @@ bytes-digests = ["bytes", "dep:crc32fast", "dep:adler2", "dep:xxhash-rust", "dep
 bytes-text = ["bytes", "dep:encoding_rs"]
 # `bytes.regex`: regular expressions over bytes, matched against many ranges of a buffer in one call.
 bytes-regex = ["bytes", "dep:regex"]
+# The `@dream/data` extension (`data`): the generic bulk-data plane over typed buffer spans:
+# reductions, comparisons into selections, gather/scatter, fill, element-wise arithmetic,
+# stable argsort and partition, natively and without per-element callbacks.
+data = []
 # The `@dream/luau` extension (`syntax`): Luau's own parser for scripts, its syntax tree,
 # comments, errors and tokens built as tables in native code.
 syntax = []

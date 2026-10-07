@@ -73,6 +73,8 @@ mod byte_rules;
 pub mod bytes;
 pub mod call;
 pub mod convert;
+#[cfg(feature = "data")]
+pub mod data;
 pub mod debug;
 pub mod debug_name;
 pub mod diagnostics;

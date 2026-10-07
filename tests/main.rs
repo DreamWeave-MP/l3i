@@ -30,6 +30,8 @@ mod analysis;
 mod bytes;
 mod call;
 mod comprehension;
+#[cfg(feature = "data")]
+mod data;
 mod debug;
 mod direct;
 mod extension;
