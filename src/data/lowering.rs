@@ -17,7 +17,7 @@
 use std::ffi::c_int;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use super::layout::{KIND, SCRATCH};
+use super::layout::{KIND, SCRATCH, STRIDE};
 use super::{Comparison, Kind, KindReceiver};
 use crate::native_code::hooks::{NamecallSite, NativeCodeHooks, NativeContext};
 use crate::native_code::ir::{IrBlockKind, IrBuilder, IrCmd, IrCondition, IrOp, bytecode_type};
@@ -146,11 +146,27 @@ impl Emit<'_, '_> {
         self.element_at(kind, cursor)
     }
 
+    /// The receiver's stride in bytes, a double in its payload.
+    fn stride(&mut self) -> IrOp {
+        let receiver = self.receiver();
+        let at = self.b.const_int(STRIDE);
+        let tag = self.b.const_tag(LUA_TUSERDATA as u8);
+        self.b.inst(IrCmd::BUFFER_READF64, &[receiver, at, tag])
+    }
+
+    /// `elements * stride` as an int byte distance.
+    fn stride_bytes(&mut self, elements: f64) -> IrOp {
+        let stride = self.stride();
+        let factor = self.b.const_double(elements);
+        let distance = self.b.inst(IrCmd::MUL_NUM, &[stride, factor]);
+        self.b.inst(IrCmd::NUM_TO_INT, &[distance])
+    }
+
     /// Element `k` of an unrolled pass whose cursor has already advanced by `UNROLL` elements.
-    fn unrolled_element(&mut self, kind: Kind, k: usize, size: i64) -> IrOp {
+    fn unrolled_element(&mut self, kind: Kind, k: usize) -> IrOp {
         let cursor = self.get_num(S_CURSOR);
         let base = self.b.inst(IrCmd::NUM_TO_INT, &[cursor]);
-        let back = self.b.const_int(-((UNROLL - k) as i64 * size) as i32);
+        let back = self.stride_bytes(-((UNROLL - k) as f64));
         let offset = self.b.inst(IrCmd::ADD_INT, &[base, back]);
         self.element_at(kind, offset)
     }
@@ -272,14 +288,15 @@ impl NativeCodeHooks for KindLowering {
             let head = emit.block();
             let body = emit.block();
             let finish = emit.block();
-            let size = kind.size() as i64;
-
-            // The span must fit: offset + count * size <= length, in int64 so nothing wraps.
+            // The span must fit: offset + count * stride <= length, in int64 so nothing wraps.
+            // Stricter than the binder's last-element rule for a stride above the element
+            // size; a span the binder would accept but this rejects takes the slow path.
             emit.b.begin_block(entry);
             let offset64 = emit.int64_of(offset_reg);
             let count64 = emit.int64_of(count_reg);
-            let size64 = emit.b.const_int64(size);
-            let bytes = emit.b.inst(IrCmd::MUL_INT64, &[count64, size64]);
+            let stride = emit.stride();
+            let stride64 = emit.b.inst(IrCmd::NUM_TO_INT64, &[stride]);
+            let bytes = emit.b.inst(IrCmd::MUL_INT64, &[count64, stride64]);
             let end64 = emit.b.inst(IrCmd::ADD_INT64, &[offset64, bytes]);
             let length = emit.buffer_length();
             let fits = emit.b.cond(IrCondition::UnsignedLessEqual);
@@ -304,7 +321,7 @@ impl NativeCodeHooks for KindLowering {
                     let first = emit.element(*kind, cursor);
                     emit.set_num(S_ACC, first);
                     let cursor = emit.get_num(S_CURSOR);
-                    let step = emit.b.const_double(size as f64);
+                    let step = emit.stride();
                     let next = emit.b.inst(IrCmd::ADD_NUM, &[cursor, step]);
                     emit.set_num(S_CURSOR, next);
                     emit.jump(head);
@@ -322,7 +339,9 @@ impl NativeCodeHooks for KindLowering {
                 let unrolled = emit.block();
                 let single = emit.block();
                 let cursor = emit.get_num(S_CURSOR);
-                let span = emit.b.const_double((UNROLL as i64 * size) as f64);
+                let stride = emit.stride();
+                let elements = emit.b.const_double(UNROLL as f64);
+                let span = emit.b.inst(IrCmd::MUL_NUM, &[stride, elements]);
                 let reach = emit.b.inst(IrCmd::ADD_NUM, &[cursor, span]);
                 let end = emit.get_num(S_END);
                 let fits = emit.b.cond(IrCondition::LessEqual);
@@ -330,7 +349,9 @@ impl NativeCodeHooks for KindLowering {
 
                 emit.b.begin_block(unrolled);
                 let cursor = emit.get_num(S_CURSOR);
-                let span = emit.b.const_double((UNROLL as i64 * size) as f64);
+                let stride = emit.stride();
+                let elements = emit.b.const_double(UNROLL as f64);
+                let span = emit.b.inst(IrCmd::MUL_NUM, &[stride, elements]);
                 let next = emit.b.inst(IrCmd::ADD_NUM, &[cursor, span]);
                 emit.set_num(S_CURSOR, next);
                 match member {
@@ -338,7 +359,7 @@ impl NativeCodeHooks for KindLowering {
                         let base = emit.b.inst(IrCmd::NUM_TO_INT, &[cursor]);
                         let mut acc = emit.get_num(S_ACC);
                         for k in 0..UNROLL {
-                            let at = emit.b.const_int((k as i64 * size) as i32);
+                            let at = emit.stride_bytes(k as f64);
                             let offset = emit.b.inst(IrCmd::ADD_INT, &[base, at]);
                             let value = emit.element_at(*kind, offset);
                             acc = emit.b.inst(IrCmd::ADD_NUM, &[acc, value]);
@@ -354,7 +375,7 @@ impl NativeCodeHooks for KindLowering {
                             let next_block = if k + 1 < UNROLL { chain[k + 1] } else { head };
                             let hit = emit.block();
                             emit.b.begin_block(chain[k]);
-                            let value = emit.unrolled_element(*kind, k, size);
+                            let value = emit.unrolled_element(*kind, k);
                             match member {
                                 Member::Count(comparison) => {
                                     let threshold = emit.get_num(S_THRESHOLD);
@@ -375,7 +396,7 @@ impl NativeCodeHooks for KindLowering {
                                     });
                                     emit.b.inst(IrCmd::JUMP_CMP_NUM, &[value, acc, better, hit, next_block]);
                                     emit.b.begin_block(hit);
-                                    let value = emit.unrolled_element(*kind, k, size);
+                                    let value = emit.unrolled_element(*kind, k);
                                     emit.set_num(S_ACC, value);
                                 }
                             }
@@ -396,7 +417,7 @@ impl NativeCodeHooks for KindLowering {
 
             let cursor = emit.get_num(S_CURSOR);
             let value = emit.element(*kind, cursor);
-            let step = emit.b.const_double(size as f64);
+            let step = emit.stride();
             let next = emit.b.inst(IrCmd::ADD_NUM, &[cursor, step]);
             emit.set_num(S_CURSOR, next);
             match member {
@@ -414,7 +435,7 @@ impl NativeCodeHooks for KindLowering {
                     emit.b.inst(IrCmd::JUMP_CMP_NUM, &[value, acc, better, replace, head]);
                     emit.b.begin_block(replace);
                     let cursor = emit.get_num(S_CURSOR);
-                    let step = emit.b.const_double(size as f64);
+                    let step = emit.stride();
                     let previous = emit.b.inst(IrCmd::SUB_NUM, &[cursor, step]);
                     let value = emit.element(*kind, previous);
                     emit.set_num(S_ACC, value);

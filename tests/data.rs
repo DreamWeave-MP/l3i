@@ -387,6 +387,11 @@ fn kind_receiver_reductions_lower_to_native_loops_with_the_bound_semantics() {
                     write(buf, 5 + i * size, v)
                 end
                 local K: dream_data_Kind = data.kind(name)
+                -- A strided layout over the same bytes: every other element.
+                local S: dream_data_Kind = data.kind(name .. '@' .. (size * 2))
+                assert(S:sum(buf, 5, n // 2) == data.sum(buf, name .. '@' .. (size * 2), 5, n // 2), name .. ' strided sum')
+                assert(S:countGt(buf, 5, n // 2, 3) == data.count(buf, name .. '@' .. (size * 2), 5, n // 2, 'gt', 3), name .. ' strided count')
+                assert(S:min(buf, 5, n // 2) == data.min(buf, name .. '@' .. (size * 2), 5, n // 2), name .. ' strided min')
                 -- The lowered calls against the module functions (the bound path), per kind.
                 assert(K:sum(buf, 5, n) == data.sum(buf, name, 5, n), name .. ' sum')
                 assert(K:sum(buf, 5 + 10 * size, 0) == 0, name .. ' empty sum')
@@ -429,4 +434,49 @@ fn kind_receiver_reductions_lower_to_native_loops_with_the_bound_semantics() {
     // records a few dozen); the slow paths exit to the binder.
     let blocks = stats_after.regular_blocks_executed - stats_before.regular_blocks_executed;
     assert!(blocks > 10_000, "native blocks executed: {blocks}");
+}
+
+#[test]
+fn strided_layouts_read_one_field_of_packed_records() {
+    exec(
+        r"
+        -- A physics-style record: x, y, vx, vy as f32, 16 bytes each; 300 bodies after a 4-byte header.
+        local n = 300
+        local motion = buffer.create(4 + n * 16)
+        local sumVy, maxVy = 0, nil
+        for i = 0, n - 1 do
+            local base = 4 + i * 16
+            buffer.writef32(motion, base, i) buffer.writef32(motion, base + 4, -i)
+            buffer.writef32(motion, base + 8, i * 0.5) local vy = ((i * 37) % 101) / 3 buffer.writef32(motion, base + 12, vy)
+            sumVy += buffer.readf32(motion, base + 12)
+            if maxVy == nil or buffer.readf32(motion, base + 12) > maxVy then maxVy = buffer.readf32(motion, base + 12) end
+        end
+        assert(data.sum(motion, 'f32@16', 4 + 12, n) == sumVy, 'vy column sum')
+        assert(data.max(motion, 'f32@16', 4 + 12, n) == maxVy and data.argmax(motion, 'f32@16', 4 + 12, n) == 30, 'the first body with (i * 37) % 101 == 100')
+        assert(data.sum(motion, 'f32@16', 4, n) == (n - 1) * n / 2, 'x column')
+        assert(data.count(motion, 'f32@16', 4 + 4, n, 'lt', -100) == n - 101, 'y column compare')
+        local VY = data.kind('f32@16')
+        assert(VY:sum(motion, 16, n) == sumVy and VY:max(motion, 16, n) == maxVy)
+        -- The last record may end exactly at the buffer: (count - 1) * stride + size.
+        assert(data.sum(motion, 'f32@16', 4 + 12, n) == sumVy)
+        local ok, message = pcall(data.sum, motion, 'f32@16', 4 + 12, n + 1)
+        assert(not ok and string.find(message, 'span of 301 f32@16 at offset 16 exceeds', 1, true), message)
+        ok, message = pcall(data.sum, motion, 'f32@2', 0, 1)
+        assert(not ok and string.find(message, 'stride', 1, true), message)
+        ok, message = pcall(data.sum, motion, 'f32@x', 0, 1)
+        assert(not ok and string.find(message, 'stride', 1, true), message)
+        -- Strided outputs too: scale the vx column in place, fill the vy column.
+        data.scale(motion, 'f32@16', 4 + 8, n, 2, motion, 4 + 8)
+        assert(buffer.readf32(motion, 4 + 8) == 0 and buffer.readf32(motion, 4 + 16 + 8) == 1, 'scaled vx')
+        data.fill(motion, 'f32@16', 4 + 12, n, 0)
+        assert(data.sum(motion, 'f32@16', 4 + 12, n) == 0 and buffer.readf32(motion, 4 + 16) == 1, 'neighbours untouched')
+        -- A strided key column sorts and gathers like a contiguous one.
+        local perm = buffer.create(n * 4)
+        data.argsort(motion, 'f32@16', 4 + 4, n, perm)
+        assert(buffer.readu32(perm, 0) == n - 1 and buffer.readu32(perm, (n - 1) * 4) == 0, 'y ascending is reverse index order')
+        local xs = buffer.create(n * 4)
+        data.gather(motion, 'f32@16', 4, n, perm, xs, 0)
+        assert(buffer.readf32(xs, 0) == n - 1 and buffer.readf32(xs, 4) == n - 2, 'gathered x by sorted y')
+    ",
+    );
 }

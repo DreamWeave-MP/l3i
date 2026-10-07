@@ -69,9 +69,14 @@ module, tests, docs. No new recognizer, no new loop emitter.
 
 A **span** is `(buffer, kind, offset, count)`: `count` elements of `kind` starting `offset`
 bytes into a Luau buffer. Kinds are the `buffer` library's own little-endian representations:
-`u8 i8 u16 i16 u32 i32 f32 f64`. A span is validated once, before any element is read (offset
-and count non-negative, `offset + count × size ≤ length`), and is a descriptor, never an
-allocation. Contiguous only; no strides.
+`u8 i8 u16 i16 u32 i32 f32 f64`, optionally with a stride: `f32@16` is one f32 field of every
+16-byte record, the layout of packed records in this ecosystem (physics bodies, entity slots,
+token records). A span is validated once, before any element is read (offset and count
+non-negative, `offset + (count − 1) × stride + size ≤ length`), and is a descriptor, never an
+allocation. Element-wise operations (`add`, `scale`, `clamp`, `fill`) take the layout for every
+operand, so a record field updates in place; `gather` reads a possibly strided field into a
+contiguous column and `scatter` writes a contiguous column into a possibly strided field. The
+receiver's native loops carry the stride in the payload and step by it.
 
 An **index vector** is a `u32` buffer of zero-based element positions. A **selection** is a
 `dream.data.Selection` userdata: a bitset over the positions of a span of a fixed length,
@@ -241,10 +246,6 @@ JSL recognition to reach the fast path.
 These were considered and left out because nothing in this repository asks for them yet; the
 brief's rule is to earn operations from evidence, not from plausible consumers.
 
-- **Strided spans.** A field of a packed record is a stride, not a contiguous span. Adding a
-  stride to the operand would touch every operation and slow the contiguous fast path unless
-  specialized. Re-open when a package reads a field column in a hot loop; the change is one
-  operand field plus per-operation handling, not a new API.
 - **Buffer sinks.** `into(buffer)[...]` needs an element kind the JSL surface cannot yet spell,
   and a nil-projection rule for a representation that has no nil. The consumer exists in the
   plan (`Consumer::Sink`); the spelling waits for a use that fixes the semantics.

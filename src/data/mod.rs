@@ -175,50 +175,99 @@ impl Kind {
     }
 }
 
-/// A bounds-checked typed span: `count` elements of `kind` starting `offset` bytes into a
+/// An element kind with the distance between consecutive elements: `"f32"` is contiguous
+/// (stride = size); `"f32@16"` is one f32 field of a 16-byte record, the shape packed records
+/// take in buffers (a physics body, an entity slot). A stride below the element size is an
+/// error; a stride above it skips the rest of the record.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Layout {
+    pub kind: Kind,
+    pub stride: usize,
+}
+
+impl Layout {
+    pub fn parse(what: &str, name: &str) -> Result<Layout> {
+        let (kind, stride) = match name.split_once('@') {
+            Some((kind, stride)) => {
+                let kind = Kind::parse(what, kind)?;
+                let stride = stride.parse::<usize>().ok().filter(|stride| *stride >= kind.size()).ok_or_else(|| {
+                    Error::runtime(format!(
+                        "{what}: stride '{stride}' must be a whole number of bytes of at least {} for {}",
+                        kind.size(),
+                        kind.name()
+                    ))
+                })?;
+                (kind, stride)
+            }
+            None => {
+                let kind = Kind::parse(what, name)?;
+                (kind, kind.size())
+            }
+        };
+        Ok(Layout { kind, stride })
+    }
+
+    pub fn contiguous(kind: Kind) -> Layout {
+        Layout { kind, stride: kind.size() }
+    }
+}
+
+/// A bounds-checked typed span: `count` elements of a layout starting `offset` bytes into a
 /// buffer. Built once per operation; element access from here is unchecked by construction.
 #[derive(Clone, Copy)]
 struct Span {
     base: *mut u8,
     kind: Kind,
+    stride: usize,
     count: usize,
 }
 
 impl Span {
-    fn new(what: &str, buffer: &BufferView<'_>, kind: Kind, offset: Exact<i64>, count: Exact<i64>) -> Result<Span> {
+    fn new(what: &str, buffer: &BufferView<'_>, layout: Layout, offset: Exact<i64>, count: Exact<i64>) -> Result<Span> {
+        let Layout { kind, stride } = layout;
         let offset =
             usize::try_from(offset.0).map_err(|_| Error::runtime(format!("{what}: negative offset {}", offset.0)))?;
         let count =
             usize::try_from(count.0).map_err(|_| Error::runtime(format!("{what}: negative count {}", count.0)))?;
-        let bytes = count.checked_mul(kind.size()).and_then(|bytes| bytes.checked_add(offset));
+        // The last element ends at offset + (count - 1) * stride + size; an empty span needs
+        // only its offset to be in range.
+        let bytes = if count == 0 {
+            Some(offset)
+        } else {
+            (count - 1)
+                .checked_mul(stride)
+                .and_then(|bytes| bytes.checked_add(kind.size()))
+                .and_then(|bytes| bytes.checked_add(offset))
+        };
         match bytes {
             Some(end) if end <= buffer.len() => {}
             _ => {
                 return Err(Error::runtime(format!(
-                    "{what}: span of {count} {} at offset {offset} exceeds the buffer length {}",
+                    "{what}: span of {count} {}{} at offset {offset} exceeds the buffer length {}",
                     kind.name(),
+                    if stride == kind.size() { String::new() } else { format!("@{stride}") },
                     buffer.len()
                 )));
             }
         }
-        // SAFETY: the buffer's storage holds at least `offset + count * size` bytes, verified
-        // above; the pointer is only dereferenced for elements inside the span.
+        // SAFETY: the buffer's storage holds every element's bytes, verified above; the pointer
+        // is only dereferenced for elements inside the span.
         let base = unsafe { buffer.bytes_unchecked().as_ptr().add(offset) }.cast_mut();
-        Ok(Span { base, kind, count })
+        Ok(Span { base, kind, stride, count })
     }
 
     #[inline(always)]
     fn get(&self, index: usize) -> f64 {
         debug_assert!(index < self.count);
         // SAFETY: `index < count`, and the span was bounds-checked at construction.
-        unsafe { self.kind.read(self.base.add(index * self.kind.size())) }
+        unsafe { self.kind.read(self.base.add(index * self.stride)) }
     }
 
     #[inline(always)]
     fn set(&self, index: usize, value: f64) {
         debug_assert!(index < self.count);
         // SAFETY: as `get`; buffers are writable storage.
-        unsafe { self.kind.write(self.base.add(index * self.kind.size()), value) }
+        unsafe { self.kind.write(self.base.add(index * self.stride), value) }
     }
 }
 
@@ -419,7 +468,7 @@ impl Target<'_> {
 // ---------------------------------------------------------------------------------------------
 
 fn sum(buffer: BufferView<'_>, kind: &str, offset: Exact<i64>, count: Exact<i64>) -> Result<f64> {
-    let span = Span::new("data.sum", &buffer, Kind::parse("data.sum", kind)?, offset, count)?;
+    let span = Span::new("data.sum", &buffer, Layout::parse("data.sum", kind)?, offset, count)?;
     let mut total = 0.0;
     for i in 0..span.count {
         total += span.get(i);
@@ -446,22 +495,22 @@ fn extreme(span: &Span, greatest: bool) -> Option<usize> {
 }
 
 fn min(buffer: BufferView<'_>, kind: &str, offset: Exact<i64>, count: Exact<i64>) -> Result<Option<f64>> {
-    let span = Span::new("data.min", &buffer, Kind::parse("data.min", kind)?, offset, count)?;
+    let span = Span::new("data.min", &buffer, Layout::parse("data.min", kind)?, offset, count)?;
     Ok(extreme(&span, false).map(|i| span.get(i)))
 }
 
 fn max(buffer: BufferView<'_>, kind: &str, offset: Exact<i64>, count: Exact<i64>) -> Result<Option<f64>> {
-    let span = Span::new("data.max", &buffer, Kind::parse("data.max", kind)?, offset, count)?;
+    let span = Span::new("data.max", &buffer, Layout::parse("data.max", kind)?, offset, count)?;
     Ok(extreme(&span, true).map(|i| span.get(i)))
 }
 
 fn argmin(buffer: BufferView<'_>, kind: &str, offset: Exact<i64>, count: Exact<i64>) -> Result<Option<f64>> {
-    let span = Span::new("data.argmin", &buffer, Kind::parse("data.argmin", kind)?, offset, count)?;
+    let span = Span::new("data.argmin", &buffer, Layout::parse("data.argmin", kind)?, offset, count)?;
     Ok(extreme(&span, false).map(|i| i as f64))
 }
 
 fn argmax(buffer: BufferView<'_>, kind: &str, offset: Exact<i64>, count: Exact<i64>) -> Result<Option<f64>> {
-    let span = Span::new("data.argmax", &buffer, Kind::parse("data.argmax", kind)?, offset, count)?;
+    let span = Span::new("data.argmax", &buffer, Layout::parse("data.argmax", kind)?, offset, count)?;
     Ok(extreme(&span, true).map(|i| i as f64))
 }
 
@@ -474,7 +523,7 @@ fn count(
     comparison: &str,
     threshold: f64,
 ) -> Result<f64> {
-    let span = Span::new("data.count", &buffer, Kind::parse("data.count", kind)?, offset, count)?;
+    let span = Span::new("data.count", &buffer, Layout::parse("data.count", kind)?, offset, count)?;
     let comparison = Comparison::parse("data.count", comparison)?;
     let mut selected = 0usize;
     for i in 0..span.count {
@@ -498,7 +547,7 @@ fn compare(
     threshold: f64,
     into: Option<&Selection>,
 ) -> Result<StackResults> {
-    let span = Span::new("data.compare", &buffer, Kind::parse("data.compare", kind)?, offset, count)?;
+    let span = Span::new("data.compare", &buffer, Layout::parse("data.compare", kind)?, offset, count)?;
     let comparison = Comparison::parse("data.compare", comparison)?;
     let target = Target::prepare(into, span.count);
     {
@@ -649,10 +698,17 @@ fn gather(
     destination_offset: Exact<i64>,
     index_count: Option<Exact<i64>>,
 ) -> Result<f64> {
-    let kind = Kind::parse("data.gather", kind)?;
+    let kind = Layout::parse("data.gather", kind)?;
     let source = Span::new("data.gather", &source, kind, source_offset, source_count)?;
     let indices = Indices::new("data.gather", &indices, Exact(0), index_count)?;
-    let destination = Span::new("data.gather", &destination, kind, destination_offset, Exact(indices.count as i64))?;
+    // The source may be a record field (a strided layout); the gathered column is contiguous.
+    let destination = Span::new(
+        "data.gather",
+        &destination,
+        Layout::contiguous(kind.kind),
+        destination_offset,
+        Exact(indices.count as i64),
+    )?;
     for i in 0..indices.count {
         let index = indices.get(i);
         if index >= source.count {
@@ -681,8 +737,9 @@ fn scatter(
     destination_offset: Exact<i64>,
     destination_count: Exact<i64>,
 ) -> Result<f64> {
-    let kind = Kind::parse("data.scatter", kind)?;
-    let source = Span::new("data.scatter", &source, kind, source_offset, source_count)?;
+    let kind = Layout::parse("data.scatter", kind)?;
+    // The scattered column is contiguous; the destination may be a record field (strided).
+    let source = Span::new("data.scatter", &source, Layout::contiguous(kind.kind), source_offset, source_count)?;
     let indices = Indices::new("data.scatter", &indices, Exact(0), Some(Exact(source.count as i64)))?;
     let destination = Span::new("data.scatter", &destination, kind, destination_offset, destination_count)?;
     for i in 0..indices.count {
@@ -701,7 +758,7 @@ fn scatter(
 }
 
 fn fill(buffer: BufferView<'_>, kind: &str, offset: Exact<i64>, count: Exact<i64>, value: f64) -> Result<()> {
-    let span = Span::new("data.fill", &buffer, Kind::parse("data.fill", kind)?, offset, count)?;
+    let span = Span::new("data.fill", &buffer, Layout::parse("data.fill", kind)?, offset, count)?;
     for i in 0..span.count {
         span.set(i, value);
     }
@@ -719,7 +776,7 @@ fn add(
     out_offset: Exact<i64>,
     count: Exact<i64>,
 ) -> Result<()> {
-    let kind = Kind::parse("data.add", kind)?;
+    let kind = Layout::parse("data.add", kind)?;
     let left = Span::new("data.add", &left, kind, left_offset, count)?;
     let right = Span::new("data.add", &right, kind, right_offset, count)?;
     let out = Span::new("data.add", &out, kind, out_offset, count)?;
@@ -738,7 +795,7 @@ fn scale(
     out: BufferView<'_>,
     out_offset: Exact<i64>,
 ) -> Result<()> {
-    let kind = Kind::parse("data.scale", kind)?;
+    let kind = Layout::parse("data.scale", kind)?;
     let source = Span::new("data.scale", &source, kind, offset, count)?;
     let out = Span::new("data.scale", &out, kind, out_offset, count)?;
     for i in 0..out.count {
@@ -758,7 +815,7 @@ fn clamp(
     out: BufferView<'_>,
     out_offset: Exact<i64>,
 ) -> Result<()> {
-    let kind = Kind::parse("data.clamp", kind)?;
+    let kind = Layout::parse("data.clamp", kind)?;
     if !matches!(low.partial_cmp(&high), Some(Ordering::Less | Ordering::Equal)) {
         return Err(Error::runtime(format!("data.clamp: low {low} is not at most high {high}")));
     }
@@ -801,7 +858,7 @@ fn argsort(
     out: BufferView<'_>,
     out_offset: Option<Exact<i64>>,
 ) -> Result<f64> {
-    let keys = Span::new("data.argsort", &keys, Kind::parse("data.argsort", kind)?, offset, count)?;
+    let keys = Span::new("data.argsort", &keys, Layout::parse("data.argsort", kind)?, offset, count)?;
     let out = Indices::new("data.argsort", &out, out_offset.unwrap_or(Exact(0)), Some(Exact(keys.count as i64)))?;
     // The keys are read once into the scratch so the sort never touches the buffer again, which
     // also makes an `out` that overlaps `keys` well defined.
@@ -824,7 +881,7 @@ fn partition(
     out: BufferView<'_>,
     out_offset: Option<Exact<i64>>,
 ) -> Result<f64> {
-    let keys = Span::new("data.partition", &keys, Kind::parse("data.partition", kind)?, offset, count)?;
+    let keys = Span::new("data.partition", &keys, Layout::parse("data.partition", kind)?, offset, count)?;
     let comparison = Comparison::parse("data.partition", comparison)?;
     let out = Indices::new("data.partition", &out, out_offset.unwrap_or(Exact(0)), Some(Exact(keys.count as i64)))?;
     let accepted = (0..keys.count).filter(|&i| comparison.test(keys.get(i), threshold)).count();
@@ -855,6 +912,8 @@ const RECEIVER_SCRATCH_WORDS: usize = 4;
 #[repr(C)]
 pub struct KindReceiver {
     kind: u64,
+    /// The stride in bytes, as a double so native code adds it to its cursor directly.
+    stride: f64,
     scratch: [Cell<u64>; RECEIVER_SCRATCH_WORDS],
 }
 
@@ -864,8 +923,12 @@ unsafe impl crate::userdata::Userdata for KindReceiver {
 }
 
 impl KindReceiver {
-    pub fn new(kind: Kind) -> KindReceiver {
-        KindReceiver { kind: kind as u64, scratch: Default::default() }
+    pub fn new(layout: Layout) -> KindReceiver {
+        KindReceiver { kind: layout.kind as u64, stride: layout.stride as f64, scratch: Default::default() }
+    }
+
+    pub fn layout(&self) -> Layout {
+        Layout { kind: self.kind(), stride: self.stride as usize }
     }
 
     pub fn kind(&self) -> Kind {
@@ -882,7 +945,7 @@ impl KindReceiver {
     }
 
     fn span(&self, what: &str, buffer: &BufferView<'_>, offset: Exact<i64>, count: Exact<i64>) -> Result<Span> {
-        Span::new(what, buffer, self.kind(), offset, count)
+        Span::new(what, buffer, self.layout(), offset, count)
     }
 }
 
@@ -891,10 +954,12 @@ pub(crate) mod layout {
     use super::KindReceiver;
 
     pub const KIND: i32 = 0;
-    pub const SCRATCH: i32 = 8;
+    pub const STRIDE: i32 = 8;
+    pub const SCRATCH: i32 = 16;
 
     const _: () = {
         assert!(std::mem::offset_of!(KindReceiver, kind) == KIND as usize);
+        assert!(std::mem::offset_of!(KindReceiver, stride) == STRIDE as usize);
         assert!(std::mem::offset_of!(KindReceiver, scratch) == SCRATCH as usize);
     };
 }
@@ -979,7 +1044,7 @@ fn describe_kind_receiver(d: &mut ExtensionDescriptor) {
 }
 
 fn kind(name: &str) -> Result<Owned<KindReceiver>> {
-    Ok(Owned(KindReceiver::new(Kind::parse("data.kind", name)?)))
+    Ok(Owned(KindReceiver::new(Layout::parse("data.kind", name)?)))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -987,6 +1052,7 @@ fn kind(name: &str) -> Result<Owned<KindReceiver>> {
 // ---------------------------------------------------------------------------------------------
 
 fn describe_module(module: &mut ModuleDecl) {
+    // `kind` is an element kind or a layout `kind@stride` (bytes between elements).
     const SPAN: &str = "buffer: buffer, kind: dream_data_ElementKind, offset: number, count: number";
     module
         .function("kind", kind)
@@ -1020,10 +1086,10 @@ fn describe_module(module: &mut ModuleDecl) {
         .doc("An empty selection over len positions, for reuse as `into`.")
         .function("gather", gather)
         .signature("(source: buffer, kind: dream_data_Kind, sourceOffset: number, sourceCount: number, indices: buffer, destination: buffer, destinationOffset: number, indexCount: number?) -> number")
-        .doc("destination[i] = source[indices[i]] for every u32 index (all of the indices buffer by default); the count written. Every index is checked before anything is written.")
+        .doc("destination[i] = source[indices[i]] for every u32 index (all of the indices buffer by default); the count written. The source may be a strided field; the destination column is contiguous. Every index is checked before anything is written.")
         .function("scatter", scatter)
         .signature("(source: buffer, kind: dream_data_Kind, sourceOffset: number, sourceCount: number, indices: buffer, destination: buffer, destinationOffset: number, destinationCount: number) -> number")
-        .doc("destination[indices[i]] = source[i] for every source element; the count written. Every index is checked against destinationCount before anything is written.")
+        .doc("destination[indices[i]] = source[i] for every source element; the count written. The source column is contiguous; the destination may be a strided field. Every index is checked against destinationCount before anything is written.")
         .function("fill", fill)
         .signature(format!("({SPAN}, value: number) -> ()"))
         .doc("Every element set to value, converted as buffer.write<kind> converts.")
