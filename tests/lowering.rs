@@ -31,6 +31,17 @@ const CORPUS: &[(&str, &str)] = &[
     ("any_nested", "return any[for x in xs for y in ys => x == y]"),
     ("all_zip", "return all[for a, b in zipStrict(xs, ys) => a <= b]"),
     ("member_min_is_not_a_reducer", "return math.min[for x in xs => x]"),
+    // Recognized data pipelines (compile mode only): the buffer branch calls the data plane.
+    ("data_sum", "return sum[for x in buf[a:b] => x]"),
+    ("data_count", "return #[for x in buf[a:b] => x]"),
+    ("data_count_filtered", "return #[for x in buf[a:b] if x > 127 => x]"),
+    ("data_count_filtered_negative", "return #[for x in buf[1:n] if x ~= -0x1F => x]"),
+    ("data_min", "return min[for x in samples[first:last] => x]"),
+    ("data_max_spaced", "return max[for x in buf[a:b] => x ]"),
+    ("data_not_binding_projection", "return sum[for x in buf[a:b] => x * 2]"),
+    ("data_not_literal_filter", "return #[for x in buf[a:b] if x > limit => x]"),
+    ("data_not_sum_with_filter", "return sum[for x in buf[a:b] if x > 1 => x]"),
+    ("data_not_any", "return any[for x in buf[a:b] => x]"),
     // Sinks.
     ("sink_dense", "return into(out)[for x in xs => x * 2]"),
     ("sink_filtered", "return into(out)[for x in xs if p(x) => f(x)]"),

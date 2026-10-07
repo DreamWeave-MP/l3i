@@ -407,6 +407,31 @@ table, no `table.move`, no closure. Analysis types the expression as the destina
 checks each projection against the destination's element type. Buffer destinations are not
 part of this spelling; they belong to the typed data plane.
 
+## Recognized data pipelines
+
+When the `dream.data` extension is installed (feature `data`, see [DATA_PLANE.md](DATA_PLANE.md)),
+compiled chunks snapshot its alias global `__l3i_data` in the prelude, and the buffer branch of
+a recognized pipeline calls the data plane once instead of looping:
+
+```luau
+sum[for x in buf[a:b] => x]                 -- data.sum(buf, "u8", a - 1, n)
+#[for x in buf[a:b] => x]                   -- n
+#[for x in buf[a:b] if x > 127 => x]        -- data.count(buf, "u8", a - 1, n, "gt", 127)
+min[for x in buf[a:b] => x]                 -- empty check, then data.min(...)
+max[for x in buf[a:b] => x]
+```
+
+Recognition is deliberately narrow, because errors and evaluation order are effects: a lone
+leading slice generator, a projection that is exactly the binding, and either no filter or one
+`binding <op> literal` filter on a count. The source, both bounds, every type check and the
+bounds normalization still run in the ordinary JSL prologue, so what raises, and when, is
+identical. The byte values are summed in `f64` in element order, exactly as the loop adds
+`buffer.readu8` results, so results are bit-identical; `min`/`max` keep the loop's `<`/`>`
+rules and raise the same empty-pipeline error before the call. Without the extension the same
+chunk takes its scalar loop. Table sources never take this path; Analysis and tooling never see
+it. Anything else (an arbitrary projection, a filter against a variable, `any`/`all`, a sum
+with a filter) stays a fused scalar loop.
+
 ### Sink and reducer evidence
 
 `cargo bench --bench comprehension -- "comprehension_(sinks|reducers)"`, same harness and

@@ -5,6 +5,8 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
+#include <optional>
+#include <string_view>
 #include <unordered_set>
 #include <utility>
 
@@ -180,6 +182,17 @@ public:
             result += "local " + operations + "_rawequal = rawequal ";
             ++preludeStatements;
         }
+        const bool hasDataOps = dynamicGenerators && std::any_of(document.comprehensions.begin(), document.comprehensions.end(),
+            [&](const Comprehension& node) {
+                return knownDataOp(node, plan(node, {}, fuse && !node.lengthPrefix.empty(), node.reducer)).has_value();
+            });
+        if (hasDataOps)
+        {
+            // The data plane's alias global; nil when the runtime did not install the extension.
+            result += "local " + operations + "_data = __l3i_data ";
+            ++preludeStatements;
+        }
+
         if (!document.slices.empty() || !bufferGenerators.empty() || dynamicGenerators)
         {
             result += "local " + operations + "_buffer = buffer ";
@@ -491,7 +504,113 @@ private:
         return pipeline;
     }
 
+    // A pipeline whose buffer path is a known data operation: a lone leading slice generator,
+    // the projection exactly its binding, no filter or one `binding <op> literal` filter, and a
+    // consumer the data plane computes bit for bit as the scalar loop would (sum, min, max,
+    // count). Everything else keeps the fused scalar loop: arbitrary expressions have effects.
+    struct KnownDataOp
+    {
+        Consumer consumer = Consumer::Count;
+        std::string comparison; // Data-plane comparison name; empty without a filter.
+        std::string threshold;  // The literal, as written.
+    };
+
+    static std::string_view trim(std::string_view text)
+    {
+        while (!text.empty() && std::isspace(static_cast<unsigned char>(text.front()))) text.remove_prefix(1);
+        while (!text.empty() && std::isspace(static_cast<unsigned char>(text.back()))) text.remove_suffix(1);
+        return text;
+    }
+
+    // `name <op> [-]<number literal>` and nothing else; the data plane's comparison name.
+    static bool literalComparison(std::string_view text, std::string_view name, std::string& comparison, std::string& threshold)
+    {
+        text = trim(text);
+        if (text.substr(0, name.size()) != name) return false;
+        text.remove_prefix(name.size());
+        if (!text.empty() && (std::isalnum(static_cast<unsigned char>(text.front())) || text.front() == '_')) return false;
+        text = trim(text);
+        static constexpr std::pair<std::string_view, std::string_view> operators[] = {
+            {"<=", "le"}, {">=", "ge"}, {"==", "eq"}, {"~=", "ne"}, {"<", "lt"}, {">", "gt"}};
+        comparison.clear();
+        for (const auto& [spelling, named] : operators)
+            if (text.substr(0, spelling.size()) == spelling)
+            {
+                comparison = named;
+                text.remove_prefix(spelling.size());
+                break;
+            }
+        if (comparison.empty()) return false;
+        text = trim(text);
+        if (!numberLiteral(text)) return false;
+        threshold = std::string(text);
+        return true;
+    }
+
+    // A whole Luau number literal, optionally negated: decimal with fraction/exponent, hex, or
+    // binary, with digit separators. Conservative: anything else is not recognized.
+    static bool numberLiteral(std::string_view text)
+    {
+        size_t at = 0;
+        if (at < text.size() && text[at] == '-') ++at;
+        const auto digitsWhile = [&](auto accept) {
+            const size_t start = at;
+            while (at < text.size() && (accept(static_cast<unsigned char>(text[at])) || text[at] == '_')) ++at;
+            return at > start;
+        };
+        if (at + 1 < text.size() && text[at] == '0' && (text[at + 1] == 'x' || text[at + 1] == 'X'))
+        {
+            at += 2;
+            if (!digitsWhile([](unsigned char c) { return std::isxdigit(c) != 0; })) return false;
+        }
+        else if (at + 1 < text.size() && text[at] == '0' && (text[at + 1] == 'b' || text[at + 1] == 'B'))
+        {
+            at += 2;
+            if (!digitsWhile([](unsigned char c) { return c == '0' || c == '1'; })) return false;
+        }
+        else
+        {
+            const bool whole = digitsWhile([](unsigned char c) { return std::isdigit(c) != 0; });
+            bool fraction = false;
+            if (at < text.size() && text[at] == '.')
+            {
+                ++at;
+                fraction = digitsWhile([](unsigned char c) { return std::isdigit(c) != 0; });
+            }
+            if (!whole && !fraction) return false;
+            if (at < text.size() && (text[at] == 'e' || text[at] == 'E'))
+            {
+                ++at;
+                if (at < text.size() && (text[at] == '+' || text[at] == '-')) ++at;
+                if (!digitsWhile([](unsigned char c) { return std::isdigit(c) != 0; })) return false;
+            }
+        }
+        return at == text.size();
+    }
+
+
+    std::optional<KnownDataOp> knownDataOp(const Comprehension& node, const Pipeline& pipeline) const
+    {
+        if (!pipeline.single() || pipeline.stages.front().kind != SourceKind::Slice || node.clauses.size() > 2) return std::nullopt;
+        const Clause& generator = node.clauses.front();
+        if (generator.binding.empty() || generator.bindings.size() > 1 || node.projection.empty()) return std::nullopt;
+        const auto text = [&](Range range) { return std::string_view(source).substr(range.begin, range.end - range.begin); };
+        const std::string_view name = text(generator.binding);
+        if (trim(text(node.projection)) != name) return std::nullopt;
+        KnownDataOp op;
+        op.consumer = pipeline.consumer;
+        if (node.clauses.size() == 2)
+        {
+            if (op.consumer != Consumer::Count) return std::nullopt;
+            if (!literalComparison(text(node.clauses[1].expression), name, op.comparison, op.threshold)) return std::nullopt;
+        }
+        else if (op.consumer != Consumer::Count && op.consumer != Consumer::Sum && op.consumer != Consumer::Min && op.consumer != Consumer::Max)
+            return std::nullopt;
+        return op;
+    }
+
     // The loop variable declaration for a generator: its user bindings copied verbatim, or
+
     // the recovery-only placeholder when a binding is missing and a placeholder is requested.
     void bindings(Text& out, const Clause& clause, ClauseSite& site, const std::string& missing = {})
     {
@@ -786,10 +905,48 @@ private:
             // the loop, and traverse each representation with its own specialized loop.
             sliceSetup(out, stage, clause, site, e, false, true);
             out += "if " + stage.prefix + "_kind == \"buffer\" then ";
-            sliceLoop(out, stage, clause, site, true);
-            stages(out, e, from + 1);
-            out.anchor = e.node.close;
-            out += "end else ";
+            if (const auto op = knownDataOp(e.node, e.pipeline))
+            {
+                // The data plane computes this consumer over the normalized byte span exactly
+                // as the scalar loop would; without the runtime extension the loop runs.
+                const std::string& p = stage.prefix;
+                const std::string span = p + "_src, \"u8\", " + p + "_first - 1, " + p + "_n";
+                // An empty span after normalization may start past the buffer (`buf[300:400]` of
+                // 256 bytes); the loop runs zero times and the data plane is not consulted.
+                out += "if " + operations + "_data then ";
+                switch (op->consumer)
+                {
+                case Consumer::Count:
+                    out += op->comparison.empty()
+                        ? e.cursor + " = " + p + "_n "
+                        : "if " + p + "_n > 0 then " + e.cursor + " = " + operations + "_data.count(" + span + ", \"" + op->comparison + "\", " + op->threshold + ") end ";
+                    break;
+                case Consumer::Sum:
+                    out += "if " + p + "_n > 0 then " + e.cursor + " = " + operations + "_data.sum(" + span + ") end ";
+                    break;
+                case Consumer::Min:
+                case Consumer::Max:
+                    out += "if " + p + "_n == 0 then " + operations + "_error(\"JSL " + (op->consumer == Consumer::Min ? "min" : "max") +
+                        " reducer received no elements\") end " + e.cursor + " = " + operations + "_data." +
+                        (op->consumer == Consumer::Min ? "min" : "max") + "(" + span + ") ";
+                    break;
+                default:
+                    break;
+                }
+                out += "else ";
+                sliceLoop(out, stage, clause, site, true);
+                stages(out, e, from + 1);
+                out.anchor = e.node.close;
+                out += "end end else ";
+            }
+            else
+            {
+                sliceLoop(out, stage, clause, site, true);
+                stages(out, e, from + 1);
+                out.anchor = e.node.close;
+                out += "end else ";
+            }
+
             out.anchor = clause.range;
             sliceLoop(out, stage, clause, site, false);
             stages(out, e, from + 1);

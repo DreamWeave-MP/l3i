@@ -238,3 +238,86 @@ fn the_module_is_also_published_for_lowered_pipelines() {
     ",
     );
 }
+
+/// The same JSL source run with and without the extension installed; both runtimes must agree
+/// on every value and every error, since the recognized path is the scalar loop's equal.
+fn agree(source: &str) {
+    let plain = Runtime::new().unwrap();
+    let with_data = runtime();
+    let script = format!("return function() local report = {{}} {source} return table.concat(report, '|') end");
+    let run = |runtime: &Runtime| -> l3i::error::Result<String> {
+        let function = runtime.load_function(&script)?;
+        function.invoke::<String, _>(&runtime.stack(), ())
+    };
+    let expected = run(&plain);
+    let actual = run(&with_data);
+    match (expected, actual) {
+        (Ok(expected), Ok(actual)) => assert_eq!(expected, actual, "{source}"),
+        (Err(expected), Err(actual)) => assert_eq!(expected.to_string(), actual.to_string(), "{source}"),
+        (expected, actual) => panic!("{source}: plain {expected:?} vs data {actual:?}"),
+    }
+}
+
+#[test]
+fn recognized_buffer_pipelines_agree_with_the_scalar_loop_and_call_the_data_plane_once() {
+    agree(
+        r"
+        local buf = buffer.create(256)
+        for i = 0, 255 do buffer.writeu8(buf, i, (i * 37) % 256) end
+        local function note(v) table.insert(report, tostring(v)) end
+        note(sum[for x in buf[1:256] => x])
+        note(sum[for x in buf[10:20] => x])
+        note(sum[for x in buf[300:400] => x])
+        note(sum[for x in buf[20:10] => x])
+        note(sum[for x in buf[-5:3] => x])
+        note(#[for x in buf[1:256] => x])
+        note(#[for x in buf[1:256] if x > 127 => x])
+        note(#[for x in buf[1:256] if x >= 127 => x])
+        note(#[for x in buf[1:256] if x == 0 => x])
+        note(#[for x in buf[1:256] if x ~= 0 => x])
+        note(#[for x in buf[1:256] if x < 1e1 => x])
+        note(#[for x in buf[1:256] if x <= 0x10 => x])
+        note(#[for x in buf[1:256] if x > -1 => x])
+        note(#[for x in buf[5:5] if x > 0 => x])
+        note(min[for x in buf[1:256] => x])
+        note(max[for x in buf[3:9] => x])
+        note(min[for x in buf[200:300] => x])
+    ",
+    );
+    for source in [
+        "return min[for x in buffer.create(4)[5:9] => x]",
+        "return max[for x in buffer.create(0)[1:1] => x]",
+        "return sum[for x in buffer.create(4)[1.5:2] => x]",
+        "return sum[for x in buffer.create(4)['a':2] => x]",
+        "return #[for x in 5[1:2] => x]",
+    ] {
+        agree(&format!(
+            "local ok, message = pcall(function() {source} end) table.insert(report, tostring(ok)) table.insert(report, tostring(message))"
+        ));
+    }
+    // Each chunk snapshots the alias global when it loads: a chunk loaded after the alias is
+    // wrapped counts its calls, one per recognized pipeline, and a chunk loaded after the alias
+    // is removed takes the scalar loop with the same results.
+    let runtime = runtime();
+    runtime
+        .exec(
+            r"
+            calls = 0
+            local real = __l3i_data
+            __l3i_data = setmetatable({}, {__index = function(_, name)
+                return function(...) calls += 1 return real[name](...) end
+            end})
+            buf = buffer.create(1000)
+            for i = 0, 999 do buffer.writeu8(buf, i, i % 7) end
+        ",
+        )
+        .unwrap();
+    let pipelines = "return sum[for x in buf[a:b] => x], #[for x in buf[a:b] if x > 3 => x], min[for x in buf[a:b] => x], #[for x in buf[a:b] => x]";
+    runtime
+        .exec(&format!("local a, b = 1, 1000 local total, hot, least, n = (function() {pipelines} end)() assert(total == 2997 and hot == 428 and least == 0 and n == 1000, tostring(total) .. ' ' .. tostring(hot)) assert(calls == 3, 'three data-plane calls, the unfiltered count needs none: ' .. calls)"))
+        .unwrap();
+    runtime.exec("__l3i_data = nil").unwrap(); // A chunk snapshots the alias before its own statements run.
+    runtime
+        .exec(&format!("local a, b = 1, 1000 local total, hot, least, n = (function() {pipelines} end)() assert(total == 2997 and hot == 428 and least == 0 and n == 1000) assert(calls == 3, 'no alias, no calls')"))
+        .unwrap();
+}
