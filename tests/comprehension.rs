@@ -888,3 +888,61 @@ fn sinks_fill_a_caller_owned_table_in_place_with_replace_semantics() {
         )
         .unwrap();
 }
+
+#[test]
+fn buffer_sinks_write_typed_elements_into_caller_buffers() {
+    let runtime = Runtime::new().unwrap();
+    runtime
+        .exec(
+            r"
+        local out = buffer.create(6 * 4)
+        local xs = {1, 2, 3, 4, 5, 6}
+        local result, count = into(out, 'f32')[for x in xs if x % 2 == 0 => x * 0.5]
+        assert(result == out and count == 3, 'the destination and the count written')
+        assert(buffer.readf32(out, 0) == 1 and buffer.readf32(out, 4) == 2 and buffer.readf32(out, 8) == 3)
+        assert(buffer.readf32(out, 12) == 0, 'bytes past the written count are untouched')
+        -- Offsets, integer kinds with the buffer library's conversions, every generator kind.
+        local _, n = into(out, 'u8', 20)[for i in range(1, 4) => i * 100]
+        assert(n == 4 and buffer.readu8(out, 20) == 100 and buffer.readu8(out, 23) == 144, 'u8 wraps like buffer.writeu8')
+        local bytes = buffer.create(8)
+        for i = 0, 7 do buffer.writeu8(bytes, i, i * 3) end
+        local _, m = into(out, 'i32', 0)[for b in bytes[2:5] => -b]
+        assert(m == 4 and buffer.readi32(out, 0) == -3 and buffer.readi32(out, 12) == -12)
+        into(out, 'u16')[for a, b in zipStrict({1, 2}, {3, 4}) => a + b]
+        assert(buffer.readu16(out, 0) == 4 and buffer.readu16(out, 2) == 6)
+        -- A strided kind writes one field of each record: velocities into 16-byte bodies.
+        local bodies = buffer.create(3 * 16)
+        local _, written = into(bodies, 'f32@16', 8)[for i, v in enumerate({0.5, 1.5, 2.5}) => v * i]
+        assert(written == 3 and buffer.readf32(bodies, 8) == 0.5 and buffer.readf32(bodies, 24) == 3 and buffer.readf32(bodies, 40) == 7.5)
+        assert(buffer.readf32(bodies, 0) == 0 and buffer.readf32(bodies, 12) == 0, 'neighbouring fields untouched')
+        -- Capacity is explicit: a full destination is an error, not a silent truncation.
+        local ok, message = pcall(function() return into(out, 'f32')[for i in range(1, 7) => i] end)
+        assert(not ok and string.find(message, 'JSL sink buffer destination is full', 1, true), message)
+        ok, message = pcall(function() return into(bodies, 'f32@16', 8)[for i in range(1, 4) => i] end)
+        assert(not ok and string.find(message, 'destination is full', 1, true), message)
+        -- Misuse: not a buffer, a bad offset, a non-number projection (the buffer library's error).
+        ok, message = pcall(function() return into({}, 'f32')[for x in xs => x] end)
+        assert(not ok and string.find(message, 'JSL sink buffer destination must be a buffer', 1, true), message)
+        ok, message = pcall(function() return into(out, 'f32', -4)[for x in xs => x] end)
+        assert(not ok and string.find(message, 'JSL sink buffer offset must be a non-negative integer', 1, true), message)
+        ok, message = pcall(function() return into(out, 'f32', 1.5)[for x in xs => x] end)
+        assert(not ok and string.find(message, 'non-negative integer', 1, true), message)
+        ok, message = pcall(function() return into(out, 'f32')[for x in xs => 'text'] end)
+        assert(not ok and string.find(message, 'number expected', 1, true), message)
+        -- Evaluation order: destination, then offset, then sources; each once.
+        local events = {}
+        local function dest() table.insert(events, 'dest') return out end
+        local function off() table.insert(events, 'off') return 0 end
+        local function src() table.insert(events, 'src') return {9} end
+        into(dest(), 'f32', off())[for x in src() => x]
+        assert(table.concat(events, ',') == 'dest,off,src')
+        -- A buffer sink may not read the buffer it writes through a slice generator.
+        ok, message = pcall(function() return into(bytes, 'u8')[for b in bytes[1:4] => b] end)
+        assert(not ok and string.find(message, 'must not be a pipeline source', 1, true), message)
+        -- Empty pipelines write nothing and report zero.
+        local _, zero = into(out, 'f32')[for x in xs if x > 100 => x]
+        assert(zero == 0)
+    ",
+        )
+        .unwrap();
+}

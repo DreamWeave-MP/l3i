@@ -358,6 +358,27 @@ int main()
             const auto m = parseSurface(s);
             assert(m.comprehensions.size() == 1 && m.comprehensions[0].sinkPrefix.empty() && m.comprehensions[0].postfix);
         }
+        for (std::string_view s : {"into(out, \"f32\")[for x in xs => x]", "into(out, \"f32@16\", base + 8)[for x in xs => x]",
+                 "into(f(a, b), \"u8\")[for x in xs => x]"})
+        {
+            const auto d = parseSurface(s);
+            assert(d.errors.empty() && d.comprehensions.size() == 1);
+            const auto& c = d.comprehensions[0];
+            assert(!c.sinkKind.empty() && slice(s, c.sinkKind).front() == '"' && !c.sinkDestination.empty());
+            assert(slice(s, c.sinkDestination).find(',') == std::string_view::npos || slice(s, c.sinkDestination) == "f(a, b)");
+        }
+        {
+            const std::string_view s = "into(out, \"f32@16\", base + 8)[for x in xs => x]";
+            const auto parsed = parseSurface(s);
+            const auto& c = parsed.comprehensions[0];
+            assert(slice(s, c.sinkOffset) == "base + 8" && slice(s, c.sinkKind) == "\"f32@16\"");
+        }
+        for (std::string_view s : {"into(out, \"f16\")[for x in xs => x]", "into(out, kind)[for x in xs => x]",
+                 "into(out, \"f32\", 0, 1)[for x in xs => x]", "into(out, \"f32@2\")[for x in xs => x]", "into(out, \"f32\",)[for x in xs => x]"})
+        {
+            const auto d = parseSurface(s);
+            assert(d.comprehensions.size() == 1 && !d.errors.empty() && !d.comprehensions[0].sinkPrefix.empty());
+        }
         {
             const auto empty = parseSurface("into()[for x in xs => x]");
             assert(empty.comprehensions.size() == 1 && !empty.comprehensions[0].sinkPrefix.empty());

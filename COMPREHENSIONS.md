@@ -404,8 +404,32 @@ allocating a result. The expression evaluates to the destination. Semantics:
 
 Lowering stores straight into the destination with the running count as index: no result
 table, no `table.move`, no closure. Analysis types the expression as the destination and
-checks each projection against the destination's element type. Buffer destinations are not
-part of this spelling; they belong to the typed data plane.
+checks each projection against the destination's element type.
+
+### Buffer sinks
+
+```luau
+local out, written = into(samples, "f32")[for x in xs if x > 0 => x * 2]
+into(bodies, "f32@16", 8)[for i, v in enumerate(velocities) => v * i]   -- one field per record
+```
+
+`into(buffer, "kind"[, offset])` writes each accepted projection into the buffer with the
+`buffer.write<kind>` the literal names, `offset + n × stride` bytes in, where the literal is an
+element kind or a `kind@stride` layout (the data plane's spelling: `"f32@16"` fills the f32
+field of 16-byte records). The kind must be a string literal so the write is a known fastcall;
+the offset defaults to 0 and must be a non-negative integer. The expression evaluates to the
+buffer and the count written. Semantics:
+
+- Destination, then offset, then sources, each evaluated once; the destination must be a buffer.
+- Capacity is explicit: a projection that would not fit raises `JSL sink buffer destination is
+  full`; nothing is silently truncated and bytes past the written count are untouched.
+- The projection must be a number: the buffer library's own conversion and error apply (an
+  integer kind truncates and wraps as `buffer.write<kind>` does; a non-number is `number
+  expected`).
+- The destination may not be a slice generator's buffer, as for table sinks.
+- Analysis types the first result as `buffer`, the second as `number`, and checks the
+  projection against `number` through the write call itself.
+
 
 ## Recognized data pipelines
 

@@ -69,6 +69,7 @@ struct Text
             shift(site.call, begin);
             shift(site.projection, begin);
             shift(site.sink, begin);
+            shift(site.sinkOffset, begin);
             for (auto& clause : site.clauses)
             {
                 shift(clause.binding, begin);
@@ -199,7 +200,9 @@ public:
             preludeStatements += 2;
         }
 
-        if (!document.slices.empty() || !bufferGenerators.empty() || dynamicGenerators)
+        const bool hasBufferSinks = std::any_of(document.comprehensions.begin(), document.comprehensions.end(),
+            [](const Comprehension& node) { return !node.sinkKind.empty(); });
+        if (!document.slices.empty() || !bufferGenerators.empty() || dynamicGenerators || hasBufferSinks)
         {
             result += "local " + operations + "_buffer = buffer ";
             ++preludeStatements;
@@ -700,6 +703,9 @@ private:
         bool directIndex = false;
         std::string seed = "0";   // The accumulator's initial value.
         std::string sink;         // The destination local of a sink consumer; empty otherwise.
+        std::string sinkWrite;    // A buffer sink's `buffer.write<kind>` member; empty for a table sink.
+        size_t sinkSize = 0;      // A buffer sink's element size and stride in bytes.
+        size_t sinkStride = 0;
     };
 
     // A sink destination may not also be a pipeline source: the pipeline would read elements
@@ -869,7 +875,15 @@ private:
             out += e.cursor + " += " + value + " ";
             return;
         case Consumer::Sink:
-            out += e.cursor + " += 1 " + e.sink + "[" + e.cursor + "] = " + value + " ";
+            if (e.sinkWrite.empty())
+                out += e.cursor + " += 1 " + e.sink + "[" + e.cursor + "] = " + value + " ";
+            else
+                // Capacity is checked per write; the write itself is the buffer library's, so a
+                // non-number projection raises its ordinary error.
+                out += "if " + e.sink + "_at + " + e.cursor + " * " + std::to_string(e.sinkStride) + " + " + std::to_string(e.sinkSize) +
+                    " > " + e.sink + "_len then " + operations + "_error(\"JSL sink buffer destination is full\") end " + operations +
+                    "_buffer." + e.sinkWrite + "(" + e.sink + ", " + e.sink + "_at + " + e.cursor + " * " + std::to_string(e.sinkStride) +
+                    ", " + value + ") " + e.cursor + " += 1 ";
             return;
         case Consumer::Min:
         case Consumer::Max:
@@ -913,6 +927,12 @@ private:
             out += "return true end)()";
             return;
         case Consumer::Sink:
+            if (!e.sinkWrite.empty())
+            {
+                // A buffer sink evaluates to the destination and the count written.
+                out += "return " + e.sink + ", " + e.cursor + " end)()";
+                return;
+            }
             // Replace semantics: entries past the written count are cleared so the result is
             // dense; the destination's prior length was captured before the pipeline ran.
             out += "for " + e.name + "_i = " + e.cursor + " + 1, " + e.sink + "_len do " + e.sink + "[" + e.name + "_i] = nil end return " +
@@ -1044,7 +1064,7 @@ private:
         e.needsCursor = (consumer != Consumer::Any && consumer != Consumer::All) && (e.scalar || !e.directIndex);
         if (consumer == Consumer::Min || consumer == Consumer::Max)
             e.seed = "nil";
-        if (sink)
+        if (sink && node.sinkKind.empty())
         {
             // The destination is evaluated exactly once, before any source, and must be a table.
             e.sink = name + "_into";
@@ -1054,6 +1074,32 @@ private:
             out += " if " + operations + "_typeof(" + e.sink + ") ~= \"table\" then " + operations +
                 "_error(\"JSL sink destination must be a table\") end local " + e.sink + "_len = #" + e.sink + " ";
         }
+        else if (sink)
+        {
+            // A buffer sink: the kind literal (validated by the frontend) picks the write and
+            // the stride at compile time; the destination, then the offset, evaluate once.
+            e.sink = name + "_into";
+            const std::string_view literal = std::string_view(source).substr(node.sinkKind.begin + 1, node.sinkKind.end - node.sinkKind.begin - 2);
+            const size_t at = literal.find('@');
+            const std::string_view kind = literal.substr(0, at);
+            e.sinkWrite = "write" + std::string(kind);
+            e.sinkSize = kind == "u8" || kind == "i8" ? 1 : kind == "u16" || kind == "i16" ? 2 : kind == "f64" ? 8 : 4;
+            e.sinkStride = at == std::string_view::npos ? e.sinkSize : size_t(std::stoul(std::string(literal.substr(at + 1))));
+            out.anchor = node.sinkDestination;
+            out += "local " + e.sink + " = ";
+            site.sink = expression(out, node.sinkDestination, "(buffer.create(0) :: buffer)");
+            out += " if " + operations + "_typeof(" + e.sink + ") ~= \"buffer\" then " + operations +
+                "_error(\"JSL sink buffer destination must be a buffer\") end local " + e.sink + "_len = " + operations + "_buffer.len(" + e.sink + ") ";
+            out.anchor = node.sinkOffset.empty() ? node.sinkKind : node.sinkOffset;
+            out += "local " + e.sink + "_at = ";
+            if (node.sinkOffset.empty())
+                out += "0";
+            else
+                site.sinkOffset = expression(out, node.sinkOffset, "(0 :: number)");
+            out += " if " + operations + "_typeof(" + e.sink + "_at) ~= \"number\" or " + e.sink + "_at % 1 ~= 0 or " + e.sink +
+                "_at < 0 then " + operations + "_error(\"JSL sink buffer offset must be a non-negative integer\") end ";
+        }
+
         if (!e.sized)
             allocation(out, e);
         stages(out, e, 0);

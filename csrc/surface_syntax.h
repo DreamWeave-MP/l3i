@@ -24,7 +24,8 @@ struct ComprehensionSite
     Range call;
     std::vector<ClauseSite> clauses;
     Range projection;
-    Range sink; // Generated destination expression of an `into(...)` sink; empty otherwise.
+    Range sink;       // Generated destination expression of an `into(...)` sink; empty otherwise.
+    Range sinkOffset; // Generated offset expression of a buffer sink; empty otherwise.
 };
 
 struct SliceSite

@@ -32,8 +32,9 @@
 //! A reducer (`sum`, `min`, `max`, `any`, `all` before `[for ...]`) is an `ExprReduction` with
 //! that `op` and an inner `ExprComprehension`; its outer span includes the reducer name, while
 //! the inner span starts at `[`. A reducer never refers to a local/global of its name; member
-//! accesses are excluded. A sink `into(destination)[for ...]` is an `ExprSink` holding the
-//! destination expression and the inner `ExprComprehension`, under the same naming rule.
+//! accesses are excluded. A sink `into(destination[, "kind"[, offset]])[for ...]` is an
+//! `ExprSink` holding the destination expression, a buffer sink's element kind and offset, and
+//! the inner `ExprComprehension`, under the same naming rule.
 //! A direct `range(first, last[, step])` generator source is an `ExprRange`; its arguments
 //! retain original nodes and spans while compilation lowers it to a numeric loop.
 //!
@@ -228,7 +229,7 @@ pub const TYPES: &[(&str, &str)] = &[
     ),
     (
         "dream_luau_ExprSink",
-        "{ kind: \"ExprSink\", line: number, column: number, endLine: number, endColumn: number, destination: dream_luau_Expr, expr: dream_luau_ExprComprehension }",
+        "{ kind: \"ExprSink\", line: number, column: number, endLine: number, endColumn: number, destination: dream_luau_Expr, elementKind: string?, offset: dream_luau_Expr?, expr: dream_luau_ExprComprehension }",
     ),
     (
         "dream_luau_ExprGroup",

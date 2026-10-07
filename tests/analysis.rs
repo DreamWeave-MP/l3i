@@ -1005,3 +1005,33 @@ fn sinks_type_as_their_destination_and_check_projections_against_it() {
     assert!(error.text.contains("number") && error.text.contains("string"), "{}", error.text);
     assert_eq!(error.span.begin_line, 3, "{error:?}");
 }
+
+#[test]
+fn buffer_sinks_type_their_projections_as_numbers() {
+    let source = concat!(
+        "--!strict\n",
+        "local values: { number } = { 1, 2, 3 }\n",
+        "local out = buffer.create(12)\n",
+        "local filled, count = into(out, \"f32\")[for x in values if x > 1 => x * 2]\n",
+        "return filled, count\n",
+    );
+    for solver in [analysis::Solver::New, analysis::Solver::Old] {
+        let analysis = comprehension_analysis(HashMap::from([("bsink", source)]), solver);
+        let report = analysis.check("bsink", false);
+        assert!(report.is_clean(), "{solver:?}: {report:#?}");
+        assert_binding_type(&analysis, "bsink", 4, "filled", "buffer");
+        assert_binding_type(&analysis, "bsink", 4, "count", "number");
+    }
+    let wrong = concat!(
+        "--!strict\n",
+        "local names: { string } = { 'a' }\n",
+        "local out = buffer.create(4)\n",
+        "local filled = into(out, \"f32\")[for name in names => name]\n",
+        "return filled\n",
+    );
+    let analysis = comprehension_analysis(HashMap::from([("bwrong", wrong)]), analysis::Solver::New);
+    let report = analysis.check("bwrong", false);
+    let error = report.diagnostics.iter().find(|d| d.kind == DiagnosticKind::TypeError).expect("a type error");
+    assert!(error.text.contains("string") && error.text.contains("number"), "{}", error.text);
+    assert_eq!(error.span.begin_line, 3, "{error:?}");
+}

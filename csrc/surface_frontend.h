@@ -73,6 +73,11 @@ struct Comprehension
     // evaluates to it. Empty when absent. The destination range excludes the parentheses.
     Range sinkPrefix;
     Range sinkDestination;
+    // A buffer sink, `into(buffer, "kind"[, offset])`: the kind string literal (quotes
+    // included; a kind or `kind@stride` layout) and the optional byte offset expression.
+    // Both empty for a table sink.
+    Range sinkKind;
+    Range sinkOffset;
     // A sink whose `into` follows a token that can end an expression statement, so it begins
     // a new statement; the lowered call then needs a separator from the previous statement.
     bool sinkStatement = false;

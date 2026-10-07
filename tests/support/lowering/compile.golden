@@ -1256,6 +1256,143 @@ local __l3i_comp_35_error = error local __l3i_comp_35_typeof = typeof local __l3
 --segment 971 1122 34 35 synthetic
 --site 0 call=154,1122 projection=763,764
 --clause binding=690,691 expression=401,403
+==== sink_buffer
+return into(out, "f32")[for x in xs if x > 0 => x * 2]
+----
+local __l3i_comp_54_error = error local __l3i_comp_54_typeof = typeof local __l3i_comp_54_rawequal = rawequal local __l3i_comp_54_buffer = buffer return (function() local __l3i_comp_23_into = out if __l3i_comp_54_typeof(__l3i_comp_23_into) ~= "buffer" then __l3i_comp_54_error("JSL sink buffer destination must be a buffer") end local __l3i_comp_23_into_len = __l3i_comp_54_buffer.len(__l3i_comp_23_into) local __l3i_comp_23_into_at = 0 if __l3i_comp_54_typeof(__l3i_comp_23_into_at) ~= "number" or __l3i_comp_23_into_at % 1 ~= 0 or __l3i_comp_23_into_at < 0 then __l3i_comp_54_error("JSL sink buffer offset must be a non-negative integer") end local __l3i_comp_23_g0_src = xs local __l3i_comp_23_g0_len = #__l3i_comp_23_g0_src if __l3i_comp_54_rawequal(__l3i_comp_23_g0_src, __l3i_comp_23_into) then __l3i_comp_54_error("JSL sink destination must not be a pipeline source") end local __l3i_comp_23_n = 0 for __l3i_comp_23_g0_i = 1, __l3i_comp_23_g0_len do local x = __l3i_comp_23_g0_src[__l3i_comp_23_g0_i] if x > 0 then local __l3i_comp_23_value = x * 2 if __l3i_comp_23_value == nil then __l3i_comp_54_error("L3i comprehension projection produced nil; filter nil explicitly") end if __l3i_comp_23_into_at + __l3i_comp_23_n * 4 + 4 > __l3i_comp_23_into_len then __l3i_comp_54_error("JSL sink buffer destination is full") end __l3i_comp_54_buffer.writef32(__l3i_comp_23_into, __l3i_comp_23_into_at + __l3i_comp_23_n * 4, __l3i_comp_23_value) __l3i_comp_23_n += 1 end end return __l3i_comp_23_into, __l3i_comp_23_n end)()
+--prelude 4
+--segment 0 146 23 54 synthetic
+--segment 146 153 0 7 copied
+--segment 153 165 7 54 synthetic
+--segment 165 192 12 15 synthetic
+--segment 192 195 12 15 copied
+--segment 195 405 12 15 synthetic
+--segment 405 645 17 22 synthetic
+--segment 645 674 24 35 synthetic
+--segment 674 676 33 35 copied
+--segment 676 963 33 35 synthetic
+--segment 963 964 28 29 copied
+--segment 964 1008 33 35 synthetic
+--segment 1008 1011 36 44 synthetic
+--segment 1011 1016 39 44 copied
+--segment 1016 1022 39 44 synthetic
+--segment 1022 1050 48 53 synthetic
+--segment 1050 1055 48 53 copied
+--segment 1055 1464 48 53 synthetic
+--segment 1464 1521 53 54 synthetic
+--site 0 call=153,1521 projection=1050,1055
+--clause binding=963,964 expression=674,676
+--clause binding=153,153 expression=1011,1016
+==== sink_buffer_offset
+local written = into(out, "u8", 4)[for x in xs => x]
+----
+local __l3i_comp_52_error = error local __l3i_comp_52_typeof = typeof local __l3i_comp_52_rawequal = rawequal local __l3i_comp_52_buffer = buffer local written = (function() local __l3i_comp_34_into = out if __l3i_comp_52_typeof(__l3i_comp_34_into) ~= "buffer" then __l3i_comp_52_error("JSL sink buffer destination must be a buffer") end local __l3i_comp_34_into_len = __l3i_comp_52_buffer.len(__l3i_comp_34_into) local __l3i_comp_34_into_at = 4 if __l3i_comp_52_typeof(__l3i_comp_34_into_at) ~= "number" or __l3i_comp_34_into_at % 1 ~= 0 or __l3i_comp_34_into_at < 0 then __l3i_comp_52_error("JSL sink buffer offset must be a non-negative integer") end local __l3i_comp_34_g0_src = xs local __l3i_comp_34_g0_len = #__l3i_comp_34_g0_src if __l3i_comp_52_rawequal(__l3i_comp_34_g0_src, __l3i_comp_34_into) then __l3i_comp_52_error("JSL sink destination must not be a pipeline source") end local __l3i_comp_34_n = 0 for __l3i_comp_34_g0_i = 1, __l3i_comp_34_g0_len do local x = __l3i_comp_34_g0_src[__l3i_comp_34_g0_i] local __l3i_comp_34_value = x if __l3i_comp_34_value == nil then __l3i_comp_52_error("L3i comprehension projection produced nil; filter nil explicitly") end if __l3i_comp_34_into_at + __l3i_comp_34_n * 1 + 1 > __l3i_comp_34_into_len then __l3i_comp_52_error("JSL sink buffer destination is full") end __l3i_comp_52_buffer.writeu8(__l3i_comp_34_into, __l3i_comp_34_into_at + __l3i_comp_34_n * 1, __l3i_comp_34_value) __l3i_comp_34_n += 1 end return __l3i_comp_34_into, __l3i_comp_34_n end)()
+--prelude 4
+--segment 0 146 34 52 synthetic
+--segment 146 162 0 16 copied
+--segment 162 174 16 52 synthetic
+--segment 174 201 21 24 synthetic
+--segment 201 204 21 24 copied
+--segment 204 414 21 24 synthetic
+--segment 414 444 32 33 synthetic
+--segment 444 445 32 33 copied
+--segment 445 654 32 33 synthetic
+--segment 654 683 35 46 synthetic
+--segment 683 685 44 46 copied
+--segment 685 972 44 46 synthetic
+--segment 972 973 39 40 copied
+--segment 973 1017 44 46 synthetic
+--segment 1017 1045 50 51 synthetic
+--segment 1045 1046 50 51 copied
+--segment 1046 1454 50 51 synthetic
+--segment 1454 1507 51 52 synthetic
+--site 0 call=162,1507 projection=1045,1046
+--clause binding=972,973 expression=683,685
+==== sink_buffer_strided
+into(bodies, "f32@16", 8)[for v in velocities => v]
+----
+local __l3i_comp_51_error = error local __l3i_comp_51_typeof = typeof local __l3i_comp_51_rawequal = rawequal local __l3i_comp_51_buffer = buffer (function() local __l3i_comp_25_into = bodies if __l3i_comp_51_typeof(__l3i_comp_25_into) ~= "buffer" then __l3i_comp_51_error("JSL sink buffer destination must be a buffer") end local __l3i_comp_25_into_len = __l3i_comp_51_buffer.len(__l3i_comp_25_into) local __l3i_comp_25_into_at = 8 if __l3i_comp_51_typeof(__l3i_comp_25_into_at) ~= "number" or __l3i_comp_25_into_at % 1 ~= 0 or __l3i_comp_25_into_at < 0 then __l3i_comp_51_error("JSL sink buffer offset must be a non-negative integer") end local __l3i_comp_25_g0_src = velocities local __l3i_comp_25_g0_len = #__l3i_comp_25_g0_src if __l3i_comp_51_rawequal(__l3i_comp_25_g0_src, __l3i_comp_25_into) then __l3i_comp_51_error("JSL sink destination must not be a pipeline source") end local __l3i_comp_25_n = 0 for __l3i_comp_25_g0_i = 1, __l3i_comp_25_g0_len do local v = __l3i_comp_25_g0_src[__l3i_comp_25_g0_i] local __l3i_comp_25_value = v if __l3i_comp_25_value == nil then __l3i_comp_51_error("L3i comprehension projection produced nil; filter nil explicitly") end if __l3i_comp_25_into_at + __l3i_comp_25_n * 16 + 4 > __l3i_comp_25_into_len then __l3i_comp_51_error("JSL sink buffer destination is full") end __l3i_comp_51_buffer.writef32(__l3i_comp_25_into, __l3i_comp_25_into_at + __l3i_comp_25_n * 16, __l3i_comp_25_value) __l3i_comp_25_n += 1 end return __l3i_comp_25_into, __l3i_comp_25_n end)()
+--prelude 4
+--segment 0 146 25 51 synthetic
+--segment 146 158 0 51 synthetic
+--segment 158 185 5 11 synthetic
+--segment 185 191 5 11 copied
+--segment 191 401 5 11 synthetic
+--segment 401 431 23 24 synthetic
+--segment 431 432 23 24 copied
+--segment 432 641 23 24 synthetic
+--segment 641 670 26 45 synthetic
+--segment 670 680 35 45 copied
+--segment 680 967 35 45 synthetic
+--segment 967 968 30 31 copied
+--segment 968 1012 35 45 synthetic
+--segment 1012 1040 49 50 synthetic
+--segment 1040 1041 49 50 copied
+--segment 1041 1452 49 50 synthetic
+--segment 1452 1505 50 51 synthetic
+--site 0 call=146,1505 projection=1040,1041
+--clause binding=967,968 expression=670,680
+==== sink_buffer_from_slice
+return into(out, "i32")[for x in src[a:b] => x]
+----
+local __l3i_comp_47_error = error local __l3i_comp_47_typeof = typeof local __l3i_comp_47_rawequal = rawequal local __l3i_comp_47_buffer = buffer return (function() local __l3i_comp_23_into = out if __l3i_comp_47_typeof(__l3i_comp_23_into) ~= "buffer" then __l3i_comp_47_error("JSL sink buffer destination must be a buffer") end local __l3i_comp_23_into_len = __l3i_comp_47_buffer.len(__l3i_comp_23_into) local __l3i_comp_23_into_at = 0 if __l3i_comp_47_typeof(__l3i_comp_23_into_at) ~= "number" or __l3i_comp_23_into_at % 1 ~= 0 or __l3i_comp_23_into_at < 0 then __l3i_comp_47_error("JSL sink buffer offset must be a non-negative integer") end local __l3i_comp_23_g0_src = src local __l3i_comp_23_g0_first = a local __l3i_comp_23_g0_last = b local __l3i_comp_23_g0_kind = __l3i_comp_47_typeof(__l3i_comp_23_g0_src) if __l3i_comp_23_g0_kind ~= "table" and __l3i_comp_23_g0_kind ~= "buffer" then __l3i_comp_47_error("JSL slice source must be a table or buffer") end if __l3i_comp_47_typeof(__l3i_comp_23_g0_first) ~= "number" or __l3i_comp_23_g0_first % 1 ~= 0 then __l3i_comp_47_error("JSL slice first bound must be a finite integer") end if __l3i_comp_47_typeof(__l3i_comp_23_g0_last) ~= "number" or __l3i_comp_23_g0_last % 1 ~= 0 then __l3i_comp_47_error("JSL slice last bound must be a finite integer") end if __l3i_comp_47_rawequal(__l3i_comp_23_g0_src, __l3i_comp_23_into) then __l3i_comp_47_error("JSL sink destination must not be a pipeline source") end local __l3i_comp_23_g0_len = 0 if __l3i_comp_23_g0_kind == "buffer" then __l3i_comp_23_g0_len = __l3i_comp_47_buffer.len(__l3i_comp_23_g0_src) else __l3i_comp_23_g0_len = #__l3i_comp_23_g0_src end if __l3i_comp_23_g0_first < 1 then __l3i_comp_23_g0_first = 1 end if __l3i_comp_23_g0_last > __l3i_comp_23_g0_len then __l3i_comp_23_g0_last = __l3i_comp_23_g0_len end local __l3i_comp_23_g0_n = 0 if __l3i_comp_23_g0_last >= __l3i_comp_23_g0_first then __l3i_comp_23_g0_n = __l3i_comp_23_g0_last - __l3i_comp_23_g0_first + 1 end local __l3i_comp_23_n = 0 if __l3i_comp_23_g0_kind == "buffer" then for __l3i_comp_23_g0_i = __l3i_comp_23_g0_first, __l3i_comp_23_g0_last do local x = __l3i_comp_47_buffer.readu8(__l3i_comp_23_g0_src, __l3i_comp_23_g0_i - 1) local __l3i_comp_23_value = x if __l3i_comp_23_value == nil then __l3i_comp_47_error("L3i comprehension projection produced nil; filter nil explicitly") end if __l3i_comp_23_into_at + __l3i_comp_23_n * 4 + 4 > __l3i_comp_23_into_len then __l3i_comp_47_error("JSL sink buffer destination is full") end __l3i_comp_47_buffer.writei32(__l3i_comp_23_into, __l3i_comp_23_into_at + __l3i_comp_23_n * 4, __l3i_comp_23_value) __l3i_comp_23_n += 1 end else for __l3i_comp_23_g0_i = __l3i_comp_23_g0_first, __l3i_comp_23_g0_last do local x = __l3i_comp_23_g0_src[__l3i_comp_23_g0_i] local __l3i_comp_23_value = x if __l3i_comp_23_value == nil then __l3i_comp_47_error("L3i comprehension projection produced nil; filter nil explicitly") end if __l3i_comp_23_into_at + __l3i_comp_23_n * 4 + 4 > __l3i_comp_23_into_len then __l3i_comp_47_error("JSL sink buffer destination is full") end __l3i_comp_47_buffer.writei32(__l3i_comp_23_into, __l3i_comp_23_into_at + __l3i_comp_23_n * 4, __l3i_comp_23_value) __l3i_comp_23_n += 1 end end return __l3i_comp_23_into, __l3i_comp_23_n end)()
+--prelude 4
+--segment 0 146 23 47 synthetic
+--segment 146 153 0 7 copied
+--segment 153 165 7 47 synthetic
+--segment 165 192 12 15 synthetic
+--segment 192 195 12 15 copied
+--segment 195 405 12 15 synthetic
+--segment 405 645 17 22 synthetic
+--segment 645 674 24 41 synthetic
+--segment 674 677 33 36 copied
+--segment 677 709 33 36 synthetic
+--segment 709 710 37 38 copied
+--segment 710 741 37 38 synthetic
+--segment 741 742 39 40 copied
+--segment 742 743 39 40 synthetic
+--segment 743 965 33 36 synthetic
+--segment 965 1139 37 38 synthetic
+--segment 1139 2135 39 40 synthetic
+--segment 2135 2136 28 29 copied
+--segment 2136 2213 39 40 synthetic
+--segment 2213 2241 45 46 synthetic
+--segment 2241 2242 45 46 copied
+--segment 2242 2651 45 46 synthetic
+--segment 2651 2660 46 47 synthetic
+--segment 2660 2740 24 41 synthetic
+--segment 2740 2741 28 29 copied
+--segment 2741 2785 24 41 synthetic
+--segment 2785 2813 45 46 synthetic
+--segment 2813 2814 45 46 copied
+--segment 2814 3223 45 46 synthetic
+--segment 3223 3280 46 47 synthetic
+--site 0 call=153,3280 projection=2813,2814
+--clause binding=2135,2136 binding=2740,2741 expression=153,153 sliceSource=674,677 sliceFirst=709,710 sliceLast=741,742
+==== sink_buffer_bad_kind
+return into(out, "f16")[for x in xs => x]
+----
+return into(out, "f16")[for x in xs => x]
+--prelude 0
+--error 17 22 sink buffer kind must be a string literal naming an element kind, e.g. "f32" or "f32@16"
+==== sink_buffer_kind_not_literal
+return into(out, kind)[for x in xs => x]
+----
+return into(out, kind)[for x in xs => x]
+--prelude 0
+--error 17 21 sink buffer kind must be a string literal naming an element kind, e.g. "f32" or "f32@16"
+==== sink_buffer_too_many_arguments
+return into(out, "f32", 0, 1)[for x in xs => x]
+----
+return into(out, "f32", 0, 1)[for x in xs => x]
+--prelude 0
+--error 25 25 into() takes a destination, an optional buffer kind and an optional offset
+==== sink_buffer_missing_offset
+return into(out, "f32",)[for x in xs => x]
+----
+return into(out, "f32",)[for x in xs => x]
+--prelude 0
+--error 23 23 expected sink buffer offset after ','
 ==== sink_spaced
 return into (out) -- note
 [for x in xs => x]

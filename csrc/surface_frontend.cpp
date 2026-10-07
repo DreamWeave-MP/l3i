@@ -201,6 +201,23 @@ private:
         if (name == "all") return Reducer::All;
         return Reducer::None;
     }
+    // The content of a quoted string token names an element kind, optionally `@stride`.
+    bool bufferKindLiteral(Range token) const
+    {
+        if (token.end - token.begin < 3) return false;
+        std::string_view text = source.substr(token.begin + 1, token.end - token.begin - 2);
+        static constexpr std::string_view kinds[] = {"u8", "i8", "u16", "i16", "u32", "i32", "f32", "f64"};
+        const size_t at = text.find('@');
+        const std::string_view kind = text.substr(0, at);
+        if (std::find(std::begin(kinds), std::end(kinds), kind) == std::end(kinds)) return false;
+        if (at == std::string_view::npos) return true;
+        const std::string_view stride = text.substr(at + 1);
+        if (stride.empty() || stride.size() > 9) return false;
+        for (const char c : stride)
+            if (!std::isdigit(static_cast<unsigned char>(c))) return false;
+        const size_t size = kind == "u8" || kind == "i8" ? 1 : kind == "u16" || kind == "i16" ? 2 : kind == "f64" ? 8 : 4;
+        return std::stoul(std::string(stride)) >= size;
+    }
     bool arrow(size_t i) const
     {
         return type(i) == '=' && type(i + 1) == '>' && tokens[i].range.end == tokens[i + 1].range.begin;
@@ -548,12 +565,50 @@ private:
                 c.sinkPrefix = {tokens[open - 1].range.begin, tokens[i - 1].range.end};
                 c.sinkStatement = open >= 2 && isPostfix(tokens[open - 2], open >= 3 ? tokens[open - 3] : Token{T::Eof, {0, 0}});
                 if (open + 1 < i - 1)
-                    c.sinkDestination = {tokens[open + 1].range.begin, tokens[i - 2].range.end};
+                {
+                    // Top-level commas split `into(destination[, "kind"[, offset]])`.
+                    std::vector<size_t> commas;
+                    int nested = 0;
+                    for (size_t at = open + 1; at < i - 1; ++at)
+                    {
+                        const int t = type(at);
+                        if (t == '(' || t == '[' || t == '{') ++nested;
+                        else if (t == ')' || t == ']' || t == '}') --nested;
+                        else if (t == ',' && nested == 0) commas.push_back(at);
+                    }
+                    const size_t destinationEnd = commas.empty() ? i - 2 : commas[0] - 1;
+                    if (destinationEnd < open + 1)
+                    {
+                        c.sinkDestination = point(open + 1);
+                        error(c.sinkDestination, "expected sink destination inside into()");
+                    }
+                    else
+                        c.sinkDestination = {tokens[open + 1].range.begin, tokens[destinationEnd].range.end};
+                    if (commas.size() > 2)
+                        error(point(commas[2]), "into() takes a destination, an optional buffer kind and an optional offset");
+                    if (!commas.empty())
+                    {
+                        const size_t kindAt = commas[0] + 1;
+                        const size_t kindEnd = commas.size() > 1 ? commas[1] - 1 : i - 2;
+                        if (kindAt == kindEnd && type(kindAt) == T::QuotedString && bufferKindLiteral(tokens[kindAt].range))
+                            c.sinkKind = tokens[kindAt].range;
+                        else
+                            error(kindAt <= kindEnd ? Range{tokens[kindAt].range.begin, tokens[kindEnd].range.end} : point(kindAt),
+                                "sink buffer kind must be a string literal naming an element kind, e.g. \"f32\" or \"f32@16\"");
+                        if (commas.size() > 1)
+                        {
+                            const size_t offsetAt = commas[1] + 1;
+                            if (offsetAt <= i - 2) c.sinkOffset = {tokens[offsetAt].range.begin, tokens[i - 2].range.end};
+                            else error(point(offsetAt), "expected sink buffer offset after ','");
+                        }
+                    }
+                }
                 else
                 {
                     c.sinkDestination = point(i - 1);
                     error(c.sinkDestination, "expected sink destination inside into()");
                 }
+
             }
         }
         c.postfix = c.lengthPrefix.empty() && c.reducerPrefix.empty() && c.sinkPrefix.empty() && i > 0 &&

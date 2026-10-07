@@ -59,6 +59,8 @@ using namespace Luau;
     X(KExprReduction, "ExprReduction") \
     X(KExprSink, "ExprSink") \
     X(destination, "destination") \
+    X(elementKind, "elementKind") \
+    X(offsetField, "offset") \
     X(KExprRange, "ExprRange") \
     X(KExprEnumerate, "ExprEnumerate") \
     X(KExprZip, "ExprZip") \
@@ -456,6 +458,7 @@ struct SurfaceExpression
     std::vector<SurfaceClause> clauses;
     AstExpr* projection = nullptr;
     AstExpr* sink = nullptr;
+    AstExpr* sinkOffset = nullptr;
 };
 using SurfaceExpressions = std::unordered_map<AstExprCall*, SurfaceExpression>;
 struct SurfaceSlice
@@ -1616,9 +1619,19 @@ public:
         const bool sink = !record.sinkPrefix.empty();
         if (sink)
         {
-            open(KExprSink, location({record.sinkPrefix.begin, record.range.end}), 2);
+            open(KExprSink, location({record.sinkPrefix.begin, record.range.end}), 4);
             surfaceExpr(surface.sink, record.sinkDestination);
             popInto(destination);
+            if (!record.sinkKind.empty())
+            {
+                lua_pushlstring(L, source + record.sinkKind.begin + 1, record.sinkKind.end - record.sinkKind.begin - 2);
+                popInto(elementKind);
+            }
+            if (!record.sinkOffset.empty())
+            {
+                surfaceExpr(surface.sinkOffset, record.sinkOffset);
+                popInto(offsetField);
+            }
         }
         const bool reduction = record.reducer != L3i::Surface::Reducer::None;
         if (reduction)
@@ -1957,6 +1970,7 @@ int l3i_luau_parse(lua_State* L, const char* source, size_t length, int flags)
                 }
                 surface.projection = index.expression(site.projection);
                 surface.sink = index.expression(site.sink);
+                surface.sinkOffset = index.expression(site.sinkOffset);
                 surfaces.emplace(call, std::move(surface));
             }
             for (const auto& site : lowered.sliceSites)

@@ -538,6 +538,13 @@ fn surface_reduction_and_length_are_source_nodes_and_stock_is_opt_in() {
         span(sinkText, sinkResult, sink, 'into(out.buffer)[for x in {1} if x => x]')
         span(sinkText, sinkResult, sink.destination, 'out.buffer')
         span(sinkText, sinkResult, sink.expr, '[for x in {1} if x => x]')
+        local bufferText = 'return into(out, \'f32@16\', 8)[for x in {1} => x]'
+        local bufferSink = luau.parse(bufferText).root.body[1].list[1]
+        assert(bufferSink.kind == 'ExprSink' and bufferSink.elementKind == 'f32@16' and bufferSink.offset.kind == 'ExprConstantNumber')
+        span(bufferText, luau.parse(bufferText), bufferSink.offset, '8')
+        assert(luau.parse('return into(out, \'f32\')[for x in {1} => x]').root.body[1].list[1].offset == nil)
+        assert(#luau.parse('return into(out, \'f16\')[for x in {1} => x]').errors > 0)
+        assert(#luau.parse('return into(out, kind)[for x in {1} => x]').errors > 0)
         assert(#luau.parse('return into()[for x in {1} => x]').errors > 0)
         assert(#luau.parse('return t.into(out)[for x in {1} => x]').errors > 0)
         local member = luau.parse('return math.min[for x in {1} => x]')

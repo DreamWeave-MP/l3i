@@ -28,9 +28,10 @@ The expression exposes ordered `clauses`, a `projection`, `openLocation`, option
 - Reducers: `ExprReduction {op = "sum" | "min" | "max" | "any" | "all", expr =
   ExprComprehension}`. Its span includes the reducer name; the child starts at `[`. A
   binding with the reducer's name is not consulted, and member access is not a reducer.
-- Sinks: `ExprSink {destination = Expr, expr = ExprComprehension}` for
-  `into(destination)[for ...]`. Its span starts at `into`; the destination keeps its own
-  source node and span. `into` is likewise never resolved against a binding.
+- Sinks: `ExprSink {destination = Expr, elementKind = string?, offset = Expr?, expr =
+  ExprComprehension}` for `into(destination[, "kind"[, offset]])[for ...]`. Its span starts at
+  `into`; the destination and offset keep their own source nodes and spans; `elementKind` is the
+  literal's content for a buffer sink. `into` is likewise never resolved against a binding.
 
 All spans slice the original source using the existing one-based byte-column,
 inclusive-end API. A zero-width insertion point has `endColumn = column - 1` on its

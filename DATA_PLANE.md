@@ -243,11 +243,11 @@ correct and final form. Only `KnownDataOp` stages (the binding itself, a compari
 binding against a literal) are eligible. The explicit API stays first-class: nothing requires
 JSL recognition to reach the fast path.
 
-## 3. Deferred, deliberately
+## 3. What the consumer ecosystem asked for
 
-These were considered and left out because nothing in this repository asks for them yet; the
-brief's rule is to earn operations from evidence, not from plausible consumers.
-
-- **Buffer sinks.** `into(buffer)[...]` needs an element kind the JSL surface cannot yet spell,
-  and a nil-projection rule for a representation that has no nil. The consumer exists in the
-  plan (`Consumer::Sink`); the spelling waits for a use that fixes the semantics.
+The `jpk` packages were read for the shapes this plane must serve, and each shipped: strided
+layouts (16-byte physics bodies, 8-byte entity slots, 12-byte token records read by field),
+`argsort` through caller scratch (recast's navmesh builder hand-rolls that stable merge),
+buffer sinks (physics writes filtered index lists into a caller buffer with a capacity), and
+thresholds held in locals (every comparison in those loops is against a local). Nothing on the
+original list remains deferred.
