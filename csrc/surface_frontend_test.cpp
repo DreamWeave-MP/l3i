@@ -363,6 +363,23 @@ int main()
             assert(empty.comprehensions.size() == 1 && !empty.comprehensions[0].sinkPrefix.empty());
             assert(!empty.errors.empty() && empty.errors[0].message.find("sink destination") != std::string::npos);
         }
+        {
+            // Unmatched parentheses before many openers: each opener scans back at most a bounded
+            // number of tokens, so hostile input stays linear, and none of them is a sink.
+            std::string s;
+            for (size_t i = 0; i < 6000; ++i) s += ")";
+            for (size_t i = 0; i < 200; ++i) s += "[for x in xs => x] ";
+            const auto d = parseSurface(s);
+            assert(d.comprehensions.size() == 200);
+            assert(d.comprehensions[0].postfix && d.comprehensions[0].sinkPrefix.empty());
+            std::string deep = "into(";
+            for (size_t i = 0; i < 5000; ++i) deep += "(";
+            deep += "x";
+            for (size_t i = 0; i < 5000; ++i) deep += ")";
+            deep += ")[for x in xs => x]";
+            const auto beyond = parseSurface(deep);
+            assert(beyond.comprehensions.size() == 1 && beyond.comprehensions[0].sinkPrefix.empty() && beyond.comprehensions[0].postfix);
+        }
         const auto d = parseSurface("minimum[for x in xs => x]; [for x in xs => x]");
         assert(d.comprehensions.size() == 2 && d.comprehensions[0].reducer == Reducer::None && d.comprehensions[0].postfix);
         assert(d.comprehensions[1].reducer == Reducer::None && !d.comprehensions[1].postfix);

@@ -12,6 +12,9 @@ namespace
 using T = Luau::Lexeme;
 // Per-document budgets prevent repeated failed prefixes from quadratic work.
 constexpr size_t maxTokens = 262144, maxDepth = 128;
+// How far back from `[for` an `into(...)` destination may reach, in tokens: hostile input with
+// unmatched parentheses before many openers must not make every opener rescan the file.
+constexpr size_t maxSinkTokens = 4096;
 constexpr size_t maxPrefixBytes = 8388608, maxPrefixCalls = 4096;
 struct Token { T::Type type; Range range; };
 class Frontend
@@ -537,7 +540,7 @@ private:
             {
                 if (type(open) == ')') ++nested;
                 else if (type(open) == '(' && --nested == 0) break;
-                if (open == 0) { nested = -1; break; }
+                if (open == 0 || i - open >= maxSinkTokens) { nested = -1; break; }
             }
             if (nested == 0 && open > 0 && type(open - 1) == T::Name && (open < 2 || (type(open - 2) != '.' && type(open - 2) != ':')) &&
                 source.substr(tokens[open - 1].range.begin, tokens[open - 1].range.end - tokens[open - 1].range.begin) == "into")
