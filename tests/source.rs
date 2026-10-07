@@ -114,17 +114,25 @@ fn numeric_range_sum_is_a_direct_numeric_loop() {
 
 #[test]
 fn enumerate_comprehensions_are_direct_indexed_loops() {
-    let listing = disassemble("return sum[for i, value in enumerate(values) => i + value]", &CompileOptions::default()).unwrap();
+    let listing =
+        disassemble("return sum[for i, value in enumerate(values) => i + value]", &CompileOptions::default()).unwrap();
     assert!(listing.contains("FORNPREP") && listing.contains("FORNLOOP"), "{listing}");
-    assert!(!listing.contains("enumerate") && !listing.contains("FORGPREP") && !listing.contains("CLOSURE"), "{listing}");
+    assert!(
+        !listing.contains("enumerate") && !listing.contains("FORGPREP") && !listing.contains("CLOSURE"),
+        "{listing}"
+    );
     assert!(!listing.contains("NEWTABLE") && !listing.contains("SETLIST"), "{listing}");
 }
 
 #[test]
 fn zip_comprehensions_are_direct_indexed_loops() {
-    let listing = disassemble("return sum[for a, b in zipShortest(left, right) => a + b]", &CompileOptions::default()).unwrap();
+    let listing =
+        disassemble("return sum[for a, b in zipShortest(left, right) => a + b]", &CompileOptions::default()).unwrap();
     assert!(listing.contains("FORNPREP") && listing.contains("FORNLOOP"), "{listing}");
-    assert!(!listing.contains("zipShortest") && !listing.contains("FORGPREP") && !listing.contains("CLOSURE"), "{listing}");
+    assert!(
+        !listing.contains("zipShortest") && !listing.contains("FORGPREP") && !listing.contains("CLOSURE"),
+        "{listing}"
+    );
     assert!(!listing.contains("NEWTABLE") && !listing.contains("SETLIST"), "{listing}");
 }
 
@@ -132,7 +140,10 @@ fn zip_comprehensions_are_direct_indexed_loops() {
 fn slices_fuse_without_materializing_the_slice() {
     let listing = disassemble("return sum[for x in values[2:limit] => x]", &CompileOptions::default()).unwrap();
     assert!(listing.contains("FORNPREP") && listing.contains("FORNLOOP"), "{listing}");
-    assert!(!listing.contains("table.move") && !listing.contains("FORGPREP") && !listing.contains("CLOSURE"), "{listing}");
+    assert!(
+        !listing.contains("table.move") && !listing.contains("FORGPREP") && !listing.contains("CLOSURE"),
+        "{listing}"
+    );
     assert!(!listing.contains("NEWTABLE") && !listing.contains("SETLIST"), "{listing}");
 }
 
@@ -199,10 +210,7 @@ fn mapped_runtime_errors_attribute_copied_and_synthetic_operations() {
 #[test]
 fn slice_validation_errors_point_to_the_original_source_and_bound() {
     let runtime = l3i::Runtime::new().unwrap();
-    let first = runtime
-        .exec("local values = {1, 2, 3}\nreturn values[\n    1.5:\n    2\n]")
-        .unwrap_err()
-        .to_string();
+    let first = runtime.exec("local values = {1, 2, 3}\nreturn values[\n    1.5:\n    2\n]").unwrap_err().to_string();
     assert!(first.contains("exec:3:") && first.contains("slice first bound"), "{first}");
 
     let source = runtime

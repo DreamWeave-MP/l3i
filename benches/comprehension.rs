@@ -170,7 +170,7 @@ fn bench_case(group: &mut BenchmarkGroup<'_, WallTime>, label: &str, body: &str,
         match output {
             Output::Count | Output::Sum | Output::SliceSum => b.iter(|| function.invoke::<f64, _>(&stack, ()).unwrap()),
             Output::Dense | Output::Filtered | Output::Slice => {
-                b.iter(|| function.invoke::<Table, _>(&stack, ()).unwrap())
+                b.iter(|| function.invoke::<Table, _>(&stack, ()).unwrap());
             }
         }
         assert_eq!(stack.top(), top);

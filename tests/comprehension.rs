@@ -37,7 +37,7 @@ fn enumerate_generators_lower_to_indexed_loops() {
     let runtime = Runtime::new().unwrap();
     runtime
         .exec(
-            r#"
+            r"
         local calls = 0
         local function values()
             calls += 1
@@ -52,7 +52,7 @@ fn enumerate_generators_lower_to_indexed_loops() {
         assert(sum[for i, value in enumerate({2, 4, 6}) => i + value] == 18)
         local nested = [for outer in {{7, 8}} for i, value in enumerate(outer) => value + i]
         assert(#nested == 2 and nested[1] == 8 and nested[2] == 10)
-    "#,
+    ",
         )
         .unwrap();
 }
@@ -84,7 +84,7 @@ fn inclusive_slices_fuse_into_comprehension_consumers() {
     let runtime = Runtime::new().unwrap();
     runtime
         .exec(
-            r#"
+            r"
         local calls = 0
         local function source() calls += 1 return {10, 20, 30, 40, 50} end
         local values = [for x in source()[2:4] => x * 2]
@@ -94,7 +94,7 @@ fn inclusive_slices_fuse_into_comprehension_consumers() {
         assert(sum[for x in {1, 2, 3, 4, 5}[2:4] if x > 2 => x] == 7, 'sum')
         assert(#[for x in {1, 2, 3, 4, 5}[99:100] => x] == 0, 'high')
         assert(#[for x in {1, 2, 3}[3:1] => x] == 0, 'reverse')
-    "#,
+    ",
         )
         .unwrap();
 }
