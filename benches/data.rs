@@ -251,7 +251,7 @@ fn movement(c: &mut Criterion) {
         group.throughput(Throughput::Elements(n as u64));
         // Keys repeat every 251 elements: many ties, where stability matters.
         // Sandboxed globals are read-only tables, so the baseline builds its index table per call.
-        let setup = format!("{} perm = buffer.create(n * 4)", setup(n));
+        let setup = format!("{} perm = buffer.create(n * 4) scratch = buffer.create(n * 4)", setup(n));
         let expected = n as f64;
         case(
             &mut group,
@@ -259,6 +259,14 @@ fn movement(c: &mut Criterion) {
             true,
             &setup,
             "return data.argsort(fbuf, 'f32', 0, n, perm)",
+            expected,
+        );
+        case(
+            &mut group,
+            "explicit data.argsort with caller scratch (stable, no allocation)",
+            true,
+            &setup,
+            "return data.argsort(fbuf, 'f32', 0, n, perm, 0, scratch)",
             expected,
         );
         case(

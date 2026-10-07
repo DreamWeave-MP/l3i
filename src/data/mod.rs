@@ -8,9 +8,11 @@
 //! The operand is a **typed contiguous span** of a buffer: `(buffer, kind, offset, count)`,
 //! where `kind` names the element representation (`"u8"`, `"i8"`, `"u16"`, `"i16"`, `"u32"`,
 //! `"i32"`, `"f32"`, `"f64"`, little-endian as the `buffer` library reads them), `offset` is a
-//! byte offset and `count` an element count. Every span is bounds-checked once, before any
-//! element is touched; a span that does not fit raises before the operation starts. Spans
-//! are descriptors, not objects: nothing is allocated to name one.
+//! byte offset and `count` an element count. A kind may carry a stride, `"f32@16"`: one f32
+//! field of every 16-byte record, which is how packed records (a physics body, an entity slot)
+//! live in buffers; the default stride is the element size. Every span is bounds-checked once,
+//! before any element is touched; a span that does not fit raises before the operation starts.
+//! Spans are descriptors, not objects: nothing is allocated to name one.
 //!
 //! Element values cross as Luau numbers with exactly the `buffer` library's conversions: an
 //! integer kind reads as its exact value and writes by truncating toward zero and wrapping to
@@ -850,6 +852,17 @@ fn key_order(a: f64, b: f64) -> Ordering {
     }
 }
 
+/// The byte range a span or index vector occupies, for aliasing checks.
+fn byte_range(base: *mut u8, count: usize, stride: usize, size: usize) -> (usize, usize) {
+    let begin = base as usize;
+    (begin, if count == 0 { begin } else { begin + (count - 1) * stride + size })
+}
+
+fn overlaps(a: (usize, usize), b: (usize, usize)) -> bool {
+    a.0 < b.1 && b.0 < a.1
+}
+
+#[allow(clippy::too_many_arguments)]
 fn argsort(
     keys: BufferView<'_>,
     kind: &str,
@@ -857,15 +870,83 @@ fn argsort(
     count: Exact<i64>,
     out: BufferView<'_>,
     out_offset: Option<Exact<i64>>,
+    scratch: Option<BufferView<'_>>,
 ) -> Result<f64> {
     let keys = Span::new("data.argsort", &keys, Layout::parse("data.argsort", kind)?, offset, count)?;
     let out = Indices::new("data.argsort", &out, out_offset.unwrap_or(Exact(0)), Some(Exact(keys.count as i64)))?;
-    // The keys are read once into the scratch so the sort never touches the buffer again, which
-    // also makes an `out` that overlaps `keys` well defined.
-    let mut order: Vec<(f64, u32)> = (0..keys.count).map(|i| (keys.get(i), i as u32)).collect();
-    order.sort_by(|a, b| key_order(a.0, b.0));
-    for (slot, (_, index)) in order.iter().enumerate() {
-        out.set(slot, *index as usize);
+    match scratch {
+        None => {
+            // Without scratch the keys are read once into a temporary, so the sort never
+            // touches the buffer again and an `out` that overlaps `keys` is well defined.
+            let mut order: Vec<(f64, u32)> = (0..keys.count).map(|i| (keys.get(i), i as u32)).collect();
+            order.sort_by(|a, b| key_order(a.0, b.0));
+            for (slot, (_, index)) in order.iter().enumerate() {
+                out.set(slot, *index as usize);
+            }
+        }
+        Some(scratch) => {
+            // Steady state, no allocation: a bottom-up stable merge sort of the index vector,
+            // alternating between `out` and the caller's scratch, reading keys from the span as
+            // it compares. The keys are read throughout, so neither index vector may overlap
+            // them, and the two index vectors may not overlap each other.
+            let scratch = Indices::new("data.argsort", &scratch, Exact(0), Some(Exact(keys.count as i64)))?;
+            let key_bytes = byte_range(keys.base, keys.count, keys.stride, keys.kind.size());
+            let out_bytes = byte_range(out.base, out.count, 4, 4);
+            let scratch_bytes = byte_range(scratch.base, scratch.count, 4, 4);
+            if overlaps(key_bytes, out_bytes)
+                || overlaps(key_bytes, scratch_bytes)
+                || overlaps(out_bytes, scratch_bytes)
+            {
+                return Err(Error::runtime(
+                    "data.argsort: keys, out and scratch must not overlap when scratch is given",
+                ));
+            }
+            let total = keys.count;
+            for position in 0..total {
+                out.set(position, position);
+            }
+            let (mut from, mut to) = (&out, &scratch);
+            let mut width = 1;
+            while width < total {
+                let mut left = 0;
+                while left < total {
+                    let mid = (left + width).min(total);
+                    let right = (left + 2 * width).min(total);
+                    let (mut lower, mut upper, mut slot) = (left, mid, left);
+                    while lower < mid && upper < right {
+                        let (first, second) = (from.get(lower), from.get(upper));
+                        // Strictly less moves the upper run's element first; ties keep the
+                        // lower (earlier) run's element: stable.
+                        if key_order(keys.get(second), keys.get(first)) == Ordering::Less {
+                            to.set(slot, second);
+                            upper += 1;
+                        } else {
+                            to.set(slot, first);
+                            lower += 1;
+                        }
+                        slot += 1;
+                    }
+                    while lower < mid {
+                        to.set(slot, from.get(lower));
+                        lower += 1;
+                        slot += 1;
+                    }
+                    while upper < right {
+                        to.set(slot, from.get(upper));
+                        upper += 1;
+                        slot += 1;
+                    }
+                    left = right;
+                }
+                std::mem::swap(&mut from, &mut to);
+                width *= 2;
+            }
+            if !std::ptr::eq(from, &out) {
+                for position in 0..total {
+                    out.set(position, from.get(position));
+                }
+            }
+        }
     }
     Ok(keys.count as f64)
 }
@@ -1103,8 +1184,8 @@ fn describe_module(module: &mut ModuleDecl) {
         .signature(format!("({SPAN}, low: number, high: number, out: buffer, outOffset: number) -> ()"))
         .doc("out[i] = math.clamp(source[i], low, high); NaN passes through; out may be the source.")
         .function("argsort", argsort)
-        .signature(format!("({SPAN}, out: buffer, outOffset: number?) -> number"))
-        .doc("The u32 permutation that orders the keys ascending, stable for equal keys, NaN last; the count written.")
+        .signature(format!("({SPAN}, out: buffer, outOffset: number?, scratch: buffer?) -> number"))
+        .doc("The u32 permutation that orders the keys ascending, stable for equal keys, NaN last; the count written. With scratch (count * 4 bytes, not overlapping keys or out) nothing is allocated.")
         .function("partition", partition)
         .signature(format!("({SPAN}, comparison: dream_data_Comparison, threshold: number, out: buffer, outOffset: number?) -> number"))
         .doc("The u32 index vector with every position satisfying the comparison first, then the rest, each part in original order; how many satisfied it.");

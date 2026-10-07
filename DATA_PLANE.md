@@ -108,10 +108,12 @@ values beyond ±2^63 saturate before the wrap); `f32` rounds on write; `f64` is 
 | `argsort` | key span | u32 permutation into `out` from `outOffset`; count | 0 | NaN keys last, in original order | keys are copied before sorting, so `out` may overlap them | bounds |
 | `partition` | key span | u32 index vector: satisfying positions first, then the rest, each in original order; accepted count | 0 | as `count` | as `argsort` | bounds, comparison name |
 
-`argsort` is stable: equal keys keep their position order. It sorts a copy of the keys paired
-with positions (`Vec<(f64, u32)>`), so the buffer is read once and never touched during the
-sort; a caller-supplied scratch is unnecessary for correctness and left out until a benchmark
-shows the allocation matters.
+`argsort` is stable: equal keys keep their position order. Without scratch it sorts a copy of
+the keys paired with positions, so the buffer is read once and `out` may overlap the keys. With
+a caller scratch (`count × 4` bytes) it is a bottom-up merge of the index vector between `out`
+and the scratch, reading keys from the span as it compares: no allocation in steady state, which
+is the shape recast's navmesh builder hand-rolls in Luau; keys, `out` and scratch must then not
+overlap, and the call refuses them if they do.
 
 ### 2.3 Execution
 
@@ -255,6 +257,3 @@ brief's rule is to earn operations from evidence, not from plausible consumers.
   change. Analysis knows whether it is a plain local; carrying that knowledge to the compile
   path is a new seam (the Analysis-only `bufferGenerators` list shows the shape). Worth doing
   when a real pipeline needs it; the scalar loop it gets today is already native under `jit`.
-- **Caller scratch for `argsort`.** The sort copies keys into a `Vec` per call; a reusable
-  scratch argument is the obvious next step once a steady-state caller shows the allocation in
-  a profile.

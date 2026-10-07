@@ -214,12 +214,23 @@ fn argsort_is_stable_with_nan_last_and_partition_keeps_order() {
         got = {}
         for i = 0, 7 do got[i + 1] = buffer.readu32(parts, i * 4) end
         assert(table.concat(got, ',') == '0,3,5,1,2,4,6,7', table.concat(got, ','))
+        -- With caller scratch: the same permutation, no allocation; overlap is refused.
+        local scratch = buffer.create(8 * 4)
+        local withScratch = buffer.create(8 * 4)
+        assert(data.argsort(keys, 'f32', 0, 8, withScratch, 0, scratch) == 8)
+        for i = 0, 7 do assert(buffer.readu32(withScratch, i * 4) == buffer.readu32(order, i * 4), 'scratch sort agrees at ' .. i) end
+        ok, message = pcall(data.argsort, keys, 'f32', 0, 8, withScratch, 0, withScratch)
+        assert(not ok and string.find(message, 'must not overlap', 1, true), message)
+        ok, message = pcall(data.argsort, keys, 'f32', 0, 8, keys, 0, scratch)
+        assert(not ok and string.find(message, 'must not overlap', 1, true), message)
+        ok, message = pcall(data.argsort, keys, 'f32', 0, 8, withScratch, 0, buffer.create(8))
+        assert(not ok and string.find(message, 'exceed the buffer length', 1, true), message)
         -- Large tied-key input stays stable.
         local n = 5000
         local ties = buffer.create(n * 4)
         for i = 0, n - 1 do buffer.writei32(ties, i * 4, i % 7) end
         local perm = buffer.create(n * 4)
-        data.argsort(ties, 'i32', 0, n, perm)
+        data.argsort(ties, 'i32', 0, n, perm, 0, buffer.create(n * 4))
         local previousKey, previousIndex = -1, -1
         for i = 0, n - 1 do
             local index = buffer.readu32(perm, i * 4)
