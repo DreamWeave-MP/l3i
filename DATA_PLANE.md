@@ -227,3 +227,25 @@ has unknown effects and is never moved into the data plane; the fused scalar loo
 correct and final form. Only `KnownDataOp` stages (the binding itself, a comparison of the
 binding against a literal) are eligible. The explicit API stays first-class: nothing requires
 JSL recognition to reach the fast path.
+
+## 3. Deferred, deliberately
+
+These were considered and left out because nothing in this repository asks for them yet; the
+brief's rule is to earn operations from evidence, not from plausible consumers.
+
+- **Strided spans.** A field of a packed record is a stride, not a contiguous span. Adding a
+  stride to the operand would touch every operation and slow the contiguous fast path unless
+  specialized. Re-open when a package reads a field column in a hot loop; the change is one
+  operand field plus per-operation handling, not a new API.
+- **Buffer sinks.** `into(buffer)[...]` needs an element kind the JSL surface cannot yet spell,
+  and a nil-projection rule for a representation that has no nil. The consumer exists in the
+  plan (`Consumer::Sink`); the spelling waits for a use that fixes the semantics.
+- **Filters against variables in recognized pipelines.** `#[for x in buf[a:b] if x > limit
+  => x]` is not recognized because the compile path has no scope information: `limit` could be
+  a global with a metamethod, so reading it once instead of per element would be a semantic
+  change. Analysis knows whether it is a plain local; carrying that knowledge to the compile
+  path is a new seam (the Analysis-only `bufferGenerators` list shows the shape). Worth doing
+  when a real pipeline needs it; the scalar loop it gets today is already native under `jit`.
+- **Caller scratch for `argsort`.** The sort copies keys into a `Vec` per call; a reusable
+  scratch argument is the obvious next step once a steady-state caller shows the allocation in
+  a profile.
