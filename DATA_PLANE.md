@@ -173,16 +173,16 @@ global access). The recognized JSL sum now runs the receiver's unrolled IR loop
 
 | n | JSL recognized (IR loop) | JSL scalar fallback (CodeGen loop) | explicit `data.sum` (bound) | handwritten `readu8` (CodeGen loop) |
 |---:|---:|---:|---:|---:|
-| sum 16 | 1,363 (124 ns) | 1,719 (151 ns) | 1,675 (138 ns) | 1,395 (117 ns) |
-| sum 256 | 2,773 (376 ns) | 9,639 (879 ns) | 5,995 (476 ns) | 9,075 (793 ns) |
-| sum 4,096 | 25,333 (4.39 µs) | 136,359 (12.7 µs) | 75,115 (6.00 µs) | 131,955 (11.8 µs) |
-| sum 65,536 | 386,293 (69.1 µs) | 2,163,879 (184 µs) | 1,181,035 (94.4 µs) | 2,098,035 (194 µs) |
-| count 16 | 1,143 (89 ns) ¹ | 1,749 (143 ns) | 1,960 (166 ns) | 1,393 (108 ns) |
-| count 256 | 4,392 (377 ns) ¹ | 10,259 (922 ns) | 8,200 (659 ns) | 9,183 (874 ns) |
-| count 4,096 | 56,350 (5.21 µs) ¹ | 146,384 (14.6 µs) | 108,040 (8.20 µs) | 133,788 (13.3 µs) |
-| count 65,536 | 887,717 (85.8 µs) ¹ | 2,324,444 (234 µs) | 1,705,480 (127 µs) | 2,127,528 (210 µs) |
-| min 256 | 4,084 (333 ns) ¹ | | 9,348 (670 ns) | 10,350 (880 ns) |
-| min 65,536 | 787,444 (64.1 µs) ¹ | | 2,033,028 (126 µs) | 2,425,710 (214 µs) |
+| sum 16 | 1,367 (135 ns) | 1,719 (151 ns) | 1,635 (136 ns) | 1,395 (116 ns) |
+| sum 256 | 2,777 (393 ns) | 9,639 (879 ns) | 4,275 (361 ns) | 9,075 (831 ns) |
+| sum 4,096 | 25,337 (4.74 µs) | 136,359 (12.7 µs) | 46,515 (4.10 µs) | 131,955 (12.1 µs) |
+| sum 65,536 | 386,297 (75.3 µs) | 2,163,879 (184 µs) | 722,355 (63.3 µs) | 2,098,035 (197 µs) |
+| count 16 | 1,147 (93 ns) ¹ | 1,749 (143 ns) | 1,919 (178 ns) | 1,393 (112 ns) |
+| count 256 | 4,396 (391 ns) ¹ | 10,259 (922 ns) | 6,479 (560 ns) | 9,183 (916 ns) |
+| count 4,096 | 56,354 (5.91 µs) ¹ | 146,384 (14.6 µs) | 79,439 (6.87 µs) | 133,788 (13.7 µs) |
+| count 65,536 | 887,721 (90.3 µs) ¹ | 2,324,444 (234 µs) | 1,246,799 (101 µs) | 2,127,528 (223 µs) |
+| min 256 | 4,090 (378 ns) ¹ | | 5,823 (437 ns) | 10,350 (969 ns) |
+| min 65,536 | 787,450 (69.6 µs) ¹ | | 1,115,583 (74.4 µs) | 2,425,710 (219 µs) |
 
 ¹ The receiver's IR loop called directly (`K:countGt`, `K:min` on an annotated local), which is
 what the JSL bridge emits; the JSL rows above carry the slice prologue on top.
@@ -216,6 +216,17 @@ What the machine shape says:
   The JSL bridge lowers every recognized consumer to the receiver.
 - A namecall in tail position (`return K:sum(...)`) compiles with a multi-value result count,
   which the hook declines; assign the result first. The bridge always assigns.
+- Strided layouts made the bound Rust loops faster, not slower: the stride-aware span let the
+  compiler vectorize the u8-to-double sum (1.18M to 722K instructions at 65,536). The native
+  loops dispatch once on contiguous-versus-strided and keep their constant-step unrolled form
+  for contiguous spans (a runtime stride in the unrolled body cost them 40%); strided spans get
+  the simple loop. Net: the IR sum wins below about 4,096 elements and the bound sum above, by
+  19% at 65,536; count and min on the receiver win at every size. The bridge keeps the receiver
+  for all three (never worse than 2.6× better than Luau's own native loop); a size-based switch
+  for large sums is the one tuning left on the table, deliberately, until a workload shows it.
+- `argsort` through caller scratch allocates nothing but reads keys from the span on every
+  compare, so it runs 30% slower than the allocating sort at 65,536 elements (2.31 ms versus
+  1.78 ms) and about even at 256. Use it where allocation, not latency, is the cost.
 - `compare` into a reused selection then `count()` costs within 5% of the direct count at
   every size, so composing selections is not a performance trade.
 
