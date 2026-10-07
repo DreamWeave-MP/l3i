@@ -134,6 +134,11 @@ harness = false
 required-features = ["intern"]
 
 [[bench]]
+name = "data"
+harness = false
+required-features = ["data"]
+
+[[bench]]
 name = "comprehension"
 harness = false
 
