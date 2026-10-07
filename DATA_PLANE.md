@@ -254,12 +254,14 @@ What the machine shape says:
   takes the bound path there), count 81.7 µs on the receiver against 78.1 µs bound, min 66.8 µs
   on the receiver against 143 µs bound; at 16 bytes the receiver count runs in 88 ns against
   110 ns for the handwritten native loop. Luau's own loops remain at 184 to 212 µs.
-- Writing comparisons into a selection from the native loop (`K:selectGt`) is a measured
-  negative: a read-modify-write of the bitset word per hit through the selection's words pointer
-  costs 222 µs at 65,536 bytes against 83 µs for the native count and 78 µs for the bound
-  `compare` followed by `count`. The member stays (it is correct, and composes selections
-  without a bound call) but `data.compare` is the recommended path; folding eight compares into
-  one word write needs a branch-free compare the IR does not offer.
+- Writing comparisons into a selection from the native loop (`K:selectGt`) first measured
+  222 µs at 65,536 bytes: a read-modify-write of the bitset word per hit through two pointer
+  loads, plus an element index in scratch. Reshaped as one 64-element pass per word, where
+  each hit ORs a compile-time bit into a scratch word and the pass writes that word once, it
+  runs in 89.6 µs including the `count()` afterwards: faster than the native count alone
+  (101 µs) and than the bound `compare` then `count` (136 µs), and ahead at every size from 256
+  elements up (at 16 it ties the bound count). Composing selections natively is now the fast
+  path, not a concession.
 - `compare` into a reused selection then `count()` costs within 5% of the direct count at
   every size, so composing selections is not a performance trade.
 

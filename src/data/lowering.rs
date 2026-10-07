@@ -631,8 +631,12 @@ impl NativeCodeHooks for KindLowering {
 
 impl Emit<'_, '_> {
     /// `K:select<cmp>(buffer, offset, count, threshold, selection)`: the selection's length
-    /// must already be `count` (the binder resizes otherwise), its words are cleared, then
-    /// every element that compares so sets its bit. The element index rides in `S_SEEN`.
+    /// must already be `count` (the binder resizes otherwise); its words are cleared, then
+    /// every element that compares so sets its bit. A contiguous span goes 64 elements per
+    /// pass: each hit ORs a compile-time bit into one scratch word and the pass writes that
+    /// word once, so no element pays an index or a pointer chase; the tail (and a strided
+    /// span) sets bits one at a time, with the element index riding in `S_SEEN`.
+    #[allow(clippy::too_many_lines)]
     fn select_loop(
         &mut self,
         comparison: Comparison,
@@ -673,6 +677,61 @@ impl Emit<'_, '_> {
         self.jump(clear);
 
         self.b.begin_block(head);
+        if let Some(size) = step {
+            const WORD: usize = 64;
+            let pass = self.block();
+            let single = self.block();
+            let span_bytes = (WORD as i64 * size) as f64;
+            let cursor = self.get_num(S_CURSOR);
+            let span = self.b.const_double(span_bytes);
+            let reach = self.b.inst(IrCmd::ADD_NUM, &[cursor, span]);
+            let end = self.get_num(S_END);
+            let fits = self.b.cond(IrCondition::LessEqual);
+            self.b.inst(IrCmd::JUMP_CMP_NUM, &[reach, end, fits, pass, single]);
+
+            // One word per pass: the cursor advances first, the chain reads each element at a
+            // compile-time offset behind it, hits OR a constant bit into the scratch word.
+            self.b.begin_block(pass);
+            let cursor = self.get_num(S_CURSOR);
+            let span = self.b.const_double(span_bytes);
+            let next = self.b.inst(IrCmd::ADD_NUM, &[cursor, span]);
+            self.set_num(S_CURSOR, next);
+            let zero64 = self.b.const_int64(0);
+            self.set_int64(S_ACC, zero64);
+            let chain: Vec<IrOp> = (0..WORD).map(|_| self.block()).collect();
+            let store = self.block();
+            self.jump(chain[0]);
+            for k in 0..WORD {
+                let next_block = if k + 1 < WORD { chain[k + 1] } else { store };
+                let hit = self.block();
+                self.b.begin_block(chain[k]);
+                let value = self.element_behind(kind, WORD - k, size);
+                self.test(comparison, value, hit, next_block);
+                self.b.begin_block(hit);
+                let bits = self.get_int64(S_ACC);
+                let flag = self.b.const_int64(1i64 << k);
+                let updated = self.b.inst(IrCmd::BITOR_INT64, &[bits, flag]);
+                self.set_int64(S_ACC, updated);
+                self.jump(next_block);
+            }
+
+            self.b.begin_block(store);
+            let index = self.get_num(S_SEEN);
+            let word = self.b.const_double(1.0 / 64.0);
+            let word_number = self.b.inst(IrCmd::MUL_NUM, &[index, word]);
+            let address = self.word_address(selection_reg, word_number);
+            let bits = self.get_int64(S_ACC);
+            let zero = self.b.const_int(0);
+            let udata = self.b.const_tag(LUA_TUSERDATA as u8);
+            self.b.inst(IrCmd::BUFFER_WRITEI64, &[address, zero, bits, udata]);
+            let index = self.get_num(S_SEEN);
+            let sixty_four = self.b.const_double(64.0);
+            let next_index = self.b.inst(IrCmd::ADD_NUM, &[index, sixty_four]);
+            self.set_num(S_SEEN, next_index);
+            self.jump(head);
+
+            self.b.begin_block(single);
+        }
         let cursor = self.get_num(S_CURSOR);
         let end = self.get_num(S_END);
         let more = self.b.cond(IrCondition::Less);
@@ -724,6 +783,30 @@ impl Emit<'_, '_> {
         self.b.inst(IrCmd::STORE_TAG, &[result, tag]);
         let done = self.done;
         self.jump(done);
+    }
+
+    /// A scratch word as an int64 (the same slot `get_num` reads as a double).
+    fn get_int64(&mut self, word: i32) -> IrOp {
+        let receiver = self.receiver();
+        let offset = self.b.const_int(SCRATCH + word * 8);
+        let tag = self.b.const_tag(LUA_TUSERDATA as u8);
+        self.b.inst(IrCmd::BUFFER_READI64, &[receiver, offset, tag])
+    }
+
+    fn set_int64(&mut self, word: i32, value: IrOp) {
+        let receiver = self.receiver();
+        let offset = self.b.const_int(SCRATCH + word * 8);
+        let tag = self.b.const_tag(LUA_TUSERDATA as u8);
+        self.b.inst(IrCmd::BUFFER_WRITEI64, &[receiver, offset, value, tag]);
+    }
+
+    /// The element `behind` elements (contiguous, `size` bytes apart) before the cursor.
+    fn element_behind(&mut self, kind: Kind, behind: usize, size: i64) -> IrOp {
+        let cursor = self.get_num(S_CURSOR);
+        let base = self.b.inst(IrCmd::NUM_TO_INT, &[cursor]);
+        let back = self.b.const_int(-(behind as i64 * size) as i32);
+        let offset = self.b.inst(IrCmd::ADD_INT, &[base, back]);
+        self.element_at(kind, offset)
     }
 
     /// The address of word `word` (a whole double) of the selection's bitset, as the pointer
