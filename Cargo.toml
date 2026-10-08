@@ -142,6 +142,10 @@ required-features = ["data"]
 name = "comprehension"
 harness = false
 
+[[bench]]
+name = "patterns"
+harness = false
+
 [features]
 default = []
 # Luau native code generation: builds Luau's CodeGen library plus the C++ shim that exposes
