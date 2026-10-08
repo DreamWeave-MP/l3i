@@ -694,5 +694,114 @@ int main()
         assert(d.comprehensions[1].postfix && !d.comprehensions[1].complete);
         assert(!d.comprehensions[0].postfix && !d.comprehensions[0].complete);
     }
+    // Record patterns: one model for declarations, parameters and generator slots.
+    {
+        const std::string_view s = "local {transform: {position: pos, rotation,}, id}: Entity = entity";
+        const auto d = parseSurface(s);
+        assert(d.errors.empty() && d.locals.size() == 1);
+        const auto& local = d.locals[0];
+        assert(slice(s, local.keyword) == "local" && slice(s, local.colon) == ":" && slice(s, local.equals) == "=");
+        const auto& p = local.pattern;
+        assert(p.record && p.complete && slice(s, p.range) == "{transform: {position: pos, rotation,}, id}");
+        assert(p.fields.size() == 2 && slice(s, p.fields[0].key) == "transform" && slice(s, p.fields[0].colon) == ":");
+        const auto& nested = p.fields[0].target;
+        assert(nested.record && slice(s, nested.open) == "{" && slice(s, nested.close) == "}" && nested.fields.size() == 2);
+        assert(slice(s, nested.fields[0].key) == "position" && slice(s, nested.fields[0].target.range) == "pos");
+        assert(slice(s, nested.fields[1].range) == "rotation" && nested.fields[1].colon.empty());
+        assert(!p.fields[1].target.record && slice(s, p.fields[1].target.range) == "id");
+    }
+    {
+        const std::string_view s = "local {} = e local {x,} = e";
+        const auto d = parseSurface(s);
+        assert(d.errors.empty() && d.locals.size() == 2 && d.locals[0].pattern.fields.empty() && d.locals[0].pattern.complete);
+        assert(d.locals[1].pattern.fields.size() == 1 && slice(s, d.locals[1].pattern.range) == "{x,}");
+    }
+    {
+        const std::string_view s = "function T:move({x, y}: Vec3, dt: Map<K, V>, {z}) end local f = function(a, {b: {c}}) end";
+        const auto d = parseSurface(s);
+        assert(d.errors.empty() && d.parameters.size() == 3);
+        assert(d.parameters[0].parameter == 0 && slice(s, d.parameters[0].colon) == ":" && d.parameters[0].function.begin == 0);
+        assert(d.parameters[1].parameter == 2 && d.parameters[1].colon.empty());
+        assert(d.parameters[2].parameter == 1 && slice(s, d.parameters[2].function) == "function" && d.parameters[2].function.begin > 0);
+        assert(d.parameters[2].pattern.fields[0].target.record);
+    }
+    {
+        const std::string_view s = "return [for i, {id, position: {z}} in enumerate(entities) if z > 0 => id]";
+        const auto d = parseSurface(s);
+        assert(d.errors.empty() && d.comprehensions.size() == 1 && d.comprehensions[0].complete);
+        const auto& g = d.comprehensions[0].clauses[0];
+        assert(g.bindings.size() == 2 && g.patterns.size() == 2 && !g.patterns[0].record && g.patterns[1].record);
+        assert(slice(s, g.bindings[1]) == "{id, position: {z}}" && slice(s, g.binding) == "i");
+        assert(!g.enumerateArgument.empty());
+    }
+    {
+        // A function literal with a pattern parameter inside a clause does not hide the next filter.
+        const std::string_view s = "return [for x in map(xs, function({a}) return a end) if x > 0 => x]";
+        const auto d = parseSurface(s);
+        assert(d.errors.empty() && d.comprehensions[0].clauses.size() == 2 && d.parameters.size() == 1);
+        assert(slice(s, d.comprehensions[0].clauses[0].expression) == "map(xs, function({a}) return a end)");
+    }
+    {
+        // Every way to repeat a name in one binding list, aliases and nesting included.
+        for (std::string_view s : {"local {x, other: x} = v", "local {x, n: {x}} = v", "function f({x}, x) end",
+                 "function f({x}, {y: x}) end", "return [for i, {i} in enumerate(xs) => i]"})
+        {
+            const auto d = parseSurface(s);
+            assert(d.errors.size() == 1);
+            const std::string name(slice(s, d.errors[0].range));
+            assert(d.errors[0].message == "duplicate binding '" + name + "' in record pattern");
+            assert(name == "x" || name == "i");
+        }
+        // Plain duplicate parameters stay Luau's business.
+        assert(parseSurface("function f(a, a) end").errors.empty());
+    }
+    {
+        const std::pair<std::string_view, std::string_view> unsupported[] = {
+            {"local {id, ...rest} = e", "rest patterns are not supported"},
+            {"local {health = 100, x} = e", "defaults are not supported"},
+            {"local {[\"k\"]: v, y} = e", "computed keys are not supported"},
+            {"local {a: [b], c} = e", "indexed patterns are not supported"},
+            {"local [a, b] = v", "indexed destructuring is not supported"},
+            {"for {id} in pairs(t) do end", "not supported in generic for loops"},
+            {"local {x}, y = v", "binds exactly one pattern"},
+        };
+        for (const auto& [s, message] : unsupported)
+        {
+            const auto d = parseSurface(s);
+            // One mistake, one diagnostic: recovery resynchronizes at the record's ',' or '}'.
+            assert(d.errors.size() == 1 && d.errors[0].message.find(message) != std::string::npos);
+        }
+        // A comprehension clause `for {` is not a statement loop.
+        assert(parseSurface("return [for {a} in xs => a]").errors.empty());
+    }
+    {
+        // Every prefix of representative forms: deterministic records and errors, nothing invented.
+        for (std::string_view full : {"local {position: {x, y}, id: key} = entity", "function f({x, y}: P, z) return x end",
+                 "return [for {x, position: {z}} in xs if z => x]"})
+            for (size_t n = 0; n <= full.size(); ++n)
+            {
+                const std::string s(full.substr(0, n));
+                const auto first = parseSurface(s), second = parseSurface(s);
+                assert(first.errors.size() == second.errors.size());
+                for (size_t k = 0; k < first.errors.size(); ++k)
+                    assert(first.errors[k].range.begin == second.errors[k].range.begin && first.errors[k].message == second.errors[k].message);
+                for (const auto& e : first.errors) assert(e.range.begin <= e.range.end && e.range.end <= s.size());
+                const auto names = [&](const Pattern& pattern, auto&& self) -> void {
+                    assert(pattern.range.begin <= pattern.range.end && pattern.range.end <= s.size());
+                    for (const auto& field : pattern.fields)
+                    {
+                        assert(!field.key.empty() && field.key.end <= s.size());
+                        self(field.target, self);
+                    }
+                };
+                for (const auto& local : first.locals) names(local.pattern, names);
+                for (const auto& parameter : first.parameters) names(parameter.pattern, names);
+                const bool whole = n == full.size();
+                assert(whole ? first.errors.empty() : true);
+            }
+        const auto d = parseSurface("local {position: {x");
+        assert(d.locals.size() == 1 && !d.locals[0].pattern.complete && d.locals[0].pattern.close.empty());
+        assert(d.locals[0].pattern.fields[0].target.fields[0].target.range.end == 19);
+    }
     std::cout << "surface frontend tests passed\n";
 }

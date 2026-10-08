@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -22,6 +23,58 @@ struct Diagnostic
 
 enum class ClauseKind { Generator, Filter };
 
+struct PatternField;
+
+// A binding pattern: a name, or a record pattern `{field, field: target, ...}` whose fields
+// bind the same-named field of one source value (`{x}`), rename it (`{x: px}`), or bind it to a
+// nested record pattern (`{position: {x, y}}`). Fields are read with ordinary Luau indexing, in
+// source order, depth first. Records introduce no runtime record; names are ordinary locals.
+struct Pattern
+{
+    // The name, or `{` through `}`; an unclosed record ends at its last consumed token. A
+    // missing name is an empty range at the insertion point.
+    Range range;
+    bool record = false;
+    Range open;  // Records: `{`.
+    Range close; // Records: `}`; empty when missing.
+    std::vector<PatternField> fields;
+    // Records: closed, with every field and nested pattern present and well formed.
+    bool complete = false;
+};
+
+struct PatternField
+{
+    Range range; // The key through the target.
+    Range key;   // The source field name; empty when missing.
+    Range colon; // Empty for the shorthand `{key}`, whose target is a name spelled like the key.
+    Pattern target;
+};
+
+// A record pattern declaration, `local {...}[: Type] = value`: one pattern and one value. The
+// value's first value is destructured, exactly as `local holder[: Type] = value` would bind it.
+struct LocalPattern
+{
+    Range keyword; // `local`
+    Pattern pattern;
+    Range colon;  // The whole-pattern annotation's ':'; empty without an annotation.
+    Range equals; // '='; empty when missing.
+    // Filled by lowering from Luau's own parse of the declaration: where the value ends, and so
+    // where the field reads go. SIZE_MAX until known (or when the declaration did not parse).
+    size_t extract = SIZE_MAX;
+};
+
+// A record pattern parameter of a function: the argument in that position is destructured on
+// entry, before the body, in parameter order. The function's public type is unchanged.
+struct ParameterPattern
+{
+    Range function;       // The declaring function's `function` keyword.
+    size_t parameter = 0; // Zero-based position in the parameter list.
+    Pattern pattern;
+    Range colon; // The parameter annotation's ':'; empty without one.
+    // Filled by lowering: the function body's first offset. SIZE_MAX until known.
+    size_t extract = SIZE_MAX;
+};
+
 // The JSL reducer consuming a comprehension: `sum`, `min`, `max` accumulate every accepted
 // projection; `any` and `all` are language-level short-circuit reducers.
 enum class Reducer { None, Sum, Min, Max, Any, All };
@@ -32,9 +85,12 @@ struct Clause
     Range range;
     Range keyword;
     // Ordered source bindings. Empty when missing; never contains invented identifiers.
-    // Ordinary and range generators have one binding; enumerate has exactly two.
+    // Ordinary and range generators have one binding; enumerate has exactly two. A binding slot
+    // may be a record pattern; its range is then the pattern's.
     std::vector<Range> bindings;
     Range binding; // First binding, retained as the compatibility/tooling shorthand.
+    // One pattern per binding slot, parallel to `bindings`: a name or a record pattern.
+    std::vector<Pattern> patterns;
     Range in;
     Range expression;
     // Direct JSL range(first, last[, step]) generator arguments. Empty for
@@ -112,6 +168,10 @@ struct Document
     // slices remain represented on their Clause and are excluded here.
     std::vector<Slice> slices;
     std::vector<Diagnostic> errors;
+    // Record pattern declarations and parameters, each in source order. Generator patterns
+    // remain on their Clause.
+    std::vector<LocalPattern> locals;
+    std::vector<ParameterPattern> parameters;
     // Original Comment/BlockComment/BrokenComment token ranges, in source order.
     // The no-surface fast path may leave this empty; stock parsing owns trivia
     // when no rewrite is needed. Resource truncation retains only lexed trivia.

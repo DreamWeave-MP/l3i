@@ -3,6 +3,7 @@
 #include "Luau/Lexer.h"
 #include "Luau/Parser.h"
 #include <algorithm>
+#include <unordered_set>
 #include <utility>
 
 namespace L3i::Surface
@@ -23,13 +24,31 @@ public:
     explicit Frontend(std::string_view source): source(source) {}
     Document run()
     {
+        // Record patterns first: prefix validation of comprehension clauses masks them.
+        if (source.find('{') != std::string_view::npos || source.find('[') != std::string_view::npos)
+            scanPatterns();
+        scan();
+        // A `for {` that no comprehension claimed as a clause is a statement loop.
+        for (const Range loop : loopPatterns)
+        {
+            const bool clause = std::any_of(document.comprehensions.begin(), document.comprehensions.end(), [&](const Comprehension& c) {
+                return std::any_of(c.clauses.begin(), c.clauses.end(), [&](const Clause& k) { return k.keyword.begin == loop.begin; });
+            });
+            if (!clause)
+                error(loop, "record patterns are not supported in generic for loops; destructure the loop variable in the body");
+        }
+        return std::move(document);
+    }
+private:
+    void scan()
+    {
         // Negative-only shortcut: substring hits are never treated as syntax.
         if (source.find('[') == std::string_view::npos)
-            return std::move(document);
+            return;
         if (source.find("for") == std::string_view::npos)
         {
             scanSlices();
-            return std::move(document);
+            return;
         }
         std::vector<size_t> lines{0};
         for (size_t i = 0; i < source.size(); ++i)
@@ -68,7 +87,7 @@ public:
                     if (current.type == T::Eof)
                     {
                         scanSlices();
-                        return std::move(document);
+                        return;
                     }
                     continue;
                 }
@@ -87,12 +106,12 @@ public:
             if (isComprehension(i)) comprehension(i, 0);
             else ++i;
         scanSlices();
-        return std::move(document);
     }
-private:
     std::string_view source;
     std::vector<Token> tokens;
     Document document;
+    // `for` keywords followed by `{`: comprehension clauses, or unsupported statement loops.
+    std::vector<Range> loopPatterns;
 
     std::vector<unsigned char> conditionalShapes;
     size_t prefixBytes = 0, prefixCalls = 0;
@@ -211,6 +230,295 @@ private:
             return a.range.begin < b.range.begin;
         });
     }
+    static T::Type typeIn(const std::vector<Token>& list, size_t i) { return list[std::min(i, list.size() - 1)].type; }
+    static Range pointIn(const std::vector<Token>& list, size_t i)
+    {
+        const Range at = list[std::min(i, list.size() - 1)].range;
+        return {at.begin, at.begin};
+    }
+    std::string_view text(Range range) const { return source.substr(range.begin, range.end - range.begin); }
+
+    // A record pattern at `list[i] == '{'`, consumed through its `}`. Recovery stops at the
+    // first token that cannot continue the pattern and leaves it to the enclosing construct.
+    Pattern recordPattern(const std::vector<Token>& list, size_t& i, size_t depth)
+    {
+        Pattern pattern;
+        pattern.record = true;
+        pattern.open = pattern.range = list[i].range;
+        pattern.close = pointIn(list, ++i);
+        const size_t errorsBefore = document.errors.size();
+        if (depth >= maxDepth)
+        {
+            error(pattern.open, "record pattern nesting limit exceeded (128)");
+            return pattern;
+        }
+        // Past an unsupported form to the next ',' or '}' of this record, so one mistake is one
+        // diagnostic; a statement keyword means the record was never closed.
+        const auto resync = [&]() {
+            int nested = 0;
+            for (;; ++i)
+            {
+                const int t = typeIn(list, i);
+                if (t == T::Eof || (nested == 0 && (t == ',' || t == '}')) || (keywordStop(t) && t != T::ReservedFunction && t != T::ReservedEnd))
+                    return t == ',' || t == '}';
+                if (t == '(' || t == '[' || t == '{') ++nested;
+                else if ((t == ')' || t == ']' || t == '}') && nested > 0) --nested;
+            }
+        };
+        for (;;)
+        {
+            const int t = typeIn(list, i);
+            if (t == '}')
+            {
+                pattern.close = list[i++].range;
+                pattern.range.end = pattern.close.end;
+                break;
+            }
+            if (t != T::Name)
+            {
+                pattern.close = pointIn(list, i);
+                if (t == T::Dot3 || t == '[')
+                {
+                    error(list[i].range, t == T::Dot3 ? "rest patterns are not supported; a record pattern names every field it binds"
+                                                      : "computed keys are not supported in record patterns; fields are named, e.g. {name: binding}");
+                    if (!resync()) break;
+                    if (typeIn(list, i) == ',') pattern.range.end = list[i++].range.end;
+                    continue;
+                }
+                if (t == ',')
+                    error(list[i].range, "expected field name in record pattern");
+                else
+                    error(pattern.close, "expected '}' to close record pattern");
+                break;
+            }
+            PatternField field;
+            field.key = list[i++].range;
+            if (typeIn(list, i) == ':')
+            {
+                field.colon = list[i++].range;
+                const int target = typeIn(list, i);
+                if (target == T::Name)
+                    field.target.range = list[i++].range;
+                else if (target == '{')
+                    field.target = recordPattern(list, i, depth + 1);
+                else if (target == '[')
+                {
+                    field.target.range = pointIn(list, i);
+                    error(list[i].range, "indexed patterns are not supported; a field binds a name or a record pattern");
+                    field.range = {field.key.begin, field.colon.end};
+                    pattern.fields.push_back(std::move(field));
+                    if (!resync())
+                    {
+                        pattern.close = pointIn(list, i);
+                        break;
+                    }
+                    if (typeIn(list, i) == ',') pattern.range.end = list[i++].range.end;
+                    continue;
+                }
+                else
+                {
+                    field.target.range = pointIn(list, i);
+                    error(field.target.range, "expected binding name or record pattern after ':'");
+                }
+            }
+            else
+                field.target.range = field.key;
+            field.range = {field.key.begin, field.target.range.empty() ? field.colon.end : field.target.range.end};
+            pattern.range.end = field.range.end;
+            pattern.fields.push_back(std::move(field));
+            const int next = typeIn(list, i);
+            if (next == '=')
+            {
+                error(list[i].range, "defaults are not supported in record patterns; a missing field binds nil");
+                if (!resync())
+                {
+                    pattern.close = pointIn(list, i);
+                    break;
+                }
+                if (typeIn(list, i) == ',') pattern.range.end = list[i++].range.end;
+                continue;
+            }
+            if (next == ',')
+            {
+                pattern.range.end = list[i++].range.end;
+                continue;
+            }
+            if (next != '}')
+            {
+                pattern.close = pointIn(list, i);
+                error(pattern.close, next == T::Name || next == '{' ? "expected ',' or '}' in record pattern"
+                                                                    : "expected '}' to close record pattern");
+                break;
+            }
+        }
+        pattern.complete = !pattern.close.empty() && document.errors.size() == errorsBefore;
+        return pattern;
+    }
+
+    // Every name one binding list introduces, in source order: plain names and record targets.
+    static void patternNames(const Pattern& pattern, std::vector<Range>& names)
+    {
+        if (!pattern.record)
+        {
+            if (!pattern.range.empty()) names.push_back(pattern.range);
+            return;
+        }
+        for (const PatternField& field : pattern.fields)
+            patternNames(field.target, names);
+    }
+
+    // One binding list may not introduce a name twice, through aliases and nesting included:
+    // the later declaration would silently shadow the earlier one.
+    void duplicates(const std::vector<Range>& names)
+    {
+        std::unordered_set<std::string_view> seen;
+        for (const Range name : names)
+            if (!seen.insert(text(name)).second)
+                error(name, "duplicate binding '" + std::string(text(name)) + "' in record pattern");
+    }
+
+    bool keywordStop(int t) const
+    {
+        return t == T::ReservedLocal || t == T::ReservedReturn || t == T::ReservedFunction || t == T::ReservedIf ||
+            t == T::ReservedFor || t == T::ReservedWhile || t == T::ReservedRepeat || t == T::ReservedDo || t == T::ReservedEnd ||
+            t == T::ReservedThen || t == T::ReservedElse || t == T::ReservedElseif || t == T::ReservedUntil ||
+            t == T::ReservedBreak || t == T::ReservedIn || t == ';' || t == T::Eof;
+    }
+
+    // Record patterns outside comprehensions: `local {...} = value` declarations and function
+    // parameters. Generator patterns are parsed with their comprehension clause.
+    void scanPatterns()
+    {
+        Luau::Allocator allocator;
+        Luau::AstNameTable names(allocator);
+        Luau::Lexer lexer(source.data(), source.size(), names);
+        lexer.setSkipComments(false);
+        std::vector<Token> all;
+        std::vector<size_t> lines{0};
+        for (size_t i = 0; i < source.size(); ++i)
+            if (source[i] == '\n') lines.push_back(i + 1);
+        for (;;)
+        {
+            const auto& token = lexer.next();
+            const auto offset = [&](Luau::Position p) { return lines[p.line] + p.column; };
+            if (token.type != T::Comment && token.type != T::BlockComment && token.type != T::BrokenComment)
+                all.push_back({token.type, {offset(token.location.begin), offset(token.location.end)}});
+            if (token.type == T::Eof) break;
+        }
+        for (size_t i = 0; i + 1 < all.size(); ++i)
+        {
+            const int t = all[i].type, next = all[i + 1].type;
+            if (t == T::ReservedLocal && next == '{')
+                localPattern(all, i);
+            else if (t == T::ReservedLocal && next == '[')
+                error(all[i + 1].range, "indexed destructuring is not supported; record patterns bind named fields, e.g. local {x, y} = value");
+            else if (t == T::ReservedFunction)
+                parameterPatterns(all, i);
+            else if (t == T::ReservedFor && next == '{')
+                loopPatterns.push_back(all[i].range);
+        }
+    }
+
+    void localPattern(const std::vector<Token>& all, size_t at)
+    {
+        LocalPattern local;
+        local.keyword = all[at].range;
+        size_t i = at + 1;
+        local.pattern = recordPattern(all, i, 0);
+        std::vector<Range> bound;
+        patternNames(local.pattern, bound);
+        duplicates(bound);
+        local.equals = pointIn(all, i);
+        if (typeIn(all, i) == ',')
+            error(all[i].range, "a record pattern declaration binds exactly one pattern to one value");
+        else
+        {
+            if (typeIn(all, i) == ':')
+            {
+                // The annotation is Luau's to parse; only the '=' that ends it matters here.
+                local.colon = all[i++].range;
+                int depth = 0;
+                for (; !keywordStop(typeIn(all, i)) || depth > 0; ++i)
+                {
+                    const int t = typeIn(all, i);
+                    if (t == T::Eof) break;
+                    if (t == '(' || t == '[' || t == '{') ++depth;
+                    else if ((t == ')' || t == ']' || t == '}') && depth > 0) --depth;
+                    else if (t == '=' && depth == 0) break;
+                }
+            }
+            if (typeIn(all, i) == '=')
+                local.equals = all[i].range;
+            else
+            {
+                local.equals = pointIn(all, i);
+                error(local.equals, "expected '=' after record pattern; a record pattern declaration needs a value");
+            }
+        }
+        document.locals.push_back(std::move(local));
+    }
+
+    // `function [name {. name} [: name]] [<generics>] (params)`: every parameter that begins
+    // with '{' is a record pattern; the annotation after it is Luau's.
+    void parameterPatterns(const std::vector<Token>& all, size_t at)
+    {
+        size_t i = at + 1;
+        if (typeIn(all, i) == T::Name)
+        {
+            ++i;
+            while ((typeIn(all, i) == '.' || typeIn(all, i) == ':') && typeIn(all, i + 1) == T::Name)
+                i += 2;
+        }
+        if (typeIn(all, i) == '<')
+        {
+            int depth = 0;
+            for (; typeIn(all, i) != T::Eof; ++i)
+            {
+                if (typeIn(all, i) == '<') ++depth;
+                else if (typeIn(all, i) == '>' && --depth == 0) { ++i; break; }
+            }
+        }
+        if (typeIn(all, i) != '(') return;
+        ++i;
+        size_t parameter = 0;
+        bool start = true;
+        int depth = 0;
+        std::vector<Range> bound;
+        bool patterns = false;
+        for (;;)
+        {
+            const int t = typeIn(all, i);
+            // A parameter list holds names, '...', patterns and types: a statement keyword or
+            // an assignment means the list was never closed; Luau reports that.
+            if (t == '=' || keywordStop(t) || (depth == 0 && t == ')'))
+                break;
+            if (depth == 0 && start && t == '{')
+            {
+                ParameterPattern pattern;
+                pattern.function = all[at].range;
+                pattern.parameter = parameter;
+                pattern.pattern = recordPattern(all, i, 0);
+                patternNames(pattern.pattern, bound);
+                if (typeIn(all, i) == ':') pattern.colon = all[i].range;
+                document.parameters.push_back(std::move(pattern));
+                patterns = true;
+                start = false;
+                continue;
+            }
+            if (depth == 0 && start && t == T::Name) bound.push_back(all[i].range);
+            start = false;
+            if (t == '(' || t == '[' || t == '{' || t == '<') ++depth;
+            else if ((t == ')' || t == ']' || t == '}' || t == '>') && depth > 0) --depth;
+            else if (t == ',' && depth == 0)
+            {
+                ++parameter;
+                start = true;
+            }
+            ++i;
+        }
+        if (patterns) duplicates(bound);
+    }
+
     bool isComprehension(size_t i) const { return type(i) == '[' && type(i + 1) == T::ReservedFor; }
     Reducer reducerOf(const Token& token, T::Type preceding) const
     {
@@ -331,6 +639,16 @@ private:
         }
         prefixBytes += r.end - r.begin;
         std::string text(source.substr(r.begin, r.end - r.begin));
+        // A record pattern of a declaration or parameter inside the prefix (in a function
+        // literal) validates as the one name it lowers to.
+        const auto mask = [&](Range pattern) {
+            if (pattern.begin < r.begin || pattern.end > r.end || pattern.empty()) return;
+            for (size_t j = pattern.begin - r.begin; j < pattern.end - r.begin; ++j)
+                if (text[j] != '\n' && text[j] != '\r') text[j] = ' ';
+            text[pattern.begin - r.begin] = '_';
+        };
+        for (const LocalPattern& local : document.locals) mask(local.pattern.range);
+        for (const ParameterPattern& parameter : document.parameters) mask(parameter.pattern.range);
         // Opaque placeholders ONLY for stock validation, never returned source.
         auto it = std::lower_bound(document.comprehensions.begin(), document.comprehensions.end(), r.begin,
             [](const Comprehension& c, size_t offset) { return c.open.begin < offset; });
@@ -679,20 +997,32 @@ private:
             clause.binding = clause.in = point(i);
             if (clause.kind == ClauseKind::Generator)
             {
-                if (type(i) == T::Name)
+                // One binding slot: a name or a record pattern.
+                const auto slot = [&]() {
+                    Pattern pattern;
+                    if (type(i) == T::Name) pattern.range = tokens[i++].range;
+                    else if (type(i) == '{') pattern = recordPattern(tokens, i, depth);
+                    else return false;
+                    clause.bindings.push_back(pattern.range);
+                    clause.patterns.push_back(std::move(pattern));
+                    return true;
+                };
+                if (slot())
                 {
-                    clause.bindings.push_back(tokens[i++].range);
                     while (type(i) == ',')
                     {
                         ++i;
-                        if (type(i) != T::Name)
+                        if (!slot())
                         {
                             error(point(i), "expected generator binding name after ','");
                             break;
                         }
-                        clause.bindings.push_back(tokens[i++].range);
                     }
                     clause.binding = clause.bindings.front();
+                    std::vector<Range> bound;
+                    for (const Pattern& pattern : clause.patterns) patternNames(pattern, bound);
+                    if (std::any_of(clause.patterns.begin(), clause.patterns.end(), [](const Pattern& p) { return p.record; }))
+                        duplicates(bound);
                 }
                 else error(point(i), "expected generator binding name after 'for'");
                 clause.in = point(i);
