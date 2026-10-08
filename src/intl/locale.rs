@@ -175,6 +175,11 @@ impl Locale {
     pub fn variants(&self) -> impl Iterator<Item = &str> {
         self.tag.id.variants.iter().map(icu_locale_core::subtags::Variant::as_str)
     }
+
+    /// The parsed tag, for building ICU4X rules and formatters.
+    pub(crate) fn icu(&self) -> &icu_locale_core::Locale {
+        &self.tag
+    }
 }
 
 impl PartialEq for Locale {

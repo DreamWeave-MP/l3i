@@ -102,7 +102,14 @@ const INTL_SCRIPT: (&str, &str) = (
      local script: string?, region: string? = locale:script(), locale:region()\n\
      local variants: { string } = locale:variants()\n\
      local canonical: string = intl.canonicalize('zh_hant')\n\
-     print(tag, base, language, script, region, #variants, canonical)\n",
+     local rules = intl.pluralRules(locale, 'ordinal')\n\
+     local category: dream_intl_PluralCategory = rules:category(21)\n\
+     local exact: string = rules:category('1.00')\n\
+     local whole: string = intl.pluralRules('pl'):category(5i)\n\
+     local categories: { dream_intl_PluralCategory } = rules:categories()\n\
+     local kind: dream_intl_PluralType = rules:type()\n\
+     local rulesLocale: string = rules:locale()\n\
+     print(tag, base, language, script, region, #variants, canonical, category, exact, whole, #categories, kind, rulesLocale)\n",
 );
 
 #[cfg(feature = "fs")]
