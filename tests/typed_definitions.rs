@@ -46,6 +46,8 @@ fn plan() -> Rc<RuntimePlan> {
     let builder = builder.extension(l3i::fs::FsExtension);
     #[cfg(feature = "process")]
     let builder = builder.extension(l3i::process::ProcessExtension);
+    #[cfg(feature = "tcp")]
+    let builder = builder.extension(l3i::tcp::TcpExtension);
     builder.finalize().unwrap()
 }
 
@@ -168,6 +170,40 @@ const PROCESS_SCRIPT: (&str, &str) = (
      local home: string? = process.env('HOME')\n\
      local wrote: boolean? = process.write('stderr', 'x')\n\
      print(result.success, code, output, result.signal, home, wrote, process.isTerminal('stdout'))\n",
+);
+
+#[cfg(feature = "tcp")]
+const TCP_SCRIPT: (&str, &str) = (
+    "tcp_script",
+    "--!strict\n\
+     local tcp = require('@dream/tcp')\n\
+     local listener, message, kind = tcp.listen('127.0.0.1:0', { backlog = 16, noDelay = true, maxStreams = 8 })\n\
+     if not listener then error(message) end\n\
+     local stream: dream_tcp_Stream? = tcp.connect(listener.localAddress, { noDelay = true })\n\
+     local poller = tcp.poller({ maxEvents = 64, maxWatches = 16, maxWaitMs = 250 })\n\
+     local watched: boolean? = poller:watch(listener, 1, 'read')\n\
+     local count: number? = poller:wait(0)\n\
+     local token: number?, readable: boolean, writable: boolean, closed: boolean = poller:next()\n\
+     local accepted, peer, failure = listener:accept()\n\
+     if accepted then\n\
+         local read: number? = accepted:readInto(buffer.create(16), 0, 16)\n\
+         local wrote: number? = accepted:write('x', 0, 1)\n\
+         local half: boolean? = accepted:shutdown('write')\n\
+         local state: dream_tcp_StreamState = accepted.state\n\
+         local local_: string? = accepted.localAddress\n\
+         print(read, wrote, half, state, accepted.peerAddress, local_, accepted.closed)\n\
+         accepted:close()\n\
+     end\n\
+     if stream then\n\
+         local done: boolean? = stream:finishConnect()\n\
+         print(done)\n\
+     end\n\
+     poller:modify(1, 'read')\n\
+     poller:unwatch(1)\n\
+     poller:close()\n\
+     local why: dream_tcp_ErrorKind? = failure\n\
+     print(kind, watched, count, token, readable, writable, closed, peer, why, listener.streams, listener.closed, poller.watching, tcp.MAX_WAIT_MS)\n\
+     listener:close()\n",
 );
 
 /// A strict walker over the tree: refinement on `kind` narrows each union to its node type.
@@ -298,6 +334,8 @@ fn the_generated_definitions_type_check_and_typed_scripts_pass_strict_mode() {
     all_scripts.push(FS_SCRIPT);
     #[cfg(feature = "process")]
     all_scripts.push(PROCESS_SCRIPT);
+    #[cfg(feature = "tcp")]
+    all_scripts.push(TCP_SCRIPT);
     let scripts = plan.analysis_sources(Scripts(all_scripts.iter().copied().collect()));
     let options = AnalysisOptions {
         definitions: vec![Definitions { name: "dream.d.luau".to_owned(), source: definitions.clone() }],

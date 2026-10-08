@@ -95,7 +95,7 @@ pub mod native;
 #[cfg(feature = "jit")]
 pub mod native_code;
 pub mod options;
-#[cfg(any(feature = "fs", feature = "process"))]
+#[cfg(any(feature = "fs", feature = "process", feature = "tcp"))]
 mod outcome;
 pub mod packed;
 #[cfg(feature = "process")]
@@ -114,6 +114,8 @@ pub mod source;
 pub mod stack;
 #[cfg(feature = "syntax")]
 pub mod syntax;
+#[cfg(feature = "tcp")]
+pub mod tcp;
 pub mod thread;
 pub mod udp;
 pub mod userdata;

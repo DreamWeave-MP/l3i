@@ -63,6 +63,8 @@ mod source;
 #[cfg(feature = "syntax")]
 mod syntax;
 mod tagged;
+#[cfg(feature = "tcp")]
+mod tcp;
 mod thread;
 #[cfg(all(feature = "analysis", feature = "soft-render"))]
 mod typed_definitions;

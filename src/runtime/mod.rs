@@ -36,6 +36,17 @@ pub(crate) unsafe fn shared_for<'a>(state: *mut ffi::lua_State) -> Option<&'a Sh
     unsafe { shared::shared_of(state).as_ref() }
 }
 
+/// How much longer the watched call `scope` runs in may take before the watchdog raises, or
+/// `None` when no execution time limit is armed. A native call that waits clamps its wait to
+/// this, so the limit holds even while no Luau instruction runs.
+#[cfg(feature = "tcp")]
+pub(crate) fn watchdog_remaining(scope: &impl crate::stack::Scope) -> Option<Duration> {
+    // SAFETY: a scope's state is a live thread of a VM that outlives the scope, and the borrow
+    // of its shared block ends in this function.
+    let shared = unsafe { shared_for(scope.state()) }?;
+    shared.deadline().get().map(|deadline| deadline.end.saturating_duration_since(std::time::Instant::now()))
+}
+
 /// The VM lifetime token of the runtime owning `state`, or a dead token for a foreign VM.
 ///
 /// # Safety

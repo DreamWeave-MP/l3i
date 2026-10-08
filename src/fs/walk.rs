@@ -82,7 +82,7 @@ struct Columns {
 /// A walk error as the failure a script gets: the OS error's kind when there is one.
 fn failure(path: &[u8], error: &walkdir::Error) -> Failure {
     Failure {
-        message: format!("dream.fs.walk: {}: {error}", super::display(path)),
+        message: format!("dream.fs.walk: {}: {error}", super::display(path)).into(),
         kind: error.io_error().map_or("other", crate::outcome::kind_of),
     }
 }

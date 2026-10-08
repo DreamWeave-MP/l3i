@@ -89,6 +89,10 @@ icu_plurals = { version = "2.3", optional = true }
 icu_decimal = { version = "2.3", optional = true }
 fixed_decimal = { version = "0.7", optional = true, features = ["ryu"] }
 writeable = { version = "0.6", optional = true }
+# `@dream/tcp` (feature `tcp`): readiness from mio (epoll, kqueue, or IOCP through AFD), and
+# socket2 for a listener's backlog and address reuse and Apple's SO_NOSIGPIPE. Both Rust.
+mio = { version = "1.2", optional = true, features = ["os-poll", "net"] }
+socket2 = { version = "0.6", optional = true, features = ["all"] }
 
 [build-dependencies]
 # Compiles the vendored Luau tree and the C++ shims.
@@ -198,3 +202,6 @@ intern = []
 # The `@dream/intl` extension (`intl`): BCP 47 locale identity, CLDR plural rules and
 # locale-aware decimal formatting.
 intl = ["dep:icu_locale_core", "dep:icu_plurals", "dep:icu_decimal", "dep:fixed_decimal", "dep:writeable"]
+# The `@dream/tcp` extension (`tcp`): nonblocking TCP listeners and byte streams over numeric
+# addresses and a bounded readiness poller, gated by the `network.tcp.*` capabilities.
+tcp = ["dep:mio", "dep:socket2"]
