@@ -24,8 +24,9 @@ public:
     explicit Frontend(std::string_view source): source(source) {}
     Document run()
     {
-        // Record patterns first: prefix validation of comprehension clauses masks them.
-        if (source.find('{') != std::string_view::npos || source.find('[') != std::string_view::npos)
+        // Record patterns first: prefix validation of comprehension clauses masks them. Without
+        // a bracket, a source that cannot hold a pattern is not even lexed.
+        if (source.find('[') != std::string_view::npos || (source.find('{') != std::string_view::npos && mayHavePatterns(source)))
             scanPatterns();
         scan();
         // A `for {` that no comprehension claimed as a clause is a statement loop.
@@ -40,6 +41,62 @@ public:
         return std::move(document);
     }
 private:
+    // Negative-only shortcut, like the substring checks before lexing: false only when no
+    // record pattern can begin anywhere in the text, read conservatively as plain characters.
+    // A pattern needs `local {`, `for {`, or a function parameter list holding a '{' that
+    // starts a parameter; any comment, string or long bracket where one could hide counts as
+    // "maybe". It never decides syntax: "maybe" means the source is lexed as usual.
+    static bool mayHavePatterns(std::string_view s)
+    {
+        const auto space = [](char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' || c == '\v'; };
+        const auto opaque = [&](size_t at) {
+            const char c = s[at];
+            return c == '"' || c == '\'' || c == '`' || (c == '-' && at + 1 < s.size() && s[at + 1] == '-') ||
+                (c == '[' && at + 1 < s.size() && (s[at + 1] == '[' || s[at + 1] == '='));
+        };
+        for (std::string_view keyword : {std::string_view("local"), std::string_view("for")})
+            for (size_t at = s.find(keyword); at != std::string_view::npos; at = s.find(keyword, at + 1))
+            {
+                size_t next = at + keyword.size();
+                while (next < s.size() && space(s[next])) ++next;
+                if (next < s.size() && (s[next] == '{' || s[next] == '[' || opaque(next))) return true;
+            }
+        for (size_t at = s.find("function"); at != std::string_view::npos; at = s.find("function", at + 1))
+        {
+            size_t i = at + 8;
+            // The name path and generics, up to the parameter list.
+            while (i < s.size() && s[i] != '(')
+            {
+                if (opaque(i)) return true;
+                if (s[i] == ')' || s[i] == '=' || s[i] == '{' || s[i] == ';') break;
+                ++i;
+            }
+            if (i >= s.size() || s[i] != '(') continue;
+            int depth = 0;
+            bool start = true; // At a parameter's first character.
+            for (; i < s.size(); ++i)
+            {
+                const char c = s[i];
+                if (opaque(i)) return true;
+                if (space(c)) continue;
+                if (c == '-' && i + 1 < s.size() && s[i + 1] == '>')
+                {
+                    ++i; // A function type's arrow, not a closing angle.
+                    start = false;
+                    continue;
+                }
+                if (c == '{' && depth == 1 && start) return true;
+                if (c == '(' || c == '[' || c == '{' || c == '<') ++depth;
+                else if (c == ')' || c == ']' || c == '}' || c == '>')
+                {
+                    if (--depth == 0) break;
+                }
+                start = depth == 1 && (c == '(' || c == ',');
+            }
+        }
+        return false;
+    }
+
     void scan()
     {
         // Negative-only shortcut: substring hits are never treated as syntax.

@@ -814,5 +814,23 @@ int main()
             assert(d.errors.size() == 1 && d.errors[0].message == "record pattern nesting limit exceeded (128)");
         }
     }
+    {
+        // The lexing shortcut never hides a pattern: each of these must still be parsed.
+        for (std::string_view s : {"local {x} = t", "local\n\t{x} = t", "local --[[c]] {x} = t", "local [a] = t",
+                 "function f({x}) end", "function f(a, {x}) end", "function T.a:b<T>(a: Map<K, V>, {x}: P) end",
+                 "function f(cb: () -> (), {x}) end", "function f(cb: (number) -> string, {x}) end",
+                 "local g = function(--[[)]] {x}) end", "return function(a, \"{\", {x}) end", "for {x} in t do end",
+                 "local f = function\n(\n{x}\n) end"})
+        {
+            const auto d = parseSurface(s);
+            assert(!d.locals.empty() || !d.parameters.empty() || !d.errors.empty());
+        }
+        // And sources without patterns lex nothing extra: no records, no errors.
+        for (std::string_view s : {"local t = {1, {2}}", "f({x = 1}, {y})", "function f(t: {number}) return {t} end"})
+        {
+            const auto d = parseSurface(s);
+            assert(d.locals.empty() && d.parameters.empty() && d.errors.empty());
+        }
+    }
     std::cout << "surface frontend tests passed\n";
 }
