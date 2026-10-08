@@ -38,6 +38,8 @@ fn plan() -> Rc<RuntimePlan> {
     let builder = builder.extension(l3i::bytes::BytesExtension);
     #[cfg(feature = "intern")]
     let builder = builder.extension(l3i::intern::InternExtension);
+    #[cfg(feature = "intl")]
+    let builder = builder.extension(l3i::intl::IntlExtension);
     #[cfg(feature = "syntax")]
     let builder = builder.extension(l3i::syntax::SyntaxExtension);
     #[cfg(feature = "fs")]
@@ -86,6 +88,21 @@ const INTERN_SCRIPT: (&str, &str) = (
      local n: number = ids:count() + ids:memory()\n\
      local policy: string = ids:policy()\n\
      print(span, found, text, again, n, policy)\n",
+);
+
+#[cfg(feature = "intl")]
+const INTL_SCRIPT: (&str, &str) = (
+    "intl_script",
+    "--!strict\n\
+     local intl = require('@dream/intl')\n\
+     local locale = intl.locale('pt-br')\n\
+     local tag: string = locale:tag()\n\
+     local base: string = locale:baseName()\n\
+     local language: string = locale:language()\n\
+     local script: string?, region: string? = locale:script(), locale:region()\n\
+     local variants: { string } = locale:variants()\n\
+     local canonical: string = intl.canonicalize('zh_hant')\n\
+     print(tag, base, language, script, region, #variants, canonical)\n",
 );
 
 #[cfg(feature = "fs")]
@@ -258,6 +275,8 @@ fn the_generated_definitions_type_check_and_typed_scripts_pass_strict_mode() {
     all_scripts.push(BYTES_SCRIPT);
     #[cfg(feature = "intern")]
     all_scripts.push(INTERN_SCRIPT);
+    #[cfg(feature = "intl")]
+    all_scripts.push(INTL_SCRIPT);
     #[cfg(feature = "syntax")]
     all_scripts.push(SYNTAX_SCRIPT);
     #[cfg(feature = "fs")]

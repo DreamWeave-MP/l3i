@@ -81,6 +81,9 @@ regex = { version = "1.10", optional = true }
 memmap2 = { version = "0.9", optional = true }
 walkdir = { version = "2.5", optional = true }
 same-file = { version = "1.0.6", optional = true }
+# `@dream/intl` (feature `intl`): ICU4X's BCP 47 parser. All Rust.
+icu_locale_core = { version = "2.3", optional = true, features = ["alloc"] }
+writeable = { version = "0.6", optional = true }
 
 [build-dependencies]
 # Compiles the vendored Luau tree and the C++ shims.
@@ -182,3 +185,5 @@ process = []
 # The `@dream/intern` extension (`intern`): pools that turn byte sequences into dense number
 # identities under exact or ASCII case-insensitive equality, lowered under jit.
 intern = []
+# The `@dream/intl` extension (`intl`): BCP 47 locale identity.
+intl = ["dep:icu_locale_core", "dep:writeable"]

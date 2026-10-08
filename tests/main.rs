@@ -39,6 +39,8 @@ mod extension;
 mod fs;
 #[cfg(feature = "intern")]
 mod intern;
+#[cfg(feature = "intl")]
+mod intl;
 mod iterator;
 mod libraries;
 mod lowering;

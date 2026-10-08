@@ -86,6 +86,8 @@ pub mod flags;
 pub mod fs;
 #[cfg(feature = "intern")]
 pub mod intern;
+#[cfg(feature = "intl")]
+pub mod intl;
 pub mod libraries;
 pub mod memory;
 pub mod module;
