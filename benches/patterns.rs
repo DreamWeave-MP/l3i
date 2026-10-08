@@ -220,6 +220,20 @@ fn module(patterned: bool, extra: &str) -> String {
     source
 }
 
+/// The patterned module as a careful author writes it in Luau: the same reads, holders included.
+fn handwritten_patterns() -> String {
+    use std::fmt::Write as _;
+    let mut source = String::from("type P = { x: number, y: number }\nlocal M = {}\n");
+    for i in 0..2000 {
+        writeln!(
+            source,
+            "function M.f{i}(p: P, dt: number) local x = p.x; local y = p.y;\n  local s = {{ z = x, w = y }} local z = s.z; local alias = s.w;\n  return x + y + z + alias + dt\nend"
+        )
+        .unwrap();
+    }
+    source
+}
+
 /// Compilation, not execution: what the frontend, lowering, source map and Luau's parser and
 /// compiler cost on the same module with no JSL, one comprehension, a few patterns, or a
 /// pattern in every function. With `L3I_PROFILE_CASE=<label>` only that case runs, setup
@@ -239,6 +253,7 @@ fn compilation(c: &mut Criterion) {
             ),
         ),
         ("patterns in every function", module(true, "")),
+        ("handwritten equivalent of every function", handwritten_patterns()),
     ];
     for (label, source) in &cases {
         if only.as_deref().is_some_and(|only| only != *label) {
