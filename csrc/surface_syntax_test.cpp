@@ -2,7 +2,11 @@
 
 #include "surface_syntax.h"
 
+#include <algorithm>
 #include <cassert>
+#include <cstdint>
+#include <utility>
+#include <vector>
 #include <cstdlib>
 #include <iostream>
 #include <string>
@@ -374,6 +378,61 @@ int main()
                 }
                 assert(covered == lowered.source.size());
             }
+    }
+    {
+        // The source map's affine fast path agrees with the envelope algorithm it shortcuts,
+        // for every span and point of several lowerings (CRLF, UTF-8, multiline patterns).
+        const auto lineStarts = [](std::string_view text) {
+            std::vector<size_t> starts{0};
+            for (size_t i = 0; i < text.size(); ++i)
+                if (text[i] == '\n') starts.push_back(i + 1);
+            return starts;
+        };
+        const auto toPosition = [](const std::vector<size_t>& starts, size_t at) {
+            const size_t line = size_t(std::upper_bound(starts.begin(), starts.end(), at) - starts.begin()) - 1;
+            return L3i::Surface::Position{unsigned(line), unsigned(at - starts[line])};
+        };
+        for (std::string_view source : {"local a = 1\r\nreturn [for x in xs if x > a =>\r\n  x * 2]\r\n",
+                 "-- é🦀\nlocal {\n  position: {x, y},\n  id: key,\n} = e\nreturn [for {v} in vs => v + x], key\n",
+                 "local function f({a}, b)\n  return sum[for i in range(1, b) => a * i]\nend\nreturn f\n"})
+        {
+            const auto lowered = L3i::Surface::lower(source, true);
+            const auto& map = lowered.map;
+            const auto& segments = map.provenance();
+            const auto original = lineStarts(source), generated = lineStarts(lowered.source);
+            // The reference: the envelope of every intersecting segment, as before the fast path.
+            const auto reference = [&](size_t begin, size_t end) {
+                size_t first = SIZE_MAX, last = 0;
+                for (const auto& s : segments)
+                {
+                    if (s.end <= begin || s.begin >= end) continue;
+                    const size_t lo = std::max(begin, s.begin), hi = std::min(end, s.end);
+                    first = std::min(first, s.copied ? s.originalBegin + lo - s.begin : s.originalBegin);
+                    last = std::max(last, s.copied ? s.originalBegin + hi - s.begin : s.originalEnd);
+                }
+                return std::pair{toPosition(original, first), toPosition(original, last)};
+            };
+            const auto pointReference = [&](size_t at) {
+                const L3i::Surface::Segment* owner = nullptr;
+                for (const auto& s : segments)
+                    if (s.begin <= at) owner = &s;
+                return toPosition(original, owner->copied ? owner->originalBegin + at - owner->begin : owner->originalBegin);
+            };
+            for (size_t begin = 0; begin < lowered.source.size(); begin += 3)
+                for (size_t end = begin; end <= lowered.source.size(); end += 7)
+                {
+                    const auto span = map.originalSpan({toPosition(generated, begin), toPosition(generated, end)});
+                    if (end == begin)
+                    {
+                        const auto at = pointReference(begin);
+                        assert(span.begin.line == at.line && span.begin.column == at.column && span.end.line == at.line);
+                        continue;
+                    }
+                    const auto [first, last] = reference(begin, end);
+                    assert(span.begin.line == first.line && span.begin.column == first.column);
+                    assert(span.end.line == last.line && span.end.column == last.column);
+                }
+        }
     }
     const auto strict = L3i::Surface::lower("return [for x in xs =>]");
     assert(!strict.document.errors.empty() && strict.sites.empty());

@@ -42,6 +42,28 @@ SourceMap::SourceMap(std::string_view original, std::string_view generated, std:
     , generatedStarts(lineStarts(generated))
     , segments(std::move(segments))
 {
+    generatedAnchors.reserve(this->segments.size());
+    originalAnchors.reserve(this->segments.size());
+    for (const Segment& segment : this->segments)
+    {
+        generatedAnchors.push_back(position(segment.begin, generatedStarts));
+        originalAnchors.push_back(position(segment.originalBegin, originalStarts));
+    }
+}
+
+// Whether `generated` is exactly offset `at`: on a real line, not clamped past its end.
+bool SourceMap::exact(Position generated, size_t at) const
+{
+    return generated.line < generatedStarts.size() && generatedStarts[generated.line] + generated.column == at;
+}
+
+Position SourceMap::shifted(Position generated, size_t segment) const
+{
+    const Position from = generatedAnchors[segment];
+    const Position to = originalAnchors[segment];
+    if (generated.line == from.line)
+        return {to.line, generated.column - from.column + to.column};
+    return {generated.line - from.line + to.line, generated.column};
 }
 
 Position SourceMap::originalPosition(Position generated) const
@@ -56,6 +78,8 @@ Position SourceMap::originalPosition(Position generated) const
     if (it == segments.begin())
         return position(0, originalStarts);
     --it;
+    if (it->copied && at < it->end && exact(generated, at))
+        return shifted(generated, size_t(it - segments.begin()));
     const size_t origin = it->copied ? it->originalBegin + at - it->begin : it->originalBegin;
     return position(origin, originalStarts);
 }
@@ -78,6 +102,13 @@ Span SourceMap::originalSpan(Span generated) const
     size_t last = 0;
     auto it = std::upper_bound(segments.begin(), segments.end(), begin,
         [](size_t value, const Segment& segment) { return value < segment.end; });
+    // The common case: the whole span lies in one copy, which maps both ends affinely.
+    if (it != segments.end() && it->copied && it->begin <= begin && end <= it->end && exact(generated.begin, begin) &&
+        exact(generated.end, end))
+    {
+        const size_t segment = size_t(it - segments.begin());
+        return {shifted(generated.begin, segment), shifted(generated.end, segment)};
+    }
     for (; it != segments.end() && it->begin < end; ++it)
     {
         const size_t lo = std::max(begin, it->begin);

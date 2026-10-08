@@ -61,5 +61,12 @@ private:
     std::vector<size_t> originalStarts;
     std::vector<size_t> generatedStarts;
     std::vector<Segment> segments;
+    // Where each segment begins, generated and original. A copy is byte-identical to its
+    // original, so a position inside it maps by a line delta (and a column delta on its first
+    // line) with no offset or line-start search.
+    std::vector<Position> generatedAnchors;
+    std::vector<Position> originalAnchors;
+    bool exact(Position generated, size_t at) const;
+    Position shifted(Position generated, size_t segment) const;
 };
 }
