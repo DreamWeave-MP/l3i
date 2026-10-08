@@ -147,6 +147,11 @@ harness = false
 required-features = ["data"]
 
 [[bench]]
+name = "intl"
+harness = false
+required-features = ["intl"]
+
+[[bench]]
 name = "comprehension"
 harness = false
 
