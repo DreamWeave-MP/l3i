@@ -222,8 +222,10 @@ fn module(patterned: bool, extra: &str) -> String {
 
 /// Compilation, not execution: what the frontend, lowering, source map and Luau's parser and
 /// compiler cost on the same module with no JSL, one comprehension, a few patterns, or a
-/// pattern in every function.
+/// pattern in every function. With `L3I_PROFILE_CASE=<label>` only that case runs, setup
+/// included, so a profiler attached to the bench sees one compilation and nothing else.
 fn compilation(c: &mut Criterion) {
+    let only = std::env::var("L3I_PROFILE_CASE").ok();
     let mut group = c.benchmark_group("patterns_compile");
     let options = l3i::source::CompileOptions::default();
     let cases = [
@@ -239,6 +241,9 @@ fn compilation(c: &mut Criterion) {
         ("patterns in every function", module(true, "")),
     ];
     for (label, source) in &cases {
+        if only.as_deref().is_some_and(|only| only != *label) {
+            continue;
+        }
         l3i::source::compile(source, &options).unwrap();
         group.throughput(Throughput::Bytes(source.len() as u64));
         retired_instructions(label, &mut || {
@@ -251,5 +256,14 @@ fn compilation(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, declarations, parameters, generators, compilation);
+/// The execution groups, unless one compilation case is being profiled.
+fn execution(c: &mut Criterion) {
+    if std::env::var_os("L3I_PROFILE_CASE").is_none() {
+        declarations(c);
+        parameters(c);
+        generators(c);
+    }
+}
+
+criterion_group!(benches, execution, compilation);
 criterion_main!(benches);
