@@ -783,3 +783,90 @@ fn a_host_stream_carries_bytes_both_ways() {
         .unwrap();
     assert_eq!(&peer.join().unwrap(), b"pong\0");
 }
+
+const HTTP_SERVER: &str = include_str!("../examples/tcp_http_server.luau");
+
+/// Status line, headers (lower-cased names) and body of one HTTP/1.1 response.
+fn parse_response(response: &[u8]) -> (String, Vec<(String, String)>, Vec<u8>) {
+    let end = response.windows(4).position(|w| w == b"\r\n\r\n").expect("a complete head");
+    let head = std::str::from_utf8(&response[..end]).unwrap();
+    let mut lines = head.split("\r\n");
+    let status = lines.next().unwrap().to_owned();
+    let headers = lines
+        .map(|line| {
+            let (name, value) = line.split_once(": ").unwrap();
+            (name.to_ascii_lowercase(), value.to_owned())
+        })
+        .collect();
+    (status, headers, response[end + 4..].to_vec())
+}
+
+/// The Luau server answers std clients that send their request in pieces, read slowly, send
+/// nonsense or ask for something missing; every response has an exact Content-Length.
+#[test]
+fn a_luau_http_server_answers_standard_clients() {
+    let runtime = runtime(&[LISTEN_CAPABILITY]);
+    runtime.exec(&format!("HttpServer = (function()\n{HTTP_SERVER}\nend)()")).unwrap();
+    runtime
+        .exec(
+            r"
+            big = string.rep('0123456789abcdef', 4 * 65536)
+            server = assert(HttpServer.new('127.0.0.1:0', function(method, path)
+                if path == '/' then return 200, 'text/plain', 'hello from luau\n' end
+                if path == '/big' then return 200, 'application/octet-stream', big end
+                return 404, 'text/plain', 'not found\n'
+            end))
+            ",
+        )
+        .unwrap();
+    let address: String = runtime.eval("return server.address").unwrap();
+    let address: std::net::SocketAddr = address.parse().unwrap();
+    let request = |pieces: Vec<&'static [u8]>, linger: Duration| {
+        std::thread::spawn(move || {
+            let mut stream = std::net::TcpStream::connect(address).unwrap();
+            stream.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+            for piece in pieces {
+                stream.write_all(piece).unwrap();
+                std::thread::sleep(Duration::from_millis(15));
+            }
+            std::thread::sleep(linger);
+            let mut response = Vec::new();
+            stream.read_to_end(&mut response).unwrap();
+            response
+        })
+    };
+    let simple: &'static [u8] = b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n";
+    let clients = vec![
+        // A head split across reads.
+        request(vec![b"GET / HT", b"TP/1.1\r\nHost: local", b"host\r\nAccept: */*\r\n", b"\r\n"], Duration::ZERO),
+        request(vec![b"GET /missing HTTP/1.0\r\n\r\n"], Duration::ZERO),
+        request(vec![b"NONSENSE\r\n\r\n"], Duration::ZERO),
+        // A reader that waits: the 4 MiB response fills the socket and resumes on writability.
+        request(vec![b"GET /big HTTP/1.1\r\nHost: localhost\r\n\r\n"], Duration::from_millis(200)),
+        request(vec![simple], Duration::ZERO),
+        request(vec![simple], Duration::ZERO),
+        request(vec![simple], Duration::ZERO),
+    ];
+    let step = runtime.load_function("return function() server:step(20) return server.served end").unwrap();
+    let started = Instant::now();
+    while step.invoke::<f64, ()>(&runtime.stack(), ()).unwrap() < 7.0 {
+        assert!(started.elapsed() < Duration::from_secs(20), "the server stopped answering");
+    }
+    let responses: Vec<_> = clients.into_iter().map(|client| parse_response(&client.join().unwrap())).collect();
+    for (status, headers, body) in &responses {
+        let length = headers.iter().find(|(name, _)| name == "content-length").expect("a Content-Length");
+        assert_eq!(length.1.parse::<usize>().unwrap(), body.len(), "{status}");
+        assert!(headers.iter().any(|(name, value)| name == "connection" && value == "close"));
+    }
+    assert_eq!(responses[0].0, "HTTP/1.1 200 OK");
+    assert_eq!(responses[0].2, b"hello from luau\n");
+    assert_eq!(responses[1].0, "HTTP/1.1 404 Not Found");
+    assert_eq!(responses[2].0, "HTTP/1.1 400 Bad Request");
+    assert_eq!(responses[3].0, "HTTP/1.1 200 OK");
+    assert_eq!(responses[3].2.len(), 4 * 1024 * 1024);
+    assert!(responses[3].2.chunks(16).all(|chunk| chunk == b"0123456789abcdef"));
+    for response in &responses[4..] {
+        assert_eq!(response.2, b"hello from luau\n");
+    }
+    runtime.exec("assert(server.listener.streams == 0) server:close()").unwrap();
+}
