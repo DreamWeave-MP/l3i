@@ -1212,6 +1212,20 @@ fn record_pattern_autocomplete_types_keys_and_hides_holders() {
             "return [for {id, po|} in entities => id]\n",
             &["active", "health", "id", "name", "position"][..],
         ),
+        // Records with no field yet complete through the tooling lowering's probe read.
+        ("empty_record", "local {|} = entity\n", &["health", "id", "name", "position"][..]),
+        (
+            "empty_record_from_call",
+            "local function getTypedEntity(): Entity return entity end\nlocal {|} = getTypedEntity()\n",
+            &["health", "id", "name", "position"][..],
+        ),
+        ("empty_nested_record", "local {position: {|}} = entity\n", &["x", "y"][..]),
+        (
+            "empty_parameter_record",
+            "local function update({|}: Entity) end\n",
+            &["health", "id", "name", "position"][..],
+        ),
+        ("empty_generator_record", "return [for {|} in entities => 1]\n", &["health", "id", "name", "position"][..]),
     ];
     for solver in [analysis::Solver::New, analysis::Solver::Old] {
         let analysis = Analysis::new(
@@ -1300,5 +1314,47 @@ fn record_pattern_snapshots_keep_their_maps_until_dirty_or_clear() {
         analysis.clear();
         complete(old, "oldMissing");
         check(old, "oldMissing");
+    }
+}
+
+#[test]
+fn empty_record_patterns_check_cleanly_on_both_solvers() {
+    // The completion probes of empty records are tooling scaffolding: no diagnostic of theirs
+    // reaches the user, and the lints see no stray local.
+    let source = format!(
+        "{PATTERN_TYPES}{}",
+        concat!(
+            "local entity: Entity = { id = 1, position = { x = 1, y = 2 }, name = 'e' }\n",
+            "local {} = entity\n",
+            "local {id, name} = entity\n",
+            "local {position: {}} = entity\n",
+            "local function update({}: Entity, {position: {x}}: Entity) return x end\n",
+            "local ones = [for {} in { entity } => 1]\n",
+            "return update(entity, entity), ones, id, name\n",
+        )
+    );
+    let source: &'static str = Box::leak(source.into_boxed_str());
+    for solver in [analysis::Solver::New, analysis::Solver::Old] {
+        let analysis = comprehension_analysis(HashMap::from([("empty", source)]), solver);
+        let report = analysis.check("empty", true);
+        assert!(report.diagnostics.is_empty(), "{solver:?}: {report:#?}");
+    }
+}
+
+#[test]
+fn record_pattern_bindings_keep_their_own_lints() {
+    let source = concat!(
+        "--!strict\n",
+        "type Point = { x: number, y: number }\n",
+        "local point: Point = { x = 1, y = 2 }\n",
+        "local {x, y: unusedAlias} = point\n",
+        "return x\n",
+    );
+    for solver in [analysis::Solver::New, analysis::Solver::Old] {
+        let analysis = comprehension_analysis(HashMap::from([("lints", source)]), solver);
+        let report = analysis.check("lints", true);
+        assert_eq!(report.diagnostics.len(), 1, "{solver:?}: {report:#?}");
+        assert_eq!(report.diagnostics[0].name, "LocalUnused", "{solver:?}: {report:#?}");
+        assert_diagnostic_span(&report.diagnostics[0], source, "unusedAlias");
     }
 }

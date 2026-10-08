@@ -13,6 +13,10 @@ struct PatternSite
     std::vector<Range> declarations; // Every generated declaration name: targets and nested holders.
     std::vector<Range> targets;      // The bound names' generated declarations, depth first.
     std::vector<Range> reads;        // Each field's generated read `holder.key`, depth first.
+    // Tooling (recovery) lowering only: the key of a probe read `holder.probe` for each record
+    // that reads no field, in the order records finish (nested before enclosing). Completion in
+    // such a record borrows Luau's property completion there; its diagnostics are not the user's.
+    std::vector<Range> probes;
 };
 
 struct ClauseSite

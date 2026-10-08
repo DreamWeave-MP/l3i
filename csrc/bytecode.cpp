@@ -198,6 +198,8 @@ void dumpPattern(std::string& out, const L3i::Surface::PatternSite& site)
         dumpRange(out, "target", target);
     for (const auto& read : site.reads)
         dumpRange(out, "read", read);
+    for (const auto& probe : site.probes)
+        dumpRange(out, "probe", probe);
 }
 
 // Every observable product of lowering, in one text: the generated source, its provenance

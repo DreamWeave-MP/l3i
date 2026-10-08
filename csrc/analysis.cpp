@@ -148,9 +148,55 @@ namespace
                              : range.begin < other.end && other.begin < range.end;
     }
 
+    // Calls `visit(pattern, site)` for every record pattern site of a snapshot: declarations,
+    // parameters and comprehension generator slots. Stops at the first `true`.
+    template<typename Visit>
+    bool eachPattern(const SourceSnapshot& snapshot, Visit&& visit)
+    {
+        const auto& lowered = snapshot.lowered;
+        for (size_t k = 0; k < lowered.localSites.size() && k < lowered.document.locals.size(); ++k)
+            if (visit(lowered.document.locals[k].pattern, lowered.localSites[k]))
+                return true;
+        for (size_t k = 0; k < lowered.parameterSites.size() && k < lowered.document.parameters.size(); ++k)
+            if (visit(lowered.document.parameters[k].pattern, lowered.parameterSites[k]))
+                return true;
+        for (const auto& site : lowered.sites)
+        {
+            const auto& node = lowered.document.comprehensions.at(site.comprehension);
+            for (size_t i = 0; i < site.clauses.size() && i < node.clauses.size(); ++i)
+                for (size_t slot = 0; slot < site.clauses[i].patterns.size() && slot < node.clauses[i].patterns.size(); ++slot)
+                    if (visit(node.clauses[i].patterns[slot], site.clauses[i].patterns[slot]))
+                        return true;
+        }
+        return false;
+    }
+
+    // Whether a generated location is a completion probe's read: never the user's diagnostic.
+    bool probe(const SourceSnapshot& snapshot, const Luau::Location& loc)
+    {
+        const auto& lowered = snapshot.lowered;
+        const L3i::Surface::Range range{offset(lowered.source, loc.begin), offset(lowered.source, loc.end)};
+        return eachPattern(snapshot, [&](const L3i::Surface::Pattern&, const L3i::Surface::PatternSite& site) {
+            return std::any_of(site.probes.begin(), site.probes.end(), [&](L3i::Surface::Range key) {
+                return range.begin <= key.end && key.begin <= range.end;
+            });
+        });
+    }
+
+    // Whether a generated location begins in text the lowering wrote rather than copied.
+    bool generatedStatement(const SourceSnapshot& snapshot, const Luau::Location& loc)
+    {
+        const auto& segments = snapshot.lowered.map.provenance();
+        const size_t at = offset(snapshot.lowered.source, loc.begin);
+        auto it = std::upper_bound(segments.begin(), segments.end(), at, [](size_t value, const auto& s) { return value < s.begin; });
+        return it != segments.begin() && !std::prev(it)->copied && at < std::prev(it)->end;
+    }
+
     bool synthetic(const SourceSnapshot& snapshot, const Luau::Location& loc)
     {
         const auto& lowered = snapshot.lowered;
+        if (probe(snapshot, loc))
+            return true;
         const L3i::Surface::Range range{offset(lowered.source, loc.begin), offset(lowered.source, loc.end)};
         // Innermost site wins; a nested generated call is not a copied expression
         // merely because its parent expression contains it.
@@ -514,7 +560,7 @@ namespace
     // `holder.key` of that record, where Luau's property completion knows the holder's type.
     // Reads pair with fields in the lowering's order: source order, depth first.
     bool patternCursor(const SourceSnapshot& snapshot, const L3i::Surface::Pattern& record, const L3i::Surface::PatternSite& site,
-        size_t& next, size_t at, L3i::Surface::Position& generated)
+        size_t& next, size_t& probes, size_t at, L3i::Surface::Position& generated)
     {
         const auto& lowered = snapshot.lowered;
         const size_t first = next;
@@ -536,46 +582,35 @@ namespace
             }
             if (field.target.record)
             {
-                if (patternCursor(snapshot, field.target, site, next, at, generated))
+                if (patternCursor(snapshot, field.target, site, next, probes, at, generated))
                     return true;
                 const size_t end = field.target.close.empty() ? field.target.range.end : field.target.close.end;
                 nested = nested || (field.target.open.begin < at && at <= end);
             }
         }
+        // A record that reads no field has the tooling lowering's probe read instead, numbered
+        // in the order records finish, exactly as the lowering emits them.
+        const bool probed = next == first && probes < site.probes.size();
+        const size_t probeAt = probed ? probes++ : 0;
         const size_t end = record.close.empty() ? record.range.end : record.close.begin;
-        if (nested || next == first || at <= record.open.begin || at > end)
+        if (nested || (next == first && !probed) || at <= record.open.begin || at > end)
             return false;
         size_t before = at;
         while (before > 0 && std::isspace(static_cast<unsigned char>(snapshot.original[before - 1])))
             --before;
         if (before == 0 || (snapshot.original[before - 1] != '{' && snapshot.original[before - 1] != ','))
             return false;
-        generated = lowered.map.generatedPoint(site.reads[first].end - firstKey);
+        generated = lowered.map.generatedPoint(probed ? site.probes[probeAt].begin : site.reads[first].end - firstKey);
         return true;
     }
 
     bool patternCursor(const SourceSnapshot& snapshot, size_t at, L3i::Surface::Position& generated)
     {
-        const auto& lowered = snapshot.lowered;
-        const auto visit = [&](const L3i::Surface::Pattern& pattern, const L3i::Surface::PatternSite& site) {
-            size_t next = 0;
-            return pattern.record && !site.reads.empty() && patternCursor(snapshot, pattern, site, next, at, generated);
-        };
-        for (size_t k = 0; k < lowered.localSites.size() && k < lowered.document.locals.size(); ++k)
-            if (visit(lowered.document.locals[k].pattern, lowered.localSites[k]))
-                return true;
-        for (size_t k = 0; k < lowered.parameterSites.size() && k < lowered.document.parameters.size(); ++k)
-            if (visit(lowered.document.parameters[k].pattern, lowered.parameterSites[k]))
-                return true;
-        for (const auto& site : lowered.sites)
-        {
-            const auto& node = lowered.document.comprehensions.at(site.comprehension);
-            for (size_t i = 0; i < site.clauses.size() && i < node.clauses.size(); ++i)
-                for (size_t slot = 0; slot < site.clauses[i].patterns.size() && slot < node.clauses[i].patterns.size(); ++slot)
-                    if (visit(node.clauses[i].patterns[slot], site.clauses[i].patterns[slot]))
-                        return true;
-        }
-        return false;
+        return eachPattern(snapshot, [&](const L3i::Surface::Pattern& pattern, const L3i::Surface::PatternSite& site) {
+            size_t next = 0, probes = 0;
+            return pattern.record && (!site.reads.empty() || !site.probes.empty()) &&
+                patternCursor(snapshot, pattern, site, next, probes, at, generated);
+        });
     }
 
     CompletionPoint completionPoint(const SourceSnapshot& snapshot, unsigned line, unsigned column)
@@ -739,7 +774,7 @@ int db_analysis_check(db_analysis* analysis, const char* name, size_t name_lengt
         for (const Luau::TypeError& error : result.errors)
         {
             const auto* snapshot = analysis->files.snapshot(error.moduleName);
-            if (snapshot && (recoveryNoise(*snapshot, error.location) ||
+            if (snapshot && (recoveryNoise(*snapshot, error.location) || probe(*snapshot, error.location) ||
                 (Luau::get_if<Luau::UnknownSymbol>(&error.data) && synthetic(*snapshot, error.location))))
                 continue;
             ++errors;
@@ -761,6 +796,10 @@ int db_analysis_check(db_analysis* analysis, const char* name, size_t name_lengt
         const auto* snapshot = analysis->files.snapshot(module);
         auto emitLint = [&](const Luau::LintWarning& warning, int kind) {
             if (snapshot && synthetic(*snapshot, warning.location))
+                return;
+            // Lowering keeps line structure, so a pattern's generated reads share their source's
+            // line. A same-line warning for a statement the lowering wrote is not the user's.
+            if (snapshot && warning.code == Luau::LintWarning::Code_SameLineStatement && generatedStatement(*snapshot, warning.location))
                 return;
             emit(diagnostic, ctx, kind, warning.code, Luau::LintWarning::getName(warning.code), module,
                 analysis->files.lintMessage(module, warning), analysis->files.originalLocation(module, warning.location));

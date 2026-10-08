@@ -4518,12 +4518,13 @@ return pos, hp
 ==== pattern_local_empty
 local {} = f()
 ----
-local __l3i_comp_6 = f()
+local __l3i_comp_6 = f() local __l3i_comp_6_probe = __l3i_comp_6.__l3i_comp_6_probe
 --prelude 0
 --segment 0 6 0 6 copied
 --segment 6 18 6 8 synthetic
 --segment 18 24 8 14 copied
---local 0 holder=6,18
+--segment 24 83 7 7 synthetic
+--local 0 holder=6,18 probe=65,83
 ==== pattern_local_semicolon
 local {a} = t; local {b} = [for x in xs => x]
 return a, b

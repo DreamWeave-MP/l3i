@@ -935,6 +935,10 @@ fn every_record_pattern_prefix_recovers_deterministically() {
         assert(decl.kind == 'StatLocalPattern' and not decl.pattern.complete and not decl.pattern.hasClose)
         local x = decl.pattern.fields[1].target.fields[1].target
         assert(x.kind == 'PatternIdentifier' and x.name == 'x' and x['local'] and x['local'].name == 'x')
+        local empty = luau.parse('local {{}} = e\nlocal {{p: {{}}}} = e\nfunction f({{}}) return 1 end')
+        assert(#empty.errors == 0 and #empty.root.body == 3, 'the completion probes are not statements of the source')
+        noGenerated(empty)
+        assert(#empty.root.body[3].func.body.body == 1)
         local unfinished = luau.parse('local {{x}}: Point')
         assert(unfinished.root.body[1].kind == 'StatLocalPattern' and unfinished.root.body[1].value == nil)
         -- A generator still missing its binding has no slots: the recovery placeholder is not one.

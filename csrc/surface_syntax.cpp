@@ -29,7 +29,7 @@ void shift(Range& range, size_t offset)
 void shift(PatternSite& site, size_t offset)
 {
     shift(site.holder, offset);
-    for (auto* list : {&site.declarations, &site.targets, &site.reads})
+    for (auto* list : {&site.declarations, &site.targets, &site.reads, &site.probes})
         for (Range& range : *list)
             shift(range, offset);
 }
@@ -464,10 +464,12 @@ private:
     void reads(Text& out, const Pattern& record, const std::string& from, PatternSite& site, bool lead)
     {
         const Range saved = out.anchor;
+        bool read = false;
         for (const PatternField& field : record.fields)
         {
             if (field.key.empty() || (!field.target.record && field.target.range.empty()))
                 continue; // Recovery: nothing to bind yet.
+            read = true;
             out.anchor = field.range;
             out += lead ? " local " : "local ";
             const size_t name = out.size();
@@ -490,6 +492,24 @@ private:
             if (!lead) out += " ";
             if (field.target.record)
                 reads(out, field.target, nested, site, lead);
+        }
+        if (recovery && !read)
+        {
+            // Tooling only: a record with no field yet still gets one read of its holder, so an
+            // editor can complete its first field with Luau's own property completion. The name
+            // extends the holder's stem, so it is hygienic and hidden; strict lowering never
+            // emits it, and Analysis drops whatever it diagnoses.
+            out.anchor = {record.open.end, record.open.end};
+            const std::string probe = from + "_probe";
+            out += lead ? " local " : "local ";
+            const size_t name = out.size();
+            out += probe;
+            site.declarations.push_back({name, out.size()});
+            out += " = " + from + ".";
+            const size_t key = out.size();
+            out += probe;
+            site.probes.push_back({key, out.size()});
+            if (!lead) out += " ";
         }
         out.anchor = saved;
     }
@@ -1556,7 +1576,7 @@ void merge(std::vector<PatternSite>& sites, std::vector<std::pair<size_t, Patter
         PatternSite& site = sites.at(index);
         if (!entry.holder.empty()) site.holder = entry.holder;
         for (auto [into, from] : {std::pair{&site.declarations, &entry.declarations}, std::pair{&site.targets, &entry.targets},
-                 std::pair{&site.reads, &entry.reads}})
+                 std::pair{&site.reads, &entry.reads}, std::pair{&site.probes, &entry.probes}})
             into->insert(into->end(), from->begin(), from->end());
     }
 }
