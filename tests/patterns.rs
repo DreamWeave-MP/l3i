@@ -772,3 +772,52 @@ fn debuggers_see_bound_names_and_honestly_named_holders() {
         ["__l3i_comp_17=record", "k=3", "x=1", "__l3i_comp_24=record", "z=2", "__l3i_comp_41=record", "a=6"]
     );
 }
+
+/// A pattern pipeline means the same with the data plane installed as without it: a record
+/// slot is never a recognized data operation, so both runtimes run the same scalar loop.
+#[cfg(feature = "data")]
+#[test]
+fn data_plane_availability_never_changes_a_pattern_pipeline() {
+    use l3i::data::DataExtension;
+    use l3i::extension::{RuntimePlan, RuntimePolicy};
+    let chunk = r#"
+        local buf = buffer.create(4) buffer.writeu8(buf, 0, 7)
+        local records = { { x = 1, ok = true }, { x = 2, ok = false }, { x = 3, ok = true } }
+        local results = {
+            sum[for {x} in records => x],
+            #[for {x, ok} in records if ok => x],
+            min[for {x} in records[2:3] => x],
+            max[for i, {x} in enumerate(records) => i * x],
+            tostring(any[for {ok} in records => not ok]),
+        }
+        local _, failure = pcall(function() return sum[for {x} in buf[1:4] => x] end)
+        table.insert(results, (string.gsub(tostring(failure), "^.-:%d+: ", "")))
+        return table.concat(results, ",")
+    "#;
+    let run = |with_data: bool| -> String {
+        let plan = if with_data {
+            RuntimePlan::builder()
+                .policy(RuntimePolicy::new().compat_global("@dream/data", "data"))
+                .extension(DataExtension)
+        } else {
+            RuntimePlan::builder()
+        }
+        .finalize()
+        .unwrap();
+        let runtime = Runtime::from_plan(&plan).unwrap();
+        let stack = runtime.stack();
+        stack
+            .with_frame(|frame| {
+                runtime
+                    .load(frame, "=pipelines", chunk, &CompileOptions::default())?
+                    .as_function()?
+                    .invoke::<String, ()>(frame, ())
+            })
+            .unwrap()
+    };
+    let plain = run(false);
+    assert_eq!(plain, "6,2,2,9,true,attempt to index number with 'x'");
+    assert_eq!(run(true), plain);
+    let lowered = lowering_snapshot("return sum[for {x} in buf[1:n] => x]", LoweringMode::Compile).unwrap();
+    assert!(!lowered.contains("_data"), "a record slot must not reach the data plane:\n{lowered}");
+}
