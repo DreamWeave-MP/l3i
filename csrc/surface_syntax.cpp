@@ -1641,46 +1641,63 @@ bool boundariesHold(const LoweredSource& lowered, const Luau::AstStatBlock* root
         return true;
     if (!root)
         return false;
-    // Each holder's name, mapped to the boundary its reads were inserted at.
-    std::unordered_map<std::string_view, std::pair<size_t, bool>> expected;
-    const std::string_view text = lowered.source;
+    // Each holder, by where its name was generated, with the boundary its reads were inserted
+    // at. A holder's local is found by its location: no names are compared.
+    struct Expected
+    {
+        size_t holder = 0;
+        size_t boundary = 0;
+        bool parameter = false;
+        bool seen = false;
+    };
+    std::vector<Expected> expected;
     for (const auto* sites : {&lowered.localSites, &lowered.parameterSites})
         for (const PatternSite& site : *sites)
         {
             if (site.holder.empty() || site.boundary == SIZE_MAX)
                 return false;
-            expected.emplace(text.substr(site.holder.begin, site.holder.end - site.holder.begin),
-                std::pair{site.boundary, sites == &lowered.parameterSites});
+            expected.push_back({site.holder.begin, site.boundary, sites == &lowered.parameterSites});
         }
+    std::sort(expected.begin(), expected.end(), [](const Expected& a, const Expected& b) { return a.holder < b.holder; });
+    const std::string_view text = lowered.source;
     std::vector<size_t> starts{0};
     for (size_t at = text.find('\n'); at != std::string_view::npos; at = text.find('\n', at + 1))
         starts.push_back(at + 1);
-    const auto offset = [&](Luau::Position p) { return p.line < starts.size() ? starts[p.line] + p.column : SIZE_MAX; };
     struct Check final : Luau::AstVisitor
     {
-        std::function<void(Luau::AstStatLocal*)> local;
-        std::function<void(Luau::AstExprFunction*)> function;
-        bool visit(Luau::AstStatLocal* node) override { local(node); return true; }
-        bool visit(Luau::AstExprFunction* node) override { function(node); return true; }
-    } check;
-    bool holds = true;
-    check.local = [&](Luau::AstStatLocal* node) {
-        if (node->vars.size == 0) return;
-        auto it = expected.find(node->vars.data[0]->name.value);
-        if (it == expected.end() || it->second.second) return;
-        holds = holds && node->values.size == 1 && offset(node->location.end) == it->second.first;
-        expected.erase(it);
-    };
-    check.function = [&](Luau::AstExprFunction* node) {
-        for (Luau::AstLocal* argument : node->args)
+        std::vector<Expected>& expected;
+        const std::vector<size_t>& starts;
+        bool holds = true;
+        Check(std::vector<Expected>& expected, const std::vector<size_t>& starts) : expected(expected), starts(starts) {}
+        size_t offset(Luau::Position p) const { return p.line < starts.size() ? starts[p.line] + p.column : SIZE_MAX; }
+        Expected* find(Luau::AstLocal* local, bool parameter)
         {
-            auto it = expected.find(argument->name.value);
-            if (it == expected.end() || !it->second.second) continue;
-            holds = holds && offset(node->body->location.begin) == it->second.first;
-            expected.erase(it);
+            const size_t at = offset(local->location.begin);
+            auto it = std::lower_bound(expected.begin(), expected.end(), at, [](const Expected& e, size_t value) { return e.holder < value; });
+            return it != expected.end() && it->holder == at && it->parameter == parameter && !it->seen ? &*it : nullptr;
         }
-    };
+        bool visit(Luau::AstStatLocal* node) override
+        {
+            if (node->vars.size != 0)
+                if (Expected* e = find(node->vars.data[0], false))
+                {
+                    e->seen = true;
+                    holds = holds && node->values.size == 1 && offset(node->location.end) == e->boundary;
+                }
+            return true;
+        }
+        bool visit(Luau::AstExprFunction* node) override
+        {
+            for (Luau::AstLocal* argument : node->args)
+                if (Expected* e = find(argument, true))
+                {
+                    e->seen = true;
+                    holds = holds && offset(node->body->location.begin) == e->boundary;
+                }
+            return true;
+        }
+    } check(expected, starts);
     const_cast<Luau::AstStatBlock*>(root)->visit(&check); // Visiting reads; Luau's visit is not const.
-    return holds && expected.empty();
+    return check.holds && std::all_of(expected.begin(), expected.end(), [](const Expected& e) { return e.seen; });
 }
 }
