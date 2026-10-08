@@ -50,20 +50,14 @@ private:
             scanSlices();
             return;
         }
-        std::vector<size_t> lines{0};
-        for (size_t i = 0; i < source.size(); ++i)
-            if (source[i] == '\n') lines.push_back(i + 1);
-        Luau::Allocator allocator;
-        Luau::AstNameTable names(allocator);
-        Luau::Lexer lexer(source.data(), source.size(), names);
-        lexer.setSkipComments(false);
         bool surfaceSeen = false;
         size_t surfaceStart = 0;
-        for (;;)
+        // Code tokens and comments merged back into source order.
+        const std::vector<Token>& all = codeTokens();
+        for (size_t next = 0, comment = 0; next < all.size();)
         {
-            const auto& token = lexer.next();
-            const auto offset = [&](Luau::Position p) { return lines[p.line] + p.column; };
-            Token current{token.type, {offset(token.location.begin), offset(token.location.end)}};
+            const bool trivia = comment < comments.size() && comments[comment].range.begin < all[next].range.begin;
+            const Token& current = trivia ? comments[comment++] : all[next++];
             if (current.type == T::Comment || current.type == T::BlockComment || current.type == T::BrokenComment)
             {
                 document.comments.push_back(current.range);
@@ -92,7 +86,7 @@ private:
                     continue;
                 }
             }
-            if (token.type == T::Eof) break;
+            if (current.type == T::Eof) break;
             if (tokens.size() - surfaceStart >= maxTokens)
             {
                 error(tokens.back().range, "surface token limit exceeded (262144 tokens from first comprehension)");
@@ -110,6 +104,34 @@ private:
     std::string_view source;
     std::vector<Token> tokens;
     Document document;
+    // The source lexed once into its code tokens (ending with Eof) and its comments. The
+    // pattern, comprehension and slice scans all read these; none lexes again.
+    std::vector<Token> code, comments;
+    bool lexed = false;
+    const std::vector<Token>& codeTokens()
+    {
+        if (lexed) return code;
+        lexed = true;
+        std::vector<size_t> lines{0};
+        for (size_t i = 0; i < source.size(); ++i)
+            if (source[i] == '\n') lines.push_back(i + 1);
+        Luau::Allocator allocator;
+        Luau::AstNameTable names(allocator);
+        Luau::Lexer lexer(source.data(), source.size(), names);
+        lexer.setSkipComments(false);
+        for (;;)
+        {
+            const auto& token = lexer.next();
+            const auto offset = [&](Luau::Position p) { return lines[p.line] + p.column; };
+            const Token current{token.type, {offset(token.location.begin), offset(token.location.end)}};
+            if (current.type == T::Comment || current.type == T::BlockComment || current.type == T::BrokenComment)
+                comments.push_back(current);
+            else
+                code.push_back(current);
+            if (token.type == T::Eof) break;
+        }
+        return code;
+    }
     // `for` keywords followed by `{`: comprehension clauses, or unsupported statement loops.
     std::vector<Range> loopPatterns;
 
@@ -121,22 +143,7 @@ private:
     void error(Range r, std::string message) { document.errors.push_back({r, std::move(message)}); }
     void scanSlices()
     {
-        Luau::Allocator allocator;
-        Luau::AstNameTable names(allocator);
-        Luau::Lexer lexer(source.data(), source.size(), names);
-        lexer.setSkipComments(false);
-        std::vector<Token> all;
-        std::vector<size_t> lines{0};
-        for (size_t i = 0; i < source.size(); ++i)
-            if (source[i] == '\n') lines.push_back(i + 1);
-        for (;;)
-        {
-            const auto& token = lexer.next();
-            const auto offset = [&](Luau::Position p) { return lines[p.line] + p.column; };
-            if (token.type != T::Comment && token.type != T::BlockComment && token.type != T::BrokenComment)
-                all.push_back({token.type, {offset(token.location.begin), offset(token.location.end)}});
-            if (token.type == T::Eof) break;
-        }
+        const std::vector<Token>& all = codeTokens();
         for (size_t open = 0; open < all.size(); ++open)
         {
             // A comprehension is never a slice, whatever colons its clauses contain.
@@ -399,22 +406,7 @@ private:
     // parameters. Generator patterns are parsed with their comprehension clause.
     void scanPatterns()
     {
-        Luau::Allocator allocator;
-        Luau::AstNameTable names(allocator);
-        Luau::Lexer lexer(source.data(), source.size(), names);
-        lexer.setSkipComments(false);
-        std::vector<Token> all;
-        std::vector<size_t> lines{0};
-        for (size_t i = 0; i < source.size(); ++i)
-            if (source[i] == '\n') lines.push_back(i + 1);
-        for (;;)
-        {
-            const auto& token = lexer.next();
-            const auto offset = [&](Luau::Position p) { return lines[p.line] + p.column; };
-            if (token.type != T::Comment && token.type != T::BlockComment && token.type != T::BrokenComment)
-                all.push_back({token.type, {offset(token.location.begin), offset(token.location.end)}});
-            if (token.type == T::Eof) break;
-        }
+        const std::vector<Token>& all = codeTokens();
         for (size_t i = 0; i + 1 < all.size() && !stopped; ++i)
         {
             const int t = all[i].type, next = all[i + 1].type;
