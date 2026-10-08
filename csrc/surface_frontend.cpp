@@ -139,7 +139,8 @@ private:
         }
         for (size_t open = 0; open < all.size(); ++open)
         {
-            if (all[open].type != '[' || open == 0) continue;
+            // A comprehension is never a slice, whatever colons its clauses contain.
+            if (all[open].type != '[' || open == 0 || (open + 1 < all.size() && all[open + 1].type == T::ReservedFor)) continue;
             size_t close = open + 1;
             int depth = 1;
             size_t colon = 0;

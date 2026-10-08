@@ -33,6 +33,28 @@ fn numeric_range_generators_lower_to_numeric_loops_with_exact_semantics() {
 }
 
 #[test]
+fn colons_inside_reducer_comprehensions_are_not_slices() {
+    // A Name before `[for` once let the standalone slice scanner claim the whole comprehension
+    // when a method call put a colon inside its brackets.
+    let runtime = Runtime::new().unwrap();
+    runtime
+        .exec(
+            r#"
+        local Box = {}
+        Box.__index = Box
+        function Box:get() return self.v end
+        local xs = { setmetatable({ v = 2 }, Box), setmetatable({ v = 5 }, Box) }
+        assert(sum[for x in xs => x:get()] == 7)
+        assert(max[for x in xs => x:get()] == 5)
+        assert(any[for x in xs => x:get() == 5])
+        local words = [for s in { "a", "b" } => s:upper()]
+        assert(words[1] == "A" and words[2] == "B")
+    "#,
+        )
+        .unwrap();
+}
+
+#[test]
 fn enumerate_generators_lower_to_indexed_loops() {
     let runtime = Runtime::new().unwrap();
     runtime
