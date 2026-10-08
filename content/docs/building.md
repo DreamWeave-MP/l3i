@@ -7,8 +7,8 @@ weight = 100
 kind = "guide"
 +++
 
-l3i owns its Luau build. Luau is the `luau/` git submodule, pinned at release 0.740, the commit
-OpenMW pins; `build.rs` compiles it and the binder's C++ additions with `cc`, in parallel, from
+l3i owns its Luau build. Luau is the `luau/` git submodule, pinned at release 0.741;
+`build.rs` compiles it and the binder's C++ additions with `cc`, in parallel, from
 the checkout alone. There is no network access at build time and no external Lua crate. Rust 1.92
 or newer, edition 2024.
 
@@ -44,7 +44,7 @@ binder's own C additions are `csrc/extra.cpp`; the shims over the C++-only APIs 
 Hosts may append compiler flags through `LUAU_CXXFLAGS`. Under `jit`, `build.rs` also parses
 `Luau/IrData.h` and `Luau/CodeGenOptions.h` and writes `ir_enums.rs` into `OUT_DIR`, the mirrors
 of `IrCmd`, `IrCondition`, `IrBlockKind` and `HostMetamethod` for that exact Luau build. It exports
-`LUAU_VERSION` (`0.740`) and `L3I_TAG_LIMIT` to the crate.
+`LUAU_VERSION` (`0.741`) and `L3I_TAG_LIMIT` to the crate.
 
 Compiled chunks default to optimisation level 2 and debug level 1, and runtime plans turn type
 information on so native code sees the userdata types.

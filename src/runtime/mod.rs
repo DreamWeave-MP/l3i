@@ -62,8 +62,9 @@ pub struct RuntimeBuilder {
 }
 
 impl RuntimeBuilder {
-    /// Routes every `buffer` allocation through `cage` (`lua_setbuffercage`), installed right
-    /// after the state is created so no buffer exists outside it.
+    /// Routes every `buffer` allocation through `cage` (`lua_setmemorycage`), installed right
+    /// after the state is created, before it makes any further object, so no buffer exists
+    /// outside it.
     pub fn buffer_cage(mut self, cage: impl crate::memory::BufferCage) -> Self {
         self.buffer_cage = Some(Box::new(cage));
         self
@@ -155,7 +156,7 @@ impl RuntimeBuilder {
             // SAFETY: fresh state, before any buffer; the outer Box keeps the cage's address
             // stable for the VM's life (it is dropped after lua_close).
             unsafe {
-                ffi::lua_setbuffercage(
+                ffi::lua_setmemorycage(
                     state,
                     crate::memory::cage_callback,
                     (&**cage as *const Box<dyn crate::memory::BufferCage>).cast_mut().cast(),

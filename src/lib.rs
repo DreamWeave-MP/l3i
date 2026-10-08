@@ -1,4 +1,4 @@
-//! Luau binder for DreamWeave component crates, which owns its own Luau 0.740 build (no
+//! Luau binder for DreamWeave component crates, which owns its own Luau 0.741 build (no
 //! intermediate Lua binding crate).
 //!
 //! l3i is its author's second Luau binder. The first is C++: `components/luau`, which Dave
@@ -146,7 +146,7 @@ const fn parse_tag_limit(text: &str) -> u8 {
     value as u8
 }
 
-/// The Luau release the linked VM was built from, e.g. `"0.740"`: the release OpenMW pins.
+/// The Luau release the linked VM was built from, e.g. `"0.741"`.
 pub const LUAU_VERSION: &str = env!("LUAU_VERSION");
 
 /// Whether this build of l3i met the verified toolchain (TOOLCHAIN.md): clang for Luau, the
@@ -169,7 +169,7 @@ mod tests {
 
     #[test]
     fn luau_is_the_release_openmw_pins() {
-        assert_eq!(super::LUAU_VERSION, "0.740");
+        assert_eq!(super::LUAU_VERSION, "0.741");
     }
 
     // Without either variable, build.rs verifies the toolchain or refuses to build at all, so a

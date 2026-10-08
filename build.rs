@@ -1,5 +1,5 @@
-//! Builds Luau from the `luau/` git submodule (pinned at the 0.740 release, the commit `OpenMW`
-//! pins), the binder's own C additions (`csrc/extra.cpp`), and, per feature, the C++ shims over
+//! Builds Luau from the `luau/` git submodule (pinned at the 0.741 release), the binder's own C
+//! additions (`csrc/extra.cpp`), and, per feature, the C++ shims over
 //! Luau's code generator and analysis libraries. Everything is compiled with `cc`, so the crate
 //! builds wherever a C++17 compiler and Cargo exist (MSVC, clang, GCC, the Android NDK, cross
 //! sysroots) with no network access at build time and nothing outside the package.
@@ -26,7 +26,7 @@ const VECTOR_SIZE: u32 = 3;
 
 // The Luau release the `luau/` submodule is pinned at. Bumping the submodule means bumping this,
 // re-auditing src/raw/ffi.rs against the new headers, and re-checking the flag policy.
-const LUAU_VERSION: &str = "0.740";
+const LUAU_VERSION: &str = "0.741";
 
 struct Luau {
     root: PathBuf,

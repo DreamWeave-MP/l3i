@@ -94,7 +94,7 @@ the gain. Both are why `build.rs` checks up front.
 
 ## Building from a checkout
 
-Luau is the `luau/` git submodule, pinned at release 0.740, the commit OpenMW pins. A crates.io
+Luau is the `luau/` git submodule, pinned at release 0.741. A crates.io
 package carries the Luau sources it needs; a checkout has to fetch them:
 
 ```sh

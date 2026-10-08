@@ -326,7 +326,7 @@ fn main() -> l3i::Result<()> {
 
 {{ api_signature(value="trait BufferCage: 'static { fn allocate(&self, ptr: *mut c_void, old_size: usize, new_size: usize, kind: c_int) -> *mut c_void; }") }}
 
-A caged allocator for Luau buffers (`lua_setbuffercage`): every `buffer` allocation goes through
+A caged allocator for Luau buffers (`lua_setmemorycage`): every `buffer` allocation goes through
 it. The `lua_Alloc` contract: `new_size == 0` frees `ptr` and returns null; `ptr` null with
 `new_size > 0` allocates; otherwise reallocates. Installed through
 `RuntimeBuilder::buffer_cage` before any buffer exists.

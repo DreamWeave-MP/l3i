@@ -1,6 +1,6 @@
 # l3i
 
-**The Luau runtime for DreamWeave.** A Rust binder for [Luau](https://luau.org) 0.740 that
+**The Luau runtime for DreamWeave.** A Rust binder for [Luau](https://luau.org) 0.741 that
 owns its own Luau build, plans every VM before it exists, and lowers hot script calls to native
 code.
 
@@ -172,7 +172,7 @@ binder.
 
 | | |
 |---|---|
-| Luau | git submodule `luau/`, release 0.740 (the commit OpenMW pins); `git clone --recurse-submodules` |
+| Luau | git submodule `luau/`, release 0.741; `git clone --recurse-submodules` |
 | C++ side | compiled by `build.rs` with `cc`: `LUAI_MAXCSTACK=8000`, three-component vectors, `LUA_UTAG_LIMIT=254`, `-fno-math-errno`, no `-march` |
 | Toolchain | clang++, lld, cross-language thin LTO, clang and rustc on the same LLVM major; enforced by `build.rs` |
 | Apple targets | clang and lld without `-Clinker-plugin-lto` (ld64.lld rejects it); macOS forfeits the cross-language inlining |
@@ -197,7 +197,7 @@ numbers for the hot paths.
 
 Wall time is noise past a few nanoseconds, so the binder's own cost is tracked in retired
 instructions per call from the CPU's counters (`cargo bench --bench instructions`), the loop
-subtracted, on the pinned Luau 0.740:
+subtracted, on Luau 0.740:
 
 | Per call | Instructions | Cycles |
 |---|---:|---:|

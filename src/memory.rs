@@ -178,7 +178,7 @@ unsafe extern "C" fn category_name(_: *mut ffi::lua_State, memcat: u8) -> *const
     })
 }
 
-/// A caged allocator for Luau buffers (`lua_setbuffercage`): every `buffer` allocation goes
+/// A caged allocator for Luau buffers (`lua_setmemorycage`): every `buffer` allocation goes
 /// through it, so the host can place buffers in a guarded region or account for them exactly.
 /// Installed through [`crate::runtime::RuntimeBuilder::buffer_cage`] before any buffer exists.
 pub trait BufferCage: 'static {

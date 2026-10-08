@@ -14,7 +14,7 @@ keywords = ["luau", "lua", "bindings", "gamedev"]
 categories = ["api-bindings", "game-development"]
 links = "luau"
 # The whole package builds from this tree: the Luau submodule (`luau/`, MIT, pinned at the
-# 0.740 release OpenMW pins; only the components the build uses are packaged) plus the binder's
+# 0.741 release; only the components the build uses are packaged) plus the binder's
 # C++ additions and shims (`csrc/`). No network at build time, no separate Lua binding crate.
 # Root-level entries are anchored with a leading slash: gitignore semantics would otherwise
 # match a bare "README.md" at any depth, including local reference checkouts.

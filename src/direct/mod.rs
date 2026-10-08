@@ -146,7 +146,7 @@ unsafe extern "C" fn user_atom(state: *mut ffi::lua_State, text: *const c_char, 
 
 /// Installs `catalogue` as this VM's `useratom` callback and verifies every spelling resolves.
 ///
-/// Luau 0.740 resolves atoms lazily (`luaS_updateatom`), but OpenMW installs the callback
+/// Luau 0.741 resolves atoms lazily (`luaS_updateatom`), but OpenMW installs the callback
 /// before `luaL_openlibs` and the binder keeps that order: call this on a runtime built with
 /// `standard_libraries(false)`, then open them, or pass the catalogue to
 /// [`crate::runtime::RuntimeBuilder::atom_catalogue`]. A VM takes exactly one catalogue;

@@ -1,4 +1,4 @@
-//! Luau 0.740 C API, transcribed from `VM/include/lua.h`, `VM/include/lualib.h`,
+//! Luau 0.741 C API, transcribed from `VM/include/lua.h`, `VM/include/lualib.h`,
 //! `Compiler/include/luacode.h`, `CodeGen/include/luacodegen.h`, and the two helpers
 //! `luau0-src` adds in `Custom/`.
 //!
@@ -442,7 +442,8 @@ unsafe extern "C-unwind" {
     );
 
     pub fn lua_callbacks(L: *mut lua_State) -> *mut lua_Callbacks;
-    pub fn lua_setbuffercage(L: *mut lua_State, alloc: lua_CageAlloc, ud: *mut c_void);
+    // 0.741 renamed `lua_setbuffercage`; only buffers are caged in this release.
+    pub fn lua_setmemorycage(L: *mut lua_State, alloc: lua_CageAlloc, ud: *mut c_void);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -555,7 +556,7 @@ unsafe extern "C" {
     /// C `free`, for buffers `luau_compile` returns.
     pub fn free(p: *mut c_void);
 
-    // Coroutine finalizers (experimental in Luau 0.740; needs the DebugLuauCoroutineFinally flag).
+    // Coroutine finalizers (experimental in Luau 0.741; needs the DebugLuauCoroutineFinally flag).
     pub fn lua_hasfinalizers(L: *mut lua_State) -> c_int;
     pub fn lua_pushfinalizerfunction(L: *mut lua_State);
     pub fn lua_addfinalizer(L: *mut lua_State, co: *mut lua_State, idx: c_int);

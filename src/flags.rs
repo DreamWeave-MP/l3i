@@ -12,6 +12,8 @@ use crate::raw::ffi;
 
 /// Luau feature flags OpenMW enables that live in the Ast, Bytecode, Compiler, and VM
 /// components, which are always linked. Runtime flags must be set before `luaL_openlibs`.
+/// Luau 0.741 graduated two of OpenMW's flags, `LuauNoDuplicateBinaryPrefix` and
+/// `LuauCompileIifeInline`: their enabled behavior is now unconditional, so they are gone.
 pub const LUAU_FLAGS: &[&str] = &[
     // Compiler side
     "LuauCompileCleanBlockDeadClose",
@@ -19,11 +21,9 @@ pub const LUAU_FLAGS: &[&str] = &[
     "LuauCompileLoopUnrollZero",
     "LuauCompileNoFoldVectorEqW",
     "LuauCompileRecursiveAliases",
-    "LuauNoDuplicateBinaryPrefix",
     "LuauCompileConcatTargetTop",
     "LuauIntegerFastcalls",
     "LuauIntegerBufferFastcalls",
-    "LuauCompileIifeInline",
     "LuauCompileMoveElision",
     "LuauCompileFastpcall",
     "LuauIntegerType2",

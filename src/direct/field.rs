@@ -1,4 +1,4 @@
-//! Direct primitive fields: `lua_registeruserdatadirectfieldget` (Luau 0.740).
+//! Direct primitive fields: `lua_registeruserdatadirectfieldget` (Luau 0.741).
 //!
 //! A registered getter runs from `GETTABLEKS` with no Lua frame, receiving only the userdata
 //! payload and a result slot. It must not touch the Lua API and must not fail. Only the value

@@ -10,7 +10,7 @@ kind = "reference"
 ## Versions
 
 l3i is on 1.x: every release in 1.x keeps the Rust API compatible, as Cargo's semver rules expect.
-The Luau it embeds is release 0.740, the commit OpenMW pins, as the `luau/` submodule; bumping it
+The Luau it embeds is release 0.741, as the `luau/` submodule; bumping it
 is a deliberate change that re-audits the hand-declared C API.
 
 ## Rust and dependencies
@@ -263,7 +263,7 @@ Past a few nanoseconds wall time is noise, so the binder's own cost is tracked i
 instructions and cycles per call, read from the CPU's counters by `cargo bench --bench
 instructions` (Linux, `perf_event_paranoid` at 2 or lower, no `perf` binary needed). The loop is
 subtracted, the minimum over seven rounds is reported, and the floors are measured the same way:
-a hand-written `lua_CFunction` and a typed direct handler. On the pinned Luau 0.740:
+a hand-written `lua_CFunction` and a typed direct handler. On Luau 0.740:
 
 | Per call | Instructions | Cycles |
 |---|---:|---:|

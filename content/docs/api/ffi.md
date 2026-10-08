@@ -1,6 +1,6 @@
 +++
 title = "The raw C API"
-description = "The ffi module: every Luau 0.740 C entry point declared by hand; TAG_LIMIT and LUAU_VERSION; the rules for hand-written lua_CFunctions."
+description = "The ffi module: every Luau 0.741 C entry point declared by hand; TAG_LIMIT and LUAU_VERSION; the rules for hand-written lua_CFunctions."
 weight = 270
 
 [extra]
@@ -15,7 +15,7 @@ depend on.
 
 {{ api_signature(value="pub mod ffi") }}
 
-The raw Luau C API for hand-written native functions, transcribed from Luau 0.740's headers.
+The raw Luau C API for hand-written native functions, transcribed from Luau 0.741's headers.
 Everything here is `unsafe`; prefer the safe layers. Names, argument order and types follow the
 headers exactly, so the C++ binder's code reads across one to one.
 
@@ -55,7 +55,7 @@ reserved: which tag a type gets is the host's or the planner's choice, per runti
 
 ## LUAU_VERSION
 
-{{ api_signature(value='const LUAU_VERSION: &str = "0.740"') }}
+{{ api_signature(value='const LUAU_VERSION: &str = "0.741"') }}
 
 The Luau release the linked VM was built from: the release OpenMW pins, as the `luau/` git
 submodule. The flag policy names this version in its error when a flag does not exist.

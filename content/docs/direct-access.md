@@ -188,7 +188,7 @@ serves one type's slot to the other.
 
 ## Direct fields
 
-`direct::field` is Luau 0.740's `lua_registeruserdatadirectfieldget`: a registered getter runs
+`direct::field` is Luau 0.741's `lua_registeruserdatadirectfieldget`: a registered getter runs
 from `GETTABLEKS` with no Lua frame, receiving only the userdata payload and a result slot. It
 must not touch the Lua API and cannot fail, so it is a unit type implementing
 `direct::field::DirectField<T>` with one function.

@@ -1,6 +1,6 @@
 +++
 title = "l3i"
-description = "The Luau runtime for DreamWeave: a Rust binder that owns its Luau 0.740 build, plans every VM before it exists, and lowers hot script calls to native code."
+description = "The Luau runtime for DreamWeave: a Rust binder that owns its Luau 0.741 build, plans every VM before it exists, and lowers hot script calls to native code."
 
 [taxonomies]
 tags = ["Rust", "Luau", "Bindings", "Game development", "Native code"]
@@ -26,7 +26,7 @@ in every runtime, and Luau's native code generator with lowering hooks written i
 {{ pipeline(data_path="data/pipeline/plan.json") }}
 
 {% features() %}
-- **Its own Luau.** Luau 0.740 is a git submodule compiled by `build.rs` with clang, lld and
+- **Its own Luau.** Luau 0.741 is a git submodule compiled by `build.rs` with clang, lld and
   cross-language thin LTO, so the Rust thunks and the Luau API inline into each other. No `mlua`,
   no separate binding crate, nothing fetched at build time.
 - **Arguments read from the value layout.** The typed binder reads stack slots straight from
@@ -123,7 +123,7 @@ mistake is a type error naming the kind: `Quaternion expected, got AnimationKey`
 
 ## What it costs
 
-Retired instructions per call, read from the CPU's counters on the pinned Luau 0.740, with the
+Retired instructions per call, read from the CPU's counters on Luau 0.740, with the
 loop subtracted. The rest of a call is Luau's own machinery.
 
 | Per call | Instructions | Cycles |

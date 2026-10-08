@@ -31,7 +31,7 @@ initialization category 0, no atom catalogue, no buffer cage, no native code.
 | `fn profiler(self, enabled: bool) -> Self` | Time script calls, switch memory categories per call, record allocation activity |
 | `fn initialization_category(self, category: MemoryCategory) -> Self` | The category charged while sandboxes and templates are set up. Default 0 |
 | `fn atom_catalogue(self, catalogue: AtomCatalogue) -> Self` | This VM's [atom catalogue](@/docs/api/direct.md), installed before the standard libraries open |
-| `fn buffer_cage(self, cage: impl BufferCage) -> Self` | Routes every `buffer` allocation through `cage` (`lua_setbuffercage`), installed before any buffer exists |
+| `fn buffer_cage(self, cage: impl BufferCage) -> Self` | Routes every `buffer` allocation through `cage` (`lua_setmemorycage`), installed before any buffer exists |
 | `fn native_code(self, options: NativeCodeOptions) -> Self` | Feature `jit`: enables native code generation with `options`. Off by default |
 | `fn build(self) -> Result<Runtime>` | Creates the VM in OpenMW's order: flag policy, `luaL_newstate`, pointer key, buffer cage, per-VM state and callbacks, native code, atom catalogue, standard libraries, the value-layout self test, l3i's packed kinds |
 
@@ -537,7 +537,7 @@ exposes (`LuauGcTraceUdata`, `LuauBufferCage`); and the CodeGen flags, applied o
 {{ api_signature(value="fn initialize() -> Result<()>") }}
 
 Freezes the policy. Idempotent and thread-safe. A flag name the linked Luau lacks is
-`Error::Logic` (`Luau 0.740 has no fast flag named ...`) rather than a silent no-op.
+`Error::Logic` (`Luau 0.741 has no fast flag named ...`) rather than a silent no-op.
 
 ## Error
 

@@ -74,7 +74,7 @@ wording told the caller nothing.
 
 ## Luau facts the ecosystem builds on
 
-**Luau 0.740 integers (`42i`) compare with `==` only.** `<`, `<=`, `>` and `>=` between two
+**Luau 0.741 integers (`42i`) compare with `==` only.** `<`, `<=`, `>` and `>=` between two
 integers raise `attempt to compare integer <= integer`; ordering goes through the `integer`
 library (`lt`, `le`, and the rest). An integer never equals a number: `42i ~= 42`. l3i therefore
 pushes identities (peer, event, channel and client ids, hashes, handles, packed scalars) as

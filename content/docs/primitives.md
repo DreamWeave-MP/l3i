@@ -89,7 +89,7 @@ which is the deal for opaque ids. A numeric `u64` stays within what an integer o
 holds, so nothing silently reinterprets.
 
 {% callout(kind="note", title="Luau integers compare with == only") %}
-In Luau 0.740, `<` and `<=` between two integers raise, and an integer never equals a number
+In Luau 0.741, `<` and `<=` between two integers raise, and an integer never equals a number
 (`42i ~= 42`). l3i pushes identities as integers and everything a script thresholds or counts as
 plain numbers.
 {% end %}
@@ -294,7 +294,7 @@ receiver is one tag-to-type compare, the key one tag test.
 
 ## What they cost
 
-Per call, in retired instructions on the pinned Luau 0.740, from `cargo bench --bench
+Per call, in retired instructions on Luau 0.740, from `cargo bench --bench
 instructions` (see [Compatibility and performance](@/docs/performance.md)):
 
 | Path | Instructions |

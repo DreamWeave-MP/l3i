@@ -5,7 +5,7 @@
 # value matters for local previews.
 base_url = "https://DreamWeave-MP.github.io/l3i"
 title = "l3i"
-description = "The Luau runtime for DreamWeave: a Rust binder that owns its Luau 0.740 build, plans every VM before it exists, and lowers hot script calls to native code."
+description = "The Luau runtime for DreamWeave: a Rust binder that owns its Luau 0.741 build, plans every VM before it exists, and lowers hot script calls to native code."
 
 compile_sass = true
 build_search_index = true

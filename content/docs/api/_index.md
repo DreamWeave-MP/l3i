@@ -59,7 +59,7 @@ Declared at the root:
 ```text
 pub mod ffi                          the raw Luau C API (raw::ffi, re-exported)
 pub const TAG_LIMIT: u8              254: valid userdata tags are 1..TAG_LIMIT
-pub const LUAU_VERSION: &str         "0.740"
+pub const LUAU_VERSION: &str         "0.741"
 pub const VERIFIED_TOOLCHAIN: bool   whether build.rs found the verified toolchain
 ```
 
@@ -92,7 +92,7 @@ crate returns. [The raw C API](@/docs/api/ffi.md) covers `ffi` and the two VM co
 - **`Result<T>` from a bound function raises.** `Ok(value)` pushes `value`'s results; `Err`
   raises the message with the caller's location, in `luaL_error` wording where the C++ binder
   had it (`invalid argument #2 to 'name' (number expected, got string)`).
-- **Integers.** Luau 0.740 integers (`42i`) compare with `==` only; `<` between two integers
+- **Integers.** Luau 0.741 integers (`42i`) compare with `==` only; `<` between two integers
   raises, and an integer never equals a number. l3i pushes identities (peer, event, channel and
   client ids, hashes, handles, packed scalars) as Luau integers through `convert::Integer`,
   `Bits64` and `Packed<T>`, and everything scripts threshold or count (sizes, lengths, counters)
