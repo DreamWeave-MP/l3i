@@ -660,3 +660,44 @@ fn the_exit_program_runs() {
         )
         .unwrap();
 }
+
+/// The locals `lua_getlocal` lists in the probe's caller, with their values as text.
+fn listed_locals(source: &str, debug_level: u8) -> Vec<String> {
+    use l3i::bind::Call;
+    let runtime = Runtime::new().unwrap();
+    let seen: Rc<std::cell::RefCell<Vec<String>>> = Rc::default();
+    let record = seen.clone();
+    let probe = runtime
+        .bind_function("dreamweave.probe", move |call: &Call| {
+            let mut n = 1;
+            while let Some((name, view)) = call.local(1, n) {
+                let value = view.read::<f64>().map_or_else(|_| "record".to_owned(), |v| v.to_string());
+                record.borrow_mut().push(format!("{name}={value}"));
+                n += 1;
+            }
+        })
+        .unwrap();
+    runtime.set_global("probe", &probe).unwrap();
+    let options = CompileOptions { optimization_level: 1, debug_level, ..CompileOptions::default() };
+    runtime
+        .stack()
+        .with_frame(|frame| {
+            runtime.load(frame, "=locals", source, &options)?.as_function()?.invoke::<(), ()>(frame, ())
+        })
+        .unwrap();
+    seen.take()
+}
+
+#[test]
+fn debuggers_see_bound_names_and_honestly_named_holders() {
+    let source = "local function f({x, y: {z}}, k)\n  local {a} = { a = x + z + k }\n  probe()\n  return a\nend\nf({ x = 1, y = { z = 2 } }, 3)";
+    // Debug level 1, the default, records no local names at all: nothing to hide or to see.
+    assert!(listed_locals(source, 1).is_empty());
+    // Debug level 2 lists every register-allocated local, generated or not; Luau has no way to
+    // mark one hidden. The holders appear under their generated names holding the very record
+    // they destructure (the first is the real argument), and every bound name holds its field.
+    assert_eq!(
+        listed_locals(source, 2),
+        ["__l3i_comp_17=record", "k=3", "x=1", "__l3i_comp_24=record", "z=2", "__l3i_comp_41=record", "a=6"]
+    );
+}
