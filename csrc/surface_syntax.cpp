@@ -141,27 +141,23 @@ public:
         : source(source), document(document), recovery(recovery), fuse(fuse), bufferGenerators(bufferGenerators),
           dynamicGenerators(dynamicGenerators), localFilters(localFilters)
     {
-        for (size_t begin = 0; begin < source.size();)
+        // Source names spelled like generated ones, found by their prefix rather than by
+        // collecting every name. Names are read as before, strings and comments included: in
+        // a run of name characters the one name starts at its first letter or '_' (leading
+        // digits never begin a name) and runs to the end. Each run is examined once.
+        const auto nameChar = [](char c) { return c == '_' || std::isalnum(static_cast<unsigned char>(c)); };
+        size_t runEnd = 0;
+        for (size_t at = source.find("__l3i_comp_"); at != std::string_view::npos; at = source.find("__l3i_comp_", at + 1))
         {
-            const unsigned char first = static_cast<unsigned char>(source[begin]);
-            if (!(first == '_' || std::isalpha(first)))
-            {
-                ++begin;
-                continue;
-            }
-            size_t end = begin + 1;
-            while (end < source.size())
-            {
-                const unsigned char next = static_cast<unsigned char>(source[end]);
-                if (!(next == '_' || std::isalnum(next))) break;
-                ++end;
-            }
-            names.emplace(source.substr(begin, end - begin));
-            begin = end;
+            if (at < runEnd) continue; // The run holding this occurrence was already examined.
+            size_t begin = at;
+            while (begin > 0 && nameChar(source[begin - 1])) --begin;
+            runEnd = at;
+            while (runEnd < source.size() && nameChar(source[runEnd])) ++runEnd;
+            while (begin < at && std::isdigit(static_cast<unsigned char>(source[begin]))) ++begin;
+            if (begin == at)
+                generatedLike.push_back(source.substr(at, runEnd - at));
         }
-        for (const std::string_view name : names)
-            if (name.substr(0, 11) == "__l3i_comp_")
-                generatedLike.push_back(name);
         operations = stem(source.size());
         for (size_t k = 0; k < document.locals.size(); ++k)
         {
@@ -374,7 +370,6 @@ private:
     const Document& document;
     bool recovery;
     bool fuse;
-    std::unordered_set<std::string_view> names;
     std::vector<std::string_view> generatedLike; // Source names spelled like generated ones.
     std::string operations;
 
