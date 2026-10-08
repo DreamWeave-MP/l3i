@@ -144,6 +144,19 @@ clang++ -std=c++17 -O1 -fuse-ld=lld -Wall -Wextra -Werror -pedantic \
 /tmp/opencode/l3i-surface-test
 ```
 
+The remapper skips subtrees whose coordinates the lowering left in place. A second suite proves
+that every location it produces is the one a full walk produces:
+
+```bash
+clang++ -std=c++17 -O1 -fuse-ld=lld -Wall -Wextra -Werror -pedantic \
+  -isystem luau/Ast/include -isystem luau/Common/include -Icsrc \
+  csrc/source_locations_test.cpp csrc/source_locations.cpp csrc/source_map.cpp \
+  csrc/surface_frontend.cpp csrc/surface_syntax.cpp \
+  -Wl,--start-group "$LUAU_OUT/libluauast.a" "$LUAU_OUT/libluaucommon.a" -Wl,--end-group \
+  -o /tmp/opencode/l3i-locations-test
+/tmp/opencode/l3i-locations-test
+```
+
 It also passes under Clang ASan/UBSan. A separate allocation-failure probe ensures
 compiler/disassembler error serialization cannot throw across the C ABI. Its outer
 exception barrier returns null and output size zero without allocating. The earlier

@@ -57,6 +57,24 @@ bool SourceMap::exact(Position generated, size_t at) const
     return generated.line < generatedStarts.size() && generatedStarts[generated.line] + generated.column == at;
 }
 
+bool SourceMap::unchanged(Span generated) const
+{
+    if (empty())
+        return true;
+    const size_t begin = offset(generated.begin, generatedStarts, generatedSize);
+    const size_t end = offset(generated.end, generatedStarts, generatedSize);
+    if (end < begin || !exact(generated.begin, begin) || !exact(generated.end, end))
+        return false;
+    auto it = std::upper_bound(segments.begin(), segments.end(), begin,
+        [](size_t value, const Segment& segment) { return value < segment.end; });
+    if (it == segments.end() || !it->copied || it->begin > begin || end > it->end)
+        return false;
+    const size_t segment = size_t(it - segments.begin());
+    const Position from = generatedAnchors[segment];
+    const Position to = originalAnchors[segment];
+    return from.line == to.line && (generated.begin.line > from.line || from.column == to.column);
+}
+
 Position SourceMap::shifted(Position generated, size_t segment) const
 {
     const Position from = generatedAnchors[segment];

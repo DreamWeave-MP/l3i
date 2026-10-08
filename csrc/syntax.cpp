@@ -2188,6 +2188,9 @@ int l3i_luau_parse(lua_State* L, const char* source, size_t length, int flags)
                 SourceMetadata metadata(surfaces, sliceSurfaces);
                 metadata.walk(result.root);
             }
+            // Remap while every declaration is still in the tree: the remapper reaches a local
+            // through its declaration, and skips unchanged subtrees that merely use it.
+            L3i::Surface::remapLocations(result, lowered.map);
             if (!reads.empty() && result.root)
             {
                 HideReads hide(reads);
@@ -2198,7 +2201,6 @@ int l3i_luau_parse(lua_State* L, const char* source, size_t length, int flags)
                 result.root->body.data += lowered.preludeStatements;
                 result.root->body.size -= lowered.preludeStatements;
             }
-            L3i::Surface::remapLocations(result, lowered.map);
         }
         else
         {

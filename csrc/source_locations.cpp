@@ -17,8 +17,9 @@ namespace
 class LocationRemapper final : public Luau::AstVisitor
 {
 public:
-    explicit LocationRemapper(const SourceMap& map)
+    LocationRemapper(const SourceMap& map, bool skipUnchanged)
         : map(map)
+        , skipUnchanged(skipUnchanged)
     {
     }
 
@@ -38,6 +39,11 @@ public:
 
     bool visit(Luau::AstNode* node) override
     {
+        // Every location of a subtree lies inside its root's span (a function's span starts at
+        // its attributes), so a subtree that maps to itself needs no walk.
+        if (skipUnchanged &&
+            map.unchanged({{node->location.begin.line, node->location.begin.column}, {node->location.end.line, node->location.end.column}}))
+            return false;
         if (!nodes.try_insert(node))
             return false;
 
@@ -192,6 +198,7 @@ public:
 
 private:
     const SourceMap& map;
+    bool skipUnchanged;
     // Each reachable object is remapped once; open addressing, not a node per entry.
     Luau::DenseHashSet<Luau::AstNode*> nodes;
     Luau::DenseHashSet<Luau::AstLocal*> locals;
@@ -283,11 +290,11 @@ std::string originalParseMessage(std::string text, Position context, const Sourc
     return text;
 }
 
-void remapLocations(Luau::ParseResult& result, const SourceMap& map)
+void remapLocations(Luau::ParseResult& result, const SourceMap& map, bool skipUnchanged)
 {
     if (map.empty())
         return;
-    LocationRemapper remapper(map);
+    LocationRemapper remapper(map, skipUnchanged);
     if (result.root)
         result.root->visit(&remapper);
 

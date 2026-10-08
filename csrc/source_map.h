@@ -42,6 +42,9 @@ public:
     const std::vector<Segment>& provenance() const { return segments; }
     Position originalPosition(Position generated) const;
     Span originalSpan(Span generated) const;
+    // Whether every position inside a generated span maps to itself: it lies in one copy
+    // whose lines are not displaced, past the copy's first line or with no column shift there.
+    bool unchanged(Span generated) const;
     Position generatedPosition(Position original) const;
     // Offset helpers for tooling sites in a mapped document (not a default identity map).
     Position generatedPoint(size_t offset) const;
