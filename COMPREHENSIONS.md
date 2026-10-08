@@ -441,6 +441,14 @@ buffer and the count written. Semantics:
   projection against `number` through the write call itself.
 
 
+## Record pattern bindings
+
+A generator binding slot may be a record pattern, `[for {id, position: {z}} in entities if z > 0
+=> id]`: each element's fields are read right after the element, in source order and before the
+clause's filters, then the pipeline continues unchanged for every source kind and consumer. A
+pipeline whose leading slot is a record pattern is never a recognized data operation. See
+[PATTERNS.md](PATTERNS.md) for the shared pattern semantics and measurements.
+
 ## Recognized data pipelines
 
 When the `dream.data` extension is installed (feature `data`, see [DATA_PLANE.md](DATA_PLANE.md)),

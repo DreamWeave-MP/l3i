@@ -35,6 +35,8 @@ affinely in byte offsets. Synthetic ranges carry intentional original spans:
 | Filter control structure | Corresponding predicate |
 | Projection temporary, nil guard, count increment, result store | Projection span |
 | Synthetic loop exits and final return | Closing comprehension bracket |
+| Record pattern holder | The pattern; its field declarations to their fields |
+| Record pattern field read `holder.key` | The field's key, so a missing field is diagnosed at its name |
 
 Nested rewrites compose directly against the whole original input. Offsets are
 never guessed from generated temporary spellings or searched projection substrings.

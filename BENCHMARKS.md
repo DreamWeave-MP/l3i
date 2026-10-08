@@ -4,6 +4,8 @@
 
 All times are wall-clock means measured by [Criterion.rs](https://github.com/bheisler/criterion.rs) (95 % confidence interval). Debug assertions off, default features (interpreter only).
 
+> `cargo bench --bench patterns` compares JSL record binding patterns with same-contract handwritten extraction, interpreted and native; see [PATTERNS.md](PATTERNS.md).
+>
 > `cargo bench --bench comprehension` now measures dense/filtered projections, allocation-free count fusion, and callback comparisons on the real checkout. See [comprehension integration evidence](COMPREHENSIONS.md) for retired CPU instructions, deterministic executed VM counts, secondary timings, inference, and diagnostic limitations. Those results are separate from the generated 2026-09-28 tables below.
 
 ## rust_to_luau_call

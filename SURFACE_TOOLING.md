@@ -34,6 +34,11 @@ The expression exposes ordered `clauses`, a `projection`, `openLocation`, option
   ExprComprehension}` for `into(destination[, "kind"[, offset]])[for ...]`. Its span starts at
   `into`; the destination and offset keep their own source nodes and spans; `elementKind` is the
   literal's content for a buffer sink. `into` is likewise never resolved against a binding.
+- Record binding patterns: `StatLocalPattern {pattern, annotation?, value?}` for
+  `local {...}[: T] = value`, and `PatternRecord {fields, ...}` nodes in `ExprFunction.args` and
+  `ComprehensionGenerator.bindings`, whose `PatternField` targets are `PatternIdentifier {name,
+  local}` (the binding's shared `Local`) or nested records. Holders and field reads never appear.
+  See [PATTERNS.md](PATTERNS.md).
 
 All spans slice the original source using the existing one-based byte-column,
 inclusive-end API. A zero-width insertion point has `endColumn = column - 1` on its
