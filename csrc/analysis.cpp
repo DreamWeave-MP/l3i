@@ -182,6 +182,12 @@ namespace
                 return false;
             if (!node.clauses[i].binding.empty() && overlaps(range, inner->clauses[i].binding))
                 return false;
+            // A record pattern slot's bound names and field reads are the user's.
+            for (const auto& pattern : inner->clauses[i].patterns)
+                for (const auto* list : {&pattern.targets, &pattern.reads})
+                    for (const auto& site : *list)
+                        if (overlaps(range, site))
+                            return false;
         }
         return true;
     }
@@ -503,12 +509,83 @@ namespace
         const char* keyword = nullptr;
     };
 
+    // A cursor in a record pattern completes the fields of the value it destructures: in a
+    // field key, or in an empty field slot after '{' or ',', it moves to the generated read
+    // `holder.key` of that record, where Luau's property completion knows the holder's type.
+    // Reads pair with fields in the lowering's order: source order, depth first.
+    bool patternCursor(const SourceSnapshot& snapshot, const L3i::Surface::Pattern& record, const L3i::Surface::PatternSite& site,
+        size_t& next, size_t at, L3i::Surface::Position& generated)
+    {
+        const auto& lowered = snapshot.lowered;
+        const size_t first = next;
+        size_t firstKey = 0;
+        bool nested = false;
+        for (const auto& field : record.fields)
+        {
+            if (field.key.empty() || (!field.target.record && field.target.range.empty()))
+                continue;
+            const size_t mine = next++;
+            if (mine >= site.reads.size())
+                return false;
+            if (mine == first)
+                firstKey = field.key.end - field.key.begin;
+            if (field.key.begin <= at && at <= field.key.end)
+            {
+                generated = lowered.map.generatedPoint(site.reads[mine].end - (field.key.end - at));
+                return true;
+            }
+            if (field.target.record)
+            {
+                if (patternCursor(snapshot, field.target, site, next, at, generated))
+                    return true;
+                const size_t end = field.target.close.empty() ? field.target.range.end : field.target.close.end;
+                nested = nested || (field.target.open.begin < at && at <= end);
+            }
+        }
+        const size_t end = record.close.empty() ? record.range.end : record.close.begin;
+        if (nested || next == first || at <= record.open.begin || at > end)
+            return false;
+        size_t before = at;
+        while (before > 0 && std::isspace(static_cast<unsigned char>(snapshot.original[before - 1])))
+            --before;
+        if (before == 0 || (snapshot.original[before - 1] != '{' && snapshot.original[before - 1] != ','))
+            return false;
+        generated = lowered.map.generatedPoint(site.reads[first].end - firstKey);
+        return true;
+    }
+
+    bool patternCursor(const SourceSnapshot& snapshot, size_t at, L3i::Surface::Position& generated)
+    {
+        const auto& lowered = snapshot.lowered;
+        const auto visit = [&](const L3i::Surface::Pattern& pattern, const L3i::Surface::PatternSite& site) {
+            size_t next = 0;
+            return pattern.record && !site.reads.empty() && patternCursor(snapshot, pattern, site, next, at, generated);
+        };
+        for (size_t k = 0; k < lowered.localSites.size() && k < lowered.document.locals.size(); ++k)
+            if (visit(lowered.document.locals[k].pattern, lowered.localSites[k]))
+                return true;
+        for (size_t k = 0; k < lowered.parameterSites.size() && k < lowered.document.parameters.size(); ++k)
+            if (visit(lowered.document.parameters[k].pattern, lowered.parameterSites[k]))
+                return true;
+        for (const auto& site : lowered.sites)
+        {
+            const auto& node = lowered.document.comprehensions.at(site.comprehension);
+            for (size_t i = 0; i < site.clauses.size() && i < node.clauses.size(); ++i)
+                for (size_t slot = 0; slot < site.clauses[i].patterns.size() && slot < node.clauses[i].patterns.size(); ++slot)
+                    if (visit(node.clauses[i].patterns[slot], site.clauses[i].patterns[slot]))
+                        return true;
+        }
+        return false;
+    }
+
     CompletionPoint completionPoint(const SourceSnapshot& snapshot, unsigned line, unsigned column)
     {
         const auto& lowered = snapshot.lowered;
         CompletionPoint result{lowered.map.generatedPosition({line, column}), nullptr};
         const size_t at = lowered.map.empty() ? offset(snapshot.original, Luau::Position(line, column))
                                              : lowered.map.originalOffset({line, column});
+        if (!lowered.map.empty() && patternCursor(snapshot, at, result.generated))
+            return result;
         // Prefer the innermost surface node at the cursor.
         const L3i::Surface::ComprehensionSite* inner = nullptr;
         for (const auto& site : lowered.sites)

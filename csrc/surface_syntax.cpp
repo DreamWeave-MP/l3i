@@ -477,10 +477,13 @@ private:
             if (!field.target.record)
                 site.targets.push_back({name, out.size()});
             out += " = ";
+            // The read is the key's: a missing field is diagnosed at its name, alias or not.
+            out.anchor = field.key;
             const size_t read = out.size();
             out += from + ".";
             out.copy(source, field.key);
             site.reads.push_back({read, out.size()});
+            out.anchor = field.range;
             out += " ";
             if (field.target.record)
                 reads(out, field.target, nested, site);

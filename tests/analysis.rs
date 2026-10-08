@@ -1055,3 +1055,221 @@ fn typed_slices_infer_numbers_and_buffers() {
         assert_binding_type(&analysis, "typed", 5, "part", "buffer");
     }
 }
+
+const PATTERN_TYPES: &str = concat!(
+    "--!strict\n",
+    "type Point = { x: number, y: number }\n",
+    "type Entity = { id: number, health: number?, position: Point, name: string }\n",
+);
+
+#[test]
+fn record_pattern_bindings_infer_field_types_on_both_solvers() {
+    let source = format!(
+        "{PATTERN_TYPES}{}",
+        concat!(
+            "local point: Point = { x = 1, y = 2 }\n",
+            "local {x, y} = point\n",
+            "local {x: px}: Point = { x = 3, y = 4 }\n",
+            "local entity: Entity = { id = 1, position = point, name = 'e' }\n",
+            "local {health, position: {x: ex}, name} = entity\n",
+            "local function length({x: lx, y: ly}: Point): number return math.sqrt(lx * lx + ly * ly) end\n",
+            "local ids = [for {id, position: {y: ey}} in { entity } if ey > 0 => id]\n",
+            "return x, y, px, health, ex, name, length, ids\n",
+        )
+    );
+    let source: &'static str = Box::leak(source.into_boxed_str());
+    for solver in [analysis::Solver::New, analysis::Solver::Old] {
+        let analysis = comprehension_analysis(HashMap::from([("patterns", source)]), solver);
+        let report = analysis.check("patterns", false);
+        assert!(report.is_clean(), "{solver:?}: {report:#?}");
+        let line = 11;
+        for (name, expected) in [
+            ("x", "number"),
+            ("y", "number"),
+            ("px", "number"),
+            ("health", "number?"),
+            ("ex", "number"),
+            ("name", "string"),
+            ("length", "(Point) -> number"),
+            ("ids", "{number}"),
+        ] {
+            assert_binding_type(&analysis, "patterns", line, name, expected);
+        }
+    }
+}
+
+#[test]
+fn record_patterns_keep_luau_typing_strict() {
+    // Nullable fields stay nullable, a parameter pattern's function still takes one record, and
+    // the whole-pattern annotation constrains the value, not each binding.
+    let cases = [
+        (
+            "nullable",
+            "local entity: Entity = { id = 1, position = { x = 1, y = 2 }, name = 'e' }\nlocal {health} = entity\nlocal n: number = health\n",
+        ),
+        ("arity", "local function length({x, y}: Point): number return x + y end\nreturn length(1, 2)\n"),
+        ("annotation", "local {x}: Point = { x = 'one', y = 2 }\nreturn x\n"),
+    ];
+    for solver in [analysis::Solver::New, analysis::Solver::Old] {
+        let modules: HashMap<&'static str, &'static str> = cases
+            .iter()
+            .map(|(name, body)| (*name, &*Box::leak(format!("{PATTERN_TYPES}{body}").into_boxed_str())))
+            .collect();
+        let analysis = comprehension_analysis(modules, solver);
+        for (module, _) in cases {
+            let report = analysis.check(module, false);
+            assert!(
+                report.diagnostics.iter().any(|d| d.kind == DiagnosticKind::TypeError),
+                "{solver:?}: {module}: {report:#?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn record_pattern_field_errors_use_original_spans_on_both_solvers() {
+    // (module, body, missing key, the pattern text the key is found in)
+    let cases = [
+        (
+            "local_key",
+            "local point: Point = { x = 1, y = 2 }\nlocal {x, nope} = point\nreturn x, nope\n",
+            "nope",
+            "{x, nope}",
+        ),
+        (
+            "alias_key",
+            "local point: Point = { x = 1, y = 2 }\nlocal {missing: alias} = point\nreturn alias\n",
+            "missing",
+            "{missing",
+        ),
+        (
+            "nested_key",
+            "local entity: Entity = { id = 1, position = { x = 1, y = 2 }, name = 'e' }\nlocal {position: {x, depth}} = entity\nreturn x, depth\n",
+            "depth",
+            "{x, depth}",
+        ),
+        ("parameter_key", "local function f({x, w}: Point) return x, w end\nreturn f\n", "w", "{x, w}"),
+        ("generator_key", "local points: {Point} = {}\nreturn [for {x, q} in points => x]\n", "q", "{x, q}"),
+    ];
+    for solver in [analysis::Solver::New, analysis::Solver::Old] {
+        let modules: HashMap<&'static str, &'static str> = cases
+            .iter()
+            .map(|(name, body, _, _)| (*name, &*Box::leak(format!("{PATTERN_TYPES}{body}").into_boxed_str())))
+            .collect();
+        let analysis = comprehension_analysis(modules.clone(), solver);
+        for (module, _, key, pattern) in cases {
+            let source = modules[module];
+            let report = analysis.check(module, false);
+            let errors: Vec<_> = report.diagnostics.iter().filter(|d| d.kind == DiagnosticKind::TypeError).collect();
+            assert_eq!(errors.len(), 1, "{solver:?}: {module}: {report:#?}");
+            assert!(errors[0].text.contains(key), "{solver:?}: {module}: {:?}", errors[0]);
+            // The failing read is attributed to its key, aliased or nested alike.
+            let begin = source.find(pattern).unwrap() + pattern.find(key).unwrap();
+            let (begin_line, begin_column) = source_position(source, begin);
+            let (end_line, end_column) = source_position(source, begin + key.len());
+            assert_eq!(
+                errors[0].span,
+                analysis::Span { begin_line, begin_column, end_line, end_column },
+                "{solver:?}: {module}: {:?}",
+                errors[0]
+            );
+        }
+    }
+}
+
+#[test]
+fn the_record_pattern_exit_program_typechecks_strictly() {
+    let source = concat!(
+        "--!strict\n",
+        "type Position = {\n    x: number,\n    y: number,\n    z: number,\n}\n\n",
+        "type Entity = {\n    id: number,\n    active: boolean,\n    position: Position,\n}\n\n",
+        "function projectedIds(entities: {Entity})\n",
+        "    return [\n        for {id, active, position: {z}} in entities\n        if active and z > 0\n        => id\n    ]\nend\n",
+        "local ids = projectedIds({})\nreturn ids\n",
+    );
+    for solver in [analysis::Solver::New, analysis::Solver::Old] {
+        let analysis = comprehension_analysis(HashMap::from([("exit", source)]), solver);
+        let report = analysis.check("exit", true);
+        assert!(report.is_clean(), "{solver:?}: {report:#?}");
+        assert_binding_type(&analysis, "exit", 21, "ids", "{number}");
+    }
+}
+
+#[test]
+fn record_pattern_autocomplete_types_keys_and_hides_holders() {
+    let prefix = format!(
+        "{PATTERN_TYPES}local entity: Entity = {{ id = 1, position = {{ x = 1, y = 2 }}, name = 'e' }}\nlocal entities: {{Entity}} = {{ entity }}\n"
+    );
+    // `|` marks the cursor; each case is completed where it stands.
+    let cases = [
+        ("partial_key", "local {posi|} = entity\n", &["health", "id", "name", "position"][..]),
+        ("empty_slot", "local {id, |} = entity\n", &["health", "id", "name", "position"][..]),
+        ("nested_key", "local {position: {x, |}} = entity\n", &["x", "y"][..]),
+        ("alias_key", "local {na|: label} = entity\n", &["health", "id", "name", "position"][..]),
+        ("parameter_key", "local function f({x, |}: Point) return x end\n", &["x", "y"][..]),
+        (
+            "generator_key",
+            "return [for {id, po|} in entities => id]\n",
+            &["active", "health", "id", "name", "position"][..],
+        ),
+    ];
+    for solver in [analysis::Solver::New, analysis::Solver::Old] {
+        let analysis = Analysis::new(
+            MemberSources(
+                cases
+                    .iter()
+                    .map(|(name, body, _)| ((*name).to_owned(), format!("{prefix}{}", body.replace('|', ""))))
+                    .collect(),
+            ),
+            AnalysisOptions { solver, retain_full_type_graphs: true, ..AnalysisOptions::default() },
+        )
+        .unwrap();
+        for (module, body, expected) in cases {
+            let source = format!("{prefix}{}", body.replace('|', ""));
+            let cursor = prefix.len() + body.find('|').unwrap();
+            let completions = complete_at(&analysis, module, &source, cursor);
+            let mut properties: Vec<_> = completions
+                .entries
+                .iter()
+                .filter(|e| e.kind == CompletionKind::Property)
+                .map(|e| e.name.as_str())
+                .collect();
+            properties.sort_unstable();
+            let expected: Vec<&str> = expected.iter().copied().filter(|name| *name != "active").collect();
+            assert_eq!(properties, expected, "{solver:?}: {module}: {completions:?}");
+        }
+    }
+}
+
+#[test]
+fn record_pattern_snapshots_survive_dirty_and_clear_on_both_solvers() {
+    for solver in [analysis::Solver::New, analysis::Solver::Old] {
+        let good =
+            format!("{PATTERN_TYPES}local point: Point = {{ x = 1, y = 2 }}\nlocal {{x, y}} = point\nreturn x + y\n");
+        let bad = format!("{PATTERN_TYPES}local point: Point = {{ x = 1, y = 2 }}\nlocal {{x, z}} = point\nreturn x\n");
+        let analysis = Analysis::new(
+            MemberSources(HashMap::from([("m".to_owned(), good.clone())])),
+            AnalysisOptions { solver, retain_full_type_graphs: true, ..AnalysisOptions::default() },
+        )
+        .unwrap();
+        assert!(analysis.check("m", false).is_clean(), "{solver:?}");
+        let completions = complete_at(&analysis, "m", &good, good.find("{x, y}").unwrap() + 2);
+        assert!(
+            completions.entries.iter().any(|e| e.name == "y" && e.kind == CompletionKind::Property),
+            "{completions:?}"
+        );
+        drop(analysis);
+        let analysis = Analysis::new(
+            MemberSources(HashMap::from([("m".to_owned(), bad.clone())])),
+            AnalysisOptions { solver, retain_full_type_graphs: true, ..AnalysisOptions::default() },
+        )
+        .unwrap();
+        let report = analysis.check("m", false);
+        assert_eq!(report.diagnostics.len(), 1, "{solver:?}: {report:#?}");
+        analysis.mark_dirty("m");
+        assert_eq!(analysis.check("m", false).diagnostics.len(), 1);
+        analysis.clear();
+        assert_eq!(analysis.check("m", false).diagnostics.len(), 1);
+        let _ = complete_at(&analysis, "m", &bad, bad.find("{x, z}").unwrap() + 2);
+    }
+}
