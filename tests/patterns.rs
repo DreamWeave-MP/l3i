@@ -692,7 +692,7 @@ fn listed_locals(source: &str, debug_level: u8) -> Vec<String> {
 fn debuggers_see_bound_names_and_honestly_named_holders() {
     let source = "local function f({x, y: {z}}, k)\n  local {a} = { a = x + z + k }\n  probe()\n  return a\nend\nf({ x = 1, y = { z = 2 } }, 3)";
     // Debug level 1, the default, records no local names at all: nothing to hide or to see.
-    assert!(listed_locals(source, 1).is_empty());
+    assert_eq!(listed_locals(source, 1), Vec::<String>::new());
     // Debug level 2 lists every register-allocated local, generated or not; Luau has no way to
     // mark one hidden. The holders appear under their generated names holding the very record
     // they destructure (the first is the real argument), and every bound name holds its field.
