@@ -197,5 +197,59 @@ fn generators(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, declarations, parameters, generators);
+/// A module of 2,000 small functions on one table, with `extra` appended: ordinary Luau when
+/// `extra` is empty. `patterned` gives every function a parameter and a declaration pattern.
+fn module(patterned: bool, extra: &str) -> String {
+    use std::fmt::Write as _;
+    let mut source = String::from("type P = { x: number, y: number }\nlocal M = {}\n");
+    for i in 0..2000 {
+        if patterned {
+            writeln!(
+                source,
+                "function M.f{i}({{x, y}}: P, dt: number)\n  local {{z, w: alias}} = {{ z = x, w = y }}\n  return x + y + z + alias + dt\nend"
+            )
+        } else {
+            writeln!(
+                source,
+                "function M.f{i}(a: number, b: number)\n  local t = {{ a = a, b = b, list = {{ a, b }} }}\n  return t.a + t.b + t.list[1]\nend"
+            )
+        }
+        .unwrap();
+    }
+    source.push_str(extra);
+    source
+}
+
+/// Compilation, not execution: what the frontend, lowering, source map and Luau's parser and
+/// compiler cost on the same module with no JSL, one comprehension, a few patterns, or a
+/// pattern in every function.
+fn compilation(c: &mut Criterion) {
+    let mut group = c.benchmark_group("patterns_compile");
+    let options = l3i::source::CompileOptions::default();
+    let cases = [
+        ("plain module", module(false, "")),
+        ("one comprehension", module(false, "local doubled = [for v in { 1, 2 } => v * 2]\n")),
+        (
+            "three patterns",
+            module(
+                false,
+                "local {x, y}: P = { x = 1, y = 2 }\nlocal function g({x}: P) return x end\nlocal {a} = { a = x + y }\n",
+            ),
+        ),
+        ("patterns in every function", module(true, "")),
+    ];
+    for (label, source) in &cases {
+        l3i::source::compile(source, &options).unwrap();
+        group.throughput(Throughput::Bytes(source.len() as u64));
+        retired_instructions(label, &mut || {
+            std::hint::black_box(l3i::source::compile(std::hint::black_box(source), &options).unwrap());
+        });
+        group.bench_function(*label, |b| {
+            b.iter(|| l3i::source::compile(std::hint::black_box(source), &options).unwrap())
+        });
+    }
+    group.finish();
+}
+
+criterion_group!(benches, declarations, parameters, generators, compilation);
 criterion_main!(benches);
