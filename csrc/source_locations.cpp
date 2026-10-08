@@ -40,14 +40,17 @@ public:
     bool visit(Luau::AstNode* node) override
     {
         // Every location of a subtree lies inside its root's span (a function's span starts at
-        // its attributes), so a subtree that maps to itself needs no walk.
-        if (skipUnchanged &&
-            map.unchanged({{node->location.begin.line, node->location.begin.column}, {node->location.end.line, node->location.end.column}}))
+        // its attributes), so a subtree that maps to itself needs no walk. One lookup gives both.
+        bool unchanged = false;
+        const Span original = map.originalSpan(
+            {{node->location.begin.line, node->location.begin.column}, {node->location.end.line, node->location.end.column}}, unchanged);
+        if (skipUnchanged && unchanged)
             return false;
         if (!nodes.try_insert(node))
             return false;
 
-        remap(node->location);
+        node->location = Luau::Location(
+            Luau::Position(original.begin.line, original.begin.column), Luau::Position(original.end.line, original.end.column));
 
         if (auto* expr = node->as<Luau::AstExprLocal>())
             remapLocal(expr->local);

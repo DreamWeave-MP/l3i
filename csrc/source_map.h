@@ -42,9 +42,10 @@ public:
     const std::vector<Segment>& provenance() const { return segments; }
     Position originalPosition(Position generated) const;
     Span originalSpan(Span generated) const;
-    // Whether every position inside a generated span maps to itself: it lies in one copy
-    // whose lines are not displaced, past the copy's first line or with no column shift there.
-    bool unchanged(Span generated) const;
+    // The same, also telling whether every position inside the span maps to itself: it lies in
+    // one copy whose lines are not displaced, past the copy's first line or with no column
+    // shift there.
+    Span originalSpan(Span generated, bool& unchanged) const;
     Position generatedPosition(Position original) const;
     // Offset helpers for tooling sites in a mapped document (not a default identity map).
     Position generatedPoint(size_t offset) const;
@@ -69,6 +70,7 @@ private:
     // line) with no offset or line-start search.
     std::vector<Position> generatedAnchors;
     std::vector<Position> originalAnchors;
+    std::vector<Position> originalEndAnchors; // Where each segment's original range ends.
     bool exact(Position generated, size_t at) const;
     Position shifted(Position generated, size_t segment) const;
 };

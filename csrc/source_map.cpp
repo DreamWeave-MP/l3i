@@ -13,11 +13,26 @@ namespace
 std::vector<size_t> lineStarts(std::string_view text)
 {
     std::vector<size_t> starts{0};
-    for (size_t i = 0; i < text.size(); ++i)
-        if (text[i] == '\n')
-            starts.push_back(i + 1);
+    for (size_t at = text.find('\n'); at != std::string_view::npos; at = text.find('\n', at + 1))
+        starts.push_back(at + 1);
     return starts;
 }
+
+// Positions of nondecreasing-mostly offsets: walks forward from the previous answer, and
+// searches only when an offset goes backwards.
+struct Cursor
+{
+    const std::vector<size_t>& starts;
+    size_t line = 0;
+    Position operator()(size_t at)
+    {
+        if (at < starts[line])
+            line = size_t(std::upper_bound(starts.begin(), starts.end(), at) - starts.begin()) - 1;
+        while (line + 1 < starts.size() && starts[line + 1] <= at)
+            ++line;
+        return {unsigned(line), unsigned(at - starts[line])};
+    }
+};
 
 size_t offset(Position position, const std::vector<size_t>& starts, size_t size)
 {
@@ -44,10 +59,13 @@ SourceMap::SourceMap(std::string_view original, std::string_view generated, std:
 {
     generatedAnchors.reserve(this->segments.size());
     originalAnchors.reserve(this->segments.size());
+    originalEndAnchors.reserve(this->segments.size());
+    Cursor generatedCursor{generatedStarts}, beginCursor{originalStarts}, endCursor{originalStarts};
     for (const Segment& segment : this->segments)
     {
-        generatedAnchors.push_back(position(segment.begin, generatedStarts));
-        originalAnchors.push_back(position(segment.originalBegin, originalStarts));
+        generatedAnchors.push_back(generatedCursor(segment.begin));
+        originalAnchors.push_back(beginCursor(segment.originalBegin));
+        originalEndAnchors.push_back(endCursor(segment.originalEnd));
     }
 }
 
@@ -57,23 +75,6 @@ bool SourceMap::exact(Position generated, size_t at) const
     return generated.line < generatedStarts.size() && generatedStarts[generated.line] + generated.column == at;
 }
 
-bool SourceMap::unchanged(Span generated) const
-{
-    if (empty())
-        return true;
-    const size_t begin = offset(generated.begin, generatedStarts, generatedSize);
-    const size_t end = offset(generated.end, generatedStarts, generatedSize);
-    if (end < begin || !exact(generated.begin, begin) || !exact(generated.end, end))
-        return false;
-    auto it = std::upper_bound(segments.begin(), segments.end(), begin,
-        [](size_t value, const Segment& segment) { return value < segment.end; });
-    if (it == segments.end() || !it->copied || it->begin > begin || end > it->end)
-        return false;
-    const size_t segment = size_t(it - segments.begin());
-    const Position from = generatedAnchors[segment];
-    const Position to = originalAnchors[segment];
-    return from.line == to.line && (generated.begin.line > from.line || from.column == to.column);
-}
 
 Position SourceMap::shifted(Position generated, size_t segment) const
 {
@@ -104,8 +105,18 @@ Position SourceMap::originalPosition(Position generated) const
 
 Span SourceMap::originalSpan(Span generated) const
 {
+    bool unchanged = false;
+    return originalSpan(generated, unchanged);
+}
+
+Span SourceMap::originalSpan(Span generated, bool& unchanged) const
+{
+    unchanged = false;
     if (empty())
+    {
+        unchanged = true;
         return generated;
+    }
     const size_t begin = offset(generated.begin, generatedStarts, generatedSize);
     const size_t end = offset(generated.end, generatedStarts, generatedSize);
     if (end <= begin)
@@ -121,27 +132,47 @@ Span SourceMap::originalSpan(Span generated) const
     auto it = std::upper_bound(segments.begin(), segments.end(), begin,
         [](size_t value, const Segment& segment) { return value < segment.end; });
     // The common case: the whole span lies in one copy, which maps both ends affinely.
-    if (it != segments.end() && it->copied && it->begin <= begin && end <= it->end && exact(generated.begin, begin) &&
-        exact(generated.end, end))
+    const bool exactBegin = exact(generated.begin, begin), exactEnd = exact(generated.end, end);
+    if (it != segments.end() && it->copied && it->begin <= begin && end <= it->end && exactBegin && exactEnd)
     {
         const size_t segment = size_t(it - segments.begin());
+        const Position from = generatedAnchors[segment];
+        const Position to = originalAnchors[segment];
+        unchanged = from.line == to.line && (generated.begin.line > from.line || from.column == to.column);
         return {shifted(generated.begin, segment), shifted(generated.end, segment)};
     }
+    // Positions come from segment anchors and the span's own ends, never from searching line
+    // starts: a span's envelope begins at some segment's original begin (or at the span's own
+    // begin inside a copy), and ends likewise.
+    Position firstAt{}, lastAt{};
     for (; it != segments.end() && it->begin < end; ++it)
     {
+        const size_t segment = size_t(it - segments.begin());
         const size_t lo = std::max(begin, it->begin);
         const size_t hi = std::min(end, it->end);
         const size_t originBegin = it->copied ? it->originalBegin + lo - it->begin : it->originalBegin;
         const size_t originEnd = it->copied ? it->originalBegin + hi - it->begin : it->originalEnd;
-        first = std::min(first, originBegin);
-        last = std::max(last, originEnd);
+        if (originBegin < first)
+        {
+            first = originBegin;
+            firstAt = !it->copied || lo == it->begin ? originalAnchors[segment]
+                : exactBegin                         ? shifted(generated.begin, segment)
+                                                     : position(originBegin, originalStarts);
+        }
+        if (originEnd > last || last == 0)
+        {
+            last = originEnd;
+            lastAt = !it->copied || hi == it->end ? originalEndAnchors[segment]
+                : exactEnd                        ? shifted(generated.end, segment)
+                                                  : position(originEnd, originalStarts);
+        }
     }
     if (first == std::numeric_limits<size_t>::max())
     {
         const Position at = originalPosition(generated.begin);
         return {at, at};
     }
-    return {position(first, originalStarts), position(last, originalStarts)};
+    return {firstAt, lastAt};
 }
 
 Position SourceMap::generatedPosition(Position origin) const
