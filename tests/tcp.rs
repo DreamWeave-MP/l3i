@@ -571,7 +571,8 @@ fn readiness_is_level_triggered_and_tokens_never_go_stale() {
                 assert(not ok and string.find(err, case[2], 1, true), err)
             end
             poller:close()
-            assert(poller.closed and listener.closed == false)
+            poller:close()
+            assert(poller.closed and poller.watching == 0 and listener.closed == false)
             -- A closed poller's handles may be watched again.
             local again = tcp.poller()
             assert(again:watch(listener, 1, 'read') and again:watch(b, 2, 'write'))

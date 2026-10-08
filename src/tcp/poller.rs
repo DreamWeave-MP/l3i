@@ -436,10 +436,16 @@ impl Poller {
         Ok(None)
     }
 
-    /// Releases every watch and the OS poller. The handles stay open. Idempotent.
+    /// Releases every watch, the OS poller and the event buffer; a closed poller keeps only
+    /// its userdata until collected. The handles stay open. Idempotent.
     pub fn close(&self) {
         self.core.release_all();
         self.core.poll.borrow_mut().take();
+        *self.core.events.borrow_mut() = mio::Events::with_capacity(0);
+        let mut slots = self.core.slots.borrow_mut();
+        slots.entries = Vec::new();
+        slots.free = Vec::new();
+        slots.by_token = HashMap::new();
     }
 }
 
