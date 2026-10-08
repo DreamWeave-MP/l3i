@@ -109,7 +109,15 @@ const INTL_SCRIPT: (&str, &str) = (
      local categories: { dream_intl_PluralCategory } = rules:categories()\n\
      local kind: dream_intl_PluralType = rules:type()\n\
      local rulesLocale: string = rules:locale()\n\
-     print(tag, base, language, script, region, #variants, canonical, category, exact, whole, #categories, kind, rulesLocale)\n",
+     local formatter = intl.decimalFormatter('fr', { grouping = 'min2', minFractionDigits = 2, maxFractionDigits = 2 })\n\
+     local text: string = formatter:format('1234567.895') .. formatter:format(2) .. formatter:format(3i)\n\
+     local options = formatter:resolvedOptions()\n\
+     local grouping: dream_intl_Grouping = options.grouping\n\
+     local digits: number = options.minFractionDigits + options.maxFractionDigits\n\
+     local formatterLocale: string = formatter:locale() .. options.locale\n\
+     local plain = intl.decimalFormatter(locale)\n\
+     print(tag, base, language, script, region, #variants, canonical, category, exact, whole, #categories, kind, rulesLocale)\n\
+     print(text, grouping, digits, formatterLocale, plain:format(1))\n",
 );
 
 #[cfg(feature = "fs")]

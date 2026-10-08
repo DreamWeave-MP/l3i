@@ -1,7 +1,8 @@
 //! `@dream/intl` through Luau: locales parse to their canonical spelling, compare by it, give
 //! their subtags back, and a malformed tag fails with the call's name and the reason; plural
 //! rules take numbers, integers and decimal strings, keep visible fraction digits, and refuse
-//! what is not a finite number.
+//! what is not a finite number; decimal formatters write each locale's digits and separators
+//! under the grouping and fraction digit options, and refuse bad options by name.
 
 use l3i::Runtime;
 use l3i::extension::{RuntimePlan, RuntimePolicy};
@@ -130,6 +131,74 @@ fn plural_rules_refuse_what_is_not_a_number() {
              assert(not ok and err:find('a language tag or a dream.intl.Locale', 1, true), err) \
              local unknown = intl.pluralRules('qaa') \
              assert(unknown:category(1) == 'other' and #unknown:categories() == 1, 'root rules')",
+        )
+        .unwrap();
+}
+
+#[test]
+fn decimal_formatters_follow_the_locale_and_options() {
+    runtime()
+        .exec(
+            "local v = 1234567.891 \
+             assert(intl.decimalFormatter('en'):format(v) == '1,234,567.891') \
+             assert(intl.decimalFormatter('de'):format(v) == '1.234.567,891') \
+             local fr = intl.decimalFormatter('fr', { grouping = 'auto', minFractionDigits = 2, maxFractionDigits = 2 }) \
+             assert(fr:format('1234567.895') == '1\\u{202f}234\\u{202f}567,90', fr:format('1234567.895')) \
+             assert(fr:format(v) == '1\\u{202f}234\\u{202f}567,89' and fr:locale() == 'fr') \
+             assert(intl.decimalFormatter(intl.locale('ar-EG')):format(123) == '١٢٣') \
+             assert(intl.decimalFormatter('ar-EG-u-nu-latn'):format(123) == '123') \
+             local en = intl.decimalFormatter('en') \
+             assert(en:format(1234i) == '1,234' and en:format(-1234.5) == '-1,234.5' and en:format('-0') == '-0') \
+             assert(en:format(-0.0) == '-0' and en:format(0) == '0' and en:format(0.1) == '0.1') \
+             assert(en:format(9223372036854775807i) == '9,223,372,036,854,775,807') \
+             assert(en:format(1e21) == '1,000,000,000,000,000,000,000') \
+             assert(en:format(0.123456789) == '0.123' and en:format('1.50') == '1.5') \
+             local never = intl.decimalFormatter('en', { grouping = 'never' }) \
+             local min2 = intl.decimalFormatter('en', { grouping = 'min2' }) \
+             assert(never:format(1234567) == '1234567' and min2:format(1234) == '1234' and min2:format(12345) == '12,345') \
+             local cents = intl.decimalFormatter('en', { minFractionDigits = 2, maxFractionDigits = 2 }) \
+             assert(cents:format(2) == '2.00' and cents:format('0.125') == '0.12' and cents:format('0.135') == '0.14') \
+             local whole = intl.decimalFormatter('en', { maxFractionDigits = 0 }) \
+             assert(whole:format(2.5) == '2' and whole:format(3.5) == '4' and whole:format(-2.5) == '-2', 'half to even') \
+             local options = intl.decimalFormatter('pl', { minFractionDigits = 5 }):resolvedOptions() \
+             assert(options.locale == 'pl' and options.grouping == 'auto', options.grouping) \
+             assert(options.minFractionDigits == 5 and options.maxFractionDigits == 5) \
+             options = en:resolvedOptions() \
+             assert(options.minFractionDigits == 0 and options.maxFractionDigits == 3) \
+             local pl = intl.decimalFormatter('pl') \
+             assert(pl:format(1234) == '1234' and pl:format(12345) == '12\\u{a0}345') \
+             local plural = intl.pluralRules('pl') \
+             local forms = { one = 'plik', few = 'pliki', many = 'plików', other = 'pliku' } \
+             assert(pl:format(1.5) .. ' ' .. forms[plural:category(1.5)] == '1,5 pliku') \
+             assert(pl:format(22) .. ' ' .. forms[plural:category(22)] == '22 pliki')",
+        )
+        .unwrap();
+}
+
+#[test]
+fn decimal_formatters_refuse_bad_options_and_numbers() {
+    runtime()
+        .exec(
+            "local function fails(pattern, f, ...) \
+               local ok, err = pcall(f, ...) \
+               assert(not ok and err:find(pattern, 1, true), tostring(err)) \
+             end \
+             local new = intl.decimalFormatter \
+             fails(\"intl.decimalFormatter: unknown grouping 'always' (auto, never or min2)\", new, 'en', { grouping = 'always' }) \
+             fails('minFractionDigits must be a whole number from 0 to 100, got 101', new, 'en', { minFractionDigits = 101 }) \
+             fails('maxFractionDigits must be a whole number from 0 to 100, got -1', new, 'en', { maxFractionDigits = -1 }) \
+             fails('minFractionDigits (3) is more than maxFractionDigits (2)', new, 'en', { minFractionDigits = 3, maxFractionDigits = 2 }) \
+             fails('minFractionDigits', new, 'en', { minFractionDigits = 1.5 }) \
+             fails('maximumFractionDigits', new, 'en', { maximumFractionDigits = 2 }) \
+             fails('options must be a table', new, 'en', 'auto') \
+             fails('not a BCP 47 language tag', new, 'en-') \
+             local en = new('en') \
+             fails('DecimalFormatter:format: NaN is not a finite number', en.format, en, 0/0) \
+             fails('DecimalFormatter:format: inf is not a finite number', en.format, en, math.huge) \
+             fails(\"DecimalFormatter:format: '1,5' is not a decimal number\", en.format, en, '1,5') \
+             fails('number or decimal string', en.format, en, {}) \
+             fails('has more digits than a decimal holds', en.format, en, string.rep('9', 40000)) \
+             assert(new('en', nil):format(1) == '1' and new('en', {}):format(1) == '1')",
         )
         .unwrap();
 }

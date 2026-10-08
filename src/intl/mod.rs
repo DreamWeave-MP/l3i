@@ -32,20 +32,48 @@
 //! Numbers are [`Operand`]s: a Luau number or integer, or a decimal string when visible
 //! fraction digits matter (`1.00` has two, and CLDR can tell it from `1`; the double `1.0`
 //! cannot carry them).
+//!
+//! # Decimal formatting
+//!
+//! A [`DecimalFormatter`] writes numbers with a locale's digits, separators, group sizes and
+//! signs, rounding half to even to its maximum fraction digits and padding to its minimum:
+//!
+//! ```lua
+//! local french = intl.decimalFormatter('fr', { minFractionDigits = 2, maxFractionDigits = 2 })
+//! print(french:format('1234567.895'))                    -- 1 234 567,90 (narrow no-break spaces)
+//! print(intl.decimalFormatter('ar-EG'):format(123))      -- ١٢٣
+//! print(intl.decimalFormatter('en', { grouping = 'min2' }):format(1234))   -- 1234
+//! ```
+//!
+//! A decimal string formats exactly; a Luau number formats as its shortest round-trip decimal
+//! (`1.005` is `1.005`, so it rounds to `1.00` at two digits, not by its binary value).
+//!
+//! # Handles
+//!
+//! Rules and formatters are built from ICU4X's compiled CLDR data, which is in the binary: no
+//! file, no provider, no capability. Each constructor builds once and the handle is reused;
+//! nothing is cached behind it and nothing is shared between runtimes. A formatter's handle
+//! writes into its own buffer, so a warm `format` allocates nothing native for the text it
+//! returns.
 
+mod decimal;
 mod locale;
 mod operand;
 mod plural;
 
+pub use decimal::{DecimalFormatter, DecimalOptions, FormatterError, Grouping, MAX_FRACTION_DIGITS};
 pub use locale::{Locale, LocaleError, canonicalize, with_canonical};
 pub use operand::{NumberError, Operand};
 pub use plural::{Category, PluralKind, PluralRules};
 
+use std::cell::RefCell;
 use std::fmt;
 
 use crate::bind::{Call, StackResults};
+use crate::convert::Exact;
 use crate::error::{Error, Result};
 use crate::extension::{Extension, ExtensionDescriptor, TagPolicy};
+use crate::options::Options;
 use crate::stack::{Frame, Scope, ValueView};
 use crate::userdata::Owned;
 
@@ -90,6 +118,17 @@ unsafe impl crate::userdata::Userdata for PluralRules {
     const NAME: &'static str = "dream.intl.PluralRules";
 }
 
+/// `dream.intl.DecimalFormatter`: a formatter and the buffer its results are written into.
+struct FormatterHandle {
+    formatter: DecimalFormatter,
+    scratch: RefCell<String>,
+}
+
+// SAFETY: the payload holds no Lua references.
+unsafe impl crate::userdata::Userdata for FormatterHandle {
+    const NAME: &'static str = "dream.intl.DecimalFormatter";
+}
+
 /// The locale a constructor's first argument names: a [`Locale`] or a tag.
 fn locale_arg(what: &str, view: ValueView<'_>) -> Result<Locale> {
     if let Some(locale) = crate::userdata::receiver::<Locale>(view) {
@@ -113,6 +152,42 @@ fn new_plural_rules(locale: ValueView<'_>, kind: Option<&str>) -> Result<Owned<P
     PluralRules::new(&locale, kind).map(Owned).map_err(|error| Error::runtime(format!("{WHAT}: {error}")))
 }
 
+/// `intl.decimalFormatter(locale, options?)`.
+fn new_decimal_formatter(
+    call: &Call<'_>,
+    locale: ValueView<'_>,
+    options: Option<ValueView<'_>>,
+) -> Result<Owned<FormatterHandle>> {
+    const WHAT: &str = "intl.decimalFormatter";
+    let locale = locale_arg(WHAT, locale)?;
+    let mut resolved = DecimalOptions::default();
+    if let Some(options) = options.filter(|view| !view.is_nil()) {
+        Options::read(call, options, WHAT, |o| {
+            let grouping = o.optional_str("grouping", |name| {
+                Grouping::parse(name)
+                    .ok_or_else(|| Error::runtime(format!("{WHAT}: unknown grouping '{name}' (auto, never or min2)")))
+            })?;
+            resolved.grouping = grouping.unwrap_or_default();
+            for (key, slot) in [
+                ("minFractionDigits", &mut resolved.min_fraction_digits),
+                ("maxFractionDigits", &mut resolved.max_fraction_digits),
+            ] {
+                *slot = match o.optional::<Exact<i64>>(key)? {
+                    Some(digits) => Some(
+                        decimal::fraction_digits(key, digits.0)
+                            .map_err(|error| Error::runtime(format!("{WHAT}: {error}")))?,
+                    ),
+                    None => None,
+                };
+            }
+            Ok(())
+        })?;
+    }
+    let formatter =
+        DecimalFormatter::new(&locale, resolved).map_err(|error| Error::runtime(format!("{WHAT}: {error}")))?;
+    Ok(Owned(FormatterHandle { formatter, scratch: RefCell::new(String::new()) }))
+}
+
 /// `text` as the call's one result.
 fn push_str(call: &Call<'_>, text: &str) -> Result<StackResults> {
     call.push(text)?;
@@ -131,6 +206,115 @@ fn push_list<'a>(call: &Call<'_>, items: impl ExactSizeIterator<Item = &'a str>)
     Ok(StackResults)
 }
 
+fn describe_locale(d: &mut ExtensionDescriptor) {
+    let mut locale = d.userdata::<Locale>("dream.intl.Locale");
+    locale.tag(TagPolicy::Preferred).doc("A BCP 47 language tag, validated and spelled canonically.");
+    locale
+        .method("tag", |locale: &Locale, call: &Call<'_>| push_str(call, locale.as_str()))
+        .signature("(self): string")
+        .doc("The canonical tag: the locale's identity.");
+    locale
+        .method("baseName", |locale: &Locale, call: &Call<'_>| push_str(call, locale.base_name()))
+        .signature("(self): string")
+        .doc("The tag without its extensions.");
+    locale
+        .method("language", |locale: &Locale, call: &Call<'_>| push_str(call, locale.language()))
+        .signature("(self): string")
+        .doc("The language subtag; und when undetermined.");
+    locale
+        .method("script", |locale: &Locale, call: &Call<'_>| -> Result<StackResults> {
+            call.push(&locale.script())?;
+            Ok(StackResults)
+        })
+        .signature("(self): string?")
+        .doc("The script subtag, or nil.");
+    locale
+        .method("region", |locale: &Locale, call: &Call<'_>| -> Result<StackResults> {
+            call.push(&locale.region())?;
+            Ok(StackResults)
+        })
+        .signature("(self): string?")
+        .doc("The region subtag, or nil.");
+    locale
+        .method("variants", |locale: &Locale, call: &Call<'_>| {
+            push_list(call, locale.variants().collect::<Vec<_>>().into_iter())
+        })
+        .signature("(self): { string }")
+        .doc("The variant subtags in canonical order.");
+    locale.metamethod("__tostring", |locale: &Locale, call: &Call<'_>| push_str(call, locale.as_str()));
+    locale.metamethod("__eq", |locale: &Locale, other: ValueView<'_>| {
+        crate::userdata::receiver::<Locale>(other).is_some_and(|other| other == locale)
+    });
+}
+
+fn describe_plural_rules(d: &mut ExtensionDescriptor) {
+    let mut rules = d.userdata::<PluralRules>("dream.intl.PluralRules");
+    rules.tag(TagPolicy::Preferred).doc("One locale's CLDR cardinal or ordinal plural rules.");
+    rules
+        .method("category", |rules: &PluralRules, value: Operand<'_>| -> Result<&'static str> {
+            rules
+                .category(value)
+                .map(Category::name)
+                .map_err(|error| Error::runtime(format!("PluralRules:category: {error}")))
+        })
+        .signature("(self, value: number | integer | string): dream_intl_PluralCategory")
+        .doc("The category of a number; a decimal string keeps its visible fraction digits.");
+    rules
+        .method("categories", |rules: &PluralRules, call: &Call<'_>| {
+            push_list(call, rules.categories().map(Category::name))
+        })
+        .signature("(self): { dream_intl_PluralCategory }")
+        .doc("The categories these rules can select, in CLDR order, ending with other.");
+    rules
+        .method("locale", |rules: &PluralRules, call: &Call<'_>| push_str(call, rules.locale().as_str()))
+        .signature("(self): string")
+        .doc("The canonical tag of the rules' locale.");
+    rules
+        .method("type", |rules: &PluralRules| rules.kind().name())
+        .signature("(self): dream_intl_PluralType")
+        .doc("cardinal or ordinal.");
+}
+
+fn describe_decimal_formatter(d: &mut ExtensionDescriptor) {
+    let mut decimal = d.userdata::<FormatterHandle>("dream.intl.DecimalFormatter");
+    decimal.tag(TagPolicy::Preferred).doc("One locale's CLDR decimal format under fixed options.");
+    decimal
+        .method("format", |handle: &FormatterHandle, call: &Call<'_>, value: Operand<'_>| -> Result<StackResults> {
+            // Formatting calls nothing in Lua, so the buffer is never borrowed twice.
+            let mut scratch = handle.scratch.borrow_mut();
+            scratch.clear();
+            handle
+                .formatter
+                .format_to(value, &mut scratch)
+                .map_err(|error| Error::runtime(format!("DecimalFormatter:format: {error}")))?;
+            push_str(call, &scratch)
+        })
+        .signature("(self, value: number | integer | string): string")
+        .doc("A number in the locale's digits and separators; a decimal string formats exactly.");
+    decimal
+        .method("locale", |handle: &FormatterHandle, call: &Call<'_>| {
+            push_str(call, handle.formatter.locale().as_str())
+        })
+        .signature("(self): string")
+        .doc("The canonical tag of the formatter's locale.");
+    decimal
+        .method("resolvedOptions", |handle: &FormatterHandle, call: &Call<'_>| -> Result<StackResults> {
+            let formatter = &handle.formatter;
+            let mut frame: Frame<'_> = call.frame();
+            let table = frame.push_table(0, 4)?;
+            table.raw_set_value(&frame, "locale", formatter.locale().as_str())?;
+            table.raw_set_value(&frame, "grouping", formatter.grouping().name())?;
+            table.raw_set_value(&frame, "minFractionDigits", &f64::from(formatter.min_fraction_digits()))?;
+            table.raw_set_value(&frame, "maxFractionDigits", &f64::from(formatter.max_fraction_digits()))?;
+            frame.release();
+            Ok(StackResults)
+        })
+        .signature(
+            "(self): { locale: string, grouping: dream_intl_Grouping, minFractionDigits: number, maxFractionDigits: number }",
+        )
+        .doc("The options the formatter resolved, defaults filled in.");
+}
+
 /// The `dream.intl` extension.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct IntlExtension;
@@ -143,73 +327,17 @@ impl Extension for IntlExtension {
     fn describe(&self, d: &mut ExtensionDescriptor) -> Result<()> {
         d.type_alias("dream_intl_PluralCategory", "\"zero\" | \"one\" | \"two\" | \"few\" | \"many\" | \"other\"");
         d.type_alias("dream_intl_PluralType", "\"cardinal\" | \"ordinal\"");
-        let mut locale = d.userdata::<Locale>("dream.intl.Locale");
-        locale.tag(TagPolicy::Preferred).doc("A BCP 47 language tag, validated and spelled canonically.");
-        locale
-            .method("tag", |locale: &Locale, call: &Call<'_>| push_str(call, locale.as_str()))
-            .signature("(self): string")
-            .doc("The canonical tag: the locale's identity.");
-        locale
-            .method("baseName", |locale: &Locale, call: &Call<'_>| push_str(call, locale.base_name()))
-            .signature("(self): string")
-            .doc("The tag without its extensions.");
-        locale
-            .method("language", |locale: &Locale, call: &Call<'_>| push_str(call, locale.language()))
-            .signature("(self): string")
-            .doc("The language subtag; und when undetermined.");
-        locale
-            .method("script", |locale: &Locale, call: &Call<'_>| -> Result<StackResults> {
-                call.push(&locale.script())?;
-                Ok(StackResults)
-            })
-            .signature("(self): string?")
-            .doc("The script subtag, or nil.");
-        locale
-            .method("region", |locale: &Locale, call: &Call<'_>| -> Result<StackResults> {
-                call.push(&locale.region())?;
-                Ok(StackResults)
-            })
-            .signature("(self): string?")
-            .doc("The region subtag, or nil.");
-        locale
-            .method("variants", |locale: &Locale, call: &Call<'_>| {
-                push_list(call, locale.variants().collect::<Vec<_>>().into_iter())
-            })
-            .signature("(self): { string }")
-            .doc("The variant subtags in canonical order.");
-        locale.metamethod("__tostring", |locale: &Locale, call: &Call<'_>| push_str(call, locale.as_str()));
-        locale.metamethod("__eq", |locale: &Locale, other: ValueView<'_>| {
-            crate::userdata::receiver::<Locale>(other).is_some_and(|other| other == locale)
-        });
-
-        let mut rules = d.userdata::<PluralRules>("dream.intl.PluralRules");
-        rules.tag(TagPolicy::Preferred).doc("One locale's CLDR cardinal or ordinal plural rules.");
-        rules
-            .method("category", |rules: &PluralRules, value: Operand<'_>| -> Result<&'static str> {
-                rules
-                    .category(value)
-                    .map(Category::name)
-                    .map_err(|error| Error::runtime(format!("PluralRules:category: {error}")))
-            })
-            .signature("(self, value: number | integer | string): dream_intl_PluralCategory")
-            .doc("The category of a number; a decimal string keeps its visible fraction digits.");
-        rules
-            .method("categories", |rules: &PluralRules, call: &Call<'_>| {
-                push_list(call, rules.categories().map(Category::name))
-            })
-            .signature("(self): { dream_intl_PluralCategory }")
-            .doc("The categories these rules can select, in CLDR order, ending with other.");
-        rules
-            .method("locale", |rules: &PluralRules, call: &Call<'_>| push_str(call, rules.locale().as_str()))
-            .signature("(self): string")
-            .doc("The canonical tag of the rules' locale.");
-        rules
-            .method("type", |rules: &PluralRules| rules.kind().name())
-            .signature("(self): dream_intl_PluralType")
-            .doc("cardinal or ordinal.");
+        d.type_alias("dream_intl_Grouping", "\"auto\" | \"never\" | \"min2\"");
+        d.type_alias(
+            "dream_intl_DecimalOptions",
+            "{ grouping: dream_intl_Grouping?, minFractionDigits: number?, maxFractionDigits: number? }",
+        );
+        describe_locale(d);
+        describe_plural_rules(d);
+        describe_decimal_formatter(d);
 
         d.module(MODULE)
-            .doc("Internationalization primitives: BCP 47 locale identity and CLDR plural rules.")
+            .doc("Internationalization primitives: BCP 47 locale identity, CLDR plural rules and decimal formatting.")
             .function("locale", |tag: &str| -> Result<Owned<Locale>> {
                 Locale::parse(tag).map(Owned).map_err(|error| Error::runtime(format!("intl.locale: {error}")))
             })
@@ -223,7 +351,12 @@ impl Extension for IntlExtension {
             .doc("The canonical spelling of a BCP 47 tag, without making a locale.")
             .function("pluralRules", new_plural_rules)
             .signature("(locale: string | dream_intl_Locale, type: dream_intl_PluralType?) -> dream_intl_PluralRules")
-            .doc("A locale's cardinal (the default) or ordinal plural rules, built once.");
+            .doc("A locale's cardinal (the default) or ordinal plural rules, built once.")
+            .function("decimalFormatter", new_decimal_formatter)
+            .signature(
+                "(locale: string | dream_intl_Locale, options: dream_intl_DecimalOptions?) -> dream_intl_DecimalFormatter",
+            )
+            .doc("A locale's decimal format under options, built once.");
         Ok(())
     }
 }
