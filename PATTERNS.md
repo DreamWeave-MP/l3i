@@ -129,11 +129,18 @@ the holder is the loop's element local and the reads follow the element read. No
 are added, so line structure is unchanged.
 
 Where a value ends, and where a body starts, is decided by Luau's own parser, not by a JSL
-expression recognizer: `lower` lowers once with every pattern named by its holder, parses that
-with stock Luau, finds each holder's declaration (its statement end) or parameter (its function
-body's start), maps those generated offsets back to the original, and lowers again with the reads
-inserted there. Compile, Analysis and `@dream/luau` all take this one path. The same parse checks
-that a declaration has exactly one value.
+expression recognizer. The frontend estimates each boundary with a token skipper, keeping an
+estimate only after a `;` or before a token that cannot continue the expression (or the return
+type), and the reads are inserted there; each read ends with `;`, so following source is never
+read as its call. The parse every consumer makes anyway then confirms the estimate: each holder's
+declaration must end exactly at its reads (with exactly one value), and each pattern parameter's
+function body must begin exactly there. A confirmed lowering is byte for byte the one a located
+lowering produces. When any boundary is not confirmed, or a pattern had no estimate, the
+boundaries are located instead: `lower` lowers once with every pattern named by its holder,
+parses that with stock Luau, finds each holder's declaration or parameter, and lowers again.
+Compilation and `@dream/luau` confirm against their own parse; Luau Analysis confirms against
+the module ASTs its frontend parsed and rechecks a module whose estimate failed with located
+boundaries, the way buffer specialization already does. Correctness never rests on the skipper.
 
 Holders are named `__l3i_comp_<offset of the record's {>`; the stem is salted when any source
 identifier equals it or extends it with `_` (the same rule now applies to every generated name,
@@ -235,22 +242,31 @@ comprehension and data-plane snapshots are byte-identical: every pattern case wa
 baseline (`7ff4c6b`), the comprehension bench's JSL rows retire identical instruction counts and
 all 67 native data-plane rows agree within 0.015%.
 
-**Compile cost** (release build, 40 compiles of a 239 KB module of 2,000 small functions):
+**Compile cost.** Retired user-space instructions per compile (`perf stat`, the difference
+between 40 compiles and none) and wall time per compile, release build, for a 239 KB module of
+2,000 small functions; the same driver built at each commit. "Before" is the end of the pattern
+campaign (`e076a62`), "pre-pattern" is `7ff4c6b`. The handwritten twin is the pattern-heavy
+module as a careful author writes it in Luau, holders and reads included.
 
-| Module | Pre-pattern baseline | Now |
-|---|---:|---:|
-| No JSL syntax | 19.1–21.2 ms | 20.7–21.9 ms (within run-to-run noise) |
-| One comprehension | 36.2–39.9 ms | 35.3–39.3 ms |
-| Three record patterns | n/a | 40.8–43.5 ms |
-| A pattern parameter and a declaration in every function | n/a | 58.5–59.8 ms |
-| 40 nested functions, each with a 24-deep parameter pattern | n/a | 2.0–2.2 ms |
+| Module | Pre-pattern | Before | Now |
+|---|---:|---:|---:|
+| No JSL syntax (has brackets) | 179.2M / 23.3 ms | 184.0M / 23.5 ms | 180.8M / 23.5 ms |
+| Handwritten twin (no brackets) | 181.8M / 27.0 ms | 221.3M / 30.2 ms | 182.5M / 27.8 ms |
+| One comprehension | 308.1M / 43.3 ms | 294.1M / 41.2 ms | 193.9M / 23.9 ms |
+| A pattern parameter and a declaration in every function | n/a | 467.0M / 68.6 ms | 323.7M / 44.8 ms |
 
-The extra stock-Luau parse that places the reads costs about 3.6 ms on this module and is paid
-only when a declaration or parameter pattern exists; it stays, because it is what makes value
-ends and body starts Luau's decision. Most of the gap between a plain module and one with any
-JSL construct is not patterns: the baseline already pays it for one comprehension (building the
-source map and remapping every location). Peak RSS: 15.4–15.7 MB plain, 17.9 MB with three
-patterns, 24.3 MB with patterns in all 2,000 functions.
+`cargo bench --bench patterns -- patterns_compile` tracks the same modules with three patterns
+added (`L3I_PROFILE_CASE=<label>` runs one case alone, for a profiler). What changed, by
+measurement: one shared lex of the source; a negative-only text check that skips the pattern
+scan, and without brackets all lexing, for sources that cannot hold a pattern; boundaries
+confirmed by the one parse instead of located by an extra one; a source map that maps positions
+inside a copy affinely, builds its anchors in one sweep, and finds segments from a galloping
+cursor; and a remapper that skips subtrees the lowering left in place and tracks visited
+objects in open-addressing sets. Files without JSL syntax are within 0.9% of the pre-pattern
+baseline's instructions (the text check), and a comprehension now costs about 13M instructions
+over its plain module instead of 129M. The pattern-heavy module still costs about 77% more than
+its handwritten twin: lexing for the frontend, building the lowered text and source map, and
+remapping the many locations whose columns the holders shift.
 
 ## Limitations
 
@@ -267,9 +283,11 @@ patterns, 24.3 MB with patterns in all 2,000 functions.
   is Luau's to parse, and the frontend does not parse types.
 - Generator patterns disable data-plane recognition for that pipeline (by design: the element is
   a record read, not a buffer element).
-- Lowering parses a pattern-bearing chunk with stock Luau once more than before (see Compile
-  cost); the cost is linear in the chunk and paid only when a declaration or parameter pattern
-  exists.
+- A boundary the frontend cannot estimate, or that Luau's parse does not confirm, costs one more
+  stock parse to locate (see Lowering); the shapes that need it are rare, such as a value whose
+  last token Luau could read as continuing onto the next line.
+- A module dense with patterns compiles in about 1.8 times the instructions of its handwritten
+  equivalent (see Compile cost).
 - Because the generated reads share their source line, a same-line warning that Luau reports once
   per line can be spent on a generated read and then dropped: `local {a} = t print(a)` gets no
   `SameLineStatement` warning, where `local a = t.a print(a)` would.
