@@ -803,5 +803,16 @@ int main()
         assert(d.locals.size() == 1 && !d.locals[0].pattern.complete && d.locals[0].pattern.close.empty());
         assert(d.locals[0].pattern.fields[0].target.fields[0].target.range.end == 19);
     }
+    {
+        // The record nesting budget is one fatal diagnostic, not a cascade or a deep stack.
+        for (std::string_view head : {"local ", "function f(", "return [for "})
+        {
+            std::string s(head);
+            for (int i = 0; i < 4096; ++i) s += "{a: ";
+            s += "x";
+            const auto d = parseSurface(s);
+            assert(d.errors.size() == 1 && d.errors[0].message == "record pattern nesting limit exceeded (128)");
+        }
+    }
     std::cout << "surface frontend tests passed\n";
 }

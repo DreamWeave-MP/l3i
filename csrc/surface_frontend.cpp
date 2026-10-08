@@ -250,7 +250,9 @@ private:
         const size_t errorsBefore = document.errors.size();
         if (depth >= maxDepth)
         {
+            // Fatal, like the comprehension nesting limit: one diagnostic, nothing further.
             error(pattern.open, "record pattern nesting limit exceeded (128)");
+            stopped = true;
             return pattern;
         }
         // Past an unsupported form to the next ',' or '}' of this record, so one mistake is one
@@ -301,7 +303,14 @@ private:
                 if (target == T::Name)
                     field.target.range = list[i++].range;
                 else if (target == '{')
+                {
                     field.target = recordPattern(list, i, depth + 1);
+                    if (stopped)
+                    {
+                        pattern.fields.push_back(std::move(field));
+                        return pattern;
+                    }
+                }
                 else if (target == '[')
                 {
                     field.target.range = pointIn(list, i);
@@ -406,7 +415,7 @@ private:
                 all.push_back({token.type, {offset(token.location.begin), offset(token.location.end)}});
             if (token.type == T::Eof) break;
         }
-        for (size_t i = 0; i + 1 < all.size(); ++i)
+        for (size_t i = 0; i + 1 < all.size() && !stopped; ++i)
         {
             const int t = all[i].type, next = all[i + 1].type;
             if (t == T::ReservedLocal && next == '{')
@@ -426,6 +435,7 @@ private:
         local.keyword = all[at].range;
         size_t i = at + 1;
         local.pattern = recordPattern(all, i, 0);
+        if (stopped) return;
         std::vector<Range> bound;
         patternNames(local.pattern, bound);
         duplicates(bound);
@@ -499,6 +509,7 @@ private:
                 pattern.function = all[at].range;
                 pattern.parameter = parameter;
                 pattern.pattern = recordPattern(all, i, 0);
+                if (stopped) return;
                 patternNames(pattern.pattern, bound);
                 if (typeIn(all, i) == ':') pattern.colon = all[i].range;
                 document.parameters.push_back(std::move(pattern));
@@ -1027,8 +1038,9 @@ private:
                 }
                 else error(point(i), "expected generator binding name after 'for'");
                 clause.in = point(i);
+                // After a fatal limit nothing further is diagnosed: the limit is the one error.
                 if (type(i) == T::ReservedIn) clause.in = tokens[i++].range;
-                else error(point(i), "expected 'in' after generator binding");
+                else if (!stopped) error(point(i), "expected 'in' after generator binding");
             }
             const size_t expressionBegin = i;
             clause.expression = expression(i, depth, false, clause.expressionSuffix);
@@ -1045,7 +1057,7 @@ private:
                 else if (clause.enumerateArgument.empty() && clause.zipArguments.empty() && clause.bindings.size() > 1)
                     error(clause.binding, "multiple generator bindings require a recognized multi-value source");
             }
-            if (clause.expression.empty())
+            if (clause.expression.empty() && !stopped)
                 error(clause.expression, clause.kind == ClauseKind::Generator ? "expected generator expression" : "expected filter expression");
             clause.range = {clause.keyword.begin, clause.expression.end};
             c.clauses.push_back(clause);
@@ -1058,10 +1070,10 @@ private:
             c.projection = expression(i, depth, true, c.projectionSuffix);
             if (c.projection.empty()) error(c.projection, "expected projection expression after '=>'");
         }
-        else error(c.arrow, "expected '=>' and projection expression");
+        else if (!stopped) error(c.arrow, "expected '=>' and projection expression");
         c.close = point(i);
         if (!stopped && type(i) == ']') c.close = tokens[i++].range;
-        else error(c.close, "expected ']' to close comprehension");
+        else if (!stopped) error(c.close, "expected ']' to close comprehension");
         c.range = {c.open.begin, c.close.end};
         c.complete = !c.postfix && !c.close.empty() && document.errors.size() == errorsBefore;
         document.comprehensions[index] = std::move(c);
