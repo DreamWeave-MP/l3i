@@ -245,7 +245,7 @@ fn compilation(c: &mut Criterion) {
             std::hint::black_box(l3i::source::compile(std::hint::black_box(source), &options).unwrap());
         });
         group.bench_function(*label, |b| {
-            b.iter(|| l3i::source::compile(std::hint::black_box(source), &options).unwrap())
+            b.iter(|| l3i::source::compile(std::hint::black_box(source), &options).unwrap());
         });
     }
     group.finish();
