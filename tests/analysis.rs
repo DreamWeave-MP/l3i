@@ -1358,3 +1358,55 @@ fn record_pattern_bindings_keep_their_own_lints() {
         assert_diagnostic_span(&report.diagnostics[0], source, "unusedAlias");
     }
 }
+
+#[test]
+fn record_pattern_types_flow_through_returns_scopes_and_pipelines_without_any() {
+    let source = format!(
+        "{PATTERN_TYPES}{}",
+        concat!(
+            "local entity: Entity = { id = 1, position = { x = 1, y = 2 }, name = 'e' }\n",
+            "local function nameOf({name}: Entity) return name end\n",
+            "local name = 'outer'\n",
+            "local function shadow({name}: Entity) return function() return name end end\n",
+            "local captured = shadow(entity)\n",
+            "local labels = [for {id, name: label} in { entity } if id > 0 => label .. '!']\n",
+            "local outerName = name\n",
+            "return nameOf, captured, labels, outerName\n",
+        )
+    );
+    let source: &'static str = Box::leak(source.into_boxed_str());
+    // Each misuse is a type error only because the binding has its field's type, not `any`.
+    let misuses = [
+        (
+            "misuse_local",
+            "local entity: Entity = { id = 1, position = { x = 1, y = 2 }, name = 'e' }\nlocal {name} = entity\nlocal n: number = name\n",
+        ),
+        (
+            "misuse_nested",
+            "local entity: Entity = { id = 1, position = { x = 1, y = 2 }, name = 'e' }\nlocal {position: {x}} = entity\nlocal s: string = x\n",
+        ),
+        ("misuse_parameter", "local function f({id}: Entity): string return id end\n"),
+        ("misuse_generator", "local entities: {Entity} = {}\nlocal bad: {string} = [for {id} in entities => id]\n"),
+    ];
+    for solver in [analysis::Solver::New, analysis::Solver::Old] {
+        let mut modules: HashMap<&'static str, &'static str> = HashMap::from([("flow", source)]);
+        for (name, body) in misuses {
+            modules.insert(name, Box::leak(format!("{PATTERN_TYPES}{body}").into_boxed_str()));
+        }
+        let analysis = comprehension_analysis(modules, solver);
+        let report = analysis.check("flow", false);
+        assert!(report.is_clean(), "{solver:?}: {report:#?}");
+        let line = 11;
+        assert_binding_type(&analysis, "flow", line, "nameOf", "(Entity) -> string");
+        assert_binding_type(&analysis, "flow", line, "captured", "() -> string");
+        assert_binding_type(&analysis, "flow", line, "labels", "{string}");
+        assert_binding_type(&analysis, "flow", line, "outerName", "string");
+        for (module, _) in misuses {
+            let report = analysis.check(module, false);
+            assert!(
+                report.diagnostics.iter().any(|d| d.kind == DiagnosticKind::TypeError),
+                "{solver:?}: {module}: {report:#?}"
+            );
+        }
+    }
+}
