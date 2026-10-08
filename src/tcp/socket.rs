@@ -189,6 +189,8 @@ impl Listener {
         // listener's port can be bound again without it, so the option only applies elsewhere.
         #[cfg(not(windows))]
         socket.set_reuse_address(options.reuse_address)?;
+        #[cfg(windows)]
+        let _ = options.reuse_address;
         socket.set_nonblocking(true)?;
         socket.bind(&address.into())?;
         // The backlog is at most 65535 (checked when read), so it fits a c_int.
