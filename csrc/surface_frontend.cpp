@@ -24,9 +24,9 @@ public:
     explicit Frontend(std::string_view source): source(source) {}
     Document run()
     {
-        // Record patterns first: prefix validation of comprehension clauses masks them. Without
-        // a bracket, a source that cannot hold a pattern is not even lexed.
-        if (source.find('[') != std::string_view::npos || (source.find('{') != std::string_view::npos && mayHavePatterns(source)))
+        // Record patterns first: prefix validation of comprehension clauses masks them. A source
+        // that cannot hold a pattern is not scanned for them, and without a bracket not lexed.
+        if (mayHavePatterns(source))
             scanPatterns();
         scan();
         // A `for {` that no comprehension claimed as a clause is a statement loop.
@@ -54,13 +54,47 @@ private:
             return c == '"' || c == '\'' || c == '`' || (c == '-' && at + 1 < s.size() && s[at + 1] == '-') ||
                 (c == '[' && at + 1 < s.size() && (s[at + 1] == '[' || s[at + 1] == '='));
         };
-        for (std::string_view keyword : {std::string_view("local"), std::string_view("for")})
-            for (size_t at = s.find(keyword); at != std::string_view::npos; at = s.find(keyword, at + 1))
+        const auto nameChar = [](char c) { return c == '_' || std::isalnum(static_cast<unsigned char>(c)); };
+        // `local [`, for its diagnostic, needs a bracket.
+        if (s.find('[') != std::string_view::npos)
+            for (size_t at = s.find("local"); at != std::string_view::npos; at = s.find("local", at + 1))
             {
-                size_t next = at + keyword.size();
+                size_t next = at + 5;
                 while (next < s.size() && space(s[next])) ++next;
-                if (next < s.size() && (s[next] == '{' || s[next] == '[' || opaque(next))) return true;
+                if (next < s.size() && (s[next] == '[' || opaque(next))) return true;
             }
+        // Every pattern opens with a '{' after `local`, `for`, '(' or ','. Each brace is judged by
+        // what precedes it: a keyword is a maybe; '(' or ',' means signatures must be read; a
+        // comment that could hide either (a ']' ending a long one, or a line holding `--`) is a
+        // maybe. With no brace-led parameter anywhere, no signature needs reading.
+        bool braceLed = false;
+        for (size_t at = s.find('{'); at != std::string_view::npos; at = s.find('{', at + 1))
+        {
+            size_t before = at;
+            bool newline = false;
+            while (before > 0 && space(s[before - 1]))
+                newline = s[--before] == '\n' || newline;
+            if (before == 0) continue;
+            const char previous = s[before - 1];
+            if (previous == ']') return true;
+            if (previous == '(' || previous == ',')
+            {
+                braceLed = true;
+                continue;
+            }
+            for (std::string_view keyword : {std::string_view("local"), std::string_view("for")})
+                if (before >= keyword.size() && s.substr(before - keyword.size(), keyword.size()) == keyword &&
+                    (before == keyword.size() || !nameChar(s[before - keyword.size() - 1])))
+                    return true;
+            if (newline)
+            {
+                const size_t line = s.rfind('\n', before - 1);
+                const size_t from = line == std::string_view::npos ? 0 : line + 1;
+                if (s.substr(from, before - from).find("--") != std::string_view::npos) return true;
+            }
+        }
+        if (!braceLed)
+            return false;
         for (size_t at = s.find("function"); at != std::string_view::npos; at = s.find("function", at + 1))
         {
             size_t i = at + 8;

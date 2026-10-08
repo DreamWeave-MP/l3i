@@ -820,7 +820,9 @@ int main()
                  "function f({x}) end", "function f(a, {x}) end", "function T.a:b<T>(a: Map<K, V>, {x}: P) end",
                  "function f(cb: () -> (), {x}) end", "function f(cb: (number) -> string, {x}) end",
                  "local g = function(--[[)]] {x}) end", "return function(a, \"{\", {x}) end", "for {x} in t do end",
-                 "local f = function\n(\n{x}\n) end"})
+                 "local f = function\n(\n{x}\n) end", "function f(a, -- note\n  {x}) end", "function f(a, --[[ x ]] {y}) end",
+                 "function f(a --[==[\n]==], {x}) end", "local -- note\n{x} = t", "local --[==[ note ]==] {x} = t",
+                 "for --[[x]] {a} in t do end", "local\n\n{x} = t", "function f(\n-- a\n{x}) end"})
         {
             const auto d = parseSurface(s);
             assert(!d.locals.empty() || !d.parameters.empty() || !d.errors.empty());
