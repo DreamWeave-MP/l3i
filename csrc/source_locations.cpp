@@ -27,10 +27,13 @@ public:
     {
         // Map the whole range: provenance may be non-monotonic, so independently
         // mapping its endpoints would not necessarily produce an ordered span.
-        const Span original = map.originalSpan({
-            {location.begin.line, location.begin.column},
-            {location.end.line, location.end.column},
-        });
+        bool unchanged = false;
+        const Span original = map.originalSpan(
+            {
+                {location.begin.line, location.begin.column},
+                {location.end.line, location.end.column},
+            },
+            unchanged, cursor);
         location = Luau::Location(
             Luau::Position(original.begin.line, original.begin.column),
             Luau::Position(original.end.line, original.end.column)
@@ -43,7 +46,8 @@ public:
         // its attributes), so a subtree that maps to itself needs no walk. One lookup gives both.
         bool unchanged = false;
         const Span original = map.originalSpan(
-            {{node->location.begin.line, node->location.begin.column}, {node->location.end.line, node->location.end.column}}, unchanged);
+            {{node->location.begin.line, node->location.begin.column}, {node->location.end.line, node->location.end.column}}, unchanged,
+            cursor);
         if (skipUnchanged && unchanged)
             return false;
         if (!nodes.try_insert(node))
@@ -202,6 +206,7 @@ public:
 private:
     const SourceMap& map;
     bool skipUnchanged;
+    mutable size_t cursor = 0; // The walk is roughly in source order: lookups start where the last ended.
     // Each reachable object is remapped once; open addressing, not a node per entry.
     Luau::DenseHashSet<Luau::AstNode*> nodes;
     Luau::DenseHashSet<Luau::AstLocal*> locals;

@@ -109,7 +109,33 @@ Span SourceMap::originalSpan(Span generated) const
     return originalSpan(generated, unchanged);
 }
 
+size_t SourceMap::segmentAfter(size_t at, size_t& cursor) const
+{
+    const auto after = [&](size_t from, size_t to) {
+        return size_t(std::upper_bound(segments.begin() + std::ptrdiff_t(from), segments.begin() + std::ptrdiff_t(to), at,
+                          [](size_t value, const Segment& segment) { return value < segment.end; }) -
+            segments.begin());
+    };
+    cursor = std::min(cursor, segments.size());
+    if (cursor > 0 && segments[cursor - 1].end > at)
+        return cursor = after(0, cursor); // Behind the cursor: search what precedes it.
+    // At or ahead of the cursor: gallop forward, then search the bracketed run.
+    size_t low = cursor, step = 1;
+    while (low + step < segments.size() && segments[low + step - 1].end <= at)
+    {
+        low += step;
+        step *= 2;
+    }
+    return cursor = after(low, std::min(low + step, segments.size()));
+}
+
 Span SourceMap::originalSpan(Span generated, bool& unchanged) const
+{
+    size_t cursor = 0;
+    return originalSpan(generated, unchanged, cursor);
+}
+
+Span SourceMap::originalSpan(Span generated, bool& unchanged, size_t& cursor) const
 {
     unchanged = false;
     if (empty())
@@ -129,8 +155,7 @@ Span SourceMap::originalSpan(Span generated, bool& unchanged) const
     // intersecting segments, so the next segment cannot steal a copied token's end.
     size_t first = std::numeric_limits<size_t>::max();
     size_t last = 0;
-    auto it = std::upper_bound(segments.begin(), segments.end(), begin,
-        [](size_t value, const Segment& segment) { return value < segment.end; });
+    auto it = segments.begin() + std::ptrdiff_t(segmentAfter(begin, cursor));
     // The common case: the whole span lies in one copy, which maps both ends affinely.
     const bool exactBegin = exact(generated.begin, begin), exactEnd = exact(generated.end, end);
     if (it != segments.end() && it->copied && it->begin <= begin && end <= it->end && exactBegin && exactEnd)

@@ -420,10 +420,16 @@ int main()
                     if (s.begin <= at) owner = &s;
                 return toPosition(original, owner->copied ? owner->originalBegin + at - owner->begin : owner->originalBegin);
             };
+            size_t cursor = 0; // Shared across lookups that move forward and jump back.
             for (size_t begin = 0; begin < lowered.source.size(); begin += 3)
                 for (size_t end = begin; end <= lowered.source.size(); end += 7)
                 {
                     const auto span = map.originalSpan({toPosition(generated, begin), toPosition(generated, end)});
+                    bool unchanged = false;
+                    const auto viaCursor =
+                        map.originalSpan({toPosition(generated, begin), toPosition(generated, end)}, unchanged, cursor);
+                    assert(viaCursor.begin.line == span.begin.line && viaCursor.begin.column == span.begin.column);
+                    assert(viaCursor.end.line == span.end.line && viaCursor.end.column == span.end.column);
                     if (end == begin)
                     {
                         const auto at = pointReference(begin);
