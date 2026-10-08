@@ -30,6 +30,7 @@ the root.
 | `bytes-digests` | CRC-32, Adler-32, FNV-1a, xxHash, MD5, SHA-1, SHA-256, BLAKE3, one-shot and incremental | `bytes::digests` |
 | `bytes-text` | Decoding and encoding every WHATWG-labelled text encoding | `bytes::text` |
 | `intern` | The `dream.intern` extension and `@dream/intern` module: pools that turn strings and buffer spans into dense number identities | `intern` |
+| `intl` | The `dream.intl` extension and `@dream/intl` module: BCP 47 locale identity, CLDR plural rules and decimal formatting | `intl` |
 | `syntax` | The `dream.luau` extension and `@dream/luau` module: Luau's own parser, the tree, comments, errors and tokens of a source as tables | `syntax` |
 
 The default feature set is empty. Networking is not a feature: `dream-net` is a dependency and

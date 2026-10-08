@@ -17,13 +17,14 @@ is a deliberate change that re-audits the hand-declared C API.
 
 - **Rust 1.92** or newer, declared as `rust-version` and checked in CI. Edition 2024. The optional `dream-soft-render` dependency declares the same.
 - `unsafe` is used, at the FFI boundary and in the value-layout reads; every block states the invariant it relies on (see [Safety](@/docs/safety.md)).
-- Optional features, all off by default: `jit`, `analysis`, `soft-render`, `bytes` with `bytes-codecs`, `bytes-digests`, `bytes-text` and `bytes-regex`, `intern`, and `syntax` (see [Building](@/docs/building.md)).
+- Optional features, all off by default: `jit`, `analysis`, `soft-render`, `bytes` with `bytes-codecs`, `bytes-digests`, `bytes-text` and `bytes-regex`, `intern`, `intl`, and `syntax` (see [Building](@/docs/building.md)).
 
 | Dependency | Version | For |
 |---|---|---|
 | `dream-net` | `=1.1.0` | The `dream.net` bridge every plan carries |
 | `dream-soft-render` | `=1.0.0`, optional (`soft-render`) | The `dream.soft_render` extension |
 | `memchr`, `miniz_oxide`, `lz4_flex`, `ruzstd`, `lzma-rs`, `crc32fast`, `adler2`, `xxhash-rust`, `md-5`, `sha1`, `sha2`, `blake3`, `encoding_rs` | Optional, behind `bytes` and its `bytes-*` features | `@dream/bytes`'s searches, codecs, digests and text encodings |
+| `icu_locale_core`, `icu_plurals`, `icu_decimal`, `fixed_decimal`, `writeable` | `2.3` (`fixed_decimal` `0.7` with `ryu`, `writeable` `0.6`), optional, behind `intl` | `@dream/intl`'s locales, plural rules and decimal formatting, with ICU4X's compiled CLDR data |
 | `cc` | `1`, `parallel` feature, build only | Compiling the Luau submodule and `csrc/` |
 | `criterion` | `0.8.2`, dev only | The benchmarks |
 
@@ -36,6 +37,9 @@ l3i is **MIT OR Apache-2.0**, at your option.
 
 Luau is Roblox's, under the MIT license; its notice ships in the package as `luau/LICENSE.txt`
 and `luau/lua_LICENSE.txt` and travels with any product that ships l3i.
+
+The `intl` feature links ICU4X and its compiled CLDR data, under the Unicode License v3
+(`Unicode-3.0`); a product that enables it carries that notice too.
 
 ## What is tested
 
@@ -78,6 +82,7 @@ The integration tests link as one binary (`tests/main.rs`), one file's tests run
 | `tests/raster.rs` | Colors and clip rectangles: construction, kind checks, the byte layout, and (`jit`) the lowered color math |
 | `tests/bytes.rs` | `@dream/bytes` (`bytes`): searching, record strings, varints, every width and order against `buffer`, the codecs against Python-made fixtures, the digests against their published vectors, the text codepages, and (`jit`) the lowered integer reads and writes |
 | `tests/intern.rs` (`intern`) | `@dream/intern`: one token per identity across spellings, strings and buffer spans, dense keys in a table's array part, the first spelling back from `resolve`, `interner` against the method and across a collection, named errors, and (`jit`) the lowered `intern` and `find` against the binder for both policies over every length to 40, every fallback, a miss then a hit, growth between calls, duplicates that never reach the binder, and the A64 build |
+| `tests/intl.rs` (`intl`) | `@dream/intl`: canonical spellings, subtags and equality of locales, malformed tags by name and reason; English, Polish, Russian, Arabic and French categories, visible fraction digits, integers, large numbers and refused non-numbers; English, German, French, Arabic-Egyptian and Polish formatting, every grouping strategy, padding, trimming, half-even ties, signs, negative zero, bad options by name; and in `src/intl` the same against the Rust types directly |
 | `tests/syntax.rs` (`syntax`) | `@dream/luau`: Luau's kinds, members and exact spans, one table per local for its declaration and every use, quote styles, functions, tables and types, errors as data with a recovered tree, declaration syntax only on request, the token stream over every byte that is not whitespace, the parser's nesting limit, and trees built while the collector steps on every allocation |
 | `tests/soft_render.rs` (`soft-render`) | A Luau scene byte-identical to the Rust scene, malformed input, textures freeing themselves, two runtimes with different tags, the vertex writer on all three paths |
 | `tests/native_code.rs` (`jit`) | The code generator with the binder's hooks, the `writef32x3` lowering, a userdata field lowering in Rust, modes, module ids, assembly dumps, the perf log |

@@ -83,7 +83,7 @@ walkdir = { version = "2.5", optional = true }
 same-file = { version = "1.0.6", optional = true }
 # `@dream/intl` (feature `intl`): ICU4X's BCP 47 parser, CLDR plural rules and decimal
 # formatting with their compiled CLDR data, and fixed_decimal's exact decimals (ryu for
-# doubles). All Rust.
+# doubles). All Rust; ICU4X and its data are Unicode-3.0.
 icu_locale_core = { version = "2.3", optional = true, features = ["alloc"] }
 icu_plurals = { version = "2.3", optional = true }
 icu_decimal = { version = "2.3", optional = true }

@@ -6,6 +6,8 @@ All times are wall-clock means measured by [Criterion.rs](https://github.com/bhe
 
 > `cargo bench --bench patterns` compares JSL record binding patterns with same-contract handwritten extraction, interpreted and native; see [PATTERNS.md](PATTERNS.md).
 >
+> `cargo bench --features intl --bench intl` counts `@dream/intl`'s construction, warm calls, the binding boundary and handle retention; see [Built-in extensions](https://DreamWeave-MP.github.io/l3i/docs/builtin-extensions/#dream-intl).
+>
 > `cargo bench --bench comprehension` now measures dense/filtered projections, allocation-free count fusion, and callback comparisons on the real checkout. See [comprehension integration evidence](COMPREHENSIONS.md) for retired CPU instructions, deterministic executed VM counts, secondary timings, inference, and diagnostic limitations. Those results are separate from the generated 2026-09-28 tables below.
 
 ## rust_to_luau_call

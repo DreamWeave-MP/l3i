@@ -1,13 +1,13 @@
 +++
 title = "Built-in extensions"
-description = "The extensions l3i ships: the dream.net bridge every plan carries, packed rotations in dream.quat, colors and clip rectangles in dream.raster, the dream.soft_render device, bytes for parsing in dream.bytes, textual identity as numbers in dream.intern, Luau's own parser in dream.luau, the host filesystem in dream.fs, and child processes in dream.process."
+description = "The extensions l3i ships: the dream.net bridge every plan carries, packed rotations in dream.quat, colors and clip rectangles in dream.raster, the dream.soft_render device, bytes for parsing in dream.bytes, textual identity as numbers in dream.intern, locales, plural rules and number formatting in dream.intl, Luau's own parser in dream.luau, the host filesystem in dream.fs, and child processes in dream.process."
 weight = 90
 
 [extra]
 kind = "guide"
 +++
 
-Nine extensions come with the crate. `dream.net` is in every plan; the others are added with
+Ten extensions come with the crate. `dream.net` is in every plan; the others are added with
 `RuntimePlan::builder().extension(..)`. Each is an ordinary `Extension` built on the
 [primitives](@/docs/primitives.md), with a Luau signature on every member, so a strict script
 that requires its module type checks against the plan's definitions.
@@ -20,6 +20,7 @@ that requires its module type checks against the plan's definitions.
 | `dream.soft_render` | `@dream/soft-render` | `l3i::soft_render::SoftRenderExtension` | `soft-render` |
 | `dream.bytes` | `@dream/bytes` | `l3i::bytes::BytesExtension` | `bytes` |
 | `dream.intern` | `@dream/intern` | `l3i::intern::InternExtension` | `intern` |
+| `dream.intl` | `@dream/intl` | `l3i::intl::IntlExtension` | `intl` |
 | `dream.luau` | `@dream/luau` | `l3i::syntax::SyntaxExtension` | `syntax` |
 | `dream.fs` | `@dream/fs` | `l3i::fs::FsExtension` | `fs` |
 | `dream.process` | `@dream/process` | `l3i::process::ProcessExtension` | `process` |
@@ -752,6 +753,153 @@ The lowered call costs about what the Rust lookup does: the C-call protocol, 277
 for even a hand-written `lua_CFunction`, is gone. Reading a table keyed by tokens is 25
 instructions and a quarter to one L1 miss, against 140 and 2.5 to 4 for `integer` keys and 122
 and 3 to 5.5 for strings. `resolve` is about 900 instructions, most of it making the string.
+
+## dream.intl
+
+Feature `intl`; module `@dream/intl`, `l3i::intl::IntlExtension`. Three internationalization
+primitives, each usable without the others: BCP 47 locale identity, CLDR plural rules, and
+CLDR decimal formatting, all from [ICU4X](https://github.com/unicode-org/icu4x) 2.3 and its
+compiled CLDR data. The data is in the binary: no file, no provider, and no capability is
+needed. The module has no current locale, no fallback order, no message catalog and no
+message syntax; which locale to use, which translation a category picks and where a formatted
+number goes are the application's.
+
+```luau
+local intl = require("@dream/intl")
+
+local polish = intl.locale("pl_pl")                  -- pl-PL
+local cardinal = intl.pluralRules(polish, "cardinal")
+print(cardinal:category(1), cardinal:category(2), cardinal:category(5))   -- one few many
+print(cardinal:category("1.00"))                     -- other: two visible fraction digits
+
+local ordinal = intl.pluralRules("en", "ordinal")
+print(ordinal:category(21))                          -- one, as in 21st
+
+local french = intl.decimalFormatter("fr", { minFractionDigits = 2, maxFractionDigits = 2 })
+print(french:format("1234567.895"))                  -- 1 234 567,90, narrow no-break spaces
+```
+
+| Function | Returns |
+|---|---|
+| `intl.locale(tag)` | A `dream_intl_Locale`: the tag parsed and spelled canonically |
+| `intl.canonicalize(tag)` | The canonical spelling as a string, without making a locale |
+| `intl.pluralRules(locale, type?)` | A `dream_intl_PluralRules`: `"cardinal"` (the default) or `"ordinal"` |
+| `intl.decimalFormatter(locale, options?)` | A `dream_intl_DecimalFormatter` under `{ grouping?, minFractionDigits?, maxFractionDigits? }` |
+| `locale:tag()`, `tostring(locale)` | The canonical tag |
+| `locale:baseName()` | The tag without its extensions (`ar-EG` of `ar-EG-u-nu-latn`) |
+| `locale:language()`, `locale:script()`, `locale:region()`, `locale:variants()` | The subtags; script and region may be nil, variants is a list |
+| `rules:category(value)` | `"zero"`, `"one"`, `"two"`, `"few"`, `"many"` or `"other"` |
+| `rules:categories()` | The categories these rules can select, in CLDR order, ending with `"other"` |
+| `rules:locale()`, `rules:type()` | The rules' canonical tag and kind |
+| `formatter:format(value)` | The number as text for the locale |
+| `formatter:locale()`, `formatter:resolvedOptions()` | The canonical tag; the options with defaults filled in |
+
+A locale argument is a `dream_intl_Locale` or a tag string. Values are a Luau number, a Luau
+`integer`, or a decimal string. Handles are built once and reused; build them where the locale is
+chosen, not per value.
+
+### Locales
+
+Parsing is ICU4X's BCP 47 parser. A tag is a language, an optional script and region, variants,
+and Unicode, transformed, private-use and other extensions. Parsing spells it canonically: the
+language lowercase, the script title case, the region uppercase, variants lowercase and sorted,
+extension keys and values lowercase and sorted, so `DE-de-u-NU-latn-CA-gregory` is
+`de-DE-u-ca-gregory-nu-latn`. Underscores separate subtags as hyphens do (`zh_hant_tw` is
+`zh-Hant-TW`): ICU4C and POSIX spell locales that way. Two locales are `==` when their canonical
+tags are, and the tag is the identity to key a cache with. `intl.canonicalize` makes no heap
+allocation for a tag of up to 64 bytes without extensions.
+
+Canonicalization is syntactic. CLDR's alias replacement (`iw` to `he`, `sh` to `sr-Latn`) and
+likely subtags are not applied, so tags that differ only there are different locales. An empty
+string, a malformed subtag (`english`, `en-US-`, `en--US`), whitespace, or a legacy grandfathered
+tag (`i-klingon`) is an error naming the call and ICU4X's reason:
+`intl.locale: 'english' is not a BCP 47 language tag: the given language subtag is invalid`.
+
+### Plural rules
+
+`rules:category(value)` evaluates the locale's CLDR rules. A decimal string keeps what it shows,
+and CLDR's rules can see it: English `1` is `one` but `"1.0"` and `"1.00"` are `other`; French
+`1000000` is `many` but `"1000000.0"` is `other`; Latvian `"0.1"` is `one` and `"0.10"` is
+`other`. A Luau number carries no visible fraction digits, so it reads as the shortest decimal
+that round-trips to the same double: `1.0` is `1`, `0.1` is `0.1`. Pass a string when the
+digits a reader will see matter. Negative values select as their magnitude does. A decimal
+string is an optional sign, digits with at most one decimal point, and an optional exponent
+(`-12.50`, `.5`, `1e6`; the exponent is multiplied out, so it is not CLDR's compact-notation
+operand). NaN, the infinities, a malformed string and a string of more than 32767 digits either
+side of the point are errors; there is no silent `other`.
+
+A locale CLDR has no rules for takes its nearest parent's, down to the root rules, where every
+number is `other`; that fallback is ICU4X's. Unicode extensions do not change plural rules.
+
+### Decimal formatting
+
+`formatter:format(value)` writes the locale's digits, decimal separator, grouping separator and
+group sizes, and signs: `1,234,567.891` in English, `1.234.567,891` in German,
+`1 234 567,891` with U+202F narrow no-break spaces in French, `١٢٣` in `ar-EG`,
+`12,34,567` in Hindi. A Unicode numbering system extension picks the digits: `ar-EG-u-nu-latn`
+writes `123`, `en-u-nu-arab` writes `١,٢٣٤`.
+
+| Option | Values | Default |
+|---|---|---|
+| `grouping` | `"auto"` as the locale groups (Polish writes `1234` but `12 345`); `"never"`; `"min2"`, only with two digits before the first separator (`1234`, `12,345`) | `"auto"` |
+| `minFractionDigits` | 0 to 100: fraction digits always written, zeros padding a shorter number | 0 |
+| `maxFractionDigits` | 0 to 100: more are rounded half to even, and trailing zeros past the minimum are dropped | the larger of 3 and the minimum |
+
+The defaults are ECMA-402's and ICU's decimal style. Rounding is half to even:
+`"0.125"` is `0.12` and `"0.135"` is `0.14` at two digits, `2.5` is `2` and `3.5` is `4` at
+none. A decimal string formats exactly, leading zeros and an explicit `+` dropped. A Luau
+number formats as its shortest round-trip decimal, not its binary value: `1234567.895` rounds to
+`…,90` at two digits, as ICU rounds it. Negative zero keeps its sign (`-0`, and `-0.0004` at
+three digits is `-0`), ECMA-402's default sign display. An unknown option, a grouping name not
+in the table, a fraction digit count that is not a whole number from 0 to 100, or a minimum above
+the maximum is an error naming the option; so are the numbers plural rules refuse.
+
+### Not here
+
+The first pass is the three primitives. Percent, currency, compact and scientific notation,
+significant digits, other rounding modes and sign displays, measurement units, dates and times,
+collation, and CLDR alias canonicalization are not in it. A percentage is not a decimal with
+`%` appended: CLDR places, spaces and sometimes reorders the sign per locale, so it waits for
+real percent formatting rather than an approximation.
+
+### What it costs
+
+Counted by `benches/intl.rs` (`cargo bench --features intl --bench intl`) on an i7-10870H:
+retired instructions from the CPU's counters, best of five rounds, with nanoseconds beside
+them. Luau rows are interpreted and have the loop subtracted.
+
+| Warm call | Rust instr | Rust ns | Luau instr | Luau ns |
+|---|---:|---:|---:|---:|
+| a bound method that does nothing (`rules:type()`) | | | 695 | 45 |
+| `category(5)`, Polish cardinal | 561 | 36 | 1253 | 92 |
+| `category(23)`, English ordinal | 372 | 25 | 1057 | 81 |
+| `category(1.5)`, Polish cardinal | 1884 | 132 | 2570 | 195 |
+| `category("1.00")`, Polish cardinal | 990 | 63 | 1970 | 157 |
+| `format(1234567)`, English | 1053 | 66 | 1839 | 139 |
+| `format(1234567.891)`, English | 2322 | 188 | 3118 | 250 |
+| `format("1234567.895")`, French, two digits | 1828 | 138 | 2981 | 245 |
+| `intl.canonicalize("pt_br")` | 1037 | 80 | 1652 | 131 |
+
+The boundary is the binder's own method call, about 700 instructions and 45 ns whatever the
+method does, and nothing on top of it: the rest of each Luau row is the Rust row. A warm
+`category` allocates nothing, native or VM. A warm `format` writes into a buffer its handle
+keeps and allocates nothing native, except the one 16-byte digit array ICU4X's decimal takes
+for more than eight significant digits, and in the VM only the Luau string a new result is; a
+result Luau already interned costs no VM bytes. A double that is not a whole number goes through
+ryu's shortest round-trip conversion, built in its small-table mode by ICU4X's decimal crate:
+57 of the 132 ns of `category(1.5)`; whole numbers skip it.
+
+Construction, from Luau: `intl.locale` 2470 instructions (213 ns), `intl.pluralRules` 4368
+(452 ns), `intl.decimalFormatter("en")` 7645 (702 ns) and with an options table 10776
+(1.1 µs, the table read included). From Rust, without the userdata, `PluralRules::new` is about
+1370 instructions (140 ns) and `DecimalFormatter::new` 2229 to 4636 (219 to 395 ns) depending on
+the locale's data. A live handle holds 224 VM bytes for a locale and 368 for rules or a formatter,
+plus its canonical tag on the native heap; the collector sees one userdata each.
+
+The feature adds ICU4X's locale, plural and decimal crates with their compiled CLDR data,
+`fixed_decimal` and `ryu`: 29 crates, all Rust, about 5 seconds of a clean release build on
+16 threads. A stripped thin-LTO binary that registers the extension grows by 288 KiB; one built
+with the feature that never registers it does not grow.
 
 ## dream.luau
 

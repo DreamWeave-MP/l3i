@@ -25,6 +25,7 @@ are optional:
 | `bytes` | The `dream.bytes` extension for parsing foreign formats: searching, record strings, varints, big-endian and half-float reads, natively lowered under `jit` |
 | `bytes-codecs`, `bytes-digests`, `bytes-text`, `bytes-regex` | Its codecs (DEFLATE, LZ4, zstd, LZMA), digests (CRC-32 to BLAKE3), text encodings and regular expressions, each pulling in its pure-Rust dependencies |
 | `intern` | The `dream.intern` extension: textual identities as dense numbers, from strings or buffer spans, exact or ASCII case-insensitive |
+| `intl` | The `dream.intl` extension: BCP 47 locales, CLDR cardinal and ordinal plural categories, and locale-aware decimal formatting |
 
 dream-net is not a feature: l3i depends on it and owns the Luau bridge to it, so every runtime
 has the network and the policy decides what scripts may do with it.

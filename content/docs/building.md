@@ -87,6 +87,7 @@ l3i = { version = "1.0", features = ["jit"] }
 | `bytes-text` | off | `encoding_rs`: text decoding and encoding for every WHATWG label |
 | `bytes-regex` | off | `regex`: `bytes.regex`, regular expressions over bytes, many ranges of a buffer in one call |
 | `intern` | off | The `dream.intern` extension (`l3i::intern`); no dependencies |
+| `intl` | off | The `dream.intl` extension (`l3i::intl`) with ICU4X's `icu_locale_core`, `icu_plurals` and `icu_decimal` and their compiled CLDR data, `fixed_decimal` and `writeable`: BCP 47 locales, plural rules, decimal formatting |
 | `syntax` | off | The `dream.luau` extension (`l3i::syntax`) and `csrc/syntax.cpp`, which builds Luau's parse tree as tables; Luau's Ast library is in every build, so no dependencies |
 | `fs` | off | The `dream.fs` extension (`l3i::fs`) with `memmap2`, `walkdir` and `same-file` |
 | `process` | off | The `dream.process` extension (`l3i::process`); no dependencies |

@@ -757,6 +757,53 @@ binds, which keep it alive, laid out `#[repr(C)]` for native code.
 |---|---|---|
 | `intern::lowering` | `intern`, `jit` | `InternLowering`, the `NativeCodeHooks` set that lowers `Pool:intern` and `Pool:find`; `lowered_sites()`, `binder_calls()` |
 
+## dream.intl
+
+Module `l3i::intl`, feature `intl`; the Luau side is in
+[Built-in extensions](@/docs/builtin-extensions.md#dream-intl). Every type works from Rust
+without a VM.
+
+{{ api_signature(value="pub struct IntlExtension") }}
+
+The extension; `id()` is `"dream.intl"`, the module path is `MODULE` (`"@dream/intl"`).
+`Clone`, `Copy`, `Debug`, `Default`.
+
+{{ api_signature(value="pub struct Locale") }}
+
+A BCP 47 tag, validated and spelled canonically; also the userdata behind `intl.locale`
+(`"dream.intl.Locale"`). `parse(&str) -> Result<Locale, LocaleError>`, `as_str()` (the
+canonical tag), `base_name()`, `language()`, `script()`, `region()`, `variants()`. Equality and
+hashing are the canonical tag's. `Display`, `FromStr`. `canonicalize(&str) -> Result<String,
+LocaleError>` and `with_canonical(&str, f)`, which hands the spelling to `f` without allocating
+for a tag of up to 64 bytes without extensions, need no `Locale`. `LocaleError` is `Empty` or
+`Invalid { input, reason }`.
+
+{{ api_signature(value="pub enum Operand<'a> { Integer(i64), Number(f64), Decimal(&'a str) }") }}
+
+A number to select a category for or format. `decimal()` is the exact `fixed_decimal::Decimal`;
+a `Decimal` string keeps its visible fraction digits, a `Number` reads as its shortest
+round-trip decimal. Also a binding parameter (`number | integer | string`). `NumberError` is
+`NotFinite(f64)`, `Malformed(String)` or `TooLong(String)`.
+
+{{ api_signature(value="pub struct PluralRules") }}
+
+One locale's rules; also the userdata behind `intl.pluralRules` (`"dream.intl.PluralRules"`).
+`new(&Locale, PluralKind) -> Result<PluralRules, UnsupportedLocale>`, `category(Operand) ->
+Result<Category, NumberError>`, `categories()`, `locale()`, `kind()`. `PluralKind` is
+`Cardinal` or `Ordinal`; `Category` is `Zero`, `One`, `Two`, `Few`, `Many` or `Other`, with
+`name()` the CLDR keyword.
+
+{{ api_signature(value="pub struct DecimalFormatter") }}
+
+One locale's decimal format under `DecimalOptions { grouping, min_fraction_digits,
+max_fraction_digits }` (`Grouping` is `Auto`, `Never` or `Min2`; the digit counts are
+`Option<u8>`, at most `MAX_FRACTION_DIGITS`, 100). `new(&Locale, DecimalOptions) ->
+Result<DecimalFormatter, FormatterError>`, `format_to(Operand, &mut String) -> Result<(),
+NumberError>`, `format(Operand)`, `locale()`, `grouping()`, `min_fraction_digits()`,
+`max_fraction_digits()` (resolved). `FormatterError` is `FractionDigitsOutOfRange`,
+`FractionDigitsInverted` or `Unsupported(UnsupportedLocale)`. The Luau handle,
+`"dream.intl.DecimalFormatter"`, wraps one with the buffer `format` writes into.
+
 `IrBuilder::namecall_call(pcpos)` emits the namecall and call Luau would have emitted for the
 pair at `pcpos`: a userdata namecall hook that lowers a fast path keeps the bound method as its
 slow path with it, without a VM exit, since returning true skips both instructions.
