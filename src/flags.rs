@@ -49,6 +49,9 @@ pub const LUAU_FLAGS: &[&str] = &[
     // installs the corresponding callback.
     "LuauGcTraceUdata",
     "LuauBufferCage",
+    // Not in OpenMW's policy either: Luau 0.741's fix for GC pacing, which read a heap that shrank
+    // between measurements as an enormous allocation rate. A dynamic flag, off upstream by default.
+    "LuauGcHeapShrinkFix",
 ];
 
 /// The remaining OpenMW flags, defined in Luau's CodeGen component. CodeGen is compiled only
