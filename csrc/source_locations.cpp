@@ -2,6 +2,7 @@
 #include "source_locations.h"
 
 #include "Luau/Ast.h"
+#include "Luau/DenseHash.h"
 #include "Luau/ParseResult.h"
 
 #include <algorithm>
@@ -37,7 +38,7 @@ public:
 
     bool visit(Luau::AstNode* node) override
     {
-        if (!nodes.insert(node).second)
+        if (!nodes.try_insert(node))
             return false;
 
         remap(node->location);
@@ -191,9 +192,10 @@ public:
 
 private:
     const SourceMap& map;
-    std::unordered_set<Luau::AstNode*> nodes;
-    std::unordered_set<Luau::AstLocal*> locals;
-    std::unordered_set<Luau::AstTableIndexer*> indexers;
+    // Each reachable object is remapped once; open addressing, not a node per entry.
+    Luau::DenseHashSet<Luau::AstNode*> nodes;
+    Luau::DenseHashSet<Luau::AstLocal*> locals;
+    Luau::DenseHashSet<Luau::AstTableIndexer*> indexers;
 
     void remap(Luau::Position& position) const
     {
@@ -217,7 +219,7 @@ private:
 
     void remapLocal(Luau::AstLocal* local)
     {
-        if (!local || !locals.insert(local).second)
+        if (!local || !locals.try_insert(local))
             return;
         remap(local->location);
         visitNode(local->annotation);
@@ -227,7 +229,7 @@ private:
 
     void remapIndexer(Luau::AstTableIndexer* indexer)
     {
-        if (!indexer || !indexers.insert(indexer).second)
+        if (!indexer || !indexers.try_insert(indexer))
             return;
         remap(indexer->location);
         remap(indexer->accessLocation);
