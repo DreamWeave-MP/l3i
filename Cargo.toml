@@ -160,6 +160,11 @@ harness = false
 required-features = ["intl"]
 
 [[bench]]
+name = "tcp"
+harness = false
+required-features = ["tcp"]
+
+[[bench]]
 name = "comprehension"
 harness = false
 
