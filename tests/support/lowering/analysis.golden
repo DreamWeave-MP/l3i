@@ -4475,157 +4475,138 @@ local __l3i_comp_28_error = error return (function() local __l3i_comp_7_out = {}
 ==== pattern_local
 local {x, y} = p return x + y
 ----
-local __l3i_comp_6 = p local x = __l3i_comp_6.x local y = __l3i_comp_6.y  return x + y
+local __l3i_comp_6 = p local x = __l3i_comp_6.x local y = __l3i_comp_6.y return x + y
 --prelude 0
 --segment 0 6 0 6 copied
 --segment 6 18 6 12 synthetic
 --segment 18 22 12 16 copied
---segment 22 23 6 12 synthetic
---segment 23 29 7 8 synthetic
+--segment 22 29 7 8 synthetic
 --segment 29 30 7 8 copied
 --segment 30 46 7 8 synthetic
 --segment 46 47 7 8 copied
---segment 47 48 7 8 synthetic
---segment 48 54 10 11 synthetic
+--segment 47 54 10 11 synthetic
 --segment 54 55 10 11 copied
 --segment 55 71 10 11 synthetic
 --segment 71 72 10 11 copied
---segment 72 73 10 11 synthetic
---segment 73 86 16 29 copied
+--segment 72 85 16 29 copied
 --local 0 holder=6,18 target=29,30 target=54,55 read=33,47 read=58,72
 ==== pattern_local_nested_alias
 local {transform: {position: pos}, health: hp}: Entity = e
 return pos, hp
 ----
-local __l3i_comp_6: Entity = e local __l3i_comp_18 = __l3i_comp_6.transform local pos = __l3i_comp_18.position local hp = __l3i_comp_6.health 
+local __l3i_comp_6: Entity = e local __l3i_comp_18 = __l3i_comp_6.transform local pos = __l3i_comp_18.position local hp = __l3i_comp_6.health
 return pos, hp
 --prelude 0
 --segment 0 6 0 6 copied
 --segment 6 18 6 46 synthetic
 --segment 18 30 46 58 copied
---segment 30 31 6 46 synthetic
---segment 31 53 7 33 synthetic
+--segment 30 53 7 33 synthetic
 --segment 53 66 7 16 synthetic
 --segment 66 75 7 16 copied
---segment 75 76 7 33 synthetic
---segment 76 82 19 32 synthetic
+--segment 75 82 19 32 synthetic
 --segment 82 85 29 32 copied
 --segment 85 88 19 32 synthetic
 --segment 88 102 19 27 synthetic
 --segment 102 110 19 27 copied
---segment 110 111 19 32 synthetic
---segment 111 117 35 45 synthetic
+--segment 110 117 35 45 synthetic
 --segment 117 119 43 45 copied
 --segment 119 122 35 45 synthetic
 --segment 122 135 35 41 synthetic
 --segment 135 141 35 41 copied
---segment 141 142 35 45 synthetic
---segment 142 157 58 73 copied
+--segment 141 156 58 73 copied
 --local 0 holder=6,18 target=82,85 target=117,119 read=53,75 read=88,110 read=122,141
 ==== pattern_local_empty
 local {} = f()
 ----
-local __l3i_comp_6 = f() 
+local __l3i_comp_6 = f()
 --prelude 0
 --segment 0 6 0 6 copied
 --segment 6 18 6 8 synthetic
 --segment 18 24 8 14 copied
---segment 24 25 6 8 synthetic
 --local 0 holder=6,18
 ==== pattern_local_semicolon
 local {a} = t; local {b} = [for x in xs => x]
 return a, b
 ----
-local __l3i_comp_57_error = error local __l3i_comp_57_table_create = table.create local __l3i_comp_6 = t; local a = __l3i_comp_6.a  local __l3i_comp_21 = (function() local __l3i_comp_27_g0_src = (xs) local __l3i_comp_27_g0_len = #__l3i_comp_27_g0_src local __l3i_comp_27_out = __l3i_comp_57_table_create(__l3i_comp_27_g0_len) :: typeof({}) for __l3i_comp_27_g0_i = 1, __l3i_comp_27_g0_len do local x = __l3i_comp_27_g0_src[__l3i_comp_27_g0_i] local __l3i_comp_27_value = (x) if __l3i_comp_27_value == nil then __l3i_comp_57_error("L3i comprehension projection produced nil; filter nil explicitly") end __l3i_comp_27_out[__l3i_comp_27_g0_i] = __l3i_comp_27_value end return __l3i_comp_27_out end)() local b = __l3i_comp_21.b 
+local __l3i_comp_57_error = error local __l3i_comp_57_table_create = table.create local __l3i_comp_6 = t; local a = __l3i_comp_6.a local __l3i_comp_21 = (function() local __l3i_comp_27_g0_src = (xs) local __l3i_comp_27_g0_len = #__l3i_comp_27_g0_src local __l3i_comp_27_out = __l3i_comp_57_table_create(__l3i_comp_27_g0_len) :: typeof({}) for __l3i_comp_27_g0_i = 1, __l3i_comp_27_g0_len do local x = __l3i_comp_27_g0_src[__l3i_comp_27_g0_i] local __l3i_comp_27_value = (x) if __l3i_comp_27_value == nil then __l3i_comp_57_error("L3i comprehension projection produced nil; filter nil explicitly") end __l3i_comp_27_out[__l3i_comp_27_g0_i] = __l3i_comp_27_value end return __l3i_comp_27_out end)() local b = __l3i_comp_21.b
 return a, b
 --prelude 2
 --segment 0 82 27 45 synthetic
 --segment 82 88 0 6 copied
 --segment 88 100 6 9 synthetic
 --segment 100 105 9 14 copied
---segment 105 106 6 9 synthetic
---segment 106 112 7 8 synthetic
+--segment 105 112 7 8 synthetic
 --segment 112 113 7 8 copied
 --segment 113 129 7 8 synthetic
 --segment 129 130 7 8 copied
---segment 130 131 7 8 synthetic
---segment 131 138 14 21 copied
---segment 138 151 21 24 synthetic
---segment 151 154 24 27 copied
---segment 154 166 27 45 synthetic
---segment 166 195 28 39 synthetic
---segment 195 196 37 37 synthetic
---segment 196 198 37 39 copied
---segment 198 199 39 39 synthetic
---segment 199 398 37 39 synthetic
---segment 398 399 32 33 copied
---segment 399 443 37 39 synthetic
---segment 443 471 43 44 synthetic
---segment 471 472 43 43 synthetic
---segment 472 473 43 44 copied
---segment 473 474 44 44 synthetic
---segment 474 662 43 44 synthetic
---segment 662 697 44 45 synthetic
---segment 697 698 21 24 synthetic
---segment 698 704 22 23 synthetic
---segment 704 705 22 23 copied
---segment 705 722 22 23 synthetic
---segment 722 723 22 23 copied
---segment 723 724 22 23 synthetic
---segment 724 736 45 57 copied
---site 0 call=154,697 projection=472,473
---clause binding=398,399 expression=196,198
+--segment 130 137 14 21 copied
+--segment 137 150 21 24 synthetic
+--segment 150 153 24 27 copied
+--segment 153 165 27 45 synthetic
+--segment 165 194 28 39 synthetic
+--segment 194 195 37 37 synthetic
+--segment 195 197 37 39 copied
+--segment 197 198 39 39 synthetic
+--segment 198 397 37 39 synthetic
+--segment 397 398 32 33 copied
+--segment 398 442 37 39 synthetic
+--segment 442 470 43 44 synthetic
+--segment 470 471 43 43 synthetic
+--segment 471 472 43 44 copied
+--segment 472 473 44 44 synthetic
+--segment 473 661 43 44 synthetic
+--segment 661 696 44 45 synthetic
+--segment 696 703 22 23 synthetic
+--segment 703 704 22 23 copied
+--segment 704 721 22 23 synthetic
+--segment 721 722 22 23 copied
+--segment 722 734 45 57 copied
+--site 0 call=153,696 projection=471,472
+--clause binding=397,398 expression=195,197
 --local 0 holder=88,100 target=112,113 read=116,130
---local 1 holder=138,151 target=704,705 read=708,723
+--local 1 holder=137,150 target=703,704 read=707,722
 ==== pattern_parameters
 local function f({x}: P, dt, {y: {z}}): number return x + z end
 ----
-local function f(__l3i_comp_17: P, dt, __l3i_comp_29): number local x = __l3i_comp_17.x  local __l3i_comp_33 = __l3i_comp_29.y local z = __l3i_comp_33.z  return x + z end
+local function f(__l3i_comp_17: P, dt, __l3i_comp_29): number local x = __l3i_comp_17.x local __l3i_comp_33 = __l3i_comp_29.y local z = __l3i_comp_33.z return x + z end
 --prelude 0
 --segment 0 17 0 17 copied
 --segment 17 30 17 20 synthetic
 --segment 30 39 20 29 copied
 --segment 39 52 29 37 synthetic
 --segment 52 61 37 46 copied
---segment 61 62 17 20 synthetic
---segment 62 68 18 19 synthetic
+--segment 61 68 18 19 synthetic
 --segment 68 69 18 19 copied
 --segment 69 86 18 19 synthetic
 --segment 86 87 18 19 copied
---segment 87 88 18 19 synthetic
---segment 88 89 29 37 synthetic
---segment 89 111 30 36 synthetic
---segment 111 125 30 31 synthetic
---segment 125 126 30 31 copied
---segment 126 127 30 36 synthetic
---segment 127 133 34 35 synthetic
---segment 133 134 34 35 copied
---segment 134 151 34 35 synthetic
---segment 151 152 34 35 copied
---segment 152 153 34 35 synthetic
---segment 153 170 46 63 copied
+--segment 87 110 30 36 synthetic
+--segment 110 124 30 31 synthetic
+--segment 124 125 30 31 copied
+--segment 125 132 34 35 synthetic
+--segment 132 133 34 35 copied
+--segment 133 150 34 35 synthetic
+--segment 150 151 34 35 copied
+--segment 151 168 46 63 copied
 --parameter 0 holder=17,30 target=68,69 read=72,87
---parameter 1 holder=39,52 target=133,134 read=111,126 read=137,152
+--parameter 1 holder=39,52 target=132,133 read=110,125 read=136,151
 ==== pattern_method
 function T:m({p}) return self, p end
 ----
-function T:m(__l3i_comp_13) local p = __l3i_comp_13.p  return self, p end
+function T:m(__l3i_comp_13) local p = __l3i_comp_13.p return self, p end
 --prelude 0
 --segment 0 13 0 13 copied
 --segment 13 26 13 16 synthetic
 --segment 26 27 16 17 copied
---segment 27 28 13 16 synthetic
---segment 28 34 14 15 synthetic
+--segment 27 34 14 15 synthetic
 --segment 34 35 14 15 copied
 --segment 35 52 14 15 synthetic
 --segment 52 53 14 15 copied
---segment 53 54 14 15 synthetic
---segment 54 73 17 36 copied
+--segment 53 72 17 36 copied
 --parameter 0 holder=13,26 target=34,35 read=38,53
 ==== pattern_function_in_projection
 return [for x in xs => function({a}) return a + x end]
 ----
-local __l3i_comp_54_error = error local __l3i_comp_54_table_create = table.create return (function() local __l3i_comp_7_g0_src = (xs) local __l3i_comp_7_g0_len = #__l3i_comp_7_g0_src local __l3i_comp_7_out = __l3i_comp_54_table_create(__l3i_comp_7_g0_len) :: typeof({}) for __l3i_comp_7_g0_i = 1, __l3i_comp_7_g0_len do local x = __l3i_comp_7_g0_src[__l3i_comp_7_g0_i] local __l3i_comp_7_value = (function(__l3i_comp_32) local a = __l3i_comp_32.a  return a + x end) if __l3i_comp_7_value == nil then __l3i_comp_54_error("L3i comprehension projection produced nil; filter nil explicitly") end __l3i_comp_7_out[__l3i_comp_7_g0_i] = __l3i_comp_7_value end return __l3i_comp_7_out end)()
+local __l3i_comp_54_error = error local __l3i_comp_54_table_create = table.create return (function() local __l3i_comp_7_g0_src = (xs) local __l3i_comp_7_g0_len = #__l3i_comp_7_g0_src local __l3i_comp_7_out = __l3i_comp_54_table_create(__l3i_comp_7_g0_len) :: typeof({}) for __l3i_comp_7_g0_i = 1, __l3i_comp_7_g0_len do local x = __l3i_comp_7_g0_src[__l3i_comp_7_g0_i] local __l3i_comp_7_value = (function(__l3i_comp_32) local a = __l3i_comp_32.a return a + x end) if __l3i_comp_7_value == nil then __l3i_comp_54_error("L3i comprehension projection produced nil; filter nil explicitly") end __l3i_comp_7_out[__l3i_comp_7_g0_i] = __l3i_comp_7_value end return __l3i_comp_7_out end)()
 --prelude 2
 --segment 0 82 7 54 synthetic
 --segment 82 89 0 7 copied
@@ -4642,17 +4623,15 @@ local __l3i_comp_54_error = error local __l3i_comp_54_table_create = table.creat
 --segment 397 406 23 32 copied
 --segment 406 419 32 35 synthetic
 --segment 419 420 35 36 copied
---segment 420 421 32 35 synthetic
---segment 421 427 33 34 synthetic
+--segment 420 427 33 34 synthetic
 --segment 427 428 33 34 copied
 --segment 428 445 33 34 synthetic
 --segment 445 446 33 34 copied
---segment 446 447 33 34 synthetic
---segment 447 464 36 53 copied
---segment 464 465 53 53 synthetic
---segment 465 649 23 53 synthetic
---segment 649 683 53 54 synthetic
---site 0 call=89,683 projection=397,464
+--segment 446 463 36 53 copied
+--segment 463 464 53 53 synthetic
+--segment 464 648 23 53 synthetic
+--segment 648 682 53 54 synthetic
+--site 0 call=89,682 projection=397,463
 --clause binding=326,327 expression=130,132
 --parameter 0 holder=406,419 target=427,428 read=431,446
 ==== pattern_generator
@@ -4832,21 +4811,18 @@ local __l3i_comp_81_error = error return (function() local __l3i_comp_7_out = {}
 ==== pattern_local_unclosed
 local {position: {x
 ----
-local __l3i_comp_6 = (nil :: any) local __l3i_comp_17 = __l3i_comp_6.position local x = __l3i_comp_17.x 
+local __l3i_comp_6 = (nil :: any) local __l3i_comp_17 = __l3i_comp_6.position local x = __l3i_comp_17.x
 --prelude 0
 --segment 0 6 0 6 copied
 --segment 6 18 6 19 synthetic
 --segment 18 33 19 19 synthetic
---segment 33 34 6 19 synthetic
---segment 34 56 7 19 synthetic
+--segment 33 56 7 19 synthetic
 --segment 56 69 7 15 synthetic
 --segment 69 77 7 15 copied
---segment 77 78 7 19 synthetic
---segment 78 84 18 19 synthetic
+--segment 77 84 18 19 synthetic
 --segment 84 85 18 19 copied
 --segment 85 102 18 19 synthetic
 --segment 102 103 18 19 copied
---segment 103 104 18 19 synthetic
 --local 0 holder=6,18 target=84,85 read=56,77 read=88,103
 --error 19 19 expected '}' to close record pattern
 --error 19 19 expected '}' to close record pattern
@@ -4854,32 +4830,29 @@ local __l3i_comp_6 = (nil :: any) local __l3i_comp_17 = __l3i_comp_6.position lo
 ==== pattern_local_missing_value
 local {x}: P
 ----
-local __l3i_comp_6: P = (nil :: any) local x = __l3i_comp_6.x 
+local __l3i_comp_6: P = (nil :: any) local x = __l3i_comp_6.x
 --prelude 0
 --segment 0 6 0 6 copied
 --segment 6 18 6 9 synthetic
 --segment 18 21 9 12 copied
 --segment 21 36 12 12 synthetic
---segment 36 37 6 9 synthetic
---segment 37 43 7 8 synthetic
+--segment 36 43 7 8 synthetic
 --segment 43 44 7 8 copied
 --segment 44 60 7 8 synthetic
 --segment 60 61 7 8 copied
---segment 61 62 7 8 synthetic
 --local 0 holder=6,18 target=43,44 read=47,61
 --error 12 12 expected '=' after record pattern; a record pattern declaration needs a value
 ==== pattern_parameter_unclosed
 function f({x,
 ----
-function f(__l3i_comp_11 local x = __l3i_comp_11.x 
+function f(__l3i_comp_11 local x = __l3i_comp_11.x
 --prelude 0
 --segment 0 11 0 11 copied
---segment 11 25 11 14 synthetic
---segment 25 31 12 13 synthetic
+--segment 11 24 11 14 synthetic
+--segment 24 31 12 13 synthetic
 --segment 31 32 12 13 copied
 --segment 32 49 12 13 synthetic
 --segment 49 50 12 13 copied
---segment 50 51 12 13 synthetic
 --parameter 0 holder=11,24 target=31,32 read=35,50
 --error 14 14 expected '}' to close record pattern
 ==== pattern_generator_unclosed
@@ -4915,55 +4888,48 @@ local __l3i_comp_26_error = error local __l3i_comp_26_table_create = table.creat
 ==== pattern_duplicate
 local {x, other: x} = v
 ----
-local __l3i_comp_6 = v local x = __l3i_comp_6.x local x = __l3i_comp_6.other 
+local __l3i_comp_6 = v local x = __l3i_comp_6.x local x = __l3i_comp_6.other
 --prelude 0
 --segment 0 6 0 6 copied
 --segment 6 18 6 19 synthetic
 --segment 18 22 19 23 copied
---segment 22 23 6 19 synthetic
---segment 23 29 7 8 synthetic
+--segment 22 29 7 8 synthetic
 --segment 29 30 7 8 copied
 --segment 30 46 7 8 synthetic
 --segment 46 47 7 8 copied
---segment 47 48 7 8 synthetic
---segment 48 54 10 18 synthetic
+--segment 47 54 10 18 synthetic
 --segment 54 55 17 18 copied
 --segment 55 58 10 18 synthetic
 --segment 58 71 10 15 synthetic
 --segment 71 76 10 15 copied
---segment 76 77 10 18 synthetic
 --local 0 holder=6,18 target=29,30 target=54,55 read=33,47 read=58,76
 --error 17 18 duplicate binding 'x' in record pattern
 ==== pattern_two_values
 local {x} = a, b
 ----
-local __l3i_comp_6 = a, b local x = __l3i_comp_6.x 
+local __l3i_comp_6 = a, b local x = __l3i_comp_6.x
 --prelude 0
 --segment 0 6 0 6 copied
 --segment 6 18 6 9 synthetic
 --segment 18 25 9 16 copied
---segment 25 26 6 9 synthetic
---segment 26 32 7 8 synthetic
+--segment 25 32 7 8 synthetic
 --segment 32 33 7 8 copied
 --segment 33 49 7 8 synthetic
 --segment 49 50 7 8 copied
---segment 50 51 7 8 synthetic
 --local 0 holder=6,18 target=32,33 read=36,50
 --error 15 15 a record pattern declaration binds exactly one pattern to one value
 ==== pattern_rest
 local {id, ...rest} = e
 ----
-local __l3i_comp_6 = e local id = __l3i_comp_6.id 
+local __l3i_comp_6 = e local id = __l3i_comp_6.id
 --prelude 0
 --segment 0 6 0 6 copied
 --segment 6 18 6 19 synthetic
 --segment 18 22 19 23 copied
---segment 22 23 6 19 synthetic
---segment 23 29 7 9 synthetic
+--segment 22 29 7 9 synthetic
 --segment 29 31 7 9 copied
 --segment 31 47 7 9 synthetic
 --segment 47 49 7 9 copied
---segment 49 50 7 9 synthetic
 --local 0 holder=6,18 target=29,31 read=34,49
 --error 11 14 rest patterns are not supported; a record pattern names every field it binds
 ==== pattern_loop_statement

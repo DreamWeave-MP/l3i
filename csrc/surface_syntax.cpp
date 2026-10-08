@@ -448,8 +448,9 @@ private:
                 out += " = (nil :: any)";
                 out.anchor = pattern.range;
             }
-            out += " ";
-            reads(out, pattern, holder(pattern), site);
+            // Inserted between source tokens: each read leads with its separator, so nothing
+            // trails into the source text that follows.
+            reads(out, pattern, holder(pattern), site, true);
         }
         out.anchor = saved;
         (e.parameter ? out.parameterSites : out.localSites).emplace_back(e.index, std::move(site));
@@ -457,8 +458,10 @@ private:
 
     // The field reads of a record pattern from its holder: `local target = holder.key`, or a
     // nested record's own holder then its reads, in source order, depth first. Ordinary
-    // indexing, no record and no call; each read is attributed to its field.
-    void reads(Text& out, const Pattern& record, const std::string& from, PatternSite& site)
+    // indexing, no record and no call; each read is attributed to its field. `lead` puts each
+    // declaration's separator before it (insertions into copied source) instead of after it
+    // (the comprehension emitter's convention).
+    void reads(Text& out, const Pattern& record, const std::string& from, PatternSite& site, bool lead)
     {
         const Range saved = out.anchor;
         for (const PatternField& field : record.fields)
@@ -466,7 +469,7 @@ private:
             if (field.key.empty() || (!field.target.record && field.target.range.empty()))
                 continue; // Recovery: nothing to bind yet.
             out.anchor = field.range;
-            out += "local ";
+            out += lead ? " local " : "local ";
             const size_t name = out.size();
             const std::string nested = field.target.record ? holder(field.target) : std::string();
             if (field.target.record)
@@ -484,9 +487,9 @@ private:
             out.copy(source, field.key);
             site.reads.push_back({read, out.size()});
             out.anchor = field.range;
-            out += " ";
+            if (!lead) out += " ";
             if (field.target.record)
-                reads(out, field.target, nested, site);
+                reads(out, field.target, nested, site, lead);
         }
         out.anchor = saved;
     }
@@ -926,7 +929,7 @@ private:
     {
         for (size_t i = 0; i < clause.patterns.size(); ++i)
             if (clause.patterns[i].record)
-                reads(out, clause.patterns[i], holder(clause.patterns[i]), site.patterns[i]);
+                reads(out, clause.patterns[i], holder(clause.patterns[i]), site.patterns[i], false);
     }
 
     // Everything a pipeline walk needs besides the stage list.
