@@ -451,7 +451,19 @@ private:
                 }
             }
             if (typeIn(all, i) == '=')
+            {
                 local.equals = all[i].range;
+                // Where the value ends, when the token skipper is sure: after a ';', or before a
+                // token that cannot continue the expression. Luau's parse verifies it.
+                const size_t end = skipExpression(all, i + 1, 0);
+                if (end != SIZE_MAX && end > i + 1)
+                {
+                    if (typeIn(all, end) == ';')
+                        local.extract = all[end].range.end;
+                    else if (!continuesExpression(typeIn(all, end)) && typeIn(all, end) != ',')
+                        local.extract = all[end - 1].range.end;
+                }
+            }
             else
             {
                 local.equals = pointIn(all, i);
@@ -488,6 +500,7 @@ private:
         int depth = 0;
         std::vector<Range> bound;
         bool patterns = false;
+        const size_t first = document.parameters.size();
         for (;;)
         {
             const int t = typeIn(all, i);
@@ -521,6 +534,227 @@ private:
             ++i;
         }
         if (patterns) duplicates(bound);
+        // Where the body starts, when the skipper is sure: right after ')' or after a return
+        // type no token could extend. Luau's parse verifies it.
+        if (!patterns || typeIn(all, i) != ')') return;
+        size_t body = i + 1;
+        if (typeIn(all, body) == ':')
+        {
+            body = skipType(all, body + 1, 0);
+            if (body == SIZE_MAX || continuesType(typeIn(all, body))) return;
+        }
+        for (size_t k = first; k < document.parameters.size(); ++k)
+            document.parameters[k].extract = all[body - 1].range.end;
+    }
+
+    // A token skipper for boundary estimates. It mirrors Luau's grammar closely enough to be
+    // right almost always; it never has to be right, because Luau's parse of the lowering
+    // checks every estimate and a mismatch falls back to locating boundaries with that parse.
+    // Each returns the index just past what it skipped, or SIZE_MAX when unsure.
+    static constexpr size_t maxSkipDepth = 64;
+
+    static bool binaryOperator(int t)
+    {
+        return t == '+' || t == '-' || t == '*' || t == '/' || t == T::FloorDiv || t == '%' || t == '^' || t == T::Dot2 ||
+            t == T::Equal || t == T::NotEqual || t == '<' || t == T::LessEqual || t == '>' || t == T::GreaterEqual ||
+            t == T::ReservedAnd || t == T::ReservedOr;
+    }
+
+    // Tokens that, after a complete expression, continue it: Luau would read them as part of it.
+    static bool continuesExpression(int t)
+    {
+        return binaryOperator(t) || t == '.' || t == ':' || t == '(' || t == '[' || t == '{' || t == T::QuotedString ||
+            t == T::RawString || t == T::InterpStringBegin || t == T::InterpStringSimple || t == T::DoubleColon;
+    }
+
+    // Tokens that, after a complete type, continue it.
+    static bool continuesType(int t)
+    {
+        return t == '?' || t == '|' || t == '&' || t == T::SkinnyArrow || t == '.' || t == '<' || t == '(';
+    }
+
+    // From an opening '(', '[', '{' or interpolated string to just past its matching closer.
+    size_t skipBalanced(const std::vector<Token>& all, size_t i) const
+    {
+        std::vector<int> closers;
+        for (; i < all.size(); ++i)
+        {
+            const int t = all[i].type;
+            if (t == T::Eof) return SIZE_MAX;
+            const int close = t == '(' ? ')' : t == '[' ? ']' : t == '{' ? '}' : t == T::InterpStringBegin ? int(T::InterpStringEnd) : 0;
+            if (close)
+                closers.push_back(close);
+            else if (t == ')' || t == ']' || t == '}' || t == T::InterpStringEnd)
+            {
+                if (closers.empty() || closers.back() != t) return SIZE_MAX;
+                closers.pop_back();
+                if (closers.empty()) return i + 1;
+            }
+        }
+        return SIZE_MAX;
+    }
+
+    // From '<' to just past its matching '>', brackets inside balanced.
+    size_t skipAngles(const std::vector<Token>& all, size_t i) const
+    {
+        int depth = 0;
+        for (; i < all.size(); ++i)
+        {
+            const int t = all[i].type;
+            if (t == T::Eof || t == ';' || keywordStop(t)) return SIZE_MAX;
+            if (t == '(' || t == '[' || t == '{')
+            {
+                i = skipBalanced(all, i);
+                if (i == SIZE_MAX) return SIZE_MAX;
+                --i;
+            }
+            else if (t == '<') ++depth;
+            else if (t == '>' && --depth == 0) return i + 1;
+        }
+        return SIZE_MAX;
+    }
+
+    size_t skipType(const std::vector<Token>& all, size_t i, size_t depth) const
+    {
+        if (depth > maxSkipDepth) return SIZE_MAX;
+        for (;;)
+        {
+            if (typeIn(all, i) == '|' || typeIn(all, i) == '&') ++i;
+            if (typeIn(all, i) == T::Dot3) ++i;
+            const int t = typeIn(all, i);
+            if (t == T::Name)
+            {
+                const bool typeOf = text(all[i].range) == "typeof";
+                ++i;
+                if (typeOf && typeIn(all, i) == '(')
+                    i = skipBalanced(all, i);
+                else
+                {
+                    while (typeIn(all, i) == '.' && typeIn(all, i + 1) == T::Name) i += 2;
+                    if (typeIn(all, i) == '<') i = skipAngles(all, i);
+                }
+            }
+            else if (t == '{')
+                i = skipBalanced(all, i);
+            else if (t == '(' || t == '<')
+            {
+                if (t == '<' && (i = skipAngles(all, i)) == SIZE_MAX) return SIZE_MAX;
+                if (typeIn(all, i) != '(') return SIZE_MAX;
+                i = skipBalanced(all, i);
+                if (i != SIZE_MAX && typeIn(all, i) == T::SkinnyArrow) i = skipType(all, i + 1, depth + 1);
+            }
+            else if (t == T::ReservedNil || t == T::ReservedTrue || t == T::ReservedFalse || t == T::QuotedString || t == T::RawString)
+                ++i;
+            else
+                return SIZE_MAX;
+            if (i == SIZE_MAX) return SIZE_MAX;
+            while (typeIn(all, i) == '?') ++i;
+            if (typeIn(all, i) != '|' && typeIn(all, i) != '&') return i;
+        }
+    }
+
+    size_t skipExpression(const std::vector<Token>& all, size_t i, size_t depth) const
+    {
+        if (depth > maxSkipDepth) return SIZE_MAX;
+        for (;;)
+        {
+            while (typeIn(all, i) == T::ReservedNot || typeIn(all, i) == '-' || typeIn(all, i) == '#') ++i;
+            i = skipSimple(all, i, depth);
+            if (i == SIZE_MAX) return SIZE_MAX;
+            if (typeIn(all, i) == T::DoubleColon && (i = skipType(all, i + 1, depth + 1)) == SIZE_MAX) return SIZE_MAX;
+            if (!binaryOperator(typeIn(all, i))) return i;
+            ++i;
+        }
+    }
+
+    size_t skipSimple(const std::vector<Token>& all, size_t i, size_t depth) const
+    {
+        const int t = typeIn(all, i);
+        switch (t)
+        {
+        case T::Number: case T::QuotedString: case T::RawString: case T::InterpStringSimple: case T::ReservedNil:
+        case T::ReservedTrue: case T::ReservedFalse: case T::Dot3:
+            return i + 1;
+        case '{': case T::InterpStringBegin:
+            return skipBalanced(all, i);
+        case T::Attribute: case T::AttributeOpen:
+            while (typeIn(all, i) == T::Attribute || typeIn(all, i) == T::AttributeOpen)
+            {
+                if (typeIn(all, i) == T::Attribute) { ++i; continue; }
+                int nested = 1; // `@[` ... `]`
+                for (++i; nested && typeIn(all, i) != T::Eof; ++i)
+                    nested += typeIn(all, i) == '[' ? 1 : typeIn(all, i) == ']' ? -1 : 0;
+            }
+            if (typeIn(all, i) != T::ReservedFunction) return SIZE_MAX;
+            return skipFunction(all, i + 1, depth + 1);
+        case T::ReservedFunction:
+            return skipFunction(all, i + 1, depth + 1);
+        case T::ReservedIf:
+        {
+            i = skipExpression(all, i + 1, depth + 1);
+            if (i == SIZE_MAX || typeIn(all, i) != T::ReservedThen) return SIZE_MAX;
+            i = skipExpression(all, i + 1, depth + 1);
+            while (i != SIZE_MAX && typeIn(all, i) == T::ReservedElseif)
+            {
+                i = skipExpression(all, i + 1, depth + 1);
+                if (i == SIZE_MAX || typeIn(all, i) != T::ReservedThen) return SIZE_MAX;
+                i = skipExpression(all, i + 1, depth + 1);
+            }
+            if (i == SIZE_MAX || typeIn(all, i) != T::ReservedElse) return SIZE_MAX;
+            return skipExpression(all, i + 1, depth + 1);
+        }
+        case T::Name: case '(':
+        {
+            i = t == '(' ? skipBalanced(all, i) : i + 1;
+            while (i != SIZE_MAX)
+            {
+                const int next = typeIn(all, i);
+                if (next == '.' && typeIn(all, i + 1) == T::Name) i += 2;
+                else if (next == ':' && typeIn(all, i + 1) == T::Name)
+                {
+                    i += 2;
+                    const int argument = typeIn(all, i);
+                    if (argument == '(' || argument == '{' || argument == T::InterpStringBegin) i = skipBalanced(all, i);
+                    else if (argument == T::QuotedString || argument == T::RawString || argument == T::InterpStringSimple) ++i;
+                    else return SIZE_MAX;
+                }
+                else if (next == '[' || next == '(' || next == '{' || next == T::InterpStringBegin) i = skipBalanced(all, i);
+                else if (next == T::QuotedString || next == T::RawString || next == T::InterpStringSimple) ++i;
+                else break;
+            }
+            return i;
+        }
+        default:
+            return SIZE_MAX;
+        }
+    }
+
+    // A function literal after `function`: signature, then its body to the matching `end`.
+    // Block keywords are counted; an `if` opens a block only where it starts a statement.
+    size_t skipFunction(const std::vector<Token>& all, size_t i, size_t depth) const
+    {
+        if (depth > maxSkipDepth) return SIZE_MAX;
+        if (typeIn(all, i) == '<' && (i = skipAngles(all, i)) == SIZE_MAX) return SIZE_MAX;
+        if (typeIn(all, i) != '(' || (i = skipBalanced(all, i)) == SIZE_MAX) return SIZE_MAX;
+        if (typeIn(all, i) == ':' && (i = skipType(all, i + 1, depth + 1)) == SIZE_MAX) return SIZE_MAX;
+        for (int blocks = 1; i < all.size(); ++i)
+        {
+            const int t = all[i].type;
+            if (t == T::Eof) return SIZE_MAX;
+            if (t == T::ReservedFunction || t == T::ReservedDo || t == T::ReservedRepeat) ++blocks;
+            else if (t == T::ReservedIf && !expressionExpected(all[i - 1].type)) ++blocks;
+            else if (t == T::ReservedUntil) --blocks;
+            else if (t == T::ReservedEnd && --blocks == 0) return i + 1;
+        }
+        return SIZE_MAX;
+    }
+
+    // Whether the token before an `if` leaves an expression to come, making it an if-expression.
+    static bool expressionExpected(int previous)
+    {
+        return binaryOperator(previous) || previous == '=' || previous == '(' || previous == '[' || previous == '{' ||
+            previous == ',' || previous == T::ReservedNot || previous == '#' || previous == T::ReservedReturn ||
+            previous == T::ReservedIn || (previous >= T::AddAssign && previous <= T::ConcatAssign);
     }
 
     bool isComprehension(size_t i) const { return type(i) == '[' && type(i + 1) == T::ReservedFor; }

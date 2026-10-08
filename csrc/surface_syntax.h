@@ -3,6 +3,11 @@
 #include "source_map.h"
 #include "surface_frontend.h"
 
+namespace Luau
+{
+struct ParseResult;
+}
+
 namespace L3i::Surface
 {
 // What one record pattern lowered to: a holder local receiving the source value, then one
@@ -17,6 +22,9 @@ struct PatternSite
     // that reads no field, in the order records finish (nested before enclosing). Completion in
     // such a record borrows Luau's property completion there; its diagnostics are not the user's.
     std::vector<Range> probes;
+    // Declarations and parameters: the generated offset where Luau must end the holder's
+    // declaration, or begin the function body, for the inserted reads to be where intended.
+    size_t boundary = SIZE_MAX;
 };
 
 struct ClauseSite
@@ -65,6 +73,9 @@ struct LoweredSource
     // declaration or parameter (broken source) has an empty holder and no reads.
     std::vector<PatternSite> localSites;
     std::vector<PatternSite> parameterSites;
+    // The reads were placed at the frontend's estimated boundaries rather than located with a
+    // parse: the caller's parse of `source` must confirm them with boundariesHold().
+    bool estimated = false;
     // Comprehensions whose recognized data shape compares the binding against an identifier.
     // They lower to the scalar loop until the compiler verifies the identifier is a local
     // declared outside the comprehension and lowers again naming them in `localFilters`.
@@ -74,7 +85,16 @@ struct LoweredSource
 // Shared compiler/tooling seam: all coordinates in map refer to the original input.
 // Recovery is tooling-only. Strict compilation must reject document errors before parsing.
 // Syntax tooling disables count fusion to retain unary length in the source tree.
+// `estimated` places record pattern reads at the frontend's estimated boundaries when every
+// pattern has one, sparing the parse that otherwise locates them; the caller then verifies
+// its own parse of the result with boundariesHold() and lowers again without `estimated` when
+// that fails.
 LoweredSource lower(std::string_view source, bool recovery = false, bool fuseLength = true,
     const std::vector<Range>& bufferGenerators = {}, bool dynamicGenerators = false,
-    const std::vector<size_t>& localFilters = {});
+    const std::vector<size_t>& localFilters = {}, bool estimated = false);
+
+// Whether Luau's parse of an estimated lowering ends every holder declaration, and begins every
+// body, exactly where the reads were inserted. Then the lowering is exactly the one a located
+// lowering produces. Always true for a lowering that was not estimated. Call before remapping.
+bool boundariesHold(const LoweredSource& lowered, const Luau::ParseResult& parsed);
 }

@@ -29,6 +29,8 @@ void shift(Range& range, size_t offset)
 void shift(PatternSite& site, size_t offset)
 {
     shift(site.holder, offset);
+    if (site.boundary != SIZE_MAX)
+        site.boundary += offset;
     for (auto* list : {&site.declarations, &site.targets, &site.reads, &site.probes})
         for (Range& range : *list)
             shift(range, offset);
@@ -443,6 +445,7 @@ private:
                 out += " = (nil :: any)";
                 out.anchor = pattern.range;
             }
+            site.boundary = out.size();
             // Inserted between source tokens: each read leads with its separator, so nothing
             // trails into the source text that follows.
             reads(out, pattern, holder(pattern), site, true);
@@ -1572,6 +1575,7 @@ void merge(std::vector<PatternSite>& sites, std::vector<std::pair<size_t, Patter
     {
         PatternSite& site = sites.at(index);
         if (!entry.holder.empty()) site.holder = entry.holder;
+        if (entry.boundary != SIZE_MAX) site.boundary = entry.boundary;
         for (auto [into, from] : {std::pair{&site.declarations, &entry.declarations}, std::pair{&site.targets, &entry.targets},
                  std::pair{&site.reads, &entry.reads}, std::pair{&site.probes, &entry.probes}})
             into->insert(into->end(), from->begin(), from->end());
@@ -1580,7 +1584,7 @@ void merge(std::vector<PatternSite>& sites, std::vector<std::pair<size_t, Patter
 }
 
 LoweredSource lower(std::string_view source, bool recovery, bool fuseLength, const std::vector<Range>& bufferGenerators,
-    bool dynamicGenerators, const std::vector<size_t>& localFilters)
+    bool dynamicGenerators, const std::vector<size_t>& localFilters, bool estimated)
 {
     Document document = parseSurface(source);
     const bool patterns = !document.locals.empty() || !document.parameters.empty();
@@ -1591,8 +1595,16 @@ LoweredSource lower(std::string_view source, bool recovery, bool fuseLength, con
         result.document = std::move(document);
         return result;
     }
-    if (patterns)
+    // The frontend's estimates are used only when every pattern has one; otherwise, or when
+    // not asked to estimate, Luau's parse of a first lowering locates every boundary.
+    const auto known = [](const auto& list) {
+        return std::all_of(list.begin(), list.end(), [](const auto& pattern) { return pattern.extract != SIZE_MAX; });
+    };
+    result.estimated = patterns && estimated && known(document.locals) && known(document.parameters);
+    if (patterns && !result.estimated)
     {
+        for (auto& local : document.locals) local.extract = SIZE_MAX;
+        for (auto& parameter : document.parameters) parameter.extract = SIZE_MAX;
         Lowerer first(source, document, recovery, fuseLength, bufferGenerators, dynamicGenerators, localFilters);
         locate(first.lower(), [&](const Pattern& pattern) { return first.holder(pattern); }, document);
         if (!recovery && !document.errors.empty())
@@ -1616,5 +1628,54 @@ LoweredSource lower(std::string_view source, bool recovery, bool fuseLength, con
     merge(result.parameterSites, output.parameterSites);
     result.document = std::move(document);
     return result;
+}
+
+bool boundariesHold(const LoweredSource& lowered, const Luau::ParseResult& parsed)
+{
+    if (!lowered.estimated)
+        return true;
+    if (!parsed.root)
+        return false;
+    // Each holder's name, mapped to the boundary its reads were inserted at.
+    std::unordered_map<std::string_view, std::pair<size_t, bool>> expected;
+    const std::string_view text = lowered.source;
+    for (const auto* sites : {&lowered.localSites, &lowered.parameterSites})
+        for (const PatternSite& site : *sites)
+        {
+            if (site.holder.empty() || site.boundary == SIZE_MAX)
+                return false;
+            expected.emplace(text.substr(site.holder.begin, site.holder.end - site.holder.begin),
+                std::pair{site.boundary, sites == &lowered.parameterSites});
+        }
+    std::vector<size_t> starts{0};
+    for (size_t at = text.find('\n'); at != std::string_view::npos; at = text.find('\n', at + 1))
+        starts.push_back(at + 1);
+    const auto offset = [&](Luau::Position p) { return p.line < starts.size() ? starts[p.line] + p.column : SIZE_MAX; };
+    struct Check final : Luau::AstVisitor
+    {
+        std::function<void(Luau::AstStatLocal*)> local;
+        std::function<void(Luau::AstExprFunction*)> function;
+        bool visit(Luau::AstStatLocal* node) override { local(node); return true; }
+        bool visit(Luau::AstExprFunction* node) override { function(node); return true; }
+    } check;
+    bool holds = true;
+    check.local = [&](Luau::AstStatLocal* node) {
+        if (node->vars.size == 0) return;
+        auto it = expected.find(node->vars.data[0]->name.value);
+        if (it == expected.end() || it->second.second) return;
+        holds = holds && node->values.size == 1 && offset(node->location.end) == it->second.first;
+        expected.erase(it);
+    };
+    check.function = [&](Luau::AstExprFunction* node) {
+        for (Luau::AstLocal* argument : node->args)
+        {
+            auto it = expected.find(argument->name.value);
+            if (it == expected.end() || !it->second.second) continue;
+            holds = holds && offset(node->body->location.begin) == it->second.first;
+            expected.erase(it);
+        }
+    };
+    parsed.root->visit(&check);
+    return holds && expected.empty();
 }
 }

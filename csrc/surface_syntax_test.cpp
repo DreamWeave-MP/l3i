@@ -2,6 +2,8 @@
 
 #include "surface_syntax.h"
 
+#include "Luau/Parser.h"
+
 #include <algorithm>
 #include <cassert>
 #include <cstdint>
@@ -432,6 +434,50 @@ int main()
                     assert(span.begin.line == first.line && span.begin.column == first.column);
                     assert(span.end.line == last.line && span.end.column == last.column);
                 }
+        }
+    }
+    {
+        // Estimated boundaries: whenever Luau's parse confirms them, the lowering is the located
+        // one byte for byte; common shapes are confirmed, and every other shape still ends with
+        // exactly the located lowering.
+        struct Shape { std::string_view source; bool fast; };
+        const Shape shapes[] = {
+            {"local {x, y} = position\nreturn x + y\n", true},
+            {"local {x}: P = getPoint(1, {2}) local {y} = t.inner[1]:m'k'\nreturn x, y\n", true},
+            {"local {a} = t; (g)()\nreturn a\n", true},
+            {"local {a} = if c then t else u\nlocal {b} = function() if a then return 1 end end\nreturn a, b\n", true},
+            {"local {a} = `{t}` .. s :: string\nreturn a\n", true},
+            {"local function f({x, y}: P, dt: number): number return x + dt end\n", true},
+            {"function T:m({p}): (number, string) return p, '' end\n", true},
+            {"local g = @native function({a}: { a: number }): () -> () return function() end end\n", true},
+            {"return [for {id} in xs => function({a}) local {b} = a return b + id end]\n", true},
+            {"local function h({x}): Map<string, { v: number }>? return x end\n", true},
+            // The value continues on the next line: Luau reads a call, and so must the lowering.
+            {"local {a} = f\n(g)()\nreturn a\n", false},
+            {"local {a} = t, u\n", false},
+            {"local function k({x}): A | B return x end\n", true},
+            {"local {a} = f 'str' return a\n", true},
+        };
+        for (const Shape& shape : shapes)
+        {
+            const auto exact = L3i::Surface::lower(shape.source, false, true, {}, true);
+            const auto estimate = L3i::Surface::lower(shape.source, false, true, {}, true, {}, true);
+            Luau::Allocator allocator;
+            Luau::AstNameTable names(allocator);
+            const auto parsed = Luau::Parser::parse(estimate.source.data(), estimate.source.size(), names, allocator);
+            const bool fast = estimate.estimated && L3i::Surface::boundariesHold(estimate, parsed);
+            if (fast != shape.fast)
+            {
+                std::cerr << "fast path " << fast << " for:\n" << shape.source << '\n' << estimate.source << '\n';
+                return 1;
+            }
+            if (fast)
+            {
+                assert(estimate.source == exact.source);
+                assert(estimate.map.provenance().size() == exact.map.provenance().size());
+            }
+            if (!exact.document.errors.empty())
+                assert(estimate.document.errors.size() >= exact.document.errors.size());
         }
     }
     const auto strict = L3i::Surface::lower("return [for x in xs =>]");

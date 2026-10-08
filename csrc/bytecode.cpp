@@ -42,9 +42,9 @@ struct ExpressionAt final : Luau::AstVisitor
 // identifier is a local (or upvalue) declared outside the comprehension, in which case reading
 // it once is indistinguishable from reading it per element and the pipeline is lowered again
 // as a data operation. Globals, and anything the parse cannot resolve, keep the loop.
-L3i::Surface::LoweredSource lowerForCompile(std::string_view source)
+L3i::Surface::LoweredSource lowerForCompile(std::string_view source, bool estimated)
 {
-    auto lowered = L3i::Surface::lower(source, false, true, {}, true);
+    auto lowered = L3i::Surface::lower(source, false, true, {}, true, {}, estimated);
     if (lowered.pendingLocalFilters.empty() || !lowered.document.errors.empty())
         return lowered;
     Luau::Allocator allocator;
@@ -71,7 +71,49 @@ L3i::Surface::LoweredSource lowerForCompile(std::string_view source)
     }
     if (verified.empty())
         return lowered;
-    return L3i::Surface::lower(source, false, true, {}, true, verified);
+    return L3i::Surface::lower(source, false, true, {}, true, verified, estimated);
+}
+
+// The compile lowering and Luau's parse of it, in one parse when the frontend's record pattern
+// boundaries are confirmed by that parse; otherwise the boundaries are located and it is parsed
+// again. Structural errors are thrown before parsing.
+struct Parsed
+{
+    L3i::Surface::LoweredSource lowered;
+    Luau::ParseResult result;
+};
+
+void throwStructural(const L3i::Surface::LoweredSource& lowered, std::string_view source)
+{
+    if (lowered.document.errors.empty())
+        return;
+    const auto& error = lowered.document.errors.front();
+    Luau::Position begin(0, 0), end(0, 0);
+    for (size_t i = 0; i < error.range.end; ++i)
+    {
+        if (i == error.range.begin)
+            begin = end;
+        if (source[i] == '\n')
+            end = Luau::Position(end.line + 1, 0);
+        else
+            ++end.column;
+    }
+    if (error.range.empty())
+        begin = end;
+    throw Luau::ParseError(Luau::Location(begin, end), error.message);
+}
+
+Parsed parseForCompile(std::string_view source, Luau::AstNameTable& names, Luau::Allocator& allocator)
+{
+    Parsed parsed{lowerForCompile(source, true), {}};
+    throwStructural(parsed.lowered, source);
+    parsed.result = Luau::Parser::parse(parsed.lowered.source.data(), parsed.lowered.source.size(), names, allocator);
+    if (L3i::Surface::boundariesHold(parsed.lowered, parsed.result))
+        return parsed;
+    parsed.lowered = lowerForCompile(source, false);
+    throwStructural(parsed.lowered, source);
+    parsed.result = Luau::Parser::parse(parsed.lowered.source.data(), parsed.lowered.source.size(), names, allocator);
+    return parsed;
 }
 
 char* compileImpl(const char* source, size_t size, lua_CompileOptions* options, size_t* outsize, bool dump)
@@ -96,31 +138,13 @@ char* compileImpl(const char* source, size_t size, lua_CompileOptions* options, 
             static_assert(sizeof(lua_CompileOptions) == sizeof(Luau::CompileOptions), "C and C++ compile options must match");
             std::memcpy(&compileOptions, options, sizeof(compileOptions));
         }
-        auto lowered = lowerForCompile(std::string_view(source, size));
-        if (!lowered.document.errors.empty())
-        {
-            const auto& error = lowered.document.errors.front();
-            Luau::Position begin(0, 0), end(0, 0);
-            for (size_t i = 0; i < error.range.end; ++i)
-            {
-                if (i == error.range.begin)
-                    begin = end;
-                if (source[i] == '\n')
-                    end = Luau::Position(end.line + 1, 0);
-                else
-                    ++end.column;
-            }
-            if (error.range.empty())
-                begin = end;
-            throw Luau::ParseError(Luau::Location(begin, end), error.message);
-        }
         Luau::Allocator allocator;
         Luau::AstNameTable names(allocator);
-        Luau::ParseResult parsed = Luau::Parser::parse(lowered.source.data(), lowered.source.size(), names, allocator);
-        L3i::Surface::remapLocations(parsed, lowered.map);
-        if (!parsed.errors.empty())
-            throw parsed.errors.front();
-        Luau::compileOrThrow(bytecode, parsed, names, compileOptions);
+        Parsed parsed = parseForCompile(std::string_view(source, size), names, allocator);
+        L3i::Surface::remapLocations(parsed.result, parsed.lowered.map);
+        if (!parsed.result.errors.empty())
+            throw parsed.result.errors.front();
+        Luau::compileOrThrow(bytecode, parsed.result, names, compileOptions);
         output = dump ? bytecode.dumpEverything() : bytecode.getBytecode();
     }
     catch (const Luau::ParseError& error)
@@ -216,9 +240,24 @@ std::string dumpImpl(std::string_view source, bool recovery, bool fuseLength, bo
                 if (!clause.sliceSource.empty())
                     buffers.push_back(clause.sliceSource);
     }
-    // The compile policy takes the compiler's own two-pass path so snapshots show what compiles.
-    const auto lowered = !recovery && fuseLength && dynamic && !bufferAll ? lowerForCompile(source)
-                                                                        : L3i::Surface::lower(source, recovery, fuseLength, buffers, dynamic);
+    // The compile policy takes the compiler's own path, estimate and verification included, so
+    // snapshots show exactly what compiles.
+    L3i::Surface::LoweredSource lowered;
+    if (!recovery && fuseLength && dynamic && !bufferAll)
+    {
+        Luau::Allocator allocator;
+        Luau::AstNameTable names(allocator);
+        try
+        {
+            lowered = parseForCompile(source, names, allocator).lowered;
+        }
+        catch (const Luau::ParseError&)
+        {
+            lowered = lowerForCompile(source, false); // Structural errors: the snapshot records them.
+        }
+    }
+    else
+        lowered = L3i::Surface::lower(source, recovery, fuseLength, buffers, dynamic);
     std::string out = lowered.source;
     out += "\n--prelude ";
     out += std::to_string(lowered.preludeStatements);

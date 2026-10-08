@@ -2100,8 +2100,14 @@ int l3i_luau_parse(lua_State* L, const char* source, size_t length, int flags)
     {
         if (surfaceMode)
         {
-            lowered = L3i::Surface::lower(std::string_view(source, length), true, false);
+            // One parse when it confirms the frontend's pattern boundaries; else locate them.
+            lowered = L3i::Surface::lower(std::string_view(source, length), true, false, {}, false, {}, true);
             result = Parser::parse(lowered.source.data(), lowered.source.size(), names, allocator, options);
+            if (!L3i::Surface::boundariesHold(lowered, result))
+            {
+                lowered = L3i::Surface::lower(std::string_view(source, length), true, false);
+                result = Parser::parse(lowered.source.data(), lowered.source.size(), names, allocator, options);
+            }
             ensureRoot(result, lowered.source, allocator);
             SiteIndex index(lowered.source);
             if (result.root) result.root->visit(&index);
