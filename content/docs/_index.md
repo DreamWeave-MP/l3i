@@ -52,7 +52,7 @@ untagged in a third.
   instantiates any number of runtimes.
 - **[Primitives](@/docs/primitives.md)**: bytes, strict options, exact integers, packed scalars,
   sequences and streams.
-- **[Built-in extensions](@/docs/builtin-extensions.md)**: `dream.net`, `dream.raster`,
+- **[Built-in extensions](@/docs/builtin-extensions.md)**: `dream.udp`, `dream.raster`,
   `dream.quat`, and `dream.soft_render`.
 - **[Native code](@/docs/native-code.md)**: Luau's code generator with lowering hooks written in
   Rust.

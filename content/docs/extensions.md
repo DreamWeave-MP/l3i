@@ -67,7 +67,7 @@ d.module("@dream/archive")
     .doc("Archives.")
     .function("open", open).signature("(path: string) -> dream_archive_Archive")
     .constant("VERSION", CompileConstant::Number(3.0))
-    .installed("client").signature("(options: { schema: dream_net_Schema }) -> dream_net_Client");
+    .installed("client").signature("(options: { schema: dream_udp_Schema }) -> dream_udp_Client");
 ```
 
 A module is read-only after install (`frozen`); `mutable()` turns that off for a stated reason.
@@ -111,8 +111,8 @@ The signatures follow the runtime, where Luau's checker keeps `integer` and `num
 |---|---|
 | A packed scalar, a `Bits64`, an `Integer` result, a `CompileConstant::Integer` | `integer` |
 | A count, a size, a plain Rust integer result, an `f64` | `number` |
-| A userdata type with key `k` | Its class name: `k` with every non-identifier character replaced by `_`, so `dream.net.Client` is `dream_net_Client` |
-| A module at path `p` | `Module_` plus the class name of `p`, so `@dream/net` is `Module__dream_net` |
+| A userdata type with key `k` | Its class name: `k` with every non-identifier character replaced by `_`, so `dream.udp.Client` is `dream_udp_Client` |
+| A module at path `p` | `Module_` plus the class name of `p`, so `@dream/udp` is `Module__dream_udp` |
 | A sequence or stream element | What `item_type(..)` names, `any` until it does |
 
 A member may name a module declared later in the plan (`() -> Module__dream_archive_ba2`): the
@@ -166,7 +166,7 @@ matter.
 
 `finalize` runs every `describe` and resolves the plan, in this order:
 
-1. Adds l3i's own `dream.net` bridge; the id is reserved, and an extension claiming it fails the plan.
+1. Adds l3i's own `dream.udp` bridge; the id is reserved, and an extension claiming it fails the plan.
 2. Validates every id, rejects an id registered twice and two ids that fold to one debug prefix (`dream.a-b` and `dream.a_b`).
 3. Orders extensions by their dependency graph (Kahn's algorithm with lexicographic tie-breaking, so the order depends on the graph only); a missing `requires` or a cycle fails, naming it.
 4. Resolves modules: unique paths, unique member names, valid identifiers, no two paths folding to one `Module_` type name, and compat globals one per module and one module per global.
@@ -381,8 +381,8 @@ fn main() -> Result<()> {
         .extension(Tools)
         .extension(Core)
         .finalize()?;
-    assert_eq!(plan.installation_order(), ["dream.core", "dream.net", "dream.tools"]);
-    assert_eq!(plan.tag_of("dream.tests.Counter"), Some(2));
+    assert_eq!(plan.installation_order(), ["dream.core", "dream.tools", "dream.udp"]);
+    assert_eq!(plan.tag_of("dream.tests.Counter"), Some(1));
 
     let runtime = Runtime::from_plan(&plan)?;
     runtime.exec(
@@ -405,9 +405,9 @@ fn main() -> Result<()> {
 }
 ```
 
-The network bridge takes tag 1 (`dream.net.Client` keys before `dream.tests.Counter`), so the
-counter gets tag 2. A second plan with `TagPolicy::Never` runs the same script untagged, and a
-plan with `first_tag(40)` gives the counter tag 41; the script does not change.
+Tags follow key order, so the counter gets tag 1 and the network bridge's `dream.udp.Client`,
+which keys after it, tag 2. A second plan with `TagPolicy::Never` runs the same script untagged,
+and a plan with `first_tag(40)` gives the counter tag 40; the script does not change.
 
 {% callout(kind="tip", title="Reaching a script's value from Rust") %}
 `l3i::userdata::check_receiver::<T>(view)` reads the `&T` behind a userdata slot in any runtime the

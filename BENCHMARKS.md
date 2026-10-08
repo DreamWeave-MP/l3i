@@ -163,7 +163,7 @@ xychart-beta
     bar [13.67, 50.09, 53.51, 54.52, 69.78, 73.23]
 ```
 
-## net_bridge
+## udp_bridge
 
 
 
@@ -175,7 +175,7 @@ xychart-beta
 
 ```mermaid
 xychart-beta
-    title "net_bridge"
+    title "udp_bridge"
     x-axis ["idle update + empty pollInto, both ends", "client sendEvent + flush", "client send, server update + pollInto"]
     y-axis "time (µs)" 0 --> 500.00
     bar [5.13, 58.72, 220.03]

@@ -24,13 +24,13 @@ donate = "https://ko-fi.com/magicaldave"
 format = "crate"
 crate = "l3i"
 
-# The transport every runtime carries: the planner inserts the dream.net bridge into every plan.
+# The transport every runtime carries: the planner inserts the dream.udp bridge into every plan.
 [[requires]]
 id = "f82752ac-e7f6-43c0-8c2f-d91b7f6b3dda"
 name = "dream-net"
 version = "=1.1.0"
 url = "https://DreamWeave-MP.github.io/dream-net/"
-reason = "Runtime infrastructure: the @dream/net module is in every plan, and l3i owns the bridge."
+reason = "Runtime infrastructure: the @dream/udp module is in every plan, and l3i owns the bridge."
 
 # The CPU rasterizer, bound as the dream.soft_render extension behind the soft-render feature.
 [[recommends]]

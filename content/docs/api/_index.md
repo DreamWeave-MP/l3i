@@ -34,7 +34,7 @@ the root.
 | `syntax` | The `dream.luau` extension and `@dream/luau` module: Luau's own parser, the tree, comments, errors and tokens of a source as tables | `syntax` |
 
 The default feature set is empty. Networking is not a feature: `dream-net` is a dependency and
-every runtime plan carries the `dream.net` bridge.
+every runtime plan carries the `dream.udp` bridge.
 
 | Page | Covers | Modules |
 |---|---|---|
@@ -42,7 +42,7 @@ every runtime plan carries the `dream.net` bridge.
 | [Stack and values](@/docs/api/stack.md) | `Stack`, `Frame`, `ValueView`, `TableView`, `Type`, `Scope`, `Value`, `Table`, `Function`, `FunctionView`, `CallResults`, `PushArgs`, every conversion type, `Options` | `stack`, `value`, `call`, `convert`, `options` |
 | [Binding and userdata](@/docs/api/bind.md) | `bind_function` shapes, `Call`, `Param`, `Return`, `VarArgs`, `ArgView`, `Overload`, `Variadic`, `ResultOrError`, `NilThen`, `Yield`, `Break`, `Userdata`, `tagged`, `untagged`, `MetatableBuilder`, iterators, `Owned`, `Borrowed`, `Storage`, `StableRef`, `LuauModule`, `ModuleBuilder`, read-only tables, `RequireNavigator`, the standard libraries | `bind`, `userdata`, `module`, `readonly`, `require`, `libraries` |
 | [Direct access and the VM](@/docs/api/direct.md) | `AtomCatalogue`, `DirectPlan`, `Registry`, `DirectAccess`, direct fields, `native::enter`, the vector buffer writer, `GcControl`, memory dumps, the buffer cage, embedder GC, `Thread`, the debug API and `RuntimeHooks` | `direct`, `native`, `vector_writer`, `memory`, `thread`, `debug` |
-| [Extensions and primitives](@/docs/api/extension.md) | `Extension`, `ExtensionDescriptor`, `UserdataBuilder`, `ModuleDecl`, `TagPolicy`, `CompilerTypePolicy`, `RuntimePlan`, `RuntimePolicy`, `InstallContext`, `PackedScalar`, `Packed`, `BufferPack`, `Sequence`, `Stream`, the `dream.quat`, `dream.raster`, `dream.net` and `dream.soft_render` extensions | `extension`, `packed`, `sequence`, `quat`, `raster`, `net`, `soft_render` |
+| [Extensions and primitives](@/docs/api/extension.md) | `Extension`, `ExtensionDescriptor`, `UserdataBuilder`, `ModuleDecl`, `TagPolicy`, `CompilerTypePolicy`, `RuntimePlan`, `RuntimePolicy`, `InstallContext`, `PackedScalar`, `Packed`, `BufferPack`, `Sequence`, `Stream`, the `dream.quat`, `dream.raster`, `dream.udp` and `dream.soft_render` extensions | `extension`, `packed`, `sequence`, `quat`, `raster`, `udp`, `soft_render` |
 | [Native code and analysis](@/docs/api/native-code.md) | `NativeCodeGen`, `NativeCodeOptions`, `NativeCodeHooks`, `NativeContext`, `IrBuilder`, `IrCmd`, dumps and execution statistics; `Analysis`, `AnalysisOptions`, `SourceProvider`, `Definitions`, `PlanSources` | `native_code`, `analysis` |
 | [The raw C API](@/docs/api/ffi.md) | The `ffi` module, `TAG_LIMIT`, `LUAU_VERSION`, and the rules for hand-written `lua_CFunction`s | `ffi` |
 

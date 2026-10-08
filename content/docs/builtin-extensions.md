@@ -1,20 +1,20 @@
 +++
 title = "Built-in extensions"
-description = "The extensions l3i ships: the dream.net bridge every plan carries, packed rotations in dream.quat, colors and clip rectangles in dream.raster, the dream.soft_render device, bytes for parsing in dream.bytes, textual identity as numbers in dream.intern, locales, plural rules and number formatting in dream.intl, Luau's own parser in dream.luau, the host filesystem in dream.fs, and child processes in dream.process."
+description = "The extensions l3i ships: the dream.udp bridge every plan carries, packed rotations in dream.quat, colors and clip rectangles in dream.raster, the dream.soft_render device, bytes for parsing in dream.bytes, textual identity as numbers in dream.intern, locales, plural rules and number formatting in dream.intl, Luau's own parser in dream.luau, the host filesystem in dream.fs, and child processes in dream.process."
 weight = 90
 
 [extra]
 kind = "guide"
 +++
 
-Ten extensions come with the crate. `dream.net` is in every plan; the others are added with
+Ten extensions come with the crate. `dream.udp` is in every plan; the others are added with
 `RuntimePlan::builder().extension(..)`. Each is an ordinary `Extension` built on the
 [primitives](@/docs/primitives.md), with a Luau signature on every member, so a strict script
 that requires its module type checks against the plan's definitions.
 
 | Extension | Module | Rust | Feature |
 |---|---|---|---|
-| `dream.net` | `@dream/net` | `l3i::net` | always |
+| `dream.udp` | `@dream/udp` | `l3i::udp` | always |
 | `dream.quat` | `@dream/quat` | `l3i::quat::QuatExtension` | always (`quat.math()` needs `jit`) |
 | `dream.raster` | `@dream/raster` | `l3i::raster::RasterExtension` | always |
 | `dream.soft_render` | `@dream/soft-render` | `l3i::soft_render::SoftRenderExtension` | `soft-render` |
@@ -28,10 +28,10 @@ that requires its module type checks against the plan's definitions.
 The samples below reach the modules as compat globals (`RuntimePolicy::new().compat_global("@dream/quat", "quat")`),
 which is what the tests do; `require("@dream/quat")` is the canonical path.
 
-## dream.net
+## dream.udp
 
 Networking is runtime infrastructure, not a feature: l3i depends on dream-net and owns the Luau
-bridge. The planner adds `NetExtension` to every plan and reserves the id `dream.net`, so no
+bridge. The planner adds `UdpExtension` to every plan and reserves the id `dream.udp`, so no
 runtime lacks the network and the policy's capabilities decide what scripts may do with it.
 dream-net stays pure Rust and knows peers, event ids, channels and bytes; this module owns the
 Luau-facing shape.
@@ -39,27 +39,27 @@ Luau-facing shape.
 - Peer, event, channel and client ids are Luau integers, exact and compared with `==`; a peer id is a `Bits64` pattern, all 64 bits. Sizes and counters are plain numbers, because scripts threshold them.
 - Payloads are Luau buffers, or strings on send. `pollInto` copies one received payload into a caller-owned buffer and `sendEvent` copies out of one before returning, so the transport retains no Lua memory.
 - The transport clock is the plan's: `update()` reads a monotonic clock started with the bridge, or the clock the host gave `RuntimePlanBuilder::network_clock`, so a script cannot spoof time and a simulation can drive it.
-- The server private key never reaches Luau. A host may still hand scripts a `net::Server` handle, or Luau may create one with `net.server{}`; both `net.server{}` and `net.client{}` require the `network.transport` capability (`net::TRANSPORT_CAPABILITY`). A Luau-created server keeps its generated key in native userdata and mints client tokens with `server:connectToken(clientId, expiresInSeconds?, timeoutSeconds?)`.
+- The server private key never reaches Luau. A host may still hand scripts a `udp::Server` handle, or Luau may create one with `udp.server{}`; both `udp.server{}` and `udp.client{}` require the `network.transport` capability (`udp::TRANSPORT_CAPABILITY`). A Luau-created server keeps its generated key in native userdata and mints client tokens with `server:connectToken(clientId, expiresInSeconds?, timeoutSeconds?)`.
 - Nothing calls into Luau from inside dream-net; the host drives one network phase per frame.
 
 ### The module
 
 | Member | Type |
 |---|---|
-| `schema(options)` | `(options: { version: number, maxMessagesPerPacket: number?, channels: { { [string]: any } }, events: { { [string]: any } } }) -> dream_net_Schema` |
-| `client(options)` | `(options: { schema: dream_net_Schema, bind: string? }) -> dream_net_Client`, bound at install because it depends on the capability |
-| `server(options)` | `(options: { schema: dream_net_Schema, address: string, protocolId: integer, maxClients: number? }) -> dream_net_Server`, bound at install because it depends on the capability |
+| `schema(options)` | `(options: { version: number, maxMessagesPerPacket: number?, channels: { { [string]: any } }, events: { { [string]: any } } }) -> dream_udp_Schema` |
+| `client(options)` | `(options: { schema: dream_udp_Schema, bind: string? }) -> dream_udp_Client`, bound at install because it depends on the capability |
+| `server(options)` | `(options: { schema: dream_udp_Schema, address: string, protocolId: integer, maxClients: number? }) -> dream_udp_Server`, bound at install because it depends on the capability |
 | `CONNECT_TOKEN_BYTES`, `MAX_EVENT_PAYLOAD`, `MAX_CHANNELS` | Folded numbers: 2048, dream-net's payload limit, 64 |
 
-`net.schema{}` is a strict option table. A channel is `{ name, delivery, capacity?, overflow?,
+`udp.schema{}` is a strict option table. A channel is `{ name, delivery, capacity?, overflow?,
 packetBudget?, resendInterval? }` with `delivery` one of `'reliableOrdered'` and
 `'unreliableUnordered'` and `overflow` one of `'fail'`, `'dropOldest'` and `'dropNewest'`; an
 event is `{ name, channel, maxPayload, codecVersion? }` naming its channel. Errors carry the path
-(`net.schema.channels[1].delivery`, `unknown channel 'missing'`).
+(`udp.schema.channels[1].delivery`, `unknown channel 'missing'`).
 
 ```luau
-local net = require("@dream/net")
-local schema = net.schema{
+local udp = require("@dream/udp")
+local schema = udp.schema{
     version = 1,
     channels = {
         { name = "reliable", delivery = "reliableOrdered" },
@@ -82,7 +82,7 @@ required is the host-granted `network.transport` capability; token bytes are saf
 clients, while the signing key remains private to the server userdata:
 
 ```luau
-local server = net.server{
+local server = udp.server{
     schema = schema,
     address = "127.0.0.1:0", -- the bound and advertised address
     protocolId = 0x12345678,
@@ -91,11 +91,11 @@ local server = net.server{
 local token = server:connectToken(1) -- buffer; expires after 300 seconds by default
 ```
 
-`dream_net_Schema` is untagged: getters `version`, `fingerprint` (32 hex digits), `eventCount`,
+`dream_udp_Schema` is untagged: getters `version`, `fingerprint` (32 hex digits), `eventCount`,
 `channelCount`; methods `eventId(name)`, `channelId(name)` (`integer?`), `eventName(id)`,
 `channelName(id)` (`string?`), `maxPayload(eventId)` (`integer?`), `fingerprintHalves()`.
 
-`dream_net_Client` and `dream_net_Server` are tagged when tags allow. The hot calls are the same
+`dream_udp_Client` and `dream_udp_Server` are tagged when tags allow. The hot calls are the same
 on both:
 
 | Call | Does |
@@ -148,9 +148,9 @@ local function step()
 end
 ```
 
-Misuse is a script error prefixed `dream.net:`, never a panic: an unknown event id, a payload
+Misuse is a script error prefixed `dream.udp:`, never a panic: an unknown event id, a payload
 range past its buffer (`payload range 0..40 exceeds the 7-byte buffer`), a peer that is not
-connected. `benches/net.rs` measures the bridge over localhost UDP.
+connected. `benches/udp.rs` measures the bridge over localhost UDP.
 
 ## dream.quat
 

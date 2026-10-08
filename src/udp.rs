@@ -1,5 +1,5 @@
-//! The dream-net bridge: extension `dream.net`, module `@dream/net`, types `dream.net.Server`,
-//! `dream.net.Client`, `dream.net.Schema`.
+//! The dream-net bridge: extension `dream.udp`, module `@dream/udp`, types `dream.udp.Server`,
+//! `dream.udp.Client`, `dream.udp.Schema`.
 //!
 //! Networking is runtime infrastructure here, not a feature. dream-net stays pure Rust and
 //! knows peers, event ids, channels, and bytes; this module owns the Luau-facing shape:
@@ -15,7 +15,7 @@
 //!   bridge, or the clock the host gave `RuntimePlanBuilder::network_clock`, so a script cannot
 //!   spoof time;
 //! - the server private key never reaches Luau: hosts may push [`Server`] handles, or Luau may
-//!   create one with `net.server` when the runtime policy grants `network.transport`; the same
+//!   create one with `udp.server` when the runtime policy grants `network.transport`; the same
 //!   capability gates client creation;
 //! - Luau or its engine host explicitly drives each network phase; dream-net never calls back into
 //!   the VM.
@@ -44,10 +44,10 @@ use crate::userdata::{Owned, Userdata};
 use crate::value::Table;
 
 /// The extension id.
-pub const EXTENSION_ID: &str = "dream.net";
+pub const EXTENSION_ID: &str = "dream.udp";
 /// The module path.
-pub const MODULE: &str = "@dream/net";
-/// The capability that lets scripts create transport objects (`net.client` and `net.server`).
+pub const MODULE: &str = "@dream/udp";
+/// The capability that lets scripts create transport objects (`udp.client` and `udp.server`).
 pub const TRANSPORT_CAPABILITY: &str = "network.transport";
 
 /// A monotonic clock the transport reads on `update()`; seconds as f64.
@@ -80,48 +80,48 @@ fn event_from_int(value: Exact<i64>) -> Result<EventTypeId> {
 }
 
 fn send_error(error: SendError) -> Error {
-    Error::runtime(format!("dream.net: {error}"))
+    Error::runtime(format!("dream.udp: {error}"))
 }
 
 fn config_error(error: impl std::fmt::Display) -> Error {
-    Error::runtime(format!("dream.net: {error}"))
+    Error::runtime(format!("dream.udp: {error}"))
 }
 
 // ---------------------------------------------------------------------------------------------
 // Schema
 // ---------------------------------------------------------------------------------------------
 
-/// A frozen wire schema (`dream.net.Schema`).
-pub struct NetSchema(pub Schema);
+/// A frozen wire schema (`dream.udp.Schema`).
+pub struct UdpSchema(pub Schema);
 
 // SAFETY: plain Rust data (an `Arc`), no Lua references, no Lua API in `Drop`.
-unsafe impl Userdata for NetSchema {
-    const NAME: &'static str = "dream.net.Schema";
+unsafe impl Userdata for UdpSchema {
+    const NAME: &'static str = "dream.udp.Schema";
 }
 
-/// `net.schema{ version = 1, channels = { {name, delivery, capacity?, overflow?} }, events = {
+/// `udp.schema{ version = 1, channels = { {name, delivery, capacity?, overflow?} }, events = {
 /// {name, channel, maxPayload, codecVersion?} } }`.
-fn build_schema(call: &Call<'_>, options: ValueView<'_>) -> Result<Owned<NetSchema>> {
-    let schema = Options::read(call, options, "net.schema", |o| {
+fn build_schema(call: &Call<'_>, options: ValueView<'_>) -> Result<Owned<UdpSchema>> {
+    let schema = Options::read(call, options, "udp.schema", |o| {
         let version = o.required::<Exact<i64>>("version")?.0;
-        let version = u32::try_from(version).map_err(|_| Error::runtime("net.schema.version: must fit in 32 bits"))?;
+        let version = u32::try_from(version).map_err(|_| Error::runtime("udp.schema.version: must fit in 32 bits"))?;
         let mut builder = SchemaBuilder::new(version);
         if let Some(max) = o.optional::<Exact<i64>>("maxMessagesPerPacket")? {
             let max =
-                u32::try_from(max.0).map_err(|_| Error::runtime("net.schema.maxMessagesPerPacket: out of range"))?;
+                u32::try_from(max.0).map_err(|_| Error::runtime("udp.schema.maxMessagesPerPacket: out of range"))?;
             builder = builder.max_messages_per_packet(max);
         }
         let channels = Table::from_value(o.required::<crate::value::Value>("channels")?)
-            .map_err(|_| Error::runtime("net.schema.channels: expected a table"))?;
+            .map_err(|_| Error::runtime("udp.schema.channels: expected a table"))?;
         let events = Table::from_value(o.required::<crate::value::Value>("events")?)
-            .map_err(|_| Error::runtime("net.schema.events: expected a table"))?;
+            .map_err(|_| Error::runtime("udp.schema.events: expected a table"))?;
         let mut channel_ids: Vec<(String, ChannelId)> = Vec::new();
         o.frame().with_frame(|frame| {
             let channels = channels.push_to(frame)?;
             let count = channels.raw_len();
             for index in 1..=count {
                 let entry = channels.raw_get_index(frame, index as i64)?;
-                let context = format!("net.schema.channels[{index}]");
+                let context = format!("udp.schema.channels[{index}]");
                 let config = Options::read(frame, entry, &context, |c| {
                     let name: String = c.required("name")?;
                     let delivery: String = c.required("delivery")?;
@@ -168,7 +168,7 @@ fn build_schema(call: &Call<'_>, options: ValueView<'_>) -> Result<Owned<NetSche
             let count = events.raw_len();
             for index in 1..=count {
                 let entry = events.raw_get_index(frame, index as i64)?;
-                let context = format!("net.schema.events[{index}]");
+                let context = format!("udp.schema.events[{index}]");
                 Options::read(frame, entry, &context, |e| {
                     let name: String = e.required("name")?;
                     let channel: String = e.required("channel")?;
@@ -193,7 +193,7 @@ fn build_schema(call: &Call<'_>, options: ValueView<'_>) -> Result<Owned<NetSche
         })?;
         builder.build().map_err(config_error)
     })?;
-    Ok(Owned(NetSchema(schema)))
+    Ok(Owned(UdpSchema(schema)))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -270,16 +270,16 @@ fn payload_range<R>(
 ) -> Result<R> {
     let total = bytes.len();
     let offset =
-        usize::try_from(offset.map_or(0, |o| o.0)).map_err(|_| Error::runtime("dream.net: negative payload offset"))?;
+        usize::try_from(offset.map_or(0, |o| o.0)).map_err(|_| Error::runtime("dream.udp: negative payload offset"))?;
     let length = match length {
-        Some(length) => usize::try_from(length.0).map_err(|_| Error::runtime("dream.net: negative payload length"))?,
+        Some(length) => usize::try_from(length.0).map_err(|_| Error::runtime("dream.udp: negative payload length"))?,
         None => {
-            total.checked_sub(offset).ok_or_else(|| Error::runtime("dream.net: payload offset exceeds the buffer"))?
+            total.checked_sub(offset).ok_or_else(|| Error::runtime("dream.udp: payload offset exceeds the buffer"))?
         }
     };
     if offset.checked_add(length).is_none_or(|end| end > total) {
         return Err(Error::runtime(format!(
-            "dream.net: payload range {offset}..{} exceeds the {total}-byte buffer",
+            "dream.udp: payload range {offset}..{} exceeds the {total}-byte buffer",
             offset.saturating_add(length)
         )));
     }
@@ -293,7 +293,7 @@ fn payload_range<R>(
 // Server
 // ---------------------------------------------------------------------------------------------
 
-/// A dream-net server as scripts see it (`dream.net.Server`). The private key stays in this
+/// A dream-net server as scripts see it (`dream.udp.Server`). The private key stays in this
 /// userdata; Luau can request per-client connect tokens but cannot read or replace the key.
 pub struct Server {
     inner: RefCell<dream_net::Server>,
@@ -309,7 +309,7 @@ struct TokenIssuer {
 // SAFETY: `dream_net::Server` is plain Rust state with no Lua references; dropping it stops
 // the transport without touching the Lua API.
 unsafe impl Userdata for Server {
-    const NAME: &'static str = "dream.net.Server";
+    const NAME: &'static str = "dream.udp.Server";
 }
 
 impl Server {
@@ -322,7 +322,7 @@ impl Server {
         Server { inner: RefCell::new(server), clock, token_issuer: Some(TokenIssuer { key, protocol_id }) }
     }
 
-    /// Pushes a server handle onto `scope` (the `dream.net` extension must be installed).
+    /// Pushes a server handle onto `scope` (the `dream.udp` extension must be installed).
     pub fn push<'s>(scope: &'s impl Scope, server: dream_net::Server, clock: Clock) -> Result<ValueView<'s>> {
         crate::userdata::push_owned(scope, Server::new(server, clock))
     }
@@ -357,7 +357,7 @@ impl Server {
                 reason: failure.reason().name(),
             }),
             Err(too_small) => Err(Error::runtime(format!(
-                "dream.net: pollInto buffer of {} bytes is too small for a {}-byte payload",
+                "dream.udp: pollInto buffer of {} bytes is too small for a {}-byte payload",
                 buffer.len(),
                 too_small.needed
             ))),
@@ -410,24 +410,24 @@ fn memory_table(scope: &impl Scope, usage: &dream_net::MemoryUsage) -> Result<Ta
 // Client
 // ---------------------------------------------------------------------------------------------
 
-/// A dream-net client as scripts see it (`dream.net.Client`).
-pub struct NetClient {
+/// A dream-net client as scripts see it (`dream.udp.Client`).
+pub struct UdpClient {
     inner: RefCell<Client>,
     clock: Clock,
 }
 
 // SAFETY: as `Server`.
-unsafe impl Userdata for NetClient {
-    const NAME: &'static str = "dream.net.Client";
+unsafe impl Userdata for UdpClient {
+    const NAME: &'static str = "dream.udp.Client";
 }
 
-impl NetClient {
-    pub fn new(client: Client, clock: Clock) -> NetClient {
-        NetClient { inner: RefCell::new(client), clock }
+impl UdpClient {
+    pub fn new(client: Client, clock: Clock) -> UdpClient {
+        UdpClient { inner: RefCell::new(client), clock }
     }
 
     pub fn push<'s>(scope: &'s impl Scope, client: Client, clock: Clock) -> Result<ValueView<'s>> {
-        crate::userdata::push_owned(scope, NetClient::new(client, clock))
+        crate::userdata::push_owned(scope, UdpClient::new(client, clock))
     }
 
     pub fn with(&self, body: impl FnOnce(&mut Client)) {
@@ -452,7 +452,7 @@ impl NetClient {
             }
             Ok(Some(ClientEvent::ConnectFailed { reason, .. })) => Ok(Polled::ConnectFailed { reason: reason.name() }),
             Err(too_small) => Err(Error::runtime(format!(
-                "dream.net: pollInto buffer of {} bytes is too small for a {}-byte payload",
+                "dream.udp: pollInto buffer of {} bytes is too small for a {}-byte payload",
                 buffer.len(),
                 too_small.needed
             ))),
@@ -479,8 +479,8 @@ impl NetClient {
 macro_rules! client_stat_field {
     ($name:ident, $field:ident) => {
         struct $name;
-        impl DirectField<NetClient> for $name {
-            fn get(client: &NetClient) -> FieldValue {
+        impl DirectField<UdpClient> for $name {
+            fn get(client: &UdpClient) -> FieldValue {
                 client.stat(|stats| stats.$field)
             }
         }
@@ -495,8 +495,8 @@ client_stat_field!(ReceivedKbpsField, received_kbps);
 client_stat_field!(AckedKbpsField, acked_kbps);
 
 struct ConnectedField;
-impl DirectField<NetClient> for ConnectedField {
-    fn get(client: &NetClient) -> FieldValue {
+impl DirectField<UdpClient> for ConnectedField {
+    fn get(client: &UdpClient) -> FieldValue {
         FieldValue::Boolean(client.inner.borrow().status() == ClientStatus::Connected)
     }
 }
@@ -505,30 +505,30 @@ impl DirectField<NetClient> for ConnectedField {
 // The extension
 // ---------------------------------------------------------------------------------------------
 
-/// The `dream.net` extension: in every runtime plan, added by the planner (the id is reserved).
-pub struct NetExtension {
+/// The `dream.udp` extension: in every runtime plan, added by the planner (the id is reserved).
+pub struct UdpExtension {
     clock: Clock,
 }
 
-impl NetExtension {
+impl UdpExtension {
     /// With a monotonic clock started now.
     pub fn new() -> Self {
-        NetExtension { clock: monotonic_clock() }
+        UdpExtension { clock: monotonic_clock() }
     }
 
     /// With the plan's clock (`RuntimePlanBuilder::network_clock`).
     pub(crate) fn with_clock(clock: Clock) -> Self {
-        NetExtension { clock }
+        UdpExtension { clock }
     }
 }
 
-impl Default for NetExtension {
+impl Default for UdpExtension {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl Extension for NetExtension {
+impl Extension for UdpExtension {
     fn id(&self) -> &'static str {
         EXTENSION_ID
     }
@@ -539,7 +539,7 @@ impl Extension for NetExtension {
         describe_client(d);
         d.module(MODULE)
             .doc("dream-net transport: schemas, clients, and capability-gated servers.")
-            .function("schema", build_schema).signature("(options: { version: number, maxMessagesPerPacket: number?, channels: { { [string]: any } }, events: { { [string]: any } } }) -> dream_net_Schema")
+            .function("schema", build_schema).signature("(options: { version: number, maxMessagesPerPacket: number?, channels: { { [string]: any } }, events: { { [string]: any } } }) -> dream_udp_Schema")
             .constant(
                 "CONNECT_TOKEN_BYTES",
                 crate::source::CompileConstant::Number(dream_net::CONNECT_TOKEN_BYTES as f64),
@@ -551,69 +551,69 @@ impl Extension for NetExtension {
             .constant("MAX_CHANNELS", crate::source::CompileConstant::Number(dream_net::schema::MAX_CHANNELS as f64));
         d.module(MODULE)
             .installed("client")
-            .signature("(options: { schema: dream_net_Schema, bind: string? }) -> dream_net_Client")
+            .signature("(options: { schema: dream_udp_Schema, bind: string? }) -> dream_udp_Client")
             .doc("A transport client; needs the network.transport capability at call time.");
         d.module(MODULE)
             .installed("server")
-            .signature("(options: { schema: dream_net_Schema, address: string, protocolId: integer, maxClients: number? }) -> dream_net_Server")
+            .signature("(options: { schema: dream_udp_Schema, address: string, protocolId: integer, maxClients: number? }) -> dream_udp_Server")
             .doc("A transport server; needs network.transport. Its private key stays native; use connectToken() to mint client tokens.");
         d.optional_capability(TRANSPORT_CAPABILITY);
-        d.memory_category("dream.net");
+        d.memory_category("dream.udp");
         Ok(())
     }
 
-    /// `net.client{}` and `net.server{}` depend on runtime capabilities, so their declared members bind here.
+    /// `udp.client{}` and `udp.server{}` depend on runtime capabilities, so their declared members bind here.
     fn install(&self, cx: &mut InstallContext<'_>) -> Result<()> {
         let transport_allowed = cx.has_capability(TRANSPORT_CAPABILITY)?;
         let clock = Rc::clone(&self.clock);
-        cx.module(MODULE)?.function("client", move |call: &Call, options: ValueView| -> Result<Owned<NetClient>> {
+        cx.module(MODULE)?.function("client", move |call: &Call, options: ValueView| -> Result<Owned<UdpClient>> {
             if !transport_allowed {
                 return Err(Error::permission(format!(
-                    "net.client requires the '{TRANSPORT_CAPABILITY}' capability, which this runtime does not grant"
+                    "udp.client requires the '{TRANSPORT_CAPABILITY}' capability, which this runtime does not grant"
                 )));
             }
-            let (bind, schema) = Options::read(call, options, "net.client", |o| {
+            let (bind, schema) = Options::read(call, options, "udp.client", |o| {
                 let bind: Option<String> = o.optional("bind")?;
                 let schema: crate::value::Value = o.required("schema")?;
                 let schema = o.frame().with_frame(|frame| {
                     let view = schema.push_to(frame)?;
-                    crate::userdata::check_receiver::<NetSchema>(view)
+                    crate::userdata::check_receiver::<UdpSchema>(view)
                         .map(|s| s.0.clone())
-                        .map_err(|_| Error::runtime("net.client.schema: expected a dream.net.Schema"))
+                        .map_err(|_| Error::runtime("udp.client.schema: expected a dream.udp.Schema"))
                 })?;
                 Ok((bind.unwrap_or_else(|| "0.0.0.0:0".to_owned()), schema))
             })?;
-            let bind_address = bind.parse().map_err(|e| Error::runtime(format!("net.client.bind: {e}")))?;
+            let bind_address = bind.parse().map_err(|e| Error::runtime(format!("udp.client.bind: {e}")))?;
             let config = ClientConfig { bind_address, transport: TransportConfig::default() };
             let client = Client::new(config, schema, clock()).map_err(config_error)?;
-            Ok(Owned(NetClient::new(client, Rc::clone(&clock))))
+            Ok(Owned(UdpClient::new(client, Rc::clone(&clock))))
         })?;
         let clock = Rc::clone(&self.clock);
         cx.module(MODULE)?.function("server", move |call: &Call, options: ValueView| -> Result<Owned<Server>> {
             if !transport_allowed {
                 return Err(Error::permission(format!(
-                    "net.server requires the '{TRANSPORT_CAPABILITY}' capability, which this runtime does not grant"
+                    "udp.server requires the '{TRANSPORT_CAPABILITY}' capability, which this runtime does not grant"
                 )));
             }
-            let (address, protocol_id, max_clients, schema) = Options::read(call, options, "net.server", |o| {
+            let (address, protocol_id, max_clients, schema) = Options::read(call, options, "udp.server", |o| {
                 let address: String = o.required("address")?;
                 let protocol_id = o.required::<Bits64>("protocolId")?.0;
                 let max_clients = o.optional::<Exact<i64>>("maxClients")?.map_or(Ok(4_usize), |n| {
-                    usize::try_from(n.0).map_err(|_| Error::runtime("net.server.maxClients: out of range"))
+                    usize::try_from(n.0).map_err(|_| Error::runtime("udp.server.maxClients: out of range"))
                 })?;
                 if !(1..=256).contains(&max_clients) {
-                    return Err(Error::runtime("net.server.maxClients: expected an integer in [1, 256]"));
+                    return Err(Error::runtime("udp.server.maxClients: expected an integer in [1, 256]"));
                 }
                 let schema: crate::value::Value = o.required("schema")?;
                 let schema = o.frame().with_frame(|frame| {
                     let view = schema.push_to(frame)?;
-                    crate::userdata::check_receiver::<NetSchema>(view)
+                    crate::userdata::check_receiver::<UdpSchema>(view)
                         .map(|s| s.0.clone())
-                        .map_err(|_| Error::runtime("net.server.schema: expected a dream.net.Schema"))
+                        .map_err(|_| Error::runtime("udp.server.schema: expected a dream.udp.Schema"))
                 })?;
                 Ok((address, protocol_id, max_clients, schema))
             })?;
-            let address = address.parse().map_err(|e| Error::runtime(format!("net.server.address: {e}")))?;
+            let address = address.parse().map_err(|e| Error::runtime(format!("udp.server.address: {e}")))?;
             let key = dream_net::generate_key();
             let config = ServerConfig {
                 public_address: address,
@@ -629,30 +629,30 @@ impl Extension for NetExtension {
 }
 
 fn describe_schema(d: &mut ExtensionDescriptor) {
-    let mut schema = d.userdata::<NetSchema>("dream.net.Schema");
+    let mut schema = d.userdata::<UdpSchema>("dream.udp.Schema");
     schema.tag(TagPolicy::Never).doc("A frozen wire schema: channels, events, fingerprint.");
-    schema.getter("version", |s: &NetSchema| i64::from(s.0.schema_version())).signature("number");
-    schema.getter("fingerprint", |s: &NetSchema| s.0.fingerprint().to_string()).signature("string");
-    schema.getter("eventCount", |s: &NetSchema| s.0.events().len() as i64).signature("number");
-    schema.getter("channelCount", |s: &NetSchema| s.0.channels().len() as i64).signature("number");
+    schema.getter("version", |s: &UdpSchema| i64::from(s.0.schema_version())).signature("number");
+    schema.getter("fingerprint", |s: &UdpSchema| s.0.fingerprint().to_string()).signature("string");
+    schema.getter("eventCount", |s: &UdpSchema| s.0.events().len() as i64).signature("number");
+    schema.getter("channelCount", |s: &UdpSchema| s.0.channels().len() as i64).signature("number");
     schema
-        .method("eventId", |s: &NetSchema, name: &str| s.0.event_id(name).map(|id| Integer(i64::from(id.0))))
+        .method("eventId", |s: &UdpSchema, name: &str| s.0.event_id(name).map(|id| Integer(i64::from(id.0))))
         .signature("(self, name: string): integer?");
     schema
-        .method("channelId", |s: &NetSchema, name: &str| s.0.channel_id(name).map(|id| Integer(i64::from(id.0))))
+        .method("channelId", |s: &UdpSchema, name: &str| s.0.channel_id(name).map(|id| Integer(i64::from(id.0))))
         .signature("(self, name: string): integer?");
     schema
-        .method("eventName", |s: &NetSchema, id: Exact<i64>| -> Option<String> {
+        .method("eventName", |s: &UdpSchema, id: Exact<i64>| -> Option<String> {
             u32::try_from(id.0).ok().and_then(|id| s.0.event(EventTypeId(id))).map(|e| e.name.clone())
         })
         .signature("(self, id: integer): string?");
     schema
-        .method("channelName", |s: &NetSchema, id: Exact<i64>| -> Option<String> {
+        .method("channelName", |s: &UdpSchema, id: Exact<i64>| -> Option<String> {
             u8::try_from(id.0).ok().and_then(|id| s.0.channel(ChannelId(id))).map(|c| c.name().to_owned())
         })
         .signature("(self, id: integer): string?");
     schema
-        .method("maxPayload", |s: &NetSchema, id: Exact<i64>| -> Option<Integer> {
+        .method("maxPayload", |s: &UdpSchema, id: Exact<i64>| -> Option<Integer> {
             u32::try_from(id.0)
                 .ok()
                 .and_then(|id| s.0.event(EventTypeId(id)))
@@ -660,20 +660,20 @@ fn describe_schema(d: &mut ExtensionDescriptor) {
         })
         .signature("(self, eventId: integer): integer?");
     schema
-        .method("fingerprintHalves", |s: &NetSchema| {
+        .method("fingerprintHalves", |s: &UdpSchema| {
             let (hi, lo) = s.0.fingerprint().halves();
             (Integer(hi as i64), Integer(lo as i64))
         })
         .signature("(self): (number, number)");
-    schema.metamethod("__tostring", |s: &NetSchema| {
-        format!("dream.net.Schema(v{}, {})", s.0.schema_version(), s.0.fingerprint())
+    schema.metamethod("__tostring", |s: &UdpSchema| {
+        format!("dream.udp.Schema(v{}, {})", s.0.schema_version(), s.0.fingerprint())
     });
 }
 
 // One declaration per member reads best as one list, however long.
 #[allow(clippy::too_many_lines)]
 fn describe_server(d: &mut ExtensionDescriptor) {
-    let mut server = d.userdata::<Server>("dream.net.Server");
+    let mut server = d.userdata::<Server>("dream.udp.Server");
     server.tag(TagPolicy::Preferred).doc("The host's transport server; created in Rust, the private key stays there.");
     server
         .method("update", |server: &Server| {
@@ -686,15 +686,15 @@ fn describe_server(d: &mut ExtensionDescriptor) {
             "connectToken",
             |server: &Server, client_id: Bits64, expires_in: Option<Exact<i64>>, timeout: Option<Exact<i64>>| {
                 let issuer = server.token_issuer.as_ref().ok_or_else(|| {
-                    Error::runtime("dream.net.Server.connectToken: this host-created server has no token issuer")
+                    Error::runtime("dream.udp.Server.connectToken: this host-created server has no token issuer")
                 })?;
                 let expires_in = expires_in.map_or(300, |n| n.0);
                 let timeout = timeout.map_or(30, |n| n.0);
                 if !(1..=86_400).contains(&expires_in) {
-                    return Err(Error::runtime("dream.net.Server.connectToken expiresInSeconds must be in [1, 86400]"));
+                    return Err(Error::runtime("dream.udp.Server.connectToken expiresInSeconds must be in [1, 86400]"));
                 }
                 if !(1..=300).contains(&timeout) {
-                    return Err(Error::runtime("dream.net.Server.connectToken timeoutSeconds must be in [1, 300]"));
+                    return Err(Error::runtime("dream.udp.Server.connectToken timeoutSeconds must be in [1, 300]"));
                 }
                 let address = server.inner.borrow().address();
                 let user_data = [0; dream_net::USER_DATA_BYTES];
@@ -830,38 +830,38 @@ fn describe_server(d: &mut ExtensionDescriptor) {
     server.getter("address", |server: &Server| server.inner.borrow().address().to_string()).signature("string");
     server.metamethod("__tostring", |server: &Server| {
         let inner = server.inner.borrow();
-        format!("dream.net.Server({}, {} connected)", inner.address(), inner.num_connected())
+        format!("dream.udp.Server({}, {} connected)", inner.address(), inner.num_connected())
     });
 }
 
 fn describe_client(d: &mut ExtensionDescriptor) {
-    let mut client = d.userdata::<NetClient>("dream.net.Client");
-    client.tag(TagPolicy::Preferred).doc("A transport client; `net.client{}` needs the network.transport capability.");
+    let mut client = d.userdata::<UdpClient>("dream.udp.Client");
+    client.tag(TagPolicy::Preferred).doc("A transport client; `udp.client{}` needs the network.transport capability.");
     client
-        .method("connect", |client: &NetClient, token: BytesView| {
+        .method("connect", |client: &UdpClient, token: BytesView| {
             let mut bytes = [0u8; dream_net::CONNECT_TOKEN_BYTES];
             if token.len() != bytes.len() {
-                return Err(Error::runtime(format!("dream.net: a connect token is {} bytes", bytes.len())));
+                return Err(Error::runtime(format!("dream.udp: a connect token is {} bytes", bytes.len())));
             }
             token.read(0, &mut bytes)?;
             let token = bytes;
             client.inner.borrow_mut().connect(&token).map_err(config_error)
         })
         .signature("(self, token: buffer | string)");
-    client.method("disconnect", |client: &NetClient| client.inner.borrow_mut().disconnect()).signature("(self)");
+    client.method("disconnect", |client: &UdpClient| client.inner.borrow_mut().disconnect()).signature("(self)");
     client
-        .method("update", |client: &NetClient| {
+        .method("update", |client: &UdpClient| {
             let now = (client.clock)();
             client.inner.borrow_mut().update(now);
         })
         .signature("(self)");
     client
-        .method("pollInto", |client: &NetClient, buffer: BufferView| client.poll_into(buffer))
+        .method("pollInto", |client: &UdpClient, buffer: BufferView| client.poll_into(buffer))
         .signature("(self, buffer: buffer): (string?, integer, ...any)");
     client
         .method(
             "sendEvent",
-            |client: &NetClient,
+            |client: &UdpClient,
              event: Exact<i64>,
              payload: BytesView,
              offset: Option<Exact<i64>>,
@@ -872,9 +872,9 @@ fn describe_client(d: &mut ExtensionDescriptor) {
             },
         )
         .signature("(self, eventId: integer, payload: buffer | string, offset: number?, length: number?)");
-    client.method("flush", |client: &NetClient| client.inner.borrow_mut().flush()).signature("(self)");
+    client.method("flush", |client: &UdpClient| client.inner.borrow_mut().flush()).signature("(self)");
     client
-        .method("counters", |client: &NetClient, call: &Call| -> Result<Option<Table>> {
+        .method("counters", |client: &UdpClient, call: &Call| -> Result<Option<Table>> {
             match client.inner.borrow().counters() {
                 Some(counters) => counters_table(call, &counters).map(Some),
                 None => Ok(None),
@@ -882,14 +882,14 @@ fn describe_client(d: &mut ExtensionDescriptor) {
         })
         .signature("(self): { [string]: number }?");
     client
-        .method("memoryUsage", |client: &NetClient, call: &Call| {
+        .method("memoryUsage", |client: &UdpClient, call: &Call| {
             memory_table(call, &client.inner.borrow().memory_usage())
         })
         .signature("(self): { [string]: number }");
-    client.getter("status", |client: &NetClient| client.status_name()).signature("string");
-    client.getter("port", |client: &NetClient| i64::from(client.inner.borrow().port())).signature("number");
+    client.getter("status", |client: &UdpClient| client.status_name()).signature("string");
+    client.getter("port", |client: &UdpClient| i64::from(client.inner.borrow().port())).signature("number");
     client
-        .getter("serverAddress", |client: &NetClient| client.inner.borrow().server_address().map(|a| a.to_string()))
+        .getter("serverAddress", |client: &UdpClient| client.inner.borrow().server_address().map(|a| a.to_string()))
         .signature("string?");
     client.field::<ConnectedField>("connected").signature("boolean");
     client.field::<RttField>("rtt").signature("number?");
@@ -898,7 +898,7 @@ fn describe_client(d: &mut ExtensionDescriptor) {
     client.field::<SentKbpsField>("sentKbps").signature("number?");
     client.field::<ReceivedKbpsField>("receivedKbps").signature("number?");
     client.field::<AckedKbpsField>("ackedKbps").signature("number?");
-    client.metamethod("__tostring", |client: &NetClient| format!("dream.net.Client({})", client.status_name()));
+    client.metamethod("__tostring", |client: &UdpClient| format!("dream.udp.Client({})", client.status_name()));
 }
 
 /// `Delivery` names as scripts spell them.

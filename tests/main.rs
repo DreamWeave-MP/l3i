@@ -49,7 +49,6 @@ mod metatable;
 mod module;
 #[cfg(feature = "jit")]
 mod native_code;
-mod net;
 mod patterns;
 mod primitives;
 #[cfg(feature = "process")]
@@ -67,6 +66,7 @@ mod tagged;
 mod thread;
 #[cfg(all(feature = "analysis", feature = "soft-render"))]
 mod typed_definitions;
+mod udp;
 mod untagged;
 mod vector_writer;
 mod watchdog;

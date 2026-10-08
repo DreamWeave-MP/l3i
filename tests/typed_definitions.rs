@@ -258,17 +258,17 @@ const SCRIPTS: &[(&str, &str)] = &[
     (
         "net_script",
         "--!strict\n\
-         local net = require('@dream/net')\n\
-         local schema = net.schema({ version = 1, channels = { { name = 'state', delivery = 'unreliable' } }, events = { { name = 'ping', channel = 'state', maxPayload = 8 } } })\n\
+         local udp = require('@dream/udp')\n\
+         local schema = udp.schema({ version = 1, channels = { { name = 'state', delivery = 'unreliable' } }, events = { { name = 'ping', channel = 'state', maxPayload = 8 } } })\n\
          local id: integer = schema:eventId('ping') or 0i\n\
          local name: string = schema:eventName(id) or ''\n\
          local count: number = schema.eventCount\n\
-         local client = net.client({ schema = schema })\n\
+         local client = udp.client({ schema = schema })\n\
          client:update()\n\
          local kind, peer, a = client:pollInto(buffer.create(64))\n\
          client:sendEvent(id, buffer.create(8), 0, 8)\n\
          local rtt: number? = client.rtt\n\
-         print(name, count, kind, peer, a, rtt, client.status, net.MAX_CHANNELS)\n",
+         print(name, count, kind, peer, a, rtt, client.status, udp.MAX_CHANNELS)\n",
     ),
 ];
 
@@ -279,7 +279,7 @@ fn the_generated_definitions_type_check_and_typed_scripts_pass_strict_mode() {
     let plan = plan();
     let definitions = plan.type_definitions();
     assert!(definitions.contains("declare extern type dream_quat_Math with"), "{definitions}");
-    assert!(definitions.contains("declare extern type dream_net_Client with"), "{definitions}");
+    assert!(definitions.contains("declare extern type dream_udp_Client with"), "{definitions}");
     assert!(definitions.contains("    IDENTITY: integer,"), "{definitions}");
     for fallback in ["(self, ...any): any", "(...any) -> ...any", ": any,\n", ": any\n"] {
         assert!(!definitions.contains(fallback), "every built-in member is typed ({fallback:?} found):\n{definitions}");

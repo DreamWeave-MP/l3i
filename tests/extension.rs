@@ -119,15 +119,15 @@ fn plan_with(core: Core, policy: RuntimePolicy) -> Rc<RuntimePlan> {
 #[test]
 fn dependency_order_composition_and_direct_dispatch() {
     let plan = plan_with(Core::preferred(), RuntimePolicy::new());
-    assert_eq!(plan.installation_order(), ["dream.core", "dream.net", "dream.tools"]);
+    assert_eq!(plan.installation_order(), ["dream.core", "dream.tools", "dream.udp"]);
     let counter = plan.userdata_by_key("dream.tests.Counter").unwrap();
     assert_eq!(counter.owner, "dream.core");
-    assert_eq!(counter.tag, Some(2), "tag 1 is the network bridge's Client");
+    assert_eq!(counter.tag, Some(1), "the network bridge's Client keys after it");
     let names: Vec<&str> = counter.members.iter().map(|m| m.name.as_str()).collect();
     assert_eq!(names, ["get", "add", "twice", "twice", "value", "double", "describe"]);
     // Every method, getter, and setter of a tagged type has a dense slot; direct fields none.
     let slots: Vec<Option<u16>> = counter.members.iter().map(|m| m.slot).collect();
-    // Slots are dense across the plan in key order; the network bridge's Client comes first.
+    // Slots are dense across the plan in key order; the network bridge's Client comes after.
     let base = slots[0].expect("the first method has a slot");
     assert_eq!(
         slots,
@@ -150,9 +150,9 @@ fn dependency_order_composition_and_direct_dispatch() {
 fn tagged_and_untagged_runtimes_agree() {
     let tagged = plan_with(Core::preferred(), RuntimePolicy::new());
     let untagged = plan_with(Core { tag: TagPolicy::Never, with_field: false }, RuntimePolicy::new());
-    // Tags follow key order; the network bridge's Client (`dream.net.Client`) sorts first.
-    assert_eq!(tagged.tag_of("dream.net.Client"), Some(1));
-    assert_eq!(tagged.tag_of("dream.tests.Counter"), Some(2));
+    // Tags follow key order; the network bridge's Client (`dream.udp.Client`) sorts after Counter.
+    assert_eq!(tagged.tag_of("dream.tests.Counter"), Some(1));
+    assert_eq!(tagged.tag_of("dream.udp.Client"), Some(2));
     assert_eq!(untagged.tag_of("dream.tests.Counter"), None);
     assert!(untagged.userdata_by_key("dream.tests.Counter").unwrap().members.iter().all(|m| m.slot.is_none()));
     for plan in [&tagged, &untagged] {
@@ -165,8 +165,8 @@ fn tagged_and_untagged_runtimes_agree() {
 fn per_vm_tags_and_atoms_differ_with_identical_semantics() {
     let a = plan_with(Core::preferred(), RuntimePolicy::new().first_tag(7));
     let b = plan_with(Core::preferred(), RuntimePolicy::new().first_tag(40));
-    assert_eq!(a.tag_of("dream.tests.Counter"), Some(8));
-    assert_eq!(b.tag_of("dream.tests.Counter"), Some(41));
+    assert_eq!(a.tag_of("dream.tests.Counter"), Some(7));
+    assert_eq!(b.tag_of("dream.tests.Counter"), Some(40));
     // Another extension in one plan shifts the atom of a shared member name.
     struct Extra;
     impl Extension for Extra {
@@ -241,7 +241,7 @@ fn compiler_metadata_and_type_definitions_follow_composition() {
     // Userdata types reach the compiler under the class name scripts annotate, in slot order
     // (tag order among equal policies): the network bridge's types are in every plan.
     let names: Vec<&str> = options.userdata_types.iter().map(|n| n.to_str().unwrap()).collect();
-    assert_eq!(names, ["dream_net_Client", "dream_tests_Counter", "dream_net_Server"]);
+    assert_eq!(names, ["dream_tests_Counter", "dream_udp_Client", "dream_udp_Server"]);
     // The compat global works and the folded constant reads the same.
     runtime.exec("assert(core.ANSWER == 42, 'answer') assert(core.LIMIT == 7i, 'limit') assert(core.NAME == 'core', 'name') assert(core.new(1):get() == 1, 'get')").unwrap();
 
@@ -363,13 +363,13 @@ fn finalization_rejects_bad_compositions() {
     // plan without being asked for, and the plan knows its module.
     let plan =
         RuntimePlan::builder().extension(Bare("zeta", vec![])).extension(Bare("alpha", vec![])).finalize().unwrap();
-    assert_eq!(plan.installation_order(), ["alpha", "dream.net", "zeta"]);
-    assert!(plan.modules().iter().any(|m| m.path == "@dream/net"));
+    assert_eq!(plan.installation_order(), ["alpha", "dream.udp", "zeta"]);
+    assert!(plan.modules().iter().any(|m| m.path == "@dream/udp"));
     let runtime = Runtime::from_plan(&plan).unwrap();
-    runtime.exec("local net = require('@dream/net') assert(type(net.schema) == 'function')").unwrap();
+    runtime.exec("local udp = require('@dream/udp') assert(type(udp.schema) == 'function')").unwrap();
     // The id is reserved: nothing can stand in for the bridge.
-    let error = text(RuntimePlan::builder().extension(Bare("dream.net", vec![])).finalize());
-    assert!(error.contains("'dream.net' is reserved for l3i's network bridge"), "{error}");
+    let error = text(RuntimePlan::builder().extension(Bare("dream.udp", vec![])).finalize());
+    assert!(error.contains("'dream.udp' is reserved for l3i's network bridge"), "{error}");
 
     // Names that fold to one identifier: debug prefixes, generated class and module type
     // names; and compat globals, one per module and one module per global.
@@ -868,9 +868,9 @@ fn compiler_type_slots_go_to_required_types_first_and_a_required_type_without_on
     let typed: Vec<&str> =
         plan.userdata().iter().filter(|u| u.bytecode_type.is_some()).map(|u| u.key.as_str()).collect();
     assert_eq!(typed.len(), COMPILER_TYPE_CAPACITY);
-    // `dream.net.Client` keys before the slot types and takes the first slot.
-    assert_eq!(plan.userdata_by_key("dream.net.Client").unwrap().bytecode_type, Some(64));
-    assert_eq!(plan.userdata_by_key("dream.slots.S0").unwrap().bytecode_type, Some(65));
+    // `dream.udp.Client` keys after the slot types, which take every slot before it.
+    assert_eq!(plan.userdata_by_key("dream.slots.S0").unwrap().bytecode_type, Some(64));
+    assert_eq!(plan.userdata_by_key("dream.udp.Client").unwrap().bytecode_type, None);
     assert_eq!(plan.userdata_by_key("dream.slots.S8").unwrap().bytecode_type, None);
 
     // A Required type declared after thirty-four Preferred ones still gets the first slot.

@@ -1,6 +1,6 @@
 +++
 title = "Extensions and primitives"
-description = "Extension, ExtensionDescriptor and the declaration builders; RuntimePlan, RuntimePolicy and InstallContext; packed scalars and buffer layouts; sequences and streams; the dream.quat, dream.raster, dream.net and dream.soft_render extensions."
+description = "Extension, ExtensionDescriptor and the declaration builders; RuntimePlan, RuntimePolicy and InstallContext; packed scalars and buffer layouts; sequences and streams; the dream.quat, dream.raster, dream.udp and dream.soft_render extensions."
 weight = 250
 
 [extra]
@@ -8,7 +8,7 @@ kind = "api"
 +++
 
 Modules `l3i::extension`, `l3i::packed`, `l3i::sequence`, `l3i::quat`, `l3i::raster`,
-`l3i::net` and, with the `soft-render` feature, `l3i::soft_render`.
+`l3i::udp` and, with the `soft-render` feature, `l3i::soft_render`.
 [Extensions](@/docs/extensions.md), [Primitives](@/docs/primitives.md) and
 [Built-in extensions](@/docs/builtin-extensions.md) are the guides.
 
@@ -205,7 +205,7 @@ The member just declared. `fn signature(self, signature: impl Into<String>) -> S
 The vocabulary for signatures follows the runtime, where Luau's checker keeps `integer` and
 `number` apart: a packed value, a `Bits64` or an `Integer` result is `integer`; a count, a size
 or an `f64` is `number`; a class is its generated name, the key with dots replaced
-(`dream_net_Client`); a module type is `Module__dream_archive_ba2`.
+(`dream_udp_Client`); a module type is `Module__dream_archive_ba2`.
 
 ### RuntimePolicy
 
@@ -250,12 +250,12 @@ Collects extensions, services and policy. `Default`.
 | `fn policy(self, policy: RuntimePolicy) -> Self` | |
 | `fn service<S: 'static>(self, service: S) -> Self` | A host service extensions may look up by type at install time |
 | `fn pin_tag(self, key: &str, tag: RuntimeTag) -> Self` | Pins the type with stable `key` to `tag` in every runtime from this plan |
-| `fn network_clock(self, clock: net::Clock) -> Self` | The transport clock the network bridge reads instead of a monotonic clock started at creation; scripts never see or set it |
+| `fn network_clock(self, clock: udp::Clock) -> Self` | The transport clock the network bridge reads instead of a monotonic clock started at creation; scripts never see or set it |
 | `fn extension(self, extension: impl Extension) -> Self`, `fn boxed_extension(self, extension: Box<dyn Extension>) -> Self` | |
-| `fn finalize(self) -> Result<Rc<RuntimePlan>>` | Adds l3i's `dream.net` bridge, runs every `describe`, resolves and freezes |
+| `fn finalize(self) -> Result<Rc<RuntimePlan>>` | Adds l3i's `dream.udp` bridge, runs every `describe`, resolves and freezes |
 
 Finalize errors (`Error::Logic`, or `Error::Permission` for a missing capability): an extension
-registered twice or claiming the reserved `dream.net` id; two ids folding to one debug prefix; a
+registered twice or claiming the reserved `dream.udp` id; two ids folding to one debug prefix; a
 missing or cyclic `requires`; a module provided twice, a member declared twice, a compat global
 for a path nothing provides; a type owned twice, a Rust type under two keys, two types sharing a
 `Userdata::NAME` or a generated class name; an augmentation of a type its extension does not
@@ -579,10 +579,10 @@ on an axis needs a clip type of its own.
 The color arithmetic receiver (`dream.raster.Math`). Module `l3i::raster::lowering` (feature
 `jit`): `struct ColorMath`, the hook set, and `fn lowered_sites() -> usize`.
 
-## dream.net
+## dream.udp
 
-Module `l3i::net`: the dream-net bridge, extension `dream.net`, module `@dream/net`, types
-`dream.net.Server`, `dream.net.Client` and `dream.net.Schema`. Every `RuntimePlan` carries it
+Module `l3i::udp`: the dream-net bridge, extension `dream.udp`, module `@dream/udp`, types
+`dream.udp.Server`, `dream.udp.Client` and `dream.udp.Schema`. Every `RuntimePlan` carries it
 and the id is reserved. Peer, event, channel and client ids are Luau integers; sizes and counters
 plain numbers; payloads Luau buffers (or strings on send), copied on the way in and out so no
 Lua memory is retained by the transport; the transport clock is the plan's; the server private
@@ -590,9 +590,9 @@ key never reaches Luau; nothing calls into Luau from inside dream-net.
 
 | Constant | Value |
 |---|---|
-| `EXTENSION_ID: &str` | `dream.net` |
-| `MODULE: &str` | `@dream/net` |
-| `TRANSPORT_CAPABILITY: &str` | `network.transport`: lets scripts create transport objects with `net.client` |
+| `EXTENSION_ID: &str` | `dream.udp` |
+| `MODULE: &str` | `@dream/udp` |
+| `TRANSPORT_CAPABILITY: &str` | `network.transport`: lets scripts create transport objects with `udp.client` |
 
 {{ api_signature(value="type Clock = Rc<dyn Fn() -> f64>") }}
 
@@ -601,7 +601,7 @@ key never reaches Luau; nothing calls into Luau from inside dream-net.
 A monotonic clock the transport reads on `update()`, seconds as `f64`; one counting from its
 creation.
 
-{{ api_signature(value="struct NetExtension") }}
+{{ api_signature(value="struct UdpExtension") }}
 
 The extension, added by the planner. `fn new() -> Self` (a monotonic clock started now), `fn
 with_clock(clock: Clock) -> Self`, `Default`. The module declares `schema(options)` (a strict
@@ -609,14 +609,14 @@ option table: `version`, `maxMessagesPerPacket?`, `channels`, `events`), the con
 `CONNECT_TOKEN_BYTES`, `MAX_EVENT_PAYLOAD`, `MAX_CHANNELS`, and the installed `client{ schema,
 bind? }`, which raises `Error::Permission` unless the policy grants `network.transport`.
 
-{{ api_signature(value="struct NetSchema(pub Schema)") }}
+{{ api_signature(value="struct UdpSchema(pub Schema)") }}
 
-`dream.net.Schema`, untagged: getters `version`, `fingerprint`, `eventCount`, `channelCount`;
+`dream.udp.Schema`, untagged: getters `version`, `fingerprint`, `eventCount`, `channelCount`;
 methods `eventId(name)`, `channelId(name)`, `eventName(id)`, `channelName(id)`.
 
 {{ api_signature(value="struct Server") }}
 
-`dream.net.Server`: a dream-net server as scripts see it. Created by the host in Rust, which
+`dream.udp.Server`: a dream-net server as scripts see it. Created by the host in Rust, which
 keeps the private key. Scripts get `update()`, `pollInto(buffer)` returning `kind, peer, a, b,
 c` with one payload copy and no allocation, `sendEvent(peer, eventId, bytes, offset?, length?)`,
 `flush()`, and the per-peer statistics methods.
@@ -627,9 +627,9 @@ c` with one payload copy and no allocation, `sendEvent(peer, eventId, bytes, off
 | `fn push<'s>(scope: &'s impl Scope, server: dream_net::Server, clock: Clock) -> Result<ValueView<'s>>` | Pushes a server handle; the extension must be installed |
 | `fn with(&self, body: impl FnOnce(&mut dream_net::Server))` | Runs `body` with the wrapped server borrowed mutably, for host code |
 
-{{ api_signature(value="struct NetClient") }}
+{{ api_signature(value="struct UdpClient") }}
 
-`dream.net.Client`, with `fn new(client: Client, clock: Clock) -> NetClient`, `fn push<'s>(scope:
+`dream.udp.Client`, with `fn new(client: Client, clock: Clock) -> UdpClient`, `fn push<'s>(scope:
 &'s impl Scope, client: Client, clock: Clock) -> Result<ValueView<'s>>` and `fn with(&self, body:
 impl FnOnce(&mut Client))`. Connection statistics are direct fields on the client.
 

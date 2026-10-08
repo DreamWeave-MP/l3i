@@ -13,8 +13,8 @@ use std::time::Duration;
 
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use l3i::extension::{RuntimePlan, RuntimePolicy};
-use l3i::net::{self, NetSchema, Server};
 use l3i::stack::Scope;
+use l3i::udp::{self, Server, UdpSchema};
 use l3i::value::Function;
 use l3i::{Runtime, userdata};
 
@@ -22,12 +22,12 @@ const PROTOCOL: u64 = 0xD4EA_4E70_0000_0003;
 const EVENTS: u64 = 256;
 
 fn connected_runtime() -> (Runtime, Function) {
-    let policy = RuntimePolicy::new().compat_global("@dream/net", "net").capability(net::TRANSPORT_CAPABILITY);
+    let policy = RuntimePolicy::new().compat_global("@dream/udp", "udp").capability(udp::TRANSPORT_CAPABILITY);
     let plan = RuntimePlan::builder().policy(policy).finalize().unwrap();
     let runtime = Runtime::from_plan(&plan).unwrap();
     runtime
         .exec(
-            "schema = net.schema{ version = 1, channels = { { name = 'state', delivery = 'unreliableUnordered', capacity = 1024, overflow = 'dropOldest' } }, \
+            "schema = udp.schema{ version = 1, channels = { { name = 'state', delivery = 'unreliableUnordered', capacity = 1024, overflow = 'dropOldest' } }, \
              events = { { name = 'Move', channel = 'state', maxPayload = 32 } } }",
         )
         .unwrap();
@@ -35,7 +35,7 @@ fn connected_runtime() -> (Runtime, Function) {
         let value = runtime.global("schema").unwrap();
         let stack = runtime.stack();
         stack
-            .with_frame(|frame| userdata::check_receiver::<NetSchema>(value.push_to(frame)?).map(|s| s.0.clone()))
+            .with_frame(|frame| userdata::check_receiver::<UdpSchema>(value.push_to(frame)?).map(|s| s.0.clone()))
             .unwrap()
     };
     let key = dream_net::generate_key();
@@ -45,7 +45,7 @@ fn connected_runtime() -> (Runtime, Function) {
         max_clients: 2,
         transport: dream_net::TransportConfig::default(),
     };
-    let clock = net::monotonic_clock();
+    let clock = udp::monotonic_clock();
     let server = dream_net::Server::new(config, &key, schema, clock()).unwrap();
     let address = server.address();
     let token = dream_net::generate_connect_token(
@@ -69,7 +69,7 @@ fn connected_runtime() -> (Runtime, Function) {
     }
     runtime
         .exec(
-            "client = net.client{ schema = schema } client:connect(token) buf = buffer.create(64) out = buffer.create(32) buffer.writef32(out, 0, 1.5) \
+            "client = udp.client{ schema = schema } client:connect(token) buf = buffer.create(64) out = buffer.create(32) buffer.writef32(out, 0, 1.5) \
              move = schema:eventId('Move') \
              function pump() server:update() client:update() \
                  while server:pollInto(buf) do end while client:pollInto(buf) do end server:flush() client:flush() end",
@@ -89,9 +89,9 @@ fn connected_runtime() -> (Runtime, Function) {
     (runtime, pump)
 }
 
-fn net_bridge(c: &mut Criterion) {
+fn udp_bridge(c: &mut Criterion) {
     let (runtime, _pump) = connected_runtime();
-    let mut group = c.benchmark_group("net_bridge");
+    let mut group = c.benchmark_group("udp_bridge");
     group.throughput(Throughput::Elements(EVENTS));
     let send = runtime
         .load_function(&format!(
@@ -130,5 +130,5 @@ fn configure() -> Criterion {
     Criterion::default().warm_up_time(Duration::from_secs(1)).measurement_time(Duration::from_secs(3))
 }
 
-criterion_group! { name = benches; config = configure(); targets = net_bridge }
+criterion_group! { name = benches; config = configure(); targets = udp_bridge }
 criterion_main!(benches);

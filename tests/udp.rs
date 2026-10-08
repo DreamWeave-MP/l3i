@@ -4,20 +4,20 @@
 use std::time::Duration;
 
 use l3i::extension::{RuntimePlan, RuntimePolicy};
-use l3i::net::{self, NetSchema};
+use l3i::udp::{self, UdpSchema};
 use l3i::userdata;
 use l3i::{Error, Runtime};
 
 const PROTOCOL: u64 = 0xD4EA_4E70_0000_0002;
 
-const SCHEMA: &str = "schema = net.schema{ version = 1, \
+const SCHEMA: &str = "schema = udp.schema{ version = 1, \
     channels = { { name = 'reliable', delivery = 'reliableOrdered' }, { name = 'state', delivery = 'unreliableUnordered', capacity = 256, overflow = 'dropOldest' } }, \
     events = { { name = 'Ping', channel = 'reliable', maxPayload = 64 }, { name = 'Pong', channel = 'reliable', maxPayload = 64 }, { name = 'Move', channel = 'state', maxPayload = 12, codecVersion = 2 } } }";
 
 fn plan(transport: bool) -> std::rc::Rc<RuntimePlan> {
-    let mut policy = RuntimePolicy::new().compat_global("@dream/net", "net");
+    let mut policy = RuntimePolicy::new().compat_global("@dream/udp", "udp");
     if transport {
-        policy = policy.capability(net::TRANSPORT_CAPABILITY);
+        policy = policy.capability(udp::TRANSPORT_CAPABILITY);
     }
     RuntimePlan::builder().policy(policy).finalize().unwrap()
 }
@@ -29,7 +29,7 @@ fn schema_of(runtime: &Runtime) -> dream_net::Schema {
     stack
         .with_frame(|frame| {
             let view = value.push_to(frame)?;
-            userdata::check_receiver::<NetSchema>(view).map(|s| s.0.clone())
+            userdata::check_receiver::<UdpSchema>(view).map(|s| s.0.clone())
         })
         .unwrap()
 }
@@ -46,23 +46,23 @@ fn schema_builds_from_options_and_reports_ids() {
              assert(schema:channelName(schema:channelId('state')) == 'state') \
              assert(schema:maxPayload(schema:eventId('Move')) == 12i) \
              local hi, lo = schema:fingerprintHalves() assert(hi ~= nil and lo ~= nil) \
-             assert(#schema.fingerprint == 32) assert(tostring(schema):find('dream.net.Schema')) \
-             assert(net.CONNECT_TOKEN_BYTES == 2048 and net.MAX_CHANNELS == 64)",
+             assert(#schema.fingerprint == 32) assert(tostring(schema):find('dream.udp.Schema')) \
+             assert(udp.CONNECT_TOKEN_BYTES == 2048 and udp.MAX_CHANNELS == 64)",
         )
         .unwrap();
     let schema = schema_of(&runtime);
     assert_eq!(schema.events().len(), 3);
     // Strict options.
     let error =
-        runtime.exec("net.schema{ version = 1, channels = {}, events = {}, extra = 1 }").unwrap_err().to_string();
+        runtime.exec("udp.schema{ version = 1, channels = {}, events = {}, extra = 1 }").unwrap_err().to_string();
     assert!(error.contains("unknown option 'extra'"), "{error}");
     let error = runtime
-        .exec("net.schema{ version = 1, channels = { { name = 'a', delivery = 'sometimes' } }, events = {} }")
+        .exec("udp.schema{ version = 1, channels = { { name = 'a', delivery = 'sometimes' } }, events = {} }")
         .unwrap_err()
         .to_string();
     assert!(error.contains("channels[1].delivery"), "{error}");
     let error = runtime
-        .exec("net.schema{ version = 1, channels = {}, events = { { name = 'X', channel = 'missing', maxPayload = 4 } } }")
+        .exec("udp.schema{ version = 1, channels = {}, events = { { name = 'X', channel = 'missing', maxPayload = 4 } } }")
         .unwrap_err()
         .to_string();
     assert!(error.contains("unknown channel 'missing'"), "{error}");
@@ -72,10 +72,10 @@ fn schema_builds_from_options_and_reports_ids() {
 fn client_creation_is_gated_by_the_transport_capability() {
     let runtime = Runtime::from_plan(&plan(false)).unwrap();
     runtime.exec(SCHEMA).unwrap();
-    let error = runtime.exec("net.client{ schema = schema }").unwrap_err().to_string();
+    let error = runtime.exec("udp.client{ schema = schema }").unwrap_err().to_string();
     assert!(error.contains("network.transport"), "{error}");
     let error =
-        runtime.exec("net.server{ schema = schema, address = '127.0.0.1:0', protocolId = 1 }").unwrap_err().to_string();
+        runtime.exec("udp.server{ schema = schema, address = '127.0.0.1:0', protocolId = 1 }").unwrap_err().to_string();
     assert!(error.contains("network.transport"), "{error}");
 }
 
@@ -84,8 +84,8 @@ fn events_flow_both_ways_over_localhost() {
     let runtime = Runtime::from_plan(&plan(true)).unwrap();
     runtime
         .exec(&format!(
-            "{SCHEMA} server = net.server{{ schema = schema, address = '127.0.0.1:0', protocolId = {}i, maxClients = 4 }} \
-             token = server:connectToken(77i, 30, 5) assert(buffer.len(token) == net.CONNECT_TOKEN_BYTES)",
+            "{SCHEMA} server = udp.server{{ schema = schema, address = '127.0.0.1:0', protocolId = {}i, maxClients = 4 }} \
+             token = server:connectToken(77i, 30, 5) assert(buffer.len(token) == udp.CONNECT_TOKEN_BYTES)",
             PROTOCOL as i64
         ))
         .unwrap();
@@ -94,7 +94,7 @@ fn events_flow_both_ways_over_localhost() {
 
     runtime
         .exec(
-            "client = net.client{ schema = schema } assert(client.status == 'disconnected') assert(not client.connected) \
+            "client = udp.client{ schema = schema } assert(client.status == 'disconnected') assert(not client.connected) \
              assert(client.rtt == nil) client:connect(token) \
              buf = buffer.create(64) log = {} pings, pongs, moves = 0, 0, 0 \
              function step() \
@@ -146,17 +146,17 @@ fn events_flow_both_ways_over_localhost() {
              assert(type(server:peerRtt(serverPeer)) == 'number') assert(type(client.rtt) == 'number') assert(client.packetLoss ~= nil) \
              assert(server:counters(serverPeer).eventsReceived >= 2) assert(client:counters().eventsSent >= 2) \
              assert(server:memoryUsage().total > 0 and client:memoryUsage().total >= 0) \
-             assert(tostring(server):find('1 connected')) assert(tostring(client) == 'dream.net.Client(connected)') \
+             assert(tostring(server):find('1 connected')) assert(tostring(client) == 'dream.udp.Client(connected)') \
              assert(log[1] == 'server:connected' or log[1] == 'client:connected')",
         )
         .unwrap();
     // Misuse is a script error, not a panic.
     let error = runtime.exec("client:sendEvent(999, 'x')").unwrap_err().to_string();
-    assert!(error.contains("dream.net"), "{error}");
+    assert!(error.contains("dream.udp"), "{error}");
     let error = runtime.exec("client:sendEvent(schema:eventId('Ping'), 'toolong', 0, 40)").unwrap_err().to_string();
     assert!(error.contains("exceeds the 7-byte buffer"), "{error}");
     let error = runtime.exec("server:sendEvent(12345i, schema:eventId('Ping'), 'x')").unwrap_err().to_string();
-    assert!(error.contains("dream.net"), "{error}");
+    assert!(error.contains("dream.udp"), "{error}");
     // A too-small poll buffer reports the size it needed and consumes nothing: the same event
     // is still there for a big enough buffer afterwards.
     runtime.exec("server:sendEvent(serverPeer, schema:eventId('Pong'), string.rep('z', 40)) server:flush()").unwrap();
@@ -192,17 +192,17 @@ fn the_plan_supplies_the_transport_clock() {
     use std::rc::Rc;
     let now = Rc::new(Cell::new(10.0f64));
     let reads = Rc::new(Cell::new(0u32));
-    let clock: net::Clock = {
+    let clock: udp::Clock = {
         let (now, reads) = (Rc::clone(&now), Rc::clone(&reads));
         Rc::new(move || {
             reads.set(reads.get() + 1);
             now.get()
         })
     };
-    let policy = RuntimePolicy::new().compat_global("@dream/net", "net").capability(net::TRANSPORT_CAPABILITY);
+    let policy = RuntimePolicy::new().compat_global("@dream/udp", "udp").capability(udp::TRANSPORT_CAPABILITY);
     let plan = RuntimePlan::builder().policy(policy).network_clock(clock).finalize().unwrap();
     let runtime = Runtime::from_plan(&plan).unwrap();
-    runtime.exec(&format!("{SCHEMA} client = net.client({{ schema = schema }}) client:update()")).unwrap();
+    runtime.exec(&format!("{SCHEMA} client = udp.client({{ schema = schema }}) client:update()")).unwrap();
     assert!(reads.get() > 0, "the client read the plan's clock");
     now.set(11.0);
     runtime.exec("client:update()").unwrap();

@@ -34,7 +34,7 @@ Documentation: **<https://DreamWeave-MP.github.io/l3i/>**. This file is the shor
 | **Arguments read from the value layout** | The typed binder reads stack slots straight from Luau's 16-byte `TValue`. A bound `(f64, f64) -> f64` call retires 369 instructions against 277 for a bare `lua_CFunction`. |
 | **Tags, atoms and slots are plan data** | A `RuntimePlan` assigns userdata tags, Luau's 32 compiler type slots, atoms and direct-access slots per VM, so one Rust type can be tag 8 in one runtime and untagged in another. |
 | **Typed by construction** | Every module member carries a Luau signature. The plan renders the `.d.luau`, and the `analysis` feature type checks strict scripts against it in the crate's own tests. |
-| **The network is not optional** | Every plan carries the `dream.net` bridge; the policy's capabilities decide what a script may do with it. |
+| **The network is not optional** | Every plan carries the `dream.udp` bridge; the policy's capabilities decide what a script may do with it. |
 | **Lowering hooks in Rust** | With `jit`, hosts write Luau's userdata and vector lowering hooks against an `IrBuilder` C ABI. Quaternions, colours, byte reads and vertex writes compile to IR with no C call. |
 
 Nothing here is a catalogue: tags, atoms, type names and debug-name roots are host data.
@@ -106,7 +106,7 @@ Each row is a page of the guide.
 | **Direct access** | Atoms let `GETTABLEKS`/`NAMECALL` reach a native callback with no metatable walk; `DirectPlan` validates Luau's inline cache in O(1) and serves a type under any tag. | [Direct access](https://DreamWeave-MP.github.io/l3i/docs/direct-access/) |
 | **Extensions and plans** | A crate declares its Luau surface once (`describe`), a plan composes crates and assigns every tag, slot and atom (`finalize`), a runtime is built from it (`from_plan`); the plan renders the `.d.luau` and can type check it. | [Extensions](https://DreamWeave-MP.github.io/l3i/docs/extensions/) |
 | **Primitives** | `BytesView`, `BufferView`, `Exact<T>`, `Integer`, `Bits64`, `PackedScalar` with a kind registry, strict `Options` tables, in-place table walks, `Sequence` and `Stream` views. | [Primitives](https://DreamWeave-MP.github.io/l3i/docs/primitives/) |
-| **Built-in extensions** | `@dream/net` (in every plan), `@dream/quat`, `@dream/raster`, `@dream/bytes`, `@dream/data`, `@dream/intern`, `@dream/intl`, `@dream/luau`, `@dream/soft-render`, `@dream/fs`, `@dream/process`. | [Built-in extensions](https://DreamWeave-MP.github.io/l3i/docs/builtin-extensions/) |
+| **Built-in extensions** | `@dream/udp` (in every plan), `@dream/quat`, `@dream/raster`, `@dream/bytes`, `@dream/data`, `@dream/intern`, `@dream/intl`, `@dream/luau`, `@dream/soft-render`, `@dream/fs`, `@dream/process`. | [Built-in extensions](https://DreamWeave-MP.github.io/l3i/docs/builtin-extensions/) |
 | **Native code** | Luau's CodeGen with lowering hooks written in Rust; which call sites lower and why. | [Native code](https://DreamWeave-MP.github.io/l3i/docs/native-code/) |
 | **The rest of the VM** | Coroutines, the debug API, memory and GC controls, libraries, `require`, Luau's analysis frontend. | [Coroutines, debugging and the rest](https://DreamWeave-MP.github.io/l3i/docs/vm/) |
 | **Rust API** | Every public module. | [Rust API](https://DreamWeave-MP.github.io/l3i/docs/api/) |
@@ -115,7 +115,7 @@ Each row is a page of the guide.
 
 | Extension | Module | What it is |
 |---|---|---|
-| `dream.net` | `@dream/net` | The dream-net bridge, in every plan: schemas, capability-gated Luau clients and servers, opaque server keys with Luau token minting, `pollInto` with one payload copy and no allocation. |
+| `dream.udp` | `@dream/udp` | The dream-net bridge, in every plan: schemas, capability-gated Luau clients and servers, opaque server keys with Luau token minting, `pollInto` with one payload copy and no allocation. |
 | `dream.quat` | `@dream/quat` | Unit rotations packed into one Luau integer (smallest-three, 18 bits per component) and animation keys; `quat.math()` lowers `rotate` to 21 ns native. |
 | `dream.raster` | `@dream/raster` | RGBA8 colours, clip rectangles and RGBA16 colours as packed integers; `raster.math()` lowers colour arithmetic. |
 | `dream.bytes` (`bytes`) | `@dream/bytes` | For parsing foreign file formats in script: searching, C strings, varints, big-endian and half-float reads lowered natively, plus codecs, digests and text codepages behind `bytes-codecs`, `bytes-digests`, `bytes-text`. |

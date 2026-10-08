@@ -130,7 +130,7 @@ pub struct RuntimePlanBuilder {
     extensions: Vec<Box<dyn Extension>>,
     services: HashMap<TypeId, (&'static str, Rc<dyn Any>)>,
     pinned_tags: BTreeMap<String, RuntimeTag>,
-    network_clock: Option<crate::net::Clock>,
+    network_clock: Option<crate::udp::Clock>,
 }
 
 impl Default for RuntimePlanBuilder {
@@ -170,7 +170,7 @@ impl RuntimePlanBuilder {
     /// The transport clock (seconds, monotonic) the network bridge reads in every runtime from
     /// this plan, instead of a monotonic clock started at creation: deterministic simulation
     /// and tests drive time themselves. Scripts never see or set it.
-    pub fn network_clock(mut self, clock: crate::net::Clock) -> Self {
+    pub fn network_clock(mut self, clock: crate::udp::Clock) -> Self {
         self.network_clock = Some(clock);
         self
     }
@@ -191,15 +191,15 @@ impl RuntimePlanBuilder {
 
         // The network bridge is runtime infrastructure: every plan carries l3i's own, the id is
         // reserved so nothing can stand in for it, and the policy decides what scripts may do.
-        if extensions.iter().any(|extension| extension.id() == crate::net::EXTENSION_ID) {
+        if extensions.iter().any(|extension| extension.id() == crate::udp::EXTENSION_ID) {
             return Err(Error::logic(format!(
                 "extension id '{}' is reserved for l3i's network bridge, which every plan carries; do not add one",
-                crate::net::EXTENSION_ID
+                crate::udp::EXTENSION_ID
             )));
         }
         let bridge = match network_clock {
-            Some(clock) => crate::net::NetExtension::with_clock(clock),
-            None => crate::net::NetExtension::new(),
+            Some(clock) => crate::udp::UdpExtension::with_clock(clock),
+            None => crate::udp::UdpExtension::new(),
         };
         extensions.insert(0, Box::new(bridge));
 

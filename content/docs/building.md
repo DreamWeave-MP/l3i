@@ -92,7 +92,7 @@ l3i = { version = "1.0", features = ["jit"] }
 | `fs` | off | The `dream.fs` extension (`l3i::fs`) with `memmap2`, `walkdir` and `same-file` |
 | `process` | off | The `dream.process` extension (`l3i::process`); no dependencies |
 
-Networking is not a feature: `dream-net` is a normal dependency and the `dream.net` bridge is in
+Networking is not a feature: `dream-net` is a normal dependency and the `dream.udp` bridge is in
 every plan.
 
 ## The toolchain rule

@@ -21,7 +21,7 @@ is a deliberate change that re-audits the hand-declared C API.
 
 | Dependency | Version | For |
 |---|---|---|
-| `dream-net` | `=1.1.0` | The `dream.net` bridge every plan carries |
+| `dream-net` | `=1.1.0` | The `dream.udp` bridge every plan carries |
 | `dream-soft-render` | `=1.0.0`, optional (`soft-render`) | The `dream.soft_render` extension |
 | `memchr`, `miniz_oxide`, `lz4_flex`, `ruzstd`, `lzma-rs`, `crc32fast`, `adler2`, `xxhash-rust`, `md-5`, `sha1`, `sha2`, `blake3`, `encoding_rs` | Optional, behind `bytes` and its `bytes-*` features | `@dream/bytes`'s searches, codecs, digests and text encodings |
 | `icu_locale_core`, `icu_plurals`, `icu_decimal`, `fixed_decimal`, `writeable` | `2.3` (`fixed_decimal` `0.7` with `ryu`, `writeable` `0.6`), optional, behind `intl` | `@dream/intl`'s locales, plural rules and decimal formatting, with ICU4X's compiled CLDR data |
@@ -94,7 +94,7 @@ The integration tests link as one binary (`tests/main.rs`), one file's tests run
 Criterion wall-clock means from `cargo bench --bench hot_paths`, generated on 2026-09-28 by
 `scripts/gen_benchmarks.py` on an Intel Core i7-10870H at 2.20 GHz, with debug assertions off
 and default features (interpreter only), under the verified toolchain. The other suites are
-`cargo bench --bench net`, `packed_quat`, `raster`, `soft_render` (feature `soft-render`) and
+`cargo bench --bench udp`, `packed_quat`, `raster`, `soft_render` (feature `soft-render`) and
 `instructions`.
 
 ### Rust to Luau
@@ -214,7 +214,7 @@ metatable identity.
 
 ### The network bridge
 
-Both ends of the `dream.net` bridge driven from Luau.
+Both ends of the `dream.udp` bridge driven from Luau.
 
 | Variant | Mean | ± Std Dev |
 |---|---:|---:|

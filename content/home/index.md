@@ -41,7 +41,7 @@ in every runtime, and Luau's native code generator with lowering hooks written i
 - **Values that never allocate.** Rotations, animation keys, colours and clip rectangles travel
   as one Luau integer each, with a kind nibble checked on every read. A packed `rotate` runs in
   21 ns lowered to native code.
-- **The network is not optional.** Every plan carries the `dream.net` bridge; the policy's
+- **The network is not optional.** Every plan carries the `dream.udp` bridge; the policy's
   capabilities decide what a script may do with it. Nothing calls into Luau from inside the
   transport.
 - **Sandboxes the engine can account for.** OpenMW's prelude, per-script instances cloned from

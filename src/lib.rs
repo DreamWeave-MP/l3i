@@ -94,7 +94,6 @@ pub mod module;
 pub mod native;
 #[cfg(feature = "jit")]
 pub mod native_code;
-pub mod net;
 pub mod options;
 #[cfg(any(feature = "fs", feature = "process"))]
 mod outcome;
@@ -116,6 +115,7 @@ pub mod stack;
 #[cfg(feature = "syntax")]
 pub mod syntax;
 pub mod thread;
+pub mod udp;
 pub mod userdata;
 pub mod value;
 pub mod vector_writer;
