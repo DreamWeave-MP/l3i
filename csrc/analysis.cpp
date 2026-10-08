@@ -286,6 +286,9 @@ namespace
     {
         db_source_provider provider;
         std::unordered_map<std::string, std::vector<L3i::Surface::Range>> bufferGenerators;
+        // Modules whose estimated pattern boundaries Luau's parse did not confirm: they are
+        // lowered with located boundaries from then on.
+        std::unordered_set<std::string> locatedBoundaries;
         // Updated only by the frontend's readSource, so cached ASTs keep the map
         // from their source snapshot even after markDirty or an existence probe.
         std::unordered_map<Luau::ModuleName, SourceSnapshot> snapshots;
@@ -366,7 +369,7 @@ namespace
                 return std::nullopt;
             }
             Luau::SourceCode::Type kind = type == 2 ? Luau::SourceCode::Script : Luau::SourceCode::Module;
-            auto lowered = L3i::Surface::lower(source, true, true, bufferGenerators[name]);
+            auto lowered = L3i::Surface::lower(source, true, true, bufferGenerators[name], false, {}, !locatedBoundaries.count(name));
             // Luau owns one shared SourceModule cache for both solvers/check modes.
             // Retain the exact original/lowered pair until that AST is reread.
             auto it = snapshots.insert_or_assign(name, SourceSnapshot{std::move(source), std::move(lowered)}).first;
@@ -512,6 +515,30 @@ namespace
         std::sort(dependencies.begin(), dependencies.end());
         for (const auto& dependency : dependencies)
             reachableModules(frontend, dependency, seen, modules);
+    }
+
+    // Confirms the estimated record pattern boundaries of a module and everything it requires
+    // against the ASTs Luau's frontend parsed. A module whose estimate failed is lowered with
+    // located boundaries and marked dirty; true means the caller must check again.
+    bool confirmBoundaries(Luau::Frontend& frontend, HostFileResolver& files, const std::string& name)
+    {
+        std::unordered_set<std::string> seen;
+        std::vector<std::string> modules;
+        reachableModules(frontend, name, seen, modules);
+        bool again = false;
+        for (const auto& module : modules)
+        {
+            const auto* snapshot = files.snapshot(module);
+            if (!snapshot || !snapshot->lowered.estimated)
+                continue;
+            const Luau::SourceModule* source = frontend.getSourceModule(module);
+            if (source && L3i::Surface::boundariesHold(snapshot->lowered, source->root))
+                continue;
+            files.locatedBoundaries.insert(module);
+            frontend.markDirty(module);
+            again = true;
+        }
+        return again;
     }
 
     bool trivia(const SourceSnapshot& snapshot, size_t begin, size_t end)
@@ -762,6 +789,8 @@ int db_analysis_check(db_analysis* analysis, const char* name, size_t name_lengt
         Luau::FrontendOptions options = analysis->options;
         options.runLintChecks = lint != 0;
         Luau::CheckResult result = analysis->frontend->check(module, options);
+        if (confirmBoundaries(*analysis->frontend, analysis->files, module))
+            result = analysis->frontend->check(module, options);
         if (specializeBufferGenerators(*analysis->frontend, analysis->files, module))
             result = analysis->frontend->check(module, options);
         int errors = 0;
@@ -851,6 +880,8 @@ int db_analysis_autocomplete(
         options.retainFullTypeGraphs = true; // autocomplete reads per-term types
         options.runLintChecks = false;
         analysis->frontend->check(module, options);
+        if (confirmBoundaries(*analysis->frontend, analysis->files, module))
+            analysis->frontend->check(module, options);
         const auto* snapshot = analysis->files.snapshot(module);
         const auto* sourceModule = analysis->frontend->getSourceModule(module);
         if (!snapshot || !sourceModule || !sourceModule->root)
@@ -892,13 +923,18 @@ int db_parse(const char* source, size_t length, db_diagnostic_fn diagnostic, voi
 {
     try
     {
-        SourceSnapshot snapshot{std::string(source, length), L3i::Surface::lower(std::string_view(source, length), true)};
+        SourceSnapshot snapshot{std::string(source, length), L3i::Surface::lower(std::string_view(source, length), true, true, {}, false, {}, true)};
         auto& lowered = snapshot.lowered;
         Luau::Allocator allocator;
         Luau::AstNameTable names(allocator);
         Luau::ParseOptions options;
         options.captureComments = true;
         Luau::ParseResult result = Luau::Parser::parse(lowered.source.data(), lowered.source.size(), names, allocator, options);
+        if (!L3i::Surface::boundariesHold(lowered, result))
+        {
+            lowered = L3i::Surface::lower(std::string_view(source, length), true);
+            result = Luau::Parser::parse(lowered.source.data(), lowered.source.size(), names, allocator, options);
+        }
         int errors = emitStructural(snapshot, std::string(), diagnostic, ctx);
         for (const Luau::ParseError& error : result.errors)
         {

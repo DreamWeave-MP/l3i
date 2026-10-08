@@ -1632,9 +1632,14 @@ LoweredSource lower(std::string_view source, bool recovery, bool fuseLength, con
 
 bool boundariesHold(const LoweredSource& lowered, const Luau::ParseResult& parsed)
 {
+    return boundariesHold(lowered, parsed.root);
+}
+
+bool boundariesHold(const LoweredSource& lowered, const Luau::AstStatBlock* root)
+{
     if (!lowered.estimated)
         return true;
-    if (!parsed.root)
+    if (!root)
         return false;
     // Each holder's name, mapped to the boundary its reads were inserted at.
     std::unordered_map<std::string_view, std::pair<size_t, bool>> expected;
@@ -1675,7 +1680,7 @@ bool boundariesHold(const LoweredSource& lowered, const Luau::ParseResult& parse
             expected.erase(it);
         }
     };
-    parsed.root->visit(&check);
+    const_cast<Luau::AstStatBlock*>(root)->visit(&check); // Visiting reads; Luau's visit is not const.
     return holds && expected.empty();
 }
 }

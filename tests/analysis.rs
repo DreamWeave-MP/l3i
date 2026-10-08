@@ -1426,3 +1426,39 @@ fn same_line_lints_skip_generated_reads_and_their_known_cost() {
         assert_eq!(same_line("jsl"), 0, "{solver:?}");
     }
 }
+
+#[test]
+fn analysis_relocates_pattern_boundaries_its_parse_does_not_confirm() {
+    // The frontend's skipper reads `make\n(a)` as a call; Luau reads two statements. The
+    // estimate is refused, the boundary relocated, and the module analysed as Luau reads it:
+    // `a` is read from `make` itself, as `make.a` would be, and `(a)` is an incomplete statement
+    // that sees the local `a`. Kept, the estimate would declare `a` after `(a)`: a global use.
+    let source = concat!(
+        "--!strict\n",
+        "local function make(n: number): { a: number } return { a = n } end\n",
+        "local {a} = make\n(a)\n",
+        "local copy = a\n",
+        "return copy\n",
+    );
+    for solver in [analysis::Solver::New, analysis::Solver::Old] {
+        for complete_first in [false, true] {
+            let analysis = comprehension_analysis(HashMap::from([("relocated", source)]), solver);
+            if complete_first {
+                let _ = analysis.autocomplete("relocated", 4, 7).unwrap();
+            }
+            let report = analysis.check("relocated", false);
+            let mut seen: Vec<_> = report.diagnostics.iter().map(|d| (d.kind, d.span.begin_line)).collect();
+            seen.sort_by_key(|(_, line)| *line);
+            assert_eq!(
+                seen,
+                [(DiagnosticKind::TypeError, 2), (DiagnosticKind::ParseError, 3)],
+                "{solver:?}: {report:#?}"
+            );
+            assert!(
+                report.diagnostics.iter().any(|d| d.text.contains("Incomplete statement")),
+                "{solver:?}: {report:#?}"
+            );
+            assert!(report.diagnostics.iter().all(|d| !d.text.contains("Unknown global")), "{solver:?}: {report:#?}");
+        }
+    }
+}

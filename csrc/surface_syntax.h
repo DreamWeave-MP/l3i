@@ -6,6 +6,7 @@
 namespace Luau
 {
 struct ParseResult;
+class AstStatBlock;
 }
 
 namespace L3i::Surface
@@ -97,4 +98,5 @@ LoweredSource lower(std::string_view source, bool recovery = false, bool fuseLen
 // body, exactly where the reads were inserted. Then the lowering is exactly the one a located
 // lowering produces. Always true for a lowering that was not estimated. Call before remapping.
 bool boundariesHold(const LoweredSource& lowered, const Luau::ParseResult& parsed);
+bool boundariesHold(const LoweredSource& lowered, const Luau::AstStatBlock* root);
 }
