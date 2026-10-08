@@ -2,8 +2,13 @@
 //! the Luau a careful author would write instead, in the same VM, and compares their results,
 //! normalized error messages, and the order of every field read (logged through `__index`).
 
+use std::cell::Cell;
+use std::rc::Rc;
+
 use l3i::Runtime;
-use l3i::source::{LoweringMode, lowering_snapshot};
+use l3i::debug::{DebugAction, DebugInfo, DebugScope, HookSet, RuntimeHooks};
+use l3i::source::{CompileOptions, LoweringMode, disassemble, lowering_snapshot};
+use l3i::stack::Stack;
 
 /// The shared harness: `rec(name, fields)` is a record whose reads log `name.key`, and a field
 /// whose value is the `FAIL` sentinel raises when read. `run` captures results, a location-free
@@ -380,5 +385,232 @@ fn generated_holders_never_capture_or_shadow_source_names() {
         assert!(holder.starts_with(&format!("__l3i_comp_{offset}_")) && holder != name, "{generated}");
         assert_eq!(generated.matches(&format!("local {name} ")).count(), 1, "{generated}");
         runtime.exec(&source).unwrap_or_else(|error| panic!("{source}: {error}"));
+    }
+}
+
+#[test]
+fn incomplete_patterns_are_rejected_before_anything_runs() {
+    let runtime = Runtime::new().unwrap();
+    runtime.exec("effects = 0 function effect() effects += 1 end").unwrap();
+    for prefix in [
+        "local {",
+        "local {x",
+        "local {x,",
+        "local {position:",
+        "local {position: {",
+        "local {position: {x",
+        "local {x}",
+        "local {x} =",
+        "local {x}: Point",
+        "function f({x,",
+        "function f({x}",
+        "return [for {x",
+        "return [for {x} in",
+        "local {x, x} = t",
+        "local {id, ...rest} = t",
+        "local {health = 100} = t",
+        "local {[\"k\"]: v} = t",
+        "local [a, b] = t",
+        "local {x} = a, b",
+        "for {id} in pairs(t) do end",
+    ] {
+        let source = format!("effect()\n{prefix}");
+        let error = runtime.exec(&source).expect_err(&source).to_string();
+        assert!(error.contains(":2:"), "{prefix}: the error is on the pattern's line: {error}");
+    }
+    runtime.exec("assert(effects == 0, 'a rejected chunk ran ' .. effects .. ' effects')").unwrap();
+}
+
+#[test]
+fn runtime_errors_report_the_original_line_of_the_failing_field() {
+    let runtime = Runtime::new().unwrap();
+    let cases = [
+        ("local {\n    a: {\n        b,\n    },\n} = {}\nreturn b", 3),
+        ("local function f({\n    position: {\n        x,\n    },\n})\n    return x\nend\nreturn f({})", 3),
+        (
+            "local ids = [\n    for {\n        id,\n        position: {\n            z,\n        },\n    } in { {} }\n    => z\n]",
+            5,
+        ),
+    ];
+    for (source, line) in cases {
+        let error = runtime.exec(source).expect_err(source).to_string();
+        assert!(error.contains(&format!(":{line}: attempt to index nil")), "{source}\n{error}");
+    }
+}
+
+#[test]
+fn comments_and_interpolation_do_not_disturb_patterns() {
+    let runtime = Runtime::new().unwrap();
+    runtime
+        .exec(
+            r"
+        local {
+            -- the first field
+            a, --[[ an inline note ]] b: renamed, -- trailing
+            c, --[==[ long ]==]
+        } = { a = 1, b = 2, c = 3 }
+        assert(a == 1 and renamed == 2 and c == 3)
+        local text = `{(function({x}) return x end)({ x = 'in' })}-{a}`
+        assert(text == 'in-1', text)
+        local s = '{x} = local {y}' -- strings and comments are not patterns: local {z}
+        assert(s == '{x} = local {y}')
+        local function f({v} --[[ after ]]: { v: number }, --[[ before ]] {w})
+            return v + w
+        end
+        assert(f({ v = 1 }, { w = 2 }) == 3)
+    ",
+        )
+        .unwrap();
+}
+
+struct InstructionCounter(Rc<Cell<u64>>);
+
+impl RuntimeHooks for InstructionCounter {
+    fn debug_step(&self, _stack: &Stack<'_>, _info: &DebugInfo) -> DebugAction {
+        self.0.set(self.0.get() + 1);
+        DebugAction::Continue
+    }
+}
+
+/// Executed VM instructions of `body` over `values`, an array of `items` records.
+fn executed_instructions(body: &str, items: u32) -> u64 {
+    let runtime = Runtime::new().unwrap();
+    runtime
+        .exec(&format!(
+            "values = table.create({items}) for i = 1, {items} do values[i] = {{ x = i, y = i * 2, z = i * 3, pos = {{ x = i }} }} end"
+        ))
+        .unwrap();
+    let function = runtime.load_function(&format!("return function() {body} end")).unwrap();
+    let steps = Rc::new(Cell::new(0));
+    runtime.set_hooks(InstructionCounter(steps.clone()), HookSet::DEBUGGER);
+    let thread = runtime.new_thread().unwrap();
+    let stack = runtime.stack();
+    thread
+        .with_stack(&stack, |scope| {
+            scope.single_step(true);
+            Ok(())
+        })
+        .unwrap();
+    assert!(matches!(thread.start(&stack, &function, ()).unwrap(), l3i::thread::Resume::Finished(_)));
+    drop(stack);
+    runtime.clear_hooks();
+    steps.get()
+}
+
+/// (name, JSL, the same-contract handwritten Luau, extra executed instructions per element)
+const SHAPES: &[(&str, &str, &str, u64)] = &[
+    (
+        "two fields from a call",
+        "local total = 0 for i = 1, #values do local {x, y} = values[i] total += x + y end return total",
+        "local total = 0 for i = 1, #values do local s = values[i] local x = s.x local y = s.y total += x + y end return total",
+        0,
+    ),
+    (
+        "three fields",
+        "local total = 0 for i = 1, #values do local {x, y, z} = values[i] total += x + y + z end return total",
+        "local total = 0 for i = 1, #values do local s = values[i] local x = s.x local y = s.y local z = s.z total += x + y + z end return total",
+        0,
+    ),
+    (
+        "nested",
+        "local total = 0 for i = 1, #values do local {pos: {x}, y} = values[i] total += x + y end return total",
+        "local total = 0 for i = 1, #values do local s = values[i] local p = s.pos local x = p.x local y = s.y total += x + y end return total",
+        0,
+    ),
+    (
+        // The holder of a local value is free: Luau aliases a local initialized from a local
+        // when neither is assigned, so `local {x, y} = e` reads straight from `e`'s register.
+        "two fields from a local",
+        "local total = 0 for i = 1, #values do local e = values[i] local {x, y} = e total += x + y end return total",
+        "local total = 0 for i = 1, #values do local e = values[i] local x = e.x local y = e.y total += x + y end return total",
+        0,
+    ),
+    (
+        "typed parameter",
+        "type R = { x: number, y: number } local function f({x, y}: R) return x + y end \
+         local total = 0 for i = 1, #values do total += f(values[i]) end return total",
+        "type R = { x: number, y: number } local function f(p: R) local x = p.x local y = p.y return x + y end \
+         local total = 0 for i = 1, #values do total += f(values[i]) end return total",
+        0,
+    ),
+];
+
+#[test]
+fn executed_instructions_match_handwritten_extraction() {
+    for items in [0, 1, 32, 1024] {
+        for (name, jsl, luau, extra) in SHAPES {
+            let surface = executed_instructions(jsl, items);
+            let handwritten = executed_instructions(luau, items);
+            println!("{name}, {items} records: JSL {surface}, Luau {handwritten}");
+            assert_eq!(surface, handwritten + extra * u64::from(items), "{name}, {items} records");
+        }
+        // Generators: the comprehension's one setup instruction, nothing per element.
+        let guard =
+            "if value == nil then error('L3i comprehension projection produced nil; filter nil explicitly') end";
+        let sum = executed_instructions("return sum[for {x, y} in values if x % 2 == 0 => x + y]", items);
+        let sum_loop = executed_instructions(
+            &format!(
+                "local src = values local total = 0 for i = 1, #src do local e = src[i] local x = e.x local y = e.y \
+                 if x % 2 == 0 then local value = x + y {guard} total += value end end return total"
+            ),
+            items,
+        );
+        let dense = executed_instructions("return [for {pos: {x}} in values => x]", items);
+        let dense_loop = executed_instructions(
+            &format!(
+                "local src = values local n = #src local out = table.create(n) for i = 1, n do local e = src[i] \
+                 local p = e.pos local x = p.x local value = x {guard} out[i] = value end return out"
+            ),
+            items,
+        );
+        println!("generators, {items} records: sum {sum} / {sum_loop}, dense {dense} / {dense_loop}");
+        assert_eq!(sum, sum_loop + 1, "{items} records");
+        assert_eq!(dense, dense_loop + 1, "{items} records");
+    }
+}
+
+/// The opcodes of the function a chunk returns, operands dropped: the code shape to compare.
+/// It is the listing's second to last function; the last is the chunk itself, and a
+/// comprehension's inlined wrapper leaves a dead prototype before it.
+fn opcodes(listing: &str) -> Vec<String> {
+    let functions: Vec<&str> = listing.split("Function ").collect();
+    let entry = functions[functions.len() - 2];
+    entry
+        .lines()
+        .filter_map(|line| {
+            let code = line.split_once(": ").map_or(line, |(_, rest)| rest).trim();
+            let op = code.split_whitespace().next()?;
+            (op.chars().all(|c| c.is_ascii_uppercase() || c == '_') && op.len() > 2).then(|| op.to_owned())
+        })
+        .collect()
+}
+
+#[test]
+fn bytecode_is_the_handwritten_extraction() {
+    let options = CompileOptions::default();
+    let pairs = [
+        (
+            "return function(p) local {x, y} = p.inner return x + y end",
+            "return function(p) local s = p.inner local x = s.x local y = s.y return x + y end",
+        ),
+        (
+            "return function({x, y: {z}}) return x + z end",
+            "return function(p) local x = p.x local s = p.y local z = s.z return x + z end",
+        ),
+        (
+            "return function(xs) return sum[for {x, y} in xs if x > 0 => x + y] end",
+            "return function(xs) local t = 0 for i = 1, #xs do local e = xs[i] local x = e.x local y = e.y if x > 0 then \
+             local v = x + y if v == nil then error('L3i comprehension projection produced nil; filter nil explicitly') end t += v end end return t end",
+        ),
+    ];
+    for (jsl, luau) in pairs {
+        let surface = disassemble(jsl, &options).unwrap();
+        let handwritten = disassemble(luau, &options).unwrap();
+        let (jsl_ops, luau_ops) = (opcodes(&surface), opcodes(&handwritten));
+        for op in ["NEWTABLE", "DUPTABLE", "NEWCLOSURE", "DUPCLOSURE", "CALL", "FASTCALL", "GETTABLEKS"] {
+            let count = |ops: &[String]| ops.iter().filter(|o| *o == op).count();
+            assert_eq!(count(&jsl_ops), count(&luau_ops), "{op} in {jsl}\n{surface}\n{handwritten}");
+        }
+        assert!(jsl_ops.len() <= luau_ops.len() + 1, "{jsl}\n{surface}\n{handwritten}");
     }
 }
