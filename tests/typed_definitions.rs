@@ -292,7 +292,7 @@ const SCRIPTS: &[(&str, &str)] = &[
          print(next, width)\n",
     ),
     (
-        "net_script",
+        "udp_script",
         "--!strict\n\
          local udp = require('@dream/udp')\n\
          local schema = udp.schema({ version = 1, channels = { { name = 'state', delivery = 'unreliable' } }, events = { { name = 'ping', channel = 'state', maxPayload = 8 } } })\n\

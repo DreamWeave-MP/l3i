@@ -77,7 +77,7 @@ The integration tests link as one binary (`tests/main.rs`), one file's tests run
 | `tests/vector_writer.rs` | `vector:writef32x3` on the interpreter path |
 | `tests/extension.rs` | The planner's gates: dependency order, composition, direct dispatch, tags and atoms per VM, the stale-cache check, compiler metadata, services, capabilities, state and drop order, every rejected composition, compiler type slots |
 | `tests/primitives.rs` | Zero-copy bytes, strict options, sequence and stream views, exact integers and bit patterns, packed scalars |
-| `tests/net.rs` | The dream-net bridge over real localhost UDP: a schema from Luau, a host-created server, a script-created client, events both ways, stats, the capability gate |
+| `tests/udp.rs` | The dream-net bridge over real localhost UDP: a schema from Luau, a host-created server, a script-created client, events both ways, stats, the capability gate |
 | `tests/quat.rs` | Packed quaternions against the f32 userdata baseline, kind checks, and (`jit`) the native lowering |
 | `tests/raster.rs` | Colors and clip rectangles: construction, kind checks, the byte layout, and (`jit`) the lowered color math |
 | `tests/bytes.rs` | `@dream/bytes` (`bytes`): searching, record strings, varints, every width and order against `buffer`, the codecs against Python-made fixtures, the digests against their published vectors, the text codepages, and (`jit`) the lowered integer reads and writes |
