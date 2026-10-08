@@ -484,7 +484,9 @@ private:
             out.copy(source, field.key);
             site.reads.push_back({read, out.size()});
             out.anchor = field.range;
-            if (!lead) out += " ";
+            // An inserted read is terminated: source that follows it, such as a body starting
+            // with `(g)()`, would otherwise continue it as a call.
+            out += lead ? ";" : " ";
             if (field.target.record)
                 reads(out, field.target, nested, site, lead);
         }
@@ -504,7 +506,7 @@ private:
             const size_t key = out.size();
             out += probe;
             site.probes.push_back({key, out.size()});
-            if (!lead) out += " ";
+            out += lead ? ";" : " ";
         }
         out.anchor = saved;
     }

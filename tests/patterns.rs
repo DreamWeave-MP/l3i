@@ -92,6 +92,12 @@ fn every_case_agrees_under_native_code() {
 
 const DECLARATIONS: &[Case] = &[
     Case {
+        name: "a statement after the semicolon that begins with a parenthesized call stays a statement",
+        setup: "local called = 0 local function g() called += 1 return function() end end",
+        jsl: "called = 0 local {a} = { a = 1 }; (g)() return a, called",
+        luau: "called = 0 local s = { a = 1 }; local a = s.a; (g)() return a, called",
+    },
+    Case {
         name: "the holder keeps the value when a getter reassigns the source variable",
         setup: "local src local function make(name, value) return rec(name, value) end",
         jsl: "local other = make('o', { a = 'other', b = 'other' }) \
@@ -241,6 +247,12 @@ fn local_declarations_match_handwritten_luau() {
 }
 
 const PARAMETERS: &[Case] = &[
+    Case {
+        name: "a body that begins with a parenthesized call is not absorbed by the reads",
+        setup: "local called = 0 local function g() called += 1 return function() end end",
+        jsl: "called = 0 local function f({a}) (g)() return a end return f({ a = 1 }), called",
+        luau: "called = 0 local function f(p) local a = p.a; (g)() return a end return f({ a = 1 }), called",
+    },
     Case {
         name: "typed parameter pattern",
         setup: "type Vec3 = { x: number, y: number, z: number }",
