@@ -70,6 +70,16 @@ using namespace Luau;
     X(SMax, "max") \
     X(SAny, "any") \
     X(SAll, "all") \
+    X(KStatLocalPattern, "StatLocalPattern") \
+    X(KPatternRecord, "PatternRecord") \
+    X(KPatternField, "PatternField") \
+    X(KPatternIdentifier, "PatternIdentifier") \
+    X(patternField, "pattern") \
+    X(patternFields, "fields") \
+    X(patternTarget, "target") \
+    X(keyLocation, "keyLocation") \
+    X(colonLocation, "colonLocation") \
+    X(shorthand, "shorthand") \
     X(KExprComprehension, "ExprComprehension") \
     X(KComprehensionGenerator, "ComprehensionGenerator") \
     X(KComprehensionFilter, "ComprehensionFilter") \
@@ -395,7 +405,11 @@ public:
             for (auto* generic : n->genericPacks) generic->visit(this);
         }
         if (auto* n = node->as<AstStatLocal>())
-            for (auto* v : n->vars) local(v);
+            for (auto* v : n->vars)
+            {
+                local(v);
+                declarations[v] = n;
+            }
         else if (auto* n = node->as<AstStatFor>()) local(n->var);
         else if (auto* n = node->as<AstStatForIn>())
             for (auto* v : n->vars) local(v);
@@ -419,6 +433,7 @@ public:
     bool visit(AstExprFunction* n) override
     {
         visit(static_cast<AstExpr*>(n));
+        for (auto* arg : n->args) local(arg);
         for (auto* attr : n->attributes) attr->visit(this);
         for (auto* generic : n->generics) generic->visit(this);
         for (auto* generic : n->genericPacks) generic->visit(this);
@@ -438,6 +453,38 @@ public:
     std::vector<size_t> starts;
     std::unordered_map<size_t, std::vector<AstExpr*>> expressions;
     std::unordered_map<size_t, AstLocal*> bindings;
+    std::unordered_map<AstLocal*, AstStatLocal*> declarations;
+};
+
+// A record pattern's source structure and the stock locals its bound names became.
+struct SurfacePattern
+{
+    const L3i::Surface::Pattern* record = nullptr;
+    const L3i::Surface::LocalPattern* declaration = nullptr; // Declarations only.
+    std::vector<AstLocal*> targets;                           // Depth first, one per bound name.
+};
+using SurfaceLocals = std::unordered_map<AstStatLocal*, SurfacePattern>; // By holder declaration.
+using SurfaceParameters = std::unordered_map<AstLocal*, SurfacePattern>;  // By holder parameter.
+
+// Removes the generated field reads of declaration and parameter patterns from their blocks:
+// the surface tree shows the pattern, never its lowering.
+class HideReads final : public AstVisitor
+{
+public:
+    explicit HideReads(const std::unordered_set<AstLocal*>& reads) : reads(reads) {}
+    bool visit(AstStatBlock* block) override
+    {
+        size_t kept = 0;
+        for (size_t i = 0; i < block->body.size; ++i)
+        {
+            auto* local = block->body.data[i]->as<AstStatLocal>();
+            if (local && local->vars.size == 1 && reads.count(local->vars.data[0])) continue;
+            block->body.data[kept++] = block->body.data[i];
+        }
+        block->body.size = kept;
+        return true;
+    }
+    const std::unordered_set<AstLocal*>& reads;
 };
 
 struct SurfaceClause
@@ -451,6 +498,7 @@ struct SurfaceClause
     AstExpr* sliceSource = nullptr;
     AstExpr* sliceFirst = nullptr;
     AstExpr* sliceLast = nullptr;
+    std::vector<SurfacePattern> patterns; // Parallel to the binding slots; name slots have no record.
 };
 struct SurfaceExpression
 {
@@ -547,6 +595,8 @@ public:
                 ++loopDepth;
                 if (clause.bindings.empty()) local(clause.binding);
                 else for (AstLocal* binding : clause.bindings) local(binding);
+                for (const SurfacePattern& pattern : clause.patterns)
+                    for (AstLocal* target : pattern.targets) local(target);
             }
         }
         walk(it->second.projection);
@@ -1113,7 +1163,18 @@ public:
         setArray(generics, node->generics);
         setArray(genericPacks, node->genericPacks);
         setLocal(self, node->self);
-        setLocals(args, node->args);
+        // A record pattern parameter is a PatternRecord carrying the parameter's annotation.
+        newTable(int(node->args.size), 0);
+        for (size_t i = 0; i < node->args.size; ++i)
+        {
+            auto pattern = parameterPatterns.find(node->args.data[i]);
+            if (pattern != parameterPatterns.end())
+                patternNode(pattern->second, node->args.data[i]->annotation);
+            else
+                pushLocal(node->args.data[i]);
+            popAt(int(i + 1));
+        }
+        popInto(args);
         setBool(vararg, node->vararg);
         setNode(varargAnnotation, node->varargAnnotation);
         setNode(returnAnnotation, node->returnAnnotation);
@@ -1277,6 +1338,23 @@ public:
 
     bool visit(AstStatLocal* node) override
     {
+        auto pattern = localPatterns.find(node);
+        if (pattern != localPatterns.end())
+        {
+            // `local {...}[: Type] = value`: the pattern, its whole-value annotation, the value.
+            stat(node, KStatLocalPattern, 4);
+            patternNode(pattern->second, nullptr);
+            popInto(patternField);
+            if (node->vars.size) setNode(annotation, node->vars.data[0]->annotation);
+            // Without its '=' the declaration has no value: the recovery hole is not source.
+            const auto& equals = pattern->second.declaration->equals;
+            if (!equals.empty())
+            {
+                if (node->values.size) setNode(value, node->values.data[0]);
+                span(equalsSignLocation, location(equals));
+            }
+            return false;
+        }
         stat(node, KStatLocal, 5);
         setLocals(vars, node->vars);
         setArray(values, node->values);
@@ -1584,6 +1662,60 @@ public:
     }
     Location location(SurfaceRange range) const { return Location(position(range.begin), position(range.end)); }
 
+    // Whether no parse error begins inside an original range.
+    bool clean(SurfaceRange range) const
+    {
+        if (parseErrors)
+            for (const auto& error : *parseErrors)
+                if (error.getLocation().begin >= position(range.begin) && error.getLocation().begin <= position(range.end))
+                    return false;
+        return true;
+    }
+
+    // A PatternRecord: its fields in source order, each binding a PatternIdentifier (sharing the
+    // stock Local of its declaration) or a nested PatternRecord. A parameter's annotation rides
+    // on its record.
+    void patternNode(const SurfacePattern& surface, AstType* annotationNode)
+    {
+        size_t next = 0;
+        recordNode(*surface.record, surface.targets, next);
+        if (annotationNode) setNode(annotation, annotationNode);
+    }
+
+    void recordNode(const L3i::Surface::Pattern& record, const std::vector<AstLocal*>& targets, size_t& next)
+    {
+        open(KPatternRecord, location(record.range), 6);
+        span(openLocation, location(record.open));
+        if (!record.close.empty()) span(closeLocation, location(record.close));
+        setBool(hasClose, !record.close.empty());
+        setBool(complete, record.complete && clean(record.range));
+        newTable(int(record.fields.size()), 0);
+        for (size_t i = 0; i < record.fields.size(); ++i)
+        {
+            const auto& field = record.fields[i];
+            open(KPatternField, location(field.range), 5);
+            setText(key, source + field.key.begin, field.key.end - field.key.begin);
+            span(keyLocation, location(field.key));
+            if (!field.colon.empty()) span(colonLocation, location(field.colon));
+            setBool(shorthand, field.colon.empty());
+            if (field.target.record)
+            {
+                recordNode(field.target, targets, next);
+                popInto(patternTarget);
+            }
+            else if (!field.target.range.empty())
+            {
+                open(KPatternIdentifier, location(field.target.range), 2);
+                setText(name, source + field.target.range.begin, field.target.range.end - field.target.range.begin);
+                if (next < targets.size()) setLocal(local, targets[next]);
+                ++next;
+                popInto(patternTarget);
+            }
+            popAt(int(i + 1));
+        }
+        popInto(patternFields);
+    }
+
     void surfaceExpr(AstExpr* expr, SurfaceRange range)
     {
         const Location expected = location(range);
@@ -1674,15 +1806,30 @@ public:
             span(keywordLocation, location(clause.keyword));
             if (generator)
             {
-                if (!clause.binding.empty()) setLocal(binding, ast.binding);
-                newTable(int(ast.bindings.size()), 0);
-                for (size_t binding = 0; binding < ast.bindings.size(); ++binding)
-                {
-                    if (ast.bindings[binding]) pushLocal(ast.bindings[binding]);
+                // A slot is a Local, or a PatternRecord for a record pattern slot. Only source
+                // slots: a recovery placeholder for a missing binding is not one.
+                const auto slot = [&](size_t at) {
+                    if (at < ast.patterns.size() && ast.patterns[at].record) patternNode(ast.patterns[at], nullptr);
+                    else if (at < ast.bindings.size() && ast.bindings[at]) pushLocal(ast.bindings[at]);
                     else lua_pushnil(L);
+                };
+                newTable(int(clause.bindings.size()), 0);
+                for (size_t binding = 0; binding < clause.bindings.size(); ++binding)
+                {
+                    slot(binding);
                     popAt(int(binding + 1));
                 }
                 popInto(bindings);
+                // `binding` is the first slot's own table, shared with `bindings[1]`.
+                if (!clause.binding.empty() && !clause.bindings.empty())
+                {
+                    const TValue* slots = luaH_getstr(hvalue(L->top - 1), keys[bindings]);
+                    setobj2s(L, L->top, luaH_getnum(hvalue(slots), 1));
+                    L->top++;
+                    popInto(binding);
+                }
+                else if (!clause.binding.empty())
+                    setLocal(binding, ast.binding);
                 if (!clause.in.empty()) span(inLocation, location(clause.in));
                 setBool(hasIn, !clause.in.empty());
             }
@@ -1894,6 +2041,8 @@ public:
 
     SurfaceExpressions surfaces;
     SurfaceSlices slices;
+    SurfaceLocals localPatterns;
+    SurfaceParameters parameterPatterns;
     const std::vector<ParseError>* parseErrors = nullptr;
 
     lua_State* L;
@@ -1943,6 +2092,8 @@ int l3i_luau_parse(lua_State* L, const char* source, size_t length, int flags)
     L3i::Surface::LoweredSource lowered;
     SurfaceExpressions surfaces;
     SurfaceSlices sliceSurfaces;
+    SurfaceLocals localSurfaces;
+    SurfaceParameters parameterSurfaces;
     bool surfaceMode = (flags & L3I_PARSE_LUAU) == 0;
     std::string failure;
     try
@@ -1977,6 +2128,18 @@ int l3i_luau_parse(lua_State* L, const char* source, size_t length, int flags)
                     surface.clauses[i].sliceSource = index.expression(site.clauses[i].sliceSource);
                     surface.clauses[i].sliceFirst = index.expression(site.clauses[i].sliceFirst);
                     surface.clauses[i].sliceLast = index.expression(site.clauses[i].sliceLast);
+                    const auto& patterns = surface.record->clauses[i].patterns;
+                    for (size_t slot = 0; slot < patterns.size() && slot < site.clauses[i].patterns.size(); ++slot)
+                    {
+                        SurfacePattern pattern;
+                        if (patterns[slot].record)
+                        {
+                            pattern.record = &patterns[slot];
+                            for (const auto& target : site.clauses[i].patterns[slot].targets)
+                                pattern.targets.push_back(index.binding(target));
+                        }
+                        surface.clauses[i].patterns.push_back(std::move(pattern));
+                    }
                 }
                 surface.projection = index.expression(site.projection);
                 surface.sink = index.expression(site.sink);
@@ -1996,10 +2159,39 @@ int l3i_luau_parse(lua_State* L, const char* source, size_t length, int flags)
                 surface.last = index.expression(site.last);
                 sliceSurfaces.emplace(call, surface);
             }
+            // Declaration and parameter patterns: the holder's statement or parameter stands for
+            // the pattern, and the generated reads leave the source blocks.
+            std::unordered_set<AstLocal*> reads;
+            const auto pattern = [&](const L3i::Surface::Pattern& record, const L3i::Surface::PatternSite& site) {
+                SurfacePattern surface;
+                surface.record = &record;
+                for (const auto& target : site.targets)
+                    surface.targets.push_back(index.binding(target));
+                for (const auto& declaration : site.declarations)
+                    if (AstLocal* local = index.binding(declaration)) reads.insert(local);
+                return surface;
+            };
+            for (size_t k = 0; k < lowered.localSites.size() && k < lowered.document.locals.size(); ++k)
+            {
+                AstLocal* holder = index.binding(lowered.localSites[k].holder);
+                auto declaration = holder ? index.declarations.find(holder) : index.declarations.end();
+                if (declaration == index.declarations.end()) continue;
+                SurfacePattern surface = pattern(lowered.document.locals[k].pattern, lowered.localSites[k]);
+                surface.declaration = &lowered.document.locals[k];
+                localSurfaces.emplace(declaration->second, std::move(surface));
+            }
+            for (size_t k = 0; k < lowered.parameterSites.size() && k < lowered.document.parameters.size(); ++k)
+                if (AstLocal* holder = index.binding(lowered.parameterSites[k].holder))
+                    parameterSurfaces.emplace(holder, pattern(lowered.document.parameters[k].pattern, lowered.parameterSites[k]));
             if (!surfaces.empty() || !sliceSurfaces.empty())
             {
                 SourceMetadata metadata(surfaces, sliceSurfaces);
                 metadata.walk(result.root);
+            }
+            if (!reads.empty() && result.root)
+            {
+                HideReads hide(reads);
+                result.root->visit(&hide);
             }
             if (result.root && lowered.preludeStatements <= result.root->body.size)
             {
@@ -2024,6 +2216,8 @@ int l3i_luau_parse(lua_State* L, const char* source, size_t length, int flags)
     Builder builder(L, source, length);
     builder.surfaces = std::move(surfaces);
     builder.slices = std::move(sliceSurfaces);
+    builder.localPatterns = std::move(localSurfaces);
+    builder.parameterPatterns = std::move(parameterSurfaces);
     if (surfaceMode)
         for (const auto& error : lowered.document.errors)
             result.errors.emplace_back(builder.location(error.range), error.message);
@@ -2032,7 +2226,9 @@ int l3i_luau_parse(lua_State* L, const char* source, size_t length, int flags)
     lua_createtable(L, 0, 8);
     builder.setNode(root, result.root);
     builder.errors(result.errors);
-    if (surfaceMode && (!lowered.document.comprehensions.empty() || !lowered.document.slices.empty())) builder.originalTrivia(names);
+    if (surfaceMode && (!lowered.document.comprehensions.empty() || !lowered.document.slices.empty() || !lowered.document.locals.empty() ||
+            !lowered.document.parameters.empty()))
+        builder.originalTrivia(names);
     else
     {
         builder.comments(result.commentLocations);

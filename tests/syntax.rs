@@ -750,3 +750,196 @@ fn incomplete_surface_clauses_export_optional_locations_and_zero_width_holes() {
     ",
     );
 }
+
+/// Fails when any string anywhere in a tree is a generated name: the surface tree shows record
+/// patterns, never their holders or field reads.
+const NO_GENERATED: &str = r"
+        local function noGenerated(node, seen, path)
+            seen = seen or {}
+            if type(node) == 'string' then
+                assert(not string.find(node, '__l3i_comp_', 1, true), (path or 'root') .. ' exposes ' .. node)
+            end
+            if type(node) ~= 'table' or seen[node] then return end
+            seen[node] = true
+            for k, v in node do noGenerated(v, seen, (path or 'root') .. '.' .. tostring(k)) end
+        end
+";
+
+#[test]
+fn record_pattern_declarations_are_source_nodes_with_shared_locals() {
+    surface_test(&format!(
+        r"{NO_GENERATED}
+        local source = 'local {{transform: {{position: pos, rotation,}}, id: key}}: Entity = entity\nreturn pos, rotation, key'
+        local r = luau.parse(source)
+        assert(#r.errors == 0, r.errors[1] and r.errors[1].message)
+        noGenerated(r)
+        assert(#r.root.body == 2, 'the field reads are not statements of the source')
+        local decl = r.root.body[1]
+        assert(decl.kind == 'StatLocalPattern')
+        span(source, r, decl, 'local {{transform: {{position: pos, rotation,}}, id: key}}: Entity = entity')
+        assert(decl.annotation.kind == 'TypeReference' and decl.annotation.name == 'Entity')
+        assert(decl.value.kind == 'ExprGlobal' and decl.value.name == 'entity')
+        span(source, r, decl.equalsSignLocation, '=')
+        local p = decl.pattern
+        assert(p.kind == 'PatternRecord' and p.complete and p.hasClose and #p.fields == 2)
+        span(source, r, p, '{{transform: {{position: pos, rotation,}}, id: key}}')
+        span(source, r, p.openLocation, '{{')
+        local transform = p.fields[1]
+        assert(transform.kind == 'PatternField' and transform.key == 'transform' and not transform.shorthand)
+        span(source, r, transform, 'transform: {{position: pos, rotation,}}')
+        span(source, r, transform.keyLocation, 'transform')
+        span(source, r, transform.colonLocation, ':')
+        local nested = transform.target
+        assert(nested.kind == 'PatternRecord' and #nested.fields == 2)
+        local pos = nested.fields[1].target
+        assert(pos.kind == 'PatternIdentifier' and pos.name == 'pos' and pos['local'].kind == 'Local' and pos['local'].name == 'pos')
+        span(source, r, pos, 'pos')
+        span(source, r, pos['local'], 'pos')
+        local rotation = nested.fields[2]
+        assert(rotation.shorthand and rotation.colonLocation == nil and rotation.target.name == 'rotation')
+        local key = p.fields[2].target
+        assert(p.fields[2].key == 'id' and key.name == 'key')
+        local list = r.root.body[2].list
+        assert(list[1]['local'] == pos['local'] and list[2]['local'] == rotation.target['local'] and list[3]['local'] == key['local'],
+            'a use is its pattern declaration')
+        assert(pos['local'].functionDepth == 0 and pos['local'].loopDepth == 0)
+    "
+    ));
+}
+
+#[test]
+fn record_pattern_parameters_keep_the_function_shape() {
+    surface_test(&format!(
+        r"{NO_GENERATED}
+        local source = 'local function move({{x, y: {{z}}}}: Vec3, dt: number): number\n  return x + z + dt\nend\nfunction T:m({{p}}) return self, p end'
+        local r = luau.parse(source)
+        assert(#r.errors == 0, r.errors[1] and r.errors[1].message)
+        noGenerated(r)
+        local fn = r.root.body[1].func
+        assert(fn.kind == 'ExprFunction' and #fn.args == 2)
+        local pattern, dt = fn.args[1], fn.args[2]
+        assert(pattern.kind == 'PatternRecord' and dt.kind == 'Local' and dt.name == 'dt')
+        span(source, r, pattern, '{{x, y: {{z}}}}')
+        assert(pattern.annotation.kind == 'TypeReference' and pattern.annotation.name == 'Vec3')
+        assert(fn.returnAnnotation ~= nil)
+        assert(#fn.body.body == 1 and fn.body.body[1].kind == 'StatReturn', 'the field reads are not body statements')
+        local x = pattern.fields[1].target['local']
+        local z = pattern.fields[2].target.fields[1].target['local']
+        assert(x.functionDepth == 1 and z.functionDepth == 1)
+        local sum = fn.body.body[1].list[1]
+        assert(sum.left.left['local'] == x and sum.left.right['local'] == z)
+        local method = r.root.body[2].func
+        assert(method.self and method.self.name == 'self' and method.args[1].kind == 'PatternRecord')
+        assert(method.body.body[1].list[2]['local'] == method.args[1].fields[1].target['local'])
+    "
+    ));
+}
+
+#[test]
+fn record_pattern_generators_are_binding_slots() {
+    surface_test(&format!(
+        r"{NO_GENERATED}
+        local source = 'return [for i, {{id, position: {{z}}}} in enumerate(xs) if z > i for {{v}} in children(id) => id + v]'
+        local r = luau.parse(source)
+        assert(#r.errors == 0, r.errors[1] and r.errors[1].message)
+        noGenerated(r)
+        local c = r.root.body[1].list[1]
+        assert(c.kind == 'ExprComprehension' and c.complete)
+        local g = c.clauses[1]
+        assert(g.binding.kind == 'Local' and g.binding.name == 'i' and #g.bindings == 2)
+        local slot = g.bindings[2]
+        assert(slot.kind == 'PatternRecord')
+        span(source, r, slot, '{{id, position: {{z}}}}')
+        local id = slot.fields[1].target['local']
+        local z = slot.fields[2].target.fields[1].target['local']
+        assert(id.loopDepth == 1 and id.functionDepth == 0 and z.loopDepth == 1)
+        assert(c.clauses[2].condition.left['local'] == z, 'a filter sees the pattern binding')
+        local inner = c.clauses[3]
+        assert(inner.binding.kind == 'PatternRecord' and inner.bindings[1] == inner.binding)
+        assert(inner.source.args[1]['local'] == id, 'a dependent source sees the earlier pattern')
+        local v = inner.binding.fields[1].target['local']
+        assert(v.loopDepth == 2)
+        assert(c.projection.left['local'] == id and c.projection.right['local'] == v)
+    "
+    ));
+}
+
+#[test]
+fn record_patterns_in_nested_functions_and_comprehensions_hide_their_lowering() {
+    surface_test(&format!(
+        r"{NO_GENERATED}
+        local source = 'return [for x in xs => function({{a}}) local {{b}} = a return b + x end]'
+        local r = luau.parse(source)
+        assert(#r.errors == 0, r.errors[1] and r.errors[1].message)
+        noGenerated(r)
+        local fn = r.root.body[1].list[1].projection
+        assert(fn.kind == 'ExprFunction' and fn.args[1].kind == 'PatternRecord')
+        local body = fn.body.body
+        assert(#body == 2 and body[1].kind == 'StatLocalPattern' and body[2].kind == 'StatReturn')
+        local a = fn.args[1].fields[1].target['local']
+        assert(body[1].value['local'] == a and a.functionDepth == 1)
+        local b = body[1].pattern.fields[1].target['local']
+        assert(body[2].list[1].left['local'] == b and body[2].list[1].right.upvalue)
+    "
+    ));
+}
+
+#[test]
+fn record_patterns_are_l3i_syntax_and_stock_parsing_is_unchanged() {
+    surface_test(
+        r"
+        local ordinary = 'local t = {x = 1}\nlocal function f(a, b) return a end\nreturn f(t.x)'
+        equal(luau.parse(ordinary).root, luau.parse(ordinary, {dialect = 'luau'}).root)
+        local stock = luau.parse('local {x} = t', {dialect = 'luau'})
+        assert(#stock.errors > 0 and stock.root.body[1].kind ~= 'StatLocalPattern')
+        for source, message in {
+            ['local {x, other: x} = v'] = 'duplicate binding',
+            ['local {id, ...rest} = e'] = 'rest patterns',
+            ['local {x} = a, b'] = 'exactly one pattern',
+            ['for {id} in pairs(t) do end'] = 'generic for loops',
+        } do
+            local r = luau.parse(source)
+            local found = false
+            for _, err in r.errors do found = found or string.find(err.message, message, 1, true) ~= nil end
+            assert(found, source)
+        end
+    ",
+    );
+}
+
+#[test]
+fn every_record_pattern_prefix_recovers_deterministically() {
+    surface_test(&format!(
+        r"{NO_GENERATED}
+        for _, source in {{
+            'local {{position: {{x, y}}, id: key}}: Entity = entity return x',
+            'function f({{x, y}}: P, z) return x end',
+            'return [for {{x, position: {{z}}}} in xs if z => x]',
+        }} do
+            for n = 0, #source do
+                local prefix = string.sub(source, 1, n)
+                local a, b = luau.parse(prefix), luau.parse(prefix)
+                assert(a.root.kind == 'StatBlock', prefix)
+                equal(a.errors, b.errors, prefix .. '.errors')
+                equal(a.root, b.root, prefix .. '.ast')
+                noGenerated(a.root)
+                for _, err in a.errors do
+                    local begin = a.lineStarts[err.line] + err.column - 1
+                    assert(begin >= 1 and begin <= #prefix + 1, prefix)
+                end
+            end
+            assert(#luau.parse(source).errors == 0, source)
+        end
+        local r = luau.parse('local {{position: {{x')
+        local decl = r.root.body[1]
+        assert(decl.kind == 'StatLocalPattern' and not decl.pattern.complete and not decl.pattern.hasClose)
+        local x = decl.pattern.fields[1].target.fields[1].target
+        assert(x.kind == 'PatternIdentifier' and x.name == 'x' and x['local'] and x['local'].name == 'x')
+        local unfinished = luau.parse('local {{x}}: Point')
+        assert(unfinished.root.body[1].kind == 'StatLocalPattern' and unfinished.root.body[1].value == nil)
+        -- A generator still missing its binding has no slots: the recovery placeholder is not one.
+        local open = luau.parse('return [for ').root.body[1].list[1].clauses[1]
+        assert(#open.bindings == 0 and open.binding == nil)
+    "
+    ));
+}
