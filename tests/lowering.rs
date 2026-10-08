@@ -171,6 +171,29 @@ const CORPUS: &[(&str, &str)] = &[
     ("unmatched_call_in_projection", "return [for x in xs => g(x]"),
     ("postfix_index", "return xs[for x in ys => x]"),
     ("unfinished_nested", "return [for x in xs for y in"),
+    // Record binding patterns: declarations, parameters and generator slots share one emitter.
+    ("pattern_local", "local {x, y} = p return x + y"),
+    ("pattern_local_nested_alias", "local {transform: {position: pos}, health: hp}: Entity = e\nreturn pos, hp"),
+    ("pattern_local_empty", "local {} = f()"),
+    ("pattern_local_semicolon", "local {a} = t; local {b} = [for x in xs => x]\nreturn a, b"),
+    ("pattern_parameters", "local function f({x}: P, dt, {y: {z}}): number return x + z end"),
+    ("pattern_method", "function T:m({p}) return self, p end"),
+    ("pattern_function_in_projection", "return [for x in xs => function({a}) return a + x end]"),
+    ("pattern_generator", "return [for {id, active, position: {z}} in entities if active and z > 0 => id]"),
+    ("pattern_generator_enumerate", "return sum[for i, {v} in enumerate(xs) => i * v]"),
+    ("pattern_generator_slice", "return #[for {x} in xs[a:b] => x]"),
+    (
+        "pattern_generator_dependent",
+        "return [for {children, enabled} in parents if enabled for {id} in children => id]",
+    ),
+    ("pattern_local_unclosed", "local {position: {x"),
+    ("pattern_local_missing_value", "local {x}: P"),
+    ("pattern_parameter_unclosed", "function f({x,"),
+    ("pattern_generator_unclosed", "return [for {x in xs => x]"),
+    ("pattern_duplicate", "local {x, other: x} = v"),
+    ("pattern_two_values", "local {x} = a, b"),
+    ("pattern_rest", "local {id, ...rest} = e"),
+    ("pattern_loop_statement", "for {id} in pairs(t) do end"),
 ];
 
 const MODES: &[(LoweringMode, &str)] = &[

@@ -48,6 +48,7 @@ mod module;
 #[cfg(feature = "jit")]
 mod native_code;
 mod net;
+mod patterns;
 mod primitives;
 #[cfg(feature = "process")]
 mod process;

@@ -191,6 +191,15 @@ void dumpRange(std::string& out, const char* label, L3i::Surface::Range range)
     out += std::to_string(range.end);
 }
 
+void dumpPattern(std::string& out, const L3i::Surface::PatternSite& site)
+{
+    dumpRange(out, "holder", site.holder);
+    for (const auto& target : site.targets)
+        dumpRange(out, "target", target);
+    for (const auto& read : site.reads)
+        dumpRange(out, "read", read);
+}
+
 // Every observable product of lowering, in one text: the generated source, its provenance
 // segments, the tooling sites, and the document's structural errors. Snapshot tests compare
 // this text, so a refactor of the lowerer proves itself by leaving every line unchanged.
@@ -242,7 +251,23 @@ std::string dumpImpl(std::string_view source, bool recovery, bool fuseLength, bo
                 dumpRange(out, "sliceFirst", clause.sliceFirst);
                 dumpRange(out, "sliceLast", clause.sliceLast);
             }
+            for (const auto& pattern : clause.patterns)
+                if (!pattern.holder.empty())
+                {
+                    out += "\n--slot";
+                    dumpPattern(out, pattern);
+                }
         }
+    }
+    for (size_t k = 0; k < lowered.localSites.size(); ++k)
+    {
+        out += "\n--local " + std::to_string(k);
+        dumpPattern(out, lowered.localSites[k]);
+    }
+    for (size_t k = 0; k < lowered.parameterSites.size(); ++k)
+    {
+        out += "\n--parameter " + std::to_string(k);
+        dumpPattern(out, lowered.parameterSites[k]);
     }
     for (const auto& site : lowered.sliceSites)
     {

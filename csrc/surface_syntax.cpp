@@ -2,11 +2,17 @@
 // exclusively in surface_frontend.cpp; there is no legacy comprehension grammar here.
 #include "surface_syntax.h"
 
+#include "Luau/Allocator.h"
+#include "Luau/Ast.h"
+#include "Luau/Parser.h"
+
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <string_view>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 
@@ -20,12 +26,24 @@ void shift(Range& range, size_t offset)
     range.end += offset;
 }
 
+void shift(PatternSite& site, size_t offset)
+{
+    shift(site.holder, offset);
+    for (auto* list : {&site.declarations, &site.targets, &site.reads})
+        for (Range& range : *list)
+            shift(range, offset);
+}
+
 struct Text
 {
     std::string text;
     std::vector<Segment> segments;
     std::vector<ComprehensionSite> sites;
     std::vector<SliceSite> sliceSites;
+    // Record pattern sites by declaration/parameter index. One pattern can contribute more than
+    // one entry (its holder and its reads); the final assembly merges them.
+    std::vector<std::pair<size_t, PatternSite>> localSites;
+    std::vector<std::pair<size_t, PatternSite>> parameterSites;
     Range anchor;
 
     size_t size() const { return text.size(); }
@@ -83,8 +101,20 @@ struct Text
                 shift(clause.sliceSource, begin);
                 shift(clause.sliceFirst, begin);
                 shift(clause.sliceLast, begin);
+                for (auto& pattern : clause.patterns)
+                    shift(pattern, begin);
             }
             sites.push_back(std::move(site));
+        }
+        for (auto [index, site] : value.localSites)
+        {
+            shift(site, begin);
+            localSites.emplace_back(index, std::move(site));
+        }
+        for (auto [index, site] : value.parameterSites)
+        {
+            shift(site, begin);
+            parameterSites.emplace_back(index, std::move(site));
         }
         for (auto site : value.sliceSites)
         {
@@ -129,7 +159,26 @@ public:
             names.emplace(source.substr(begin, end - begin));
             begin = end;
         }
+        for (const std::string_view name : names)
+            if (name.substr(0, 11) == "__l3i_comp_")
+                generatedLike.push_back(name);
         operations = stem(source.size());
+        for (size_t k = 0; k < document.locals.size(); ++k)
+        {
+            const LocalPattern& local = document.locals[k];
+            edits.push_back({local.pattern.range.begin, local.pattern.range.end, false, false, k});
+            if (local.extract != SIZE_MAX)
+                edits.push_back({local.extract, local.extract, false, true, k});
+        }
+        for (size_t k = 0; k < document.parameters.size(); ++k)
+        {
+            const ParameterPattern& parameter = document.parameters[k];
+            edits.push_back({parameter.pattern.range.begin, parameter.pattern.range.end, true, false, k});
+            if (parameter.extract != SIZE_MAX)
+                edits.push_back({parameter.extract, parameter.extract, true, true, k});
+        }
+        // Parameters of one function share their body's insertion point and keep parameter order.
+        std::stable_sort(edits.begin(), edits.end(), [](const Edit& a, const Edit& b) { return a.begin < b.begin; });
         // A comprehension inside a sink destination is lowered as part of that destination
         // expression, so the walk over nodes in opening order must not emit it first.
         sinkParent.assign(document.comprehensions.size(), SIZE_MAX);
@@ -147,9 +196,19 @@ public:
         }
     }
 
+    // The holder local of a record pattern, keyed by the record's opening brace.
+    std::string holder(const Pattern& record) const { return stem(record.open.begin); }
+
     Text lower()
     {
         Text result;
+        if (document.comprehensions.empty() && document.slices.empty())
+        {
+            // Record patterns alone need no lowering-owned operations, so no prelude.
+            preludeStatements = 0;
+            result.append(range({0, source.size()}));
+            return result;
+        }
         result.anchor = document.comprehensions.empty() ? document.slices.front().range : document.comprehensions.front().range;
         size_t prefix = 0;
         auto comment = document.comments.begin();
@@ -274,7 +333,7 @@ public:
                 const bool sink = !it->sinkPrefix.empty() && it->sinkPrefix.begin >= copied;
                 const Reducer reducer = !it->reducerPrefix.empty() && it->reducerPrefix.begin >= copied ? it->reducer : Reducer::None;
                 const size_t begin = sink ? it->sinkPrefix.begin : reducer != Reducer::None ? it->reducerPrefix.begin : count ? it->lengthPrefix.begin : it->range.begin;
-                result.copy(source, {copied, begin});
+                copy(result, copied, begin);
                 result.append(comprehension(size_t(it - document.comprehensions.begin()), count, reducer));
                 copied = it->range.end;
                 ++it;
@@ -286,14 +345,28 @@ public:
                     ++sliceIt;
                     continue;
                 }
-                result.copy(source, {copied, sliceIt->range.begin});
+                copy(result, copied, sliceIt->range.begin);
                 result.append(slice(size_t(sliceIt - document.slices.begin())));
                 copied = sliceIt->range.end;
                 ++sliceIt;
             }
         }
-        result.copy(source, {copied, input.end});
+        copy(result, copied, input.end);
         return result;
+    }
+
+    // Copies source[from, to) and lowers the record pattern edits inside it. Comprehension and
+    // slice ranges are never copied here, so an edit inside one is lowered by its own recursion.
+    void copy(Text& out, size_t from, size_t to)
+    {
+        auto it = std::lower_bound(edits.begin(), edits.end(), from, [](const Edit& edit, size_t at) { return edit.begin < at; });
+        for (; it != edits.end() && it->end <= to; ++it)
+        {
+            out.copy(source, {from, it->begin});
+            edit(out, *it);
+            from = it->end;
+        }
+        out.copy(source, {from, to});
     }
 
 private:
@@ -302,7 +375,21 @@ private:
     bool recovery;
     bool fuse;
     std::unordered_set<std::string_view> names;
+    std::vector<std::string_view> generatedLike; // Source names spelled like generated ones.
     std::string operations;
+
+    // Record patterns of declarations and parameters, lowered where the copy of the source
+    // reaches them: the pattern becomes its holder name, and the field reads are inserted where
+    // Luau's own parse put the end of the value or the start of the body.
+    struct Edit
+    {
+        size_t begin = 0;
+        size_t end = 0;
+        bool parameter = false; // Indexes document.parameters, else document.locals.
+        bool extract = false;   // Inserts the field reads, else replaces the pattern by its holder.
+        size_t index = 0;
+    };
+    std::vector<Edit> edits;
     std::vector<size_t> sinkParent;
     size_t preludeStatements = 1;
     const std::vector<Range>& bufferGenerators;
@@ -328,9 +415,77 @@ private:
             std::string name = "__l3i_comp_" + std::to_string(offset);
             if (salt)
                 name += "_" + std::to_string(salt);
-            if (!names.count(name))
+            // Every generated name is the stem or extends it with '_': a source name spelled
+            // either way would be shadowed by, or capture, a generated local, so it salts the stem.
+            const bool taken = std::any_of(generatedLike.begin(), generatedLike.end(), [&](std::string_view used) {
+                return used == name || (used.size() > name.size() && used.substr(0, name.size()) == name && used[name.size()] == '_');
+            });
+            if (!taken)
                 return name;
         }
+    }
+
+    // A pattern edit: the holder in place of the pattern, or the field reads after the value
+    // (or before the body). Sites are recorded by index and merged by the final assembly.
+    void edit(Text& out, const Edit& e)
+    {
+        const Pattern& pattern = e.parameter ? document.parameters[e.index].pattern : document.locals[e.index].pattern;
+        PatternSite site;
+        const Range saved = out.anchor;
+        out.anchor = pattern.range;
+        if (!e.extract)
+        {
+            const size_t begin = out.size();
+            out += holder(pattern);
+            site.holder = {begin, out.size()};
+        }
+        else
+        {
+            if (!e.parameter && document.locals[e.index].equals.empty())
+            {
+                // Recovery only: a declaration still missing its '=' gets an untyped hole.
+                out.anchor = {e.begin, e.begin};
+                out += " = (nil :: any)";
+                out.anchor = pattern.range;
+            }
+            out += " ";
+            reads(out, pattern, holder(pattern), site);
+        }
+        out.anchor = saved;
+        (e.parameter ? out.parameterSites : out.localSites).emplace_back(e.index, std::move(site));
+    }
+
+    // The field reads of a record pattern from its holder: `local target = holder.key`, or a
+    // nested record's own holder then its reads, in source order, depth first. Ordinary
+    // indexing, no record and no call; each read is attributed to its field.
+    void reads(Text& out, const Pattern& record, const std::string& from, PatternSite& site)
+    {
+        const Range saved = out.anchor;
+        for (const PatternField& field : record.fields)
+        {
+            if (field.key.empty() || (!field.target.record && field.target.range.empty()))
+                continue; // Recovery: nothing to bind yet.
+            out.anchor = field.range;
+            out += "local ";
+            const size_t name = out.size();
+            const std::string nested = field.target.record ? holder(field.target) : std::string();
+            if (field.target.record)
+                out += nested;
+            else
+                out.copy(source, field.target.range);
+            site.declarations.push_back({name, out.size()});
+            if (!field.target.record)
+                site.targets.push_back({name, out.size()});
+            out += " = ";
+            const size_t read = out.size();
+            out += from + ".";
+            out.copy(source, field.key);
+            site.reads.push_back({read, out.size()});
+            out += " ";
+            if (field.target.record)
+                reads(out, field.target, nested, site);
+        }
+        out.anchor = saved;
     }
 
     Range expression(Text& out, Range original, std::string_view missing, std::string_view suffix = {})
@@ -679,6 +834,8 @@ private:
         if (!pipeline.single() || pipeline.stages.front().kind != SourceKind::Slice || node.clauses.size() > 2) return std::nullopt;
         const Clause& generator = node.clauses.front();
         if (generator.binding.empty() || generator.bindings.size() > 1 || node.projection.empty()) return std::nullopt;
+        // A record pattern reads fields of each element: not a data operation.
+        if (!generator.patterns.empty() && generator.patterns.front().record) return std::nullopt;
         const auto text = [&](Range range) { return std::string_view(source).substr(range.begin, range.end - range.begin); };
         const std::string_view name = text(generator.binding);
         KnownDataOp op;
@@ -722,28 +879,51 @@ private:
         return op;
     }
 
-    // The loop variable declaration for a generator: its user bindings copied verbatim, or
-
-    // the recovery-only placeholder when a binding is missing and a placeholder is requested.
+    // The loop variable declaration for a generator: its user bindings copied verbatim, a
+    // record pattern slot's holder, or the recovery-only placeholder when a binding is missing
+    // and a placeholder is requested. Record slots read their fields in `slotReads`.
     void bindings(Text& out, const Clause& clause, ClauseSite& site, const std::string& missing = {})
     {
+        site.patterns.assign(clause.patterns.size(), PatternSite{});
+        const auto slot = [&](size_t i) {
+            const size_t begin = out.size();
+            if (i < clause.patterns.size() && clause.patterns[i].record)
+            {
+                const Range saved = out.anchor;
+                out.anchor = clause.patterns[i].range;
+                out += holder(clause.patterns[i]);
+                out.anchor = saved;
+                site.patterns[i].holder = {begin, out.size()};
+            }
+            else
+                out.copy(source, clause.bindings[i]);
+            return Range{begin, out.size()};
+        };
         if (clause.bindings.size() > 1)
         {
             for (size_t i = 0; i < clause.bindings.size(); ++i)
             {
                 if (i) out += ", ";
-                const size_t begin = out.size();
-                out.copy(source, clause.bindings[i]);
-                site.bindings.push_back({begin, out.size()});
+                site.bindings.push_back(slot(i));
             }
             site.binding = site.bindings.front();
             return;
         }
         const size_t begin = out.size();
         if (clause.binding.empty() && !missing.empty()) out += missing;
+        else if (!clause.bindings.empty()) slot(0);
         else out.copy(source, clause.binding);
         site.binding = {begin, out.size()};
         site.bindings.push_back(site.binding);
+    }
+
+    // The field reads of every record slot, right after the loop has bound the element: before
+    // the clause's filters, so extraction order is the pattern's, never the filters'.
+    void slotReads(Text& out, const Clause& clause, ClauseSite& site)
+    {
+        for (size_t i = 0; i < clause.patterns.size(); ++i)
+            if (clause.patterns[i].record)
+                reads(out, clause.patterns[i], holder(clause.patterns[i]), site.patterns[i]);
     }
 
     // Everything a pipeline walk needs besides the stage list.
@@ -894,6 +1074,7 @@ private:
             out += " = " + operations + "_buffer.read" + typed->kind + "(" + prefix + "_src, " + typed->at(prefix + "_i") + ") ";
         else
             out += bytes ? " = " + operations + "_buffer.readu8(" + prefix + "_src, " + prefix + "_i - 1) " : " = " + prefix + "_src[" + prefix + "_i] ";
+        slotReads(out, clause, site);
     }
 
     // One generator stage: evaluate its source once, open the loop, declare the bindings.
@@ -918,6 +1099,7 @@ private:
             out += "if " + prefix + "_r2 == 0 then " + operations + "_error(\"JSL range step must not be zero\") end for ";
             bindings(out, clause, site, (e.sized ? e.name : prefix) + "_missing");
             out += " = " + prefix + "_r0, " + prefix + "_r1, " + prefix + "_r2 do ";
+            slotReads(out, clause, site);
             return;
         }
         case SourceKind::Slice:
@@ -956,6 +1138,7 @@ private:
                 out += prefix + "_src" + std::to_string(argument) + "[" + prefix + "_i]";
             }
             out += " ";
+            slotReads(out, clause, site);
             return;
         }
         case SourceKind::Enumerate:
@@ -980,6 +1163,7 @@ private:
                 bindings(out, clause, site, (e.sized ? e.name : prefix) + "_missing");
                 out += " = " + prefix + "_src[" + prefix + "_i] ";
             }
+            slotReads(out, clause, site);
             return;
         }
         }
@@ -1289,16 +1473,125 @@ private:
 };
 }
 
+namespace
+{
+// The original offset of a generated position that ends a token (a statement's end, a body's
+// start): the byte before it is the token's last, and a copy maps affinely.
+size_t originalEnd(const std::vector<Segment>& segments, size_t generated)
+{
+    auto it = std::upper_bound(segments.begin(), segments.end(), generated - 1, [](size_t at, const Segment& s) { return at < s.begin; });
+    if (generated == 0 || it == segments.begin()) return 0;
+    const Segment& segment = *--it;
+    return segment.copied ? segment.originalBegin + (generated - segment.begin) : segment.originalEnd;
+}
+
+size_t originalBegin(const std::vector<Segment>& segments, size_t generated)
+{
+    auto it = std::upper_bound(segments.begin(), segments.end(), generated, [](size_t at, const Segment& s) { return at < s.begin; });
+    if (it == segments.begin()) return 0;
+    const Segment& segment = *--it;
+    return segment.copied ? segment.originalBegin + (generated - segment.begin) : segment.originalBegin;
+}
+
+// Luau owns where a declaration's value ends and where a function body starts. The first
+// lowering names every pattern by its holder; Luau's parse of it finds each holder's declaration
+// or parameter, and the field reads go exactly there in the second lowering.
+void locate(const Text& first, const std::function<std::string(const Pattern&)>& holder, Document& document)
+{
+    std::unordered_map<std::string, size_t> locals, parameters;
+    for (size_t k = 0; k < document.locals.size(); ++k)
+        locals.emplace(holder(document.locals[k].pattern), k);
+    for (size_t k = 0; k < document.parameters.size(); ++k)
+        parameters.emplace(holder(document.parameters[k].pattern), k);
+    Luau::Allocator allocator;
+    Luau::AstNameTable names(allocator);
+    const Luau::ParseResult parsed = Luau::Parser::parse(first.text.data(), first.text.size(), names, allocator);
+    if (!parsed.root) return;
+    std::vector<size_t> starts{0};
+    for (size_t i = 0; i < first.text.size(); ++i)
+        if (first.text[i] == '\n') starts.push_back(i + 1);
+    const auto offset = [&](Luau::Position p) { return p.line < starts.size() ? starts[p.line] + p.column : first.text.size(); };
+    struct Finder final : Luau::AstVisitor
+    {
+        std::function<void(Luau::AstStatLocal*)> local;
+        std::function<void(Luau::AstExprFunction*)> function;
+        bool visit(Luau::AstStatLocal* node) override { local(node); return true; }
+        bool visit(Luau::AstExprFunction* node) override { function(node); return true; }
+    } finder;
+    finder.local = [&](Luau::AstStatLocal* node) {
+        if (node->vars.size == 0) return;
+        auto it = locals.find(node->vars.data[0]->name.value);
+        if (it == locals.end()) return;
+        LocalPattern& local = document.locals[it->second];
+        local.extract = originalEnd(first.segments, offset(node->location.end));
+        if (node->values.size > 1)
+        {
+            const size_t at = originalBegin(first.segments, offset(node->values.data[1]->location.begin));
+            document.errors.push_back({{at, at}, "a record pattern declaration binds exactly one pattern to one value"});
+        }
+        locals.erase(it); // A holder is declared once; later same-named locals are not it.
+    };
+    finder.function = [&](Luau::AstExprFunction* node) {
+        for (Luau::AstLocal* argument : node->args)
+        {
+            auto it = parameters.find(argument->name.value);
+            if (it == parameters.end()) continue;
+            document.parameters[it->second].extract = originalEnd(first.segments, offset(node->body->location.begin));
+            parameters.erase(it);
+        }
+    };
+    parsed.root->visit(&finder);
+}
+
+void merge(std::vector<PatternSite>& sites, std::vector<std::pair<size_t, PatternSite>>& entries)
+{
+    for (auto& [index, entry] : entries)
+    {
+        PatternSite& site = sites.at(index);
+        if (!entry.holder.empty()) site.holder = entry.holder;
+        for (auto [into, from] : {std::pair{&site.declarations, &entry.declarations}, std::pair{&site.targets, &entry.targets},
+                 std::pair{&site.reads, &entry.reads}})
+            into->insert(into->end(), from->begin(), from->end());
+    }
+}
+}
+
 LoweredSource lower(std::string_view source, bool recovery, bool fuseLength, const std::vector<Range>& bufferGenerators,
     bool dynamicGenerators, const std::vector<size_t>& localFilters)
 {
     Document document = parseSurface(source);
-    if ((document.comprehensions.empty() && document.slices.empty()) || (!recovery && !document.errors.empty()))
-        return {std::string(source), {}, std::move(document), {}, {}, 0, {}};
+    const bool patterns = !document.locals.empty() || !document.parameters.empty();
+    LoweredSource result;
+    if ((document.comprehensions.empty() && document.slices.empty() && !patterns) || (!recovery && !document.errors.empty()))
+    {
+        result.source = std::string(source);
+        result.document = std::move(document);
+        return result;
+    }
+    if (patterns)
+    {
+        Lowerer first(source, document, recovery, fuseLength, bufferGenerators, dynamicGenerators, localFilters);
+        locate(first.lower(), [&](const Pattern& pattern) { return first.holder(pattern); }, document);
+        if (!recovery && !document.errors.empty())
+        {
+            result.source = std::string(source);
+            result.document = std::move(document);
+            return result;
+        }
+    }
     Lowerer lowerer(source, document, recovery, fuseLength, bufferGenerators, dynamicGenerators, localFilters);
     Text output = lowerer.lower();
-    SourceMap map(source, output.text, std::move(output.segments));
-    return {std::move(output.text), std::move(map), std::move(document), std::move(output.sites), std::move(output.sliceSites),
-        lowerer.prelude(), std::move(lowerer.pendingLocalFilters)};
+    result.map = SourceMap(source, output.text, std::move(output.segments));
+    result.source = std::move(output.text);
+    result.sites = std::move(output.sites);
+    result.sliceSites = std::move(output.sliceSites);
+    result.preludeStatements = lowerer.prelude();
+    result.pendingLocalFilters = std::move(lowerer.pendingLocalFilters);
+    result.localSites.resize(document.locals.size());
+    result.parameterSites.resize(document.parameters.size());
+    merge(result.localSites, output.localSites);
+    merge(result.parameterSites, output.parameterSites);
+    result.document = std::move(document);
+    return result;
 }
 }

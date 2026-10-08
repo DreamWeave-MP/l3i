@@ -5,6 +5,16 @@
 
 namespace L3i::Surface
 {
+// What one record pattern lowered to: a holder local receiving the source value, then one
+// declaration per field read, `local target = holder.key`, depth first in source order.
+struct PatternSite
+{
+    Range holder;                    // The holder's generated name in its declaration or parameter.
+    std::vector<Range> declarations; // Every generated declaration name: targets and nested holders.
+    std::vector<Range> targets;      // The bound names' generated declarations, depth first.
+    std::vector<Range> reads;        // Each field's generated read `holder.key`, depth first.
+};
+
 struct ClauseSite
 {
     Range binding; // Generated declaration token, not a guessed temporary spelling.
@@ -16,6 +26,8 @@ struct ClauseSite
     Range sliceSource;
     Range sliceFirst;
     Range sliceLast;
+    // Parallel to the clause's binding slots; a name slot has an empty holder.
+    std::vector<PatternSite> patterns;
 };
 
 struct ComprehensionSite
@@ -45,6 +57,10 @@ struct LoweredSource
     std::vector<ComprehensionSite> sites;
     std::vector<SliceSite> sliceSites;
     size_t preludeStatements = 0;
+    // Parallel to document.locals and document.parameters. A pattern Luau did not parse into a
+    // declaration or parameter (broken source) has an empty holder and no reads.
+    std::vector<PatternSite> localSites;
+    std::vector<PatternSite> parameterSites;
     // Comprehensions whose recognized data shape compares the binding against an identifier.
     // They lower to the scalar loop until the compiler verifies the identifier is a local
     // declared outside the comprehension and lowers again naming them in `localFilters`.
