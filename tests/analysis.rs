@@ -1410,3 +1410,19 @@ fn record_pattern_types_flow_through_returns_scopes_and_pipelines_without_any() 
         }
     }
 }
+
+#[test]
+fn same_line_lints_skip_generated_reads_and_their_known_cost() {
+    // Luau warns once per line. A generated read can take that one warning, which is dropped:
+    // the destructuring line gets none where its handwritten form gets one (PATTERNS.md).
+    let jsl = "--!strict\nlocal t = { a = 1 }\nlocal {a} = t print(a)\n";
+    let luau = "--!strict\nlocal t = { a = 1 }\nlocal a = t.a print(a)\n";
+    for solver in [analysis::Solver::New, analysis::Solver::Old] {
+        let analysis = comprehension_analysis(HashMap::from([("jsl", jsl), ("luau", luau)]), solver);
+        let same_line = |module: &str| {
+            analysis.check(module, true).diagnostics.iter().filter(|d| d.name == "SameLineStatement").count()
+        };
+        assert_eq!(same_line("luau"), 1, "{solver:?}");
+        assert_eq!(same_line("jsl"), 0, "{solver:?}");
+    }
+}

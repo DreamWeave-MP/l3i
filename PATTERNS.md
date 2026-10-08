@@ -166,9 +166,17 @@ nil at the failing field's line at run time). Autocomplete in a pattern key (`lo
 entity`) or an empty field slot (`local {id, |} = entity`, `{position: {x, |}}`, `function
 f({x, |}: Point)`, `[for {id, po|} in entities ...]`) moves the cursor to the field's generated
 read `holder.key`, so Luau's property completion lists the destructured value's fields, typed,
-nested records included. Generated holders are hidden; pattern bindings and reads inside
-comprehensions count as user code for diagnostics and lints. Normal checks, autocomplete,
-`mark_dirty` and `clear` are tested under both solvers.
+nested records included. A record with no field yet (`local {|} = getTypedEntity()`, `local
+{position: {|}} = entity`, `function update({|}: Entity)`, `[for {|} in entities ...]`) has
+no read to borrow; the tooling lowering (Analysis and `@dream/luau`, never compilation) gives
+it one probe read `holder.holder_probe`, and the cursor completes there the same way. The probe's
+diagnostics are dropped, its statement is absent from the source tree, and its names are hidden.
+Generated holders are hidden; pattern bindings and reads inside comprehensions count as user code
+for diagnostics and lints. The generated reads share their source line, so Luau's
+`SameLineStatement` lint is dropped for statements the lowering wrote; a lint about a bound name
+itself (`LocalUnused` on an unused alias) is reported at its source span. Normal checks,
+autocomplete, `mark_dirty` and `clear` are tested under both solvers, across source changes
+between pattern declarations, pattern parameters and plain Luau.
 
 Recovery is structural and deterministic: every prefix of representative declarations,
 parameters and generators yields the same records, errors and tree on every parse, with no
@@ -179,17 +187,21 @@ names. Strict compilation rejects every structural error before anything runs.
 ## Evidence
 
 Validated 2026-10-08 on the pinned Luau 0.740 (`c0e346ed`), Intel Core i7-10870H, Linux x86-64,
-rustc 1.99.0.
+rustc 1.99.0; rerun in the hardening pass the same day.
 
-**Semantic oracle** (`tests/patterns.rs`): 38 table-driven cases each run a JSL body and the
+**Semantic oracle** (`tests/patterns.rs`): 43 table-driven cases each run a JSL body and the
 handwritten Luau a careful author would write, in one VM, and compare results, location-free
 errors and the full `__index` read log: source evaluated once, read order, aliases, missing
 fields, nested-nil and nil-source errors, failing reads stopping extraction, identity, multiple
 returns, vectors/strings/metatables, empty patterns, shadowing, closures, annotations, statement
 boundaries; parameter order, arity (`debug.info(f, 'a')`), nil arguments, methods, varargs,
 recursion, generics and attributes; every consumer, dependent generators, enumerate/zip slots,
-scalar elements, nil projections. Absolute read orders, generated-name hygiene, the strict
-rejection of every incomplete form and the brief's exit program are asserted separately.
+scalar elements, nil projections; getters that reassign the source variable or write a later
+field, getters that destructure, indexable userdata, a failure deep inside a nested pattern.
+With the `jit` feature every case runs again compiled to native code and agrees. A pattern
+pipeline gives the same results and errors with and without the data plane installed. Absolute
+read orders, generated-name hygiene, the strict rejection of every incomplete form and the
+brief's exit program are asserted separately.
 
 **Executed VM instructions** (deterministic single-step counts, interpreter): declarations
 (two/three fields, nested, from a call or from a local) and typed parameters execute exactly as
@@ -219,20 +231,45 @@ handwritten code. Generators retire 30 (interpreter) or 2 (native) more instruct
 run-to-run drift of sequential measurement (for example 40.5 µs against 38.3 µs native for two
 fields with identical instruction counts); they are not evidence of a difference. Existing
 comprehension and data-plane snapshots are byte-identical: every pattern case was added to
-`tests/lowering.rs` without changing any earlier snapshot line.
+`tests/lowering.rs` without changing any earlier snapshot line. Against the pre-pattern
+baseline (`7ff4c6b`), the comprehension bench's JSL rows retire identical instruction counts and
+all 67 native data-plane rows agree within 0.015%.
+
+**Compile cost** (release build, 40 compiles of a 239 KB module of 2,000 small functions):
+
+| Module | Pre-pattern baseline | Now |
+|---|---:|---:|
+| No JSL syntax | 19.1–21.2 ms | 20.7–21.9 ms (within run-to-run noise) |
+| One comprehension | 36.2–39.9 ms | 35.3–39.3 ms |
+| Three record patterns | n/a | 40.8–43.5 ms |
+| A pattern parameter and a declaration in every function | n/a | 58.5–59.8 ms |
+| 40 nested functions, each with a 24-deep parameter pattern | n/a | 2.0–2.2 ms |
+
+The extra stock-Luau parse that places the reads costs about 3.6 ms on this module and is paid
+only when a declaration or parameter pattern exists; it stays, because it is what makes value
+ends and body starts Luau's decision. Most of the gap between a plain module and one with any
+JSL construct is not patterns: the baseline already pays it for one comprehension (building the
+source map and remapping every location). Peak RSS: 15.4–15.7 MB plain, 17.9 MB with three
+patterns, 24.3 MB with patterns in all 2,000 functions.
 
 ## Limitations
 
-- Holders are real locals named `__l3i_comp_<n>`: a debugger's local list shows them next to the
-  bound names (as it shows a comprehension's own locals). They are absent from surface trees,
-  completions and diagnostics.
-- Autocomplete in an empty record `{|}` with no field yet has no read to borrow a type from and
-  does not complete fields; once one field is written, empty slots complete the record's fields.
-  Without a value (`local {x` at the end of a file) there is nothing to type keys against.
+- Holders are real locals named `__l3i_comp_<n>`. At the default debug level 1 Luau records no
+  local names at all, so a debugger lists none, user or generated. At debug level 2 Luau lists
+  every register-allocated local, with no way to mark one internal: holders appear under their
+  generated names, holding exactly the record they destructure (a parameter's holder is the real
+  argument), next to the bound names with their field values. Hiding them would mean rewriting
+  serialized debug information or filtering by name in the host, which could hide a user's own
+  local; neither is done. They are absent from surface trees, completions and diagnostics.
+- Without a value (`local {x` at the end of a file) there is nothing to type keys against.
 - A declaration with an annotation but no `=` reports the missing `=` at the next statement
   keyword or the end of the file rather than right after the annotation: the annotation's extent
   is Luau's to parse, and the frontend does not parse types.
 - Generator patterns disable data-plane recognition for that pipeline (by design: the element is
   a record read, not a buffer element).
-- Lowering parses a pattern-bearing chunk with stock Luau once more than before; the cost is
-  linear in the chunk and paid only when a declaration or parameter pattern exists.
+- Lowering parses a pattern-bearing chunk with stock Luau once more than before (see Compile
+  cost); the cost is linear in the chunk and paid only when a declaration or parameter pattern
+  exists.
+- Because the generated reads share their source line, a same-line warning that Luau reports once
+  per line can be spent on a generated read and then dropped: `local {a} = t print(a)` gets no
+  `SameLineStatement` warning, where `local a = t.a print(a)` would.
