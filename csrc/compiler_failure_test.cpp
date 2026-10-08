@@ -42,8 +42,9 @@ extern "C" char* l3i_luau_disassemble(const char*, size_t, lua_CompileOptions*, 
 int main()
 {
     using Compile = decltype(&l3i_luau_compile);
-    const std::string parseError = "local xs = [for x in {1} => x]\n\nlocal broken =";
-    const std::string compileError = "return [for x in {1} => x]";
+    // Record patterns take the lowering's second parse; every budget must fail inside it too.
+    const std::string parseError = "local {a} = {a = 1}\nlocal xs = [for x in {1} => x]\n\nlocal broken =";
+    const std::string compileError = "local function f({x}) return x end\nreturn [for x in {1} => f({x = x})]";
     const char* types[257];
     for (size_t i = 0; i < 256; ++i)
         types[i] = "UnusedType";

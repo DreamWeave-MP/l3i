@@ -1242,34 +1242,63 @@ fn record_pattern_autocomplete_types_keys_and_hides_holders() {
 }
 
 #[test]
-fn record_pattern_snapshots_survive_dirty_and_clear_on_both_solvers() {
+fn record_pattern_snapshots_keep_their_maps_until_dirty_or_clear() {
+    let old = concat!(
+        "--!strict\ntype Point = { x: number, y: number }\nlocal point: Point = { x = 1, y = 2 }\n",
+        "local {x, oldMissing} = point\nreturn x\n",
+    );
+    let new = concat!(
+        "--!strict\n\ntype Point = { x: number, y: number }\nlocal point: Point = { x = 1, y = 2 }\n",
+        "local function f({y, newMissing}: Point) return y end\nreturn f(point)\n",
+    );
+    let plain = concat!(
+        "--!strict\ntype Point = { x: number, y: number }\nlocal point: Point = { x = 1, y = 2 }\n",
+        "local plainMissing = point.plainMissing\nreturn plainMissing\n",
+    );
     for solver in [analysis::Solver::New, analysis::Solver::Old] {
-        let good =
-            format!("{PATTERN_TYPES}local point: Point = {{ x = 1, y = 2 }}\nlocal {{x, y}} = point\nreturn x + y\n");
-        let bad = format!("{PATTERN_TYPES}local point: Point = {{ x = 1, y = 2 }}\nlocal {{x, z}} = point\nreturn x\n");
+        let source = std::rc::Rc::new(std::cell::RefCell::new(old));
         let analysis = Analysis::new(
-            MemberSources(HashMap::from([("m".to_owned(), good.clone())])),
+            ChangingSource(source.clone()),
             AnalysisOptions { solver, retain_full_type_graphs: true, ..AnalysisOptions::default() },
         )
         .unwrap();
-        assert!(analysis.check("m", false).is_clean(), "{solver:?}");
-        let completions = complete_at(&analysis, "m", &good, good.find("{x, y}").unwrap() + 2);
-        assert!(
-            completions.entries.iter().any(|e| e.name == "y" && e.kind == CompletionKind::Property),
-            "{completions:?}"
-        );
-        drop(analysis);
-        let analysis = Analysis::new(
-            MemberSources(HashMap::from([("m".to_owned(), bad.clone())])),
-            AnalysisOptions { solver, retain_full_type_graphs: true, ..AnalysisOptions::default() },
-        )
-        .unwrap();
-        let report = analysis.check("m", false);
-        assert_eq!(report.diagnostics.len(), 1, "{solver:?}: {report:#?}");
-        analysis.mark_dirty("m");
-        assert_eq!(analysis.check("m", false).diagnostics.len(), 1);
+        let check = |expected: &str, key: &str| {
+            let report = analysis.check("snapshot", false);
+            assert_eq!(report.diagnostics.len(), 1, "{solver:?}: {report:?}");
+            let error = &report.diagnostics[0];
+            assert!(error.text.contains(key), "{solver:?}: {error:?}");
+            let at = expected.find(key).unwrap();
+            assert_eq!(error.span.begin_line, source_position(expected, at).0, "{solver:?}: {error:?}");
+        };
+        // Completing inside the missing key (a pattern key, or plain Luau's `point.key`) lists
+        // the record's fields only through the right snapshot's map and sites.
+        let complete = |expected: &str, key: &str| {
+            let at = expected.find(&format!(".{key}")).map_or_else(|| expected.find(key).unwrap(), |dot| dot + 1) + 2;
+            let completions = complete_at(&analysis, "snapshot", expected, at);
+            let mut properties: Vec<_> = completions
+                .entries
+                .iter()
+                .filter(|entry| entry.kind == CompletionKind::Property)
+                .map(|entry| entry.name.as_str())
+                .collect();
+            properties.sort_unstable();
+            assert_eq!(properties, ["x", "y"], "{solver:?}: {key}: {completions:?}");
+        };
+        check(old, "oldMissing");
+        complete(old, "oldMissing");
+        *source.borrow_mut() = new;
+        check(old, "oldMissing");
+        complete(old, "oldMissing");
+        analysis.mark_dirty("snapshot");
+        complete(new, "newMissing");
+        check(new, "newMissing");
+        *source.borrow_mut() = plain;
+        analysis.mark_dirty("snapshot");
+        check(plain, "plainMissing");
+        complete(plain, "plainMissing");
+        *source.borrow_mut() = old;
         analysis.clear();
-        assert_eq!(analysis.check("m", false).diagnostics.len(), 1);
-        let _ = complete_at(&analysis, "m", &bad, bad.find("{x, z}").unwrap() + 2);
+        complete(old, "oldMissing");
+        check(old, "oldMissing");
     }
 }
