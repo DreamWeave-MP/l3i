@@ -181,14 +181,15 @@ names. Strict compilation rejects every structural error before anything runs.
 Validated 2026-10-08 on the pinned Luau 0.740 (`c0e346ed`), Intel Core i7-10870H, Linux x86-64,
 rustc 1.99.0.
 
-**Semantic oracle** (`tests/patterns.rs`): 37 table-driven cases each run a JSL body and the
+**Semantic oracle** (`tests/patterns.rs`): 38 table-driven cases each run a JSL body and the
 handwritten Luau a careful author would write, in one VM, and compare results, location-free
 errors and the full `__index` read log: source evaluated once, read order, aliases, missing
 fields, nested-nil and nil-source errors, failing reads stopping extraction, identity, multiple
 returns, vectors/strings/metatables, empty patterns, shadowing, closures, annotations, statement
 boundaries; parameter order, arity (`debug.info(f, 'a')`), nil arguments, methods, varargs,
-recursion; every consumer, dependent generators, enumerate/zip slots, scalar elements, nil
-projections. Absolute read orders and generated-name hygiene are asserted separately.
+recursion, generics and attributes; every consumer, dependent generators, enumerate/zip slots,
+scalar elements, nil projections. Absolute read orders, generated-name hygiene, the strict
+rejection of every incomplete form and the brief's exit program are asserted separately.
 
 **Executed VM instructions** (deterministic single-step counts, interpreter): declarations
 (two/three fields, nested, from a call or from a local) and typed parameters execute exactly as

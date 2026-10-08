@@ -232,6 +232,14 @@ fn function_parameters_match_handwritten_luau() {
             luau: "local function f(p, z) local x = p.x local y = p.y return x end return debug.info(f, 'a')",
         },
         Case {
+            name: "generic functions and attributes",
+            setup: "type Box<T> = { value: T }",
+            jsl: "@native local function unbox<T>({value}: Box<T>, fallback: T): T return value or fallback end \
+                  return unbox({ value = 4 }, 0), unbox({}, 7)",
+            luau: "@native local function unbox<T>(b: Box<T>, fallback: T): T local value = b.value return value or fallback end \
+                   return unbox({ value = 4 }, 0), unbox({}, 7)",
+        },
+        Case {
             name: "a failing parameter read raises before the body",
             setup: "",
             jsl: "local function f({a, b}) table.insert(log, 'body') return a end return f(rec('p', { a = 1, b = FAIL }))",
@@ -613,4 +621,42 @@ fn bytecode_is_the_handwritten_extraction() {
         }
         assert!(jsl_ops.len() <= luau_ops.len() + 1, "{jsl}\n{surface}\n{handwritten}");
     }
+}
+
+#[test]
+fn the_exit_program_runs() {
+    Runtime::new()
+        .unwrap()
+        .exec(
+            r"
+        type Position = {
+            x: number,
+            y: number,
+            z: number,
+        }
+
+        type Entity = {
+            id: number,
+            active: boolean,
+            position: Position,
+        }
+
+        function projectedIds(entities: {Entity})
+            return [
+                for {id, active, position: {z}} in entities
+                if active and z > 0
+                => id
+            ]
+        end
+
+        local ids = projectedIds({
+            { id = 1, active = true, position = { x = 0, y = 0, z = 2 } },
+            { id = 2, active = false, position = { x = 0, y = 0, z = 3 } },
+            { id = 3, active = true, position = { x = 0, y = 0, z = -1 } },
+            { id = 4, active = true, position = { x = 0, y = 0, z = 9 } },
+        })
+        assert(#ids == 2 and ids[1] == 1 and ids[2] == 4)
+    ",
+        )
+        .unwrap();
 }
