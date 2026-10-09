@@ -19,6 +19,8 @@ local dns = require('@dream/dns')
 local tcp = require('@dream/tcp')
 local tls = require('@dream/tls')
 
+local MAX_HEAD = 16 * 1024
+
 local HttpsClient = {}
 
 local function remainingMs(deadline: number): number
@@ -162,6 +164,7 @@ function HttpsClient.connect(host: string, port: number, options: { [string]: an
 		end
 		if done == nil then
 			poller:close()
+			secure:close()
 			return nil, reason, problem
 		end
 		if os.clock() >= deadline then
@@ -241,44 +244,55 @@ function HttpsClient.request(secure, method: string, host: string, path: string,
 	end
 	poller:modify(1, 'read')
 	local scratch = buffer.create(65536)
+	-- The head is searched only where new bytes arrived, and may be at most MAX_HEAD bytes; the
+	-- body's chunks are joined once, at the end. The deadline holds while data keeps arriving.
+	local head = ''
 	local received = {}
 	local size = 0
+	local bodySize = 0
 	local response
-	local bodyStart
 	while true do
+		if os.clock() >= deadline then
+			poller:close()
+			return nil, 'the response timed out', 'timedOut'
+		end
 		local count, reason, problem = secure:readInto(scratch)
 		if count == 0 then
 			break
 		elseif count then
-			table.insert(received, buffer.readstring(scratch, 0, count))
 			size += count
 			if size > limit then
 				poller:close()
 				return nil, 'the response is larger than maxResponseBytes', 'limitReached'
 			end
-			if not response then
-				local text = table.concat(received)
-				received = { text }
-				local ending = string.find(text, '\r\n\r\n', 1, true)
+			local chunk = buffer.readstring(scratch, 0, count)
+			if response then
+				table.insert(received, chunk)
+				bodySize += count
+			else
+				local from = math.max(1, #head - 2)
+				head ..= chunk
+				local ending = string.find(head, '\r\n\r\n', from, true)
 				if ending then
-					response = parseHead(string.sub(text, 1, ending - 1))
+					response = parseHead(string.sub(head, 1, ending - 1))
 					if not response then
 						poller:close()
 						return nil, 'the response is not HTTP/1.x', 'invalidInput'
 					end
-					bodyStart = ending + 4
+					received = { string.sub(head, ending + 4) }
+					bodySize = #received[1]
+				elseif #head > MAX_HEAD then
+					poller:close()
+					return nil, 'the response head is larger than 16 KiB', 'limitReached'
 				end
 			end
 			local length = response and tonumber(response.headers['content-length'])
-			if length and size - bodyStart + 1 >= length then
+			if length and bodySize >= length then
 				break
 			end
 		elseif problem ~= 'wouldBlock' then
 			poller:close()
 			return nil, reason, problem
-		elseif os.clock() >= deadline then
-			poller:close()
-			return nil, 'the response timed out', 'timedOut'
 		else
 			poller:wait(math.min(1000, remainingMs(deadline)))
 			drain(poller)
@@ -288,8 +302,7 @@ function HttpsClient.request(secure, method: string, host: string, path: string,
 	if not response then
 		return nil, 'the connection ended before a response head', 'truncated'
 	end
-	local text = table.concat(received)
-	local body = string.sub(text, bodyStart)
+	local body = table.concat(received)
 	local length = tonumber(response.headers['content-length'])
 	if length then
 		if #body < length then

@@ -1,7 +1,9 @@
 -- A small HTTPS server written in Luau over @dream/tcp and @dream/tls: TLS handshakes, HTTP/1.1
 -- requests without bodies, fixed Content-Length responses, keep-alive up to a request limit,
 -- and a cap on open connections. A demonstration, not a production server: no request bodies,
--- no chunked encoding, no idle timeouts beyond the TLS handshake deadline.
+-- no chunked encoding, no idle timeouts beyond the TLS handshake deadline, so clients that
+-- connect and stay silent can hold every connection slot; a real server gives each
+-- connection an idle deadline.
 --
 -- The TLS part is the point: every connection is watched through one poller, reads and writes
 -- are partial, the stream is watched for writing only while a response is waiting, and a
@@ -68,7 +70,7 @@ function HttpsServer:acceptAll()
 		else
 			local token = self.nextToken
 			self.nextToken += 1
-			self.connections[token] = { stream = secure, head = '', out = nil, sent = 0, requests = 0, closing = false }
+			self.connections[token] = { stream = secure, head = '', searched = 1, out = nil, sent = 0, requests = 0, closing = false }
 			assert(self.poller:watch(secure, token, 'read'))
 		end
 	end
@@ -83,8 +85,10 @@ end
 
 -- Answers the request at the front of the head buffer, if a whole head is there.
 function HttpsServer:handle(token, connection)
-	local ending = string.find(connection.head, '\r\n\r\n', 1, true)
+	-- Only where new bytes arrived: the head before them was searched already.
+	local ending = string.find(connection.head, '\r\n\r\n', connection.searched, true)
 	if not ending then
+		connection.searched = math.max(1, #connection.head - 2)
 		if #connection.head > MAX_HEAD then
 			connection.closing = true
 			connection.out = response(431, 'text/plain', 'request head too large\n', false)
@@ -93,6 +97,7 @@ function HttpsServer:handle(token, connection)
 	end
 	local head = string.sub(connection.head, 1, ending - 1)
 	connection.head = string.sub(connection.head, ending + 4)
+	connection.searched = 1
 	connection.requests += 1
 	local method, path = string.match(head, '^(%u+) (%S+) HTTP/1%.[01]\r?\n?')
 	local lowered = string.lower(head)

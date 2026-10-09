@@ -1,7 +1,8 @@
 -- A small HTTP/1.1 server written in Luau over @dream/tcp, to show the TCP primitives carrying
 -- a real protocol. It is a demonstration, not a production server: one request per
 -- connection, no request bodies, no keep-alive, no chunked encoding, no TLS, no timeouts
--- beyond the caller's loop. What it does do correctly is the TCP part: a request head
+-- beyond the caller's loop, so clients that connect and stay silent can hold every
+-- connection slot. What it does do correctly is the TCP part: a request head
 -- arrives in however many reads it takes, a response leaves in however many writes the
 -- socket accepts, every handle is drained until 'wouldBlock', and 'write' is watched only
 -- while bytes are waiting.
@@ -111,8 +112,10 @@ function HttpServer:readRequest(token, connection)
 			self:finish(token) -- reset, or closed before a whole request
 			return
 		end
+		-- Only where new bytes arrived: the head before them was searched already.
+		local from = math.max(1, #connection.head - 2)
 		connection.head ..= buffer.readstring(self.scratch, 0, count)
-		local ending = string.find(connection.head, '\r\n\r\n', 1, true)
+		local ending = string.find(connection.head, '\r\n\r\n', from, true)
 		if ending then
 			local method, path = string.match(connection.head, '^(%u+) (%S+) HTTP/1%.[01]\r\n')
 			if not method then

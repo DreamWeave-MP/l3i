@@ -364,3 +364,51 @@ fn soak() {
         assert!(end_rss <= rss + 32 * 1024, "resident memory grew from {rss} KiB to {end_rss} KiB");
     }
 }
+
+/// A server that never ends its response head stops the example client at 16 KiB, however
+/// fast it streams: the head is bounded, and each read is searched once, not the whole head
+/// again.
+#[test]
+fn the_example_client_bounds_a_response_head_that_never_ends() {
+    let pki = pki();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let chain: Vec<_> =
+        rustls::pki_types::CertificateDer::pem_slice_iter(pki.leaf.chain.as_bytes()).map(Result::unwrap).collect();
+    let key = rustls::pki_types::PrivateKeyDer::from_pem_slice(pki.leaf.key.as_bytes()).unwrap();
+    let config = Arc::new(
+        rustls::ServerConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
+            .with_safe_default_protocol_versions()
+            .unwrap()
+            .with_no_client_auth()
+            .with_single_cert(chain, key)
+            .unwrap(),
+    );
+    let peer = std::thread::spawn(move || {
+        let (socket, _) = listener.accept().unwrap();
+        let mut stream = rustls::StreamOwned::new(rustls::ServerConnection::new(config).unwrap(), socket);
+        let mut request = Vec::new();
+        let mut byte = [0u8; 1];
+        while !request.ends_with(b"\r\n\r\n") {
+            stream.read_exact(&mut byte).unwrap();
+            request.push(byte[0]);
+        }
+        // Header bytes in small records, never a blank line, until the client gives up.
+        for _ in 0..2000 {
+            if stream.write_all(&[b'x'; 100]).and_then(|()| stream.flush()).is_err() {
+                break;
+            }
+        }
+    });
+    let runtime = client_runtime(HashMap::from([("test.local", vec!["127.0.0.1"])]));
+    runtime.set_global("PORT", &f64::from(port)).unwrap();
+    runtime
+        .exec(
+            "local secure = assert(HttpsClient.connect('test.local', PORT, { tlsConfig = trust, attemptDelayMs = 100 })) \
+             local response, message, kind = HttpsClient.request(secure, 'GET', 'test.local', '/') \
+             assert(response == nil and kind == 'limitReached' and string.find(message, 'head', 1, true), tostring(message)) \
+             secure:close()",
+        )
+        .unwrap();
+    peer.join().unwrap();
+}
