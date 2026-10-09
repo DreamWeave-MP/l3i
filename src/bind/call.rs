@@ -146,7 +146,7 @@ impl<'c> Call<'c> {
 impl Call<'_> {
     /// Runs a full collection from inside this call, as Luau's `collectgarbage("collect")`
     /// does: a native resource a runtime caps may be held only by garbage.
-    #[cfg(feature = "tls")]
+    #[cfg(feature = "tcp")]
     pub(crate) fn collect_garbage(&self) {
         // SAFETY: the state is live for the call, and a full collection is permitted from a C
         // function (Luau's own collectgarbage is one); no userdata destructor calls the Lua API.

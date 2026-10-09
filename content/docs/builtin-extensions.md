@@ -1185,8 +1185,9 @@ end
 | `poller` | `maxWaitMs` | 0 to 60000: the longest `wait` this poller allows | 1000 |
 
 An unknown option, or a value outside its range, is an error naming it. A runtime holds at
-most 64 open pollers (the host's `TcpExtension::max_pollers`); `poller()` past that is an
-error, and a closed or collected poller does not count.
+most 64 open pollers (the host's `TcpExtension::max_pollers`). A closed poller does not count,
+and neither does one the script dropped: at the maximum `poller()` runs a full collection
+first, and is an error only if that frees nothing.
 
 ### Streams are bytes
 

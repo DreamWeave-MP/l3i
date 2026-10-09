@@ -212,7 +212,11 @@ fn new_poller(
         })?;
     }
     // Each poller holds an OS poller (a descriptor or two) and its event buffer, which the VM's
-    // memory limit does not see, and needs no capability: the runtime's count bounds them.
+    // memory limit does not see, and needs no capability: the runtime's count bounds them. One
+    // the script dropped unclosed waits for the collector, so at the maximum a collection runs.
+    if open.get() >= max {
+        call.collect_garbage();
+    }
     if open.get() >= max {
         return Err(Error::runtime(format!(
             "dream.tcp.poller: {max} pollers are open in this runtime, its maximum; close one (closed or collected pollers do not count)"

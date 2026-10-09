@@ -897,14 +897,15 @@ fn a_closed_poller_holds_no_descriptor() {
 }
 
 /// A runtime holds at most its host's maximum of open pollers, which need no capability;
-/// closing or collecting one frees its place.
+/// closing one frees its place, and so does dropping it, since a collection runs at the
+/// maximum before the call is refused.
 #[test]
 fn pollers_are_capped_per_runtime() {
     let policy = RuntimePolicy::new().compat_global("@dream/tcp", "tcp");
     let plan =
         RuntimePlan::builder().policy(policy).extension(TcpExtension::default().max_pollers(3)).finalize().unwrap();
-    let runtime = Runtime::from_plan(&plan).unwrap();
-    runtime
+    Runtime::from_plan(&plan)
+        .unwrap()
         .exec(
             "local a = tcp.poller() B, C = tcp.poller(), tcp.poller() \
              local ok, message = pcall(tcp.poller) \
@@ -912,9 +913,11 @@ fn pollers_are_capped_per_runtime() {
              a:close() a:close() \
              D = tcp.poller() \
              assert(not pcall(tcp.poller), 'closing twice frees one place') \
-             B = nil",
+             B = nil \
+             local e = tcp.poller() \
+             assert(not pcall(tcp.poller)) \
+             C:close() D:close() e:close() \
+             for _ = 1, 50 do tcp.poller() end",
         )
         .unwrap();
-    runtime.collect_garbage();
-    runtime.exec("local e = tcp.poller() assert(not pcall(tcp.poller)) C:close() D:close() e:close()").unwrap();
 }
