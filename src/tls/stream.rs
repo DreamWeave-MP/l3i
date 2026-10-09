@@ -56,7 +56,8 @@ pub enum TlsState {
     Handshaking,
     /// Authenticated: application data moves.
     Open,
-    /// A fatal error ended the session and closed its socket; every call reports the error.
+    /// A fatal error ended the session and shut its socket down both ways; every call reports
+    /// the error, and `close` releases the socket.
     Failed,
     /// Closed locally.
     Closed,
@@ -252,12 +253,13 @@ impl TlsStream {
     }
 
     /// Ends the session for `failure`: the alert rustls queued goes out if the socket takes it
-    /// now, then the socket closes, so nothing can continue in plaintext.
+    /// now, then the socket is shut down both ways, so nothing can continue in plaintext.
     fn fatal(&self, conn: &mut rustls::Connection, message: String, kind: &'static str) -> Failure {
         let _ = self.pump_out(conn);
-        self.io.close();
+        // Shut, not closed: the peer sees the end and nothing more moves either way, while the
+        // descriptor and its watch stay until `close`, so a script's token stays valid.
+        let _ = self.io.with_stream(|socket| socket.shutdown(Shutdown::Both));
         self.flags.state.set(TlsState::Failed);
-        self.release();
         *self.failure.borrow_mut() = Some((message.clone(), kind));
         Failure { message: Cow::Owned(message), kind }
     }
@@ -766,7 +768,7 @@ pub(crate) fn describe(d: &mut ExtensionDescriptor) {
     stream
         .method("handshake", |s: &TlsStream| s.handshake())
         .signature("(self): (boolean?, string?, dream_tls_ErrorKind?)")
-        .doc("Moves the handshake as far as the socket allows: true once authenticated, false while it needs the socket again, or nil, a message and the kind when it failed (the socket is then closed).");
+        .doc("Moves the handshake as far as the socket allows: true once authenticated, false while it needs the socket again, or nil, a message and the kind when it failed (the socket is then shut both ways; close() releases it).");
     stream
         .method("readInto", |s: &TlsStream, buffer: BufferView<'_>, offset: Option<Exact<i64>>, length: Option<Exact<i64>>| {
             s.read_into(buffer, offset, length)

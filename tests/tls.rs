@@ -524,12 +524,26 @@ fn an_end_without_close_notify_is_truncation_not_end_of_stream() {
             local client, server = secured()
             assert(handshakeBoth(client, server))
             assert(transfer(server, client, 'partial') == 'partial')
+            local watcher = tcp.poller()
+            assert(watcher:watch(client, 7, 'read'))
             server:close() -- the socket closes with no close_notify
-            local data, message, kind = readToEnd(client)
+            local data, message, kind
+            for _ = 1, 100 do
+                data, message, kind = client:readInto(buffer.create(64))
+                if kind ~= 'wouldBlock' then break end
+                watcher:wait(50)
+            end
             assert(data == nil and kind == 'truncated', tostring(kind) .. ' ' .. tostring(message))
             assert(client.state == 'failed')
             local n, _, again = client:readInto(buffer.create(4))
             assert(n == nil and again == 'truncated')
+            -- The failure shut the socket but kept it, and its watch, until close: the token
+            -- the script holds is still valid, and the failure is reported, not hidden.
+            assert(watcher:wait(0) == 1 and watcher:next() == 7)
+            watcher:unwatch(7)
+            client:close()
+            assert(client.state == 'failed')
+            watcher:close()
             ",
         )
         .unwrap();
