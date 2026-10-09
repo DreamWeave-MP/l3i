@@ -290,3 +290,73 @@ fn a_luau_server_serves_concurrent_keep_alive_clients_within_its_limits() {
     }
     runtime.exec("assert(server.served == 12, server.served) server:close()").unwrap();
 }
+
+/// Open file descriptors and resident memory in KiB (Linux).
+fn fds_and_rss() -> Option<(usize, u64)> {
+    let fds = std::fs::read_dir("/proc/self/fd").ok()?.count();
+    let status = std::fs::read_to_string("/proc/self/status").ok()?;
+    let rss =
+        status.lines().find_map(|line| line.strip_prefix("VmRSS:"))?.trim().trim_end_matches(" kB").parse().ok()?;
+    Some((fds, rss))
+}
+
+/// A soak of the whole stack: resolve, race, verify, fetch and close, with refused names and
+/// bare DNS requests mixed in, for `L3I_SOAK_SECS` seconds (default 30). File descriptors and
+/// resident memory must stay level once warm. Run alone:
+/// `cargo test --features dns,tls --test integration -- --ignored https::soak --nocapture`.
+#[test]
+#[ignore = "a long-running soak; run it on purpose"]
+fn soak() {
+    let seconds: u64 = std::env::var("L3I_SOAK_SECS").ok().and_then(|s| s.parse().ok()).unwrap_or(30);
+    let stop = Arc::new(AtomicBool::new(false));
+    let (address, server) = serve(pki().leaf.clone(), Arc::clone(&stop));
+    let mut table = HashMap::new();
+    table.insert("test.local", vec!["::1", "127.0.0.1"]);
+    table.insert("wrong.test", vec!["127.0.0.1"]);
+    let client = client_runtime(table);
+    client.set_global("PORT", &f64::from(address.port())).unwrap();
+    let round = client
+        .load_function(
+            r"
+            return function(i)
+                local secure = assert(HttpsClient.connect('test.local', PORT, { tlsConfig = trust, attemptDelayMs = 50 }))
+                local response = assert(HttpsClient.request(secure, 'GET', 'test.local', '/hello'))
+                assert(response.status == 200)
+                HttpsClient.close(secure)
+                if i % 10 == 0 then
+                    local refused, _, kind = HttpsClient.connect('wrong.test', PORT, { tlsConfig = trust })
+                    assert(refused == nil and kind == 'certificateNameMismatch', kind)
+                end
+                local r = assert(dns.resolve('test.local', PORT))
+                assert(r:wait(1000))
+                assert(r:take())
+            end
+            ",
+        )
+        .unwrap();
+    let started = Instant::now();
+    let mut baseline = None;
+    let mut rounds = 0u64;
+    while started.elapsed() < Duration::from_secs(seconds) {
+        rounds += 1;
+        round.invoke::<(), _>(&client.stack(), (rounds as f64,)).unwrap();
+        if rounds.is_multiple_of(100) {
+            client.collect_garbage();
+            if rounds == 200 {
+                baseline = fds_and_rss();
+            }
+        }
+    }
+    client.collect_garbage();
+    let end = fds_and_rss();
+    stop.store(true, Ordering::SeqCst);
+    let served = server.join().unwrap();
+    println!(
+        "soak: {rounds} rounds in {:?}, server served {served}, baseline {baseline:?}, end {end:?}",
+        started.elapsed()
+    );
+    if let (Some((fds, rss)), Some((end_fds, end_rss))) = (baseline, end) {
+        assert!(end_fds <= fds + 8, "descriptors grew from {fds} to {end_fds}");
+        assert!(end_rss <= rss + 32 * 1024, "resident memory grew from {rss} KiB to {end_rss} KiB");
+    }
+}
