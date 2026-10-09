@@ -655,3 +655,72 @@ fn receiver_selections_lower_to_native_loops() {
     assert!(l3i::data::lowering::lowered_sites() > before, "the select calls were lowered");
     assert!(blocks > 5_000, "native blocks executed: {blocks}");
 }
+
+/// Spans whose size overflows 64 bits raise on every path: a stride or field offset so large
+/// that `count * stride` or `offset + field` wraps never reads as a small span that fits, and
+/// never panics inside a native call.
+#[test]
+fn spans_that_overflow_their_arithmetic_raise() {
+    exec(
+        r"
+        local buf = buffer.create(16)
+        for _, case in {
+            { function() return data.u8(2 ^ 62):sum(buf, 0, 4) end, 'exceeds the buffer length' },
+            { function() return data.kind('u8@4611686018427387904'):sum(buf, 0, 4) end, 'exceeds the buffer length' },
+            { function() return data.sum(buf, 'u8@4611686018427387904', 0, 4) end, 'exceeds the buffer length' },
+            { function() return data.kind('u8@4+18446744073709551615') end, 'field offset' },
+            { function() return data.sum(buf, 'u8@8+7', 18446744073709551615 - 7, 1) end, '' },
+        } do
+            local ok, message = pcall(case[1])
+            assert(not ok and string.find(message, case[2], 1, true), tostring(message))
+        end
+    ",
+    );
+}
+
+/// The same through native code: the lowered fit check refuses a span whose size would wrap
+/// instead of running zero iterations and returning 0.
+#[cfg(feature = "jit")]
+#[test]
+fn native_spans_that_overflow_take_the_raising_path() {
+    let Some((runtime, before)) = native_runtime() else { return };
+    // `@native` functions compile without a loop; the receivers and buffers are locals
+    // inside them (a typed parameter or an upvalue does not reach the code generator), and
+    // each call keeps one result (`return K:sum(..)` keeps them all and stays bound). The old
+    // fit check let 4 * 2^62 wrap to 0 and returned 0 from an empty loop.
+    let chunk = per_kind_chunk(
+        r"
+        @native local function wideSum()
+            local buf = buffer.create(64)
+            local K: dream_data_Kind_{name} = {ctor}(2 ^ 62)
+            local got = K:sum(buf, 0, 4)
+            return got
+        end
+        @native local function wideCount()
+            local buf = buffer.create(64)
+            local K: dream_data_Kind_{name} = {ctor}(2 ^ 62)
+            local got = K:countGt(buf, 0, 4, 0)
+            return got
+        end
+        @native local function longSum()
+            local buf = buffer.create(64)
+            local K: dream_data_Kind_{name} = {ctor}()
+            local got = K:sum(buf, 0, 2 ^ 40)
+            return got
+        end
+        @native local function plainSum()
+            local buf = buffer.create(64)
+            local K: dream_data_Kind_{name} = {ctor}()
+            local got = K:sum(buf, 0, 64 // {size})
+            return got
+        end
+        for _, call in { wideSum, wideCount, longSum } do
+            local ok, message = pcall(call)
+            assert(not ok and string.find(message, 'exceeds the buffer length', 1, true), '{name}: ' .. tostring(message))
+        end
+        assert(plainSum() == 0, '{name}: an ordinary span still sums')
+        ",
+    );
+    run_native(&runtime, &chunk);
+    assert!(l3i::data::lowering::lowered_sites() > before, "the receiver calls were lowered");
+}

@@ -218,7 +218,7 @@ impl Layout {
                 (kind, kind.size())
             }
         };
-        if offset + kind.size() > stride {
+        if offset.checked_add(kind.size()).is_none_or(|end| end > stride) {
             return Err(Error::runtime(format!(
                 "{what}: field offset {offset} does not leave room for {} inside a stride of {stride}",
                 kind.name()
@@ -247,7 +247,10 @@ impl Span {
         let Layout { kind, stride, offset: field } = layout;
         let offset = usize::try_from(offset.0)
             .map_err(|_| Error::runtime(format!("{what}: negative offset {}", offset.0)))?
-            + field;
+            .checked_add(field)
+            .ok_or_else(|| {
+                Error::runtime(format!("{what}: offset {} plus field offset {field} overflows", offset.0))
+            })?;
         let count =
             usize::try_from(count.0).map_err(|_| Error::runtime(format!("{what}: negative count {}", count.0)))?;
         // The last element ends at offset + (count - 1) * stride + size; an empty span needs

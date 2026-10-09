@@ -592,14 +592,20 @@ impl NativeCodeHooks for KindLowering {
             let same = emit.b.cond(IrCondition::Equal);
             emit.b.inst(IrCmd::CHECK_CMP_INT64, &[len, count64, same, slow]);
         }
-        // The span must fit: offset + count * stride <= length, in int64 so nothing wraps.
-        // Stricter than the binder's last-element rule for a stride above the element size; a
-        // span the binder would accept but this rejects takes the slow path.
+        // The span must fit: offset + count * stride <= length. Neither count nor stride may
+        // exceed the buffer's length (at most 2^30 bytes) before they are multiplied, so the
+        // product stays below 2^60 and the sum below 2^61: nothing wraps into a small "end" that
+        // fits. Stricter than the binder's last-element rule; a span the binder would accept but
+        // this rejects (an empty span with a huge stride, say) takes the slow path, which raises
+        // or answers exactly as the binder does.
         let stride = emit.stride();
         let stride64 = emit.b.inst(IrCmd::NUM_TO_INT64, &[stride]);
+        let length = emit.buffer_length();
+        let within = emit.b.cond(IrCondition::UnsignedLessEqual);
+        emit.b.inst(IrCmd::CHECK_CMP_INT64, &[count64, length, within, slow]);
+        emit.b.inst(IrCmd::CHECK_CMP_INT64, &[stride64, length, within, slow]);
         let bytes = emit.b.inst(IrCmd::MUL_INT64, &[count64, stride64]);
         let end64 = emit.b.inst(IrCmd::ADD_INT64, &[offset64, bytes]);
-        let length = emit.buffer_length();
         let fits = emit.b.cond(IrCondition::UnsignedLessEqual);
         emit.b.inst(IrCmd::CHECK_CMP_INT64, &[end64, length, fits, slow]);
         let end_number = emit.b.inst(IrCmd::INT64_TO_NUM, &[end64]);
