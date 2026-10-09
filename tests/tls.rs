@@ -542,7 +542,8 @@ fn an_end_without_close_notify_is_truncation_not_end_of_stream() {
             assert(watcher:wait(0) == 1 and watcher:next() == 7)
             watcher:unwatch(7)
             client:close()
-            assert(client.state == 'failed')
+            assert(client.state == 'closed' and client.closed)
+            assert(client.failureKind == 'truncated' and client.failure:find('close_notify'), client.failure)
             watcher:close()
             ",
         )
@@ -782,4 +783,60 @@ fn certificate_inputs_are_bounded_before_they_cost_native_memory() {
         // Copying first would have staged 1 GiB or more; other tests share the process.
         assert!(after.saturating_sub(before) < 512 * 1024, "peak grew by {} KiB", after - before);
     }
+}
+
+/// A failed session closes like any other: `closed` afterwards, every call but `close` raises
+/// the closed-handle error, its watch goes with it, and why it failed stays readable.
+#[test]
+fn a_failed_session_closes_like_any_other() {
+    runtime()
+        .exec(
+            r"
+            for _, watched in { false, true } do
+                local client, server, listener = secured(PKI.leaf, { serverName = 'wrong.test' })
+                local poller = tcp.poller()
+                if watched then assert(poller:watch(client, 3, 'read')) end
+                assert(poller:watch(server, 5, 'read'))
+                local done, message, kind
+                for _ = 1, 400 do
+                    done, message, kind = client:handshake()
+                    if server.state == 'handshaking' then server:handshake() end
+                    if done == nil then break end
+                    poller:wait(25)
+                    while poller:next() do end
+                end
+                poller:unwatch(5)
+                assert(done == nil and kind == 'certificateNameMismatch', message)
+                assert(client.state == 'failed' and not client.closed)
+                assert(client.failureKind == 'certificateNameMismatch' and client.failure == message)
+                assert(poller.watching == (if watched then 1 else 0))
+                client:close()
+                assert(client.state == 'closed' and client.closed)
+                assert(client.failureKind == 'certificateNameMismatch' and client.failure == message)
+                assert(poller.watching == 0, 'closing released the watch')
+                for _, call in {
+                    function() client:handshake() end,
+                    function() client:readInto(buffer.create(4)) end,
+                    function() client:write('x') end,
+                    function() client:flush() end,
+                    function() client:shutdownWrite() end,
+                    function() poller:watch(client, 4, 'read') end,
+                } do
+                    local ok, err = pcall(call)
+                    assert(not ok and err:find('closed'), err)
+                end
+                client:close()
+                assert(client.closed)
+                -- A session that never failed reports no failure.
+                assert(server.failure == nil or server.failureKind ~= nil)
+                server:close() listener:close() poller:close()
+            end
+            local client, server = secured()
+            assert(handshakeBoth(client, server))
+            client:close()
+            assert(client.closed and client.failure == nil and client.failureKind == nil)
+            server:close()
+            ",
+        )
+        .unwrap();
 }

@@ -1474,7 +1474,8 @@ local count = secure:readInto(buffer.create(65536))  -- 0 only after close_notif
 | `flush()` | Pushes pending ciphertext: `true` when none is left in the session (handed to the OS, not necessarily received), `false` when the socket is full |
 | `shutdownWrite()` | Queues close_notify and flushes; once it has left, the TCP write half is shut. Reading stays open |
 | `close()` | Closes the socket at once without close_notify, drops its watch and its place in the listener's count; idempotent |
-| `state`, `handshaking`, `closed` | `"handshaking"`, `"open"`, `"failed"` or `"closed"` |
+| `state`, `handshaking`, `closed` | `"handshaking"`, `"open"`, `"failed"` or `"closed"`; `close()` always leaves it `"closed"` |
+| `failure`, `failureKind` | Why the session failed, if it did, kept after `close` |
 | `wantsRead`, `wantsWrite` | Whether the session needs the peer's bytes, or has ciphertext waiting |
 | `alpn`, `protocolVersion`, `cipherSuite`, `serverName` | The negotiated protocol, `"1.3"` or `"1.2"`, the suite; a client's identity, or the name a client asked a server for (SNI) |
 | `peerAddress`, `localAddress` | As the TCP stream's |
@@ -1505,7 +1506,8 @@ There is no option, anywhere, to skip or weaken verification, accept a name mism
 an unverified self-signed certificate, log keys or extract session secrets; 0-RTT is off on
 both sides. A failure is never a downgrade: the session fails, sends its alert if the socket
 takes it, and shuts the socket both ways. The failure persists for every later call, the poller
-reports the stream until it is closed, and `close` releases it.
+reports the stream until it is closed, and `close` releases it: the stream is then `closed`
+like any other, every call but `close` raises, and `failure` still says what went wrong.
 
 | Kind | Meaning |
 |---|---|

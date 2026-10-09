@@ -265,6 +265,8 @@ const TLS_SCRIPT: (&str, &str) = (
      local alpn: string? = secure.alpn\n\
      local version: string? = secure.protocolVersion\n\
      print(watched, done, why, failure, count, wrote, flushed, closing, state, alpn, version, secure.cipherSuite, secure.serverName, secure.wantsRead, secure.wantsWrite, secure.handshaking, secure.peerAddress, secure.localAddress, problem, problemKind, serverProblem, message, kind)\n\
+     local lastFailure: string?, lastKind: dream_tls_ErrorKind? = secure.failure, secure.failureKind\n\
+     print(lastFailure, lastKind)\n\
      secure:close()\n",
 );
 

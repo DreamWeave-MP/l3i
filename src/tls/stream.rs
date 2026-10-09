@@ -59,7 +59,8 @@ pub enum TlsState {
     /// A fatal error ended the session and shut its socket down both ways; every call reports
     /// the error, and `close` releases the socket.
     Failed,
-    /// Closed locally.
+    /// Closed locally, whether or not it had failed (the failure stays in `failure`); every
+    /// call but `close` raises.
     Closed,
 }
 
@@ -246,10 +247,14 @@ impl TlsStream {
     /// listener's count is released. Idempotent.
     pub fn close(&self) {
         self.io.close();
-        if self.flags.state.get() != TlsState::Failed {
-            self.flags.state.set(TlsState::Closed);
-        }
+        // Closed whatever it was: a failure stays readable through `failure`, not the state.
+        self.flags.state.set(TlsState::Closed);
         self.release();
+    }
+
+    /// Why the session failed, if it did, kept after `close`: the message and the kind.
+    pub fn failure(&self) -> Option<(String, &'static str)> {
+        self.failure.borrow().clone()
     }
 
     /// Ends the session for `failure`: the alert rustls queued goes out if the socket takes it
@@ -796,6 +801,14 @@ pub(crate) fn describe(d: &mut ExtensionDescriptor) {
     stream.getter("state", |s: &TlsStream| s.state().name()).signature("dream_tls_State");
     stream.getter("handshaking", |s: &TlsStream| s.state() == TlsState::Handshaking).signature("boolean");
     stream.getter("closed", |s: &TlsStream| s.state() == TlsState::Closed).signature("boolean");
+    stream
+        .getter("failure", |s: &TlsStream| s.failure().map(|(message, _)| message))
+        .signature("string?")
+        .doc("Why the session failed, if it did; kept after close.");
+    stream
+        .getter("failureKind", |s: &TlsStream| s.failure().map(|(_, kind)| kind))
+        .signature("dream_tls_ErrorKind?")
+        .doc("The kind of that failure.");
     stream
         .getter("wantsRead", |s: &TlsStream| s.conn.borrow().wants_read())
         .signature("boolean")
