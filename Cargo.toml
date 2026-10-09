@@ -115,6 +115,8 @@ cc = { version = "1", features = ["parallel"] }
 criterion = { version = "0.8.2", features = ["html_reports"] }
 # Test PKIs for `@dream/tls`: CAs, chains, expired and mismatched certificates, made per run.
 rcgen = { version = "0.14", default-features = false, features = ["ring", "pem"] }
+# Signal masks, dispositions and descriptor limits for tests of what the OS does at the edges.
+libc = "0.2"
 
 [[test]]
 name = "integration"

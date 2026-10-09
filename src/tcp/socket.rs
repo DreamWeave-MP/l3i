@@ -313,7 +313,15 @@ impl Listener {
                 self.io.clear(READABLE);
                 return Ok(Outcome::Failed(would_block("dream.tcp.Listener.accept: no connection is waiting")));
             }
-            Some(Err(error)) => return Ok(Outcome::Failed(refused("Listener.accept", Some(self.local), &error))),
+            Some(Err(error)) => {
+                // A connection that went away before it was taken leaves the rest waiting. Any
+                // other refusal (out of descriptors or memory) would refuse again at once, so the
+                // listener is reported ready again with the next connection, not on every wait.
+                if !matches!(error.kind(), io::ErrorKind::ConnectionAborted | io::ErrorKind::ConnectionReset) {
+                    self.io.clear(READABLE);
+                }
+                return Ok(Outcome::Failed(refused("Listener.accept", Some(self.local), &error)));
+            }
         };
         if let Err(error) = configure_accepted(&stream, self.no_delay) {
             return Ok(Outcome::Failed(refused("Listener.accept", Some(peer), &error)));

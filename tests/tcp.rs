@@ -896,6 +896,66 @@ fn a_closed_poller_holds_no_descriptor() {
     assert!(after < before + 200, "{before} descriptors before, {after} after");
 }
 
+/// An accept the OS refuses for want of descriptors leaves the listener not ready until the
+/// next connection, so a process out of descriptors waits instead of spinning. The scenario
+/// runs in a child process of this test binary, whose descriptor limit it lowers and fills.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_listener_out_of_descriptors_is_not_reported_ready_again() {
+    const NAME: &str = "tcp::a_listener_out_of_descriptors_is_not_reported_ready_again";
+    if std::env::var_os("L3I_EMFILE_CHILD").is_none() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", NAME, "--test-threads=1", "--nocapture"])
+            .env("L3I_EMFILE_CHILD", "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"), "the child ran the scenario");
+        return;
+    }
+    let runtime = runtime(&[LISTEN_CAPABILITY, CONNECT_CAPABILITY]);
+    runtime
+        .exec(
+            "LISTENER = assert(tcp.listen('127.0.0.1:0')) \
+             CLIENT = assert(tcp.connect(LISTENER.localAddress)) \
+             POLLER = tcp.poller() \
+             assert(POLLER:watch(LISTENER, 1, 'read')) \
+             assert(POLLER:wait(1000) == 1, 'the connection is waiting')",
+        )
+        .unwrap();
+    // Every descriptor below a lowered limit taken, so the accept has none left.
+    let mut limit = libc::rlimit { rlim_cur: 0, rlim_max: 0 };
+    // SAFETY: getrlimit and setrlimit read and write the one struct passed.
+    unsafe { assert_eq!(libc::getrlimit(libc::RLIMIT_NOFILE, &raw mut limit), 0) };
+    let lowered = libc::rlimit { rlim_cur: 256.min(limit.rlim_cur), rlim_max: limit.rlim_max };
+    unsafe { assert_eq!(libc::setrlimit(libc::RLIMIT_NOFILE, &raw const lowered), 0) };
+    let mut held = Vec::new();
+    while let Ok(file) = std::fs::File::open("/dev/null") {
+        held.push(file);
+    }
+    let result = runtime.exec(
+        "local stream, message, kind = LISTENER:accept() \
+         assert(stream == nil and kind ~= 'wouldBlock', 'the accept is refused: ' .. tostring(message)) \
+         assert(POLLER:wait(100) == 0, 'the refused listener is not reported ready again at once')",
+    );
+    drop(held);
+    // SAFETY: as above, restoring the limit read before.
+    unsafe { assert_eq!(libc::setrlimit(libc::RLIMIT_NOFILE, &raw const limit), 0) };
+    result.unwrap();
+    runtime
+        .exec(
+            "local stream = LISTENER:accept() \
+             assert(stream, 'with descriptors back, the waiting connection is taken') \
+             stream:close() CLIENT:close() POLLER:close() LISTENER:close()",
+        )
+        .unwrap();
+}
+
 /// A runtime holds at most its host's maximum of open pollers, which need no capability;
 /// closing one frees its place, and so does dropping it, since a collection runs at the
 /// maximum before the call is refused.

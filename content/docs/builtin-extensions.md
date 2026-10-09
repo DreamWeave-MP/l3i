@@ -1214,7 +1214,9 @@ A listener has `accept()`, which returns the next waiting stream and its peer's 
 `nil`, the message and `"wouldBlock"` when none is waiting, or `"limitReached"` at
 `maxStreams` without accepting; `close()`; and the getters `localAddress`, `closed` and
 `streams`, the accepted streams still open. Accepted streams stay open when their listener
-closes.
+closes. When the OS refuses an accept for want of descriptors or memory, the listener is
+reported ready again with the next connection rather than on every `wait`, so a process out of
+descriptors does not spin.
 
 ### Readiness
 
