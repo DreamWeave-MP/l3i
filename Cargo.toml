@@ -244,4 +244,4 @@ tcp = ["dep:mio", "dep:socket2"]
 dns = ["dep:idna", "dep:libc"]
 # The `@dream/tls` extension (`tls`): verified TLS 1.3 and 1.2 client and server sessions over
 # `@dream/tcp` streams with rustls; no capability of its own.
-tls = ["tcp", "dep:rustls", "dep:rustls-platform-verifier", "dep:zeroize", "dep:idna"]
+tls = ["tcp", "dep:rustls", "dep:rustls-platform-verifier", "dep:zeroize", "dep:idna", "dep:libc"]

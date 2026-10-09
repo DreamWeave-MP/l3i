@@ -738,6 +738,99 @@ fn a_plain_rustls_server_and_the_luau_client_agree() {
     peer.join().unwrap();
 }
 
+/// A write to a peer that has gone fails as an outcome and raises no SIGPIPE, which would
+/// kill a host that has not ignored it. The test harness ignores SIGPIPE, so this thread
+/// blocks it instead: Linux keeps a blocked signal pending even while it is ignored, so
+/// `sigpending` shows whether a send raised one.
+#[cfg(target_os = "linux")]
+#[test]
+fn writes_to_a_vanished_peer_raise_no_sigpipe() {
+    fn mask(how: libc::c_int) {
+        let mut set = std::mem::MaybeUninit::<libc::sigset_t>::uninit();
+        // SAFETY: sigemptyset initializes the set before it is read, and the mask changes only
+        // this thread's; a pending SIGPIPE is consumed before the mask is restored.
+        unsafe {
+            libc::sigemptyset(set.as_mut_ptr());
+            libc::sigaddset(set.as_mut_ptr(), libc::SIGPIPE);
+            assert_eq!(libc::pthread_sigmask(how, set.as_ptr(), std::ptr::null_mut()), 0);
+        }
+    }
+    fn sigpipe_pending() -> bool {
+        let mut set = std::mem::MaybeUninit::<libc::sigset_t>::uninit();
+        // SAFETY: sigpending fills the set before sigismember reads it.
+        unsafe {
+            assert_eq!(libc::sigpending(set.as_mut_ptr()), 0);
+            libc::sigismember(set.as_ptr(), libc::SIGPIPE) == 1
+        }
+    }
+
+    let pki = pki();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let chain: Vec<_> =
+        rustls::pki_types::CertificateDer::pem_slice_iter(pki.leaf.chain.as_bytes()).map(Result::unwrap).collect();
+    let key = rustls::pki_types::PrivateKeyDer::from_pem_slice(pki.leaf.key.as_bytes()).unwrap();
+    let config = Arc::new(
+        rustls::ServerConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
+            .with_safe_default_protocol_versions()
+            .unwrap()
+            .with_no_client_auth()
+            .with_single_cert(chain, key)
+            .unwrap(),
+    );
+    // The peer finishes the handshake, then closes its socket outright: the client's next
+    // records draw a reset, and the sends after that fail with EPIPE.
+    let peer = std::thread::spawn(move || {
+        let (mut socket, _) = listener.accept().unwrap();
+        let mut connection = rustls::ServerConnection::new(config).unwrap();
+        while connection.is_handshaking() {
+            connection.complete_io(&mut socket).unwrap();
+        }
+    });
+    mask(libc::SIG_BLOCK);
+    let result = runtime().exec(&format!(
+        r"
+        local raw = assert(tcp.connect('{address}'))
+        assert(settle(raw) == true)
+        local client = assert(tls.client(raw, {{ serverName = 'localhost', config = trusting() }}))
+        local poller = tcp.poller()
+        assert(poller:watch(client, 1, 'readwrite'))
+        while true do
+            local done, message = client:handshake()
+            assert(done ~= nil, message)
+            if done then break end
+            poller:wait(100)
+        end
+        poller:close()
+        local idle = tcp.poller()
+        local deadline = os.clock() + 10
+        local failed
+        while not failed and os.clock() < deadline do
+            local written, message = client:write(string.rep('x', 1000))
+            if written ~= nil then written, message = client:flush() end
+            failed = written == nil and message
+            idle:wait(10)
+        end
+        assert(failed, 'writing to the closed peer never failed')
+        client:close()
+        "
+    ));
+    let raised = sigpipe_pending();
+    if raised {
+        // SAFETY: SIGPIPE is pending and blocked, so sigtimedwait takes it at once.
+        unsafe {
+            let mut set = std::mem::MaybeUninit::<libc::sigset_t>::uninit();
+            libc::sigemptyset(set.as_mut_ptr());
+            libc::sigaddset(set.as_mut_ptr(), libc::SIGPIPE);
+            libc::sigtimedwait(set.as_ptr(), std::ptr::null_mut(), &libc::timespec { tv_sec: 0, tv_nsec: 0 });
+        }
+    }
+    mask(libc::SIG_UNBLOCK);
+    peer.join().unwrap();
+    result.unwrap();
+    assert!(!raised, "a send to the closed peer raised SIGPIPE");
+}
+
 /// The process's peak resident memory in KiB (Linux).
 fn peak_kib() -> Option<u64> {
     let status = std::fs::read_to_string("/proc/self/status").ok()?;

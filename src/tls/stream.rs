@@ -142,11 +142,40 @@ impl Write for Socket<'_> {
     /// A whole flight in one send: records written one by one would wait on Nagle's
     /// algorithm and the peer's delayed acknowledgement between them.
     fn write_vectored(&mut self, bufs: &[io::IoSlice<'_>]) -> io::Result<usize> {
-        (&*self.0).write_vectored(bufs)
+        send_vectored(self.0, bufs)
     }
     fn flush(&mut self) -> io::Result<()> {
         Ok(())
     }
+}
+
+/// Sends `bufs` without raising SIGPIPE when the peer has gone, which would kill a host that
+/// has not ignored it. std's `write` sends with MSG_NOSIGNAL where it exists, but its
+/// `write_vectored` is a plain `writev`, which takes no flags.
+#[cfg(any(
+    target_os = "linux",
+    target_os = "android",
+    target_os = "freebsd",
+    target_os = "netbsd",
+    target_os = "openbsd",
+    target_os = "dragonfly"
+))]
+fn send_vectored(stream: &mio::net::TcpStream, bufs: &[io::IoSlice<'_>]) -> io::Result<usize> {
+    socket2::SockRef::from(stream).send_vectored_with_flags(bufs, libc::MSG_NOSIGNAL)
+}
+
+/// Apple's sockets carry SO_NOSIGPIPE (mio sets it on connect, the TCP extension on accept),
+/// and Windows has no SIGPIPE.
+#[cfg(not(any(
+    target_os = "linux",
+    target_os = "android",
+    target_os = "freebsd",
+    target_os = "netbsd",
+    target_os = "openbsd",
+    target_os = "dragonfly"
+)))]
+fn send_vectored(mut stream: &mio::net::TcpStream, bufs: &[io::IoSlice<'_>]) -> io::Result<usize> {
+    stream.write_vectored(bufs)
 }
 
 /// What one socket read brought.
