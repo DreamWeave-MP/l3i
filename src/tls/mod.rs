@@ -38,7 +38,7 @@
 mod config;
 mod stream;
 
-pub use config::{ClientConfig, MAX_CHAIN, MAX_INPUT_BYTES, MAX_ROOTS, ServerConfig};
+pub use config::{ClientConfig, MAX_CHAIN, MAX_INPUT_BYTES, MAX_KEY_BYTES, MAX_LIST_BYTES, MAX_ROOTS, ServerConfig};
 pub(crate) use stream::watch_target;
 pub use stream::{
     DEFAULT_BUFFER_LIMIT, DEFAULT_HANDSHAKE_TIMEOUT_MS, MAX_BUFFER_LIMIT, MAX_HANDSHAKE_TIMEOUT_MS, MIN_BUFFER_LIMIT,

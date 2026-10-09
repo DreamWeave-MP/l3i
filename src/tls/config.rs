@@ -4,6 +4,12 @@
 //! Certificates and keys arrive as PEM or DER bytes the caller already holds: this module
 //! never reads a file and needs no filesystem capability. Private key bytes are copied once
 //! into a buffer that is zeroed when dropped; the Luau string they came from cannot be.
+//!
+//! Every input is bounded before it costs native memory: an array's length before its first
+//! element is read, each input's size and the list's running total before its bytes are
+//! parsed, and the certificate count before each certificate is kept. Certificates are parsed
+//! straight from the script's bytes, so no copy of an input is staged. A table repeating one
+//! large string costs the script almost nothing, so only bounds checked this early hold.
 
 use std::borrow::Cow;
 use std::sync::Arc;
@@ -26,14 +32,20 @@ use crate::userdata::{Owned, Userdata};
 
 use super::provider;
 
-/// The most bytes one certificate or key input may have.
+/// The most bytes one certificate input may have.
 pub const MAX_INPUT_BYTES: usize = 1 << 20;
+/// The most bytes all the certificate inputs of one list (`roots`, `certChain`) may have.
+pub const MAX_LIST_BYTES: usize = 4 << 20;
+/// The most bytes a private key input may have.
+pub const MAX_KEY_BYTES: usize = 64 << 10;
 /// The most trust anchors one client configuration adds.
 pub const MAX_ROOTS: usize = 1024;
 /// The most certificates in a server's chain.
 pub const MAX_CHAIN: usize = 16;
-/// The most ALPN protocols, and the longest one.
+/// The most ALPN protocols.
 const MAX_ALPN: usize = 16;
+/// The most entries of `versions` (there are two versions; repeats are allowed, not hoarded).
+const MAX_VERSIONS: usize = 4;
 
 /// `dream.tls.ClientConfig`: trust and protocol settings for client sessions.
 pub struct ClientConfig(pub(crate) Arc<rustls::ClientConfig>);
@@ -59,66 +71,100 @@ fn is_pem(bytes: &[u8]) -> bool {
     bytes.windows(10).any(|window| window == b"-----BEGIN")
 }
 
-/// The bytes of one input, copied (they are parsed after the view is gone).
-fn input_bytes(what: &str, view: ValueView<'_>) -> Result<Zeroizing<Vec<u8>>> {
+/// A private key's bytes, copied once into a buffer zeroed when it drops.
+fn key_bytes(what: &str, view: ValueView<'_>) -> Result<Zeroizing<Vec<u8>>> {
     let bytes = BytesView::from_view(view)
         .map_err(|_| view.field_type_error(what, "PEM or DER bytes as a string or buffer"))?;
-    if bytes.len() > MAX_INPUT_BYTES {
-        return Err(Error::runtime(format!("{what}: {} bytes, more than {MAX_INPUT_BYTES}", bytes.len())));
+    if bytes.len() > MAX_KEY_BYTES {
+        return Err(Error::runtime(format!("{what}: {} bytes, more than {MAX_KEY_BYTES}", bytes.len())));
     }
     // SAFETY: copied at once, with no call into Lua while the slice lives.
     Ok(Zeroizing::new(unsafe { bytes.bytes_unchecked() }.to_vec()))
 }
 
-/// Certificates from one input: every certificate of a PEM text, or one DER certificate.
-fn certificates_of(
-    what: &str,
-    bytes: &[u8],
-    into: &mut Vec<CertificateDer<'static>>,
-) -> std::result::Result<(), Failure> {
-    if !is_pem(bytes) {
-        into.push(CertificateDer::from(bytes.to_vec()));
-        return Ok(());
-    }
-    let before = into.len();
-    for certificate in CertificateDer::pem_slice_iter(bytes) {
-        into.push(
-            certificate.map_err(|error| failure(format!("{what}: malformed PEM: {error}"), "invalidCertificate"))?,
-        );
-    }
-    if into.len() == before {
-        return Err(failure(format!("{what}: the PEM text holds no CERTIFICATE block"), "invalidCertificate"));
-    }
-    Ok(())
+/// The certificates of one list, collected within its bounds as the inputs are read.
+struct Collected<'w> {
+    what: &'w str,
+    limit: usize,
+    bytes: usize,
+    certificates: Vec<CertificateDer<'static>>,
+    /// Malformed input: a result for the script, not an error.
+    failure: Option<Failure>,
 }
 
-/// Certificates from a string, a buffer, or an array of them.
+impl Collected<'_> {
+    fn keep(&mut self, certificate: CertificateDer<'static>) -> Result<()> {
+        if self.certificates.len() == self.limit {
+            return Err(Error::runtime(format!("{}: more than {} certificates", self.what, self.limit)));
+        }
+        self.certificates.push(certificate);
+        Ok(())
+    }
+
+    /// Parses one input straight from the script's bytes: every certificate of a PEM text, or
+    /// one DER certificate. Its size and the list's total are checked before anything is
+    /// copied, the count before each certificate is kept.
+    fn add(&mut self, label: &str, view: ValueView<'_>) -> Result<()> {
+        let bytes = BytesView::from_view(view)
+            .map_err(|_| view.field_type_error(label, "PEM or DER bytes as a string or buffer"))?;
+        if bytes.len() > MAX_INPUT_BYTES {
+            return Err(Error::runtime(format!("{label}: {} bytes, more than {MAX_INPUT_BYTES}", bytes.len())));
+        }
+        self.bytes += bytes.len();
+        if self.bytes > MAX_LIST_BYTES {
+            return Err(Error::runtime(format!(
+                "{}: more than {MAX_LIST_BYTES} bytes of certificate input",
+                self.what
+            )));
+        }
+        // SAFETY: the slice is parsed (and what is kept copied) before this returns, with no
+        // call into Lua while it lives.
+        let slice = unsafe { bytes.bytes_unchecked() };
+        if !is_pem(slice) {
+            return self.keep(CertificateDer::from(slice.to_vec()));
+        }
+        let before = self.certificates.len();
+        for certificate in CertificateDer::pem_slice_iter(slice) {
+            match certificate {
+                Ok(certificate) => self.keep(certificate)?,
+                Err(error) => {
+                    self.failure = Some(failure(format!("{label}: malformed PEM: {error}"), "invalidCertificate"));
+                    return Err(Error::runtime("malformed certificate input"));
+                }
+            }
+        }
+        if self.certificates.len() == before {
+            self.failure =
+                Some(failure(format!("{label}: the PEM text holds no CERTIFICATE block"), "invalidCertificate"));
+            return Err(Error::runtime("malformed certificate input"));
+        }
+        Ok(())
+    }
+}
+
+/// Certificates from a string, a buffer, or an array of them, at most `limit` of them and
+/// [`MAX_LIST_BYTES`] of input.
 fn certificates(
     frame: &Frame<'_>,
     what: &str,
     view: ValueView<'_>,
     limit: usize,
 ) -> Result<std::result::Result<Vec<CertificateDer<'static>>, Failure>> {
-    let mut inputs = Vec::new();
-    if view.is_table() {
+    let mut collected = Collected { what, limit, bytes: 0, certificates: Vec::new(), failure: None };
+    let read = if view.is_table() {
         let table = view.as_table()?;
-        table.for_each_array(frame, |_, index, value| {
-            inputs.push(input_bytes(&format!("{what}[{index}]"), value)?);
-            Ok(())
-        })?;
-    } else {
-        inputs.push(input_bytes(what, view)?);
-    }
-    let mut certificates = Vec::new();
-    for input in &inputs {
-        if let Err(failure) = certificates_of(what, input, &mut certificates) {
-            return Ok(Err(failure));
+        if table.raw_len() > limit {
+            return Err(Error::runtime(format!("{what}: {} entries, more than {limit}", table.raw_len())));
         }
+        table.for_each_array(frame, |_, index, value| collected.add(&format!("{what}[{index}]"), value))
+    } else {
+        collected.add(what, view)
+    };
+    if let Some(failure) = collected.failure {
+        return Ok(Err(failure));
     }
-    if certificates.len() > limit {
-        return Err(Error::runtime(format!("{what}: {} certificates, more than {limit}", certificates.len())));
-    }
-    Ok(Ok(certificates))
+    read?;
+    Ok(Ok(collected.certificates))
 }
 
 /// A private key from PEM (PKCS #8, PKCS #1 or SEC1) or DER.
@@ -162,8 +208,14 @@ fn string_list(frame: &Frame<'_>, what: &str, view: ValueView<'_>) -> Result<Vec
         return Err(view.field_type_error(what, "an array of strings"));
     }
     let table = view.as_table()?;
+    if table.raw_len() > MAX_VERSIONS {
+        return Err(Error::runtime(format!("{what}: more than {MAX_VERSIONS} entries")));
+    }
     let mut items = Vec::new();
     table.for_each_array(frame, |_, index, value| {
+        if items.len() == MAX_VERSIONS {
+            return Err(Error::runtime(format!("{what}: more than {MAX_VERSIONS} entries")));
+        }
         let item = value.read::<&str>().map_err(|_| Error::runtime(format!("{what}[{index}] must be a string")))?;
         items.push(item.to_owned());
         Ok(())
@@ -177,8 +229,14 @@ pub(crate) fn alpn(frame: &Frame<'_>, what: &str, view: ValueView<'_>) -> Result
         return Err(view.field_type_error(what, "an array of protocol names"));
     }
     let table = view.as_table()?;
+    if table.raw_len() > MAX_ALPN {
+        return Err(Error::runtime(format!("{what}: more than {MAX_ALPN} protocols")));
+    }
     let mut protocols = Vec::new();
     table.for_each_array(frame, |_, index, value| {
+        if protocols.len() == MAX_ALPN {
+            return Err(Error::runtime(format!("{what}: more than {MAX_ALPN} protocols")));
+        }
         let name = value.read::<&[u8]>().map_err(|_| Error::runtime(format!("{what}[{index}] must be a string")))?;
         if name.is_empty() || name.len() > 255 {
             return Err(Error::runtime(format!("{what}[{index}] must be 1 to 255 bytes")));
@@ -186,9 +244,6 @@ pub(crate) fn alpn(frame: &Frame<'_>, what: &str, view: ValueView<'_>) -> Result
         protocols.push(name.to_vec());
         Ok(())
     })?;
-    if protocols.len() > MAX_ALPN {
-        return Err(Error::runtime(format!("{what}: more than {MAX_ALPN} protocols")));
-    }
     Ok(protocols)
 }
 
@@ -303,7 +358,7 @@ fn server_config(call: &Call<'_>, options: ValueView<'_>) -> Result<Outcome<Owne
         chain = Some(o.with_required_in("certChain", |frame, view| {
             certificates(frame, &format!("{WHAT}: certChain"), view, MAX_CHAIN)
         })?);
-        key = Some(o.with_required("privateKey", |view| input_bytes(&format!("{WHAT}: privateKey"), view))?);
+        key = Some(o.with_required("privateKey", |view| key_bytes(&format!("{WHAT}: privateKey"), view))?);
         protocols =
             o.with_optional_in("alpn", |frame, view| alpn(frame, &format!("{WHAT}: alpn"), view))?.unwrap_or_default();
         names = o.with_optional_in("versions", |frame, view| string_list(frame, &format!("{WHAT}: versions"), view))?;

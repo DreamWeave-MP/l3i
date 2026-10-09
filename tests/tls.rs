@@ -736,3 +736,50 @@ fn a_plain_rustls_server_and_the_luau_client_agree() {
         .unwrap();
     peer.join().unwrap();
 }
+
+/// The process's peak resident memory in KiB (Linux).
+fn peak_kib() -> Option<u64> {
+    let status = std::fs::read_to_string("/proc/self/status").ok()?;
+    status.lines().find_map(|line| line.strip_prefix("VmHWM:"))?.trim().trim_end_matches(" kB").parse().ok()
+}
+
+/// A table repeating one large string costs the script almost nothing; every bound must hold
+/// before the native side copies, so a rejected input never costs more than the budget.
+#[test]
+fn certificate_inputs_are_bounded_before_they_cost_native_memory() {
+    let runtime = runtime();
+    let before = peak_kib();
+    let started = std::time::Instant::now();
+    runtime
+        .exec(
+            r"
+            local blob = string.rep('0', 1048576) -- 1 MiB, not PEM: one DER input per entry
+            local cases = {
+                { function() tls.clientConfig({ roots = table.create(100000, blob), platform = false }) end, '100000 entries, more than 1024' },
+                { function() tls.clientConfig({ roots = table.create(1024, blob), platform = false }) end, 'more than 4194304 bytes of certificate input' },
+                { function() tls.clientConfig({ roots = blob .. '0', platform = false }) end, 'more than 1048576' },
+                { function() tls.serverConfig({ certChain = table.create(16, blob), privateKey = PKI.leaf.key }) end, 'more than 4194304 bytes' },
+                { function() tls.serverConfig({ certChain = table.create(17, PKI.leaf.chain), privateKey = PKI.leaf.key }) end, '17 entries, more than 16' },
+                -- Counts are checked while one PEM text is read, not after.
+                { function() tls.clientConfig({ roots = string.rep(PKI.ca, 1100), platform = false }) end, 'more than 1024 certificates' },
+                { function() tls.serverConfig({ certChain = string.rep(PKI.leaf.chain, 17), privateKey = PKI.leaf.key }) end, 'more than 16 certificates' },
+                { function() tls.serverConfig({ certChain = PKI.leaf.chain, privateKey = string.rep('k', 65537) }) end, 'more than 65536' },
+                { function() tls.clientConfig({ alpn = table.create(17, 'h2') }) end, 'more than 16 protocols' },
+                { function() tls.clientConfig({ versions = table.create(5, '1.3') }) end, 'more than 4 entries' },
+            }
+            for _, case in cases do
+                local ok, err = pcall(case[1])
+                assert(not ok and string.find(err, case[2], 1, true), err)
+            end
+            -- At the bounds, inputs still work.
+            assert(tls.clientConfig({ roots = string.rep(PKI.ca, 3), platform = false }))
+            assert(tls.serverConfig({ certChain = PKI.chained.chain, privateKey = PKI.chained.key, versions = { '1.3', '1.2', '1.3', '1.2' } }))
+            ",
+        )
+        .unwrap();
+    assert!(started.elapsed() < std::time::Duration::from_secs(10), "{:?}", started.elapsed());
+    if let (Some(before), Some(after)) = (before, peak_kib()) {
+        // Copying first would have staged 1 GiB or more; other tests share the process.
+        assert!(after.saturating_sub(before) < 512 * 1024, "peak grew by {} KiB", after - before);
+    }
+}
