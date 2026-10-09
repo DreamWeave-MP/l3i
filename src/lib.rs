@@ -79,6 +79,8 @@ pub mod debug;
 pub mod debug_name;
 pub mod diagnostics;
 pub mod direct;
+#[cfg(feature = "dns")]
+pub mod dns;
 pub mod error;
 pub mod extension;
 pub mod flags;
@@ -95,7 +97,7 @@ pub mod native;
 #[cfg(feature = "jit")]
 pub mod native_code;
 pub mod options;
-#[cfg(any(feature = "fs", feature = "process", feature = "tcp"))]
+#[cfg(any(feature = "fs", feature = "process", feature = "tcp", feature = "dns"))]
 mod outcome;
 pub mod packed;
 #[cfg(feature = "process")]

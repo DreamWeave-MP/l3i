@@ -34,6 +34,8 @@ mod comprehension;
 mod data;
 mod debug;
 mod direct;
+#[cfg(feature = "dns")]
+mod dns;
 mod extension;
 #[cfg(feature = "fs")]
 mod fs;

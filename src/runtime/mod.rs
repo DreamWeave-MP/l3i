@@ -39,7 +39,7 @@ pub(crate) unsafe fn shared_for<'a>(state: *mut ffi::lua_State) -> Option<&'a Sh
 /// How much longer the watched call `scope` runs in may take before the watchdog raises, or
 /// `None` when no execution time limit is armed. A native call that waits clamps its wait to
 /// this, so the limit holds even while no Luau instruction runs.
-#[cfg(feature = "tcp")]
+#[cfg(any(feature = "tcp", feature = "dns"))]
 pub(crate) fn watchdog_remaining(scope: &impl crate::stack::Scope) -> Option<Duration> {
     // SAFETY: a scope's state is a live thread of a VM that outlives the scope, and the borrow
     // of its shared block ends in this function.

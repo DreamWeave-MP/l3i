@@ -94,6 +94,12 @@ writeable = { version = "0.6", optional = true }
 # socket2 for a listener's backlog and address reuse and Apple's SO_NOSIGPIPE. Both Rust.
 mio = { version = "1.2", optional = true, features = ["os-poll", "net"] }
 socket2 = { version = "0.6", optional = true, features = ["all"] }
+# `@dream/dns` (feature `dns`): UTS #46 host name mapping (idna, over ICU4X's normalizer); on Unix
+# the OS resolver is called through libc's getaddrinfo, so its error codes stay distinct.
+idna = { version = "1.1", optional = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = { version = "0.2", optional = true }
 
 [build-dependencies]
 # Compiles the vendored Luau tree and the C++ shims.
@@ -215,3 +221,7 @@ intl = ["dep:icu_locale_core", "dep:icu_plurals", "dep:icu_decimal", "dep:fixed_
 # The `@dream/tcp` extension (`tcp`): nonblocking TCP listeners and byte streams over numeric
 # addresses and a bounded readiness poller, gated by the `network.tcp.*` capabilities.
 tcp = ["dep:mio", "dep:socket2"]
+# The `@dream/dns` extension (`dns`): hostname resolution through the OS resolver on a bounded
+# pool of worker threads, gated by `network.dns.resolve`; watchable by a `tcp` poller when both
+# features are on.
+dns = ["dep:idna", "dep:libc"]

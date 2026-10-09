@@ -48,6 +48,8 @@ fn plan() -> Rc<RuntimePlan> {
     let builder = builder.extension(l3i::process::ProcessExtension);
     #[cfg(feature = "tcp")]
     let builder = builder.extension(l3i::tcp::TcpExtension);
+    #[cfg(feature = "dns")]
+    let builder = builder.extension(l3i::dns::DnsExtension::default());
     builder.finalize().unwrap()
 }
 
@@ -206,6 +208,23 @@ const TCP_SCRIPT: (&str, &str) = (
      listener:close()\n",
 );
 
+#[cfg(feature = "dns")]
+const DNS_SCRIPT: (&str, &str) = (
+    "dns_script",
+    "--!strict\n\
+     local dns = require('@dream/dns')\n\
+     local request, message, kind = dns.resolve('example.com', 443, { timeoutMs = 5000, maxAddresses = 8 })\n\
+     if not request then error(message) end\n\
+     local done: boolean = request:wait(250)\n\
+     local status: dream_dns_Status = request.status\n\
+     local addresses, why, failure = request:take()\n\
+     local first: string? = addresses and addresses[1]\n\
+     local failed: dream_dns_ErrorKind? = failure\n\
+     request:cancel()\n\
+     request:close()\n\
+     print(done, status, first, why, failed, kind, request.host, request.asciiHost, request.port, request.closed, dns.MAX_TIMEOUT_MS, dns.MAX_ADDRESSES)\n",
+);
+
 /// A strict walker over the tree: refinement on `kind` narrows each union to its node type.
 #[cfg(feature = "syntax")]
 const SYNTAX_SCRIPT: (&str, &str) = (
@@ -336,6 +355,8 @@ fn the_generated_definitions_type_check_and_typed_scripts_pass_strict_mode() {
     all_scripts.push(PROCESS_SCRIPT);
     #[cfg(feature = "tcp")]
     all_scripts.push(TCP_SCRIPT);
+    #[cfg(feature = "dns")]
+    all_scripts.push(DNS_SCRIPT);
     let scripts = plan.analysis_sources(Scripts(all_scripts.iter().copied().collect()));
     let options = AnalysisOptions {
         definitions: vec![Definitions { name: "dream.d.luau".to_owned(), source: definitions.clone() }],
