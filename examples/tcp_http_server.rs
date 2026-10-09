@@ -20,7 +20,7 @@ fn main() -> l3i::Result<()> {
     let address = args.next().unwrap_or_else(|| "127.0.0.1:8080".to_owned());
     let responses: f64 = args.next().map_or(0.0, |count| count.parse().expect("responses is a number"));
     let policy = RuntimePolicy::new().capability(LISTEN_CAPABILITY);
-    let plan = RuntimePlan::builder().policy(policy).extension(TcpExtension).finalize()?;
+    let plan = RuntimePlan::builder().policy(policy).extension(TcpExtension::default()).finalize()?;
     let runtime = Runtime::from_plan(&plan)?;
     runtime.exec(&format!("HttpServer = (function()\n{SERVER}\nend)()"))?;
     runtime.set_global("address", address.as_str())?;

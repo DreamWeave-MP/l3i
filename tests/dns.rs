@@ -413,7 +413,7 @@ fn with_poller() -> (Runtime, Arc<Mock>) {
         .capability(l3i::tcp::CONNECT_CAPABILITY);
     let plan = RuntimePlan::builder()
         .policy(policy)
-        .extension(l3i::tcp::TcpExtension)
+        .extension(l3i::tcp::TcpExtension::default())
         .extension(DnsExtension::new(resolver).max_lookups(64))
         .finalize()
         .unwrap();

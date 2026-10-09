@@ -47,7 +47,7 @@ fn plan() -> Rc<RuntimePlan> {
     #[cfg(feature = "process")]
     let builder = builder.extension(l3i::process::ProcessExtension);
     #[cfg(feature = "tcp")]
-    let builder = builder.extension(l3i::tcp::TcpExtension);
+    let builder = builder.extension(l3i::tcp::TcpExtension::default());
     #[cfg(feature = "dns")]
     let builder = builder.extension(l3i::dns::DnsExtension::default());
     #[cfg(feature = "tls")]

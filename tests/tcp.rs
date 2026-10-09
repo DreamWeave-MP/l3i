@@ -102,7 +102,7 @@ fn runtime_with(grants: &[&str], limits: Option<Limits>) -> Runtime {
     if let Some(limits) = limits {
         policy = policy.limits(limits);
     }
-    let plan = RuntimePlan::builder().policy(policy).extension(TcpExtension).finalize().unwrap();
+    let plan = RuntimePlan::builder().policy(policy).extension(TcpExtension::default()).finalize().unwrap();
     let runtime = Runtime::from_plan(&plan).unwrap();
     runtime.exec(HELPERS).unwrap();
     runtime
@@ -118,7 +118,7 @@ fn error_of(runtime: &Runtime, source: &str) -> String {
 
 #[test]
 fn the_extension_registers_its_module_and_typed_definitions() {
-    let plan = RuntimePlan::builder().extension(TcpExtension).finalize().unwrap();
+    let plan = RuntimePlan::builder().extension(TcpExtension::default()).finalize().unwrap();
     assert!(plan.modules().iter().any(|module| module.path == "@dream/tcp"));
     let definitions = plan.type_definitions();
     for declared in [
@@ -894,4 +894,27 @@ fn a_closed_poller_holds_no_descriptor() {
     let after = open_descriptors();
     // Other tests open sockets meanwhile; 400 leaked pollers would hold 800 descriptors.
     assert!(after < before + 200, "{before} descriptors before, {after} after");
+}
+
+/// A runtime holds at most its host's maximum of open pollers, which need no capability;
+/// closing or collecting one frees its place.
+#[test]
+fn pollers_are_capped_per_runtime() {
+    let policy = RuntimePolicy::new().compat_global("@dream/tcp", "tcp");
+    let plan =
+        RuntimePlan::builder().policy(policy).extension(TcpExtension::default().max_pollers(3)).finalize().unwrap();
+    let runtime = Runtime::from_plan(&plan).unwrap();
+    runtime
+        .exec(
+            "local a = tcp.poller() B, C = tcp.poller(), tcp.poller() \
+             local ok, message = pcall(tcp.poller) \
+             assert(not ok and string.find(message, '3 pollers are open', 1, true), message) \
+             a:close() a:close() \
+             D = tcp.poller() \
+             assert(not pcall(tcp.poller), 'closing twice frees one place') \
+             B = nil",
+        )
+        .unwrap();
+    runtime.collect_garbage();
+    runtime.exec("local e = tcp.poller() assert(not pcall(tcp.poller)) C:close() D:close() e:close()").unwrap();
 }

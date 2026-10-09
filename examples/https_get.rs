@@ -21,7 +21,7 @@ fn main() -> l3i::Result<()> {
     let policy = RuntimePolicy::new().capability(CONNECT_CAPABILITY).capability(RESOLVE_CAPABILITY);
     let plan = RuntimePlan::builder()
         .policy(policy)
-        .extension(TcpExtension)
+        .extension(TcpExtension::default())
         .extension(TlsExtension)
         .extension(DnsExtension::default())
         .finalize()?;

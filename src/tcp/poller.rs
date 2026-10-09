@@ -357,6 +357,17 @@ impl Drop for Core {
 /// `dream.tcp.Poller`.
 pub struct Poller {
     core: Rc<Core>,
+    /// The runtime's count of open pollers, released once when this one closes or is
+    /// collected; none for a poller the host made.
+    counted: RefCell<Option<Rc<Cell<u32>>>>,
+}
+
+impl Drop for Poller {
+    fn drop(&mut self) {
+        if let Some(open) = self.counted.get_mut().take() {
+            open.set(open.get() - 1);
+        }
+    }
 }
 
 // SAFETY: plain Rust state with no Lua references; dropping it closes an OS poller and clears
@@ -404,7 +415,16 @@ impl Poller {
                 deferred: Cell::new(false),
                 limits,
             }),
+            counted: RefCell::new(None),
         })
+    }
+
+    /// A poller counted in `open`, a runtime's open pollers, until it closes or is collected.
+    pub(crate) fn counted(limits: Limits, open: &Rc<Cell<u32>>) -> io::Result<Poller> {
+        let poller = Poller::new(limits)?;
+        open.set(open.get() + 1);
+        *poller.counted.borrow_mut() = Some(Rc::clone(open));
+        Ok(poller)
     }
 
     fn open(&self, what: &str) -> Result<()> {
@@ -579,6 +599,9 @@ impl Poller {
         self.core.poll.borrow_mut().take();
         self.core.registry.borrow_mut().take();
         self.core.waker.borrow_mut().take();
+        if let Some(open) = self.counted.borrow_mut().take() {
+            open.set(open.get() - 1);
+        }
         *self.core.events.borrow_mut() = mio::Events::with_capacity(0);
         let mut slots = self.core.slots.borrow_mut();
         slots.entries = Vec::new();

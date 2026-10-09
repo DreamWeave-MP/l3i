@@ -303,7 +303,7 @@ fn dns(instructions: &Instructions) {
     let policy = RuntimePolicy::new().capability(RESOLVE_CAPABILITY);
     let plan = RuntimePlan::builder()
         .policy(policy)
-        .extension(TcpExtension)
+        .extension(TcpExtension::default())
         .extension(DnsExtension::new(resolver.clone()).max_requests(4096).max_lookups(4096))
         .finalize()
         .unwrap();
@@ -336,7 +336,7 @@ fn dns(instructions: &Instructions) {
     let system_runtime = {
         let plan = RuntimePlan::builder()
             .policy(RuntimePolicy::new().capability(RESOLVE_CAPABILITY))
-            .extension(TcpExtension)
+            .extension(TcpExtension::default())
             .extension(DnsExtension::default())
             .finalize()
             .unwrap();
@@ -374,8 +374,12 @@ fn dns(instructions: &Instructions) {
 fn tls(instructions: &Instructions) {
     let pki = pki();
     let policy = RuntimePolicy::new().capability(LISTEN_CAPABILITY).capability(CONNECT_CAPABILITY);
-    let plan =
-        RuntimePlan::builder().policy(policy).extension(TcpExtension).extension(TlsExtension).finalize().unwrap();
+    let plan = RuntimePlan::builder()
+        .policy(policy)
+        .extension(TcpExtension::default())
+        .extension(TlsExtension)
+        .finalize()
+        .unwrap();
     let runtime = Runtime::from_plan(&plan).unwrap();
     runtime.set_global("CA", pki.0.as_str()).unwrap();
     runtime.set_global("CHAIN", pki.1.as_str()).unwrap();

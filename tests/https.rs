@@ -63,8 +63,12 @@ fn server_runtime() -> Runtime {
         .compat_global("@dream/tcp", "tcp")
         .compat_global("@dream/tls", "tls")
         .capability(LISTEN_CAPABILITY);
-    let plan =
-        RuntimePlan::builder().policy(policy).extension(TcpExtension).extension(TlsExtension).finalize().unwrap();
+    let plan = RuntimePlan::builder()
+        .policy(policy)
+        .extension(TcpExtension::default())
+        .extension(TlsExtension)
+        .finalize()
+        .unwrap();
     let runtime = Runtime::from_plan(&plan).unwrap();
     runtime.exec(&format!("HttpsServer = (function()\n{SERVER}\nend)()")).unwrap();
     runtime
@@ -91,7 +95,7 @@ fn client_runtime_with(table: HashMap<&'static str, Vec<&str>>) -> (Runtime, Arc
         .capability(RESOLVE_CAPABILITY);
     let plan = RuntimePlan::builder()
         .policy(policy)
-        .extension(TcpExtension)
+        .extension(TcpExtension::default())
         .extension(TlsExtension)
         .extension(DnsExtension::new(resolver))
         .finalize()

@@ -240,8 +240,12 @@ pub fn runtime() -> Runtime {
         .compat_global("@dream/tls", "tls")
         .capability(LISTEN_CAPABILITY)
         .capability(CONNECT_CAPABILITY);
-    let plan =
-        RuntimePlan::builder().policy(policy).extension(TcpExtension).extension(TlsExtension).finalize().unwrap();
+    let plan = RuntimePlan::builder()
+        .policy(policy)
+        .extension(TcpExtension::default())
+        .extension(TlsExtension)
+        .finalize()
+        .unwrap();
     let runtime = Runtime::from_plan(&plan).unwrap();
     let pki = pki();
     let lua_leaf = |leaf: &Leaf| format!("{{ chain = [==[{}]==], key = [==[{}]==] }}", leaf.chain, leaf.key);
@@ -264,7 +268,7 @@ pub fn runtime() -> Runtime {
 
 #[test]
 fn the_extension_requires_tcp_and_widens_its_watchable_handles() {
-    let plan = RuntimePlan::builder().extension(TcpExtension).extension(TlsExtension).finalize().unwrap();
+    let plan = RuntimePlan::builder().extension(TcpExtension::default()).extension(TlsExtension).finalize().unwrap();
     let definitions = plan.type_definitions();
     assert!(definitions.contains("declare extern type dream_tls_Stream with"), "{definitions}");
     assert!(

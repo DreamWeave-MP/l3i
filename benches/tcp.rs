@@ -247,7 +247,7 @@ return function(case, a, b) cases[case](a, b) end
 
 fn runtime() -> (Runtime, Function) {
     let policy = RuntimePolicy::new().capability(LISTEN_CAPABILITY).capability(CONNECT_CAPABILITY);
-    let plan = RuntimePlan::builder().policy(policy).extension(TcpExtension).finalize().unwrap();
+    let plan = RuntimePlan::builder().policy(policy).extension(TcpExtension::default()).finalize().unwrap();
     let runtime = Runtime::from_plan(&plan).unwrap();
     let run = runtime.load_function(CHUNK).unwrap();
     (runtime, run)

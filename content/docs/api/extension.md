@@ -833,7 +833,9 @@ Module `l3i::tcp`, feature `tcp`; the Luau side is in
 {{ api_signature(value="pub struct TcpExtension") }}
 
 The extension; `id()` is `"dream.tcp"` (`EXTENSION_ID`), the module path is `MODULE`
-(`"@dream/tcp"`). `Clone`, `Copy`, `Debug`, `Default`.
+(`"@dream/tcp"`). `new()` (also `Default`), `max_pollers(u32)` (pollers open per runtime, 1 to
+4096, default 64: a poller needs no capability and holds OS descriptors the VM's memory limit
+does not see). `Clone`, `Copy`, `Debug`.
 
 | Item | What it is |
 |---|---|

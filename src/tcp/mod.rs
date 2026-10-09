@@ -63,7 +63,9 @@ pub(crate) mod socket;
 pub use poller::Poller;
 pub use socket::{Listener, Stream, StreamState};
 
+use std::cell::Cell;
 use std::net::SocketAddr;
+use std::rc::Rc;
 
 use crate::bind::{ArgView, Call, StackResults};
 use crate::convert::Exact;
@@ -190,7 +192,12 @@ fn connect(
     Ok(Outcome::Done(StackResults))
 }
 
-fn new_poller(call: &Call<'_>, options: Option<ValueView<'_>>) -> Result<Owned<Poller>> {
+fn new_poller(
+    call: &Call<'_>,
+    open: &Rc<Cell<u32>>,
+    max: u32,
+    options: Option<ValueView<'_>>,
+) -> Result<Owned<Poller>> {
     let mut limits = poller::Limits::default();
     if let Some(options) = options.filter(|view| !view.is_nil()) {
         Options::read(call, options, "dream.tcp.poller", |o| {
@@ -204,7 +211,14 @@ fn new_poller(call: &Call<'_>, options: Option<ValueView<'_>>) -> Result<Owned<P
             Ok(())
         })?;
     }
-    match Poller::new(limits) {
+    // Each poller holds an OS poller (a descriptor or two) and its event buffer, which the VM's
+    // memory limit does not see, and needs no capability: the runtime's count bounds them.
+    if open.get() >= max {
+        return Err(Error::runtime(format!(
+            "dream.tcp.poller: {max} pollers are open in this runtime, its maximum; close one (closed or collected pollers do not count)"
+        )));
+    }
+    match Poller::counted(limits, open) {
         Ok(poller) => Ok(Owned(poller)),
         // Creating an epoll, kqueue or completion port fails only when the process is out of
         // descriptors or memory: nothing a script can act on.
@@ -227,8 +241,32 @@ struct Grants {
 }
 
 /// The `dream.tcp` extension.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct TcpExtension;
+#[derive(Clone, Copy, Debug)]
+pub struct TcpExtension {
+    max_pollers: u32,
+}
+
+impl TcpExtension {
+    /// With at most 64 pollers open per runtime.
+    pub fn new() -> TcpExtension {
+        TcpExtension { max_pollers: 64 }
+    }
+
+    /// At most `max` pollers open per runtime at once (closed or collected ones do not count);
+    /// 1 to 4096. A poller needs no capability, and holds an OS poller (a descriptor or two)
+    /// and its event buffer, which the VM's memory limit does not see.
+    #[must_use]
+    pub fn max_pollers(mut self, max: u32) -> TcpExtension {
+        self.max_pollers = max.clamp(1, 4096);
+        self
+    }
+}
+
+impl Default for TcpExtension {
+    fn default() -> Self {
+        TcpExtension::new()
+    }
+}
 
 impl Extension for TcpExtension {
     fn id(&self) -> &'static str {
@@ -262,9 +300,9 @@ impl Extension for TcpExtension {
             .installed("connect")
             .signature("(address: string, options: dream_tcp_ConnectOptions?) -> (dream_tcp_Stream?, string?, dream_tcp_ErrorKind?)")
             .doc("Starts a nonblocking connection; the stream is usually 'connecting' until finishConnect() says otherwise. Needs network.tcp.connect.")
-            .function("poller", new_poller)
+            .installed("poller")
             .signature("(options: dream_tcp_PollerOptions?) -> dream_tcp_Poller")
-            .doc("A readiness poller: maxEvents per wait (default 256), maxWatches (default 1024), maxWaitMs (default 1000).")
+            .doc("A readiness poller: maxEvents per wait (default 256), maxWatches (default 1024), maxWaitMs (default 1000). A runtime holds at most the host's maximum open at once (64 by default).")
             .constant("MAX_WAIT_MS", crate::source::CompileConstant::Number(f64::from(MAX_WAIT_MS)));
         Ok(())
     }
@@ -276,6 +314,11 @@ impl Extension for TcpExtension {
             public: cx.has_capability(PUBLIC_CAPABILITY)?,
         };
         let module = cx.module(MODULE)?;
+        let pollers = Rc::new(Cell::new(0));
+        let max_pollers = self.max_pollers;
+        module.function("poller", move |call: &Call<'_>, options: Option<ValueView<'_>>| {
+            new_poller(call, &pollers, max_pollers, options)
+        })?;
         module.function("listen", move |call: &Call<'_>, address: &str, options: Option<ValueView<'_>>| {
             listen(call, granted, address, options)
         })?;
