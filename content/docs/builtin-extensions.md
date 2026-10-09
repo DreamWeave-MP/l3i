@@ -1582,7 +1582,11 @@ server as the name it asked for, and makes one HTTP/1.1 request.
 `tests/https.rs` runs them against each other through a resolver that maps `test.local` to an
 unreachable address, an IPv6 loopback nobody listens on and the real IPv4 server, and serves
 independent rustls clients; `cargo run --example https_get --features dns,tls -- example.com /`
-fetches from a real server with the OS resolver and platform store. They are demonstrations:
+fetches from a real server with the OS resolver and platform store. The client's deadlines use
+`os.clock()`, which Luau implements as a monotonic wall clock on Windows, Apple platforms,
+Linux, FreeBSD and Emscripten (C's CPU-time `clock()` only elsewhere), so time spent waiting
+counts; `tests/https.rs` holds a stalled resolver, a connect whose SYNs are dropped and a
+silent TLS peer to a 300 ms deadline in wall time. They are demonstrations:
 no redirects, chunked bodies, request bodies or connection reuse.
 
 ### What it costs

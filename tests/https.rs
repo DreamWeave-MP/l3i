@@ -72,12 +72,17 @@ fn server_runtime() -> Runtime {
 
 /// A client runtime whose resolver maps test names to fixed addresses.
 fn client_runtime(table: HashMap<&'static str, Vec<&str>>) -> Runtime {
+    client_runtime_with(table).0
+}
+
+/// The same, with the resolver's mock (names starting with `slow` wait for its gate).
+fn client_runtime_with(table: HashMap<&'static str, Vec<&str>>) -> (Runtime, Arc<Mock>) {
     let table = table
         .into_iter()
         .map(|(name, ips)| (name, Ok(ips.iter().map(|ip| SocketAddr::new(ip.parse().unwrap(), 0)).collect())))
         .collect();
     let mock = Arc::new(Mock { table, ..Mock::default() });
-    let resolver = Resolver::new(ResolverConfig { workers: 2, queue: 8 }, mock as Arc<dyn Lookup>);
+    let resolver = Resolver::new(ResolverConfig { workers: 2, queue: 8 }, Arc::clone(&mock) as Arc<dyn Lookup>);
     let policy = RuntimePolicy::new()
         .compat_global("@dream/tcp", "tcp")
         .compat_global("@dream/tls", "tls")
@@ -95,7 +100,65 @@ fn client_runtime(table: HashMap<&'static str, Vec<&str>>) -> Runtime {
     runtime.exec(&format!("HttpsClient = (function()\n{CLIENT}\nend)()")).unwrap();
     runtime.set_global("CA", pki().ca.as_str()).unwrap();
     runtime.exec("trust = assert(tls.clientConfig({ roots = { CA }, platform = false }))").unwrap();
-    runtime
+    (runtime, mock)
+}
+
+/// The example's deadlines are wall time: a stalled resolver, a TCP endpoint whose SYNs are
+/// dropped and a peer that accepts but never speaks TLS each end the call as `timedOut` close
+/// to the 300 ms asked for, while the script spends that time waiting, not computing.
+#[test]
+fn the_example_clients_deadlines_hold_in_wall_time() {
+    // A listener with a one-connection backlog, filled and never accepted: further SYNs are
+    // dropped and a connect stays pending.
+    let holder = server_runtime();
+    holder.exec("stuck = assert(tcp.listen('127.0.0.1:0', { backlog = 1 }))").unwrap();
+    let stuck: String = holder.eval("return stuck.localAddress").unwrap();
+    let stuck: SocketAddr = stuck.parse().unwrap();
+    let mut held = Vec::new();
+    for _ in 0..16 {
+        match std::net::TcpStream::connect_timeout(&stuck, Duration::from_millis(200)) {
+            Ok(stream) => held.push(stream),
+            Err(_) => break,
+        }
+    }
+    // A peer that accepts the connection and then says nothing.
+    let idle = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let mut table = HashMap::new();
+    table.insert("stuck.test", vec!["127.0.0.1"]);
+    table.insert("idle.test", vec!["127.0.0.1"]);
+    let (client, mock) = client_runtime_with(table);
+    let mut cases = vec![
+        ("slow.test", 443, "slow.test: timed out"),
+        ("idle.test", idle.local_addr().unwrap().port(), "TLS handshake with idle.test timed out"),
+    ];
+    // Linux drops SYNs to a full backlog, leaving the connect pending; other systems may
+    // refuse it instead.
+    if cfg!(target_os = "linux") {
+        cases.push(("stuck.test", stuck.port(), "connecting to stuck.test"));
+    }
+    for (name, port, stage) in cases {
+        client.set_global("NAME", name).unwrap();
+        client.set_global("PORT", &f64::from(port)).unwrap();
+        client.set_global("STAGE", stage).unwrap();
+        let started = Instant::now();
+        client
+            .exec(
+                r"
+                local before = os.clock()
+                local secure, message, kind = HttpsClient.connect(NAME, PORT, { tlsConfig = trust, timeoutMs = 300 })
+                assert(secure == nil and kind == 'timedOut', `{NAME}: {tostring(kind)} {tostring(message)}`)
+                -- Each case stops where it is stuck: the lookup, the connect, the handshake.
+                assert(string.find(message, STAGE, 1, true), message)
+                local spent = os.clock() - before
+                assert(spent >= 0.25 and spent < 1.5, `{NAME}: os.clock advanced {spent} s`)
+                ",
+            )
+            .unwrap();
+        let waited = started.elapsed();
+        assert!(waited >= Duration::from_millis(250) && waited < Duration::from_millis(1500), "{name}: {waited:?}");
+    }
+    mock.open();
+    drop(held);
 }
 
 #[test]

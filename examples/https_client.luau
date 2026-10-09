@@ -4,6 +4,11 @@
 -- library: no redirects, no chunked bodies, no proxies, no connection reuse.
 --
 -- Every wait goes through one poller and is bounded by the call's deadline; nothing spins.
+-- Deadlines are measured with os.clock(), which in Luau is a monotonic wall clock on Windows
+-- (QueryPerformanceCounter), Apple platforms (mach_absolute_time), Linux and FreeBSD
+-- (CLOCK_MONOTONIC) and Emscripten, unlike Lua's CPU time; time spent waiting counts. Only on
+-- other platforms does Luau fall back to C's clock(), CPU time, where these deadlines would
+-- stretch: there, give the client a host clock instead.
 --
 --   local https = HttpsClient
 --   local secure = assert(https.connect('example.com', 443, { timeoutMs = 10000 }))
