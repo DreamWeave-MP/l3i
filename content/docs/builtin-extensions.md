@@ -1584,10 +1584,11 @@ roots; an unusable store is not read again.
 ### Keys
 
 Certificates and keys are bytes the caller holds: this module never opens a file and has no
-capability of its own (a session's network authority is its TCP stream's). Key bytes are
-copied once into a buffer zeroed when it drops; the Luau string or buffer they came from is
-the script's and cannot be zeroized, and the parsed key lives in the configuration as long as
-it does. No message ever contains key material.
+capability of its own (a session's network authority is its TCP stream's). Key bytes are read
+into a buffer zeroed when it drops, but that is the only copy zeroed: rustls takes a key only
+as an owned copy, which its parser drops without zeroing, the parsed key lives in the
+configuration as long as it does, and the Luau string or buffer the bytes came from is the
+script's. Treat the process's memory as holding the key. No message ever contains key material.
 
 ### Not here
 

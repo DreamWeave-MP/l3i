@@ -27,7 +27,7 @@ is a deliberate change that re-audits the hand-declared C API.
 | `icu_locale_core`, `icu_plurals`, `icu_decimal`, `fixed_decimal`, `writeable` | `2.3` (`fixed_decimal` `0.7` with `ryu`, `writeable` `0.6`), optional, behind `intl` | `@dream/intl`'s locales, plural rules and decimal formatting, with ICU4X's compiled CLDR data |
 | `mio`, `socket2` | `1.2` (`os-poll`, `net`), `0.6` (`all`), optional, behind `tcp` | `@dream/tcp`'s nonblocking sockets and OS readiness; `socket2` is already in the tree through `dream-net` |
 | `idna`, `libc` (Unix) | `1.1`, `0.2`, optional, behind `dns` (`idna` also behind `tls`) | Host names mapped to A-labels; `getaddrinfo` |
-| `rustls`, `rustls-platform-verifier`, `zeroize` | `0.23.40` (ring, std, tls12), `0.7`, `1.8`, optional, behind `tls` | `@dream/tls`'s sessions, the platform trust store, zeroed key buffers |
+| `rustls`, `rustls-platform-verifier`, `zeroize` | `0.23.40` (ring, std, tls12), `0.7`, `1.8`, optional, behind `tls` | `@dream/tls`'s sessions, the platform trust store, the zeroed copy of key input |
 | `cc` | `1`, `parallel` feature, build only | Compiling the Luau submodule and `csrc/` |
 | `criterion` | `0.8.2`, dev only | The benchmarks |
 | `rcgen` | `0.14` (ring, pem), dev only | Test PKIs for `@dream/tls`, made per run |

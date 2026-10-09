@@ -146,7 +146,8 @@ fn is_pem(bytes: &[u8]) -> bool {
     bytes.windows(10).any(|window| window == b"-----BEGIN")
 }
 
-/// A private key's bytes, copied once into a buffer zeroed when it drops.
+/// A private key's bytes, copied into a buffer zeroed when it drops. rustls takes a key only
+/// as an owned copy, which it drops without zeroing; this one is ours to zero.
 fn key_bytes(what: &str, view: ValueView<'_>) -> Result<Zeroizing<Vec<u8>>> {
     let bytes = BytesView::from_view(view)
         .map_err(|_| view.field_type_error(what, "PEM or DER bytes as a string or buffer"))?;
