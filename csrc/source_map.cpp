@@ -258,6 +258,13 @@ size_t SourceMap::originalOffset(Position at) const
     return offset(at, originalStarts, original.size());
 }
 
+size_t SourceMap::generatedOffset(Position at) const
+{
+    if (generatedStarts.empty())
+        throw std::logic_error("generated position requires a mapped surface document");
+    return offset(at, generatedStarts, generatedSize);
+}
+
 unsigned SourceMap::originalLines() const
 {
     return empty() ? 0 : unsigned(originalStarts.size() - 1 + (!original.empty() && original.back() != '\n'));

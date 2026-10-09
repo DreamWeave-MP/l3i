@@ -54,6 +54,8 @@ public:
     Position generatedPoint(size_t offset) const;
     Span originalRange(size_t begin, size_t end) const;
     size_t originalOffset(Position position) const;
+    // The offset of a generated position, clamped to its line like `originalOffset`.
+    size_t generatedOffset(Position position) const;
     bool generatedName(std::string_view name) const;
     unsigned originalLines() const;
     // A line-only reference can be ambiguous after several original lines were fused.

@@ -1462,3 +1462,45 @@ fn analysis_relocates_pattern_boundaries_its_parse_does_not_confirm() {
         }
     }
 }
+
+/// Completing in a module costs time in proportion to it, surface syntax or not: deciding
+/// which locals the lowering made never rescans the text per local.
+#[test]
+fn completion_time_grows_linearly_with_the_module() {
+    use std::fmt::Write as _;
+    use std::time::{Duration, Instant};
+    let module = |functions: usize, surface: bool| {
+        let mut text = String::from("--!strict\n");
+        for k in 0..functions {
+            if surface {
+                writeln!(text, "local function f{k}(a: {{number}}) local v = [for x in a => x + {k}] return v end")
+                    .unwrap();
+            } else {
+                writeln!(text, "local function f{k}(a: number) local v = a + {k} return v end").unwrap();
+            }
+        }
+        text.push_str("local z = f");
+        text
+    };
+    let time = |text: String| {
+        let line = u32::try_from(text.lines().count() - 1).unwrap();
+        let mut modules = HashMap::new();
+        modules.insert("big", &*Box::leak(text.into_boxed_str()));
+        let analysis = Analysis::new(Sources { modules }, AnalysisOptions::default()).unwrap();
+        (0..2)
+            .map(|_| {
+                let start = Instant::now();
+                let completions = analysis.autocomplete("big", line, 11).unwrap();
+                assert!(completions.entries.iter().any(|entry| entry.name == "f0"));
+                start.elapsed()
+            })
+            .min()
+            .unwrap()
+            .max(Duration::from_millis(5))
+    };
+    for surface in [false, true] {
+        let small = time(module(250, surface));
+        let large = time(module(1000, surface));
+        assert!(large < small * 10, "surface {surface}: {small:?} for 250 functions, {large:?} for 1000");
+    }
+}

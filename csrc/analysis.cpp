@@ -171,40 +171,108 @@ namespace
         return false;
     }
 
-    // Whether a generated location is a completion probe's read: never the user's diagnostic.
-    bool probe(const SourceSnapshot& snapshot, const Luau::Location& loc)
+    // The offset of a location in a lowered source with a map (an unmapped one has no sites to
+    // compare it with), found through the map's line starts rather than a scan of the text.
+    L3i::Surface::Range generatedRange(const SourceSnapshot& snapshot, const Luau::Location& loc)
     {
-        const auto& lowered = snapshot.lowered;
-        const L3i::Surface::Range range{offset(lowered.source, loc.begin), offset(lowered.source, loc.end)};
-        return eachPattern(snapshot, [&](const L3i::Surface::Pattern&, const L3i::Surface::PatternSite& site) {
-            return std::any_of(site.probes.begin(), site.probes.end(), [&](L3i::Surface::Range key) {
-                return range.begin <= key.end && key.begin <= range.end;
+        const auto& map = snapshot.lowered.map;
+        return {map.generatedOffset({loc.begin.line, loc.begin.column}), map.generatedOffset({loc.end.line, loc.end.column})};
+    }
+
+    // A snapshot's comprehension sites and completion probes ordered for lookups in
+    // logarithmic time; a request that asks about every local or diagnostic builds one.
+    struct SiteIndex
+    {
+        const SourceSnapshot& snapshot;
+        // Sites by call begin, a call before the calls inside it, with each one's innermost
+        // container (SIZE_MAX at the top). Calls nest or are disjoint, so the innermost call
+        // around a range is the last one to begin at or before it, or one of its containers.
+        std::vector<const L3i::Surface::ComprehensionSite*> sites;
+        std::vector<size_t> containers;
+        // Probe ranges by begin, and the largest end among each prefix of them.
+        std::vector<L3i::Surface::Range> probes;
+        std::vector<size_t> probeEnds;
+
+        explicit SiteIndex(const SourceSnapshot& snapshot) : snapshot(snapshot)
+        {
+            const auto& all = snapshot.lowered.sites;
+            std::vector<size_t> order(all.size());
+            for (size_t k = 0; k < order.size(); ++k)
+                order[k] = k;
+            // Equal calls in reverse, so the first of them is the innermost and wins, as the
+            // first of equals does in a scan.
+            std::sort(order.begin(), order.end(), [&](size_t a, size_t b) {
+                const auto& x = all[a].call;
+                const auto& y = all[b].call;
+                return x.begin != y.begin ? x.begin < y.begin : x.end != y.end ? x.end > y.end : a > b;
             });
-        });
+            std::vector<size_t> open;
+            for (size_t k : order)
+            {
+                const auto& call = all[k].call;
+                while (!open.empty() && !(sites[open.back()]->call.begin <= call.begin && call.end <= sites[open.back()]->call.end))
+                    open.pop_back();
+                containers.push_back(open.empty() ? SIZE_MAX : open.back());
+                open.push_back(sites.size());
+                sites.push_back(&all[k]);
+            }
+            eachPattern(snapshot, [&](const L3i::Surface::Pattern&, const L3i::Surface::PatternSite& site) {
+                probes.insert(probes.end(), site.probes.begin(), site.probes.end());
+                return false;
+            });
+            std::sort(probes.begin(), probes.end(), [](L3i::Surface::Range a, L3i::Surface::Range b) { return a.begin < b.begin; });
+            for (const auto& key : probes)
+                probeEnds.push_back(probeEnds.empty() ? key.end : std::max(probeEnds.back(), key.end));
+        }
+
+        // Whether any probe overlaps `range`, ends included.
+        bool probe(L3i::Surface::Range range) const
+        {
+            const auto after = std::upper_bound(probes.begin(), probes.end(), range.end,
+                [](size_t value, L3i::Surface::Range key) { return value < key.begin; });
+            return after != probes.begin() && probeEnds[size_t(after - probes.begin()) - 1] >= range.begin;
+        }
+
+        // The innermost site whose call holds `range`, or null.
+        const L3i::Surface::ComprehensionSite* innermost(L3i::Surface::Range range) const
+        {
+            const auto after = std::upper_bound(sites.begin(), sites.end(), range.begin,
+                [](size_t value, const L3i::Surface::ComprehensionSite* site) { return value < site->call.begin; });
+            for (size_t k = size_t(after - sites.begin()) - 1; k != SIZE_MAX; k = containers[k])
+                if (sites[k]->call.begin <= range.begin && range.end <= sites[k]->call.end)
+                    return sites[k];
+            return nullptr;
+        }
+    };
+
+    // Whether a generated location is a completion probe's read: never the user's diagnostic.
+    bool probe(const SiteIndex& index, const Luau::Location& loc)
+    {
+        return !index.snapshot.lowered.map.empty() && index.probe(generatedRange(index.snapshot, loc));
     }
 
     // Whether a generated location begins in text the lowering wrote rather than copied.
     bool generatedStatement(const SourceSnapshot& snapshot, const Luau::Location& loc)
     {
+        if (snapshot.lowered.map.empty())
+            return false;
         const auto& segments = snapshot.lowered.map.provenance();
-        const size_t at = offset(snapshot.lowered.source, loc.begin);
+        const size_t at = generatedRange(snapshot, loc).begin;
         auto it = std::upper_bound(segments.begin(), segments.end(), at, [](size_t value, const auto& s) { return value < s.begin; });
         return it != segments.begin() && !std::prev(it)->copied && at < std::prev(it)->end;
     }
 
-    bool synthetic(const SourceSnapshot& snapshot, const Luau::Location& loc)
+    bool synthetic(const SiteIndex& index, const Luau::Location& loc)
     {
-        const auto& lowered = snapshot.lowered;
-        if (probe(snapshot, loc))
+        const auto& lowered = index.snapshot.lowered;
+        if (lowered.map.empty())
+            return false;
+        const L3i::Surface::Range range = generatedRange(index.snapshot, loc);
+        if (index.probe(range))
             return true;
-        const L3i::Surface::Range range{offset(lowered.source, loc.begin), offset(lowered.source, loc.end)};
         // Innermost site wins; a nested generated call is not a copied expression
         // merely because its parent expression contains it.
-        const L3i::Surface::ComprehensionSite* inner = nullptr;
-        for (const auto& site : lowered.sites)
-            if (site.call.begin <= range.begin && range.end <= site.call.end &&
-                (!inner || site.call.end - site.call.begin < inner->call.end - inner->call.begin))
-                inner = &site;
+        const L3i::Surface::ComprehensionSite* inner = index.innermost(range);
         if (!inner)
             return false;
         const auto& node = lowered.document.comprehensions.at(inner->comprehension);
@@ -238,10 +306,11 @@ namespace
         return true;
     }
 
-    bool recoveryNoise(const SourceSnapshot& snapshot, const Luau::Location& loc)
+    bool recoveryNoise(const SiteIndex& index, const Luau::Location& loc)
     {
-        if (!synthetic(snapshot, loc))
+        if (!synthetic(index, loc))
             return false;
+        const SourceSnapshot& snapshot = index.snapshot;
         const auto span = snapshot.lowered.map.originalSpan({{loc.begin.line, loc.begin.column}, {loc.end.line, loc.end.column}});
         const size_t begin = snapshot.lowered.map.originalOffset(span.begin);
         const size_t end = snapshot.lowered.map.originalOffset(span.end);
@@ -261,12 +330,12 @@ namespace
 
     struct GeneratedBindings : Luau::AstVisitor
     {
-        const SourceSnapshot& snapshot;
+        const SiteIndex& index;
         std::unordered_set<std::string> names;
-        explicit GeneratedBindings(const SourceSnapshot& snapshot) : snapshot(snapshot) {}
+        explicit GeneratedBindings(const SiteIndex& index) : index(index) {}
         void add(Luau::AstLocal* local)
         {
-            if (synthetic(snapshot, local->location) || snapshot.lowered.map.generatedName(local->name.value))
+            if (synthetic(index, local->location) || index.snapshot.lowered.map.generatedName(local->name.value))
                 names.insert(local->name.value);
         }
         bool visit(Luau::AstStatLocal* stat) override
@@ -800,11 +869,15 @@ int db_analysis_check(db_analysis* analysis, const char* name, size_t name_lengt
         for (const auto& name : modules)
             if (const auto* snapshot = analysis->files.snapshot(name))
                 errors += emitStructural(*snapshot, name, diagnostic, ctx);
+        std::unordered_map<const SourceSnapshot*, SiteIndex> indexes;
+        const auto indexOf = [&](const SourceSnapshot& snapshot) -> const SiteIndex& {
+            return indexes.try_emplace(&snapshot, snapshot).first->second;
+        };
         for (const Luau::TypeError& error : result.errors)
         {
             const auto* snapshot = analysis->files.snapshot(error.moduleName);
-            if (snapshot && (recoveryNoise(*snapshot, error.location) || probe(*snapshot, error.location) ||
-                (Luau::get_if<Luau::UnknownSymbol>(&error.data) && synthetic(*snapshot, error.location))))
+            if (snapshot && (recoveryNoise(indexOf(*snapshot), error.location) || probe(indexOf(*snapshot), error.location) ||
+                (Luau::get_if<Luau::UnknownSymbol>(&error.data) && synthetic(indexOf(*snapshot), error.location))))
                 continue;
             ++errors;
             std::string text;
@@ -824,7 +897,7 @@ int db_analysis_check(db_analysis* analysis, const char* name, size_t name_lengt
         }
         const auto* snapshot = analysis->files.snapshot(module);
         auto emitLint = [&](const Luau::LintWarning& warning, int kind) {
-            if (snapshot && synthetic(*snapshot, warning.location))
+            if (snapshot && synthetic(indexOf(*snapshot), warning.location))
                 return;
             // Lowering keeps line structure, so a pattern's generated reads share their source's
             // line. A same-line warning for a statement the lowering wrote is not the user's.
@@ -889,7 +962,8 @@ int db_analysis_autocomplete(
         const auto point = completionPoint(*snapshot, line, column);
         Luau::AutocompleteResult result = Luau::autocomplete(*analysis->frontend, module, Luau::Position(point.generated.line, point.generated.column),
             [](std::string, std::optional<const Luau::ExternType*>, std::optional<std::string>) { return std::nullopt; });
-        GeneratedBindings generated(*snapshot);
+        const SiteIndex index(*snapshot);
+        GeneratedBindings generated(index);
         sourceModule->root->visit(&generated);
         for (const auto& [entryName, entry] : result.entryMap)
         {
@@ -936,9 +1010,10 @@ int db_parse(const char* source, size_t length, db_diagnostic_fn diagnostic, voi
             result = Luau::Parser::parse(lowered.source.data(), lowered.source.size(), names, allocator, options);
         }
         int errors = emitStructural(snapshot, std::string(), diagnostic, ctx);
+        const SiteIndex index(snapshot);
         for (const Luau::ParseError& error : result.errors)
         {
-            if (recoveryNoise(snapshot, error.getLocation()))
+            if (recoveryNoise(index, error.getLocation()))
                 continue;
             const auto loc = error.getLocation();
             const std::string text = L3i::Surface::originalParseMessage(error.getMessage(), {loc.begin.line, loc.begin.column}, lowered.map);
