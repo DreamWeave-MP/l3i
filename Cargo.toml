@@ -184,6 +184,11 @@ harness = false
 required-features = ["tcp"]
 
 [[bench]]
+name = "dns_tls"
+harness = false
+required-features = ["dns", "tls"]
+
+[[bench]]
 name = "comprehension"
 harness = false
 

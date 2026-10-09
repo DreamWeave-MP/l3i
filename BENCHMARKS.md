@@ -8,6 +8,8 @@ All times are wall-clock means measured by [Criterion.rs](https://github.com/bhe
 >
 > `cargo bench --features tcp --bench tcp` measures `@dream/tcp` over loopback: throughput by transfer size against `std::net`, one bound call, connection setup, poller dispatch at 1, 32 and 256 connections, CPU while waiting, and memory per handle and watch; see [Built-in extensions](https://DreamWeave-MP.github.io/l3i/docs/builtin-extensions/#dream-tcp).
 >
+> `cargo bench --features dns,tls --bench dns_tls` measures `@dream/dns` (a literal, the worker pool's round trip, a poller woken by a completion, the OS resolver, saturation, idle CPU) and `@dream/tls` against plain TCP on the same loopback path (handshakes, a 16-byte round trip, throughput by write size, empty reads, configuration construction, retention); see [Built-in extensions](https://DreamWeave-MP.github.io/l3i/docs/builtin-extensions/#dream-tls).
+>
 > `cargo bench --features intl --bench intl` counts `@dream/intl`'s construction, warm calls, the binding boundary and handle retention; see [Built-in extensions](https://DreamWeave-MP.github.io/l3i/docs/builtin-extensions/#dream-intl).
 >
 > `cargo bench --bench comprehension` now measures dense/filtered projections, allocation-free count fusion, and callback comparisons on the real checkout. See [comprehension integration evidence](COMPREHENSIONS.md) for retired CPU instructions, deterministic executed VM counts, secondary timings, inference, and diagnostic limitations. Those results are separate from the generated 2026-09-28 tables below.
