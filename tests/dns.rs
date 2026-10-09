@@ -474,6 +474,9 @@ fn completions_deadlines_sockets_and_tokens_share_one_poller() {
             local literal = assert(dns.resolve('127.0.0.1', 80))
             assert(poller:watch(literal, 1, 'read'))
             assert(poller:wait(0) == 1 and poller:next() == 1)
+            -- Taken, it is never reported again, so the waits below really wait.
+            assert(literal:take())
+            assert(poller:wait(0) == 0)
             -- A deadline with no event at all: reported on time.
             local late = assert(dns.resolve('slow.test', 80, { timeoutMs = 80 }))
             assert(poller:watch(late, 2, 'read'))
@@ -495,16 +498,19 @@ fn completions_deadlines_sockets_and_tokens_share_one_poller() {
             local client = assert(tcp.connect(listener.localAddress))
             local ready = assert(dns.resolve('multi.test', 80))
             assert(poller:watch(ready, 4, 'read'))
-            local wanted = { [1] = true, [3] = true, [4] = true }
+            -- Bounded by wall time, not by a count of waits: the listener stays readable until
+            -- its connection is accepted, so it is unwatched once seen and the waits that
+            -- follow block until the worker answers, however slow the machine.
             local got = {}
-            for _ = 1, 50 do
+            local deadline = os.clock() + 5
+            while not (got[3] and got[4]) and os.clock() < deadline do
                 poller:wait(200)
                 while true do
                     local token = poller:next()
                     if not token then break end
+                    if token == 3 and not got[3] then poller:unwatch(3) end
                     got[token] = true
                 end
-                if got[3] and got[4] then break end
             end
             assert(got[3] and got[4], 'a socket and a request in one poller')
             -- Errors: write interest, a second poller, a taken request.
