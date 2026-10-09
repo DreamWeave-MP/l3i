@@ -368,3 +368,43 @@ fn hostile_source_is_scanned_in_linear_time() {
         assert!(large < small * 10, "{name}: {small:?} for 2000, {large:?} for 8000");
     }
 }
+
+/// A member callback may itself compile with members. The nested compile keeps its own and
+/// gives the outer compile back its members and the constant strings it already handed the
+/// compiler: the outer chunk folds every member, before and after the nested compile.
+#[test]
+fn member_callbacks_may_compile_with_members_of_their_own() {
+    use l3i::source::{CompileConstant, LibraryMembers};
+    use std::ffi::CString;
+    use std::rc::Rc;
+    struct Inner;
+    impl LibraryMembers for Inner {
+        fn member_constant(&self, _: &str, member: &str) -> Option<CompileConstant> {
+            Some(CompileConstant::String(format!("inner {member}")))
+        }
+    }
+    struct Outer;
+    impl LibraryMembers for Outer {
+        fn member_constant(&self, _: &str, member: &str) -> Option<CompileConstant> {
+            if member == "second" {
+                let options = CompileOptions {
+                    known_libraries: vec![CString::new("inner").unwrap()],
+                    library_members: Some(Rc::new(Inner)),
+                    ..CompileOptions::default()
+                };
+                let listing = disassemble("return inner.value", &options).unwrap();
+                assert!(listing.contains("inner value"), "{listing}");
+            }
+            Some(CompileConstant::String(format!("outer {member}")))
+        }
+    }
+    let options = CompileOptions {
+        known_libraries: vec![CString::new("lib").unwrap()],
+        library_members: Some(Rc::new(Outer)),
+        ..CompileOptions::default()
+    };
+    let listing = disassemble("return lib.first, lib.second, lib.third", &options).unwrap();
+    for folded in ["outer first", "outer second", "outer third"] {
+        assert!(listing.contains(folded), "{folded}: {listing}");
+    }
+}

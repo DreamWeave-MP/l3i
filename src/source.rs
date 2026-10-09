@@ -79,9 +79,9 @@ unsafe fn member_names<'a>(library: *const c_char, member: *const c_char) -> Opt
 unsafe extern "C" fn member_type_callback(library: *const c_char, member: *const c_char) -> c_int {
     let _guard = crate::raw::trampoline::AbortOnPanic::new();
     let Some((library, member)) = (unsafe { member_names(library, member) }) else { return -1 };
-    ACTIVE_MEMBERS.with(|active| {
-        active.borrow().as_ref().and_then(|members| members.member_type(library, member)).map_or(-1, c_int::from)
-    })
+    // Cloned out first: the host's answer may itself compile, which installs its own members.
+    let members = ACTIVE_MEMBERS.with(|active| active.borrow().clone());
+    members.and_then(|members| members.member_type(library, member)).map_or(-1, c_int::from)
 }
 
 unsafe extern "C" fn member_constant_callback(
@@ -91,8 +91,9 @@ unsafe extern "C" fn member_constant_callback(
 ) {
     let _guard = crate::raw::trampoline::AbortOnPanic::new();
     let Some((library, member)) = (unsafe { member_names(library, member) }) else { return };
-    let value = ACTIVE_MEMBERS
-        .with(|active| active.borrow().as_ref().and_then(|members| members.member_constant(library, member)));
+    // Cloned out first, as in `member_type_callback`.
+    let members = ACTIVE_MEMBERS.with(|active| active.borrow().clone());
+    let value = members.and_then(|members| members.member_constant(library, member));
     // SAFETY: `constant` is the compiler's slot for this query.
     unsafe {
         match value {
@@ -270,17 +271,19 @@ fn compile_native(source: &str, options: &CompileOptions, disassemble: bool) -> 
     };
 
     let mut size = 0usize;
+    // A member callback may compile too: each compile installs its own members over the ones
+    // it found and puts those back after, and frees only the constant strings it added, since
+    // an outer compile still points into its own.
+    let outer = with_members.then(|| ACTIVE_MEMBERS.with(|active| active.replace(options.library_members.clone())));
+    let strings = CONSTANT_STRINGS.with(|strings| strings.borrow().len());
+    let compile = if disassemble { ffi::l3i_luau_disassemble } else { ffi::l3i_luau_compile };
     // SAFETY: every pointer in `raw` outlives this call (the CStrings and the pointer arrays
     // are locals of this function). The C++ shim owns lowering, mapping and parsing and
     // catches all compiler exceptions, reporting failure in-band.
-    if with_members {
-        ACTIVE_MEMBERS.with(|active| active.borrow_mut().clone_from(&options.library_members));
-    }
-    let compile = if disassemble { ffi::l3i_luau_disassemble } else { ffi::l3i_luau_compile };
     let bytecode = unsafe { compile(source.as_ptr().cast(), source.len(), &mut raw, &mut size) };
-    if with_members {
-        ACTIVE_MEMBERS.with(|active| active.borrow_mut().take());
-        CONSTANT_STRINGS.with(|strings| strings.borrow_mut().clear());
+    if let Some(outer) = outer {
+        ACTIVE_MEMBERS.with(|active| *active.borrow_mut() = outer);
+        CONSTANT_STRINGS.with(|kept| kept.borrow_mut().truncate(strings));
     }
     if bytecode.is_null() {
         return Err(Error::runtime("Luau compiler returned no bytecode"));
