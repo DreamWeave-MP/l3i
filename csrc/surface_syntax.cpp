@@ -157,8 +157,13 @@ public:
             runEnd = at;
             while (runEnd < source.size() && nameChar(source[runEnd])) ++runEnd;
             while (begin < at && std::isdigit(static_cast<unsigned char>(source[begin]))) ++begin;
-            if (begin == at)
-                generatedLike.push_back(source.substr(at, runEnd - at));
+            if (begin != at) continue;
+            // A generated name is a stem, or a stem extended with '_': this spelling collides
+            // with itself and with each of its prefixes that stops before an '_'.
+            const std::string_view used = source.substr(at, runEnd - at);
+            spelled.insert(used);
+            for (size_t underscore = used.find('_', 11); underscore != std::string_view::npos; underscore = used.find('_', underscore + 1))
+                spelled.insert(used.substr(0, underscore));
         }
         operations = stem(source.size());
         for (size_t k = 0; k < document.locals.size(); ++k)
@@ -372,7 +377,9 @@ private:
     const Document& document;
     bool recovery;
     bool fuse;
-    std::vector<std::string_view> generatedLike; // Source names spelled like generated ones.
+    // The generated names a source spelling collides with; each '_' in the source adds at most
+    // one, so a stem is checked in constant time however many such spellings there are.
+    std::unordered_set<std::string_view> spelled;
     std::string operations;
 
     // Record patterns of declarations and parameters, lowered where the copy of the source
@@ -414,10 +421,7 @@ private:
                 name += "_" + std::to_string(salt);
             // Every generated name is the stem or extends it with '_': a source name spelled
             // either way would be shadowed by, or capture, a generated local, so it salts the stem.
-            const bool taken = std::any_of(generatedLike.begin(), generatedLike.end(), [&](std::string_view used) {
-                return used == name || (used.size() > name.size() && used.substr(0, name.size()) == name && used[name.size()] == '_');
-            });
-            if (!taken)
+            if (!spelled.count(name))
                 return name;
         }
     }

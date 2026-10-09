@@ -332,16 +332,20 @@ fn large_modules_compile_past_the_former_frontend_budgets() {
     compile(&sums, &options).unwrap();
 }
 
-/// Hostile source costs the surface frontend time in proportion to its size: unclosed and
-/// deeply nested brackets, overlapping signatures and pattern values are each scanned once,
-/// never once per candidate. Four times the input may take about four times as long; a scan
-/// that rescans would take sixteen.
+/// Hostile source costs the surface frontend and lowering time in proportion to its size:
+/// unclosed and deeply nested brackets, overlapping signatures and pattern values are each
+/// scanned once, never once per candidate, and spellings like generated names are checked in
+/// constant time per generated name. Four times the input may take about four times as long;
+/// a scan that rescans would take sixteen.
 #[test]
 fn hostile_source_is_scanned_in_linear_time() {
     use l3i::source::{LoweringMode, lowering_snapshot};
     use std::time::{Duration, Instant};
     type Case = (&'static str, fn(usize) -> String);
-    let cases: [Case; 8] = [
+    let cases: [Case; 9] = [
+        ("spellings like generated names", |n| {
+            format!("{}--{}", "local r = [for x in t => x]\n".repeat(n / 4), " __l3i_comp_x".repeat(2 * n))
+        }),
         ("closers before slices", |n| format!("x = {}", ")[1:2]".repeat(n))),
         ("unclosed indexes", |n| format!("x = {}", "a[ ".repeat(n))),
         ("nested indexes", |n| format!("{}1{}", "a[".repeat(n), "]".repeat(n))),
