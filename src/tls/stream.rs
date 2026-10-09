@@ -685,13 +685,10 @@ fn tcp_stream<'v>(what: &str, view: ValueView<'v>) -> Result<&'v crate::tcp::Str
         .ok_or_else(|| view.field_type_error(what, "a connected dream.tcp.Stream"))
 }
 
-/// The configuration `tls.client` uses when given none, built once per runtime.
-pub(crate) type DefaultClient = RefCell<Option<Arc<rustls::ClientConfig>>>;
-
 /// `tls.client(stream, { serverName, config?, alpn?, bufferLimit?, handshakeTimeoutMs? })`.
 pub(crate) fn client(
     call: &Call<'_>,
-    defaults: &DefaultClient,
+    context: &super::config::Context,
     stream: ValueView<'_>,
     options: ValueView<'_>,
 ) -> Result<Outcome<Owned<TlsStream>>> {
@@ -723,16 +720,10 @@ pub(crate) fn client(
     };
     let mut config = match config {
         Some(config) => config,
-        None => {
-            let mut cached = defaults.borrow_mut();
-            match cached.as_ref() {
-                Some(config) => Arc::clone(config),
-                None => match super::config::platform_default() {
-                    Ok(config) => Arc::clone(cached.insert(config)),
-                    Err(failure) => return Ok(Outcome::Failed(failure)),
-                },
-            }
-        }
+        None => match context.default_client() {
+            Ok(config) => config,
+            Err(failure) => return Ok(Outcome::Failed(failure)),
+        },
     };
     if let Some(alpn) = alpn {
         let mut changed = (*config).clone();

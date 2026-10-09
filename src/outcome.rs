@@ -70,7 +70,7 @@ pub(crate) fn network_kind_of(error: &std::io::Error) -> &'static str {
 
 /// An I/O call the OS refused: its message and the error's kind. A message that never varies
 /// is borrowed, so an expected refusal (a socket with nothing to read) allocates nothing.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct Failure {
     pub(crate) message: Cow<'static, str>,
     pub(crate) kind: &'static str,

@@ -243,7 +243,7 @@ pub fn runtime() -> Runtime {
     let plan = RuntimePlan::builder()
         .policy(policy)
         .extension(TcpExtension::default())
-        .extension(TlsExtension)
+        .extension(TlsExtension::default())
         .finalize()
         .unwrap();
     let runtime = Runtime::from_plan(&plan).unwrap();
@@ -268,14 +268,18 @@ pub fn runtime() -> Runtime {
 
 #[test]
 fn the_extension_requires_tcp_and_widens_its_watchable_handles() {
-    let plan = RuntimePlan::builder().extension(TcpExtension::default()).extension(TlsExtension).finalize().unwrap();
+    let plan = RuntimePlan::builder()
+        .extension(TcpExtension::default())
+        .extension(TlsExtension::default())
+        .finalize()
+        .unwrap();
     let definitions = plan.type_definitions();
     assert!(definitions.contains("declare extern type dream_tls_Stream with"), "{definitions}");
     assert!(
         definitions
             .contains("export type dream_tcp_Watchable = dream_tcp_Listener | dream_tcp_Stream | dream_tls_Stream")
     );
-    let error = RuntimePlan::builder().extension(TlsExtension).finalize().err().unwrap().to_string();
+    let error = RuntimePlan::builder().extension(TlsExtension::default()).finalize().err().unwrap().to_string();
     assert!(error.contains("dream.tcp"), "{error}");
 }
 
@@ -939,5 +943,38 @@ fn a_failed_session_closes_like_any_other() {
             server:close()
             ",
         )
+        .unwrap();
+}
+
+/// A runtime keeps at most its host's maximum of configurations alive, which need no
+/// capability. At the maximum a full collection runs first, so configurations a script dropped
+/// never count; past it the answer is `limitReached`.
+#[test]
+fn configurations_are_capped_per_runtime() {
+    let pki = pki();
+    let policy = RuntimePolicy::new().compat_global("@dream/tls", "tls");
+    let plan = RuntimePlan::builder()
+        .policy(policy)
+        .extension(TcpExtension::default())
+        .extension(TlsExtension::default().max_configs(3))
+        .finalize()
+        .unwrap();
+    Runtime::from_plan(&plan)
+        .unwrap()
+        .exec(&format!(
+            r"
+            local ca, chain, key = [==[{}]==], [==[{}]==], [==[{}]==]
+            local function client() return tls.clientConfig({{ roots = {{ ca }}, platform = false }}) end
+            for _ = 1, 50 do assert(client()) end
+            KEPT = {{ assert(client()), assert(client()), assert(client()) }}
+            local config, message, kind = client()
+            assert(config == nil and kind == 'limitReached' and string.find(message, '3 configurations', 1, true), message)
+            local server, problem, why = tls.serverConfig({{ certChain = chain, privateKey = key }})
+            assert(server == nil and why == 'limitReached', problem)
+            KEPT[1] = nil
+            assert(tls.serverConfig({{ certChain = chain, privateKey = key }}))
+            ",
+            pki.ca, pki.leaf.chain, pki.leaf.key
+        ))
         .unwrap();
 }

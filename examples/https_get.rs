@@ -22,7 +22,7 @@ fn main() -> l3i::Result<()> {
     let plan = RuntimePlan::builder()
         .policy(policy)
         .extension(TcpExtension::default())
-        .extension(TlsExtension)
+        .extension(TlsExtension::default())
         .extension(DnsExtension::default())
         .finalize()?;
     let runtime = Runtime::from_plan(&plan)?;

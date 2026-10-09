@@ -45,7 +45,6 @@ pub use stream::{
     TlsState, TlsStream,
 };
 
-use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::{Arc, OnceLock};
 
@@ -74,8 +73,33 @@ const TLS_KINDS: &str = "\"truncated\" | \"certificateUntrusted\" | \"certificat
     | \"invalidKey\" | \"keyMismatch\" | \"trustStoreUnavailable\"";
 
 /// The `dream.tls` extension. It requires `dream.tcp`.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct TlsExtension;
+#[derive(Clone, Copy, Debug)]
+pub struct TlsExtension {
+    max_configs: u32,
+}
+
+impl TlsExtension {
+    /// With at most 32 configurations alive per runtime.
+    pub fn new() -> TlsExtension {
+        TlsExtension { max_configs: 32 }
+    }
+
+    /// At most `max` client and server configurations alive per runtime at once (1 to 4096,
+    /// default 32); a collected one does not count. A configuration needs no capability and
+    /// holds its roots, chain and key in native memory the VM's memory limit does not see, a
+    /// few hundred KiB at the most.
+    #[must_use]
+    pub fn max_configs(mut self, max: u32) -> TlsExtension {
+        self.max_configs = max.clamp(1, 4096);
+        self
+    }
+}
+
+impl Default for TlsExtension {
+    fn default() -> Self {
+        TlsExtension::new()
+    }
+}
 
 impl Extension for TlsExtension {
     fn id(&self) -> &'static str {
@@ -113,13 +137,19 @@ impl Extension for TlsExtension {
     }
 
     fn install(&self, cx: &mut InstallContext<'_>) -> Result<()> {
-        let defaults: Rc<stream::DefaultClient> = Rc::new(RefCell::new(None));
-        cx.module(MODULE)?.function(
-            "client",
-            move |call: &Call<'_>, stream: ValueView<'_>, options: ValueView<'_>| {
-                stream::client(call, &defaults, stream, options)
-            },
-        )?;
+        let context = Rc::new(config::Context::new(self.max_configs));
+        let module = cx.module(MODULE)?;
+        let shared = Rc::clone(&context);
+        module.function("clientConfig", move |call: &Call<'_>, options: Option<ValueView<'_>>| {
+            config::client_config(call, &shared, options)
+        })?;
+        let shared = Rc::clone(&context);
+        module.function("serverConfig", move |call: &Call<'_>, options: ValueView<'_>| {
+            config::server_config(call, &shared, options)
+        })?;
+        module.function("client", move |call: &Call<'_>, stream: ValueView<'_>, options: ValueView<'_>| {
+            stream::client(call, &context, stream, options)
+        })?;
         Ok(())
     }
 }

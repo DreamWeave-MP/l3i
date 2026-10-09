@@ -66,7 +66,7 @@ fn server_runtime() -> Runtime {
     let plan = RuntimePlan::builder()
         .policy(policy)
         .extension(TcpExtension::default())
-        .extension(TlsExtension)
+        .extension(TlsExtension::default())
         .finalize()
         .unwrap();
     let runtime = Runtime::from_plan(&plan).unwrap();
@@ -96,7 +96,7 @@ fn client_runtime_with(table: HashMap<&'static str, Vec<&str>>) -> (Runtime, Arc
     let plan = RuntimePlan::builder()
         .policy(policy)
         .extension(TcpExtension::default())
-        .extension(TlsExtension)
+        .extension(TlsExtension::default())
         .extension(DnsExtension::new(resolver))
         .finalize()
         .unwrap();

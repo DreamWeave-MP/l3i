@@ -12,6 +12,8 @@
 //! large string costs the script almost nothing, so only bounds checked this early hold.
 
 use std::borrow::Cow;
+use std::cell::{Cell, RefCell};
+use std::rc::Rc;
 use std::sync::Arc;
 
 use rustls::client::WebPkiServerVerifier;
@@ -48,19 +50,92 @@ const MAX_ALPN: usize = 16;
 const MAX_VERSIONS: usize = 4;
 
 /// `dream.tls.ClientConfig`: trust and protocol settings for client sessions.
-pub struct ClientConfig(pub(crate) Arc<rustls::ClientConfig>);
+pub struct ClientConfig(
+    pub(crate) Arc<rustls::ClientConfig>,
+    #[allow(dead_code, reason = "held for its Drop, which gives the runtime's place back")] Counted,
+);
 
-// SAFETY: plain Rust data behind an `Arc`, no Lua references, no Lua API in `Drop`.
+// SAFETY: plain Rust data behind an `Arc` and a count, no Lua references, no Lua API in `Drop`.
 unsafe impl Userdata for ClientConfig {
     const NAME: &'static str = "dream.tls.ClientConfig";
 }
 
 /// `dream.tls.ServerConfig`: a certificate chain, its key and protocol settings.
-pub struct ServerConfig(pub(crate) Arc<rustls::ServerConfig>);
+pub struct ServerConfig(
+    pub(crate) Arc<rustls::ServerConfig>,
+    #[allow(dead_code, reason = "held for its Drop, which gives the runtime's place back")] Counted,
+);
 
 // SAFETY: as `ClientConfig`.
 unsafe impl Userdata for ServerConfig {
     const NAME: &'static str = "dream.tls.ServerConfig";
+}
+
+/// One place in a runtime's count of live configurations, given back when its configuration
+/// is collected.
+pub(crate) struct Counted(Rc<Cell<u32>>);
+
+impl Drop for Counted {
+    fn drop(&mut self) {
+        self.0.set(self.0.get() - 1);
+    }
+}
+
+/// A runtime's TLS state: its count of live configurations, and the platform's verifier and
+/// default client configuration, each built at most once (a failure included, so an unusable
+/// trust store is not read again on every call).
+pub(crate) struct Context {
+    configs: Rc<Cell<u32>>,
+    max_configs: u32,
+    verifier: RefCell<Option<std::result::Result<Arc<dyn ServerCertVerifier>, Failure>>>,
+    default_client: RefCell<Option<std::result::Result<Arc<rustls::ClientConfig>, Failure>>>,
+}
+
+impl Context {
+    pub(crate) fn new(max_configs: u32) -> Context {
+        Context {
+            configs: Rc::new(Cell::new(0)),
+            max_configs,
+            verifier: RefCell::new(None),
+            default_client: RefCell::new(None),
+        }
+    }
+
+    /// A place for one more configuration. Configurations have no `close`, so one a script
+    /// dropped waits for the collector: at the maximum a full collection runs first.
+    fn place(&self, call: &Call<'_>, what: &str) -> std::result::Result<Counted, Failure> {
+        if self.configs.get() >= self.max_configs {
+            call.collect_garbage();
+        }
+        if self.configs.get() >= self.max_configs {
+            return Err(failure(
+                format!(
+                    "{what}: {} configurations are alive in this runtime, its maximum; reuse one",
+                    self.max_configs
+                ),
+                "limitReached",
+            ));
+        }
+        self.configs.set(self.configs.get() + 1);
+        Ok(Counted(Rc::clone(&self.configs)))
+    }
+
+    /// The platform's verifier over its own store alone, read once per runtime.
+    fn platform(&self) -> std::result::Result<Arc<dyn ServerCertVerifier>, Failure> {
+        self.verifier.borrow_mut().get_or_insert_with(|| platform_verifier(Vec::new())).clone()
+    }
+
+    /// The configuration `tls.client` uses when given none: the platform verifier, TLS 1.2
+    /// and 1.3, no ALPN.
+    pub(crate) fn default_client(&self) -> std::result::Result<Arc<rustls::ClientConfig>, Failure> {
+        if let Some(made) = self.default_client.borrow().as_ref() {
+            return made.clone();
+        }
+        let made = self.platform().and_then(|verifier| {
+            client_over(verifier, &[&rustls::version::TLS13, &rustls::version::TLS12], Vec::new())
+        });
+        self.default_client.borrow_mut().insert(made).clone()
+    }
 }
 
 fn failure(message: String, kind: &'static str) -> Failure {
@@ -286,15 +361,17 @@ fn client_over(
     Ok(Arc::new(config))
 }
 
-/// The configuration `tls.client` uses when given none: the platform verifier, TLS 1.2 and 1.3,
-/// no ALPN.
-pub(crate) fn platform_default() -> std::result::Result<Arc<rustls::ClientConfig>, Failure> {
-    client_over(platform_verifier(Vec::new())?, &[&rustls::version::TLS13, &rustls::version::TLS12], Vec::new())
-}
-
 /// `tls.clientConfig{ roots?, platform?, alpn?, versions? }`.
-fn client_config(call: &Call<'_>, options: Option<ValueView<'_>>) -> Result<Outcome<Owned<ClientConfig>>> {
+pub(crate) fn client_config(
+    call: &Call<'_>,
+    context: &Context,
+    options: Option<ValueView<'_>>,
+) -> Result<Outcome<Owned<ClientConfig>>> {
     const WHAT: &str = "dream.tls.clientConfig";
+    let place = match context.place(call, WHAT) {
+        Ok(place) => place,
+        Err(failure) => return Ok(Outcome::Failed(failure)),
+    };
     let mut roots: Option<std::result::Result<Vec<CertificateDer<'static>>, Failure>> = None;
     let mut platform = true;
     let mut protocols = Vec::new();
@@ -319,7 +396,7 @@ fn client_config(call: &Call<'_>, options: Option<ValueView<'_>>) -> Result<Outc
         Err(failure) => return Ok(Outcome::Failed(failure)),
     };
     let verifier: Arc<dyn ServerCertVerifier> = if platform {
-        match platform_verifier(roots) {
+        match if roots.is_empty() { context.platform() } else { platform_verifier(roots) } {
             Ok(verifier) => verifier,
             Err(failure) => return Ok(Outcome::Failed(failure)),
         }
@@ -342,14 +419,22 @@ fn client_config(call: &Call<'_>, options: Option<ValueView<'_>>) -> Result<Outc
         }
     };
     Ok(match client_over(verifier, &versions, protocols) {
-        Ok(config) => Outcome::Done(Owned(ClientConfig(config))),
+        Ok(config) => Outcome::Done(Owned(ClientConfig(config, place))),
         Err(failure) => Outcome::Failed(failure),
     })
 }
 
 /// `tls.serverConfig{ certChain, privateKey, alpn?, versions? }`.
-fn server_config(call: &Call<'_>, options: ValueView<'_>) -> Result<Outcome<Owned<ServerConfig>>> {
+pub(crate) fn server_config(
+    call: &Call<'_>,
+    context: &Context,
+    options: ValueView<'_>,
+) -> Result<Outcome<Owned<ServerConfig>>> {
     const WHAT: &str = "dream.tls.serverConfig";
+    let place = match context.place(call, WHAT) {
+        Ok(place) => place,
+        Err(failure) => return Ok(Outcome::Failed(failure)),
+    };
     let mut chain = None;
     let mut key = None;
     let mut protocols = Vec::new();
@@ -391,7 +476,7 @@ fn server_config(call: &Call<'_>, options: ValueView<'_>) -> Result<Outcome<Owne
     };
     config.alpn_protocols = protocols;
     config.max_early_data_size = 0;
-    Ok(Outcome::Done(Owned(ServerConfig(Arc::new(config)))))
+    Ok(Outcome::Done(Owned(ServerConfig(Arc::new(config), place))))
 }
 
 pub(crate) fn describe(d: &mut ExtensionDescriptor) {
@@ -402,10 +487,10 @@ pub(crate) fn describe(d: &mut ExtensionDescriptor) {
         .tag(TagPolicy::Never)
         .doc("An immutable certificate chain, its key and protocol settings, shared by every session made from it.");
     d.module(super::MODULE)
-        .function("clientConfig", client_config)
+        .installed("clientConfig")
         .signature("(options: dream_tls_ClientConfigOptions?) -> (dream_tls_ClientConfig?, string?, dream_tls_ErrorKind?)")
-        .doc("Builds client settings once: the platform's trust store (platform = true, the default) with any extra roots, or only the given roots (platform = false). Loading the platform store may read files; do it once and reuse the config.")
-        .function("serverConfig", server_config)
+        .doc("Builds client settings once: the platform's trust store (platform = true, the default) with any extra roots, or only the given roots (platform = false). The platform store alone is loaded once per runtime; build a config once and reuse it. A runtime keeps at most the host's maximum of configurations alive (32 by default); past it, limitReached.")
+        .installed("serverConfig")
         .signature("(options: dream_tls_ServerConfigOptions) -> (dream_tls_ServerConfig?, string?, dream_tls_ErrorKind?)")
         .doc("Builds server settings once from a PEM or DER chain and its private key, checking that they match. New configs serve new sessions; sessions keep the config they started with.");
 }

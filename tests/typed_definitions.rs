@@ -51,7 +51,7 @@ fn plan() -> Rc<RuntimePlan> {
     #[cfg(feature = "dns")]
     let builder = builder.extension(l3i::dns::DnsExtension::default());
     #[cfg(feature = "tls")]
-    let builder = builder.extension(l3i::tls::TlsExtension);
+    let builder = builder.extension(l3i::tls::TlsExtension::default());
     builder.finalize().unwrap()
 }
 

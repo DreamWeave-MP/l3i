@@ -1570,6 +1570,14 @@ most 1 MiB each; a chain at most 16 certificates; a client configuration at most
 roots; ALPN at most 16 protocols. Server sessions resume through rustls's bounded in-memory
 cache (256 sessions per configuration); clients keep rustls's default resumption cache.
 
+Configurations, sessions and their buffers live in native memory, which the VM's memory limit
+does not see. A runtime keeps at most 32 configurations alive (the host's
+`TlsExtension::max_configs`): past that, `clientConfig` and `serverConfig` first run a full
+collection, since a configuration has no `close` and one the script dropped waits for the
+collector, and then answer `limitReached`. The platform's store alone is loaded once per
+runtime, for `tls.client` without a configuration and for every `clientConfig` without extra
+roots; an unusable store is not read again.
+
 ### Keys
 
 Certificates and keys are bytes the caller holds: this module never opens a file and has no

@@ -906,7 +906,9 @@ Module `l3i::tls`, feature `tls`; the Luau side is in
 {{ api_signature(value="pub struct TlsExtension") }}
 
 `id()` is `"dream.tls"`; it requires `dream.tcp` and widens `dream_tcp_Watchable` with
-`dream_tls_Stream`. `Clone`, `Copy`, `Debug`, `Default`.
+`dream_tls_Stream`. `new()` (also `Default`), `max_configs(u32)` (client and server
+configurations alive per runtime, 1 to 4096, default 32: a configuration needs no capability and
+holds native memory the VM's memory limit does not see). `Clone`, `Copy`, `Debug`.
 
 {{ api_signature(value="pub struct TlsStream") }}
 

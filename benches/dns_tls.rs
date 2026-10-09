@@ -377,7 +377,7 @@ fn tls(instructions: &Instructions) {
     let plan = RuntimePlan::builder()
         .policy(policy)
         .extension(TcpExtension::default())
-        .extension(TlsExtension)
+        .extension(TlsExtension::default())
         .finalize()
         .unwrap();
     let runtime = Runtime::from_plan(&plan).unwrap();
