@@ -7,6 +7,11 @@
 CXX = "clang++"
 CXX_x86_64-pc-windows-msvc = "clang-cl"
 CXX_aarch64-pc-windows-msvc = "clang-cl"
+# C dependencies (BLAKE3's SIMD kernels, ring under `tls`) go through the same compiler: the
+# system `cc` is GCC on many Linux hosts, and l3i is never built with GCC.
+CC = "clang"
+CC_x86_64-pc-windows-msvc = "clang-cl"
+CC_aarch64-pc-windows-msvc = "clang-cl"
 
 [target.x86_64-unknown-linux-gnu]
 rustflags = ["-Clinker-plugin-lto", "-Clinker=clang", "-Clink-arg=-fuse-ld=lld"]

@@ -8,6 +8,7 @@ else; `L3I_UNVERIFIED_TOOLCHAIN=1` turns the refusal into a warning. This page r
 | Side | Requirement | Where it is set |
 |---|---|---|
 | C++ (Luau, `csrc/`) | `clang++`; `build.rs` adds `-flto=thin` itself | `CXX=clang++` (`.cargo/config.toml` `[env]`) |
+| C in dependencies (BLAKE3's kernels, ring) | `clang`, never the system `cc`, which is GCC on many Linux hosts | `CC=clang` (`.cargo/config.toml` `[env]`) |
 | Rust | `-Clinker-plugin-lto -Clinker=clang -Clink-arg=-fuse-ld=lld`, all three checked by `build.rs` | `.cargo/config.toml` `[target.*] rustflags` |
 | Both | clang and rustc on the same LLVM major (`clang++ --version`, `rustc -vV`) | checked by `build.rs` |
 | MSVC targets | `clang-cl` compiles (`CXX_x86_64-pc-windows-msvc`), rustc links with `-Clinker=lld-link` | `.cargo/config.toml` |
