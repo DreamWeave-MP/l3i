@@ -280,8 +280,9 @@ impl Slots {
 pub(crate) struct Core {
     poll: RefCell<Option<mio::Poll>>,
     /// A second handle on the poll's registry, so a source closing while the poller waits (it
-    /// cannot: no Lua runs inside a wait) or after it closed never needs the poll itself.
-    registry: mio::Registry,
+    /// cannot: no Lua runs inside a wait) never needs the poll itself. It holds the OS poller
+    /// open too, so closing the poller drops it.
+    registry: RefCell<Option<mio::Registry>>,
     /// Made on the first socketless watch; mio allows one per poll.
     waker: RefCell<Option<Arc<mio::Waker>>>,
     events: RefCell<mio::Events>,
@@ -292,9 +293,12 @@ pub(crate) struct Core {
 }
 
 impl Core {
-    /// The OS registry sockets register with.
-    pub(crate) fn registry(&self) -> &mio::Registry {
-        &self.registry
+    /// Runs `body` with the OS registry sockets register with; a closed poller has none.
+    pub(crate) fn with_registry<R>(&self, body: impl FnOnce(&mio::Registry) -> io::Result<R>) -> io::Result<R> {
+        match &*self.registry.borrow() {
+            Some(registry) => body(registry),
+            None => Err(io::Error::new(io::ErrorKind::NotConnected, "the poller is closed")),
+        }
     }
 
     /// The waker a worker thread uses to end this poller's wait. It holds no reference to the
@@ -305,7 +309,7 @@ impl Core {
         if let Some(waker) = waker.as_ref() {
             return Ok(Arc::clone(waker));
         }
-        let made = Arc::new(mio::Waker::new(&self.registry, WAKE_TOKEN)?);
+        let made = Arc::new(self.with_registry(|registry| mio::Waker::new(registry, WAKE_TOKEN))?);
         *waker = Some(Arc::clone(&made));
         Ok(made)
     }
@@ -393,7 +397,7 @@ impl Poller {
         Ok(Poller {
             core: Rc::new(Core {
                 poll: RefCell::new(Some(poll)),
-                registry,
+                registry: RefCell::new(Some(registry)),
                 waker: RefCell::new(None),
                 events: RefCell::new(mio::Events::with_capacity(limits.events as usize)),
                 slots: RefCell::new(Slots::default()),
@@ -573,6 +577,7 @@ impl Poller {
     pub fn close(&self) {
         self.core.release_all();
         self.core.poll.borrow_mut().take();
+        self.core.registry.borrow_mut().take();
         self.core.waker.borrow_mut().take();
         *self.core.events.borrow_mut() = mio::Events::with_capacity(0);
         let mut slots = self.core.slots.borrow_mut();

@@ -108,7 +108,7 @@ impl Io {
             && let Some(core) = watch.poller.upgrade()
         {
             // A failure means the registration is gone already; closing the socket ends it anyway.
-            let _ = socket.deregister(core.registry());
+            let _ = core.with_registry(|registry| socket.deregister(registry));
             core.release(watch.slot);
         }
     }
@@ -120,12 +120,12 @@ impl Watchable for Io {
     }
 
     fn register(&self, core: &Core, token: mio::Token) -> io::Result<()> {
-        self.with_socket(|socket| socket.register(core.registry(), token))
+        self.with_socket(|socket| core.with_registry(|registry| socket.register(registry, token)))
             .unwrap_or_else(|| Err(io::Error::new(io::ErrorKind::NotConnected, "the handle is closed")))
     }
 
     fn deregister(&self, core: &Core) {
-        self.with_socket(|socket| socket.deregister(core.registry()));
+        self.with_socket(|socket| core.with_registry(|registry| socket.deregister(registry)));
     }
 }
 

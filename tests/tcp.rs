@@ -871,3 +871,27 @@ fn a_luau_http_server_answers_standard_clients() {
     }
     runtime.exec("assert(server.listener.streams == 0) server:close()").unwrap();
 }
+
+/// The descriptors this process holds open (Linux).
+#[cfg(target_os = "linux")]
+fn open_descriptors() -> usize {
+    std::fs::read_dir("/proc/self/fd").unwrap().count()
+}
+
+/// Closing a poller releases its OS poller at once, not when the collector finds the
+/// userdata: a script that keeps closed pollers holds no descriptors for them.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_closed_poller_holds_no_descriptor() {
+    let runtime = runtime(&[]);
+    let before = open_descriptors();
+    runtime
+        .exec(
+            "KEPT = {} \
+             for i = 1, 400 do local poller = tcp.poller() poller:close() KEPT[i] = poller end",
+        )
+        .unwrap();
+    let after = open_descriptors();
+    // Other tests open sockets meanwhile; 400 leaked pollers would hold 800 descriptors.
+    assert!(after < before + 200, "{before} descriptors before, {after} after");
+}
