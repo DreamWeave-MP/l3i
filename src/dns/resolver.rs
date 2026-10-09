@@ -55,6 +55,11 @@ pub trait Lookup: Send + Sync + 'static {
 
 /// The operating system's resolver: `getaddrinfo` with no address family and stream sockets,
 /// so the hosts file, NSS, search domains, VPN and split DNS all apply, in the OS's order.
+///
+/// On Unix it calls `getaddrinfo` directly, which reads the environment, outside the lock
+/// `std::env::set_var` takes: a host must not change the environment while a lookup may run,
+/// as with any thread calling `getaddrinfo` (std's own lookups take that lock, but lose the
+/// distinction between a name that does not exist and a resolver that failed).
 #[derive(Clone, Copy, Debug, Default)]
 pub struct SystemLookup;
 
