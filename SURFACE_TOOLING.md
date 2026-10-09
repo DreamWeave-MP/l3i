@@ -114,13 +114,14 @@ without exposing generated functions; strict compilation rejects them.
 Recovery is deterministic and bounded, not a claim that every severely damaged
 file retains every subtree. Limits for actual surface parsing are:
 
-- 262,144 retained tokens starting at the first genuine comprehension opener;
 - nesting below 128;
-- expression-prefix validation: 4,096 calls and 8,388,608 cumulative bytes.
+- expression-prefix validation: 8,388,608 cumulative bytes plus eight times the
+  source size, and 4,096 calls plus one per source byte.
 
-Comments and ordinary tokens before the first opener do not consume that token
-budget. Ordinary Luau and inert string/comment sentinels do not gain an 8 MiB size
-limit. Luau's own recursion limits also apply. Fatal recovery still returns the
+The prefix budget grows with the source, so work proportional to the source always
+fits it and a module is never refused for its size; only candidates nested so that
+the same text is validated over and over run out. Luau's own recursion limits also
+apply. Fatal recovery still returns the
 required `StatBlock` root with an error statement, but can lose detailed subtrees.
 CST/round-trip formatting and incremental parsing are not supplied by this pass.
 

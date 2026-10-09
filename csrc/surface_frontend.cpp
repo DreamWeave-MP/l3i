@@ -11,17 +11,25 @@ namespace L3i::Surface
 namespace
 {
 using T = Luau::Lexeme;
-// Per-document budgets prevent repeated failed prefixes from quadratic work.
-constexpr size_t maxTokens = 262144, maxDepth = 128;
+constexpr size_t maxDepth = 128;
 // How far back from `[for` an `into(...)` destination may reach, in tokens: hostile input with
 // unmatched parentheses before many openers must not make every opener rescan the file.
 constexpr size_t maxSinkTokens = 4096;
-constexpr size_t maxPrefixBytes = 8388608, maxPrefixCalls = 4096;
 struct Token { T::Type type; Range range; };
 class Frontend
 {
 public:
-    explicit Frontend(std::string_view source): source(source) {}
+    // Prefix validation parses candidate text. Candidates that do not nest cost no more than
+    // the source between them, so the byte budget is a fixed amount plus a multiple of the
+    // source: it stops only nested candidates that parse the same text over and over, never a
+    // large module. Every candidate is a distinct bracket or clause, so the call budget the
+    // size of the source does not bind on such a module either.
+    explicit Frontend(std::string_view source)
+        : source(source)
+        , maxPrefixBytes(8388608 + 8 * source.size())
+        , maxPrefixCalls(4096 + source.size())
+    {
+    }
     Document run()
     {
         // Record patterns first: prefix validation of comprehension clauses masks them. A source
@@ -142,7 +150,6 @@ private:
             return;
         }
         bool surfaceSeen = false;
-        size_t surfaceStart = 0;
         // Code tokens and comments merged back into source order.
         const std::vector<Token>& all = codeTokens();
         for (size_t next = 0, comment = 0; next < all.size();)
@@ -152,21 +159,16 @@ private:
             if (current.type == T::Comment || current.type == T::BlockComment || current.type == T::BrokenComment)
             {
                 document.comments.push_back(current.range);
-                // Trivia doesn't interrupt [ ... for detection or consume the
-                // extension token budget, before or after the first opener.
+                // Trivia doesn't interrupt [ ... for detection.
                 continue;
             }
             // Every code token is retained so a consumer prefix of any length (`into(...)`)
-            // can be read back from the first opener. The extension token budget is charged
-            // from that opener; plain source before it is unbudgeted.
+            // can be read back from the first opener.
             tokens.push_back(current);
             if (!surfaceSeen)
             {
                 if (tokens.size() >= 2 && tokens[tokens.size() - 2].type == '[' && current.type == T::ReservedFor)
-                {
                     surfaceSeen = true;
-                    surfaceStart = tokens.size() - 2;
-                }
                 else
                 {
                     if (current.type == T::Eof)
@@ -178,12 +180,6 @@ private:
                 }
             }
             if (current.type == T::Eof) break;
-            if (tokens.size() - surfaceStart >= maxTokens)
-            {
-                error(tokens.back().range, "surface token limit exceeded (262144 tokens from first comprehension)");
-                tokens.push_back({T::Eof, {tokens.back().range.end, tokens.back().range.end}});
-                break;
-            }
         }
         prepareConditionalShapes();
         size_t i = 0;
@@ -227,6 +223,7 @@ private:
     std::vector<Range> loopPatterns;
 
     std::vector<unsigned char> conditionalShapes;
+    const size_t maxPrefixBytes, maxPrefixCalls;
     size_t prefixBytes = 0, prefixCalls = 0;
     bool stopped = false;
     T::Type type(size_t i) const { return tokens[std::min(i, tokens.size() - 1)].type; }
@@ -307,8 +304,7 @@ private:
             // e.g. values[obj:method()]. Stock syntax wins over JSL slicing.
             if (++prefixCalls > maxPrefixCalls || slice.range.end - slice.range.begin > maxPrefixBytes - prefixBytes)
             {
-                error({slice.range.end, slice.range.end},
-                    "surface expression prefix work limit exceeded (4096 calls / 8388608 bytes)");
+                error({slice.range.end, slice.range.end}, prefixLimitMessage());
                 return;
             }
             prefixBytes += slice.range.end - slice.range.begin;
@@ -957,12 +953,18 @@ private:
         }
     }
 
+    std::string prefixLimitMessage() const
+    {
+        return "surface expression prefix work limit exceeded (" + std::to_string(maxPrefixCalls) + " calls / " +
+            std::to_string(maxPrefixBytes) + " bytes)";
+    }
+
     bool validPrefix(Range r)
     {
         if (r.empty()) return false;
         if (++prefixCalls > maxPrefixCalls || r.end - r.begin > maxPrefixBytes - prefixBytes)
         {
-            error({r.end, r.end}, "surface expression prefix work limit exceeded (4096 calls / 8388608 bytes)");
+            error({r.end, r.end}, prefixLimitMessage());
             stopped = true;
             return false;
         }

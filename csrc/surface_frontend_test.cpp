@@ -241,12 +241,11 @@ int main()
     }
     {
         std::string s;
-        for (size_t i = 0; i < 4097; ++i) s += "values[first:last];";
+        // Slices that do not nest validate in work proportional to the source: well past the
+        // former fixed cap of 4096 every one is recognized.
+        for (size_t i = 0; i < 5000; ++i) s += "values[first:last];";
         const auto d = parseSurface(s);
-        assert(d.slices.size() == 4096 && !d.errors.empty());
-        bool found = false;
-        for (const auto& e : d.errors) found |= e.message.find("work limit") != std::string::npos;
-        assert(found);
+        assert(d.slices.size() == 5000 && d.errors.empty());
     }
     {
         const std::string s = "-- [for fake in xs => fake]\r\nlocal a = '[for fake]'\nlocal b = [==[[for fake]]==]\n"
@@ -530,16 +529,17 @@ int main()
         std::string s = "[for x in " + std::string(140, '(') + "xs" + std::string(140, ')') + " => x]";
         assert(!parseSurface(s).errors.empty());
         assert(parseSurface(std::string(8388609, ' ')).errors.empty());
+        // A large module is not refused for its size: more than 262144 tokens after the first
+        // opener (the former cap) scan like any others.
         std::string manyTokens = "[for x in xs";
         for (size_t i = 0; i < 131073; ++i) manyTokens += " + xs";
         manyTokens += " => x]";
-        const auto tokenLimited = parseSurface(manyTokens);
-        assert(!tokenLimited.errors.empty());
-        assert(tokenLimited.errors[0].message.find("token limit") != std::string::npos);
+        const auto many = parseSurface(manyTokens);
+        assert(many.errors.empty() && many.comprehensions.size() == 1 && many.comprehensions[0].complete);
     }
     {
         // Both exceed the former blanket byte cap. Literal sentinels must not
-        // activate the feature budget, even with more than 262144 real tokens.
+        // activate the feature, even with more than 262144 real tokens.
         const std::string bigString = "local text = '[for " + std::string(8388609, 'x') + "'";
         const auto stringControl = parseSurface(bigString);
         assert(stringControl.errors.empty() && stringControl.comprehensions.empty());
@@ -551,13 +551,21 @@ int main()
         // Ordinary tokens BEFORE the first genuine opener don't consume its
         // token budget, either. This also exercises offsets beyond 8 MiB.
         complete(bigBody + "local result = [for x in xs => x]");
-        // A genuine opener still enforces the byte budget for prefix work.
+        // Prefix work proportional to the source fits its budget, however large the source.
         const std::string largeFeature = "[for x in '" + std::string(8388609, 'x') + "' if x => x]";
-        const auto limited = parseSurface(largeFeature);
-        assert(limited.comprehensions.size() == 1 && !limited.comprehensions[0].complete);
-        bool found = false;
-        for (const auto& e : limited.errors) found |= e.message.find("work limit") != std::string::npos;
-        assert(found);
+        const auto large = parseSurface(largeFeature);
+        assert(large.errors.empty() && large.comprehensions.size() == 1 && large.comprehensions[0].complete);
+        // Valid stock Luau never runs out of budget: each method call in an index is a slice
+        // candidate validated once, and well past the former fixed cap of 4096 they all stay
+        // stock syntax, as do as many filtered comprehensions.
+        std::string calls = "local x\n";
+        for (size_t i = 0; i < 5000; ++i) calls += "x = t[o:m()]\n";
+        const auto stock = parseSurface(calls);
+        assert(stock.errors.empty() && stock.slices.empty());
+        std::string filtered;
+        for (size_t i = 0; i < 5000; ++i) filtered += "local s = sum[for x in t if x > 1 => x * 2]\n";
+        const auto sums = parseSurface(filtered);
+        assert(sums.errors.empty() && sums.comprehensions.size() == 5000);
     }
     {
         std::string s = "[for x in function() ";

@@ -308,3 +308,26 @@ fn sinks_compile_to_direct_destination_stores() {
     );
     assert!(!listing.contains("FORGPREP") && !listing.contains("NEWCLOSURE"), "{listing}");
 }
+
+/// Size alone never refuses a module. Past the frontend's former fixed budgets (4096
+/// validated candidates, 262144 tokens after the first comprehension), method calls in
+/// indexes stay stock Luau and comprehensions keep lowering.
+#[test]
+fn large_modules_compile_past_the_former_frontend_budgets() {
+    let options = CompileOptions::default();
+    let mut calls = String::from("local t, o = {}, { m = function() return 1 end }\nlocal x\n");
+    for _ in 0..5000 {
+        calls.push_str("x = t[o:m()]\n");
+    }
+    compile(&calls, &options).unwrap();
+    let mut tokens = String::from("local xs = {1}\nlocal first = [for x in xs => x]\nlocal y = 0\n");
+    for _ in 0..70_000 {
+        tokens.push_str("y = y + 1\n");
+    }
+    compile(&tokens, &options).unwrap();
+    let mut sums = String::from("local t, s = {1, 2, 3}, 0\n");
+    for _ in 0..5000 {
+        sums.push_str("s = sum[for x in t if x > 1 => x * 2]\n");
+    }
+    compile(&sums, &options).unwrap();
+}
