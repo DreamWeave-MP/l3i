@@ -947,3 +947,48 @@ fn every_record_pattern_prefix_recovers_deterministically() {
     "
     ));
 }
+
+/// A local shadowed many times is one long `shadow` chain. Building its tables, and mapping a
+/// lowered tree's locations back to the source, walk the chain without recursing, so a
+/// script of repeated declarations cannot overflow the native stack.
+#[test]
+fn long_shadow_chains_do_not_recurse() {
+    // The declarations sit on a line the lowering leaves alone (its prelude goes on the
+    // first), so the remapper skips them; the comment inside the comprehension shifts every
+    // later line, so the last declaration is remapped and reaches the chain through its shadow.
+    // An annotation that names the previous declaration (`typeof(x)`) reaches the chain a
+    // second way.
+    use l3i::source::LoadScope;
+    let runtime = runtime();
+    for declaration in ["local x = 1 ", "local x: typeof(x) = 1 "] {
+        let surface = format!(
+            "local t = {{}}\n{}\nlocal r = [for v in t -- c\n => v]\nlocal x = 2\n",
+            declaration.repeat(200_000)
+        );
+        runtime
+            .exec(&format!(
+                r"
+                local plain = string.rep('{declaration}', 200000)
+                local surface = 'local t = {{}}\n' .. plain .. '\nlocal r = [for v in t -- c\n => v]\nlocal x = 2\n'
+                local function depth(statement)
+                    local count, last = 0, statement.vars[1]
+                    while last.shadow do last, count = last.shadow, count + 1 end
+                    return count
+                end
+                for _, dialect in {{ 'luau', 'l3i' }} do
+                    local result = luau.parse(plain, {{ dialect = dialect }})
+                    assert(#result.errors == 0, result.errors[1] and result.errors[1].message)
+                    assert(depth(result.root.body[200000]) == 199999)
+                end
+                local result = luau.parse(surface)
+                assert(#result.errors == 0, result.errors[1] and result.errors[1].message)
+                local last = result.root.body[#result.root.body]
+                assert(depth(last) == 200000 and last.line == 5, last.line)
+                "
+            ))
+            .unwrap();
+        // Compiling remaps the same way (the constant locals need no registers).
+        let stack = runtime.stack();
+        stack.load_source("=shadows", &surface, &runtime.compile_options()).unwrap();
+    }
+}

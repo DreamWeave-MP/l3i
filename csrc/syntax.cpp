@@ -858,31 +858,48 @@ public:
         popInto(key);
     }
 
+    void pushBuiltLocal(AstLocal* local)
+    {
+        setobj2s(L, L->top, luaH_getnum(locals, localSlots.at(local)));
+        L->top++;
+    }
+
     // The one table of a local, shared by its declaration and every use.
     void pushLocal(AstLocal* local)
     {
-        auto [it, inserted] = localSlots.try_emplace(local, int(localSlots.size() + 1));
-        if (!inserted)
+        // A shadow chain is as long as a name has redeclarations, so it is walked, not
+        // recursed: every local on it not yet built gets its registered table first, then its
+        // annotation and shadow, which can then only refer to tables that exist.
+        const size_t first = pendingLocals.size();
+        for (AstLocal* at = local; at != nullptr && localSlots.find(at) == localSlots.end(); at = at->shadow)
         {
-            setobj2s(L, L->top, luaH_getnum(locals, it->second));
-            L->top++;
-            return;
+            const int slot = int(localSlots.size() + 1);
+            localSlots.emplace(at, slot);
+            pendingLocals.push_back(at);
+            open(KLocal, at->location, 6);
+            setName(name, at->name);
+            setBool(isConst, at->isConst);
+            setNumber(functionDepth, double(at->functionDepth));
+            setNumber(loopDepth, double(at->loopDepth));
+            store(locals, luaH_setnum(L, locals, slot), L->top - 1);
+            L->top--;
         }
-        int slot = it->second;
-        open(KLocal, local->location, 6);
-        setName(name, local->name);
-        setBool(isConst, local->isConst);
-        setNumber(functionDepth, double(local->functionDepth));
-        setNumber(loopDepth, double(local->loopDepth));
-        // Registered before the annotation and shadow are built: neither can reach this local,
-        // but the table must exist before anything refers to it.
-        store(locals, luaH_setnum(L, locals, slot), L->top - 1);
-        setNode(annotation, local->annotation);
-        if (local->shadow != nullptr)
+        // An annotation can reach another chain; that walk appends to pendingLocals and
+        // finishes its own entries before returning, so this one only sees its own.
+        for (size_t i = first; i < pendingLocals.size(); ++i)
         {
-            pushLocal(local->shadow);
-            popInto(shadow);
+            AstLocal* at = pendingLocals[i];
+            pushBuiltLocal(at);
+            setNode(annotation, at->annotation);
+            if (at->shadow != nullptr)
+            {
+                pushBuiltLocal(at->shadow);
+                popInto(shadow);
+            }
+            L->top--;
         }
+        pendingLocals.resize(first);
+        pushBuiltLocal(local);
     }
 
     void setLocal(Str key, AstLocal* local)
@@ -2053,6 +2070,7 @@ public:
     LuaTable* locals = nullptr;
     std::vector<uint32_t> lineStarts;
     std::unordered_map<AstLocal*, int> localSlots;
+    std::vector<AstLocal*> pendingLocals;
 
     // Field names that collide with the builder's own methods.
     static constexpr Str typeList_ = Str::typeList;

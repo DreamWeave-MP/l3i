@@ -234,12 +234,18 @@ private:
 
     void remapLocal(Luau::AstLocal* local)
     {
-        if (!local || !locals.try_insert(local))
-            return;
-        remap(local->location);
-        visitNode(local->annotation);
-        // Shadow links can reference locals outside the immediate subtree.
-        remapLocal(local->shadow);
+        // Shadow links can reference locals outside the immediate subtree, and a chain is as
+        // long as a name has redeclarations, so it is walked, not recursed. Annotations come
+        // after the whole chain is marked: `local x: typeof(x)` reaches the previous x through
+        // its annotation, which must find it done rather than start a nested walk.
+        Luau::AstLocal* const first = local;
+        while (local && locals.try_insert(local))
+        {
+            remap(local->location);
+            local = local->shadow;
+        }
+        for (Luau::AstLocal* at = first; at != local; at = at->shadow)
+            visitNode(at->annotation);
     }
 
     void remapIndexer(Luau::AstTableIndexer* indexer)
