@@ -32,6 +32,11 @@
 
 mod request;
 mod resolver;
+#[cfg(feature = "tcp")]
+mod watch;
+
+#[cfg(feature = "tcp")]
+pub(crate) use watch::watch_target;
 
 pub use request::{MAX_WAIT_MS, Request};
 pub use resolver::{Lookup, LookupError, Resolver, ResolverConfig, SystemLookup};
@@ -251,6 +256,9 @@ impl Extension for DnsExtension {
         d.type_alias("dream_dns_Status", STATUS_TYPE);
         d.type_alias("dream_dns_ResolveOptions", OPTIONS_TYPE);
         d.optional_capability(RESOLVE_CAPABILITY);
+        // With @dream/tcp in the plan, its pollers watch requests too.
+        #[cfg(feature = "tcp")]
+        d.optional(crate::tcp::EXTENSION_ID).widen_type_alias("dream_tcp_Watchable", "dream_dns_Request");
         request::describe_request(d);
         d.module(MODULE)
             .doc("Hostname resolution through the OS resolver on bounded worker threads; never blocks the script.")

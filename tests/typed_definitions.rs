@@ -225,6 +225,21 @@ const DNS_SCRIPT: (&str, &str) = (
      print(done, status, first, why, failed, kind, request.host, request.asciiHost, request.port, request.closed, dns.MAX_TIMEOUT_MS, dns.MAX_ADDRESSES)\n",
 );
 
+#[cfg(all(feature = "dns", feature = "tcp"))]
+const DNS_POLL_SCRIPT: (&str, &str) = (
+    "dns_poll_script",
+    "--!strict\n\
+     local dns = require('@dream/dns')\n\
+     local tcp = require('@dream/tcp')\n\
+     local poller = tcp.poller()\n\
+     local request = dns.resolve('example.com', 443)\n\
+     if not request then return end\n\
+     local watched: boolean? = poller:watch(request, 1, 'read')\n\
+     poller:wait(100)\n\
+     local token: number?, readable: boolean = poller:next()\n\
+     print(watched, token, readable)\n",
+);
+
 /// A strict walker over the tree: refinement on `kind` narrows each union to its node type.
 #[cfg(feature = "syntax")]
 const SYNTAX_SCRIPT: (&str, &str) = (
@@ -357,6 +372,8 @@ fn the_generated_definitions_type_check_and_typed_scripts_pass_strict_mode() {
     all_scripts.push(TCP_SCRIPT);
     #[cfg(feature = "dns")]
     all_scripts.push(DNS_SCRIPT);
+    #[cfg(all(feature = "dns", feature = "tcp"))]
+    all_scripts.push(DNS_POLL_SCRIPT);
     let scripts = plan.analysis_sources(Scripts(all_scripts.iter().copied().collect()));
     let options = AnalysisOptions {
         definitions: vec![Definitions { name: "dream.d.luau".to_owned(), source: definitions.clone() }],

@@ -299,7 +299,7 @@ impl Core {
 
     /// The waker a worker thread uses to end this poller's wait. It holds no reference to the
     /// poller's own state, which never leaves its thread.
-    #[cfg_attr(not(test), allow(dead_code, reason = "socketless sources (dream.dns) take it"))]
+    #[cfg_attr(not(any(test, feature = "dns")), allow(dead_code, reason = "socketless sources (dream.dns) take it"))]
     pub(crate) fn waker(&self) -> io::Result<Arc<mio::Waker>> {
         let mut waker = self.waker.borrow_mut();
         if let Some(waker) = waker.as_ref() {
@@ -371,6 +371,10 @@ fn target(handle: ValueView<'_>) -> Result<Target> {
     }
     if let Some(stream) = crate::userdata::receiver::<Stream>(handle) {
         return stream.target();
+    }
+    #[cfg(feature = "dns")]
+    if let Some(target) = crate::dns::watch_target(handle) {
+        return target;
     }
     Err(handle.field_type_error(
         "dream.tcp.Poller.watch",

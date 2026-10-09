@@ -35,6 +35,9 @@ pub struct Request {
     pub(crate) taken: Rc<Cell<bool>>,
     /// The runtime's count of live requests, released once.
     active: RefCell<Option<Rc<Cell<u32>>>>,
+    /// The request as a `@dream/tcp` poller source.
+    #[cfg(feature = "tcp")]
+    pub(crate) source: Rc<super::watch::Source>,
 }
 
 // SAFETY: plain Rust state with no Lua references; dropping it cancels a lookup and releases a
@@ -56,6 +59,8 @@ impl Request {
     ) -> Request {
         active.set(active.get() + 1);
         Request {
+            #[cfg(feature = "tcp")]
+            source: super::watch::Source::new(&shared),
             shared,
             pool,
             host,
@@ -171,6 +176,8 @@ impl Request {
         self.shared.lock().phase = Phase::Closed;
         self.taken.set(true);
         self.release();
+        #[cfg(feature = "tcp")]
+        self.source.detach();
     }
 
     fn is_closed(&self) -> bool {

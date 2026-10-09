@@ -330,3 +330,146 @@ fn a_wait_never_outlasts_the_execution_time_limit() {
     assert!(started.elapsed() < Duration::from_millis(900), "{:?}", started.elapsed());
     mock.open();
 }
+
+/// A runtime with both `@dream/dns` and `@dream/tcp`, over a gated mock resolver.
+#[cfg(feature = "tcp")]
+fn with_poller() -> (Runtime, Arc<Mock>) {
+    let mock = mock();
+    let resolver = Resolver::new(ResolverConfig { workers: 2, queue: 8 }, Arc::clone(&mock) as Arc<dyn Lookup>);
+    let policy = RuntimePolicy::new()
+        .compat_global("@dream/dns", "dns")
+        .compat_global("@dream/tcp", "tcp")
+        .capability(RESOLVE_CAPABILITY)
+        .capability(l3i::tcp::LISTEN_CAPABILITY)
+        .capability(l3i::tcp::CONNECT_CAPABILITY);
+    let plan = RuntimePlan::builder()
+        .policy(policy)
+        .extension(l3i::tcp::TcpExtension)
+        .extension(DnsExtension::new(resolver))
+        .finalize()
+        .unwrap();
+    assert!(
+        plan.type_definitions()
+            .contains("export type dream_tcp_Watchable = dream_tcp_Listener | dream_tcp_Stream | dream_dns_Request")
+    );
+    (Runtime::from_plan(&plan).unwrap(), mock)
+}
+
+/// A completion on a worker ends a poller's wait at once, with no socket involved.
+#[cfg(feature = "tcp")]
+#[test]
+fn a_completion_wakes_a_waiting_poller_promptly() {
+    let (runtime, mock) = with_poller();
+    runtime
+        .exec("poller = tcp.poller({ maxWaitMs = 5000 }) request = assert(dns.resolve('slow.test', 443)) assert(poller:watch(request, 7, 'read'))")
+        .unwrap();
+    let opener = {
+        let mock = Arc::clone(&mock);
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(80));
+            mock.open();
+        })
+    };
+    let started = Instant::now();
+    runtime
+        .exec(
+            r"
+            assert(poller:wait(0) == 0, 'nothing is ready before the lookup returns')
+            assert(poller:wait(4000) == 1)
+            local token, readable, writable, closed = poller:next()
+            assert(token == 7 and readable and not writable and not closed)
+            assert(poller:next() == nil)
+            -- Level-triggered: still ready until taken, then never again.
+            assert(poller:wait(0) == 1 and poller:next() == 7)
+            local list = assert(request:take())
+            assert(list[1] == '192.0.2.9:443')
+            assert(poller:wait(0) == 0)
+            poller:unwatch(7)
+            ",
+        )
+        .unwrap();
+    let woke = started.elapsed();
+    opener.join().unwrap();
+    assert!(woke >= Duration::from_millis(60) && woke < Duration::from_millis(1500), "{woke:?}");
+}
+
+#[cfg(feature = "tcp")]
+#[test]
+fn completions_deadlines_sockets_and_tokens_share_one_poller() {
+    let (runtime, mock) = with_poller();
+    runtime
+        .exec(
+            r"
+            local poller = tcp.poller()
+            -- Completed before it is watched: reported by the first wait.
+            local literal = assert(dns.resolve('127.0.0.1', 80))
+            assert(poller:watch(literal, 1, 'read'))
+            assert(poller:wait(0) == 1 and poller:next() == 1)
+            -- A deadline with no event at all: reported on time.
+            local late = assert(dns.resolve('slow.test', 80, { timeoutMs = 80 }))
+            assert(poller:watch(late, 2, 'read'))
+            local started = os.clock()
+            local seen = {}
+            while not seen[2] do
+                poller:wait(1000)
+                while true do
+                    local token = poller:next()
+                    if not token then break end
+                    seen[token] = true
+                end
+            end
+            local none, message, kind = late:take()
+            assert(none == nil and kind == 'timedOut', message)
+            -- Requests and sockets in the same wait.
+            local listener = assert(tcp.listen('127.0.0.1:0'))
+            assert(poller:watch(listener, 3, 'read'))
+            local client = assert(tcp.connect(listener.localAddress))
+            local ready = assert(dns.resolve('multi.test', 80))
+            assert(poller:watch(ready, 4, 'read'))
+            local wanted = { [1] = true, [3] = true, [4] = true }
+            local got = {}
+            for _ = 1, 50 do
+                poller:wait(200)
+                while true do
+                    local token = poller:next()
+                    if not token then break end
+                    got[token] = true
+                end
+                if got[3] and got[4] then break end
+            end
+            assert(got[3] and got[4], 'a socket and a request in one poller')
+            -- Errors: write interest, a second poller, a taken request.
+            for _, case in {
+                { function() poller:modify(4, 'write') end, 'only ever readable' },
+                { function() tcp.poller():watch(ready, 1, 'read') end, 'already watched' },
+                { function() poller:watch(late, 9, 'read') end, 'nothing to wait for' },
+            } do
+                local ok, err = pcall(case[1])
+                assert(not ok and string.find(err, case[2], 1, true), err)
+            end
+            -- A queued event of an unwatched request never reaches the token's next owner.
+            assert(poller:wait(0) >= 1)
+            poller:unwatch(4)
+            local pending = assert(dns.resolve('slow.test', 81))
+            assert(poller:watch(pending, 4, 'read'))
+            while true do
+                local token = poller:next()
+                if not token then break end
+                assert(token ~= 4, 'the old watch under token 4 leaked into the new one')
+            end
+            -- Closing a watched request releases the watch.
+            local watching = poller.watching
+            pending:close()
+            assert(poller.watching == watching - 1)
+            client:close() listener:close() poller:close()
+            ",
+        )
+        .unwrap();
+    // Collecting a watched request releases its watch too.
+    runtime
+        .exec("collected = tcp.poller() local r = assert(dns.resolve('slow.test', 82)) assert(collected:watch(r, 1, 'read'))")
+        .unwrap();
+    runtime.collect_garbage();
+    runtime.exec("assert(collected.watching == 0, collected.watching)").unwrap();
+    mock.open();
+}
