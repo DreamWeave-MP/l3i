@@ -282,6 +282,7 @@ function cases.platformConfig(n) for i = 1, n do assert(tls.clientConfig()) end 
 function cases.serverConfig(n) for i = 1, n do assert(tls.serverConfig({ certChain = CHAIN, privateKey = KEY })) end end
 function cases.keepTls(n) for i = 1, n do local c, s = tlsPair() kept[i] = { c, s } end end
 function cases.keepTcp(n) for i = 1, n do local c, s = tcpPair() kept[i] = { c, s } end end
+function cases.keepClosedTls(n) for i = 1, n do local c, s = tlsPair() c:close() s:close() kept[i] = { c, s } end end
 function cases.drop() for _, pair in kept do pair[1]:close() pair[2]:close() end kept = {} end
 return function(case, a, b) return cases[case](a, b) end
 ";
@@ -472,7 +473,11 @@ fn tls(instructions: &Instructions) {
     println!("\nRetention per connected pair (client and server), live after a full collection\n");
     println!("| Held | VM bytes | native bytes |");
     println!("|---|---:|---:|");
-    for (label, case) in [("TCP pair", "keepTcp"), ("TLS pair after the handshake", "keepTls")] {
+    for (label, case) in [
+        ("TCP pair", "keepTcp"),
+        ("TLS pair after the handshake", "keepTls"),
+        ("TLS pair closed but still referenced", "keepClosedTls"),
+    ] {
         runtime.gc(GcControl::Collect);
         let (vm, native) = (heap(&runtime), LIVE.load(Ordering::Relaxed));
         run(&runtime, &chunk, case, 64.0, 0.0);

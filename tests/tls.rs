@@ -833,8 +833,12 @@ fn a_failed_session_closes_like_any_other() {
             end
             local client, server = secured()
             assert(handshakeBoth(client, server))
+            assert(client.alpn == nil and client.protocolVersion == '1.3' and client.cipherSuite ~= nil)
             client:close()
             assert(client.closed and client.failure == nil and client.failureKind == nil)
+            -- The session state went with close: nothing negotiated is left to report.
+            assert(client.protocolVersion == nil and client.cipherSuite == nil and not client.wantsRead and not client.wantsWrite)
+            assert(client.serverName == 'test.local')
             server:close()
             ",
         )

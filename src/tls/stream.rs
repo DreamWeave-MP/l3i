@@ -180,7 +180,9 @@ pub(crate) fn tls_kind(error: &rustls::Error) -> &'static str {
 /// `dream.tls.Stream`.
 pub struct TlsStream {
     io: Rc<Io>,
-    conn: RefCell<rustls::Connection>,
+    /// The session: its buffers and keys. Dropped at `close`, not when the userdata is
+    /// collected, so closed handles a script keeps hold only their small userdata.
+    conn: RefCell<Option<rustls::Connection>>,
     flags: Rc<Flags>,
     limit: usize,
     failure: RefCell<Option<(String, &'static str)>>,
@@ -212,7 +214,7 @@ impl TlsStream {
         conn.set_buffer_limit(Some(limit));
         TlsStream {
             io: taken.io,
-            conn: RefCell::new(conn),
+            conn: RefCell::new(Some(conn)),
             flags: Rc::new(Flags {
                 state: Cell::new(TlsState::Handshaking),
                 pending_out: Cell::new(false),
@@ -250,6 +252,8 @@ impl TlsStream {
         // Closed whatever it was: a failure stays readable through `failure`, not the state.
         self.flags.state.set(TlsState::Closed);
         self.release();
+        // The session's buffers and keys go now; every call checks `closed` before using it.
+        self.conn.borrow_mut().take();
     }
 
     /// Why the session failed, if it did, kept after `close`: the message and the kind.
@@ -353,7 +357,7 @@ impl TlsStream {
     /// Moves the handshake as far as the socket allows; true once it is complete.
     fn drive(&self, what: &str) -> std::result::Result<bool, Failure> {
         let mut conn = self.conn.borrow_mut();
-        let conn = &mut *conn;
+        let conn = conn.as_mut().expect("only a closed session has no connection, and calls check that first");
         if Instant::now() >= self.flags.deadline {
             return Err(self.fatal(
                 conn,
@@ -448,7 +452,7 @@ impl TlsStream {
         // rustls copies plaintext into the slice and nothing keeps its address after the call.
         let dst = unsafe { &mut buffer.bytes_mut_unchecked()[offset..offset + length] };
         let mut conn = self.conn.borrow_mut();
-        let conn = &mut *conn;
+        let conn = conn.as_mut().expect("only a closed session has no connection, and calls check that first");
         if let Err(error) = self.pump_out(conn) {
             return Ok(Outcome::Failed(self.fatal_io(conn, WHAT, &error)));
         }
@@ -522,7 +526,7 @@ impl TlsStream {
         // its own record, through this call's one view.
         let src = unsafe { &data.bytes_unchecked()[offset..offset + length] };
         let mut conn = self.conn.borrow_mut();
-        let conn = &mut *conn;
+        let conn = conn.as_mut().expect("only a closed session has no connection, and calls check that first");
         if let Err(error) = self.pump_out(conn) {
             return Ok(Outcome::Failed(self.fatal_io(conn, WHAT, &error)));
         }
@@ -547,7 +551,7 @@ impl TlsStream {
     /// Writes pending ciphertext; after close_notify has left, shuts the TCP write half.
     fn flush_now(&self, what: &str) -> std::result::Result<bool, Failure> {
         let mut conn = self.conn.borrow_mut();
-        let conn = &mut *conn;
+        let conn = conn.as_mut().expect("only a closed session has no connection, and calls check that first");
         let (drained, _) = self.pump_out(conn).map_err(|error| self.fatal_io(conn, what, &error))?;
         if drained && self.write_closed.get() && !self.fin_sent.get() {
             // The peer may already have closed; that is not this side's error.
@@ -575,7 +579,9 @@ impl TlsStream {
             return Ok(Outcome::Failed(failure));
         }
         if !self.write_closed.get() {
-            self.conn.borrow_mut().send_close_notify();
+            if let Some(conn) = self.conn.borrow_mut().as_mut() {
+                conn.send_close_notify();
+            }
             self.write_closed.set(true);
         }
         Ok(match self.flush_now(WHAT) {
@@ -810,34 +816,65 @@ pub(crate) fn describe(d: &mut ExtensionDescriptor) {
         .signature("dream_tls_ErrorKind?")
         .doc("The kind of that failure.");
     stream
-        .getter("wantsRead", |s: &TlsStream| s.conn.borrow().wants_read())
+        .getter("wantsRead", |s: &TlsStream| s.conn.borrow().as_ref().is_some_and(|c| c.wants_read()))
         .signature("boolean")
         .doc("Whether the session needs bytes from the peer to make progress.");
     stream
-        .getter("wantsWrite", |s: &TlsStream| s.conn.borrow().wants_write())
+        .getter("wantsWrite", |s: &TlsStream| s.conn.borrow().as_ref().is_some_and(|c| c.wants_write()))
         .signature("boolean")
         .doc("Whether ciphertext is waiting for the socket.");
     stream
         .getter("alpn", |s: &TlsStream| {
-            s.conn.borrow().alpn_protocol().map(|p| String::from_utf8_lossy(p).into_owned())
+            s.conn.borrow().as_ref()?.alpn_protocol().map(|p| String::from_utf8_lossy(p).into_owned())
         })
         .signature("string?");
     stream
-        .getter("protocolVersion", |s: &TlsStream| s.conn.borrow().protocol_version().and_then(version_name))
+        .getter("protocolVersion", |s: &TlsStream| s.conn.borrow().as_ref()?.protocol_version().and_then(version_name))
         .signature("string?");
     stream
         .getter("cipherSuite", |s: &TlsStream| {
-            s.conn.borrow().negotiated_cipher_suite().and_then(|suite| suite.suite().as_str())
+            s.conn.borrow().as_ref()?.negotiated_cipher_suite().and_then(|suite| suite.suite().as_str())
         })
         .signature("string?");
     stream
         .getter("serverName", |s: &TlsStream| match &*s.conn.borrow() {
-            rustls::Connection::Client(_) => s.server_name.clone(),
-            rustls::Connection::Server(server) => server.server_name().map(str::to_owned),
+            Some(rustls::Connection::Server(server)) => server.server_name().map(str::to_owned),
+            // A client's identity is its own; a closed server session has forgotten the SNI.
+            Some(rustls::Connection::Client(_)) | None => s.server_name.clone(),
         })
         .signature("string?")
-        .doc("A client's: the identity it verifies. A server's: the name the client asked for (SNI), if any.");
+        .doc("A client's: the identity it verifies. A server's: the name the client asked for (SNI), if any, until it is closed. The negotiated values (alpn, protocolVersion, cipherSuite) are nil once closed.");
     stream.getter("peerAddress", |s: &TlsStream| s.peer.to_string()).signature("string");
     stream.getter("localAddress", |s: &TlsStream| s.local.map(|a| a.to_string())).signature("string?");
     stream.metamethod("__tostring", |s: &TlsStream| format!("dream.tls.Stream({}, {})", s.peer, s.state().name()));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Closing drops the rustls session at once: a closed handle a script keeps does not hold
+    /// its buffers until collection.
+    #[test]
+    fn closing_drops_the_session_at_once() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let client = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let _server = listener.accept().unwrap();
+        let taken = crate::tcp::Stream::from_std(client).unwrap().take("test").unwrap();
+        let config = rustls::ClientConfig::builder_with_provider(super::super::provider())
+            .with_safe_default_protocol_versions()
+            .unwrap()
+            .with_root_certificates(rustls::RootCertStore::empty())
+            .with_no_client_auth();
+        let conn =
+            rustls::ClientConnection::new(Arc::new(config), ServerName::try_from("test.local").unwrap()).unwrap();
+        let stream = TlsStream::new(taken, conn.into(), DEFAULT_BUFFER_LIMIT, Duration::from_secs(1), None);
+        assert!(stream.conn.borrow().is_some());
+        stream.close();
+        assert!(stream.conn.borrow().is_none());
+        assert_eq!(stream.state(), TlsState::Closed);
+        assert!(stream.gate("Stream.readInto").is_err());
+        stream.close();
+        assert!(stream.conn.borrow().is_none());
+    }
 }

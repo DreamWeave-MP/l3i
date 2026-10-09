@@ -1607,13 +1607,14 @@ about 7 µs. 65 requests blocked on a stalled resolver, watched by one poller th
 | a 16-byte round trip (µs) | 6.9 | 10.3 |
 | a read with nothing ready (µs) | 0.4 | 0.4 |
 | throughput at 1 / 4 / 16 / 64 KiB writes (MiB/s) | 183 / 554 / 1945 / 4339 | 121 / 314 / 756 / 1106 |
-| held per connected pair, VM / native bytes | 416 / 176 | 2848 / 13301 |
+| held per connected pair, VM / native bytes | 416 / 176 | 2848 / 13302 open, 2848 / 266 closed |
 
 `tls.clientConfig` over explicit roots costs 4.3 µs, `tls.serverConfig` 18.8 µs (parsing and
 matching the key), and the platform store 3.7 ms. Throughput is bounded by AES-GCM and by rustls
 allocating an output buffer per record (about two allocations per write, 192 per MiB at 64 KiB
-writes); a warm read makes none. A session's userdata holds the rustls state inline, which is
-what the VM bytes above are.
+writes); a warm read makes none. A session's userdata holds the rustls state inline, so the
+VM's memory accounting sees it (the VM bytes above); its buffers are native and `close` drops
+them at once, so closed handles a script keeps cost almost nothing native.
 
 `dns` adds `idna` and ICU4X's normalizer (28 crates, Unicode-3.0 data, shared with `intl`);
 `tls` adds rustls, ring, rustls-webpki, rustls-platform-verifier with rustls-native-certs and
