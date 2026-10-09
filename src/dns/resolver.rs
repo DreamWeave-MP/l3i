@@ -343,7 +343,7 @@ impl Pool {
             if state.jobs.len() >= self.config.queue {
                 return Err(Refused::Full(self.config.queue));
             }
-            state.jobs.push_back(Job { host, port, shared, _ticket: ticket });
+            state.jobs.push_back(Job { host, port, shared: Arc::clone(&shared), _ticket: ticket });
             if state.idle > 0 {
                 self.work.notify_one();
             }
@@ -361,8 +361,9 @@ impl Pool {
                 let mut state = self.lock();
                 state.spawned -= 1;
                 if state.spawned == 0 {
-                    // Nothing will ever serve the queue: take this job back.
-                    state.jobs.pop_back();
+                    // Nothing will ever serve the queue: take this job back, by identity, since
+                    // another runtime sharing the resolver may have queued one after it.
+                    state.jobs.retain(|job| !Arc::ptr_eq(&job.shared, &shared));
                     return Err(Refused::NoThread);
                 }
             }
