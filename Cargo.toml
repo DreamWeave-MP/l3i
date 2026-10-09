@@ -228,7 +228,7 @@ syntax = []
 fs = ["dep:memmap2", "dep:walkdir", "dep:same-file"]
 # The `@dream/process` extension (`process`): run a child process and wait for its exit code,
 # gated by the `process.spawn` capability.
-process = []
+process = ["dep:libc"]
 # The `@dream/intern` extension (`intern`): pools that turn byte sequences into dense number
 # identities under exact or ASCII case-insensitive equality, lowered under jit.
 intern = []

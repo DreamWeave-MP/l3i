@@ -197,7 +197,11 @@ fn run(
     // The input goes in on its own thread, so a child that fills its output pipe before it has
     // read all of its input cannot deadlock against this one.
     let feeder = match (options.stdin, child.stdin.take()) {
-        (Some(input), Some(mut pipe)) => Some(std::thread::spawn(move || std::io::Write::write_all(&mut pipe, &input))),
+        (Some(input), Some(mut pipe)) => Some(std::thread::spawn(move || {
+            #[cfg(unix)]
+            block_sigpipe();
+            std::io::Write::write_all(&mut pipe, &input)
+        })),
         _ => None,
     };
     let output = done!(match child.wait_with_output() {
@@ -227,6 +231,21 @@ fn run(
     }
     frame.release();
     Ok(Outcome::Done(StackResults))
+}
+
+/// Blocks SIGPIPE on the calling thread: a child that exits without reading all of its input
+/// then fails the write with EPIPE instead of raising a signal that would kill a host that has
+/// not ignored it. A signal raised anyway stays pending on this thread and ends with it.
+#[cfg(unix)]
+fn block_sigpipe() {
+    let mut set = std::mem::MaybeUninit::<libc::sigset_t>::uninit();
+    // SAFETY: sigemptyset initializes the set before sigaddset and pthread_sigmask read it, and
+    // the mask changed is this thread's own; the thread only writes the child's input.
+    unsafe {
+        libc::sigemptyset(set.as_mut_ptr());
+        libc::sigaddset(set.as_mut_ptr(), libc::SIGPIPE);
+        libc::pthread_sigmask(libc::SIG_BLOCK, set.as_ptr(), std::ptr::null_mut());
+    }
 }
 
 /// `stdout` or `stderr`.
