@@ -3,12 +3,16 @@
 //! Each handle keeps its socket in an [`Io`] behind an `Rc` only the userdata holds. A poller
 //! watching the handle keeps a `Weak` to the `Io` and shares its readiness cell, so a watched
 //! handle that is collected still closes its socket, and its registration goes with it.
+//!
+//! A connected stream can be handed over whole ([`Stream::take`]): the new owner (a TLS
+//! session) gets the `Io` and the listener's count, and the stream becomes inert, so the
+//! plaintext interface can neither touch the socket nor close it, collected or not.
 
 use std::borrow::Cow;
 use std::cell::{Cell, RefCell};
 use std::io::{self, Read, Write};
 use std::net::{Shutdown, SocketAddr};
-use std::rc::{Rc, Weak};
+use std::rc::Rc;
 
 use crate::bind::{Call, StackResults};
 use crate::convert::{BufferView, BytesView, Exact};
@@ -19,17 +23,17 @@ use crate::stack::{Scope, ValueView};
 use crate::userdata::Userdata;
 
 use super::ListenOptions;
-use super::poller::Core;
+use super::poller::{Core, Target, Watch, Watchable};
 
 /// Readiness bits: the handle may read (or accept, or has an error to report).
-pub(super) const READABLE: u8 = 1;
+pub(crate) const READABLE: u8 = 1;
 /// The handle may write (or a connect has finished, either way).
-pub(super) const WRITABLE: u8 = 2;
+pub(crate) const WRITABLE: u8 = 2;
 /// The peer will send nothing more: end of stream, a hang-up or a socket error. Never cleared.
-pub(super) const CLOSED: u8 = 4;
+pub(crate) const CLOSED: u8 = 4;
 
 /// A socket a poller can register.
-pub(super) enum Socket {
+pub(crate) enum Socket {
     Listener(mio::net::TcpListener),
     Stream(mio::net::TcpStream),
 }
@@ -44,7 +48,7 @@ impl Socket {
         }
     }
 
-    pub(super) fn register(&mut self, registry: &mio::Registry, token: mio::Token) -> io::Result<()> {
+    fn register(&mut self, registry: &mio::Registry, token: mio::Token) -> io::Result<()> {
         let interest = self.os_interest();
         match self {
             Socket::Listener(listener) => registry.register(listener, token, interest),
@@ -52,7 +56,7 @@ impl Socket {
         }
     }
 
-    pub(super) fn deregister(&mut self, registry: &mio::Registry) -> io::Result<()> {
+    fn deregister(&mut self, registry: &mio::Registry) -> io::Result<()> {
         match self {
             Socket::Listener(listener) => registry.deregister(listener),
             Socket::Stream(stream) => registry.deregister(stream),
@@ -60,19 +64,13 @@ impl Socket {
     }
 }
 
-/// Which poller slot watches a handle.
-pub(super) struct Watch {
-    pub(super) poller: Weak<Core>,
-    pub(super) slot: u32,
-}
-
 /// A handle's socket, its readiness and its registration.
-pub(super) struct Io {
+pub(crate) struct Io {
     socket: RefCell<Option<Socket>>,
     /// Set by the poller from OS events; READABLE and WRITABLE are cleared here when an
     /// operation reports would-block, which is what makes edge notifications level-triggered.
-    pub(super) ready: Rc<Cell<u8>>,
-    pub(super) watch: RefCell<Option<Watch>>,
+    pub(crate) ready: Rc<Cell<u8>>,
+    pub(crate) watch: RefCell<Option<Watch>>,
 }
 
 impl Io {
@@ -80,28 +78,54 @@ impl Io {
         Rc::new(Io { socket: RefCell::new(Some(socket)), ready: Rc::new(Cell::new(0)), watch: RefCell::new(None) })
     }
 
-    pub(super) fn is_closed(&self) -> bool {
+    pub(crate) fn is_closed(&self) -> bool {
         self.socket.borrow().is_none()
     }
 
     /// Runs `body` on the open socket; `None` once closed.
-    pub(super) fn with_socket<R>(&self, body: impl FnOnce(&mut Socket) -> R) -> Option<R> {
+    pub(crate) fn with_socket<R>(&self, body: impl FnOnce(&mut Socket) -> R) -> Option<R> {
         self.socket.borrow_mut().as_mut().map(body)
     }
 
-    fn clear(&self, bits: u8) {
+    /// Runs `body` on the open stream socket; `None` once closed.
+    pub(crate) fn with_stream<R>(&self, body: impl FnOnce(&mio::net::TcpStream) -> R) -> Option<R> {
+        self.with_socket(|socket| {
+            let Socket::Stream(stream) = socket else { unreachable!("a stream's socket is a stream") };
+            body(stream)
+        })
+    }
+
+    /// Forgets readiness an operation found gone (it answered would-block).
+    pub(crate) fn clear(&self, bits: u8) {
         self.ready.set(self.ready.get() & !bits);
     }
 
     /// Releases the registration and the socket. Idempotent.
-    fn close(&self) {
+    pub(crate) fn close(&self) {
         let watch = self.watch.borrow_mut().take();
         let socket = self.socket.borrow_mut().take();
         if let (Some(watch), Some(mut socket)) = (watch, socket)
             && let Some(core) = watch.poller.upgrade()
         {
-            core.release(watch.slot, &mut socket);
+            // A failure means the registration is gone already; closing the socket ends it anyway.
+            let _ = socket.deregister(core.registry());
+            core.release(watch.slot);
         }
+    }
+}
+
+impl Watchable for Io {
+    fn watch_cell(&self) -> &RefCell<Option<Watch>> {
+        &self.watch
+    }
+
+    fn register(&self, core: &Core, token: mio::Token) -> io::Result<()> {
+        self.with_socket(|socket| socket.register(core.registry(), token))
+            .unwrap_or_else(|| Err(io::Error::new(io::ErrorKind::NotConnected, "the handle is closed")))
+    }
+
+    fn deregister(&self, core: &Core) {
+        self.with_socket(|socket| socket.deregister(core.registry()));
     }
 }
 
@@ -159,12 +183,32 @@ fn window(
 // ---------------------------------------------------------------------------------------------
 
 /// The accepted streams of one listener that are still open, against its `maxStreams`.
-struct StreamCount {
+pub(crate) struct StreamCount {
     live: Cell<u32>,
     max: u32,
     /// The listener's readiness: freeing a stream at the limit marks it readable again, since
     /// the connections that waited in the backlog raised no new notification.
     listener_ready: Rc<Cell<u8>>,
+}
+
+impl StreamCount {
+    /// One accepted stream is gone. Its owner calls this exactly once, by taking the count.
+    pub(crate) fn release(&self) {
+        let live = self.live.get();
+        if live == self.max {
+            self.listener_ready.set(self.listener_ready.get() | READABLE);
+        }
+        self.live.set(live.saturating_sub(1));
+    }
+}
+
+/// What a stream hands its new owner: the socket, the addresses, and the listener's count.
+#[allow(dead_code, reason = "dream.tls takes streams over")]
+pub(crate) struct Taken {
+    pub(crate) io: Rc<Io>,
+    pub(crate) peer: SocketAddr,
+    pub(crate) local: Option<SocketAddr>,
+    pub(crate) counted: Option<Rc<StreamCount>>,
 }
 
 /// `dream.tcp.Listener`: a nonblocking listening socket.
@@ -230,8 +274,13 @@ impl Listener {
         self.io.is_closed()
     }
 
-    pub(super) fn io(&self) -> &Rc<Io> {
-        &self.io
+    pub(super) fn target(&self) -> Target {
+        Target {
+            source: Rc::clone(&self.io) as Rc<dyn Watchable>,
+            ready: Rc::clone(&self.io.ready),
+            read_only: true,
+            synthetic: None,
+        }
     }
 
     /// Releases the socket and its registration; the accepted streams stay open.
@@ -302,6 +351,12 @@ fn closed(what: &str, noun: &str) -> Error {
     Error::runtime(format!("dream.tcp.{what}: the {noun} is closed"))
 }
 
+fn consumed(what: &str) -> Error {
+    Error::runtime(format!(
+        "dream.tcp.{what}: the stream was handed over (to a TLS session) and can no longer be used; use its new owner"
+    ))
+}
+
 pub(super) fn describe_listener(d: &mut ExtensionDescriptor) {
     let mut listener = d.userdata::<Listener>(Listener::NAME);
     listener.tag(TagPolicy::Preferred).doc("A nonblocking TCP listener. Accepted streams carry its authority.");
@@ -336,6 +391,9 @@ pub enum StreamState {
     Failed,
     /// Closed locally; every method but `close` raises.
     Closed,
+    /// Handed to a new owner (a TLS session) with [`Stream::take`]: every method but `close`
+    /// raises, and `close` does nothing, since the socket is no longer this stream's.
+    Consumed,
 }
 
 impl StreamState {
@@ -346,6 +404,7 @@ impl StreamState {
             StreamState::Connected => "connected",
             StreamState::Failed => "failed",
             StreamState::Closed => "closed",
+            StreamState::Consumed => "consumed",
         }
     }
 }
@@ -432,12 +491,58 @@ impl Stream {
         self.local.get()
     }
 
-    pub(super) fn io(&self) -> &Rc<Io> {
-        &self.io
+    pub(super) fn target(&self) -> Result<Target> {
+        match self.state.get() {
+            StreamState::Consumed => Err(consumed("Poller.watch")),
+            StreamState::Closed => Err(Error::runtime("dream.tcp.Poller.watch: the handle is closed")),
+            _ => Ok(Target {
+                source: Rc::clone(&self.io) as Rc<dyn Watchable>,
+                ready: Rc::clone(&self.io.ready),
+                read_only: false,
+                synthetic: None,
+            }),
+        }
     }
 
-    /// Releases the socket, its registration and its place in the listener's count.
+    /// Hands the connected socket to a new owner, which takes over its registration-free `Io`,
+    /// its addresses and its listener's count; this stream becomes `Consumed`. Refused while
+    /// the connect is pending or failed, once closed or consumed, and while a poller watches it
+    /// (unwatch first, so no queued event or registration refers to the old handle).
+    #[cfg_attr(not(test), allow(dead_code, reason = "dream.tls takes streams over"))]
+    pub(crate) fn take(&self, what: &str) -> Result<Taken> {
+        match self.state.get() {
+            StreamState::Connected => {}
+            StreamState::Connecting => {
+                return Err(Error::runtime(format!(
+                    "{what}: the stream is still connecting; wait until finishConnect() returns true"
+                )));
+            }
+            StreamState::Failed => return Err(Error::runtime(format!("{what}: the stream's connect failed"))),
+            StreamState::Closed => return Err(Error::runtime(format!("{what}: the stream is closed"))),
+            StreamState::Consumed => {
+                return Err(Error::runtime(format!("{what}: the stream was already handed over")));
+            }
+        }
+        if self.io.watch.borrow().is_some() {
+            return Err(Error::runtime(format!(
+                "{what}: a poller watches the stream; unwatch it before handing it over"
+            )));
+        }
+        self.state.set(StreamState::Consumed);
+        Ok(Taken {
+            io: Rc::clone(&self.io),
+            peer: self.peer,
+            local: self.local.get(),
+            counted: self.counted.borrow_mut().take(),
+        })
+    }
+
+    /// Releases the socket, its registration and its place in the listener's count. A stream
+    /// handed over owns none of them any more, so closing it does nothing.
     pub fn close(&self) {
+        if self.state.get() == StreamState::Consumed {
+            return;
+        }
         self.io.close();
         self.state.set(StreamState::Closed);
         self.uncount();
@@ -445,21 +550,12 @@ impl Stream {
 
     fn uncount(&self) {
         if let Some(count) = self.counted.borrow_mut().take() {
-            let live = count.live.get();
-            if live == count.max {
-                count.listener_ready.set(count.listener_ready.get() | READABLE);
-            }
-            count.live.set(live.saturating_sub(1));
+            count.release();
         }
     }
 
     fn with_stream<R>(&self, what: &str, body: impl FnOnce(&mio::net::TcpStream) -> R) -> Result<R> {
-        self.io
-            .with_socket(|socket| {
-                let Socket::Stream(stream) = socket else { unreachable!("a stream's socket is a stream") };
-                body(stream)
-            })
-            .ok_or_else(|| closed(what, "stream"))
+        self.io.with_stream(body).ok_or_else(|| closed(what, "stream"))
     }
 
     fn fail(&self, failure: Failure) -> Failure {
@@ -479,6 +575,7 @@ impl Stream {
     fn settle(&self, what: &str) -> Result<Gate> {
         match self.state.get() {
             StreamState::Closed => return Err(closed(what, "stream")),
+            StreamState::Consumed => return Err(consumed(what)),
             StreamState::Connected => return Ok(Gate::Open),
             StreamState::Failed => return Ok(Gate::Failed(self.stored_failure())),
             StreamState::Connecting => {}
@@ -655,4 +752,56 @@ pub(super) fn describe_stream(d: &mut ExtensionDescriptor) {
     stream.getter("state", |s: &Stream| s.state.get().name()).signature("dream_tcp_StreamState");
     stream.getter("closed", |s: &Stream| s.state.get() == StreamState::Closed).signature("boolean");
     stream.metamethod("__tostring", |s: &Stream| format!("dream.tcp.Stream({}, {})", s.peer, s.state.get().name()));
+}
+
+#[cfg(test)]
+mod tests {
+    //! Handing a stream over: the new owner holds the only working handle on the socket.
+
+    use super::*;
+    use crate::tcp::poller::{Limits, Poller, READ};
+
+    fn connected() -> (Stream, std::net::TcpStream) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let client = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (server, _) = listener.accept().unwrap();
+        (Stream::from_std(client).unwrap(), server)
+    }
+
+    #[test]
+    fn a_taken_stream_is_inert_and_its_socket_outlives_it() {
+        let (stream, mut peer) = connected();
+        let taken = stream.take("test").unwrap();
+        assert_eq!(stream.state(), StreamState::Consumed);
+        // Closing or dropping the old handle leaves the new owner's socket open.
+        stream.close();
+        assert_eq!(stream.state(), StreamState::Consumed);
+        assert!(stream.take("test").is_err_and(|e| e.to_string().contains("already handed over")));
+        assert!(stream.target().is_err_and(|e| e.to_string().contains("handed over")));
+        assert!(stream.settle("Stream.readInto").is_err_and(|e| e.to_string().contains("handed over")));
+        drop(stream);
+        assert!(!taken.io.is_closed());
+        let written = taken.io.with_stream(|mut socket| socket.write(b"still mine")).unwrap().unwrap();
+        assert_eq!(written, 10);
+        let mut read = [0u8; 10];
+        std::io::Read::read_exact(&mut peer, &mut read).unwrap();
+        assert_eq!(&read, b"still mine");
+        taken.io.close();
+        assert!(taken.io.is_closed());
+    }
+
+    #[test]
+    fn a_watched_or_unsettled_stream_is_not_handed_over() {
+        let (stream, _peer) = connected();
+        let poller = Poller::new(Limits::default()).unwrap();
+        assert!(matches!(poller.watch_target(stream.target().unwrap(), 1, READ).unwrap(), Outcome::Done(true)));
+        assert!(stream.take("test").is_err_and(|e| e.to_string().contains("unwatch it")));
+        assert_eq!(stream.state(), StreamState::Connected);
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let pending = Stream::connect(listener.local_addr().unwrap(), false).unwrap();
+        assert!(pending.take("test").is_err_and(|e| e.to_string().contains("finishConnect")));
+        pending.close();
+        assert!(pending.take("test").is_err_and(|e| e.to_string().contains("closed")));
+    }
 }

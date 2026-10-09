@@ -1,19 +1,28 @@
-//! `dream.tcp.Poller`: bounded readiness waits over watched listeners and streams.
+//! `dream.tcp.Poller`: bounded readiness waits over watched sources.
 //!
 //! The OS reports edges (mio's contract on every platform); the poller keeps the last readiness
 //! each handle was told in a cell it shares with the handle, and the handle clears a bit only
 //! when an operation reports would-block. A wait therefore reports every handle that may still
 //! make progress, which is level-triggered readiness, and it never blocks while one is pending.
 //!
+//! A source is anything [`Watchable`]: a socket (a TCP listener or stream, or the socket under a
+//! TLS stream) or a source with no socket that wakes the poller through its [`mio::Waker`] (a
+//! DNS request completing on a worker thread). A source may add [`Synthetic`] readiness the OS
+//! cannot see (plaintext a TLS session already decrypted, a request that completed) and a
+//! deadline at which it becomes reportable with no event at all; a wait never sleeps past the
+//! earliest one.
+//!
 //! Watches live in slots; a slot's mio token carries its index and a generation, and the queue
 //! of events `next()` hands out keeps both, so an event never reaches a watch that replaced the
-//! one it was raised for. Slots hold the handle weakly and the handle holds the poller weakly.
+//! one it was raised for. The waker's token is reserved and never a slot's. Slots hold their
+//! source weakly and the source holds the poller weakly.
 
 use std::borrow::Cow;
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, VecDeque};
 use std::io;
 use std::rc::{Rc, Weak};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::bind::Call;
@@ -24,11 +33,11 @@ use crate::outcome::{Failure, Outcome};
 use crate::stack::ValueView;
 use crate::userdata::Userdata;
 
-use super::socket::{CLOSED, Io, Listener, READABLE, Socket, Stream, WRITABLE, Watch};
+use super::socket::{CLOSED, Listener, READABLE, Stream, WRITABLE};
 
 /// Interest bits.
-const READ: u8 = 1;
-const WRITE: u8 = 2;
+pub(crate) const READ: u8 = 1;
+pub(crate) const WRITE: u8 = 2;
 
 /// The largest token: tokens are whole numbers a double holds exactly.
 const MAX_TOKEN: i64 = 1 << 53;
@@ -36,6 +45,59 @@ const MAX_TOKEN: i64 = 1 << 53;
 /// Half of a mio token is the slot index, half its generation.
 const INDEX_BITS: u32 = usize::BITS / 2;
 const INDEX_MASK: usize = (1 << INDEX_BITS) - 1;
+
+/// The waker's token; [`Slots::mio_token`] never hands it to a slot.
+const WAKE_TOKEN: mio::Token = mio::Token(usize::MAX);
+
+/// The readiness bits an interest makes reportable: `closed` goes with reading.
+pub(crate) fn mask(interest: u8) -> u8 {
+    let mut mask = 0;
+    if interest & READ != 0 {
+        mask |= READABLE | CLOSED;
+    }
+    if interest & WRITE != 0 {
+        mask |= WRITABLE;
+    }
+    mask
+}
+
+/// Which poller slot watches a source.
+pub(crate) struct Watch {
+    pub(crate) poller: Weak<Core>,
+    pub(crate) slot: u32,
+}
+
+/// Something a poller can watch.
+pub(crate) trait Watchable {
+    /// Where the source records its watch, so that closing it releases the slot.
+    fn watch_cell(&self) -> &RefCell<Option<Watch>>;
+    /// Registers with `core` under `token`: a socket with the OS, a socketless source by taking
+    /// the poller's waker.
+    fn register(&self, core: &Core, token: mio::Token) -> io::Result<()>;
+    /// Undoes [`Self::register`]; a source that is already closed has nothing to undo.
+    fn deregister(&self, core: &Core);
+}
+
+/// Readiness a source knows of that the OS does not report.
+pub(crate) trait Synthetic {
+    /// The bits to report for `interest`, given the readiness the OS last reported (`os`).
+    fn reportable(&self, os: u8, interest: u8, now: Instant) -> u8;
+    /// When the source becomes reportable without any event, while that is still to come.
+    /// Must return `None` once reaching the deadline would report nothing, so a wait never
+    /// returns early for it.
+    fn deadline(&self) -> Option<Instant>;
+}
+
+/// What `watch` registers: the source, the readiness cell it shares, and what it may report.
+pub(crate) struct Target {
+    pub(crate) source: Rc<dyn Watchable>,
+    pub(crate) ready: Rc<Cell<u8>>,
+    /// Only ever readable (a listener, a DNS request): watching it for writing is an error.
+    pub(crate) read_only: bool,
+    /// Held strongly by the slot, so it must not own the source: a collected handle has to be
+    /// able to die while watched.
+    pub(crate) synthetic: Option<Rc<dyn Synthetic>>,
+}
 
 /// What a poller may hold and hand out.
 #[derive(Clone, Copy, Debug)]
@@ -57,28 +119,40 @@ struct Slot {
     generation: u32,
     token: i64,
     interest: u8,
-    listener: bool,
+    read_only: bool,
     ready: Rc<Cell<u8>>,
-    io: Weak<Io>,
+    source: Weak<dyn Watchable>,
+    synthetic: Option<Rc<dyn Synthetic>>,
 }
 
 impl Slot {
-    /// The readiness bits the interest makes reportable: `closed` goes with reading.
-    fn reportable(&self) -> u8 {
-        let mut mask = 0;
-        if self.interest & READ != 0 {
-            mask |= READABLE | CLOSED;
+    fn empty() -> Slot {
+        let source: Weak<dyn Watchable> = Weak::<super::socket::Io>::new();
+        Slot {
+            used: false,
+            generation: 0,
+            token: 0,
+            interest: 0,
+            read_only: false,
+            ready: Rc::new(Cell::new(0)),
+            source,
+            synthetic: None,
         }
-        if self.interest & WRITE != 0 {
-            mask |= WRITABLE;
-        }
-        self.ready.get() & mask
     }
 
-    /// Whether this slot's handle may make progress. A slot whose handle is gone (collected
+    /// The bits this watch reports now.
+    fn reportable(&self, now: Instant) -> u8 {
+        let os = self.ready.get();
+        match &self.synthetic {
+            Some(synthetic) => synthetic.reportable(os, self.interest, now),
+            None => os & mask(self.interest),
+        }
+    }
+
+    /// Whether this slot's source may make progress. A slot whose source is gone (collected
     /// while the poller was busy) is never ready.
-    fn is_ready(&self) -> bool {
-        self.used && self.reportable() != 0 && self.io.strong_count() != 0
+    fn is_ready(&self, now: Instant) -> bool {
+        self.used && self.source.strong_count() != 0 && self.reportable(now) != 0
     }
 }
 
@@ -111,19 +185,18 @@ impl Slots {
             return;
         }
         self.by_token.remove(&slot.token);
-        slot.used = false;
-        slot.generation = slot.generation.wrapping_add(1);
-        slot.io = Weak::new();
-        slot.ready = Rc::new(Cell::new(0));
+        let generation = slot.generation.wrapping_add(1);
+        *slot = Slot::empty();
+        slot.generation = generation;
         self.free.push(index);
     }
 
-    /// Frees the slots whose handles were collected while the poller could not be told.
+    /// Frees the slots whose sources were collected while the poller could not be told.
     fn sweep(&mut self) {
         let gone: Vec<u32> = (0..self.entries.len() as u32)
             .filter(|&index| {
                 let slot = &self.entries[index as usize];
-                slot.used && slot.io.strong_count() == 0
+                slot.used && slot.source.strong_count() == 0
             })
             .collect();
         for index in gone {
@@ -131,9 +204,13 @@ impl Slots {
         }
     }
 
-    /// Records what the OS reported for each live watch.
+    /// Records what the OS reported for each live watch. The waker's event carries no
+    /// readiness: it only ends the OS wait, and the scan that follows sees what changed.
     fn apply(&self, events: &mio::Events) {
         for event in events {
+            if event.token() == WAKE_TOKEN {
+                continue;
+            }
             let token = event.token().0;
             let index = token & INDEX_MASK;
             let generation = token >> INDEX_BITS;
@@ -159,8 +236,25 @@ impl Slots {
         }
     }
 
+    /// Whether anything is reportable now, and the earliest synthetic deadline still to come.
+    fn survey(&self, now: Instant) -> (bool, Option<Instant>) {
+        let mut earliest: Option<Instant> = None;
+        for slot in &self.entries {
+            if !slot.used || slot.source.strong_count() == 0 {
+                continue;
+            }
+            if slot.reportable(now) != 0 {
+                return (true, None);
+            }
+            if let Some(deadline) = slot.synthetic.as_ref().and_then(|synthetic| synthetic.deadline()) {
+                earliest = Some(earliest.map_or(deadline, |earliest| earliest.min(deadline)));
+            }
+        }
+        (false, earliest)
+    }
+
     /// Queues up to `max` ready watches, scanning once round from the cursor.
-    fn fill(&mut self, max: usize) -> usize {
+    fn fill(&mut self, max: usize, now: Instant) -> usize {
         self.queue.clear();
         let count = self.entries.len();
         if count == 0 {
@@ -170,7 +264,7 @@ impl Slots {
         for step in 0..count {
             let index = (start + step) % count;
             let slot = &self.entries[index];
-            if slot.is_ready() {
+            if slot.is_ready(now) {
                 self.queue.push_back((index as u32, slot.generation));
                 if self.queue.len() == max {
                     self.cursor = index + 1;
@@ -182,39 +276,57 @@ impl Slots {
     }
 }
 
-/// The poller's state, shared weakly with the handles it watches.
+/// The poller's state, shared weakly with the sources it watches.
 pub(crate) struct Core {
     poll: RefCell<Option<mio::Poll>>,
-    /// A second handle on the poll's registry, so a handle closing while the poller waits (it
+    /// A second handle on the poll's registry, so a source closing while the poller waits (it
     /// cannot: no Lua runs inside a wait) or after it closed never needs the poll itself.
     registry: mio::Registry,
+    /// Made on the first socketless watch; mio allows one per poll.
+    waker: RefCell<Option<Arc<mio::Waker>>>,
     events: RefCell<mio::Events>,
     slots: RefCell<Slots>,
-    /// A handle released its watch while the slots were borrowed.
+    /// A source released its watch while the slots were borrowed.
     deferred: Cell<bool>,
     limits: Limits,
 }
 
 impl Core {
-    /// Drops the watch in `slot` of a handle that is closing.
-    pub(super) fn release(&self, slot: u32, socket: &mut Socket) {
-        // A failure means the registration is gone already; closing the socket ends it anyway.
-        let _ = socket.deregister(&self.registry);
-        // Busy only if a handle is collected during a poller call; the next wait sweeps it.
+    /// The OS registry sockets register with.
+    pub(crate) fn registry(&self) -> &mio::Registry {
+        &self.registry
+    }
+
+    /// The waker a worker thread uses to end this poller's wait. It holds no reference to the
+    /// poller's own state, which never leaves its thread.
+    #[cfg_attr(not(test), allow(dead_code, reason = "socketless sources (dream.dns) take it"))]
+    pub(crate) fn waker(&self) -> io::Result<Arc<mio::Waker>> {
+        let mut waker = self.waker.borrow_mut();
+        if let Some(waker) = waker.as_ref() {
+            return Ok(Arc::clone(waker));
+        }
+        let made = Arc::new(mio::Waker::new(&self.registry, WAKE_TOKEN)?);
+        *waker = Some(Arc::clone(&made));
+        Ok(made)
+    }
+
+    /// Drops the watch in `slot` of a source that is closing and has deregistered itself.
+    pub(crate) fn release(&self, slot: u32) {
+        // Busy only if a source is collected during a poller call; the next wait sweeps it.
         match self.slots.try_borrow_mut() {
             Ok(mut slots) => slots.free(slot),
             Err(_) => self.deferred.set(true),
         }
     }
 
-    /// Frees the watches of handles collected while the slots were busy.
+    /// Frees the watches of sources collected while the slots were busy.
     fn sweep(&self, slots: &mut Slots) {
         if self.deferred.replace(false) {
             slots.sweep();
         }
     }
 
-    /// Releases every watch: the handles stay open and may be watched again.
+    /// Releases every watch: the sources stay open and may be watched again.
     fn release_all(&self) {
         let mut slots = self.slots.borrow_mut();
         for index in 0..slots.entries.len() as u32 {
@@ -222,9 +334,9 @@ impl Core {
             if !slot.used {
                 continue;
             }
-            if let Some(io) = slot.io.upgrade() {
-                io.watch.borrow_mut().take();
-                io.with_socket(|socket| socket.deregister(&self.registry));
+            if let Some(source) = slot.source.upgrade() {
+                source.watch_cell().borrow_mut().take();
+                source.deregister(self);
             }
             slots.free(index);
         }
@@ -244,13 +356,27 @@ pub struct Poller {
 }
 
 // SAFETY: plain Rust state with no Lua references; dropping it closes an OS poller and clears
-// the watch of each handle it watched, touching no Lua API.
+// the watch of each source it watched, touching no Lua API.
 unsafe impl Userdata for Poller {
     const NAME: &'static str = "dream.tcp.Poller";
 }
 
 /// What `next()` returns.
 type Next = Option<(f64, bool, bool, bool)>;
+
+/// The source behind a handle a script passed to `watch`.
+fn target(handle: ValueView<'_>) -> Result<Target> {
+    if let Some(listener) = crate::userdata::receiver::<Listener>(handle) {
+        return Ok(listener.target());
+    }
+    if let Some(stream) = crate::userdata::receiver::<Stream>(handle) {
+        return stream.target();
+    }
+    Err(handle.field_type_error(
+        "dream.tcp.Poller.watch",
+        "a dream.tcp.Listener or dream.tcp.Stream, or another dream_tcp_Watchable handle",
+    ))
+}
 
 impl Poller {
     pub(crate) fn new(limits: Limits) -> io::Result<Poller> {
@@ -260,6 +386,7 @@ impl Poller {
             core: Rc::new(Core {
                 poll: RefCell::new(Some(poll)),
                 registry,
+                waker: RefCell::new(None),
                 events: RefCell::new(mio::Events::with_capacity(limits.events as usize)),
                 slots: RefCell::new(Slots::default()),
                 deferred: Cell::new(false),
@@ -278,19 +405,15 @@ impl Poller {
     fn watch(&self, handle: ValueView<'_>, token: Exact<i64>, interest: &str) -> Result<Outcome<bool>> {
         const WHAT: &str = "watch";
         self.open(WHAT)?;
-        let (io, listener) = if let Some(listener) = crate::userdata::receiver::<Listener>(handle) {
-            (Rc::clone(listener.io()), true)
-        } else if let Some(stream) = crate::userdata::receiver::<Stream>(handle) {
-            (Rc::clone(stream.io()), false)
-        } else {
-            return Err(handle.field_type_error("dream.tcp.Poller.watch", "a dream.tcp.Listener or dream.tcp.Stream"));
-        };
-        let interest = parse_interest(WHAT, interest, listener)?;
+        let target = target(handle)?;
+        let interest = parse_interest(WHAT, interest, target.read_only)?;
         let token = check_token(WHAT, token)?;
-        if io.is_closed() {
-            return Err(Error::runtime("dream.tcp.Poller.watch: the handle is closed"));
-        }
-        if io.watch.borrow().is_some() {
+        self.watch_target(target, token, interest)
+    }
+
+    /// Watches `target` under `token`; the checks every handle shares.
+    pub(crate) fn watch_target(&self, target: Target, token: i64, interest: u8) -> Result<Outcome<bool>> {
+        if target.source.watch_cell().borrow().is_some() {
             return Err(Error::runtime(
                 "dream.tcp.Poller.watch: the handle is already watched (by this or another poller); unwatch it first",
             ));
@@ -313,41 +436,35 @@ impl Poller {
             Some(index) => index,
             None => {
                 let index = u32::try_from(slots.entries.len()).expect("bounded by maxWatches");
-                slots.entries.push(Slot {
-                    used: false,
-                    generation: 0,
-                    token: 0,
-                    interest: 0,
-                    listener: false,
-                    ready: Rc::new(Cell::new(0)),
-                    io: Weak::new(),
-                });
+                slots.entries.push(Slot::empty());
                 index
             }
         };
+        // The one generation whose token would be the waker's is skipped.
+        if Slots::mio_token(index, slots.entries[index as usize].generation) == WAKE_TOKEN {
+            let slot = &mut slots.entries[index as usize];
+            slot.generation = slot.generation.wrapping_add(1);
+        }
         let generation = slots.entries[index as usize].generation;
-        let registered = io
-            .with_socket(|socket| socket.register(&self.core.registry, Slots::mio_token(index, generation)))
-            .expect("checked open above");
-        if let Err(error) = registered {
+        if let Err(error) = target.source.register(&self.core, Slots::mio_token(index, generation)) {
             slots.free.push(index);
             return Ok(Outcome::Failed(Failure {
                 message: Cow::Owned(format!("dream.tcp.Poller.watch: {error}")),
                 kind: crate::outcome::network_kind_of(&error),
             }));
         }
-        let slot = &mut slots.entries[index as usize];
-        *slot = Slot {
+        slots.entries[index as usize] = Slot {
             used: true,
             generation,
             token,
             interest,
-            listener,
-            ready: Rc::clone(&io.ready),
-            io: Rc::downgrade(&io),
+            read_only: target.read_only,
+            ready: target.ready,
+            source: Rc::downgrade(&target.source),
+            synthetic: target.synthetic,
         };
         slots.by_token.insert(token, index);
-        *io.watch.borrow_mut() = Some(Watch { poller: Rc::downgrade(&self.core), slot: index });
+        *target.source.watch_cell().borrow_mut() = Some(Watch { poller: Rc::downgrade(&self.core), slot: index });
         Ok(Outcome::Done(true))
     }
 
@@ -358,7 +475,7 @@ impl Poller {
         let mut slots = self.core.slots.borrow_mut();
         let index = slots.find(WHAT, token)?;
         let slot = &mut slots.entries[index as usize];
-        slot.interest = parse_interest(WHAT, interest, slot.listener)?;
+        slot.interest = parse_interest(WHAT, interest, slot.read_only)?;
         Ok(())
     }
 
@@ -368,9 +485,9 @@ impl Poller {
         let token = check_token(WHAT, token)?;
         let mut slots = self.core.slots.borrow_mut();
         let index = slots.find(WHAT, token)?;
-        if let Some(io) = slots.entries[index as usize].io.upgrade() {
-            io.watch.borrow_mut().take();
-            io.with_socket(|socket| socket.deregister(&self.core.registry));
+        if let Some(source) = slots.entries[index as usize].source.upgrade() {
+            source.watch_cell().borrow_mut().take();
+            source.deregister(&self.core);
         }
         slots.free(index);
         Ok(())
@@ -397,8 +514,12 @@ impl Poller {
         self.core.sweep(&mut slots);
         let max = self.core.limits.events as usize;
         loop {
-            let pending = slots.entries.iter().any(Slot::is_ready);
-            let timeout = if pending { Duration::ZERO } else { deadline.saturating_duration_since(Instant::now()) };
+            let now = Instant::now();
+            let (pending, earliest) = slots.survey(now);
+            // A source's own deadline ends the OS wait early, so it is reported on time with no
+            // thread or timer behind it.
+            let until = earliest.map_or(deadline, |earliest| earliest.min(deadline));
+            let timeout = if pending { Duration::ZERO } else { until.saturating_duration_since(now) };
             match poll.poll(&mut events, Some(timeout)) {
                 Ok(()) => slots.apply(&events),
                 Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
@@ -409,10 +530,12 @@ impl Poller {
                     }));
                 }
             }
-            let queued = slots.fill(max);
-            // Events for interest the script does not hold wake the OS wait without making
-            // anything reportable; keep waiting out the budget.
-            if queued > 0 || Instant::now() >= deadline {
+            let now = Instant::now();
+            let queued = slots.fill(max, now);
+            // Events for interest the script does not hold, and wakes for sources that are not
+            // reportable yet, end the OS wait without making anything reportable; keep waiting
+            // out the budget.
+            if queued > 0 || now >= deadline {
                 return Ok(Outcome::Done(queued as f64));
             }
         }
@@ -420,6 +543,7 @@ impl Poller {
 
     fn next(&self) -> Result<Next> {
         self.open("next")?;
+        let now = Instant::now();
         let mut slots = self.core.slots.borrow_mut();
         while let Some((index, generation)) = slots.queue.pop_front() {
             let slot = &slots.entries[index as usize];
@@ -427,7 +551,7 @@ impl Poller {
             if !slot.used || slot.generation != generation {
                 continue;
             }
-            let bits = slot.reportable();
+            let bits = slot.reportable(now);
             if bits == 0 {
                 continue;
             }
@@ -441,6 +565,7 @@ impl Poller {
     pub fn close(&self) {
         self.core.release_all();
         self.core.poll.borrow_mut().take();
+        self.core.waker.borrow_mut().take();
         *self.core.events.borrow_mut() = mio::Events::with_capacity(0);
         let mut slots = self.core.slots.borrow_mut();
         slots.entries = Vec::new();
@@ -449,7 +574,7 @@ impl Poller {
     }
 }
 
-fn parse_interest(what: &str, interest: &str, listener: bool) -> Result<u8> {
+fn parse_interest(what: &str, interest: &str, read_only: bool) -> Result<u8> {
     let bits = match interest {
         "read" => READ,
         "write" => WRITE,
@@ -460,9 +585,9 @@ fn parse_interest(what: &str, interest: &str, listener: bool) -> Result<u8> {
             )));
         }
     };
-    if listener && bits & WRITE != 0 {
+    if read_only && bits & WRITE != 0 {
         return Err(Error::runtime(format!(
-            "dream.tcp.Poller.{what}: a listener is only ever readable; watch it for 'read'"
+            "dream.tcp.Poller.{what}: a listener is only ever readable (so is a request); watch it for 'read'"
         )));
     }
     Ok(bits)
@@ -481,14 +606,14 @@ fn check_token(what: &str, token: Exact<i64>) -> Result<i64> {
 pub(super) fn describe_poller(d: &mut ExtensionDescriptor) {
     let mut poller = d.userdata::<Poller>(Poller::NAME);
     poller.tag(TagPolicy::Preferred).doc(
-        "Level-triggered readiness for watched listeners and streams, under caller-chosen tokens. Never calls Luau.",
+        "Level-triggered readiness for watched listeners, streams and the handles other extensions add, under caller-chosen tokens. Never calls Luau.",
     );
     poller
         .method("watch", |p: &Poller, handle: ValueView<'_>, token: Exact<i64>, interest: &str| {
             p.watch(handle, token, interest)
         })
-        .signature("(self, handle: dream_tcp_Listener | dream_tcp_Stream, token: number, interest: dream_tcp_Interest): (boolean?, string?, dream_tcp_ErrorKind?)")
-        .doc("Watches an open handle under a token unique in this poller. A handle is watched by one poller at a time; a listener only for 'read'.");
+        .signature("(self, handle: dream_tcp_Watchable, token: number, interest: dream_tcp_Interest): (boolean?, string?, dream_tcp_ErrorKind?)")
+        .doc("Watches an open handle under a token unique in this poller. A handle is watched by one poller at a time; a listener or a request only for 'read'.");
     poller
         .method("modify", |p: &Poller, token: Exact<i64>, interest: &str| p.modify(token, interest))
         .signature("(self, token: number, interest: dream_tcp_Interest)")
@@ -518,4 +643,150 @@ pub(super) fn describe_poller(d: &mut ExtensionDescriptor) {
             if p.core.poll.borrow().is_none() { ", closed" } else { "" }
         )
     });
+}
+
+#[cfg(test)]
+mod tests {
+    //! The seam other extensions build on, without them: a socketless source woken from another
+    //! thread, a synthetic deadline, and the waker's token kept apart from every slot's.
+
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    use super::*;
+
+    /// A socketless source completed by another thread through the poller's waker.
+    struct Flag {
+        watch: RefCell<Option<Watch>>,
+        done: Arc<AtomicBool>,
+        waker: RefCell<Option<Arc<mio::Waker>>>,
+        due: Rc<Due>,
+    }
+
+    /// The flag's readiness, apart from it as the poller requires.
+    struct Due {
+        done: Arc<AtomicBool>,
+        deadline: Option<Instant>,
+    }
+
+    impl Watchable for Flag {
+        fn watch_cell(&self) -> &RefCell<Option<Watch>> {
+            &self.watch
+        }
+        fn register(&self, core: &Core, _: mio::Token) -> io::Result<()> {
+            *self.waker.borrow_mut() = Some(core.waker()?);
+            Ok(())
+        }
+        fn deregister(&self, _: &Core) {
+            self.waker.borrow_mut().take();
+        }
+    }
+
+    impl Synthetic for Due {
+        fn reportable(&self, _: u8, interest: u8, now: Instant) -> u8 {
+            let due = self.done.load(Ordering::Acquire) || self.deadline.is_some_and(|deadline| now >= deadline);
+            if due && interest & READ != 0 { READABLE } else { 0 }
+        }
+        fn deadline(&self) -> Option<Instant> {
+            if self.done.load(Ordering::Acquire) { None } else { self.deadline }
+        }
+    }
+
+    fn flag(deadline: Option<Instant>) -> Rc<Flag> {
+        let done = Arc::new(AtomicBool::new(false));
+        Rc::new(Flag {
+            watch: RefCell::new(None),
+            done: Arc::clone(&done),
+            waker: RefCell::new(None),
+            due: Rc::new(Due { done, deadline }),
+        })
+    }
+
+    fn watch(poller: &Poller, source: &Rc<Flag>, token: i64) {
+        let target = Target {
+            source: Rc::clone(source) as Rc<dyn Watchable>,
+            ready: Rc::new(Cell::new(0)),
+            read_only: true,
+            synthetic: Some(Rc::clone(&source.due) as Rc<dyn Synthetic>),
+        };
+        assert!(matches!(poller.watch_target(target, token, READ).unwrap(), Outcome::Done(true)));
+    }
+
+    /// The wait loop without a VM: the same survey, OS wait and fill.
+    fn wait(poller: &Poller, timeout: Duration) -> usize {
+        let deadline = Instant::now() + timeout;
+        let mut poll = poller.core.poll.borrow_mut();
+        let poll = poll.as_mut().unwrap();
+        let mut events = poller.core.events.borrow_mut();
+        let mut slots = poller.core.slots.borrow_mut();
+        loop {
+            let now = Instant::now();
+            let (pending, earliest) = slots.survey(now);
+            let until = earliest.map_or(deadline, |earliest| earliest.min(deadline));
+            let timeout = if pending { Duration::ZERO } else { until.saturating_duration_since(now) };
+            poll.poll(&mut events, Some(timeout)).unwrap();
+            slots.apply(&events);
+            let now = Instant::now();
+            let queued = slots.fill(256, now);
+            if queued > 0 || now >= deadline {
+                return queued;
+            }
+        }
+    }
+
+    #[test]
+    fn a_completion_on_another_thread_ends_a_wait_promptly() {
+        let poller = Poller::new(Limits::default()).unwrap();
+        let source = flag(None);
+        watch(&poller, &source, 7);
+        let (done, waker) = (Arc::clone(&source.done), source.waker.borrow().clone().unwrap());
+        let worker = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(30));
+            done.store(true, Ordering::Release);
+            waker.wake().unwrap();
+        });
+        let started = Instant::now();
+        assert_eq!(wait(&poller, Duration::from_secs(5)), 1);
+        assert!(started.elapsed() < Duration::from_secs(1), "{:?}", started.elapsed());
+        worker.join().unwrap();
+        assert_eq!(poller.next().unwrap(), Some((7.0, true, false, false)));
+        // Completed before it is watched: reported at once, no wake needed.
+        let early = flag(None);
+        early.done.store(true, Ordering::Release);
+        watch(&poller, &early, 8);
+        assert_eq!(wait(&poller, Duration::ZERO), 2);
+    }
+
+    #[test]
+    fn a_deadline_ends_a_wait_with_no_event() {
+        let poller = Poller::new(Limits::default()).unwrap();
+        let source = flag(Some(Instant::now() + Duration::from_millis(40)));
+        watch(&poller, &source, 1);
+        let started = Instant::now();
+        assert_eq!(wait(&poller, Duration::from_secs(5)), 1);
+        let waited = started.elapsed();
+        assert!(waited >= Duration::from_millis(35) && waited < Duration::from_secs(1), "{waited:?}");
+    }
+
+    #[test]
+    fn the_wake_token_is_never_a_slot_and_releasing_a_source_frees_its_slot() {
+        assert_ne!(Slots::mio_token(0, 0), WAKE_TOKEN);
+        assert_ne!(Slots::mio_token(65_535, u32::MAX), WAKE_TOKEN);
+        let poller = Poller::new(Limits::default()).unwrap();
+        let source = flag(None);
+        watch(&poller, &source, 3);
+        // A wake for nothing reportable ends the OS wait but queues nothing.
+        source.waker.borrow().as_ref().unwrap().wake().unwrap();
+        assert_eq!(wait(&poller, Duration::from_millis(20)), 0);
+        let slot = source.watch.borrow().as_ref().unwrap().slot;
+        source.watch.borrow_mut().take();
+        poller.core.release(slot);
+        assert_eq!(poller.core.slots.borrow().by_token.len(), 0);
+        // The freed slot's next watch has a new generation, so an old token cannot reach it.
+        let again = flag(None);
+        watch(&poller, &again, 3);
+        assert_eq!(poller.core.slots.borrow().entries[slot as usize].generation, 1);
+        drop(again);
+        poller.core.slots.borrow_mut().sweep();
+        assert_eq!(poller.core.slots.borrow().by_token.len(), 0);
+    }
 }

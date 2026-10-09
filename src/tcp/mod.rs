@@ -57,8 +57,8 @@
 //! alive. `close()` releases a socket and its registration at once, and collecting the userdata
 //! does the same. Handles belong to the runtime that made them and are not `Send`.
 
-mod poller;
-mod socket;
+pub(crate) mod poller;
+pub(crate) mod socket;
 
 pub use poller::Poller;
 pub use socket::{Listener, Stream, StreamState};
@@ -240,7 +240,12 @@ impl Extension for TcpExtension {
         d.type_alias("dream_tcp_ListenOptions", LISTEN_OPTIONS_TYPE);
         d.type_alias("dream_tcp_ConnectOptions", CONNECT_OPTIONS_TYPE);
         d.type_alias("dream_tcp_PollerOptions", POLLER_OPTIONS_TYPE);
-        d.type_alias("dream_tcp_StreamState", "\"connecting\" | \"connected\" | \"failed\" | \"closed\"");
+        d.type_alias(
+            "dream_tcp_StreamState",
+            "\"connecting\" | \"connected\" | \"failed\" | \"closed\" | \"consumed\"",
+        );
+        // Other extensions widen this with the handles they let a poller watch.
+        d.type_alias("dream_tcp_Watchable", "dream_tcp_Listener | dream_tcp_Stream");
         d.type_alias("dream_tcp_Interest", "\"read\" | \"write\" | \"readwrite\"");
         d.type_alias("dream_tcp_Shutdown", "\"read\" | \"write\" | \"both\"");
         d.optional_capability(CONNECT_CAPABILITY);
