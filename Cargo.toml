@@ -49,7 +49,8 @@ include = [
 ]
 
 [dependencies]
-# Networking is runtime infrastructure, not a feature: l3i owns the Luau bridge to dream-net.
+# The game transport is runtime infrastructure, not a feature: l3i owns the Luau bridge to
+# dream-net. (Raw TCP is the optional `tcp` feature below.)
 # Pinned exactly: the transport's wire behaviour is part of what a runtime promises.
 dream-net = "=1.1.0"
 # The CPU rasterizer is a domain extension, behind the `soft-render` feature.

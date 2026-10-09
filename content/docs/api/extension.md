@@ -1,6 +1,6 @@
 +++
 title = "Extensions and primitives"
-description = "Extension, ExtensionDescriptor and the declaration builders; RuntimePlan, RuntimePolicy and InstallContext; packed scalars and buffer layouts; sequences and streams; the dream.quat, dream.raster, dream.udp and dream.soft_render extensions."
+description = "Extension, ExtensionDescriptor and the declaration builders; RuntimePlan, RuntimePolicy and InstallContext; packed scalars and buffer layouts; sequences and streams; the dream.quat, dream.raster, dream.udp, dream.soft_render and dream.tcp extensions."
 weight = 250
 
 [extra]
@@ -823,3 +823,42 @@ The extension; `id()` is `"dream.luau"` (`EXTENSION_ID`), the module path is `MO
 | `TYPES: &[(&str, &str)]` | Every `dream_luau_*` type the definitions declare, name and definition, in order: the node kinds, the unions over them, the result |
 | `TOKEN_KINDS: [&str; 14]` | The token kind names, numbered from 1 in this order as `luau.tokenKinds` numbers them |
 
+
+## dream.tcp
+
+Module `l3i::tcp`, feature `tcp`; the Luau side is in
+[Built-in extensions](@/docs/builtin-extensions.md#dream-tcp).
+
+{{ api_signature(value="pub struct TcpExtension") }}
+
+The extension; `id()` is `"dream.tcp"` (`EXTENSION_ID`), the module path is `MODULE`
+(`"@dream/tcp"`). `Clone`, `Copy`, `Debug`, `Default`.
+
+| Item | What it is |
+|---|---|
+| `CONNECT_CAPABILITY` | `"network.tcp.connect"`: `tcp.connect` |
+| `LISTEN_CAPABILITY` | `"network.tcp.listen"`: `tcp.listen` on loopback |
+| `PUBLIC_CAPABILITY` | `"network.tcp.public"`: with listen, wildcard and non-loopback binds |
+| `MAX_WAIT_MS: u32` | 60000, the longest `Poller:wait` any poller allows |
+| `MAX_POLLER_LIMIT: u32` | 65536, the most `maxEvents` and `maxWatches` |
+| `MAX_STREAM_LIMIT: u32` | 65536, the most `maxStreams` |
+
+{{ api_signature(value="pub struct Listener") }}
+
+The userdata behind `tcp.listen` (`"dream.tcp.Listener"`). `from_std(std::net::TcpListener,
+max_streams: u32) -> io::Result<Listener>` wraps a listener the host bound and makes it
+nonblocking; `push(scope, listener)` hands it to a script, which needs no capability to use
+it. `local_address()`, `is_closed()`, `close()`.
+
+{{ api_signature(value="pub struct Stream") }}
+
+The userdata behind `tcp.connect` and `Listener:accept` (`"dream.tcp.Stream"`).
+`from_std(std::net::TcpStream) -> io::Result<Stream>` wraps a connected stream the host made;
+`push(scope, stream)`. `state() -> StreamState` (`Connecting`, `Connected`, `Failed`, `Closed`,
+with `name()` the script's spelling), `peer_address()`, `local_address()`, `close()`.
+
+{{ api_signature(value="pub struct Poller") }}
+
+The userdata behind `tcp.poller` (`"dream.tcp.Poller"`); `close()` releases every watch and
+the OS poller. Listeners, streams and pollers are `!Send`: they belong to the runtime that made
+them.

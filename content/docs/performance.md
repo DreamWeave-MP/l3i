@@ -17,7 +17,7 @@ is a deliberate change that re-audits the hand-declared C API.
 
 - **Rust 1.92** or newer, declared as `rust-version` and checked in CI. Edition 2024. The optional `dream-soft-render` dependency declares the same.
 - `unsafe` is used, at the FFI boundary and in the value-layout reads; every block states the invariant it relies on (see [Safety](@/docs/safety.md)).
-- Optional features, all off by default: `jit`, `analysis`, `soft-render`, `bytes` with `bytes-codecs`, `bytes-digests`, `bytes-text` and `bytes-regex`, `intern`, `intl`, and `syntax` (see [Building](@/docs/building.md)).
+- Optional features, all off by default: `jit`, `analysis`, `soft-render`, `bytes` with `bytes-codecs`, `bytes-digests`, `bytes-text` and `bytes-regex`, `intern`, `intl`, `syntax`, and `tcp` (see [Building](@/docs/building.md)).
 
 | Dependency | Version | For |
 |---|---|---|
@@ -25,6 +25,7 @@ is a deliberate change that re-audits the hand-declared C API.
 | `dream-soft-render` | `=1.0.0`, optional (`soft-render`) | The `dream.soft_render` extension |
 | `memchr`, `miniz_oxide`, `lz4_flex`, `ruzstd`, `lzma-rs`, `crc32fast`, `adler2`, `xxhash-rust`, `md-5`, `sha1`, `sha2`, `blake3`, `encoding_rs` | Optional, behind `bytes` and its `bytes-*` features | `@dream/bytes`'s searches, codecs, digests and text encodings |
 | `icu_locale_core`, `icu_plurals`, `icu_decimal`, `fixed_decimal`, `writeable` | `2.3` (`fixed_decimal` `0.7` with `ryu`, `writeable` `0.6`), optional, behind `intl` | `@dream/intl`'s locales, plural rules and decimal formatting, with ICU4X's compiled CLDR data |
+| `mio`, `socket2` | `1.2` (`os-poll`, `net`), `0.6` (`all`), optional, behind `tcp` | `@dream/tcp`'s nonblocking sockets and OS readiness; `socket2` is already in the tree through `dream-net` |
 | `cc` | `1`, `parallel` feature, build only | Compiling the Luau submodule and `csrc/` |
 | `criterion` | `0.8.2`, dev only | The benchmarks |
 
@@ -77,6 +78,7 @@ The integration tests link as one binary (`tests/main.rs`), one file's tests run
 | `tests/vector_writer.rs` | `vector:writef32x3` on the interpreter path |
 | `tests/extension.rs` | The planner's gates: dependency order, composition, direct dispatch, tags and atoms per VM, the stale-cache check, compiler metadata, services, capabilities, state and drop order, every rejected composition, compiler type slots |
 | `tests/primitives.rs` | Zero-copy bytes, strict options, sequence and stream views, exact integers and bit patterns, packed scalars |
+| `tests/tcp.rs` (`tcp`) | `@dream/tcp` over real loopback sockets: the capability gates, IPv4 and IPv6 addresses, connects settled by the socket error, echo of binary payloads across several clients, end of stream against would-block, buffer windows, partial writes under backpressure, half-close, level-triggered readiness and stale tokens, bounded and fair waits, the watchdog, close and collection, host-made handles, and a Luau HTTP/1.1 server answering standard clients |
 | `tests/udp.rs` | The dream-net bridge over real localhost UDP: a schema from Luau, a host-created server, a script-created client, events both ways, stats, the capability gate |
 | `tests/quat.rs` | Packed quaternions against the f32 userdata baseline, kind checks, and (`jit`) the native lowering |
 | `tests/raster.rs` | Colors and clip rectangles: construction, kind checks, the byte layout, and (`jit`) the lowered color math |

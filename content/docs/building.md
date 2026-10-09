@@ -91,9 +91,10 @@ l3i = { version = "1.0", features = ["jit"] }
 | `syntax` | off | The `dream.luau` extension (`l3i::syntax`) and `csrc/syntax.cpp`, which builds Luau's parse tree as tables; Luau's Ast library is in every build, so no dependencies |
 | `fs` | off | The `dream.fs` extension (`l3i::fs`) with `memmap2`, `walkdir` and `same-file` |
 | `process` | off | The `dream.process` extension (`l3i::process`); no dependencies |
+| `tcp` | off | The `dream.tcp` extension (`l3i::tcp`) with `mio` (epoll, kqueue, IOCP) and `socket2` (backlog, address reuse, Apple's `SO_NOSIGPIPE`): TCP listeners, streams and a readiness poller |
 
-Networking is not a feature: `dream-net` is a normal dependency and the `dream.udp` bridge is in
-every plan.
+The game transport is not a feature: `dream-net` is a normal dependency and the `dream.udp`
+bridge is in every plan. Raw TCP is the optional `tcp` feature.
 
 ## The toolchain rule
 

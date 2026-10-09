@@ -1,7 +1,8 @@
 //! The dream-net bridge: extension `dream.udp`, module `@dream/udp`, types `dream.udp.Server`,
 //! `dream.udp.Client`, `dream.udp.Schema`.
 //!
-//! Networking is runtime infrastructure here, not a feature. dream-net stays pure Rust and
+//! The game transport is runtime infrastructure here, not a feature (raw TCP is the optional
+//! `tcp` feature's `dream.tcp`, which shares nothing with it). dream-net stays pure Rust and
 //! knows peers, event ids, channels, and bytes; this module owns the Luau-facing shape:
 //!
 //! - peer, event, channel, and client ids are Luau integers (exact, compared with `==`),

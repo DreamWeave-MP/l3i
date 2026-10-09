@@ -1,13 +1,13 @@
 +++
 title = "Built-in extensions"
-description = "The extensions l3i ships: the dream.udp bridge every plan carries, packed rotations in dream.quat, colors and clip rectangles in dream.raster, the dream.soft_render device, bytes for parsing in dream.bytes, textual identity as numbers in dream.intern, locales, plural rules and number formatting in dream.intl, Luau's own parser in dream.luau, the host filesystem in dream.fs, and child processes in dream.process."
+description = "The extensions l3i ships: the dream.udp bridge every plan carries, packed rotations in dream.quat, colors and clip rectangles in dream.raster, the dream.soft_render device, bytes for parsing in dream.bytes, textual identity as numbers in dream.intern, locales, plural rules and number formatting in dream.intl, Luau's own parser in dream.luau, the host filesystem in dream.fs, child processes in dream.process, and raw TCP streams with a readiness poller in dream.tcp."
 weight = 90
 
 [extra]
 kind = "guide"
 +++
 
-Ten extensions come with the crate. `dream.udp` is in every plan; the others are added with
+Eleven extensions come with the crate. `dream.udp` is in every plan; the others are added with
 `RuntimePlan::builder().extension(..)`. Each is an ordinary `Extension` built on the
 [primitives](@/docs/primitives.md), with a Luau signature on every member, so a strict script
 that requires its module type checks against the plan's definitions.
@@ -24,14 +24,15 @@ that requires its module type checks against the plan's definitions.
 | `dream.luau` | `@dream/luau` | `l3i::syntax::SyntaxExtension` | `syntax` |
 | `dream.fs` | `@dream/fs` | `l3i::fs::FsExtension` | `fs` |
 | `dream.process` | `@dream/process` | `l3i::process::ProcessExtension` | `process` |
+| `dream.tcp` | `@dream/tcp` | `l3i::tcp::TcpExtension` | `tcp` |
 
 The samples below reach the modules as compat globals (`RuntimePolicy::new().compat_global("@dream/quat", "quat")`),
 which is what the tests do; `require("@dream/quat")` is the canonical path.
 
 ## dream.udp
 
-Networking is runtime infrastructure, not a feature: l3i depends on dream-net and owns the Luau
-bridge. The planner adds `UdpExtension` to every plan and reserves the id `dream.udp`, so no
+The game transport is runtime infrastructure, not a feature: l3i depends on dream-net and owns
+the Luau bridge. (Raw TCP is a separate, optional extension, [dream.tcp](#dream-tcp).) The planner adds `UdpExtension` to every plan and reserves the id `dream.udp`, so no
 runtime lacks the network and the policy's capabilities decide what scripts may do with it.
 dream-net stays pure Rust and knows peers, event ids, channels and bytes; this module owns the
 Luau-facing shape.
@@ -1113,3 +1114,250 @@ shell in between. A program the OS can't start returns `nil`, the message and th
 `@dream/fs` does. `run` needs `process.spawn` (`l3i::process::SPAWN_CAPABILITY`) and `env` needs
 `process.environment`; `write` and `isTerminal` need nothing, since `print` already reaches
 standard output.
+
+## dream.tcp
+
+Feature `tcp`; module `@dream/tcp`, `l3i::tcp::TcpExtension`. Raw TCP byte streams and a
+readiness poller over numeric addresses: a transport primitive, not a protocol. There is no
+HTTP, TLS, WebSocket, framing, text encoding or name resolution here; protocols are written in
+Luau on top. It is separate from `dream.udp` and shares nothing with it, capabilities included.
+The script or its host drives every phase: nothing calls into Luau, there is no thread, event
+loop or scheduler behind the module, and only `poller:wait` ever waits, for a bounded time.
+
+```luau
+local tcp = require("@dream/tcp")
+local listener = assert(tcp.listen("127.0.0.1:0", { noDelay = true }))
+local poller = tcp.poller()
+assert(poller:watch(listener, 0, "read"))
+local scratch = buffer.create(65536)
+local streams, nextToken = {}, 1
+
+while running do
+    poller:wait(250)
+    while true do
+        local token, readable, writable, closed = poller:next()
+        if token == nil then break end
+        if token == 0 then
+            -- Drain the listener: accept until it says 'wouldBlock'.
+            while true do
+                local stream = listener:accept()
+                if not stream then break end
+                streams[nextToken] = stream
+                assert(poller:watch(stream, nextToken, "read"))
+                nextToken += 1
+            end
+        elseif readable then
+            local stream = streams[token]
+            while true do
+                local count, message, kind = stream:readInto(scratch)
+                if count == nil then
+                    if kind ~= "wouldBlock" then poller:unwatch(token) stream:close() end
+                    break
+                end
+                if count == 0 then poller:unwatch(token) stream:close() break end -- end of stream
+                handle(stream, scratch, count)
+            end
+        end
+    end
+end
+```
+
+### The module
+
+| Member | Type |
+|---|---|
+| `listen(address, options?)` | `(address: string, options: dream_tcp_ListenOptions?) -> (dream_tcp_Listener?, string?, dream_tcp_ErrorKind?)`: a nonblocking listener; port `0` picks one, and `localAddress` says which |
+| `connect(address, options?)` | `(address: string, options: dream_tcp_ConnectOptions?) -> (dream_tcp_Stream?, string?, dream_tcp_ErrorKind?)`: starts a nonblocking connect; the stream is `"connecting"` until `finishConnect()` says otherwise |
+| `poller(options?)` | `(options: dream_tcp_PollerOptions?) -> dream_tcp_Poller` |
+| `MAX_WAIT_MS` | Folded number: 60000, the longest wait any poller allows |
+
+| Options of | Key | Values | Default |
+|---|---|---|---|
+| `listen` | `backlog` | 1 to 65535: connections the OS queues before `accept` | 128 |
+| `listen` | `reuseAddress` | `SO_REUSEADDR`, to bind a port a closed listener left in `TIME_WAIT`; ignored on Windows, where it would let another socket take a port in use | `true` |
+| `listen` | `noDelay` | Nagle's algorithm off on every accepted stream | `false` |
+| `listen` | `maxStreams` | 1 to 65536: accepted streams that may be open at once | 1024 |
+| `connect` | `noDelay` | Nagle's algorithm off | `false` |
+| `poller` | `maxEvents` | 1 to 65536: events one `wait` queues | 256 |
+| `poller` | `maxWatches` | 1 to 65536: handles one poller watches | 1024 |
+| `poller` | `maxWaitMs` | 0 to 60000: the longest `wait` this poller allows | 1000 |
+
+An unknown option, or a value outside its range, is an error naming it.
+
+### Streams are bytes
+
+A stream carries bytes and nothing else: no message boundaries, no newline handling, no text
+encoding, NUL bytes included. Nothing is buffered behind it in either direction.
+
+| Member | Does |
+|---|---|
+| `readInto(target, offset?, length?)` | Receives straight into `target` at `offset` (default 0), at most `length` bytes (default the space after `offset`, and at least 1). Returns the count; **`0` is end of stream**, the peer closed its write half, and stays `0`; **`nil, message, "wouldBlock"`** is nothing ready yet. The two are never the same answer |
+| `write(data, offset?, length?)` | Hands the OS the range of a buffer or string once and returns how many bytes it took, **possibly fewer than given**; the caller keeps the rest and writes it when the stream is writable. `nil, message, "wouldBlock"` when it took none; an empty range returns `0` without a system call |
+| `finishConnect()` | `true` once connected, `false` while the connect is pending, or `nil`, the message and the kind (`"connectionRefused"`, `"timedOut"`, ...) when it failed. It reads the socket's pending error and then its peer, never writability alone |
+| `shutdown(how)` | `"write"` sends end of stream and leaves reading open (a half-close, not `close`); `"read"` and `"both"` as named |
+| `close()` | Closes the socket and drops its registration at once; closing twice does nothing |
+| `localAddress`, `peerAddress` | `"127.0.0.1:50211"`, `"[::1]:50211"`; `localAddress` is nil until the OS assigns one |
+| `state` | `"connecting"`, `"connected"`, `"failed"` or `"closed"` |
+| `closed` | Whether `close()` was called |
+
+`readInto` and `write` settle a pending connect first: while it is pending they answer
+`"wouldBlock"`, and once it failed every transfer, `finishConnect` included, answers that
+failure again. Neither ever waits, and neither keeps the buffer's address after it returns. A
+zero-byte read is an error rather than a `0` that would read as end of stream.
+
+A listener has `accept()`, which returns the next waiting stream and its peer's address, or
+`nil`, the message and `"wouldBlock"` when none is waiting, or `"limitReached"` at
+`maxStreams` without accepting; `close()`; and the getters `localAddress`, `closed` and
+`streams`, the accepted streams still open. Accepted streams stay open when their listener
+closes.
+
+### Readiness
+
+A poller watches handles under tokens the caller chooses, whole numbers from 0 to 2^53 unique
+within the poller. Tokens are not descriptors and mean nothing to the OS.
+
+| Member | Does |
+|---|---|
+| `watch(handle, token, interest)` | Watches an open listener or stream for `"read"`, `"write"` or `"readwrite"` (a listener only for `"read"`). A handle is watched by one poller at a time. Returns `true`, or the OS's refusal as `nil, message, kind` |
+| `modify(token, interest)` | Changes what a watch reports, without a system call |
+| `unwatch(token)` | Stops watching; the token may be used again at once |
+| `wait(timeoutMs)` | Waits at most `timeoutMs`, `0` to check without waiting, and queues up to `maxEvents` ready watches; returns how many. Never longer than `maxWaitMs`, and never past the runtime's execution time limit: inside a watched call the wait ends at the deadline and the watchdog raises as soon as Luau runs again |
+| `next()` | The next queued event as `token, readable, writable, closed`, or `nil` when the queue is drained |
+| `close()` | Releases every watch, the OS poller and its event buffer; the handles stay open. Closing twice does nothing |
+| `watching`, `closed` | Getters: watches held, and whether `close()` was called |
+
+Readiness is **level-triggered**. The OS reports edges (epoll and kqueue edge-triggered, IOCP
+through AFD, all by mio); the poller remembers the last readiness each handle was told and a
+handle forgets it only when an operation answers `"wouldBlock"`. So a watch is reported by every
+`wait` until the script has drained it, and a `wait` with anything still pending does not
+block. Readiness is a hint: an operation after it may still answer `"wouldBlock"`.
+
+- Drain: `accept` and `readInto` until `"wouldBlock"`; after a partial read, the next `wait`
+  reports the stream again.
+- Watch `"write"` only while bytes are waiting. A stream with room in its send buffer is always
+  writable, so a permanent `"readwrite"` watch makes every `wait` return at once. Write until
+  done or `"wouldBlock"`, then `modify` back to `"read"`.
+- `closed` is true when the peer will send nothing more: end of stream, a hang-up or a socket
+  error. It is reported with read interest, alongside `readable`, and stays set; the next
+  `readInto` returns `0` or the error. A half-closed stream may still be written.
+- After end of stream a read watch stays readable, as epoll's level mode does: unwatch, close,
+  or `modify` to `"write"`.
+- An event queued by `wait` is checked again by `next()`: a watch removed, replaced under the
+  same token, or drained since, is never reported, and an OS event raised for an old watch never
+  reaches a new one (each watch's OS token carries a generation).
+- When more than `maxEvents` watches are ready, the next `wait` starts its scan after the last
+  one reported, so every ready watch is reached within a few waits.
+- Events for interest the script does not hold wake the OS wait without being reported; the
+  wait goes on for the rest of its time.
+
+### Authority
+
+| Capability | Grants |
+|---|---|
+| `network.tcp.connect` (`CONNECT_CAPABILITY`) | `tcp.connect`, to any address |
+| `network.tcp.listen` (`LISTEN_CAPABILITY`) | `tcp.listen` on loopback addresses (`127.0.0.0/8`, `::1`) |
+| `network.tcp.public` (`PUBLIC_CAPABILITY`) | With `network.tcp.listen`, binding wildcard (`0.0.0.0`, `[::]`) and non-loopback addresses; nothing on its own |
+
+All three are denied unless the policy grants them, and none is implied by another or by
+`dream.udp`'s `network.transport`. A function whose capability is missing exists, typed, and
+raises a permission error. A stream accepted from a listener carries the listener's authority:
+a script that may only listen cannot connect anywhere. A host can hand a script handles it made
+itself with `Listener::from_std` and `Stream::from_std` and push them with `Listener::push` or
+`Stream::push`; the script then needs no capability, and has no other way to make a handle.
+
+`network.tcp.connect` is a coarse grant. It reaches every destination the host can reach,
+including services that listen only on loopback (databases, debuggers, admin ports, other
+local tools) and the local network. There is no endpoint allowlist; a scoped policy (hosts,
+ports, address ranges) is follow-up work, and this module is not a network sandbox.
+
+### Addresses and names
+
+Addresses are numeric: `127.0.0.1:80`, `[::1]:8080`. A name such as
+`localhost:80` is an error, not a lookup: resolving a name blocks for as long as the resolver
+takes, so it does not belong behind a function that never waits. A host that needs names
+resolves them, off the script's thread if need be, and passes the addresses on. Whether `[::]`
+also accepts IPv4 is the OS default.
+
+### Errors
+
+A call the OS refuses returns `nil`, the message and a `dream_tcp_ErrorKind`:
+`"wouldBlock"`, `"connectionRefused"`, `"connectionReset"`, `"connectionAborted"`,
+`"notConnected"`, `"brokenPipe"`, `"addressInUse"`, `"addressNotAvailable"`, `"timedOut"`,
+`"hostUnreachable"`, `"networkUnreachable"`, `"networkDown"`, `"permissionDenied"`,
+`"limitReached"` (a bound the script set, never the OS), `"invalidInput"`, `"unsupported"` or
+`"other"`. Messages name the call and the address: `dream.tcp.connect: 127.0.0.1:9: Connection
+refused (os error 111)`; the would-block messages are constants and allocate nothing. A
+malformed address, a bad option, an offset or length outside the buffer, an unknown interest,
+a token in use, a closed handle or poller, or a missing capability is an error raised in the
+script, never a panic.
+
+### Lifetimes
+
+Sockets and pollers are native state owned by their userdata. A poller refers to the handles it
+watches weakly and a handle to its poller weakly, so neither keeps the other or a socket alive,
+and no Luau value is retained. Collecting a stream or listener closes its socket and drops its
+watch; collecting or closing a poller releases every watch, and the handles may be watched by
+another poller. Handles belong to the runtime that made them and are not `Send`. Sockets are
+close-on-exec, so `process.run` children do not inherit them, and writes never raise `SIGPIPE`
+(`MSG_NOSIGNAL` on Linux, `SO_NOSIGPIPE` on Apple platforms).
+
+### An HTTP server in Luau
+
+`examples/tcp_http_server.luau` is a small HTTP/1.1 server written in Luau over this module,
+and `cargo run --example tcp_http_server --features tcp -- 127.0.0.1:8080` serves it to
+`curl -i http://127.0.0.1:8080/`. It is a demonstration, not a production server: one request
+per connection, a fixed `Content-Length` response, `Connection: close`, no request bodies, no
+keep-alive and no timeouts. What it does do properly is the transport part, and
+`tests/tcp.rs` holds it to that with standard clients that split their requests across writes
+and read a 4 MiB response late.
+
+### Not here
+
+TLS, name resolution, UDP sockets (`dream.udp` is the game transport), endpoint allowlists,
+keepalive and buffer-size options, connect and idle timeouts (the caller's loop owns time),
+cancelling a wait from another thread, and sharing handles between runtimes. The module has
+Windows and macOS code paths, and mio and socket2 support both, but it has been built and
+tested on Linux only so far.
+
+### What it costs
+
+Measured by `benches/tcp.rs` (`cargo bench --features tcp --bench tcp`) on an i7-10870H,
+Linux 7.2, over loopback in one thread; times are the best of five rounds, instructions are
+retired user-space instructions. Luau drives `@dream/tcp` from an interpreted loop; the Rust
+rows do the same with nonblocking `std::net` sockets.
+
+| Transfer size | Luau MiB/s | `std::net` MiB/s |
+|---:|---:|---:|
+| 1 KiB | 150 | 179 |
+| 4 KiB | 571 | 692 |
+| 16 KiB | 1971 | 2323 |
+| 64 KiB | 4090 | 4692 |
+
+| Operation | instr | ns |
+|---|---:|---:|
+| `stream.state`, the floor of a bound member | 760 | 50 |
+| `readInto` with nothing ready (`"wouldBlock"`) | 1679 | 328 |
+| `write` 16 B + `readInto` 16 B | 1811 | 5423 |
+| the same two calls through `std::net` | 169 | 4853 |
+| connect, accept, settle and close both ends, from Luau | 21142 | 47337 |
+| the same through blocking `std::net` | 334 | 33448 |
+| `wait(0)`, 1 / 32 / 256 idle watches | 1210 / 2636 / 12940 | 241 / 365 / 1277 |
+| `wait(0)` and draining `next()`, all of 1 / 32 / 256 ready | 2230 / 25945 / 197305 | 289 / 1840 / 13136 |
+
+Warm reads and writes allocate nothing native, and a transfer's throughput is within 13 to 18 %
+of `std::net` at every size: the system calls dominate, and the binder's call (about 760
+instructions, 50 ns) is the rest. Dispatch costs about 52 ns an event at 256 ready watches,
+the bound `next()` call; an idle `wait(0)` is one `epoll_wait` plus a scan of the watches, about
+4 ns each. The connection row is dominated by the helper pollers the bench makes per pair (22
+native allocations, mostly theirs) and by loopback's own handshake.
+
+Waiting does not spin: 256 idle watches over four `wait(250)` used 0.9 ms of CPU in a second,
+and a writer blocked on a full send buffer, writing until `"wouldBlock"` and waiting for
+writability ten times, used 1.3 ms in 0.9 s. Retention, live after a full collection: a stream
+is about 210 VM bytes and 90 native bytes, a listener 96 and 120, a watch 79 native bytes and
+no VM bytes; kernel socket buffers are the OS's and not counted.
+
+The bottlenecks are the system calls themselves (one per `readInto` or `write`, by design: no
+hidden queue to batch them) and, for many connections, `wait`'s scan of every watch, which is
+linear in the watches held. The feature adds one crate, mio (socket2 is already in the tree
+through dream-net).

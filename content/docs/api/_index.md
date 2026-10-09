@@ -31,10 +31,11 @@ the root.
 | `bytes-text` | Decoding and encoding every WHATWG-labelled text encoding | `bytes::text` |
 | `intern` | The `dream.intern` extension and `@dream/intern` module: pools that turn strings and buffer spans into dense number identities | `intern` |
 | `intl` | The `dream.intl` extension and `@dream/intl` module: BCP 47 locale identity, CLDR plural rules and decimal formatting | `intl` |
+| `tcp` | The `dream.tcp` extension and `@dream/tcp` module: nonblocking TCP listeners and byte streams over numeric addresses and a bounded, level-triggered readiness poller | `tcp` |
 | `syntax` | The `dream.luau` extension and `@dream/luau` module: Luau's own parser, the tree, comments, errors and tokens of a source as tables | `syntax` |
 
-The default feature set is empty. Networking is not a feature: `dream-net` is a dependency and
-every runtime plan carries the `dream.udp` bridge.
+The default feature set is empty. The game transport is not a feature: `dream-net` is a
+dependency and every runtime plan carries the `dream.udp` bridge; raw TCP is the `tcp` feature.
 
 | Page | Covers | Modules |
 |---|---|---|
