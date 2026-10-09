@@ -159,6 +159,14 @@ fn listen(
             Ok(())
         })?;
     }
+    // On the BSD stacks, Apple's included, SO_REUSEADDR also lets a socket bind a more specific
+    // address over a listening wildcard socket on the same port, so a loopback grant could take
+    // connections meant for the host's own public service. There it needs the public grant,
+    // which may bind any address anyway. Linux refuses that bind whatever the option says.
+    #[cfg(all(unix, not(any(target_os = "linux", target_os = "android"))))]
+    if !granted.public {
+        resolved.reuse_address = false;
+    }
     let listener = match Listener::bind(address, &resolved) {
         Ok(listener) => listener,
         Err(error) => return Ok(Outcome::Failed(refused("listen", &address, &error))),

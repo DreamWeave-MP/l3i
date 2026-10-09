@@ -1176,7 +1176,7 @@ end
 | Options of | Key | Values | Default |
 |---|---|---|---|
 | `listen` | `backlog` | 1 to 65535: connections the OS queues before `accept` | 128 |
-| `listen` | `reuseAddress` | `SO_REUSEADDR`, to bind a port a closed listener left in `TIME_WAIT`; ignored on Windows, where it would let another socket take a port in use | `true` |
+| `listen` | `reuseAddress` | `SO_REUSEADDR`, to bind a port a closed listener left in `TIME_WAIT`; ignored on Windows, where it would let another socket take a port in use, and on macOS and the BSDs without `network.tcp.public`, where it would let a loopback listener bind over a listening wildcard socket on the same port | `true` |
 | `listen` | `noDelay` | Nagle's algorithm off on every accepted stream | `false` |
 | `listen` | `maxStreams` | 1 to 65536: accepted streams that may be open at once | 1024 |
 | `connect` | `noDelay` | Nagle's algorithm off | `false` |
