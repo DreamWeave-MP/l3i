@@ -331,3 +331,40 @@ fn large_modules_compile_past_the_former_frontend_budgets() {
     }
     compile(&sums, &options).unwrap();
 }
+
+/// Hostile source costs the surface frontend time in proportion to its size: unclosed and
+/// deeply nested brackets, overlapping signatures and pattern values are each scanned once,
+/// never once per candidate. Four times the input may take about four times as long; a scan
+/// that rescans would take sixteen.
+#[test]
+fn hostile_source_is_scanned_in_linear_time() {
+    use l3i::source::{LoweringMode, lowering_snapshot};
+    use std::time::{Duration, Instant};
+    type Case = (&'static str, fn(usize) -> String);
+    let cases: [Case; 8] = [
+        ("closers before slices", |n| format!("x = {}", ")[1:2]".repeat(n))),
+        ("unclosed indexes", |n| format!("x = {}", "a[ ".repeat(n))),
+        ("nested indexes", |n| format!("{}1{}", "a[".repeat(n), "]".repeat(n))),
+        ("nested slices", |n| format!("{}1{}", "a[".repeat(n), ":1]".repeat(n))),
+        ("signatures", |n| format!("f({{}})\n{}g(x)", "function ".repeat(n))),
+        ("generics", |n| format!("local {{a}} = t\n{}", "function < ".repeat(n))),
+        ("unclosed pattern values", |n| "local {a} = ( ".repeat(n)),
+        ("unended pattern values", |n| "local {a} = function() ".repeat(n)),
+    ];
+    let time = |source: &str| {
+        (0..3)
+            .map(|_| {
+                let start = Instant::now();
+                let _ = lowering_snapshot(source, LoweringMode::Compile);
+                start.elapsed()
+            })
+            .min()
+            .unwrap()
+            .max(Duration::from_millis(5))
+    };
+    for (name, make) in cases {
+        let small = time(&make(2000));
+        let large = time(&make(8000));
+        assert!(large < small * 10, "{name}: {small:?} for 2000, {large:?} for 8000");
+    }
+}

@@ -246,6 +246,14 @@ int main()
         for (size_t i = 0; i < 5000; ++i) s += "values[first:last];";
         const auto d = parseSurface(s);
         assert(d.slices.size() == 5000 && d.errors.empty());
+        // Slices nest as deeply as comprehensions may; an index deeper than that is left to
+        // Luau as stock syntax.
+        std::string nested;
+        for (size_t i = 0; i < 200; ++i) nested += "a[";
+        nested += "1";
+        for (size_t i = 0; i < 200; ++i) nested += ":1]";
+        const auto deep = parseSurface(nested);
+        assert(deep.slices.size() == 128 && deep.errors.empty());
     }
     {
         const std::string s = "-- [for fake in xs => fake]\r\nlocal a = '[for fake]'\nlocal b = [==[[for fake]]==]\n"

@@ -3,6 +3,7 @@
 #include "Luau/Lexer.h"
 #include "Luau/Parser.h"
 #include <algorithm>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 
@@ -103,13 +104,16 @@ private:
         }
         if (!braceLed)
             return false;
+        // Signatures can overlap (`function function ... (`, or lists that never close), so the
+        // reading is budgeted in proportion to the source; running out is a maybe.
+        size_t steps = 4 * s.size() + 4096;
         for (size_t at = s.find("function"); at != std::string_view::npos; at = s.find("function", at + 1))
         {
             size_t i = at + 8;
             // The name path and generics, up to the parameter list.
             while (i < s.size() && s[i] != '(')
             {
-                if (opaque(i)) return true;
+                if (--steps == 0 || opaque(i)) return true;
                 if (s[i] == ')' || s[i] == '=' || s[i] == '{' || s[i] == ';') break;
                 ++i;
             }
@@ -119,7 +123,7 @@ private:
             for (; i < s.size(); ++i)
             {
                 const char c = s[i];
-                if (opaque(i)) return true;
+                if (--steps == 0 || opaque(i)) return true;
                 if (space(c)) continue;
                 if (c == '-' && i + 1 < s.size() && s[i + 1] == '>')
                 {
@@ -232,44 +236,71 @@ private:
     void scanSlices()
     {
         const std::vector<Token>& all = codeTokens();
-        for (size_t open = 0; open < all.size(); ++open)
+        // Partners, colons and nesting are found in one pass, so no candidate rescans the
+        // source. Each bracket kind is matched on its own, as counting that kind alone would:
+        // closeOf[i] is the `]` of the `[` at i (0 when unclosed), colonOf[i] the last `:`
+        // directly inside it, depthOf[i] how many `[` enclose it, and openOf[i] the opener of
+        // the `)`, `]` or `}` at i (SIZE_MAX when unmatched). nesting[i] counts the brackets
+        // of every kind opened minus closed before i, and commasAt the commas at each nesting.
+        const size_t count = all.size();
+        std::vector<size_t> closeOf(count, 0), colonOf(count, 0), depthOf(count, 0), openOf(count, SIZE_MAX);
+        std::vector<long> nesting(count + 1, 0);
+        std::unordered_map<long, std::vector<size_t>> commasAt;
+        {
+            std::vector<size_t> stacks[3];
+            for (size_t i = 0; i < count; ++i)
+            {
+                const int token = all[i].type;
+                const bool opening = token == '(' || token == '[' || token == '{';
+                const bool closing = token == ')' || token == ']' || token == '}';
+                nesting[i + 1] = nesting[i] + (opening ? 1 : 0) - (closing ? 1 : 0);
+                if (token == ',') commasAt[nesting[i]].push_back(i);
+                else if (token == ':' && !stacks[1].empty()) colonOf[stacks[1].back()] = i;
+                if (!opening && !closing) continue;
+                std::vector<size_t>& stack = stacks[token == '(' || token == ')' ? 0 : token == '[' || token == ']' ? 1 : 2];
+                if (opening)
+                {
+                    if (token == '[') depthOf[i] = stack.size();
+                    stack.push_back(i);
+                }
+                else if (!stack.empty())
+                {
+                    openOf[i] = stack.back();
+                    if (token == ']') closeOf[stack.back()] = i;
+                    stack.pop_back();
+                }
+            }
+        }
+        // Clause expressions that are generator slices, which their comprehension owns.
+        std::vector<std::pair<size_t, size_t>> generatorSlices;
+        for (const Comprehension& comprehension : document.comprehensions)
+            for (const Clause& clause : comprehension.clauses)
+                if (!clause.sliceSource.empty()) generatorSlices.emplace_back(clause.expression.begin, clause.expression.end);
+        std::sort(generatorSlices.begin(), generatorSlices.end());
+        for (size_t open = 0; open < count; ++open)
         {
             // A comprehension is never a slice, whatever colons its clauses contain.
-            if (all[open].type != '[' || open == 0 || (open + 1 < all.size() && all[open + 1].type == T::ReservedFor)) continue;
-            size_t close = open + 1;
-            int depth = 1;
-            size_t colon = 0;
-            for (; close < all.size() && depth; ++close)
-            {
-                if (all[close].type == '[') ++depth;
-                else if (all[close].type == ']') --depth;
-                else if (all[close].type == ':' && depth == 1) colon = close;
-            }
-            if (depth || !colon) continue;
-            // An optional `, "kind"` after the last bound makes the slice typed.
+            if (all[open].type != '[' || open == 0 || (open + 1 < count && all[open + 1].type == T::ReservedFor)) continue;
+            if (!closeOf[open] || !colonOf[open]) continue;
+            const size_t close = closeOf[open] + 1, colon = colonOf[open];
+            // A slice is validated again inside each enclosing one's text and lowered inside it,
+            // so an index nested as deeply as comprehensions may be is left to Luau as stock
+            // syntax: the validation stays linear in the source, and no valid Luau is refused.
+            if (depthOf[open] >= maxDepth) continue;
+            // An optional `, "kind"` after the last bound makes the slice typed: the first comma
+            // after the colon at the colon's nesting.
             size_t comma = 0;
-            int nested = 0;
-            for (size_t at = colon + 1; at + 1 < close; ++at)
+            if (const auto commas = commasAt.find(nesting[colon + 1]); commas != commasAt.end())
             {
-                const int token = all[at].type;
-                if (token == '(' || token == '[' || token == '{') ++nested;
-                else if (token == ')' || token == ']' || token == '}') --nested;
-                else if (token == ',' && nested == 0 && !comma) comma = at;
+                const auto at = std::upper_bound(commas->second.begin(), commas->second.end(), colon);
+                if (at != commas->second.end() && *at + 1 < close) comma = *at;
             }
             const size_t lastEnd = comma ? comma - 1 : close - 2;
             size_t start = open - 1;
             if (all[start].type == ')' || all[start].type == ']' || all[start].type == '}')
             {
-                const int closing = all[start].type;
-                const int wanted = closing == ')' ? '(' : closing == ']' ? '[' : '{';
-                int nested = 1;
-                while (start > 0 && nested)
-                {
-                    --start;
-                    if (all[start].type == closing) ++nested;
-                    else if (all[start].type == wanted) --nested;
-                }
-                if (nested) continue;
+                if (openOf[start] == SIZE_MAX) continue;
+                start = openOf[start];
                 if (start > 0 && all[start - 1].type == T::Name) --start;
             }
             else if (all[start].type != T::Name && all[start].type != T::Number &&
@@ -292,14 +323,8 @@ private:
                 else
                     badKind = true;
             }
-            const bool generatorSlice = std::any_of(document.comprehensions.begin(), document.comprehensions.end(),
-                [&](const Comprehension& comprehension) {
-                    return std::any_of(comprehension.clauses.begin(), comprehension.clauses.end(), [&](const Clause& clause) {
-                        return !clause.sliceSource.empty() && clause.expression.begin == slice.range.begin &&
-                            clause.expression.end == slice.range.end;
-                    });
-                });
-            if (generatorSlice) continue;
+            if (std::binary_search(generatorSlices.begin(), generatorSlices.end(), std::make_pair(slice.range.begin, slice.range.end)))
+                continue;
             // A colon inside an otherwise valid Luau index can be a method call,
             // e.g. values[obj:method()]. Stock syntax wins over JSL slicing.
             if (++prefixCalls > maxPrefixCalls || slice.range.end - slice.range.begin > maxPrefixBytes - prefixBytes)
@@ -494,6 +519,7 @@ private:
     void scanPatterns()
     {
         const std::vector<Token>& all = codeTokens();
+        indexPartners();
         for (size_t i = 0; i + 1 < all.size() && !stopped; ++i)
         {
             const int t = all[i].type, next = all[i + 1].type;
@@ -526,15 +552,21 @@ private:
             if (typeIn(all, i) == ':')
             {
                 // The annotation is Luau's to parse; only the '=' that ends it matters here.
+                // Inside brackets nothing but the closer matters, so the scan jumps to it.
                 local.colon = all[i++].range;
-                int depth = 0;
-                for (; !keywordStop(typeIn(all, i)) || depth > 0; ++i)
+                for (;; ++i)
                 {
                     const int t = typeIn(all, i);
-                    if (t == T::Eof) break;
-                    if (t == '(' || t == '[' || t == '{') ++depth;
-                    else if ((t == ')' || t == ']' || t == '}') && depth > 0) --depth;
-                    else if (t == '=' && depth == 0) break;
+                    if (t == '=' || keywordStop(t)) break;
+                    if (t == '(' || t == '[' || t == '{')
+                    {
+                        if (anyClose[i] == SIZE_MAX)
+                        {
+                            i = all.size() - 1;
+                            break;
+                        }
+                        i = anyClose[i];
+                    }
                 }
             }
             if (typeIn(all, i) == '=')
@@ -571,15 +603,8 @@ private:
             while ((typeIn(all, i) == '.' || typeIn(all, i) == ':') && typeIn(all, i + 1) == T::Name)
                 i += 2;
         }
-        if (typeIn(all, i) == '<')
-        {
-            int depth = 0;
-            for (; typeIn(all, i) != T::Eof; ++i)
-            {
-                if (typeIn(all, i) == '<') ++depth;
-                else if (typeIn(all, i) == '>' && --depth == 0) { ++i; break; }
-            }
-        }
+        // Generics hold names and packs, never a statement keyword, at which the skip stops.
+        if (typeIn(all, i) == '<' && (i = skipAngles(all, i)) == SIZE_MAX) return;
         if (typeIn(all, i) != '(') return;
         ++i;
         size_t parameter = 0;
@@ -660,26 +685,58 @@ private:
         return t == '?' || t == '|' || t == '&' || t == T::SkinnyArrow || t == '.' || t == '<' || t == '(';
     }
 
-    // From an opening '(', '[', '{' or interpolated string to just past its matching closer.
-    size_t skipBalanced(const std::vector<Token>& all, size_t i) const
+    // Partners over the code tokens, found once so that no scan or skip rescans the source:
+    // strictClose[i] is just past the closer of the '(', '[', '{' or interpolated string that
+    // opens at i when everything between nests by kind (SIZE_MAX when it does not, or never
+    // closes); anyClose[i] is the closer of the '(', '[' or '{' at i counting every kind alike
+    // (SIZE_MAX when unclosed); blockEnd[i] is just past the `end` of the block that the
+    // `function`, `do`, `repeat` or statement `if` at i opens (SIZE_MAX when none closes it).
+    std::vector<size_t> strictClose, anyClose, blockEnd;
+    void indexPartners()
     {
-        std::vector<int> closers;
-        for (; i < all.size(); ++i)
+        const std::vector<Token>& all = codeTokens();
+        strictClose.assign(all.size(), SIZE_MAX);
+        anyClose.assign(all.size(), SIZE_MAX);
+        blockEnd.assign(all.size(), SIZE_MAX);
+        std::vector<std::pair<size_t, int>> strict;
+        std::vector<size_t> any, blocks;
+        for (size_t i = 0; i < all.size(); ++i)
         {
             const int t = all[i].type;
-            if (t == T::Eof) return SIZE_MAX;
             const int close = t == '(' ? ')' : t == '[' ? ']' : t == '{' ? '}' : t == T::InterpStringBegin ? int(T::InterpStringEnd) : 0;
             if (close)
-                closers.push_back(close);
+            {
+                strict.emplace_back(i, close);
+                if (t != T::InterpStringBegin) any.push_back(i);
+            }
             else if (t == ')' || t == ']' || t == '}' || t == T::InterpStringEnd)
             {
-                if (closers.empty() || closers.back() != t) return SIZE_MAX;
-                closers.pop_back();
-                if (closers.empty()) return i + 1;
+                if (!strict.empty() && strict.back().second == t)
+                {
+                    strictClose[strict.back().first] = i + 1;
+                    strict.pop_back();
+                }
+                else
+                    strict.clear(); // Every opener still open meets this closer of another kind first.
+                if (t != T::InterpStringEnd && !any.empty())
+                {
+                    anyClose[any.back()] = i;
+                    any.pop_back();
+                }
+            }
+            if (t == T::ReservedFunction || t == T::ReservedDo || t == T::ReservedRepeat ||
+                (t == T::ReservedIf && (i == 0 || !expressionExpected(all[i - 1].type))))
+                blocks.push_back(i);
+            else if ((t == T::ReservedEnd || t == T::ReservedUntil) && !blocks.empty())
+            {
+                if (t == T::ReservedEnd) blockEnd[blocks.back()] = i + 1;
+                blocks.pop_back();
             }
         }
-        return SIZE_MAX;
     }
+
+    // From an opening '(', '[', '{' or interpolated string to just past its matching closer.
+    size_t skipBalanced(const std::vector<Token>&, size_t i) const { return i < strictClose.size() ? strictClose[i] : SIZE_MAX; }
 
     // From '<' to just past its matching '>', brackets inside balanced.
     size_t skipAngles(const std::vector<Token>& all, size_t i) const
@@ -768,9 +825,10 @@ private:
             while (typeIn(all, i) == T::Attribute || typeIn(all, i) == T::AttributeOpen)
             {
                 if (typeIn(all, i) == T::Attribute) { ++i; continue; }
-                int nested = 1; // `@[` ... `]`
-                for (++i; nested && typeIn(all, i) != T::Eof; ++i)
+                int nested = 1; // `@[` ... `]`, which holds no statement keyword.
+                for (++i; nested && !keywordStop(typeIn(all, i)); ++i)
                     nested += typeIn(all, i) == '[' ? 1 : typeIn(all, i) == ']' ? -1 : 0;
+                if (nested) return SIZE_MAX;
             }
             if (typeIn(all, i) != T::ReservedFunction) return SIZE_MAX;
             return skipFunction(all, i + 1, depth + 1);
@@ -821,19 +879,11 @@ private:
     size_t skipFunction(const std::vector<Token>& all, size_t i, size_t depth) const
     {
         if (depth > maxSkipDepth) return SIZE_MAX;
+        const size_t keyword = i - 1;
         if (typeIn(all, i) == '<' && (i = skipAngles(all, i)) == SIZE_MAX) return SIZE_MAX;
         if (typeIn(all, i) != '(' || (i = skipBalanced(all, i)) == SIZE_MAX) return SIZE_MAX;
         if (typeIn(all, i) == ':' && (i = skipType(all, i + 1, depth + 1)) == SIZE_MAX) return SIZE_MAX;
-        for (int blocks = 1; i < all.size(); ++i)
-        {
-            const int t = all[i].type;
-            if (t == T::Eof) return SIZE_MAX;
-            if (t == T::ReservedFunction || t == T::ReservedDo || t == T::ReservedRepeat) ++blocks;
-            else if (t == T::ReservedIf && !expressionExpected(all[i - 1].type)) ++blocks;
-            else if (t == T::ReservedUntil) --blocks;
-            else if (t == T::ReservedEnd && --blocks == 0) return i + 1;
-        }
-        return SIZE_MAX;
+        return keyword < blockEnd.size() && blockEnd[keyword] != SIZE_MAX && blockEnd[keyword] > i ? blockEnd[keyword] : SIZE_MAX;
     }
 
     // Whether the token before an `if` leaves an expression to come, making it an if-expression.
