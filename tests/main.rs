@@ -68,6 +68,8 @@ mod tagged;
 #[cfg(feature = "tcp")]
 mod tcp;
 mod thread;
+#[cfg(feature = "tls")]
+mod tls;
 #[cfg(all(feature = "analysis", feature = "soft-render"))]
 mod typed_definitions;
 mod udp;

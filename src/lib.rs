@@ -86,6 +86,8 @@ pub mod extension;
 pub mod flags;
 #[cfg(feature = "fs")]
 pub mod fs;
+#[cfg(any(feature = "dns", feature = "tls"))]
+pub mod hostname;
 #[cfg(feature = "intern")]
 pub mod intern;
 #[cfg(feature = "intl")]
@@ -97,7 +99,7 @@ pub mod native;
 #[cfg(feature = "jit")]
 pub mod native_code;
 pub mod options;
-#[cfg(any(feature = "fs", feature = "process", feature = "tcp", feature = "dns"))]
+#[cfg(any(feature = "fs", feature = "process", feature = "tcp", feature = "dns", feature = "tls"))]
 mod outcome;
 pub mod packed;
 #[cfg(feature = "process")]
@@ -119,6 +121,8 @@ pub mod syntax;
 #[cfg(feature = "tcp")]
 pub mod tcp;
 pub mod thread;
+#[cfg(feature = "tls")]
+pub mod tls;
 pub mod udp;
 pub mod userdata;
 pub mod value;

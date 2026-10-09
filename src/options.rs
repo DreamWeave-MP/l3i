@@ -151,6 +151,40 @@ impl<'f> Options<'_, 'f> {
         body(value).map(Some).map_err(|cause| self.field_error(key, &cause))
     }
 
+    /// [`Self::with_required`] with the reader's frame as well, for an option that may be a
+    /// value or a table to walk in place (`string | { string }`).
+    pub fn with_required_in<R>(
+        &mut self,
+        key: &str,
+        body: impl FnOnce(&Frame<'_>, ValueView<'_>) -> Result<R>,
+    ) -> Result<R> {
+        self.take(key);
+        if !self.keys.contains(key) {
+            return Err(Error::runtime(format!("{}: missing required option '{key}'", self.context)));
+        }
+        let step = self.frame.frame();
+        let value = self.table.raw_get(&step, key)?;
+        body(&step, value).map_err(|cause| self.field_error(key, &cause))
+    }
+
+    /// [`Self::with_required_in`] for an optional key: `None` when absent or nil.
+    pub fn with_optional_in<R>(
+        &mut self,
+        key: &str,
+        body: impl FnOnce(&Frame<'_>, ValueView<'_>) -> Result<R>,
+    ) -> Result<Option<R>> {
+        self.take(key);
+        if !self.keys.contains(key) {
+            return Ok(None);
+        }
+        let step = self.frame.frame();
+        let value = self.table.raw_get(&step, key)?;
+        if value.type_of() == Type::Nil {
+            return Ok(None);
+        }
+        body(&step, value).map(Some).map_err(|cause| self.field_error(key, &cause))
+    }
+
     /// The required table option `key`, walked in place: `body` gets the reader's frame to read
     /// elements through (`table.for_each_array(frame, ..)`, `table.raw_get(frame, ..)`) and the
     /// table's view, with nothing pinned. Any other type is a field error naming `table`.

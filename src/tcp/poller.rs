@@ -372,6 +372,10 @@ fn target(handle: ValueView<'_>) -> Result<Target> {
     if let Some(stream) = crate::userdata::receiver::<Stream>(handle) {
         return stream.target();
     }
+    #[cfg(feature = "tls")]
+    if let Some(target) = crate::tls::watch_target(handle) {
+        return target;
+    }
     #[cfg(feature = "dns")]
     if let Some(target) = crate::dns::watch_target(handle) {
         return target;

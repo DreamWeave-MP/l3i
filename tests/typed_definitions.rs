@@ -50,6 +50,8 @@ fn plan() -> Rc<RuntimePlan> {
     let builder = builder.extension(l3i::tcp::TcpExtension);
     #[cfg(feature = "dns")]
     let builder = builder.extension(l3i::dns::DnsExtension::default());
+    #[cfg(feature = "tls")]
+    let builder = builder.extension(l3i::tls::TlsExtension);
     builder.finalize().unwrap()
 }
 
@@ -240,6 +242,32 @@ const DNS_POLL_SCRIPT: (&str, &str) = (
      print(watched, token, readable)\n",
 );
 
+#[cfg(feature = "tls")]
+const TLS_SCRIPT: (&str, &str) = (
+    "tls_script",
+    "--!strict\n\
+     local tcp = require('@dream/tcp')\n\
+     local tls = require('@dream/tls')\n\
+     local config, problem, problemKind = tls.clientConfig({ roots = { 'pem' }, platform = false, alpn = { 'http/1.1' }, versions = { '1.3' } })\n\
+     local server, serverProblem = tls.serverConfig({ certChain = 'pem', privateKey = 'pem', alpn = { 'http/1.1' } })\n\
+     local raw = tcp.connect('127.0.0.1:443')\n\
+     if not raw or not config or not server then return end\n\
+     local secure, message, kind = tls.client(raw, { serverName = 'example.com', config = config, alpn = { 'h2' }, bufferLimit = 65536, handshakeTimeoutMs = 5000 })\n\
+     if not secure then return end\n\
+     local poller = tcp.poller()\n\
+     local watched: boolean? = poller:watch(secure, 1, 'readwrite')\n\
+     local done: boolean?, why: string?, failure: dream_tls_ErrorKind? = secure:handshake()\n\
+     local count: number? = secure:readInto(buffer.create(64), 0, 64)\n\
+     local wrote: number? = secure:write('GET / HTTP/1.1\\r\\n\\r\\n')\n\
+     local flushed: boolean? = secure:flush()\n\
+     local closing: boolean? = secure:shutdownWrite()\n\
+     local state: dream_tls_State = secure.state\n\
+     local alpn: string? = secure.alpn\n\
+     local version: string? = secure.protocolVersion\n\
+     print(watched, done, why, failure, count, wrote, flushed, closing, state, alpn, version, secure.cipherSuite, secure.serverName, secure.wantsRead, secure.wantsWrite, secure.handshaking, secure.peerAddress, secure.localAddress, problem, problemKind, serverProblem, message, kind)\n\
+     secure:close()\n",
+);
+
 /// A strict walker over the tree: refinement on `kind` narrows each union to its node type.
 #[cfg(feature = "syntax")]
 const SYNTAX_SCRIPT: (&str, &str) = (
@@ -374,6 +402,8 @@ fn the_generated_definitions_type_check_and_typed_scripts_pass_strict_mode() {
     all_scripts.push(DNS_SCRIPT);
     #[cfg(all(feature = "dns", feature = "tcp"))]
     all_scripts.push(DNS_POLL_SCRIPT);
+    #[cfg(feature = "tls")]
+    all_scripts.push(TLS_SCRIPT);
     let scripts = plan.analysis_sources(Scripts(all_scripts.iter().copied().collect()));
     let options = AnalysisOptions {
         definitions: vec![Definitions { name: "dream.d.luau".to_owned(), source: definitions.clone() }],

@@ -150,8 +150,8 @@ fn refused(what: &str, address: Option<SocketAddr>, error: &io::Error) -> Failur
 }
 
 /// The window `(offset, length)` of `len` bytes, defaults `0` and the space left, each argument
-/// checked the way `@dream/fs` checks a buffer window.
-fn window(
+/// checked the way `@dream/fs` checks a buffer window; `what` names the call in full.
+pub(crate) fn window(
     what: &str,
     noun: &str,
     len: usize,
@@ -159,20 +159,17 @@ fn window(
     length: Option<Exact<i64>>,
 ) -> Result<(usize, usize)> {
     let non_negative = |name: &str, value: Exact<i64>| {
-        usize::try_from(value.0)
-            .map_err(|_| Error::runtime(format!("dream.tcp.{what}: {name} {} is negative", value.0)))
+        usize::try_from(value.0).map_err(|_| Error::runtime(format!("{what}: {name} {} is negative", value.0)))
     };
     let offset = offset.map(|offset| non_negative("offset", offset)).transpose()?.unwrap_or(0);
     if offset > len {
-        return Err(Error::runtime(format!(
-            "dream.tcp.{what}: offset {offset} past the end of the {noun} (size {len})"
-        )));
+        return Err(Error::runtime(format!("{what}: offset {offset} past the end of the {noun} (size {len})")));
     }
     let space = len - offset;
     let length = length.map(|length| non_negative("length", length)).transpose()?.unwrap_or(space);
     if length > space {
         return Err(Error::runtime(format!(
-            "dream.tcp.{what}: length {length} does not fit the {noun} (space {space} after offset {offset})"
+            "{what}: length {length} does not fit the {noun} (space {space} after offset {offset})"
         )));
     }
     Ok((offset, length))
@@ -203,7 +200,7 @@ impl StreamCount {
 }
 
 /// What a stream hands its new owner: the socket, the addresses, and the listener's count.
-#[allow(dead_code, reason = "dream.tls takes streams over")]
+#[cfg_attr(not(feature = "tls"), allow(dead_code, reason = "dream.tls takes streams over"))]
 pub(crate) struct Taken {
     pub(crate) io: Rc<Io>,
     pub(crate) peer: SocketAddr,
@@ -508,7 +505,7 @@ impl Stream {
     /// its addresses and its listener's count; this stream becomes `Consumed`. Refused while
     /// the connect is pending or failed, once closed or consumed, and while a poller watches it
     /// (unwatch first, so no queued event or registration refers to the old handle).
-    #[cfg_attr(not(test), allow(dead_code, reason = "dream.tls takes streams over"))]
+    #[cfg_attr(not(any(test, feature = "tls")), allow(dead_code, reason = "dream.tls takes streams over"))]
     pub(crate) fn take(&self, what: &str) -> Result<Taken> {
         match self.state.get() {
             StreamState::Connected => {}
@@ -619,7 +616,7 @@ impl Stream {
         length: Option<Exact<i64>>,
     ) -> Result<Outcome<f64>> {
         const WHAT: &str = "Stream.readInto";
-        let (offset, length) = window(WHAT, "buffer", buffer.len(), offset, length)?;
+        let (offset, length) = window("dream.tcp.Stream.readInto", "buffer", buffer.len(), offset, length)?;
         if length == 0 {
             return Err(Error::runtime(
                 "dream.tcp.Stream.readInto: no room to read into; a zero-byte read would look like end of stream",
@@ -658,7 +655,7 @@ impl Stream {
         length: Option<Exact<i64>>,
     ) -> Result<Outcome<f64>> {
         const WHAT: &str = "Stream.write";
-        let (offset, length) = window(WHAT, "data", data.len(), offset, length)?;
+        let (offset, length) = window("dream.tcp.Stream.write", "data", data.len(), offset, length)?;
         match self.settle(WHAT)? {
             Gate::Open => {}
             Gate::Pending => return Ok(Outcome::Failed(would_block("dream.tcp.Stream.write: still connecting"))),
