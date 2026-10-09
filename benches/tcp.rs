@@ -81,6 +81,8 @@ impl Instructions {
         }
     }
 
+    // Elsewhere the counter field does not exist and the body only times.
+    #[cfg_attr(not(target_os = "linux"), allow(clippy::unused_self, reason = "perf counters are Linux-only"))]
     fn count(&self, body: &mut dyn FnMut()) -> Option<u64> {
         #[cfg(target_os = "linux")]
         if let Some(counter) = &self.counter {
