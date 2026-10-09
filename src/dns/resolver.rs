@@ -92,16 +92,18 @@ impl Lookup for SystemLookup {
         let mut entry = list;
         while !entry.is_null() {
             // SAFETY: `entry` is a node of the list getaddrinfo returned, not yet freed; its
-            // address is a sockaddr of the family it names, at least `ai_addrlen` bytes.
+            // address, when present, is `ai_addrlen` bytes of a sockaddr of the family it names,
+            // read only when that is long enough for the family's struct.
             unsafe {
                 let info = &*entry;
+                let fits = |size: usize| !info.ai_addr.is_null() && info.ai_addrlen as usize >= size;
                 match info.ai_family {
-                    libc::AF_INET if !info.ai_addr.is_null() => {
+                    libc::AF_INET if fits(std::mem::size_of::<libc::sockaddr_in>()) => {
                         let v4 = &*info.ai_addr.cast::<libc::sockaddr_in>();
                         let ip = Ipv4Addr::from(u32::from_be(v4.sin_addr.s_addr));
                         addresses.push(SocketAddr::V4(SocketAddrV4::new(ip, port)));
                     }
-                    libc::AF_INET6 if !info.ai_addr.is_null() => {
+                    libc::AF_INET6 if fits(std::mem::size_of::<libc::sockaddr_in6>()) => {
                         let v6 = &*info.ai_addr.cast::<libc::sockaddr_in6>();
                         let ip = Ipv6Addr::from(v6.sin6_addr.s6_addr);
                         addresses.push(SocketAddr::V6(SocketAddrV6::new(ip, port, v6.sin6_flowinfo, v6.sin6_scope_id)));
