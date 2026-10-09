@@ -132,7 +132,15 @@ pub(crate) fn render_with(plan: &RuntimePlan, members: Option<&ModuleMembers>) -
         }
         let _ = writeln!(out, "-- types declared by {}", descriptor.id());
         for (name, definition) in descriptor.type_aliases() {
-            let _ = writeln!(out, "export type {name} = {definition}");
+            let _ = write!(out, "export type {name} = {definition}");
+            for &other in &plan.order {
+                for (widened, member) in plan.descriptors[other].type_alias_widenings() {
+                    if widened == name {
+                        let _ = write!(out, " | {member}");
+                    }
+                }
+            }
+            out.push('\n');
         }
         out.push('\n');
     }

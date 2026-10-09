@@ -107,8 +107,9 @@ Everything one extension declares in `describe`. `Debug`.
 | `fn memory_category(&mut self, name: &str) -> &mut Self` | A symbolic memory category the planner maps to a Luau category number |
 | `fn packed<T: PackedScalar>(&mut self) -> &mut Self` | A packed kind this extension's members use, so every runtime registers `T` as its owner |
 | `fn type_alias(&mut self, name: &str, definition: impl Into<String>) -> &mut Self` | A named Luau type the signatures refer to, for values that are plain tables (a parse tree, an options record); rendered `export type <name> = <definition>` ahead of every module, so aliases may refer to one another in any order. The plan refuses a name that is not an identifier, is declared twice, or is a userdata class name |
+| `fn widen_type_alias(&mut self, name: &str, member: impl Into<String>) -> &mut Self` | Widens a union another extension declares: rendered `<definition> \| <member>` when the declaring extension is in the plan, and ignored when it is not. How an integration adds its handle type to a parameter of an extension that cannot know it, such as `dream_tcp_Watchable` |
 | `fn native_hooks(&mut self, hooks: impl NativeCodeHooks) -> &mut Self` | Feature `jit`: lowering hooks for this extension's types |
-| `fn dependencies(&self)`, `optional_dependencies`, `modules`, `owned_userdata`, `augmentations`, `services`, `capabilities`, `optional_capabilities`, `memory_categories`, `packed_kinds`, `type_aliases`, `native_hook_sets` | Read back what was declared |
+| `fn dependencies(&self)`, `optional_dependencies`, `modules`, `owned_userdata`, `augmentations`, `services`, `capabilities`, `optional_capabilities`, `memory_categories`, `packed_kinds`, `type_aliases`, `type_alias_widenings`, `native_hook_sets` | Read back what was declared |
 
 ### UserdataBuilder and MemberDecl
 

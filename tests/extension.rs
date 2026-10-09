@@ -984,3 +984,42 @@ fn a_planned_runtime_refuses_shape_changes() {
     plain.set_compile_options(plain.compile_options()).unwrap();
     plain.register_packed::<l3i::raster::Color>().unwrap();
 }
+
+/// An integration widens a union another extension declares, only when that extension is in
+/// the plan: the rendered alias names every member, and a plan without the declarer neither
+/// renders the widening nor fails.
+#[test]
+fn an_extension_widens_a_union_another_declares_when_it_is_present() {
+    struct Owner;
+    impl Extension for Owner {
+        fn id(&self) -> &'static str {
+            "dream.owner"
+        }
+        fn describe(&self, d: &mut ExtensionDescriptor) -> Result<()> {
+            d.type_alias("dream_owner_Handle", "number");
+            d.module("@dream/owner").function("take", |_: f64| ()).signature("(handle: dream_owner_Handle) -> ()");
+            Ok(())
+        }
+    }
+    struct Widener(&'static str);
+    impl Extension for Widener {
+        fn id(&self) -> &'static str {
+            self.0
+        }
+        fn describe(&self, d: &mut ExtensionDescriptor) -> Result<()> {
+            d.optional("dream.owner");
+            d.widen_type_alias("dream_owner_Handle", "string");
+            Ok(())
+        }
+    }
+    let plan = RuntimePlan::builder()
+        .extension(Widener("dream.widener"))
+        .extension(Owner)
+        .extension(Widener("dream.second"))
+        .finalize()
+        .unwrap();
+    let definitions = plan.type_definitions();
+    assert!(definitions.contains("export type dream_owner_Handle = number | string | string\n"), "{definitions}");
+    let alone = RuntimePlan::builder().extension(Widener("dream.widener")).finalize().unwrap();
+    assert!(!alone.type_definitions().contains("dream_owner_Handle"));
+}

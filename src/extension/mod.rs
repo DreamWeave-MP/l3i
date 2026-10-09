@@ -553,6 +553,7 @@ pub struct ExtensionDescriptor {
     memory_categories: BTreeSet<String>,
     packed: Vec<crate::packed::PackedKind>,
     type_aliases: Vec<(String, String)>,
+    widenings: Vec<(String, String)>,
     #[cfg(feature = "jit")]
     native_hooks: Vec<std::rc::Rc<dyn crate::native_code::NativeCodeHooks>>,
 }
@@ -585,6 +586,7 @@ impl ExtensionDescriptor {
             memory_categories: BTreeSet::new(),
             packed: Vec::new(),
             type_aliases: Vec::new(),
+            widenings: Vec::new(),
             #[cfg(feature = "jit")]
             native_hooks: Vec::new(),
         }
@@ -603,6 +605,21 @@ impl ExtensionDescriptor {
     /// The named types declared with [`Self::type_alias`], in declaration order.
     pub fn type_aliases(&self) -> &[(String, String)] {
         &self.type_aliases
+    }
+
+    /// Widens a union another extension declares with [`Self::type_alias`]: the definitions
+    /// render it as `<definition> | <member>` when the declaring extension is in the plan, and
+    /// nothing changes when it is not. This is how an integration adds its own handle type to a
+    /// parameter of an extension that cannot know it (a poller that watches what other
+    /// extensions make), without that parameter naming a type a plan may lack.
+    pub fn widen_type_alias(&mut self, name: &str, member: impl Into<String>) -> &mut Self {
+        self.widenings.push((name.to_owned(), member.into()));
+        self
+    }
+
+    /// The widenings declared with [`Self::widen_type_alias`], in declaration order.
+    pub fn type_alias_widenings(&self) -> &[(String, String)] {
+        &self.widenings
     }
 
     /// Declares a packed scalar kind this extension's members use, so every runtime from the
