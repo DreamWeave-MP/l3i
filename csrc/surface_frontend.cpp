@@ -308,6 +308,9 @@ private:
                 continue;
             Slice slice;
             slice.source = {all[start].range.begin, all[open - 1].range.end};
+            // A name right after a token that ends an expression can only begin a statement.
+            slice.statement = all[start].type == T::Name && start > 0 &&
+                isPostfix(all[start - 1], start >= 2 ? all[start - 2] : Token{T::Eof, {0, 0}});
             const bool missingFirst = colon == open + 1;
             const bool missingLast = colon == lastEnd;
             slice.first = missingFirst ? Range{all[colon].range.begin, all[colon].range.begin}

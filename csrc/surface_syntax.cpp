@@ -578,6 +578,8 @@ private:
         out.anchor = node.range;
         SliceSite site;
         site.slice = index;
+        if (node.statement)
+            out += ";"; // Separate the call from the previous statement; Luau would otherwise call its result.
         const size_t callBegin = out.size();
         out += "(function() local " + prefix + "_src = ";
         site.source = expression(out, node.source, "({} :: {any})");

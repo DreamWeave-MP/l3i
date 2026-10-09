@@ -158,6 +158,9 @@ struct Slice
     Range last;
     Range kind; // The kind literal of a typed slice `source[first:last, "kind"]`; empty otherwise.
     bool complete = false;
+    // Starts a statement right after an expression (`local f = g` then `t[1:2][1] = 5`): its
+    // lowered call needs a ';' before it, or Luau would call the expression with it.
+    bool statement = false;
 };
 
 struct Document

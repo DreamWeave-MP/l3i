@@ -138,6 +138,11 @@ fn standalone_slices_materialize_dense_tables_with_single_evaluation() {
         assert(#high == 0)
         local key = {method = function() return 1 end}
         assert(({9})[key:method()] == 9)
+        -- A slice that starts a statement right after an expression is its own statement.
+        local grid = {{1}, {2}, {3}}
+        local before = print
+        grid[2:3][1][1] = 5
+        assert(grid[2][1] == 5 and before == print)
     "#,
         )
         .unwrap();
