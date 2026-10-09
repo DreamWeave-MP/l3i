@@ -937,6 +937,14 @@ fn buffer_sinks_write_typed_elements_into_caller_buffers() {
         local _, written = into(bodies, 'f32@16', 8)[for i, v in enumerate({0.5, 1.5, 2.5}) => v * i]
         assert(written == 3 and buffer.readf32(bodies, 8) == 0.5 and buffer.readf32(bodies, 24) == 3 and buffer.readf32(bodies, 40) == 7.5)
         assert(buffer.readf32(bodies, 0) == 0 and buffer.readf32(bodies, 12) == 0, 'neighbouring fields untouched')
+        -- A field offset places each write inside its record, where a typed slice reads it.
+        local fields = buffer.create(2 * 16)
+        local _, placed = into(fields, 'f32@16+12')[for v in {1, 2} => v]
+        assert(placed == 2 and buffer.readf32(fields, 12) == 1 and buffer.readf32(fields, 28) == 2, 'written at the field')
+        assert(buffer.readf32(fields, 0) == 0 and buffer.readf32(fields, 16) == 0, 'the field offset is not dropped')
+        assert(sum[for v in fields[1:2, 'f32@16+12'] => v] == 3, 'the slice reads what the sink wrote')
+        local tight, overflow = pcall(function() return into(buffer.create(31), 'f32@16+12')[for v in {1, 2} => v] end)
+        assert(not tight and string.find(overflow, 'destination is full', 1, true), overflow)
         -- Capacity is explicit: a full destination is an error, not a silent truncation.
         local ok, message = pcall(function() return into(out, 'f32')[for i in range(1, 7) => i] end)
         assert(not ok and string.find(message, 'JSL sink buffer destination is full', 1, true), message)

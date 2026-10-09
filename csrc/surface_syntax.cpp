@@ -977,6 +977,7 @@ private:
         std::string sinkWrite;    // A buffer sink's `buffer.write<kind>` member; empty for a table sink.
         size_t sinkSize = 0;      // A buffer sink's element size and stride in bytes.
         size_t sinkStride = 0;
+        size_t sinkField = 0;     // The field's position inside each record, `f32@16+12`.
     };
 
     // A sink destination may not also be a pipeline source: the pipeline would read elements
@@ -1217,12 +1218,16 @@ private:
             if (e.sinkWrite.empty())
                 out += e.cursor + " += 1 " + e.sink + "[" + e.cursor + "] = " + value + " ";
             else
+            {
                 // Capacity is checked per write; the write itself is the buffer library's, so a
                 // non-number projection raises its ordinary error.
-                out += "if " + e.sink + "_at + " + e.cursor + " * " + std::to_string(e.sinkStride) + " + " + std::to_string(e.sinkSize) +
-                    " > " + e.sink + "_len then " + operations + "_error(\"JSL sink buffer destination is full\") end " + operations +
-                    "_buffer." + e.sinkWrite + "(" + e.sink + ", " + e.sink + "_at + " + e.cursor + " * " + std::to_string(e.sinkStride) +
-                    ", " + value + ") " + e.cursor + " += 1 ";
+                const std::string field = e.sinkField ? " + " + std::to_string(e.sinkField) : std::string();
+                out += "if " + e.sink + "_at + " + e.cursor + " * " + std::to_string(e.sinkStride) + field + " + " +
+                    std::to_string(e.sinkSize) + " > " + e.sink + "_len then " + operations +
+                    "_error(\"JSL sink buffer destination is full\") end " + operations + "_buffer." + e.sinkWrite + "(" + e.sink +
+                    ", " + e.sink + "_at + " + e.cursor + " * " + std::to_string(e.sinkStride) + field + ", " + value + ") " +
+                    e.cursor + " += 1 ";
+            }
             return;
         case Consumer::Min:
         case Consumer::Max:
@@ -1461,15 +1466,15 @@ private:
         }
         else if (sink)
         {
-            // A buffer sink: the kind literal (validated by the frontend) picks the write and
-            // the stride at compile time; the destination, then the offset, evaluate once.
+            // A buffer sink: the kind literal (validated by the frontend) picks the write, the
+            // stride and the field at compile time, read as a typed slice reads them; the
+            // destination, then the offset, evaluate once.
             e.sink = name + "_into";
-            const std::string_view literal = std::string_view(source).substr(node.sinkKind.begin + 1, node.sinkKind.end - node.sinkKind.begin - 2);
-            const size_t at = literal.find('@');
-            const std::string_view kind = literal.substr(0, at);
-            e.sinkWrite = "write" + std::string(kind);
-            e.sinkSize = kind == "u8" || kind == "i8" ? 1 : kind == "u16" || kind == "i16" ? 2 : kind == "f64" ? 8 : 4;
-            e.sinkStride = at == std::string_view::npos ? e.sinkSize : size_t(std::stoul(std::string(literal.substr(at + 1))));
+            const SliceLayout layout = *sliceLayout(node.sinkKind);
+            e.sinkWrite = "write" + layout.kind;
+            e.sinkSize = layout.size;
+            e.sinkStride = layout.stride;
+            e.sinkField = layout.offset;
             out.anchor = node.sinkDestination;
             out += "local " + e.sink + " = ";
             site.sink = expression(out, node.sinkDestination, "(buffer.create(0) :: buffer)");
