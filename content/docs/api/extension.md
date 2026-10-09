@@ -871,7 +871,8 @@ Module `l3i::dns`, feature `dns`; the Luau side is in
 
 {{ api_signature(value="pub struct DnsExtension") }}
 
-`new(Resolver)`, `max_requests(u32)` (open requests per runtime, default 64), `Default` over
+`new(Resolver)`, `max_requests(u32)` (open requests per runtime, default 64), `max_lookups(u32)`
+(a runtime's lookups occupying the resolver, queued or running, default 2), `Default` over
 `Resolver::system()`. `id()` is `"dream.dns"`; `RESOLVE_CAPABILITY` is
 `"network.dns.resolve"`; `MAX_TIMEOUT_MS` 60000, `MAX_ADDRESSES` 64.
 

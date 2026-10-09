@@ -1428,10 +1428,21 @@ how the tests resolve `test.local` deterministically.
 
 Workers own plain Rust data: the name, the port and the request's `Arc` state. No Luau value,
 runtime `Rc` or callback crosses to them. A request's terminal phase (done, cancelled, timed
-out) is entered exactly once under its lock. A running `getaddrinfo` cannot be interrupted, so
-a request that times out or is cancelled reads that way at once while its worker stays busy
-until the OS returns, and the pool's size bounds how many such calls run. Nothing is cached:
-the OS may cache, as it always does.
+out) is entered exactly once under its lock, and the deadline holds at both ends: a lookup
+that returns after it is a timeout even if the script never looked in time, and one that
+returns at the deadline or before it stays ready however late the script looks. A running
+`getaddrinfo` cannot be interrupted, so a request that times out or is cancelled reads that
+way at once while its worker stays busy until the OS returns, and the pool's size bounds how
+many such calls run. Nothing is cached: the OS may cache, as it always does.
+
+Because those calls keep their workers, a shared resolver is shared capacity.
+`DnsExtension::max_lookups` (default 2, 1 to 4096) caps how many of a runtime's lookups may
+occupy the pool at once, queued or running, including those it cancelled or that timed out,
+so one runtime cannot hold every worker of a shared resolver; a lookup's place is given back
+when its worker is done with it, and literals never count. This is a per-runtime share, not
+fair queueing; a host that serves tenants of different trust gives each tier its own
+`Resolver`, which isolates them completely. No worker is ever killed, since no OS resolver API
+allows it safely.
 
 ### Authority
 

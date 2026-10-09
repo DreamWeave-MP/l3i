@@ -9,7 +9,7 @@
 
 use std::collections::VecDeque;
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, Weak};
 use std::time::Instant;
 
@@ -273,10 +273,30 @@ impl Shared {
     }
 }
 
+/// One lookup's place in its runtime's count of lookups occupying the pool, given back when
+/// the job is dropped: when its worker is done with it (finished, or skipped because it was
+/// cancelled first), when it is withdrawn from the queue, or when the pool shuts down. A
+/// lookup the script gave up on still holds its place while the OS call runs.
+pub(crate) struct Ticket(Arc<AtomicUsize>);
+
+impl Ticket {
+    pub(crate) fn take(count: &Arc<AtomicUsize>) -> Ticket {
+        count.fetch_add(1, Ordering::AcqRel);
+        Ticket(Arc::clone(count))
+    }
+}
+
+impl Drop for Ticket {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
 struct Job {
     host: String,
     port: u16,
     shared: Arc<Shared>,
+    _ticket: Ticket,
 }
 
 struct State {
@@ -308,7 +328,13 @@ impl Pool {
     }
 
     /// Queues a lookup, starting a worker when none is idle and the pool is below its size.
-    pub(crate) fn submit(self: &Arc<Pool>, host: String, port: u16, shared: Arc<Shared>) -> Result<(), Refused> {
+    pub(crate) fn submit(
+        self: &Arc<Pool>,
+        host: String,
+        port: u16,
+        shared: Arc<Shared>,
+        ticket: Ticket,
+    ) -> Result<(), Refused> {
         let spawn = {
             let mut state = self.lock();
             if state.closed {
@@ -317,7 +343,7 @@ impl Pool {
             if state.jobs.len() >= self.config.queue {
                 return Err(Refused::Full(self.config.queue));
             }
-            state.jobs.push_back(Job { host, port, shared });
+            state.jobs.push_back(Job { host, port, shared, _ticket: ticket });
             if state.idle > 0 {
                 self.work.notify_one();
             }

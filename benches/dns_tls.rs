@@ -302,7 +302,7 @@ fn dns(instructions: &Instructions) {
     let plan = RuntimePlan::builder()
         .policy(policy)
         .extension(TcpExtension)
-        .extension(DnsExtension::new(resolver.clone()).max_requests(4096))
+        .extension(DnsExtension::new(resolver.clone()).max_requests(4096).max_lookups(4096))
         .finalize()
         .unwrap();
     let runtime = Runtime::from_plan(&plan).unwrap();

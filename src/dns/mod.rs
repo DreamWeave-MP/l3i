@@ -110,6 +110,9 @@ struct Context {
     resolver: Resolver,
     active: Rc<Cell<u32>>,
     max_requests: u32,
+    /// Lookups of this runtime queued or running on the pool, given up on or not.
+    lookups: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    max_lookups: usize,
 }
 
 fn resolve(
@@ -141,9 +144,21 @@ fn resolve(
             (Shared::new(Phase::Done(Ok(vec![SocketAddr::new(ip, port)])), options.max_addresses, deadline), None)
         }
         None => {
+            let occupied = cx.lookups.load(std::sync::atomic::Ordering::Acquire);
+            if occupied >= cx.max_lookups {
+                return Ok(Outcome::Failed(Failure {
+                    message: format!(
+                        "dream.dns.resolve: {}: {occupied} lookups of this runtime occupy the resolver (queued or still running, including ones given up on), its maximum",
+                        name.original
+                    )
+                    .into(),
+                    kind: "limitReached",
+                }));
+            }
             let shared = Shared::new(Phase::Queued, options.max_addresses, deadline);
             let pool = cx.resolver.pool();
-            if let Err(refused) = pool.submit(name.ascii.clone(), port, std::sync::Arc::clone(&shared)) {
+            let ticket = resolver::Ticket::take(&cx.lookups);
+            if let Err(refused) = pool.submit(name.ascii.clone(), port, std::sync::Arc::clone(&shared), ticket) {
                 let (message, kind) = match refused {
                     Refused::Full(queue) => (
                         format!(
@@ -174,12 +189,25 @@ fn resolve(
 pub struct DnsExtension {
     resolver: Resolver,
     max_requests: u32,
+    max_lookups: u32,
 }
 
 impl DnsExtension {
-    /// Over `resolver`, with at most 64 open requests per runtime.
+    /// Over `resolver`, with at most 64 open requests and 2 lookups occupying the resolver per
+    /// runtime.
     pub fn new(resolver: Resolver) -> DnsExtension {
-        DnsExtension { resolver, max_requests: 64 }
+        DnsExtension { resolver, max_requests: 64, max_lookups: 2 }
+    }
+
+    /// At most `max` of a runtime's lookups may occupy the resolver at once (1 to 4096,
+    /// default 2): queued, or running on a worker, including lookups the script cancelled or
+    /// that timed out, since the OS call cannot be stopped and the worker stays busy. This is
+    /// what keeps one runtime from taking a shared resolver's every worker; literals never
+    /// count. Separate resolvers per trust tier isolate runtimes completely.
+    #[must_use]
+    pub fn max_lookups(mut self, max: u32) -> DnsExtension {
+        self.max_lookups = max.clamp(1, 4096);
+        self
     }
 
     /// At most `max` requests open per runtime at once (taken, closed or collected ones do not
@@ -230,6 +258,8 @@ impl Extension for DnsExtension {
                 resolver: self.resolver.clone(),
                 active: Rc::new(Cell::new(0)),
                 max_requests: self.max_requests,
+                lookups: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+                max_lookups: self.max_lookups as usize,
             });
             module.function(
                 "resolve",

@@ -138,7 +138,7 @@ fn runtime_over(resolver: Resolver, grants: &[&str], max_requests: u32, limits: 
     if let Some(limits) = limits {
         policy = policy.limits(limits);
     }
-    let extension = DnsExtension::new(resolver).max_requests(max_requests);
+    let extension = DnsExtension::new(resolver).max_requests(max_requests).max_lookups(64);
     let plan = RuntimePlan::builder().policy(policy).extension(extension).finalize().unwrap();
     Runtime::from_plan(&plan).unwrap()
 }
@@ -414,7 +414,7 @@ fn with_poller() -> (Runtime, Arc<Mock>) {
     let plan = RuntimePlan::builder()
         .policy(policy)
         .extension(l3i::tcp::TcpExtension)
-        .extension(DnsExtension::new(resolver))
+        .extension(DnsExtension::new(resolver).max_lookups(64))
         .finalize()
         .unwrap();
     assert!(
@@ -541,4 +541,41 @@ fn completions_deadlines_sockets_and_tokens_share_one_poller() {
     runtime.collect_garbage();
     runtime.exec("assert(collected.watching == 0, collected.watching)").unwrap();
     mock.open();
+}
+
+/// One runtime cannot take a shared resolver's every worker: its lookups that still occupy the
+/// pool (here two that timed out while their OS calls run on) count against its own limit,
+/// another runtime on the same resolver keeps resolving, and the places come back only when the
+/// workers are done.
+#[test]
+fn a_runtime_holds_only_its_share_of_a_shared_resolver() {
+    let mock = mock();
+    let resolver = Resolver::new(ResolverConfig { workers: 4, queue: 8 }, Arc::clone(&mock) as Arc<dyn Lookup>);
+    let plan = |extension: DnsExtension| {
+        let policy = RuntimePolicy::new().compat_global("@dream/dns", "dns").capability(RESOLVE_CAPABILITY);
+        Runtime::from_plan(&RuntimePlan::builder().policy(policy).extension(extension).finalize().unwrap()).unwrap()
+    };
+    let greedy = plan(DnsExtension::new(resolver.clone()));
+    let other = plan(DnsExtension::new(resolver.clone()));
+    greedy
+        .exec(
+            r"
+            local first = assert(dns.resolve('slow.test', 80, { timeoutMs = 50 }))
+            local second = assert(dns.resolve('slow.test', 81, { timeoutMs = 50 }))
+            assert(first:wait(5000) and second:wait(5000))
+            assert(first.status == 'timedOut' and second.status == 'timedOut')
+            first:close() second:close()
+            local refused, message, kind = dns.resolve('multi.test', 82)
+            assert(refused == nil and kind == 'limitReached' and message:find('occupy the resolver'), message)
+            -- Literals use no worker and never count.
+            assert(assert(dns.resolve('127.0.0.1', 83)):take())
+            ",
+        )
+        .unwrap();
+    other
+        .exec("local r = assert(dns.resolve('multi.test', 84)) assert(r:wait(5000)) assert(#assert(r:take()) == 3)")
+        .unwrap();
+    mock.open();
+    until_returned(&mock, 3);
+    greedy.exec("local r = assert(dns.resolve('multi.test', 85)) assert(r:wait(5000)) assert(r:take())").unwrap();
 }
