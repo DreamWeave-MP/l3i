@@ -137,9 +137,11 @@ fn resolve(
     }
     let deadline = Instant::now() + options.timeout;
     let (shared, pool) = match name.literal {
-        Some(ip) => (Shared::new(Phase::Done(Ok(vec![SocketAddr::new(ip, port)])), options.max_addresses), None),
+        Some(ip) => {
+            (Shared::new(Phase::Done(Ok(vec![SocketAddr::new(ip, port)])), options.max_addresses, deadline), None)
+        }
         None => {
-            let shared = Shared::new(Phase::Queued, options.max_addresses);
+            let shared = Shared::new(Phase::Queued, options.max_addresses, deadline);
             let pool = cx.resolver.pool();
             if let Err(refused) = pool.submit(name.ascii.clone(), port, std::sync::Arc::clone(&shared)) {
                 let (message, kind) = match refused {

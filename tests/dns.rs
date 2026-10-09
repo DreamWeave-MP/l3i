@@ -19,6 +19,8 @@ pub struct Mock {
     pub table: HashMap<&'static str, Result<Vec<SocketAddr>, LookupError>>,
     pub gate: Arc<(Mutex<bool>, Condvar)>,
     pub calls: AtomicUsize,
+    /// Lookups that have returned to their worker.
+    pub returned: AtomicUsize,
 }
 
 impl Mock {
@@ -38,12 +40,79 @@ impl Lookup for Mock {
                 open = changed.wait(open).unwrap();
             }
         }
-        match self.table.get(host) {
+        let result = match self.table.get(host) {
             Some(Ok(addresses)) => Ok(addresses.iter().map(|a| SocketAddr::new(a.ip(), port)).collect()),
             Some(Err(error)) => Err(error.clone()),
             None => Err(LookupError::NotFound),
-        }
+        };
+        self.returned.fetch_add(1, Ordering::SeqCst);
+        result
     }
+}
+
+/// Waits until `count` lookups have returned, then a moment for their workers to record them.
+fn until_returned(mock: &Mock, count: usize) {
+    let started = Instant::now();
+    while mock.returned.load(Ordering::SeqCst) < count {
+        assert!(started.elapsed() < Duration::from_secs(5), "the lookup never returned");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    std::thread::sleep(Duration::from_millis(50));
+}
+
+/// The deadline holds at completion, not only when the script looks: a lookup that returns
+/// after the deadline, unobserved, is a timeout; one that returns in time stays ready however
+/// late the script looks.
+#[test]
+fn a_late_result_is_a_timeout_even_when_nobody_looked_in_time() {
+    let (runtime, mock, _) = mocked(1, 4);
+    runtime.exec("late = assert(dns.resolve('slow.test', 80, { timeoutMs = 40 }))").unwrap();
+    std::thread::sleep(Duration::from_millis(100));
+    mock.open();
+    until_returned(&mock, 1);
+    runtime
+        .exec(
+            r"
+            assert(late.status == 'timedOut', late.status)
+            local none, message, kind = late:take()
+            assert(none == nil and kind == 'timedOut', message)
+            ",
+        )
+        .unwrap();
+    runtime.exec("onTime = assert(dns.resolve('multi.test', 80, { timeoutMs = 50 }))").unwrap();
+    until_returned(&mock, 2);
+    std::thread::sleep(Duration::from_millis(60));
+    runtime
+        .exec(
+            r"
+            assert(onTime.status == 'ready', onTime.status)
+            assert(#assert(onTime:take()) == 3)
+            ",
+        )
+        .unwrap();
+}
+
+/// The same through a poller: the late result is reported, as a timeout.
+#[cfg(feature = "tcp")]
+#[test]
+fn a_late_result_reaches_a_poller_as_a_timeout() {
+    let (runtime, mock) = with_poller();
+    runtime
+        .exec("poller = tcp.poller() late = assert(dns.resolve('slow.test', 80, { timeoutMs = 40 })) assert(poller:watch(late, 1, 'read'))")
+        .unwrap();
+    std::thread::sleep(Duration::from_millis(100));
+    mock.open();
+    until_returned(&mock, 1);
+    runtime
+        .exec(
+            r"
+            assert(poller:wait(0) == 1 and poller:next() == 1)
+            local none, _, kind = late:take()
+            assert(none == nil and kind == 'timedOut', kind)
+            assert(poller:wait(0) == 0)
+            ",
+        )
+        .unwrap();
 }
 
 fn addresses(list: &[&str]) -> Vec<SocketAddr> {

@@ -86,7 +86,7 @@ impl Request {
 
     /// Enters the timed-out phase once the deadline has passed.
     pub(crate) fn expire(&self, now: Instant) {
-        if !self.shared.is_terminal() && now >= self.deadline && self.shared.finish(Phase::TimedOut) {
+        if !self.shared.is_terminal() && self.shared.is_late(now) && self.shared.finish(Phase::TimedOut) {
             self.withdraw();
         }
     }

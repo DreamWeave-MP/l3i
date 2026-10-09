@@ -77,7 +77,7 @@ impl Synthetic for Due {
         if interest & READ == 0 || self.taken.get() {
             return 0;
         }
-        if self.shared.is_terminal() || now >= self.deadline { READABLE } else { 0 }
+        if self.shared.is_terminal() || self.shared.is_late(now) { READABLE } else { 0 }
     }
 
     fn deadline(&self) -> Option<Instant> {

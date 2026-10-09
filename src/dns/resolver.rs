@@ -188,17 +188,27 @@ pub(crate) struct Shared {
     terminal: AtomicBool,
     /// Every addresses list is cut to this many entries, duplicates removed first.
     max_addresses: usize,
+    /// The request's deadline. A lookup that returns after it is a timeout, whether or not the
+    /// script looked at the request in between: a result that arrives at the deadline or
+    /// before it wins, one after it never does.
+    deadline: Instant,
 }
 
 impl Shared {
-    pub(crate) fn new(phase: Phase, max_addresses: usize) -> Arc<Shared> {
+    pub(crate) fn new(phase: Phase, max_addresses: usize, deadline: Instant) -> Arc<Shared> {
         let terminal = !matches!(phase, Phase::Queued | Phase::Running);
         Arc::new(Shared {
             inner: Mutex::new(Inner { phase, waker: None }),
             finished: Condvar::new(),
             terminal: AtomicBool::new(terminal),
             max_addresses,
+            deadline,
         })
+    }
+
+    /// Whether `now` is past the deadline; the one comparison the worker and the script share.
+    pub(crate) fn is_late(&self, now: Instant) -> bool {
+        now > self.deadline
     }
 
     /// The lock, whatever a panicking holder left: every phase change is one assignment.
@@ -229,8 +239,15 @@ impl Shared {
         true
     }
 
-    /// The worker's half: a result for a request still pending, else thrown away.
+    /// The worker's half: a result for a request still pending, else thrown away. A result
+    /// that came back after the deadline makes the request time out, so a late answer is never
+    /// reported as ready just because nobody looked in time; a cancellation or a timeout the
+    /// script already saw stays as it is.
     fn complete(&self, result: Result<Vec<SocketAddr>, LookupError>) {
+        if self.is_late(Instant::now()) {
+            self.finish(Phase::TimedOut);
+            return;
+        }
         let result = result.and_then(|mut addresses| {
             let mut seen = std::collections::HashSet::new();
             addresses.retain(|address| seen.insert(*address));
