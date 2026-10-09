@@ -281,6 +281,14 @@ loop. Recognition is narrow and semantic: the lowered call must compute exactly 
 loop computes, in the same numeric representation and with the same error behaviour, or it is
 not emitted. See COMPREHENSIONS.md, "Recognized data pipelines".
 
+The alias is an ordinary global, read once when the chunk starts, like the other globals the
+lowering's prelude snapshots (`buffer`, `table.create`, `error`, `rawequal`, `typeof`). Whoever
+can assign the globals a chunk runs in can therefore redirect its recognized pipelines, and
+with them the buffers they read, exactly as replacing `buffer` would. Scripts that do not trust
+each other must not share a writable global environment: under `Runtime::sandbox_globals` the
+globals are read-only, and a script that assigns `__l3i_data` only shadows it in its own
+environment.
+
 ### 2.6 Semantic law
 
 Errors and evaluation order are effects. An arbitrary JSL expression in a filter or projection
