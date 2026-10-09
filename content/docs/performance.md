@@ -17,7 +17,7 @@ is a deliberate change that re-audits the hand-declared C API.
 
 - **Rust 1.92** or newer, declared as `rust-version` and checked in CI. Edition 2024. The optional `dream-soft-render` dependency declares the same.
 - `unsafe` is used, at the FFI boundary and in the value-layout reads; every block states the invariant it relies on (see [Safety](@/docs/safety.md)).
-- Optional features, all off by default: `jit`, `analysis`, `soft-render`, `bytes` with `bytes-codecs`, `bytes-digests`, `bytes-text` and `bytes-regex`, `intern`, `intl`, `syntax`, and `tcp` (see [Building](@/docs/building.md)).
+- Optional features, all off by default: `jit`, `analysis`, `soft-render`, `bytes` with `bytes-codecs`, `bytes-digests`, `bytes-text` and `bytes-regex`, `intern`, `intl`, `syntax`, `tcp`, `dns` and `tls` (see [Building](@/docs/building.md)).
 
 | Dependency | Version | For |
 |---|---|---|
@@ -26,8 +26,11 @@ is a deliberate change that re-audits the hand-declared C API.
 | `memchr`, `miniz_oxide`, `lz4_flex`, `ruzstd`, `lzma-rs`, `crc32fast`, `adler2`, `xxhash-rust`, `md-5`, `sha1`, `sha2`, `blake3`, `encoding_rs` | Optional, behind `bytes` and its `bytes-*` features | `@dream/bytes`'s searches, codecs, digests and text encodings |
 | `icu_locale_core`, `icu_plurals`, `icu_decimal`, `fixed_decimal`, `writeable` | `2.3` (`fixed_decimal` `0.7` with `ryu`, `writeable` `0.6`), optional, behind `intl` | `@dream/intl`'s locales, plural rules and decimal formatting, with ICU4X's compiled CLDR data |
 | `mio`, `socket2` | `1.2` (`os-poll`, `net`), `0.6` (`all`), optional, behind `tcp` | `@dream/tcp`'s nonblocking sockets and OS readiness; `socket2` is already in the tree through `dream-net` |
+| `idna`, `libc` (Unix) | `1.1`, `0.2`, optional, behind `dns` (`idna` also behind `tls`) | Host names mapped to A-labels; `getaddrinfo` |
+| `rustls`, `rustls-platform-verifier`, `zeroize` | `0.23.40` (ring, std, tls12), `0.7`, `1.8`, optional, behind `tls` | `@dream/tls`'s sessions, the platform trust store, zeroed key buffers |
 | `cc` | `1`, `parallel` feature, build only | Compiling the Luau submodule and `csrc/` |
 | `criterion` | `0.8.2`, dev only | The benchmarks |
+| `rcgen` | `0.14` (ring, pem), dev only | Test PKIs for `@dream/tls`, made per run |
 
 The two DreamWeave crates are pinned exactly: they define what goes on the wire and what a pixel
 is, and the byte-identical tests hold against those versions.
@@ -38,6 +41,11 @@ l3i is **MIT OR Apache-2.0**, at your option.
 
 Luau is Roblox's, under the MIT license; its notice ships in the package as `luau/LICENSE.txt`
 and `luau/lua_LICENSE.txt` and travels with any product that ships l3i.
+
+The `dns` and `tls` features link ICU4X's normalizer data through `idna`, also under the
+Unicode License v3. `tls` links rustls (Apache-2.0, ISC or MIT), rustls-webpki (ISC) and ring
+(`Apache-2.0 AND ISC`: its own code ISC, code from BoringSSL under Apache-2.0 or ISC as each
+file states).
 
 The `intl` feature links ICU4X and its compiled CLDR data, under the Unicode License v3
 (`Unicode-3.0`); a product that enables it carries that notice too.
@@ -79,6 +87,9 @@ The integration tests link as one binary (`tests/main.rs`), one file's tests run
 | `tests/extension.rs` | The planner's gates: dependency order, composition, direct dispatch, tags and atoms per VM, the stale-cache check, compiler metadata, services, capabilities, state and drop order, every rejected composition, compiler type slots |
 | `tests/primitives.rs` | Zero-copy bytes, strict options, sequence and stream views, exact integers and bit patterns, packed scalars |
 | `tests/tcp.rs` (`tcp`) | `@dream/tcp` over real loopback sockets: the capability gates, IPv4 and IPv6 addresses, connects settled by the socket error, echo of binary payloads across several clients, end of stream against would-block, buffer windows, partial writes under backpressure, half-close, level-triggered readiness and stale tokens, bounded and fair waits, the watchdog, close and collection, host-made handles, and a Luau HTTP/1.1 server answering standard clients |
+| `tests/dns.rs` (`dns`) | `@dream/dns`: literals, `localhost` through the OS resolver, a deterministic resolver for ordering, deduplication, every failure kind, the bounded queue and pool, cancellation before and during a lookup, timeouts while queued and while running, late results thrown away, one-shot results, the per-runtime limit, collection, the watchdog, and (with `tcp`) completions waking a poller, deadlines without events, and tokens shared with sockets |
+| `tests/tls.rs` (`tls`) | `@dream/tls` with a PKI made per run: TLS 1.3 and 1.2, ALPN and SNI, IP identities, rotated configurations, name mismatch, expiry, not-yet-valid, untrusted and incomplete chains, ALPN without overlap, configuration errors, the TCP stream handed over whole, close_notify against truncation, buffered plaintext and bounded backpressure under the poller, handshake deadlines, hang-ups and non-TLS peers, the platform store, and a stock rustls server |
+| `tests/https.rs` (`dns`, `tls`) | DNS → raced TCP connects → verified TLS → HTTP/1.1 in Luau through a fake resolver, and a Luau HTTPS server answering concurrent keep-alive rustls clients |
 | `tests/udp.rs` | The dream-net bridge over real localhost UDP: a schema from Luau, a host-created server, a script-created client, events both ways, stats, the capability gate |
 | `tests/quat.rs` | Packed quaternions against the f32 userdata baseline, kind checks, and (`jit`) the native lowering |
 | `tests/raster.rs` | Colors and clip rectangles: construction, kind checks, the byte layout, and (`jit`) the lowered color math |

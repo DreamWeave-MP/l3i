@@ -388,7 +388,7 @@ pub enum StreamState {
     Failed,
     /// Closed locally; every method but `close` raises.
     Closed,
-    /// Handed to a new owner (a TLS session) with [`Stream::take`]: every method but `close`
+    /// Handed whole to a new owner (`tls.client` or `tls.server`): every method but `close`
     /// raises, and `close` does nothing, since the socket is no longer this stream's.
     Consumed,
 }

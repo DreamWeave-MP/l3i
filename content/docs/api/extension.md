@@ -1,6 +1,6 @@
 +++
 title = "Extensions and primitives"
-description = "Extension, ExtensionDescriptor and the declaration builders; RuntimePlan, RuntimePolicy and InstallContext; packed scalars and buffer layouts; sequences and streams; the dream.quat, dream.raster, dream.udp, dream.soft_render and dream.tcp extensions."
+description = "Extension, ExtensionDescriptor and the declaration builders; RuntimePlan, RuntimePolicy and InstallContext; packed scalars and buffer layouts; sequences and streams; the dream.quat, dream.raster, dream.udp, dream.soft_render, dream.tcp, dream.dns and dream.tls extensions."
 weight = 250
 
 [extra]
@@ -863,3 +863,57 @@ with `name()` the script's spelling), `peer_address()`, `local_address()`, `clos
 The userdata behind `tcp.poller` (`"dream.tcp.Poller"`); `close()` releases every watch and
 the OS poller. Listeners, streams and pollers are `!Send`: they belong to the runtime that made
 them.
+
+## dream.dns
+
+Module `l3i::dns`, feature `dns`; the Luau side is in
+[Built-in extensions](@/docs/builtin-extensions.md#dream-dns).
+
+{{ api_signature(value="pub struct DnsExtension") }}
+
+`new(Resolver)`, `max_requests(u32)` (open requests per runtime, default 64), `Default` over
+`Resolver::system()`. `id()` is `"dream.dns"`; `RESOLVE_CAPABILITY` is
+`"network.dns.resolve"`; `MAX_TIMEOUT_MS` 60000, `MAX_ADDRESSES` 64.
+
+{{ api_signature(value="pub struct Resolver") }}
+
+A bounded pool of lookup threads, cheap to clone and shareable between runtimes.
+`new(ResolverConfig { workers, queue }, Arc<dyn Lookup>)` (clamped to 1..=64 and 1..=4096),
+`system()` (the process's default over `SystemLookup`), `config()`, `load()` (queued lookups,
+threads started). Dropping the last handle ends the workers as they finish.
+
+{{ api_signature(value="pub trait Lookup: Send + Sync + 'static") }}
+
+`fn lookup(&self, host: &str, port: u16) -> Result<Vec<SocketAddr>, LookupError>`, run only on
+the resolver's threads; `SystemLookup` is the OS's. `LookupError` is `NotFound`,
+`TemporaryFailure` or `Other(String)`, with `kind()` the script's spelling.
+
+{{ api_signature(value="pub struct Request") }}
+
+The userdata behind `dns.resolve` (`"dream.dns.Request"`): `status()`, `cancel()`, `close()`.
+
+`l3i::hostname::normalize(&str) -> Result<Name, String>` (features `dns` or `tls`) is the
+mapping both modules use; `Name { original, ascii, literal }`, `bare()` without the trailing dot.
+
+## dream.tls
+
+Module `l3i::tls`, feature `tls`; the Luau side is in
+[Built-in extensions](@/docs/builtin-extensions.md#dream-tls).
+
+{{ api_signature(value="pub struct TlsExtension") }}
+
+`id()` is `"dream.tls"`; it requires `dream.tcp` and widens `dream_tcp_Watchable` with
+`dream_tls_Stream`. `Clone`, `Copy`, `Debug`, `Default`.
+
+{{ api_signature(value="pub struct TlsStream") }}
+
+The userdata behind `tls.client` and `tls.server` (`"dream.tls.Stream"`): `state() ->
+TlsState` (`Handshaking`, `Open`, `Failed`, `Closed`, with `name()`), `close()`.
+`ClientConfig` and `ServerConfig` are the configuration userdata (`"dream.tls.ClientConfig"`,
+`"dream.tls.ServerConfig"`).
+
+| Item | Value |
+|---|---|
+| `DEFAULT_BUFFER_LIMIT`, `MIN_BUFFER_LIMIT`, `MAX_BUFFER_LIMIT` | 64 KiB, 4 KiB, 16 MiB of pending ciphertext |
+| `DEFAULT_HANDSHAKE_TIMEOUT_MS`, `MAX_HANDSHAKE_TIMEOUT_MS` | 10000, 300000 |
+| `MAX_INPUT_BYTES`, `MAX_CHAIN`, `MAX_ROOTS` | 1 MiB per certificate or key input, 16 certificates, 1024 roots |

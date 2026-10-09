@@ -92,6 +92,8 @@ l3i = { version = "1.0", features = ["jit"] }
 | `fs` | off | The `dream.fs` extension (`l3i::fs`) with `memmap2`, `walkdir` and `same-file` |
 | `process` | off | The `dream.process` extension (`l3i::process`); no dependencies |
 | `tcp` | off | The `dream.tcp` extension (`l3i::tcp`) with `mio` (epoll, kqueue, IOCP) and `socket2` (backlog, address reuse, Apple's `SO_NOSIGPIPE`): TCP listeners, streams and a readiness poller |
+| `dns` | off | The `dream.dns` extension (`l3i::dns`) with `idna` (over ICU4X's normalizer) and, on Unix, `libc` for `getaddrinfo`: host name resolution on a bounded worker pool |
+| `tls` | off | The `dream.tls` extension (`l3i::tls`), turning on `tcp`, with `rustls` (ring provider; ring's C and assembly built by cc with clang), `rustls-platform-verifier`, `zeroize` and `idna`: verified TLS client and server sessions |
 
 The game transport is not a feature: `dream-net` is a normal dependency and the `dream.udp`
 bridge is in every plan. Raw TCP is the optional `tcp` feature.

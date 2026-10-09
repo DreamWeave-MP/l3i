@@ -43,7 +43,7 @@ Nothing here is a catalogue: tags, atoms, type names and debug-name roots are ho
 
 ```toml
 [dependencies]
-l3i = { version = "1", features = ["jit"] }   # jit, analysis, soft-render, bytes(-codecs, -digests, -text), data, intern, intl, syntax, fs, process, tcp are optional
+l3i = { version = "1", features = ["jit"] }   # jit, analysis, soft-render, bytes(-codecs, -digests, -text), data, intern, intl, syntax, fs, process, tcp, dns, tls are optional
 ```
 
 l3i builds only with **clang, lld and cross-language thin LTO**, and Cargo does not inherit a
@@ -106,7 +106,7 @@ Each row is a page of the guide.
 | **Direct access** | Atoms let `GETTABLEKS`/`NAMECALL` reach a native callback with no metatable walk; `DirectPlan` validates Luau's inline cache in O(1) and serves a type under any tag. | [Direct access](https://DreamWeave-MP.github.io/l3i/docs/direct-access/) |
 | **Extensions and plans** | A crate declares its Luau surface once (`describe`), a plan composes crates and assigns every tag, slot and atom (`finalize`), a runtime is built from it (`from_plan`); the plan renders the `.d.luau` and can type check it. | [Extensions](https://DreamWeave-MP.github.io/l3i/docs/extensions/) |
 | **Primitives** | `BytesView`, `BufferView`, `Exact<T>`, `Integer`, `Bits64`, `PackedScalar` with a kind registry, strict `Options` tables, in-place table walks, `Sequence` and `Stream` views. | [Primitives](https://DreamWeave-MP.github.io/l3i/docs/primitives/) |
-| **Built-in extensions** | `@dream/udp` (in every plan), `@dream/quat`, `@dream/raster`, `@dream/bytes`, `@dream/data`, `@dream/intern`, `@dream/intl`, `@dream/luau`, `@dream/soft-render`, `@dream/fs`, `@dream/process`, `@dream/tcp`. | [Built-in extensions](https://DreamWeave-MP.github.io/l3i/docs/builtin-extensions/) |
+| **Built-in extensions** | `@dream/udp` (in every plan), `@dream/quat`, `@dream/raster`, `@dream/bytes`, `@dream/data`, `@dream/intern`, `@dream/intl`, `@dream/luau`, `@dream/soft-render`, `@dream/fs`, `@dream/process`, `@dream/tcp`, `@dream/dns`, `@dream/tls`. | [Built-in extensions](https://DreamWeave-MP.github.io/l3i/docs/builtin-extensions/) |
 | **Native code** | Luau's CodeGen with lowering hooks written in Rust; which call sites lower and why. | [Native code](https://DreamWeave-MP.github.io/l3i/docs/native-code/) |
 | **The rest of the VM** | Coroutines, the debug API, memory and GC controls, libraries, `require`, Luau's analysis frontend. | [Coroutines, debugging and the rest](https://DreamWeave-MP.github.io/l3i/docs/vm/) |
 | **Rust API** | Every public module. | [Rust API](https://DreamWeave-MP.github.io/l3i/docs/api/) |
@@ -127,6 +127,8 @@ Each row is a page of the guide.
 | `dream.fs` (`fs`) | `@dream/fs` | The host filesystem over byte paths: reads, memory-mapped readers, writers, metadata, a columnar walk, links and identity; what the OS refuses is an answer, not an error. Behind `filesystem.read` and `filesystem.write`. |
 | `dream.process` (`process`) | `@dream/process` | Child processes with their exit code and output, behind `process.spawn`; the environment behind `process.environment`; unbuffered writes to stdout and stderr. |
 | `dream.tcp` (`tcp`) | `@dream/tcp` | Raw TCP byte streams over numeric addresses: `readInto` into caller buffers with end of stream kept apart from would-block, partial writes with no hidden queue, half-close, and a bounded, level-triggered poller that never calls Luau. Behind `network.tcp.connect`, `network.tcp.listen` and `network.tcp.public`. |
+| `dream.dns` (`dns`) | `@dream/dns` | Host name resolution through the OS resolver on a bounded worker pool: one-shot requests that never block the script, IDNA names, both address families in the OS's order, deadlines and cancellation, watchable by the TCP poller. Behind `network.dns.resolve`. |
+| `dream.tls` (`tls`) | `@dream/tls` | Verified TLS 1.3 and 1.2 client and server sessions over TCP streams with rustls: the platform trust store or explicit roots, name verification independent of the address, ALPN and SNI, bounded buffers, close_notify kept apart from truncation, nonblocking and watchable; no way to skip verification. |
 
 ## Features
 
@@ -146,11 +148,14 @@ Each row is a page of the guide.
 | `fs` | The `@dream/fs` extension | `memmap2`, `walkdir`, `same-file` |
 | `process` | The `@dream/process` extension | none |
 | `tcp` | The `@dream/tcp` extension | `mio` (`socket2` is already a dependency of `dream-net`) |
+| `dns` | The `@dream/dns` extension | `idna` (ICU4X's normalizer, Unicode-3.0), `libc` on Unix |
+| `tls` | The `@dream/tls` extension (turns on `tcp`) | `rustls` with ring, `rustls-platform-verifier`, `zeroize`, `idna` |
 | `soft-render` | The `dream.soft_render` extension | `dream-soft-render` |
 
 The default feature set is empty. The game transport is not a feature: `dream-net` is a
 dependency.
-Everything optional is pure Rust.
+Everything optional is Rust, except the C and assembly compiled with clang for BLAKE3's
+kernels (`bytes-digests`) and ring (`tls`).
 
 ## The rules
 

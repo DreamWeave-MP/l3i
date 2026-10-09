@@ -1,13 +1,13 @@
 +++
 title = "Built-in extensions"
-description = "The extensions l3i ships: the dream.udp bridge every plan carries, packed rotations in dream.quat, colors and clip rectangles in dream.raster, the dream.soft_render device, bytes for parsing in dream.bytes, textual identity as numbers in dream.intern, locales, plural rules and number formatting in dream.intl, Luau's own parser in dream.luau, the host filesystem in dream.fs, child processes in dream.process, and raw TCP streams with a readiness poller in dream.tcp."
+description = "The extensions l3i ships: the dream.udp bridge every plan carries, packed rotations in dream.quat, colors and clip rectangles in dream.raster, the dream.soft_render device, bytes for parsing in dream.bytes, textual identity as numbers in dream.intern, locales, plural rules and number formatting in dream.intl, Luau's own parser in dream.luau, the host filesystem in dream.fs, child processes in dream.process, raw TCP streams with a readiness poller in dream.tcp, host name resolution in dream.dns, and verified TLS sessions in dream.tls."
 weight = 90
 
 [extra]
 kind = "guide"
 +++
 
-Eleven extensions come with the crate. `dream.udp` is in every plan; the others are added with
+Thirteen extensions come with the crate. `dream.udp` is in every plan; the others are added with
 `RuntimePlan::builder().extension(..)`. Each is an ordinary `Extension` built on the
 [primitives](@/docs/primitives.md), with a Luau signature on every member, so a strict script
 that requires its module type checks against the plan's definitions.
@@ -25,6 +25,8 @@ that requires its module type checks against the plan's definitions.
 | `dream.fs` | `@dream/fs` | `l3i::fs::FsExtension` | `fs` |
 | `dream.process` | `@dream/process` | `l3i::process::ProcessExtension` | `process` |
 | `dream.tcp` | `@dream/tcp` | `l3i::tcp::TcpExtension` | `tcp` |
+| `dream.dns` | `@dream/dns` | `l3i::dns::DnsExtension` | `dns` |
+| `dream.tls` | `@dream/tls` | `l3i::tls::TlsExtension` | `tls` (with `tcp`) |
 
 The samples below reach the modules as compat globals (`RuntimePolicy::new().compat_global("@dream/quat", "quat")`),
 which is what the tests do; `require("@dream/quat")` is the canonical path.
@@ -1197,7 +1199,7 @@ encoding, NUL bytes included. Nothing is buffered behind it in either direction.
 | `shutdown(how)` | `"write"` sends end of stream and leaves reading open (a half-close, not `close`); `"read"` and `"both"` as named |
 | `close()` | Closes the socket and drops its registration at once; closing twice does nothing |
 | `localAddress`, `peerAddress` | `"127.0.0.1:50211"`, `"[::1]:50211"`; `localAddress` is nil until the OS assigns one |
-| `state` | `"connecting"`, `"connected"`, `"failed"` or `"closed"` |
+| `state` | `"connecting"`, `"connected"`, `"failed"`, `"closed"`, or `"consumed"` once a TLS session has taken the stream |
 | `closed` | Whether `close()` was called |
 
 `readInto` and `write` settle a pending connect first: while it is pending they answer
@@ -1218,7 +1220,7 @@ within the poller. Tokens are not descriptors and mean nothing to the OS.
 
 | Member | Does |
 |---|---|
-| `watch(handle, token, interest)` | Watches an open listener or stream for `"read"`, `"write"` or `"readwrite"` (a listener only for `"read"`). A handle is watched by one poller at a time. Returns `true`, or the OS's refusal as `nil, message, kind` |
+| `watch(handle, token, interest)` | Watches an open `dream_tcp_Watchable` (a listener or stream, and with their extensions a TLS stream or a DNS request) for `"read"`, `"write"` or `"readwrite"` (a listener or a request only for `"read"`). A handle is watched by one poller at a time. Returns `true`, or the OS's refusal as `nil, message, kind` |
 | `modify(token, interest)` | Changes what a watch reports, without a system call |
 | `unwatch(token)` | Stops watching; the token may be used again at once |
 | `wait(timeoutMs)` | Waits at most `timeoutMs`, `0` to check without waiting, and queues up to `maxEvents` ready watches; returns how many. Never longer than `maxWaitMs`, and never past the runtime's execution time limit: inside a watched call the wait ends at the deadline and the watchdog raises as soon as Luau runs again |
@@ -1274,9 +1276,9 @@ ports, address ranges) is follow-up work, and this module is not a network sandb
 
 Addresses are numeric: `127.0.0.1:80`, `[::1]:8080`. A name such as
 `localhost:80` is an error, not a lookup: resolving a name blocks for as long as the resolver
-takes, so it does not belong behind a function that never waits. A host that needs names
-resolves them, off the script's thread if need be, and passes the addresses on. Whether `[::]`
-also accepts IPv4 is the OS default.
+takes, so it does not belong behind a function that never waits. Names are
+[`@dream/dns`](#dream-dns)'s, which resolves them on worker threads and returns addresses in
+exactly this form. Whether `[::]` also accepts IPv4 is the OS default.
 
 ### Errors
 
@@ -1313,8 +1315,9 @@ and read a 4 MiB response late.
 
 ### Not here
 
-TLS, name resolution, UDP sockets (`dream.udp` is the game transport), endpoint allowlists,
-keepalive and buffer-size options, connect and idle timeouts (the caller's loop owns time),
+TLS and name resolution (they are [`@dream/tls`](#dream-tls) and [`@dream/dns`](#dream-dns)),
+UDP sockets (`dream.udp` is the game transport), endpoint allowlists, keepalive and buffer-size
+options, connect and idle timeouts (the caller's loop owns time),
 cancelling a wait from another thread, and sharing handles between runtimes. The module has
 Windows and macOS code paths, and mio and socket2 support both, but it has been built and
 tested on Linux only so far.
@@ -1361,3 +1364,259 @@ The bottlenecks are the system calls themselves (one per `readInto` or `write`, 
 hidden queue to batch them) and, for many connections, `wait`'s scan of every watch, which is
 linear in the watches held. The feature adds one crate, mio (socket2 is already in the tree
 through dream-net).
+
+## dream.dns
+
+Feature `dns`; module `@dream/dns`, `l3i::dns::DnsExtension`. Host name resolution through the
+operating system's resolver, on a bounded pool of worker threads, without ever blocking the
+script. DNS resolves; it does not connect and it does not establish trust.
+
+```luau
+local dns = require("@dream/dns")
+local request = assert(dns.resolve("example.com", 443, { timeoutMs = 5000 }))
+request:wait(250)                                -- or watch it with a @dream/tcp poller
+local addresses, message, kind = request:take()  -- once; nil, message, 'wouldBlock' while pending
+-- { "[2606:4700:10::ac42:93f3]:443", "104.18.27.120:443", ... }
+```
+
+| Member | Does |
+|---|---|
+| `resolve(host, port, options?)` | Returns a request at once, or `nil`, a message and `"limitReached"` when the runtime's open requests or the resolver's queue are full. `host` and `port` are separate: nothing parses `host:port`. Options: `timeoutMs` (1 to 60000, default 5000), `maxAddresses` (1 to 64, default 16) |
+| `request:take()` | Once: the addresses, or the failure (`"notFound"`, `"temporaryFailure"`, `"timedOut"`, `"cancelled"`, `"other"`). `nil, message, "wouldBlock"` while pending; a second `take` raises |
+| `request:wait(timeoutMs)` | Waits at most `timeoutMs` (0 to 60000, never past the request's deadline or the runtime's execution time limit) on a condition variable, for a feature set without `@dream/tcp`; `true` once finished. The lookup runs on a worker, never here |
+| `request:cancel()`, `request:close()` | Give up on a pending lookup: a queued one leaves the queue, a running one's result is thrown away. `close` also drops the result and any watch; it is idempotent |
+| `status` | `"pending"`, `"ready"`, `"failed"`, `"cancelled"`, `"timedOut"`, `"consumed"` or `"closed"` |
+| `host`, `asciiHost`, `port`, `closed` | The name as given, the name resolved (A-labels), the port |
+| `MAX_TIMEOUT_MS`, `MAX_ADDRESSES` | 60000 and 64 |
+
+With `@dream/tcp` in the plan a request is a `dream_tcp_Watchable`: `poller:watch(request,
+token, "read")` reports it readable once it finishes or its deadline passes, and never again
+once taken. Completion wakes a waiting poller through its `mio::Waker` (taken under the
+request's lock, so a completion before or during the watch is never lost), and the wait is
+capped at the earliest watched deadline, so a timeout is reported on time with no thread or
+timer behind it.
+
+### Names
+
+A name maps to ASCII the way URLs map host names: UTS #46 nontransitional processing with
+WHATWG's forbidden host code points refused (`_` is allowed, as real networks use it). It is
+then checked before anything is queued: at most 253 characters, labels of 1 to 63 letters,
+digits, `-` or `_`, one optional trailing dot, no NUL; `Bücher.example` resolves as
+`xn--bcher-kva.example` while `request.host` keeps what the caller wrote. An IPv4 or IPv6
+literal, bracketed or not, completes at once without a lookup. A bad name, port or option is
+an error raised in the script; a lookup that fails is an answer.
+
+### Results
+
+Addresses come in the order the OS returned them (RFC 6724 and the host's own policy), with
+both families kept and exact duplicates removed, cut to `maxAddresses`, each with the port:
+IPv6 in brackets, ready for `tcp.connect`. An empty answer is `notFound`. Choosing among them
+is the caller's: `examples/https_client.luau` interleaves the families and races staggered
+connection attempts.
+
+### The resolver
+
+`Resolver::new(ResolverConfig { workers, queue }, lookup)` runs a `Lookup` on at most
+`workers` threads (1 to 64, default 4), started as lookups need them, with at most `queue`
+lookups waiting (1 to 4096, default 64); the queue counts lookups no worker has started yet,
+so a burst can fill it before idle workers wake. A full queue is `limitReached`, never another
+thread. `Resolver::system()` is the process's shared default over `SystemLookup`, the OS's
+`getaddrinfo` (through libc on Unix, so a missing name and a temporary failure stay distinct;
+std's lookup on Windows). Runtimes may share one resolver; `DnsExtension::max_requests` bounds
+each runtime's open requests (default 64). A host can install any `Lookup` instead, which is
+how the tests resolve `test.local` deterministically.
+
+Workers own plain Rust data: the name, the port and the request's `Arc` state. No Luau value,
+runtime `Rc` or callback crosses to them. A request's terminal phase (done, cancelled, timed
+out) is entered exactly once under its lock. A running `getaddrinfo` cannot be interrupted, so
+a request that times out or is cancelled reads that way at once while its worker stays busy
+until the OS returns, and the pool's size bounds how many such calls run. Nothing is cached:
+the OS may cache, as it always does.
+
+### Authority
+
+`network.dns.resolve` (`RESOLVE_CAPABILITY`), denied unless granted, and granting nothing
+else: no TCP or UDP capability implies it, and it implies no right to connect. Lookups go
+wherever the OS sends them (the configured resolvers, hosts file, VPN), so a script that may
+resolve can make the machine ask its resolvers about names of its choosing. This is not
+DNS-over-HTTPS and no public resolver is ever substituted.
+
+## dream.tls
+
+Feature `tls` (which turns on `tcp`); module `@dream/tls`, `l3i::tls::TlsExtension`, which
+requires `dream.tcp` in the plan. Verified TLS 1.3 and 1.2 sessions over `@dream/tcp`
+streams, client and server, driven by nonblocking calls; rustls 0.23 with the ring provider.
+TLS authenticates and encrypts; HTTP and every other protocol stay in Luau.
+
+```luau
+local tls = require("@dream/tls")
+-- raw: a dream.tcp.Stream whose finishConnect() returned true, not watched by any poller
+local secure = assert(tls.client(raw, { serverName = "example.com", alpn = { "http/1.1" } }))
+-- raw is now "consumed". Watch secure, and on readiness:
+local done, message, kind = secure:handshake()   -- true, false (call again), or nil
+local accepted = secure:write("GET / HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\n\r\n")
+secure:flush()
+local count = secure:readInto(buffer.create(65536))  -- 0 only after close_notify
+```
+
+| Member | Does |
+|---|---|
+| `clientConfig(options?)` | Client trust and protocols, built once and shared: `roots` (PEM or DER strings or buffers, or an array of them), `platform` (default `true`), `alpn`, `versions` (`{ "1.2", "1.3" }` by default). `nil, message, kind` for unusable roots (`"invalidCertificate"`) or an unusable platform store (`"trustStoreUnavailable"`) |
+| `serverConfig(options)` | `certChain` (PEM or DER), `privateKey` (PKCS #8, PKCS #1 or SEC1, PEM or DER), `alpn`, `versions`. The key is checked against the leaf certificate (`"keyMismatch"`); malformed input is `"invalidCertificate"` or `"invalidKey"` |
+| `client(stream, options)` | Takes a connected, unwatched TCP stream for a client session: `serverName` (required), `config` (default: the platform store, built once per runtime), `alpn`, `bufferLimit`, `handshakeTimeoutMs` |
+| `server(stream, config, options?)` | Takes an accepted, unwatched TCP stream for a server session under `config`: `bufferLimit`, `handshakeTimeoutMs` |
+
+| Stream member | Does |
+|---|---|
+| `handshake()` | Moves the handshake as far as the socket allows: `true` once authenticated, `false` when it needs the socket again, `nil, message, kind` when it failed |
+| `readInto(target, offset?, length?)` | Decrypted bytes into the buffer; `0` only after the peer's close_notify; `nil, message, "wouldBlock"` when nothing is ready; `"truncated"` when the connection ended without close_notify |
+| `write(data, offset?, length?)` | Encrypts as much as the bounded send buffer takes and returns that plaintext count, not bytes on the wire; the ciphertext goes to the socket at once as far as it takes it. `"wouldBlock"` when the buffer is full |
+| `flush()` | Pushes pending ciphertext: `true` when none is left in the session (handed to the OS, not necessarily received), `false` when the socket is full |
+| `shutdownWrite()` | Queues close_notify and flushes; once it has left, the TCP write half is shut. Reading stays open |
+| `close()` | Closes the socket at once without close_notify, drops its watch and its place in the listener's count; idempotent |
+| `state`, `handshaking`, `closed` | `"handshaking"`, `"open"`, `"failed"` or `"closed"` |
+| `wantsRead`, `wantsWrite` | Whether the session needs the peer's bytes, or has ciphertext waiting |
+| `alpn`, `protocolVersion`, `cipherSuite`, `serverName` | The negotiated protocol, `"1.3"` or `"1.2"`, the suite; a client's identity, or the name a client asked a server for (SNI) |
+| `peerAddress`, `localAddress` | As the TCP stream's |
+
+A call that has to finish the handshake first does it, and answers `"wouldBlock"` while it is
+still running. Every call does a bounded amount of socket work (32 steps for a handshake, 64
+socket reads for a read) and stops; nothing waits.
+
+### Verification
+
+A client verifies the certificate chain, its validity period, and the server name it was
+given: a DNS name (sent as SNI) or an IP address (matched against IP SANs). The name is the
+caller's, independent of the address the socket connected to, so a name resolved to an IPv6
+or an IPv4 address is verified the same way; it passes through the same mapping as
+`@dream/dns`, so a Unicode name is checked as its A-label.
+
+The default trust is the platform's, through rustls-platform-verifier: the system CA bundle
+(found by rustls-native-certs, loaded once per configuration) and webpki on Linux and BSD,
+Security.framework on Apple platforms, CryptoAPI on Windows. The platforms differ: Apple and
+Windows apply the OS's own policy, including whatever revocation checking the OS does, while
+Linux checks no revocation. An unusable store (no CA bundle in a minimal container) fails closed with
+`"trustStoreUnavailable"`; no bundled root set is ever substituted. `roots` adds trust
+anchors to the platform's, or, with `platform = false`, is the whole trust, for internal PKIs
+and tests. Loading the platform store reads files on the calling thread, once per
+configuration: about 3.7 ms on the reference machine.
+
+There is no option, anywhere, to skip or weaken verification, accept a name mismatch, accept
+an unverified self-signed certificate, log keys or extract session secrets; 0-RTT is off on
+both sides. A failure is never a downgrade: the session fails, sends its alert if the socket
+takes it, and shuts the socket both ways. The failure persists for every later call, the poller
+reports the stream until it is closed, and `close` releases it.
+
+| Kind | Meaning |
+|---|---|
+| `certificateNameMismatch` | The certificate is not for the server name |
+| `certificateExpired`, `certificateNotYetValid` | Outside its validity period |
+| `certificateUntrusted` | No chain to a trusted root (an unknown CA, a missing intermediate) |
+| `certificateRevoked`, `certificateInvalid` | Revoked where the platform checks; any other certificate problem |
+| `tlsAlert` | The peer refused the handshake (the server side of a client's rejection) |
+| `noApplicationProtocol`, `tlsIncompatible`, `tlsProtocol` | No common ALPN protocol; no common version or suite; a malformed or unexpected message |
+| `truncated` | The connection ended without close_notify: what arrived may be cut short |
+| `timedOut` | The handshake missed its deadline (default 10 s, at most 300 s) |
+| `invalidCertificate`, `invalidKey`, `keyMismatch`, `trustStoreUnavailable` | Configuration problems |
+
+The socket's own kinds (`connectionReset`, `brokenPipe`, ...) pass through as in `@dream/tcp`.
+
+### Ownership
+
+`tls.client` and `tls.server` take the TCP stream whole: its socket, its addresses and its
+place in the listener's `maxStreams` count, released exactly once when the session closes. The
+TCP handle becomes `"consumed"`: reading, writing, shutting down, finishing a connect, watching
+it or wrapping it again all raise, and closing or collecting it leaves the session's socket
+alone. A stream still connecting, failed, closed, already consumed or watched by a poller is
+refused (unwatch it first, so no registration or queued event refers to the old handle), and
+a refused call leaves it usable.
+
+### Readiness
+
+A session is a `dream_tcp_Watchable`: one poller, one registration, the same tokens. What the
+poller reports combines the socket's readiness with what only the session knows:
+
+- readable: decrypted plaintext is waiting, the socket has bytes, the peer ended, or
+  ciphertext of the session's own is waiting and the socket can take it (a key update or an
+  alert must go out before the read can finish, so a reader is never stalled behind a write);
+- writable: the send buffer has room, or pending ciphertext can go out;
+- while handshaking: either, when the socket can move the handshake, or at the handshake
+  deadline, which caps the poller's wait like a DNS deadline does.
+
+Watch for writing only while there is something to write, as with TCP: an open session with
+room in its send buffer is always writable.
+
+### Bounds
+
+`bufferLimit` caps the ciphertext waiting for the socket (default 64 KiB, 4 KiB to 16 MiB);
+`write` takes no more plaintext than fits. rustls holds at most 16 KiB of decrypted plaintext
+per session and reads no more from the socket until it is taken. Certificate inputs are at
+most 1 MiB each; a chain at most 16 certificates; a client configuration at most 1024 added
+roots; ALPN at most 16 protocols. Server sessions resume through rustls's bounded in-memory
+cache (256 sessions per configuration); clients keep rustls's default resumption cache.
+
+### Keys
+
+Certificates and keys are bytes the caller holds: this module never opens a file and has no
+capability of its own (a session's network authority is its TCP stream's). Key bytes are
+copied once into a buffer zeroed when it drops; the Luau string or buffer they came from is
+the script's and cannot be zeroized, and the parsed key lives in the configuration as long as
+it does. No message ever contains key material.
+
+### Not here
+
+Client certificates (mutual TLS) are deferred: servers do not request them and clients do not
+offer them. Also not here: OCSP stapling, certificate pinning, session ticket configuration,
+key logging (deliberately), QUIC, and HTTP. Only the ring provider is built. The platform
+verifier's behaviour has been exercised on Linux only.
+
+### An HTTPS client and server in Luau
+
+`examples/https_client.luau` resolves a name, races connection attempts across the returned
+addresses (families interleaved, a new attempt every 250 ms or as soon as one fails, the
+first to connect wins and the rest are closed, one deadline for everything), verifies the
+server as the name it asked for, and makes one HTTP/1.1 request.
+`examples/https_server.luau` serves HTTPS with bounded keep-alive and connections.
+`tests/https.rs` runs them against each other through a resolver that maps `test.local` to an
+unreachable address, an IPv6 loopback nobody listens on and the real IPv4 server, and serves
+independent rustls clients; `cargo run --example https_get --features dns,tls -- example.com /`
+fetches from a real server with the OS resolver and platform store. They are demonstrations:
+no redirects, chunked bodies, request bodies or connection reuse.
+
+### What it costs
+
+Measured by `benches/dns_tls.rs` (`cargo bench --features dns,tls --bench dns_tls`) on an
+i7-10870H, Linux 7.2, loopback, one thread, best of five rounds; Luau drives the modules.
+
+| DNS | instr | µs | native allocs |
+|---|---:|---:|---:|
+| a literal, resolved and taken (no worker) | 8693 | 0.8 | 9 |
+| an instant lookup through the pool, `wait` + `take` | 12746 | 7.7 | 11 |
+| the same, woken through a poller | 16337 | 7.9 | 14 |
+| `localhost` through `getaddrinfo`, warm (cold, with the thread start: 1.0 ms) | 11056 | 44.9 | 12 |
+
+The pool's round trip, a queue, a thread hand-off and a condition variable or waker, costs
+about 7 µs. 65 requests blocked on a stalled resolver, watched by one poller through four
+`wait(250)`, used 0.39 ms of CPU in a second.
+
+| TLS 1.3 against TCP | TCP | TLS |
+|---|---:|---:|
+| connect, accept and close a pair (µs) | 42 | 368 (325 for both handshakes, ECDSA P-256, 198 allocations) |
+| a 16-byte round trip (µs) | 6.9 | 10.3 |
+| a read with nothing ready (µs) | 0.4 | 0.4 |
+| throughput at 1 / 4 / 16 / 64 KiB writes (MiB/s) | 183 / 554 / 1945 / 4339 | 121 / 314 / 756 / 1106 |
+| held per connected pair, VM / native bytes | 416 / 176 | 2848 / 13301 |
+
+`tls.clientConfig` over explicit roots costs 4.3 µs, `tls.serverConfig` 18.8 µs (parsing and
+matching the key), and the platform store 3.7 ms. Throughput is bounded by AES-GCM and by rustls
+allocating an output buffer per record (about two allocations per write, 192 per MiB at 64 KiB
+writes); a warm read makes none. A session's userdata holds the rustls state inline, which is
+what the VM bytes above are.
+
+`dns` adds `idna` and ICU4X's normalizer (28 crates, Unicode-3.0 data, shared with `intl`);
+`tls` adds rustls, ring, rustls-webpki, rustls-platform-verifier with rustls-native-certs and
+openssl-probe (pure Rust, no OpenSSL), zeroize and the same `idna` (69 crates for this target
+with `tls`, against 27 with no features). ring compiles C and assembly through cc with clang.
+A stripped release build of `examples/https_get.rs` is 5.7 MiB against 3.5 MiB for the TCP-only
+`tcp_http_server` and 2.3 MiB for an example with no features (different programs, so only
+indicative).
