@@ -39,6 +39,8 @@ mod dns;
 mod extension;
 #[cfg(feature = "fs")]
 mod fs;
+#[cfg(all(feature = "dns", feature = "tls"))]
+mod https;
 #[cfg(feature = "intern")]
 mod intern;
 #[cfg(feature = "intl")]
