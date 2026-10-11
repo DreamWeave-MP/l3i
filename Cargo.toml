@@ -41,8 +41,6 @@ include = [
     "benches/**",
     "scripts/**",
     "/README.md",
-    "/BENCHMARKS.md",
-    "/TOOLCHAIN.md",
     "/LICENSE-MIT",
     "/LICENSE-APACHE",
     "/rustfmt.toml",

@@ -36,7 +36,7 @@
     clippy::return_self_not_must_use,
     // OpenMW, Luau, and C++ identifiers appear in prose.
     clippy::doc_markdown,
-    // The hot paths in BENCHMARKS.md were measured with these; see PERF commits.
+    // The hot paths on the performance page were measured with these; see PERF commits.
     clippy::inline_always,
     // FFI call sites take `&x as *const T` everywhere.
     clippy::borrow_as_ptr,
@@ -159,7 +159,8 @@ const fn parse_tag_limit(text: &str) -> u8 {
 /// The Luau release the linked VM was built from, e.g. `"0.742"`.
 pub const LUAU_VERSION: &str = env!("LUAU_VERSION");
 
-/// Whether this build of l3i met the verified toolchain (TOOLCHAIN.md): clang for Luau, the
+/// Whether this build of l3i met the verified toolchain
+/// (<https://DreamWeave-MP.github.io/l3i/docs/building/#the-toolchain-rule>): clang for Luau, the
 /// Rust side and Luau linked as one thin LTO module by lld, and clang and rustc on one LLVM
 /// major. Apple targets count without the cross-language half, as `build.rs` vets them.
 ///

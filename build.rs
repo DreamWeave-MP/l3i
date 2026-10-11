@@ -2,8 +2,8 @@
 //! additions (`csrc/extra.cpp`), and, per feature, the C++ shims over
 //! Luau's code generator and analysis libraries. Everything is compiled with `cc`, with no
 //! network access at build time and nothing outside the package. The compiler must be clang or
-//! clang-cl and the link cross-language LTO (`toolchain_policy` below, TOOLCHAIN.md): the crate
-//! does not build with GCC.
+//! clang-cl and the link cross-language LTO (`toolchain_policy` below, and the toolchain rule on
+//! <https://DreamWeave-MP.github.io/l3i/docs/building/>): the crate does not build with GCC.
 
 // The shared CI runs `-W clippy::pedantic -D warnings`.
 #![allow(clippy::doc_markdown)]
@@ -246,7 +246,9 @@ fn main() {
 
 /// Parses the `enum class` bodies the Rust IR layer mirrors and writes them to `OUT_DIR`.
 /// Enforces the verified toolchain: clang for the C++ side, cross-language thin LTO, and an LLVM
-/// major shared by clang and rustc. TOOLCHAIN.md holds the measurements: the binder's hot paths
+/// major shared by clang and rustc. The toolchain campaign on the performance page
+/// (<https://DreamWeave-MP.github.io/l3i/docs/performance/#the-toolchain-campaign>) holds the
+/// measurements: the binder's hot paths
 /// run 8 to 15 percent faster than under GCC only when the Rust thunks and Luau's API inline into
 /// each other, and the same configuration also has the shortest clean build. Plain clang is
 /// slower than GCC at runtime, so the LTO half is not optional. `L3I_UNVERIFIED_TOOLCHAIN=1`
@@ -316,7 +318,7 @@ fn toolchain_policy(base: &mut cc::Build) {
         }
         Some(problem) if env::var_os("L3I_UNVERIFIED_TOOLCHAIN").is_some() => {
             println!(
-                "cargo:warning=l3i is building with an unverified toolchain ({problem}); expect slower binder hot paths, see TOOLCHAIN.md"
+                "cargo:warning=l3i is building with an unverified toolchain ({problem}); expect slower binder hot paths, see https://DreamWeave-MP.github.io/l3i/docs/building/"
             );
         }
         Some(problem) => panic!(
@@ -325,7 +327,8 @@ fn toolchain_policy(base: &mut cc::Build) {
              `-Clinker-plugin-lto -Clinker=clang -Clink-arg=-fuse-ld=lld` (without the plugin flag on\n\
              Apple targets, where ld64.lld rejects it), with clang and rustc on the same LLVM major. This repository's .cargo/config.toml sets them; a dependent crate adds the\n\
              same lines to its own .cargo/config.toml. Set L3I_UNVERIFIED_TOOLCHAIN=1 to build anyway\n\
-             with a warning. TOOLCHAIN.md has the measurements behind this policy."
+             with a warning. https://DreamWeave-MP.github.io/l3i/docs/building/ has the rule and the\n\
+             measurements behind it."
         ),
     }
 }

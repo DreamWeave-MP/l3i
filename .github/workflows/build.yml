@@ -21,7 +21,8 @@ jobs:
     with:
       crate_names: '["l3i"]'
 
-      # l3i builds only under the clang cross-language LTO policy (TOOLCHAIN.md). StroggForge's
+      # l3i builds only under the clang cross-language LTO policy (the toolchain rule on the
+      # Building page of the site). StroggForge's
       # setup-llvm step gives every job that compiles a clang and lld whose LLVM major matches the
       # active rustc; since v52 it runs unconditionally, so there is nothing to switch on here.
 

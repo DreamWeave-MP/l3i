@@ -107,6 +107,7 @@ or by building silently slow.
 | Side | Requirement | Where it is set |
 |---|---|---|
 | C++ (Luau, `csrc/`) | `clang++`; `build.rs` adds `-flto=thin` itself | `CXX=clang++` (`.cargo/config.toml` `[env]`) |
+| C in dependencies (BLAKE3's kernels, ring) | `clang`, never the system `cc`, which is GCC on many Linux hosts | `CC=clang` (`.cargo/config.toml` `[env]`) |
 | Rust | `-Clinker-plugin-lto -Clinker=clang -Clink-arg=-fuse-ld=lld`, all three checked by `build.rs` | `.cargo/config.toml` `[target.*] rustflags` |
 | Both | clang and rustc on the same LLVM major (`clang++ --version`, `rustc -vV`) | checked by `build.rs` |
 | MSVC targets | `clang-cl` compiles (`CXX_x86_64-pc-windows-msvc`), rustc links with `-Clinker=lld-link` | `.cargo/config.toml` |
@@ -135,9 +136,13 @@ performance numbers checks it, since an exempted build is slower by no fixed amo
 
 Installing the tools: Fedora `dnf install clang lld`; Debian and Ubuntu
 `apt install clang-<N> lld-<N>` where `<N>` is rustc's LLVM major. Apple's clang is not upstream
-LLVM; use a Homebrew or nightly LLVM whose major matches. [TOOLCHAIN.md](https://github.com/DreamWeave-MP/l3i/blob/main/TOOLCHAIN.md)
-records the measurements behind the rule; the campaign table is on
-[Compatibility and performance](@/docs/performance.md).
+LLVM; use a Homebrew or nightly LLVM whose major matches. The measurements behind the rule are
+[the toolchain campaign](@/docs/performance.md#the-toolchain-campaign): every binder path gains
+8 to 15 percent from the cross-language inlining, plain clang without it is slower than GCC, and
+the verified configuration is also the fastest clean build.
+
+GCC is not supported, for Luau or for anything else in the tree. Do not build, compile-check or
+test with it; the standalone C++ suites under `csrc/` are clang-only too.
 
 ## What a dependent crate copies
 
@@ -145,7 +150,8 @@ Cargo does not inherit a dependency's configuration, so a crate that depends on 
 `[env]` and `rustflags` lines into its own `.cargo/config.toml`. This repository's file, in full:
 
 ```toml
-# The verified toolchain (TOOLCHAIN.md): clang compiles Luau, the Rust side emits bitcode, and
+# The verified toolchain (https://DreamWeave-MP.github.io/l3i/docs/building/#the-toolchain-rule):
+# clang compiles Luau, the Rust side emits bitcode, and
 # lld runs one thin LTO over both languages. build.rs refuses anything else unless
 # L3I_UNVERIFIED_TOOLCHAIN is set (docs.rs is exempt). Environment variables override every
 # entry here. Linux is the measured configuration; the Windows entries follow the same shape
@@ -154,6 +160,11 @@ Cargo does not inherit a dependency's configuration, so a crate that depends on 
 CXX = "clang++"
 CXX_x86_64-pc-windows-msvc = "clang-cl"
 CXX_aarch64-pc-windows-msvc = "clang-cl"
+# C dependencies (BLAKE3's SIMD kernels, ring under `tls`) go through the same compiler: the
+# system `cc` is GCC on many Linux hosts, and l3i is never built with GCC.
+CC = "clang"
+CC_x86_64-pc-windows-msvc = "clang-cl"
+CC_aarch64-pc-windows-msvc = "clang-cl"
 
 [target.x86_64-unknown-linux-gnu]
 rustflags = ["-Clinker-plugin-lto", "-Clinker=clang", "-Clink-arg=-fuse-ld=lld"]

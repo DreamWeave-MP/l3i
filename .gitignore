@@ -5,6 +5,9 @@
 /luau-0.740
 /openmw
 
+# scripts/gen_benchmarks.py's output; CI attaches it to a release, the site carries the tables
+/BENCHMARKS.md
+
 # Site build output
 /public/
 /dist/

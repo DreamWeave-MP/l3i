@@ -189,16 +189,19 @@ The value layout the binder reads is pinned by `static_assert`s in `csrc/extra.c
 against the API once per runtime, so a Luau bump that moves a byte fails at once. Every Luau
 API function in `lua.h`, `lualib.h`, `luacode.h`, `luacodegen.h`, `luajitinliner.h` and
 `Require.h` is declared in `l3i::ffi`, except the varargs `lua_pushvfstring`.
-[TOOLCHAIN.md](TOOLCHAIN.md) has the measurements behind the rule and
-[Building](https://DreamWeave-MP.github.io/l3i/docs/building/) the whole procedure.
+[Building](https://DreamWeave-MP.github.io/l3i/docs/building/) has the whole procedure and
+[the toolchain campaign](https://DreamWeave-MP.github.io/l3i/docs/performance/#the-toolchain-campaign)
+the measurements behind the rule.
 
 ## Quality
 
 `cargo test`, `cargo test --all-features`, `cargo clippy --all-targets --all-features -- -W
 clippy::pedantic -D warnings` and `cargo fmt --check` are clean on every commit. The integration
 tests link as one binary (`cargo test <file>::` runs one file), since each binary pays a full
-link-time codegen under cross-language LTO. [`BENCHMARKS.md`](BENCHMARKS.md) holds the Criterion
-numbers for the hot paths.
+link-time codegen under cross-language LTO.
+[Compatibility and performance](https://DreamWeave-MP.github.io/l3i/docs/performance/) holds the
+Criterion numbers for the hot paths; a release tag regenerates them and attaches the table to
+the GitHub release.
 
 Wall time is noise past a few nanoseconds, so the binder's own cost is tracked in retired
 instructions per call from the CPU's counters (`cargo bench --bench instructions`), the loop

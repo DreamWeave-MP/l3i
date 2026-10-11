@@ -577,4 +577,6 @@ i7-10870H in a Fedora 44 toolbox: gcc 16.2.1, clang/lld 22.1.8, mold 2.40.4, rus
 - mold is a no-op here: the link is a small fraction of a build dominated by compiling Luau. The self-contained lld rustc ships is not used with a custom `-Clinker`, so system lld is the linker.
 - The verified configuration is also the fastest clean build, 16 to 18 s, four times faster than the gcc serial baseline.
 
-`BENCHMARKS.md` is regenerated under this configuration.
+The hot-path tables above are regenerated under this configuration, by
+`scripts/gen_benchmarks.py` over Criterion's output; a release tag runs it in CI and attaches the
+result to the GitHub release.

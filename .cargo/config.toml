@@ -1,4 +1,5 @@
-# The verified toolchain (TOOLCHAIN.md): clang compiles Luau, the Rust side emits bitcode, and
+# The verified toolchain (https://DreamWeave-MP.github.io/l3i/docs/building/#the-toolchain-rule):
+# clang compiles Luau, the Rust side emits bitcode, and
 # lld runs one thin LTO over both languages. build.rs refuses anything else unless
 # L3I_UNVERIFIED_TOOLCHAIN is set (docs.rs is exempt). Environment variables override every
 # entry here. Linux is the measured configuration; the Windows entries follow the same shape
