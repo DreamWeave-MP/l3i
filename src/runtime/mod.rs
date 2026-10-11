@@ -70,9 +70,22 @@ pub struct RuntimeBuilder {
     native_code: Option<crate::native_code::NativeCodeOptions>,
     atom_catalogue: Option<crate::direct::AtomCatalogue>,
     buffer_cage: Option<Box<dyn crate::memory::BufferCage>>,
+    coroutine_finalizers: bool,
 }
 
 impl RuntimeBuilder {
+    /// Enables Luau's coroutine finalizers: `coroutine.finally` for scripts, and
+    /// [`crate::thread::Thread::add_finalizer`] and
+    /// [`crate::thread::Thread::finalizer_function`] for the host. Off by default. Luau's flag
+    /// for them is process-wide and a VM must be created under the value it runs with, so the
+    /// first runtime built in the process decides: `build` fails when this asks for finalizers
+    /// after a runtime was built without them, and once one runtime has them every later one
+    /// has them too, asked or not.
+    pub fn coroutine_finalizers(mut self, enabled: bool) -> Self {
+        self.coroutine_finalizers = enabled;
+        self
+    }
+
     /// Routes every `buffer` allocation through `cage` (`lua_setmemorycage`), installed right
     /// after the state is created, before it makes any further object, so no buffer exists
     /// outside it.
@@ -149,6 +162,7 @@ impl RuntimeBuilder {
 
     pub fn build(self) -> Result<Runtime> {
         flags::initialize()?;
+        flags::decide_coroutine_finalizers(self.coroutine_finalizers)?;
         // SAFETY: luaL_newstate uses the default allocator; a null result is out of memory.
         let state = unsafe { ffi::luaL_newstate() };
         if state.is_null() {
@@ -305,6 +319,7 @@ impl Runtime {
             native_code: None,
             atom_catalogue: None,
             buffer_cage: None,
+            coroutine_finalizers: false,
         }
     }
 

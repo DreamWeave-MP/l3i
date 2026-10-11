@@ -146,15 +146,6 @@ impl Runtime {
         unsafe { ffi::lua_setembeddergc(self.stack().state_ptr(), None) };
         self.shared().embedder_gc().borrow_mut().take();
     }
-
-    /// Enables Luau's coroutine finalizers (the `LuauCoroutineFinally` flag, off by default).
-    pub fn enable_coroutine_finalizers(&self) -> Result<()> {
-        // SAFETY: luau_setfflag walks the static flag list.
-        if unsafe { ffi::luau_setfflag(c"LuauCoroutineFinally".as_ptr(), 1) } == 0 {
-            return Err(Error::logic("This Luau build has no LuauCoroutineFinally flag"));
-        }
-        Ok(())
-    }
 }
 
 thread_local! {
@@ -354,10 +345,17 @@ pub mod raw {
 
 impl Thread {
     /// Registers the function at `callback` to run when this coroutine is finalized
-    /// (`lua_addfinalizer`; enable with [`Runtime::enable_coroutine_finalizers`] first). The
-    /// coroutine must be live: started and suspended, or running. Fails for the main thread, a
-    /// fresh thread (Luau reports it as finished), or a dead coroutine.
+    /// (`lua_addfinalizer`). Finalizers are chosen when the first runtime of the process is
+    /// built ([`crate::runtime::RuntimeBuilder::coroutine_finalizers`]); without them this
+    /// fails. The coroutine must be live: started and suspended, or running. Fails for the main
+    /// thread, a fresh thread (Luau reports it as finished), or a dead coroutine.
     pub fn add_finalizer(&self, scope: &impl Scope, callback: ValueView<'_>) -> Result<()> {
+        if !crate::flags::coroutine_finalizers() {
+            // Without the flag Luau's collector does not mark a thread's finalizers.
+            return Err(Error::logic(
+                "Coroutine finalizers are off: enable them on the builder of the first runtime of the process",
+            ));
+        }
         if !callback.is_function() {
             return Err(Error::logic("A finalizer must be a function"));
         }
@@ -376,9 +374,13 @@ impl Thread {
         })
     }
 
-    /// True when finalizers are registered on this coroutine.
+    /// True when finalizers are registered on this coroutine; false in a process without them.
     pub fn has_finalizers(&self) -> bool {
-        self.value().is_valid() && unsafe { ffi::lua_hasfinalizers(self.state_ptr()) != 0 }
+        // SAFETY: the pin proves the thread reachable; lua_hasfinalizers reads one field, and
+        // asserts the flag the first check stands for.
+        crate::flags::coroutine_finalizers()
+            && self.value().is_valid()
+            && unsafe { ffi::lua_hasfinalizers(self.state_ptr()) != 0 }
     }
 
     /// The function that runs this coroutine's pending finalizers when called

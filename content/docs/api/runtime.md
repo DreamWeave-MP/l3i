@@ -32,10 +32,12 @@ initialization category 0, no atom catalogue, no buffer cage, no native code.
 | `fn initialization_category(self, category: MemoryCategory) -> Self` | The category charged while sandboxes and templates are set up. Default 0 |
 | `fn atom_catalogue(self, catalogue: AtomCatalogue) -> Self` | This VM's [atom catalogue](@/docs/api/direct.md), installed before the standard libraries open |
 | `fn buffer_cage(self, cage: impl BufferCage) -> Self` | Routes every `buffer` allocation through `cage` (`lua_setmemorycage`), installed before any buffer exists |
+| `fn coroutine_finalizers(self, enabled: bool) -> Self` | Luau's coroutine finalizers: `coroutine.finally` for scripts, `Thread::add_finalizer` and `Thread::finalizer_function` for the host. Off by default. Luau's flag is process-wide, so the first runtime built decides: asking after a runtime was built without them fails `build`, and once one runtime has them every later one does. `flags::coroutine_finalizers()` reports the decision |
 | `fn native_code(self, options: NativeCodeOptions) -> Self` | Feature `jit`: enables native code generation with `options`. Off by default |
 | `fn build(self) -> Result<Runtime>` | Creates the VM in OpenMW's order: flag policy, `luaL_newstate`, pointer key, buffer cage, per-VM state and callbacks, native code, atom catalogue, standard libraries, the value-layout self test, l3i's packed kinds |
 
-Errors from `build`: the flag policy names a flag this Luau build lacks (`Error::Logic`), the
+Errors from `build`: the flag policy names a flag this Luau build lacks (`Error::Logic`),
+coroutine finalizers are asked for after a runtime was built without them (`Error::Logic`), the
 state cannot be allocated (`Error::Runtime`), the atom catalogue does not resolve, or the value
 layout mirror disagrees with the API.
 
@@ -234,7 +236,7 @@ from this runtime is alive and not suspended inside a Lua call. Inside a bound f
 Methods other modules add to `Runtime` are documented with their module:
 `sandbox` (below); `new_thread`, `set_hooks`, `clear_hooks`, `gc`, `allocation_rate`, `clock`,
 `encode_pointer`, `memory_dump`, `gc_dump`, `set_light_userdata_name`, `light_userdata_name`,
-`weak_ref`, `set_embedder_gc`, `clear_embedder_gc`, `enable_coroutine_finalizers`,
+`weak_ref`, `set_embedder_gc`, `clear_embedder_gc`,
 `atom_catalogue`, `atom_of`, `install_vector_buffer_writer` on
 [Direct access and the VM](@/docs/api/direct.md); `open_library`, `sandbox_luau`,
 `register_library`, `find_table`, `set_jit_inliner`, `install_require`, `require_function`,
@@ -538,6 +540,11 @@ exposes (`LuauGcTraceUdata`, `LuauBufferCage`); and the CodeGen flags, applied o
 
 Freezes the policy. Idempotent and thread-safe. A flag name the linked Luau lacks is
 `Error::Logic` (`Luau 0.742 has no fast flag named ...`) rather than a silent no-op.
+
+{{ api_signature(value="fn coroutine_finalizers() -> bool") }}
+
+Whether this process runs with coroutine finalizers, which the first runtime built decides
+(`RuntimeBuilder::coroutine_finalizers`). False until a runtime exists.
 
 ## Error
 

@@ -126,6 +126,51 @@ pub fn initialize() -> Result<()> {
         .map_err(Error::Logic)
 }
 
+static COROUTINE_FINALIZERS: OnceLock<std::result::Result<bool, String>> = OnceLock::new();
+
+/// Decides, once per process, whether Luau's coroutine finalizers are on, and returns the
+/// decision. `LuauCoroutineFinally` is process-wide, and a VM has to open its coroutine library
+/// and collect its threads under the value it goes on to run with, so the flag can only be
+/// raised before any VM exists: the first runtime built decides. A later runtime that asks for
+/// finalizers in a process that went without them is refused; one that does not ask in a process
+/// that has them gets them anyway.
+pub(crate) fn decide_coroutine_finalizers(requested: bool) -> Result<bool> {
+    let decided = COROUTINE_FINALIZERS
+        .get_or_init(|| {
+            if requested {
+                // SAFETY: luau_setfflag only walks the static flag list and writes a bool. This
+                // is the first runtime build of the process, so no VM made by this crate has
+                // opened its libraries without the flag.
+                unsafe {
+                    if ffi::luau_setfflag(c"LuauCoroutineFinally".as_ptr(), 1) == 0 {
+                        return Err(format!(
+                            "Luau {} has no fast flag named LuauCoroutineFinally",
+                            crate::LUAU_VERSION
+                        ));
+                    }
+                    // Types `coroutine.finally`; defined in Analysis, which only the `analysis`
+                    // feature links, so its absence is not an error.
+                    ffi::luau_setfflag(c"LuauCoroutineFinallyAnalysis".as_ptr(), 1);
+                }
+            }
+            Ok(requested)
+        })
+        .clone()
+        .map_err(Error::Logic)?;
+    if requested && !decided {
+        return Err(Error::logic(
+            "Coroutine finalizers must be chosen by the first runtime of the process: Luau's flag is process-wide and a runtime was already built without them",
+        ));
+    }
+    Ok(decided)
+}
+
+/// Whether this process runs with coroutine finalizers
+/// ([`crate::runtime::RuntimeBuilder::coroutine_finalizers`]). False until a runtime is built.
+pub fn coroutine_finalizers() -> bool {
+    matches!(COROUTINE_FINALIZERS.get(), Some(Ok(true)))
+}
+
 #[cfg(test)]
 mod tests {
     #[test]

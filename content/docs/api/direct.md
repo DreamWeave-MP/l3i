@@ -305,7 +305,6 @@ On `Runtime`:
 | `fn light_userdata_name(&self, tag: c_int) -> Option<String>` | |
 | `fn weak_ref(&self, view: ValueView<'_>) -> Result<WeakRef>` | A weak reference that does not keep the value alive |
 | `fn set_embedder_gc(&self, gc: impl EmbedderGc)`, `fn clear_embedder_gc(&self)` | The embedder half of cross-heap GC |
-| `fn enable_coroutine_finalizers(&self) -> Result<()>` | Luau's `LuauCoroutineFinally` flag, off by default |
 
 ```rust
 use l3i::Runtime;
@@ -379,8 +378,9 @@ Fast flags (process-wide, frozen by the crate's policy once a runtime exists; fo
 | `fn fast_int(name: &str) -> Option<c_int>`, `fn set_fast_int(name: &str, value: c_int) -> Result<()>` | Integer flags (`FInt`) |
 
 On `Thread`: `fn add_finalizer(&self, scope: &impl Scope, callback: ValueView<'_>) -> Result<()>`
-registers a function to run when the coroutine is finalized (enable finalizers first; fails for
-the main thread, a fresh thread or a dead coroutine), and `fn has_finalizers(&self) -> bool`.
+registers a function to run when the coroutine is finalized (it fails unless the process has
+finalizers, chosen with `RuntimeBuilder::coroutine_finalizers`, and for the main thread, a fresh
+thread or a dead coroutine), and `fn has_finalizers(&self) -> bool`.
 `fn finalizer_function(&self, scope: &impl Scope, close: bool) -> Result<Function>` is the pinned
 function that runs the pending finalizers when called, once. With `close` false the coroutine
 must have finished or failed, and its finalizers receive `"finished"` and its results or

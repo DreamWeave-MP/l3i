@@ -10,7 +10,7 @@ use l3i::memory::{self, BufferCage, EmbedderGc, GcControl, LightUserdata, Userda
 use l3i::stack::Scope;
 use l3i::thread::Resume;
 use l3i::userdata::{Userdata, tagged};
-use l3i::value::{Table, Value};
+use l3i::value::Table;
 
 #[test]
 fn gc_controls_and_counters() {
@@ -233,10 +233,55 @@ fn the_buffer_cage_sees_every_buffer_allocation() {
     drop(runtime);
 }
 
+/// The first runtime of a process decides whether it has coroutine finalizers, and this binary's
+/// other tests build runtimes without them. A scenario that needs them runs alone in a child
+/// process of the binary. True in the parent, once the child has passed; false in the child.
+fn passed_in_a_child_process(name: &str) -> bool {
+    if std::env::var_os("L3I_FINALIZER_CHILD").is_some() {
+        return false;
+    }
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", name, "--test-threads=1", "--nocapture"])
+        .env("L3I_FINALIZER_CHILD", "1")
+        .output()
+        .unwrap();
+    let (stdout, stderr) = (String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+    assert!(output.status.success(), "{stdout}{stderr}");
+    assert!(stdout.contains("1 passed"), "the child ran the scenario: {stdout}");
+    true
+}
+
+#[test]
+fn coroutine_finalizers_are_refused_unless_the_first_runtime_chose_them() {
+    let runtime = Runtime::new().unwrap();
+    // Whichever runtime this process built first, it built it without finalizers.
+    let error = Runtime::builder().coroutine_finalizers(true).build().err().unwrap().to_string();
+    assert!(error.contains("first runtime of the process"), "{error}");
+    assert!(!l3i::flags::coroutine_finalizers());
+    assert!(runtime.eval::<bool>("return coroutine.finally == nil").unwrap());
+
+    let body = runtime.load_function("return function() coroutine.yield() end").unwrap();
+    let callback = runtime.load_function("return function() end").unwrap();
+    let thread = runtime.new_thread().unwrap();
+    assert!(matches!(thread.start(&runtime.stack(), &body, ()).unwrap(), Resume::Yielded(_)));
+    let error = runtime
+        .stack()
+        .with_frame(|frame| thread.add_finalizer(frame, callback.push_to(frame)?))
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("Coroutine finalizers are off"), "{error}");
+    assert!(!thread.has_finalizers());
+    assert!(thread.finalizer_function(&runtime.stack(), true).is_err());
+}
+
 #[test]
 fn coroutine_finalizers_run_when_asked() {
-    let runtime = Runtime::new().unwrap();
-    runtime.enable_coroutine_finalizers().unwrap();
+    if passed_in_a_child_process("memory::coroutine_finalizers_run_when_asked") {
+        return;
+    }
+    let runtime = Runtime::builder().coroutine_finalizers(true).build().unwrap();
+    assert!(l3i::flags::coroutine_finalizers());
+    assert!(runtime.eval::<bool>("return type(coroutine.finally) == 'function'").unwrap());
     let body = runtime.load_function("return function() finalized = 'no' coroutine.yield() return 1 end").unwrap();
     let on_finish = runtime.load_function("return function(how) finalized = how end").unwrap();
     let finalized =
@@ -265,10 +310,10 @@ fn coroutine_finalizers_run_when_asked() {
     cancel.invoke::<(), _>(&runtime.stack(), ()).unwrap();
     assert_eq!(finalized(), "cancelled");
     assert!(thread.is_reset() && !thread.has_finalizers());
-    // The main thread cannot take finalizers; the error is reported, not raised through Rust.
-    let main = runtime.load_function("return function() end").unwrap();
-    let _ = main;
-    let _ = Value::invalid();
+
+    // Once a process has finalizers, a runtime built without asking has them too.
+    let later = Runtime::new().unwrap();
+    assert!(later.eval::<bool>("return type(coroutine.finally) == 'function'").unwrap());
 }
 
 #[test]
@@ -277,7 +322,8 @@ fn fast_flags_are_introspectable() {
     assert_eq!(memory::fast_flag("LuauFastpcall"), Some(true), "policy flag is on");
     assert_eq!(memory::fast_flag("NoSuchFlagAtAll"), None);
     assert!(memory::fast_flags().iter().any(|(name, _)| name == "LuauFastpcall"));
-    memory::set_fast_flag("LuauCoroutineFinally", true).unwrap();
+    // Writes the value the policy already set: other tests' VMs share these process-wide flags.
+    memory::set_fast_flag("LuauFastpcall", true).unwrap();
     assert!(memory::set_fast_flag("NoSuchFlagAtAll", true).is_err());
     assert!(memory::set_fast_int("NoSuchIntAtAll", 1).is_err());
     assert_eq!(memory::fast_int("NoSuchIntAtAll"), None);
