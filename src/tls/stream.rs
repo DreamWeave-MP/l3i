@@ -87,6 +87,9 @@ pub(crate) struct Flags {
     room: Cell<bool>,
     /// The peer sent close_notify.
     peer_closed: Cell<bool>,
+    /// rustls would read now. While a handshake flight waits for the socket it would not, and
+    /// a call then neither reads nor clears the socket's stale readable bit.
+    wants_read: Cell<bool>,
     deadline: Instant,
 }
 
@@ -97,11 +100,8 @@ impl Synthetic for Flags {
             // The next call reports what happened.
             TlsState::Failed | TlsState::Closed => READABLE | WRITABLE,
             TlsState::Handshaking => {
-                if now >= self.deadline || os & (READABLE | CLOSED) != 0 || flush {
-                    READABLE | WRITABLE
-                } else {
-                    0
-                }
+                let readable = os & READABLE != 0 && self.wants_read.get();
+                if now >= self.deadline || readable || os & CLOSED != 0 || flush { READABLE | WRITABLE } else { 0 }
             }
             TlsState::Open => {
                 let ended = os & CLOSED != 0 || self.peer_closed.get();
@@ -241,6 +241,7 @@ impl TlsStream {
         server_name: Option<String>,
     ) -> TlsStream {
         conn.set_buffer_limit(Some(limit));
+        let wants_read = conn.wants_read();
         TlsStream {
             io: taken.io,
             conn: RefCell::new(Some(conn)),
@@ -250,6 +251,7 @@ impl TlsStream {
                 plaintext: Cell::new(false),
                 room: Cell::new(false),
                 peer_closed: Cell::new(false),
+                wants_read: Cell::new(wants_read),
                 deadline: Instant::now() + handshake_timeout,
             }),
             limit,
@@ -377,6 +379,7 @@ impl TlsStream {
         flags.pending_out.set(io.tls_bytes_to_write() > 0);
         flags.room.set(io.tls_bytes_to_write() < self.limit && !self.write_closed.get());
         flags.peer_closed.set(io.peer_has_closed());
+        flags.wants_read.set(conn.wants_read());
         if flags.state.get() == TlsState::Handshaking && !conn.is_handshaking() {
             flags.state.set(TlsState::Open);
         }
@@ -896,5 +899,30 @@ mod tests {
         assert!(stream.gate("Stream.readInto").is_err());
         stream.close();
         assert!(stream.conn.borrow().is_none());
+    }
+
+    /// A handshake whose flight is stuck behind a full socket reports nothing for a stale
+    /// readable bit: the next call would neither read nor clear it, so the wait would spin.
+    #[test]
+    fn a_handshake_waiting_to_send_ignores_a_stale_readable_socket() {
+        let flags = Flags {
+            state: Cell::new(TlsState::Handshaking),
+            pending_out: Cell::new(true),
+            plaintext: Cell::new(false),
+            room: Cell::new(false),
+            peer_closed: Cell::new(false),
+            wants_read: Cell::new(false),
+            deadline: Instant::now() + Duration::from_secs(10),
+        };
+        let now = Instant::now();
+        let both = READABLE | WRITABLE;
+        assert_eq!(flags.reportable(READABLE, both, now), 0);
+        assert_eq!(flags.reportable(READABLE | WRITABLE, both, now), both, "the socket took the flight");
+        assert_eq!(flags.reportable(READABLE | CLOSED, both, now), both, "the peer went away");
+        assert_eq!(flags.reportable(READABLE, both, flags.deadline), both, "the deadline passed");
+        flags.pending_out.set(false);
+        flags.wants_read.set(true);
+        assert_eq!(flags.reportable(READABLE, both, now), both, "the flight is out and rustls reads");
+        assert_eq!(flags.reportable(0, both, now), 0);
     }
 }
