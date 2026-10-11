@@ -85,6 +85,7 @@ pub const MODULE: &str = "@dream/intl";
 /// ICU4X could not build rules or a formatter for a locale. With the compiled CLDR data a
 /// locale without data of its own falls back to its parents and the root, so this is rare.
 #[derive(Clone, PartialEq, Eq, Debug)]
+#[non_exhaustive]
 pub struct UnsupportedLocale {
     /// What was being built.
     pub what: &'static str,

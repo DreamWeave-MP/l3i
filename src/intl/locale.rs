@@ -31,6 +31,7 @@ pub struct Locale {
 
 /// Why a string is not a language tag.
 #[derive(Clone, PartialEq, Eq, Debug)]
+#[non_exhaustive]
 pub enum LocaleError {
     /// The string is empty.
     Empty,

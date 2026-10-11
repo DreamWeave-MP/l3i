@@ -15,6 +15,7 @@ use std::time::Instant;
 
 /// Why a lookup found no address.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum LookupError {
     /// The name does not exist, or has no address records (`EAI_NONAME`, `EAI_NODATA`).
     NotFound,
@@ -142,6 +143,7 @@ impl Lookup for SystemLookup {
 
 /// How many lookups a resolver runs at once and how many may wait.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ResolverConfig {
     /// Worker threads, started as lookups need them and never more: 1 to 64.
     pub workers: usize,
@@ -149,9 +151,18 @@ pub struct ResolverConfig {
     pub queue: usize,
 }
 
+impl ResolverConfig {
+    /// `workers` threads at most and `queue` lookups waiting at most; [`Resolver::new`] clamps
+    /// both to their bounds.
+    #[must_use]
+    pub fn new(workers: usize, queue: usize) -> ResolverConfig {
+        ResolverConfig { workers, queue }
+    }
+}
+
 impl Default for ResolverConfig {
     fn default() -> Self {
-        ResolverConfig { workers: 4, queue: 64 }
+        ResolverConfig::new(4, 64)
     }
 }
 

@@ -86,7 +86,7 @@ fn client_runtime_with(table: HashMap<&'static str, Vec<&str>>) -> (Runtime, Arc
         .map(|(name, ips)| (name, Ok(ips.iter().map(|ip| SocketAddr::new(ip.parse().unwrap(), 0)).collect())))
         .collect();
     let mock = Arc::new(Mock { table, ..Mock::default() });
-    let resolver = Resolver::new(ResolverConfig { workers: 2, queue: 8 }, Arc::clone(&mock) as Arc<dyn Lookup>);
+    let resolver = Resolver::new(ResolverConfig::new(2, 8), Arc::clone(&mock) as Arc<dyn Lookup>);
     let policy = RuntimePolicy::new()
         .compat_global("@dream/tcp", "tcp")
         .compat_global("@dream/tls", "tls")

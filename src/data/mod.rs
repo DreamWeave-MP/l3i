@@ -74,6 +74,7 @@ pub struct DataExtension;
 
 /// An element representation inside a buffer, named as the `buffer` library names its reads.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Kind {
     U8,
     I8,
@@ -182,6 +183,7 @@ impl Kind {
 /// take in buffers (a simulated body, an entity slot). A stride below the element size is an
 /// error; a stride above it skips the rest of the record.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Layout {
     pub kind: Kind,
     pub stride: usize,
@@ -191,6 +193,12 @@ pub struct Layout {
 }
 
 impl Layout {
+    /// Elements of `kind` every `stride` bytes, each `offset` bytes into its record.
+    #[must_use]
+    pub fn new(kind: Kind, stride: usize, offset: usize) -> Layout {
+        Layout { kind, stride, offset }
+    }
+
     pub fn parse(what: &str, name: &str) -> Result<Layout> {
         let (name, offset) = match name.split_once('+') {
             Some((name, offset)) => (
@@ -1318,6 +1326,7 @@ fn describe_constructors(module: &mut ModuleDecl) {
 
 /// A reduction over the elements that satisfy an optional comparison: the receiver's members.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ReductionOp {
     Sum,
     Min,
@@ -1328,9 +1337,18 @@ pub enum ReductionOp {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Reduction {
     pub op: ReductionOp,
     pub filter: Option<Comparison>,
+}
+
+impl Reduction {
+    /// `op` over every element, or over the elements a comparison with the threshold accepts.
+    #[must_use]
+    pub fn new(op: ReductionOp, filter: Option<Comparison>) -> Reduction {
+        Reduction { op, filter }
+    }
 }
 
 /// What a reduction answers.

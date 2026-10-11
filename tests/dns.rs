@@ -145,7 +145,7 @@ fn runtime_over(resolver: Resolver, grants: &[&str], max_requests: u32, limits: 
 
 fn mocked(workers: usize, queue: usize) -> (Runtime, Arc<Mock>, Resolver) {
     let mock = mock();
-    let resolver = Resolver::new(ResolverConfig { workers, queue }, Arc::clone(&mock) as Arc<dyn Lookup>);
+    let resolver = Resolver::new(ResolverConfig::new(workers, queue), Arc::clone(&mock) as Arc<dyn Lookup>);
     (runtime_over(resolver.clone(), &[RESOLVE_CAPABILITY], 64, None), mock, resolver)
 }
 
@@ -344,7 +344,7 @@ fn the_queue_is_bounded_and_cancellation_and_timeouts_race_a_slow_lookup_cleanly
 fn requests_are_limited_per_runtime_and_released_by_take_close_and_collection() {
     let mock = mock();
     mock.open();
-    let resolver = Resolver::new(ResolverConfig { workers: 2, queue: 8 }, Arc::clone(&mock) as Arc<dyn Lookup>);
+    let resolver = Resolver::new(ResolverConfig::new(2, 8), Arc::clone(&mock) as Arc<dyn Lookup>);
     let runtime = runtime_over(resolver.clone(), &[RESOLVE_CAPABILITY], 2, None);
     runtime
         .exec(
@@ -404,7 +404,7 @@ fn a_wait_never_outlasts_the_execution_time_limit() {
 #[cfg(feature = "tcp")]
 fn with_poller() -> (Runtime, Arc<Mock>) {
     let mock = mock();
-    let resolver = Resolver::new(ResolverConfig { workers: 2, queue: 8 }, Arc::clone(&mock) as Arc<dyn Lookup>);
+    let resolver = Resolver::new(ResolverConfig::new(2, 8), Arc::clone(&mock) as Arc<dyn Lookup>);
     let policy = RuntimePolicy::new()
         .compat_global("@dream/dns", "dns")
         .compat_global("@dream/tcp", "tcp")
@@ -556,7 +556,7 @@ fn completions_deadlines_sockets_and_tokens_share_one_poller() {
 #[test]
 fn a_runtime_holds_only_its_share_of_a_shared_resolver() {
     let mock = mock();
-    let resolver = Resolver::new(ResolverConfig { workers: 4, queue: 8 }, Arc::clone(&mock) as Arc<dyn Lookup>);
+    let resolver = Resolver::new(ResolverConfig::new(4, 8), Arc::clone(&mock) as Arc<dyn Lookup>);
     let plan = |extension: DnsExtension| {
         let policy = RuntimePolicy::new().compat_global("@dream/dns", "dns").capability(RESOLVE_CAPABILITY);
         Runtime::from_plan(&RuntimePlan::builder().policy(policy).extension(extension).finalize().unwrap()).unwrap()

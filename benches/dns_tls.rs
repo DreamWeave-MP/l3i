@@ -303,7 +303,7 @@ fn heap(runtime: &Runtime) -> f64 {
 
 fn dns(instructions: &Instructions) {
     let lookup = Arc::new(Bench { gate: (Mutex::new(false), Condvar::new()) });
-    let resolver = Resolver::new(ResolverConfig { workers: 4, queue: 64 }, Arc::clone(&lookup) as Arc<dyn Lookup>);
+    let resolver = Resolver::new(ResolverConfig::new(4, 64), Arc::clone(&lookup) as Arc<dyn Lookup>);
     let policy = RuntimePolicy::new().capability(RESOLVE_CAPABILITY);
     let plan = RuntimePlan::builder()
         .policy(policy)

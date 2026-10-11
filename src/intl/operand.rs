@@ -19,6 +19,7 @@ use crate::stack::{Type, ValueView};
 /// Luau number has no visible fraction digits of its own; it reads as the shortest decimal that
 /// round-trips to the same double, so `1.0` is `1` and `0.1` is `0.1`, not the binary fraction.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
 pub enum Operand<'a> {
     /// A whole number.
     Integer(i64),
@@ -31,6 +32,7 @@ pub enum Operand<'a> {
 
 /// Why an [`Operand`] is not a number.
 #[derive(Clone, PartialEq, Debug)]
+#[non_exhaustive]
 pub enum NumberError {
     /// NaN or an infinity.
     NotFinite(f64),

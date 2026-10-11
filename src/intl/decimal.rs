@@ -18,6 +18,7 @@ const DEFAULT_MAX_FRACTION_DIGITS: u8 = 3;
 
 /// When grouping separators are written.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum Grouping {
     /// As the locale groups: `1,234` in English, `1234` in Polish, `12,34,567` in Hindi.
     #[default]
@@ -52,6 +53,7 @@ impl Grouping {
 /// How a [`DecimalFormatter`] writes numbers. The fraction digit counts resolve as ECMA-402's
 /// do: the minimum defaults to 0, the maximum to the larger of 3 and the minimum.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct DecimalOptions {
     /// When grouping separators are written.
     pub grouping: Grouping,
@@ -62,8 +64,31 @@ pub struct DecimalOptions {
     pub max_fraction_digits: Option<u8>,
 }
 
+impl DecimalOptions {
+    /// The defaults: automatic grouping, the locale's fraction digits.
+    #[must_use]
+    pub fn new() -> DecimalOptions {
+        DecimalOptions::default()
+    }
+
+    #[must_use]
+    pub fn grouping(mut self, grouping: Grouping) -> DecimalOptions {
+        self.grouping = grouping;
+        self
+    }
+
+    /// The fewest and the most fraction digits to write; `None` leaves the locale's choice.
+    #[must_use]
+    pub fn fraction_digits(mut self, min: Option<u8>, max: Option<u8>) -> DecimalOptions {
+        self.min_fraction_digits = min;
+        self.max_fraction_digits = max;
+        self
+    }
+}
+
 /// Why a formatter could not be built.
 #[derive(Clone, PartialEq, Eq, Debug)]
+#[non_exhaustive]
 pub enum FormatterError {
     /// A fraction digit count past [`MAX_FRACTION_DIGITS`].
     FractionDigitsOutOfRange {

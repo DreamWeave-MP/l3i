@@ -51,6 +51,7 @@ pub const MAX_HANDSHAKE_TIMEOUT_MS: u32 = 300_000;
 
 /// Where a session is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum TlsState {
     /// The handshake is not complete; no application data moves.
     Handshaking,

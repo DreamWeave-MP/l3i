@@ -146,7 +146,7 @@ fn locale(tag: &str) -> Locale {
 }
 
 fn options(min: Option<u8>, max: Option<u8>) -> DecimalOptions {
-    DecimalOptions { grouping: Grouping::Auto, min_fraction_digits: min, max_fraction_digits: max }
+    DecimalOptions::new().grouping(Grouping::Auto).fraction_digits(min, max)
 }
 
 fn rust_rows(instructions: &Instructions) {

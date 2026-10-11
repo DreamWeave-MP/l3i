@@ -399,6 +399,7 @@ pub(super) fn describe_listener(d: &mut ExtensionDescriptor) {
 
 /// Where a stream is in its life.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum StreamState {
     /// A connect is in progress.
     Connecting,
