@@ -97,6 +97,7 @@ pub(crate) fn watch_target(handle: ValueView<'_>) -> Option<Result<Target>> {
         source: Rc::clone(&request.source) as Rc<dyn Watchable>,
         ready: Rc::new(Cell::new(0)),
         read_only: true,
+        latent: false,
         synthetic: Some(Rc::new(Due {
             shared: Arc::clone(&request.shared),
             taken: Rc::clone(&request.taken),

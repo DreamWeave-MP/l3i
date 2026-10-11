@@ -631,6 +631,7 @@ impl TlsStream {
                 source: Rc::clone(&self.io) as Rc<dyn Watchable>,
                 ready: Rc::clone(&self.io.ready),
                 read_only: false,
+                latent: false,
                 synthetic: Some(Rc::clone(&self.flags) as Rc<dyn crate::tcp::poller::Synthetic>),
             }),
         }

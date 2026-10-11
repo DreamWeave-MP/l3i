@@ -276,6 +276,8 @@ impl Listener {
             source: Rc::clone(&self.io) as Rc<dyn Watchable>,
             ready: Rc::clone(&self.io.ready),
             read_only: true,
+            // `StreamCount::release` marks the listener readable again with no OS event.
+            latent: true,
             synthetic: None,
         }
     }
@@ -504,6 +506,7 @@ impl Stream {
                 source: Rc::clone(&self.io) as Rc<dyn Watchable>,
                 ready: Rc::clone(&self.io.ready),
                 read_only: false,
+                latent: false,
                 synthetic: None,
             }),
         }

@@ -94,6 +94,11 @@ pub(crate) struct Target {
     pub(crate) ready: Rc<Cell<u8>>,
     /// Only ever readable (a listener, a DNS request): watching it for writing is an error.
     pub(crate) read_only: bool,
+    /// The readiness cell may be raised outside the OS event path (a listener is marked
+    /// readable again when a stream is released at its limit), so the watch stays a candidate
+    /// for every scan; a socket's bits rise only with an OS event, so it is dropped from the
+    /// scan while they are clear.
+    pub(crate) latent: bool,
     /// Held strongly by the slot, so it must not own the source: a collected handle has to be
     /// able to die while watched.
     pub(crate) synthetic: Option<Rc<dyn Synthetic>>,
@@ -120,6 +125,10 @@ struct Slot {
     token: i64,
     interest: u8,
     read_only: bool,
+    /// Scanned on every wait while watched: its readiness can rise without an OS event.
+    retained: bool,
+    /// Its index is in `Slots::candidates` (kept across a free, so an index is never listed twice).
+    listed: bool,
     ready: Rc<Cell<u8>>,
     source: Weak<dyn Watchable>,
     synthetic: Option<Rc<dyn Synthetic>>,
@@ -134,6 +143,8 @@ impl Slot {
             token: 0,
             interest: 0,
             read_only: false,
+            retained: false,
+            listed: false,
             ready: Rc::new(Cell::new(0)),
             source,
             synthetic: None,
@@ -163,6 +174,12 @@ struct Slots {
     by_token: HashMap<i64, u32>,
     /// `(index, generation)` of the events `next()` has still to hand out.
     queue: VecDeque<(u32, u32)>,
+    /// The slots a scan looks at: every retained watch, and every socket watch with a readiness
+    /// bit its interest reports. A socket's bits rise only in `apply`, and its interest widens
+    /// only in `modify`, both of which list it, so a reportable slot is always listed; one found
+    /// with nothing its interest reports and not retained is dropped by `prune`, so idle sockets
+    /// (which keep a writable bit from registration) cost a wait nothing.
+    candidates: Vec<u32>,
     /// Where the next wait starts its scan, so a long run of ready handles cannot starve the rest.
     cursor: usize,
 }
@@ -186,9 +203,34 @@ impl Slots {
         }
         self.by_token.remove(&slot.token);
         let generation = slot.generation.wrapping_add(1);
+        let listed = slot.listed;
         *slot = Slot::empty();
         slot.generation = generation;
+        slot.listed = listed;
         self.free.push(index);
+    }
+
+    /// Puts `index` among the candidates, once.
+    fn list(&mut self, index: u32) {
+        let slot = &mut self.entries[index as usize];
+        if !slot.listed {
+            slot.listed = true;
+            self.candidates.push(index);
+        }
+    }
+
+    /// Drops the candidates no scan needs: freed slots, and sockets with no bit their interest
+    /// reports.
+    fn prune(&mut self) {
+        let entries = &mut self.entries;
+        self.candidates.retain(|&index| {
+            let slot = &mut entries[index as usize];
+            let keep = slot.used && (slot.retained || slot.ready.get() & mask(slot.interest) != 0);
+            if !keep {
+                slot.listed = false;
+            }
+            keep
+        });
     }
 
     /// Frees the slots whose sources were collected while the poller could not be told.
@@ -206,7 +248,7 @@ impl Slots {
 
     /// Records what the OS reported for each live watch. The waker's event carries no
     /// readiness: it only ends the OS wait, and the scan that follows sees what changed.
-    fn apply(&self, events: &mio::Events) {
+    fn apply(&mut self, events: &mio::Events) {
         for event in events {
             if event.token() == WAKE_TOKEN {
                 continue;
@@ -233,14 +275,18 @@ impl Slots {
                 bits |= READABLE | WRITABLE | CLOSED;
             }
             slot.ready.set(slot.ready.get() | bits);
+            self.list(index as u32);
         }
     }
 
     /// Whether anything is reportable now, and the earliest synthetic deadline still to come.
-    fn survey(&self, now: Instant) -> (bool, Option<Instant>) {
+    /// Scans the candidates, pruned first, so the cost is in watches with something to say.
+    fn survey(&mut self, now: Instant) -> (bool, Option<Instant>) {
+        self.prune();
         let mut earliest: Option<Instant> = None;
-        for slot in &self.entries {
-            if !slot.used || slot.source.strong_count() == 0 {
+        for &index in &self.candidates {
+            let slot = &self.entries[index as usize];
+            if slot.source.strong_count() == 0 {
                 continue;
             }
             if slot.reportable(now) != 0 {
@@ -253,21 +299,22 @@ impl Slots {
         (false, earliest)
     }
 
-    /// Queues up to `max` ready watches, scanning once round from the cursor.
+    /// Queues up to `max` ready watches, scanning the candidates once round from the cursor.
     fn fill(&mut self, max: usize, now: Instant) -> usize {
         self.queue.clear();
-        let count = self.entries.len();
+        let count = self.candidates.len();
         if count == 0 {
             return 0;
         }
         let start = self.cursor % count;
         for step in 0..count {
-            let index = (start + step) % count;
-            let slot = &self.entries[index];
+            let at = (start + step) % count;
+            let index = self.candidates[at];
+            let slot = &self.entries[index as usize];
             if slot.is_ready(now) {
-                self.queue.push_back((index as u32, slot.generation));
+                self.queue.push_back((index, slot.generation));
                 if self.queue.len() == max {
-                    self.cursor = index + 1;
+                    self.cursor = at + 1;
                     return max;
                 }
             }
@@ -495,16 +542,22 @@ impl Poller {
                 kind: crate::outcome::network_kind_of(&error),
             }));
         }
+        let listed = slots.entries[index as usize].listed;
         slots.entries[index as usize] = Slot {
             used: true,
             generation,
             token,
             interest,
             read_only: target.read_only,
+            retained: target.latent || target.synthetic.is_some(),
+            listed,
             ready: target.ready,
             source: Rc::downgrade(&target.source),
             synthetic: target.synthetic,
         };
+        // Scanned at least once: the OS reports a socket's readiness at registration through an
+        // event, but a retained source may be reportable already.
+        slots.list(index);
         slots.by_token.insert(token, index);
         *target.source.watch_cell().borrow_mut() = Some(Watch { poller: Rc::downgrade(&self.core), slot: index });
         Ok(Outcome::Done(true))
@@ -518,6 +571,8 @@ impl Poller {
         let index = slots.find(WHAT, token)?;
         let slot = &mut slots.entries[index as usize];
         slot.interest = parse_interest(WHAT, interest, slot.read_only)?;
+        // A bit the new interest reports may have been waiting since the slot was pruned.
+        slots.list(index);
         Ok(())
     }
 
@@ -624,6 +679,8 @@ impl Poller {
         slots.entries = Vec::new();
         slots.free = Vec::new();
         slots.by_token = HashMap::new();
+        slots.candidates = Vec::new();
+        slots.cursor = 0;
     }
 }
 
@@ -759,6 +816,7 @@ mod tests {
             source: Rc::clone(source) as Rc<dyn Watchable>,
             ready: Rc::new(Cell::new(0)),
             read_only: true,
+            latent: false,
             synthetic: Some(Rc::clone(&source.due) as Rc<dyn Synthetic>),
         };
         assert!(matches!(poller.watch_target(target, token, READ).unwrap(), Outcome::Done(true)));
