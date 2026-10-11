@@ -114,7 +114,6 @@ unsafe extern "C" {
     pub fn db_codegen_create(L: *mut lua_State, context: *mut c_void);
     pub fn db_codegen_is_native_execution_enabled(L: *mut lua_State) -> c_int;
     pub fn db_codegen_set_native_execution_enabled(L: *mut lua_State, enabled: c_int);
-    pub fn db_codegen_disable_native_execution_for_function(L: *mut lua_State, level: c_int);
     pub fn db_codegen_set_userdata_remapper(L: *mut lua_State, context: *mut c_void, remapper: Option<db_remapper_fn>);
     pub fn db_codegen_compile(
         L: *mut lua_State,

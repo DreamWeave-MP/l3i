@@ -235,7 +235,7 @@ Methods other modules add to `Runtime` are documented with their module:
 `sandbox` (below); `new_thread`, `set_hooks`, `clear_hooks`, `gc`, `allocation_rate`, `clock`,
 `encode_pointer`, `memory_dump`, `gc_dump`, `set_light_userdata_name`, `light_userdata_name`,
 `weak_ref`, `set_embedder_gc`, `clear_embedder_gc`, `enable_coroutine_finalizers`,
-`finalizer_function`, `atom_catalogue`, `atom_of`, `install_vector_buffer_writer` on
+`atom_catalogue`, `atom_of`, `install_vector_buffer_writer` on
 [Direct access and the VM](@/docs/api/direct.md); `open_library`, `sandbox_luau`,
 `register_library`, `find_table`, `set_jit_inliner`, `install_require`, `require_function`,
 `proxy_require_function`, `register_require_module`, `registered_require_modules`, `clear_require_cache_entry`,
@@ -537,7 +537,7 @@ exposes (`LuauGcTraceUdata`, `LuauBufferCage`); and the CodeGen flags, applied o
 {{ api_signature(value="fn initialize() -> Result<()>") }}
 
 Freezes the policy. Idempotent and thread-safe. A flag name the linked Luau lacks is
-`Error::Logic` (`Luau 0.741 has no fast flag named ...`) rather than a silent no-op.
+`Error::Logic` (`Luau 0.742 has no fast flag named ...`) rather than a silent no-op.
 
 ## Error
 

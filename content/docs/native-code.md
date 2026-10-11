@@ -266,6 +266,4 @@ let text = runtime.stack().with_frame(|frame| {
 `native_code::set_perf_log(|entry| ..)` installs the process-wide perf log: every function
 compiled natively afterwards, in any runtime, is reported as a `PerfEntry` with its address, size
 and symbol, for profiler symbolisation. `clear_perf_log()` removes it.
-`set_native_execution_enabled(&scope, bool)` turns native execution on or off for the whole VM,
-and `disable_native_execution_for_function(&scope, level)` for one running Lua function, for
-example from a bound function that detected a problem.
+`set_native_execution_enabled(&scope, bool)` turns native execution on or off for the whole VM.

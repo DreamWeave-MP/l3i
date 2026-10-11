@@ -27,8 +27,6 @@ namespace CG = Luau::CodeGen;
 
 static_assert(sizeof(CG::IrOp) == sizeof(uint32_t), "IrOp must travel as a 32-bit value");
 
-LUAU_FASTFLAG(LuauCallFeedback)
-
 extern "C" {
 
 struct db_ir_builder; // opaque: Luau::CodeGen::IrBuilder
@@ -253,11 +251,6 @@ void db_codegen_set_native_execution_enabled(lua_State* L, int enabled)
     CG::setNativeExecutionEnabled(L, enabled != 0);
 }
 
-void db_codegen_disable_native_execution_for_function(lua_State* L, int level)
-{
-    CG::disableNativeExecutionForFunction(L, level);
-}
-
 void db_codegen_set_userdata_remapper(lua_State* L, void* context, db_remapper_fn remapper)
 {
     CG::setUserdataRemapper(L, context, reinterpret_cast<CG::UserdataRemapperCallback*>(remapper));
@@ -395,7 +388,7 @@ void db_ir_namecall_call(db_ir_builder* build, uint32_t pcpos)
     const Instruction* call = b.function.proto->code + callpos;
     LuauOpcode op = LuauOpcode(LUAU_INSN_OP(*call));
     b.inst(CG::IrCmd::INTERRUPT, b.constUint(callpos));
-    b.inst(CG::IrCmd::SET_SAVEDPC, b.constUint(FFlag::LuauCallFeedback ? callpos + Luau::getOpLength(op) : callpos + 1));
+    b.inst(CG::IrCmd::SET_SAVEDPC, b.constUint(callpos + Luau::getOpLength(op)));
     b.inst(CG::IrCmd::CALL, b.vmReg(LUAU_INSN_A(*call)), b.constInt(LUAU_INSN_B(*call) - 1), b.constInt(LUAU_INSN_C(*call) - 1));
 }
 

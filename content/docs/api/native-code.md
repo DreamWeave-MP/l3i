@@ -78,7 +78,6 @@ after `lua_close`, as Luau requires for shared contexts.
 | `fn mode(&self) -> NativeCodeMode` | |
 | `fn set_native_execution_enabled(&self, scope: &impl Scope, enabled: bool)` | Turns native execution on or off for the whole VM |
 | `fn is_native_execution_enabled(&self, scope: &impl Scope) -> bool` | |
-| `fn disable_native_execution_for_function(&self, scope: &impl Scope, level: c_int)` | For the Lua function at call-stack `level` (0 is the innermost), for example from a bound function that detected a problem |
 | `fn compile(&self, scope: &impl Scope, index: c_int, bytecode: &[u8]) -> Result<NativeCodeResult>` | Compiles the Lua closure at `index` (and every nested function) natively; `bytecode` identifies the module. A C function or a non-function slot is a logic error |
 | `fn assembly(&self, scope: &impl Scope, index: c_int, options: AssemblyOptions) -> Result<String>` | The assembly and/or IR Luau generates for the closure at `index`, as text, with this generator's hooks and types in effect; nothing is installed. Empty output means nothing could be lowered |
 | `fn execution_stats(&self, scope: &impl Scope) -> ExecutionStats` | Luau's block counters summed over every retained module (counters must be on) |

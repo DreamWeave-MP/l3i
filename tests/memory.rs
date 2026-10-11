@@ -238,21 +238,33 @@ fn coroutine_finalizers_run_when_asked() {
     let runtime = Runtime::new().unwrap();
     runtime.enable_coroutine_finalizers().unwrap();
     let body = runtime.load_function("return function() finalized = 'no' coroutine.yield() return 1 end").unwrap();
-    let on_finish = runtime.load_function("return function() finalized = 'yes' end").unwrap();
+    let on_finish = runtime.load_function("return function(how) finalized = how end").unwrap();
+    let finalized =
+        || runtime.global("finalized").unwrap().with_value(&runtime.stack(), |_, v| v.read::<String>()).unwrap();
     let thread = runtime.new_thread().unwrap();
     // A fresh thread counts as finished for Luau: finalizers attach to a live coroutine.
     assert!(runtime.stack().with_frame(|frame| thread.add_finalizer(frame, on_finish.push_to(frame)?)).is_err());
     assert!(matches!(thread.start(&runtime.stack(), &body, ()).unwrap(), Resume::Yielded(_)));
     assert!(!thread.has_finalizers());
+    assert!(thread.finalizer_function(&runtime.stack(), true).is_err(), "nothing is pending yet");
     runtime.stack().with_frame(|frame| thread.add_finalizer(frame, on_finish.push_to(frame)?)).unwrap();
     assert!(thread.has_finalizers());
+    assert!(thread.finalizer_function(&runtime.stack(), false).is_err(), "a suspended coroutine has not finished");
     assert!(matches!(thread.resume(&runtime.stack(), ()).unwrap(), Resume::Finished(_)));
-    let finalize = runtime.finalizer_function().unwrap();
-    finalize.invoke::<(), _>(&runtime.stack(), (thread.value(),)).unwrap();
-    assert_eq!(
-        runtime.global("finalized").unwrap().with_value(&runtime.stack(), |_, v| v.read::<String>()).unwrap(),
-        "yes"
-    );
+    let finalize = thread.finalizer_function(&runtime.stack(), false).unwrap();
+    finalize.invoke::<(), _>(&runtime.stack(), ()).unwrap();
+    assert_eq!(finalized(), "finished");
+    assert!(!thread.has_finalizers());
+    assert!(finalize.invoke::<(), _>(&runtime.stack(), ()).is_err(), "the function works once");
+
+    // Closing cancels a suspended coroutine: its finalizers hear of it and the thread is reset.
+    assert!(matches!(thread.start(&runtime.stack(), &body, ()).unwrap(), Resume::Yielded(_)));
+    runtime.stack().with_frame(|frame| thread.add_finalizer(frame, on_finish.push_to(frame)?)).unwrap();
+    let cancel = thread.finalizer_function(&runtime.stack(), true).unwrap();
+    assert_eq!(finalized(), "no");
+    cancel.invoke::<(), _>(&runtime.stack(), ()).unwrap();
+    assert_eq!(finalized(), "cancelled");
+    assert!(thread.is_reset() && !thread.has_finalizers());
     // The main thread cannot take finalizers; the error is reported, not raised through Rust.
     let main = runtime.load_function("return function() end").unwrap();
     let _ = main;
@@ -265,7 +277,7 @@ fn fast_flags_are_introspectable() {
     assert_eq!(memory::fast_flag("LuauFastpcall"), Some(true), "policy flag is on");
     assert_eq!(memory::fast_flag("NoSuchFlagAtAll"), None);
     assert!(memory::fast_flags().iter().any(|(name, _)| name == "LuauFastpcall"));
-    memory::set_fast_flag("DebugLuauCoroutineFinally", true).unwrap();
+    memory::set_fast_flag("LuauCoroutineFinally", true).unwrap();
     assert!(memory::set_fast_flag("NoSuchFlagAtAll", true).is_err());
     assert!(memory::set_fast_int("NoSuchIntAtAll", 1).is_err());
     assert_eq!(memory::fast_int("NoSuchIntAtAll"), None);

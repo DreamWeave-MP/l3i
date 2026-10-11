@@ -354,12 +354,6 @@ impl NativeCodeGen {
         unsafe { ffi::db_codegen_is_native_execution_enabled(scope.state()) != 0 }
     }
 
-    /// Disables native execution for the Lua function running at call-stack `level` (0 is the
-    /// innermost), for example from a bound function that detected a problem.
-    pub fn disable_native_execution_for_function(&self, scope: &impl Scope, level: c_int) {
-        unsafe { ffi::db_codegen_disable_native_execution_for_function(scope.state(), level) }
-    }
-
     /// Compiles the Lua closure at `index` of `scope` (and every nested function) natively.
     /// `bytecode` is the closure's bytecode, which identifies the module.
     pub fn compile(&self, scope: &impl Scope, index: c_int, bytecode: &[u8]) -> Result<NativeCodeResult> {

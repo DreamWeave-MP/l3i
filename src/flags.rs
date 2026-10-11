@@ -58,6 +58,8 @@ pub const LUAU_FLAGS: &[&str] = &[
 /// with the `jit` feature; without it these symbols do not exist. The X64/A64 flags are defined
 /// in the per-architecture lowering files, which the linker only keeps for the target
 /// architecture, so each of those exists at run time on its own architecture only.
+/// Luau 0.742 removed `AddReturnExectargetCheck` together with
+/// `disableNativeExecutionForFunction`, the one function that needed it.
 pub const LUAU_CODEGEN_FLAGS: &[&str] = &[
     "LuauCodegenPropagateFallbackTags",
     "LuauCodegenX64IntSpillRestore",
@@ -67,7 +69,6 @@ pub const LUAU_CODEGEN_FLAGS: &[&str] = &[
     "LuauCodegenInteger3",
     "LuauCodegenIntegerCompare",
     "LuauCodegenBufferInteger",
-    "AddReturnExectargetCheck",
 ];
 
 static INITIALIZED: OnceLock<std::result::Result<(), String>> = OnceLock::new();

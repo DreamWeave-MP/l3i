@@ -2,7 +2,7 @@
 
 The comprehension baseline below was validated on the actual L3i checkout, 2026-10-04,
 starting from the already-applied `88e0636` dense/non-nil prototype. Luau was stock 0.740 then,
-submodule commit `c0e346edd89066b44dca174c9f54ce84c746a540`; it is stock 0.741 now. The
+submodule commit `c0e346edd89066b44dca174c9f54ce84c746a540`; it is stock 0.742 now. The
 `sum[for ...]` reducer documented at the end has since passed every gate; the Phase One
 closure section records the
 current numbers for every lowering family.

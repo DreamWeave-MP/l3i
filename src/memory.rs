@@ -12,7 +12,7 @@ use crate::error::{Error, Result};
 use crate::raw::ffi;
 use crate::runtime::Runtime;
 use crate::stack::{Scope, Type, ValueView};
-use crate::thread::Thread;
+use crate::thread::{CoroutineStatus, Thread};
 use crate::userdata::{RuntimeTag, Userdata};
 
 /// `lua_gc` commands. Sizes are in kilobytes where Luau's are.
@@ -147,24 +147,13 @@ impl Runtime {
         self.shared().embedder_gc().borrow_mut().take();
     }
 
-    /// Enables Luau's experimental coroutine finalizers (`DebugLuauCoroutineFinally`).
+    /// Enables Luau's coroutine finalizers (the `LuauCoroutineFinally` flag, off by default).
     pub fn enable_coroutine_finalizers(&self) -> Result<()> {
         // SAFETY: luau_setfflag walks the static flag list.
-        if unsafe { ffi::luau_setfflag(c"DebugLuauCoroutineFinally".as_ptr(), 1) } == 0 {
-            return Err(Error::logic("This Luau build has no DebugLuauCoroutineFinally flag"));
+        if unsafe { ffi::luau_setfflag(c"LuauCoroutineFinally".as_ptr(), 1) } == 0 {
+            return Err(Error::logic("This Luau build has no LuauCoroutineFinally flag"));
         }
         Ok(())
-    }
-
-    /// The `finalize(coroutine)` function that runs a finished coroutine's finalizers
-    /// (`lua_pushfinalizerfunction`), pinned.
-    pub fn finalizer_function(&self) -> Result<crate::value::Function> {
-        let stack = self.stack();
-        stack.with_frame(|frame| {
-            // SAFETY: pushes one C closure on the frame.
-            unsafe { ffi::lua_pushfinalizerfunction(frame.state()) };
-            crate::value::Function::from_value(crate::value::Value::store(frame.top_value())?)
-        })
     }
 }
 
@@ -390,6 +379,57 @@ impl Thread {
     /// True when finalizers are registered on this coroutine.
     pub fn has_finalizers(&self) -> bool {
         self.value().is_valid() && unsafe { ffi::lua_hasfinalizers(self.state_ptr()) != 0 }
+    }
+
+    /// The function that runs this coroutine's pending finalizers when called
+    /// (`lua_pushfinalizerfunction`), pinned. It belongs to this coroutine, takes no arguments
+    /// and works once: Luau raises on a second call. With `close` false the coroutine must have
+    /// finished or failed, and its finalizers are told `"finished"` with its results or
+    /// `"error"` with its error. With `close` true it must be suspended or idle: the call resets
+    /// it and its finalizers are told `"cancelled"`. Call the function before the coroutine is
+    /// used again: Luau checks the coroutine's state here, not at the call.
+    ///
+    /// Fails when no finalizer is pending, when the coroutine is in the wrong state for `close`,
+    /// when `scope`'s thread is itself suspended, and for a failed coroutine whose error is no
+    /// longer on its stack: [`Thread::resume`] takes the error, so a failure it reported cannot
+    /// be finalized.
+    pub fn finalizer_function(&self, scope: &impl Scope, close: bool) -> Result<crate::value::Function> {
+        let status = self.coroutine_status(scope)?;
+        if !self.has_finalizers() {
+            return Err(Error::logic("The coroutine has no pending finalizers"));
+        }
+        let co = self.state_ptr();
+        // SAFETY: coroutine_status proved both threads live and in one VM; these only read.
+        let (caller_idle, held) = unsafe { (ffi::lua_status(scope.state()) == ffi::LUA_OK, ffi::lua_gettop(co)) };
+        if !caller_idle {
+            return Err(Error::logic("A suspended thread cannot take a finalizer function"));
+        }
+        let ready = match (close, status) {
+            (true, CoroutineStatus::Suspended | CoroutineStatus::Finished) | (false, CoroutineStatus::Finished) => true,
+            // Luau moves the error off the coroutine's stack when the function runs.
+            (false, CoroutineStatus::FinishedWithError) => held > 0,
+            _ => false,
+        };
+        if !ready {
+            return Err(Error::logic(if close {
+                "Only a suspended or idle coroutine can be cancelled"
+            } else {
+                "Only a finished coroutine, or a failed one still holding its error, can be finalized"
+            }));
+        }
+        scope.with_frame(|frame| {
+            // SAFETY: Luau's preconditions hold: the calling thread is idle, `co` is another
+            // thread of the same VM with finalizers pending, and it is suspended or idle (to
+            // close) or dead with what its finalizers receive on its stack. The push allocates,
+            // so it runs where an allocation failure becomes an error.
+            unsafe {
+                frame.raising(0, 1, |state| {
+                    ffi::lua_pushfinalizerfunction(state, co, c_int::from(close));
+                    1
+                })?;
+            }
+            crate::value::Function::from_value(crate::value::Value::store(frame.top_value())?)
+        })
     }
 }
 

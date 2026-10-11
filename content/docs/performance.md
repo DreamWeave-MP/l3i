@@ -10,7 +10,7 @@ kind = "reference"
 ## Versions
 
 l3i is on 1.x: every release in 1.x keeps the Rust API compatible, as Cargo's semver rules expect.
-The Luau it embeds is release 0.741, as the `luau/` submodule; bumping it
+The Luau it embeds is release 0.742, as the `luau/` submodule; bumping it
 is a deliberate change that re-audits the hand-declared C API.
 
 ## Rust and dependencies

@@ -113,7 +113,7 @@ and the defaults are on [Runtime options](@/docs/runtime-options.md#the-collecto
 | Embedder GC | `set_embedder_gc(gc)` installs the embedder half of cross-heap marking: each cycle Luau asks the `EmbedderGc` to `reset`, marks userdata through `UserdataMark` callbacks (`memory::set_userdata_mark::<T, M>(&runtime)`, for a tagged `T`), then asks it to mark every weak reference reachable from marked native objects. `clear_embedder_gc()` removes it |
 | Weak references | `weak_ref(view)` returns a `WeakRef` that does not keep its value alive; `get(scope)` pushes the value while it lives, `release(scope)` frees the slot. Unmarked weak references die at the next cycle |
 | Light userdata | `LightUserdata { pointer, tag }` pushes and reads `lua_pushlightuserdatatagged`; `set_light_userdata_name(tag, name)` is what `typeof` reports for the tag |
-| Coroutine finalizers | `enable_coroutine_finalizers()` turns on Luau's experimental `DebugLuauCoroutineFinally`; `Thread::add_finalizer(scope, callback)` attaches a function to a live coroutine, `has_finalizers()` asks, and `finalizer_function()` is the pinned `finalize(coroutine)` that runs them |
+| Coroutine finalizers | `enable_coroutine_finalizers()` turns on Luau's `LuauCoroutineFinally` flag; `Thread::add_finalizer(scope, callback)` attaches a function to a live coroutine, `has_finalizers()` asks, and `Thread::finalizer_function(scope, close)` is the pinned, single-use function that runs them: for a finished or failed coroutine, or with `close` to cancel a suspended one |
 | Raw tags | `memory::raw::set_userdata_tag` and `new_userdata_tagged`, both `unsafe`, for hosts that manage a tag's meaning themselves |
 | Fast flags | `fast_flags()`, `fast_flag(name)`, `set_fast_flag`, `fast_int`, `set_fast_int` |
 
@@ -202,4 +202,4 @@ unsafe extern "C-unwind" fn twice(state: *mut ffi::lua_State) -> c_int {
 }
 ```
 
-`l3i::TAG_LIMIT` and `l3i::LUAU_VERSION` (`"0.741"`) describe the linked VM.
+`l3i::TAG_LIMIT` and `l3i::LUAU_VERSION` (`"0.742"`) describe the linked VM.

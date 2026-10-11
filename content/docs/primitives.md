@@ -89,7 +89,7 @@ which is the deal for opaque ids. A numeric `u64` stays within what an integer o
 holds, so nothing silently reinterprets.
 
 {% callout(kind="note", title="Luau integers compare with == only") %}
-In Luau 0.741, `<` and `<=` between two integers raise, and an integer never equals a number
+In Luau 0.742, `<` and `<=` between two integers raise, and an integer never equals a number
 (`42i ~= 42`). l3i pushes identities as integers and everything a script thresholds or counts as
 plain numbers.
 {% end %}

@@ -1,4 +1,4 @@
-//! Luau 0.741 C API, transcribed from `VM/include/lua.h`, `VM/include/lualib.h`,
+//! Luau 0.742 C API, transcribed from `VM/include/lua.h`, `VM/include/lualib.h`,
 //! `Compiler/include/luacode.h`, `CodeGen/include/luacodegen.h`, and the binder's own additions
 //! in `csrc/`.
 //!
@@ -556,9 +556,11 @@ unsafe extern "C" {
     /// C `free`, for buffers `luau_compile` returns.
     pub fn free(p: *mut c_void);
 
-    // Coroutine finalizers (experimental in Luau 0.741; needs the DebugLuauCoroutineFinally flag).
+    // Coroutine finalizers (need the LuauCoroutineFinally flag). Since 0.742 the pushed function
+    // is bound to `co` and runs once; `toclose` cancels a suspended coroutine instead of
+    // finalizing a dead one.
     pub fn lua_hasfinalizers(L: *mut lua_State) -> c_int;
-    pub fn lua_pushfinalizerfunction(L: *mut lua_State);
+    pub fn lua_pushfinalizerfunction(L: *mut lua_State, co: *mut lua_State, toclose: c_int);
     pub fn lua_addfinalizer(L: *mut lua_State, co: *mut lua_State, idx: c_int);
 
     // lualib.h string buffers
