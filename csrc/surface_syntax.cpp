@@ -1338,7 +1338,8 @@ private:
             break;
         case Consumer::Any:
         case Consumer::All:
-            out += "return " + receiver + (op.consumer == Consumer::Any ? "any" : "all") + suffix + "(" + arguments + ") ";
+            // An empty span falls through to the closer's `return false` / `return true`.
+            out += guard + "return " + receiver + (op.consumer == Consumer::Any ? "any" : "all") + suffix + "(" + arguments + ") end ";
             break;
         default:
             break;

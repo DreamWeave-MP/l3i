@@ -313,7 +313,11 @@ fn recognized_buffer_pipelines_agree_with_the_scalar_loop_and_call_the_data_plan
         note(sum[for x in buf[1:256] if x >= 128 => x])
         note(sum[for x in buf[1:256] if x > limit => x])
         note(min[for x in buf[1:256] if x > limit => x] .. ':' .. max[for x in buf[1:256] if x ~= 0 => x])
-        note(min[for x in buf[3:9] if x < 1000 => x] .. ':' .. max[for x in buf[300:400] if x > 0 => tostring(x)] )
+        note(min[for x in buf[3:9] if x < 1000 => x] .. ':' .. max[for x in buf[200:256] if x > 0 => tostring(x)] )
+        -- Empty after normalization: both runtimes must raise the same empty-reducer error, and
+        -- everything below must still run, so the error is caught.
+        ok, message = pcall(function() return max[for x in buf[300:400] if x > 0 => tostring(x)] end)
+        note(tostring(ok) .. ':' .. tostring(message))
         ok, message = pcall(function() return min[for x in buf[1:256] if x > 10000 => x] end)
         note(tostring(ok) .. ':' .. tostring(message))
         ok, message = pcall(function() return max[for x in buf[300:400] if x > 0 => x] end)
@@ -321,6 +325,11 @@ fn recognized_buffer_pipelines_agree_with_the_scalar_loop_and_call_the_data_plan
         note(tostring(any[for x in buf[1:256] => x > 200]) .. tostring(any[for x in buf[1:256] => x > 300]) .. tostring(any[for x in buf[300:400] => x > 0]))
         note(tostring(all[for x in buf[1:256] => x <= limit]) .. tostring(all[for x in buf[1:256] => x < 256]) .. tostring(all[for x in buf[300:400] => x > 0]))
         note(tostring(all[for x in buf[1:256] => x ~= nothing]))
+        -- Spans that start past the buffer are empty: any is false and all is true, whether the
+        -- slice is dynamic, typed, or strided, and whatever the threshold's spelling.
+        note(tostring(any[for x in buf[257:400] => x > 5]) .. tostring(any[for x in buf[258:400] => x > 5]) .. tostring(all[for x in buf[300:400] => x > 5]))
+        note(tostring(any[for x in buf[300:400, 'u8'] => x > 5]) .. tostring(all[for x in buf[300:400, 'u8'] => x > limit]) .. tostring(any[for x in buf[300:400, 'f32@16'] => x > 5]))
+        note(tostring(any[for x in buf[300:400] => x > limit]) .. tostring(all[for x in buf[300:400] if x > 0 => x > limit]))
         ok, message = pcall(function() return any[for x in buf[1:256] => x > text] end)
         note(tostring(ok) .. ':' .. tostring(message))
         -- Typed slices: contiguous f32 samples and a strided f32 field of 16-byte records.
