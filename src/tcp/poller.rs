@@ -401,6 +401,16 @@ fn target(handle: ValueView<'_>) -> Result<Target> {
     ))
 }
 
+/// The event buffer a poller starts with; it doubles whenever a wait fills it, up to `maxEvents`,
+/// so a large `maxEvents` costs native memory only once a wait has that much to report.
+const INITIAL_EVENTS: usize = 256;
+
+/// The capacity the event buffer grows to after a wait filled `filled` of its `capacity`, when
+/// it was full and `max` allows more.
+fn grown_capacity(capacity: usize, filled: usize, max: usize) -> Option<usize> {
+    (filled > 0 && filled == capacity && capacity < max).then(|| (capacity * 2).min(max))
+}
+
 impl Poller {
     pub(crate) fn new(limits: Limits) -> io::Result<Poller> {
         let poll = mio::Poll::new()?;
@@ -410,7 +420,7 @@ impl Poller {
                 poll: RefCell::new(Some(poll)),
                 registry: RefCell::new(Some(registry)),
                 waker: RefCell::new(None),
-                events: RefCell::new(mio::Events::with_capacity(limits.events as usize)),
+                events: RefCell::new(mio::Events::with_capacity((limits.events as usize).min(INITIAL_EVENTS))),
                 slots: RefCell::new(Slots::default()),
                 deferred: Cell::new(false),
                 limits,
@@ -553,7 +563,14 @@ impl Poller {
             let until = earliest.map_or(deadline, |earliest| earliest.min(deadline));
             let timeout = if pending { Duration::ZERO } else { until.saturating_duration_since(now) };
             match poll.poll(&mut events, Some(timeout)) {
-                Ok(()) => slots.apply(&events),
+                Ok(()) => {
+                    slots.apply(&events);
+                    // A full buffer may have left events behind; the next wait reports them
+                    // (the OS keeps them), and gets room for twice as many.
+                    if let Some(capacity) = grown_capacity(events.capacity(), events.iter().count(), max) {
+                        *events = mio::Events::with_capacity(capacity);
+                    }
+                }
                 Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
                 Err(error) => {
                     return Ok(Outcome::Failed(Failure {
@@ -790,6 +807,21 @@ mod tests {
         early.done.store(true, Ordering::Release);
         watch(&poller, &early, 8);
         assert_eq!(wait(&poller, Duration::ZERO), 2);
+    }
+
+    /// The event buffer starts small whatever `maxEvents` says and doubles only when a wait
+    /// fills it, so an unprivileged script cannot allocate `maxEvents` entries up front.
+    #[test]
+    fn the_event_buffer_starts_small_and_doubles_when_full() {
+        let poller = Poller::new(Limits { events: 65_536, ..Limits::default() }).unwrap();
+        assert_eq!(poller.core.events.borrow().capacity(), INITIAL_EVENTS);
+        let small = Poller::new(Limits { events: 16, ..Limits::default() }).unwrap();
+        assert_eq!(small.core.events.borrow().capacity(), 16);
+        assert_eq!(grown_capacity(256, 256, 65_536), Some(512));
+        assert_eq!(grown_capacity(256, 255, 65_536), None);
+        assert_eq!(grown_capacity(256, 256, 256), None);
+        assert_eq!(grown_capacity(40_000, 40_000, 65_536), Some(65_536));
+        assert_eq!(grown_capacity(0, 0, 65_536), None);
     }
 
     #[test]
