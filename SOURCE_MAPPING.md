@@ -132,7 +132,9 @@ cargo clippy --workspace --all-targets --all-features -- -W clippy::pedantic -D 
 The canonical frontend now uses Luau's lexer/parser library. To run its standalone
 frontend and lowering/map tests, link `surface_frontend.cpp` and the relevant test
 with the Cargo-built Ast/Common/VM archives, as in the fault-probe command below.
-There is no dependency-free duplicate recognizer.
+There is no dependency-free duplicate recognizer. In these commands `LUAU_OUT` is the
+Cargo build script's `OUT_DIR` (`target/debug/build/l3i-*/out`) and `OUT` any scratch
+directory.
 
 ```bash
 clang++ -std=c++17 -O1 -fuse-ld=lld -Wall -Wextra -Werror -pedantic \
@@ -140,8 +142,8 @@ clang++ -std=c++17 -O1 -fuse-ld=lld -Wall -Wextra -Werror -pedantic \
   csrc/surface_frontend.cpp csrc/surface_syntax.cpp csrc/source_map.cpp csrc/surface_syntax_test.cpp \
   -Wl,--start-group "$LUAU_OUT/libluauast.a" "$LUAU_OUT/libluaucommon.a" \
   "$LUAU_OUT/libluauvm.a" -Wl,--end-group \
-  -o /tmp/opencode/l3i-surface-test
-/tmp/opencode/l3i-surface-test
+  -o "$OUT"/l3i-surface-test
+"$OUT"/l3i-surface-test
 ```
 
 The remapper skips subtrees whose coordinates the lowering left in place. A second suite proves
@@ -153,8 +155,8 @@ clang++ -std=c++17 -O1 -fuse-ld=lld -Wall -Wextra -Werror -pedantic \
   csrc/source_locations_test.cpp csrc/source_locations.cpp csrc/source_map.cpp \
   csrc/surface_frontend.cpp csrc/surface_syntax.cpp \
   -Wl,--start-group "$LUAU_OUT/libluauast.a" "$LUAU_OUT/libluaucommon.a" -Wl,--end-group \
-  -o /tmp/opencode/l3i-locations-test
-/tmp/opencode/l3i-locations-test
+  -o "$OUT"/l3i-locations-test
+"$OUT"/l3i-locations-test
 ```
 
 It also passes under Clang ASan/UBSan. A separate allocation-failure probe ensures
@@ -175,8 +177,8 @@ clang++ -std=c++17 -O1 -fuse-ld=lld -Wall -Wextra -Werror -pedantic \
   "$LUAU_OUT/libluaucompiler.a" "$LUAU_OUT/libluauast.a" \
   "$LUAU_OUT/libluaubytecode.a" "$LUAU_OUT/libluaucommon.a" \
   "$LUAU_OUT/libluauvm.a" -Wl,--end-group \
-  -o /tmp/opencode/l3i-compiler-failure-test
-/tmp/opencode/l3i-compiler-failure-test
+  -o "$OUT"/l3i-compiler-failure-test
+"$OUT"/l3i-compiler-failure-test
 ```
 
 The completed run covered every allocation budget through parse-error and compile-error

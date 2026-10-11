@@ -1,9 +1,10 @@
 # Comprehensions: integration and instruction evidence
 
 The comprehension baseline below was validated on the actual L3i checkout, 2026-10-04,
-starting from the already-applied `88e0636` dense/non-nil prototype. Luau remains stock 0.740,
-submodule commit `c0e346edd89066b44dca174c9f54ce84c746a540`. The `sum[for ...]` reducer
-documented at the end has since passed every gate; the Phase One closure section records the
+starting from the already-applied `88e0636` dense/non-nil prototype. Luau was stock 0.740 then,
+submodule commit `c0e346edd89066b44dca174c9f54ce84c746a540`; it is stock 0.741 now. The
+`sum[for ...]` reducer documented at the end has since passed every gate; the Phase One
+closure section records the
 current numbers for every lowering family.
 
 ## Contract
@@ -60,7 +61,8 @@ the unfused expression remains valid. No purity assumptions are made.
 
 ## Compiler and executed VM instructions
 
-The normal L3i policy enables `LuauCompileIifeInline` and optimization level 2.
+The normal L3i policy compiles at optimization level 2, where Luau inlines a function called
+where it is written (its `LuauCompileIifeInline` flag until 0.741, unconditional since).
 Disassembly proves the simple wrapper emits neither `NEWCLOSURE` nor `DUPCLOSURE`.
 The dense entry function's only calls are `table.create` and the cold `error` path.
 Luau still emits an unused wrapper prototype in the listing; that is not a runtime

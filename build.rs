@@ -1,8 +1,9 @@
 //! Builds Luau from the `luau/` git submodule (pinned at the 0.741 release), the binder's own C
 //! additions (`csrc/extra.cpp`), and, per feature, the C++ shims over
-//! Luau's code generator and analysis libraries. Everything is compiled with `cc`, so the crate
-//! builds wherever a C++17 compiler and Cargo exist (MSVC, clang, GCC, the Android NDK, cross
-//! sysroots) with no network access at build time and nothing outside the package.
+//! Luau's code generator and analysis libraries. Everything is compiled with `cc`, with no
+//! network access at build time and nothing outside the package. The compiler must be clang or
+//! clang-cl and the link cross-language LTO (`toolchain_policy` below, TOOLCHAIN.md): the crate
+//! does not build with GCC.
 
 // The shared CI runs `-W clippy::pedantic -D warnings`.
 #![allow(clippy::doc_markdown)]

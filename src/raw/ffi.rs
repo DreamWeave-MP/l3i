@@ -1,6 +1,6 @@
 //! Luau 0.741 C API, transcribed from `VM/include/lua.h`, `VM/include/lualib.h`,
-//! `Compiler/include/luacode.h`, `CodeGen/include/luacodegen.h`, and the two helpers
-//! `luau0-src` adds in `Custom/`.
+//! `Compiler/include/luacode.h`, `CodeGen/include/luacodegen.h`, and the binder's own additions
+//! in `csrc/`.
 //!
 //! Luau is built with C++ exceptions (not longjmp), so every entry point that can raise is
 //! declared `extern "C-unwind"`. Names and argument order follow the headers exactly so the
