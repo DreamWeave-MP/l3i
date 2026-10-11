@@ -129,7 +129,8 @@ struct Slot {
     retained: bool,
     /// Its index is in `Slots::candidates` (kept across a free, so an index is never listed twice).
     listed: bool,
-    ready: Rc<Cell<u8>>,
+    /// The source's readiness cell; none in a free slot, so freeing allocates nothing.
+    ready: Option<Rc<Cell<u8>>>,
     source: Weak<dyn Watchable>,
     synthetic: Option<Rc<dyn Synthetic>>,
 }
@@ -145,15 +146,20 @@ impl Slot {
             read_only: false,
             retained: false,
             listed: false,
-            ready: Rc::new(Cell::new(0)),
+            ready: None,
             source,
             synthetic: None,
         }
     }
 
+    /// The OS readiness bits recorded for this watch.
+    fn os_bits(&self) -> u8 {
+        self.ready.as_ref().map_or(0, |ready| ready.get())
+    }
+
     /// The bits this watch reports now.
     fn reportable(&self, now: Instant) -> u8 {
-        let os = self.ready.get();
+        let os = self.os_bits();
         match &self.synthetic {
             Some(synthetic) => synthetic.reportable(os, self.interest, now),
             None => os & mask(self.interest),
@@ -182,6 +188,10 @@ struct Slots {
     candidates: Vec<u32>,
     /// Where the next wait starts its scan, so a long run of ready handles cannot starve the rest.
     cursor: usize,
+    /// When the last wait filled the queue: `next()` judges deadlines by it rather than reading
+    /// the clock per event (a deadline that passes between the wait and `next()` waits for the
+    /// next wait, as one passing just after `next()` would).
+    filled_at: Option<Instant>,
 }
 
 impl Slots {
@@ -225,7 +235,7 @@ impl Slots {
         let entries = &mut self.entries;
         self.candidates.retain(|&index| {
             let slot = &mut entries[index as usize];
-            let keep = slot.used && (slot.retained || slot.ready.get() & mask(slot.interest) != 0);
+            let keep = slot.used && (slot.retained || slot.os_bits() & mask(slot.interest) != 0);
             if !keep {
                 slot.listed = false;
             }
@@ -274,7 +284,9 @@ impl Slots {
                 // The next operation reports the error, whichever way the script looks.
                 bits |= READABLE | WRITABLE | CLOSED;
             }
-            slot.ready.set(slot.ready.get() | bits);
+            if let Some(ready) = &slot.ready {
+                ready.set(ready.get() | bits);
+            }
             self.list(index as u32);
         }
     }
@@ -302,6 +314,7 @@ impl Slots {
     /// Queues up to `max` ready watches, scanning the candidates once round from the cursor.
     fn fill(&mut self, max: usize, now: Instant) -> usize {
         self.queue.clear();
+        self.filled_at = Some(now);
         let count = self.candidates.len();
         if count == 0 {
             return 0;
@@ -551,7 +564,7 @@ impl Poller {
             read_only: target.read_only,
             retained: target.latent || target.synthetic.is_some(),
             listed,
-            ready: target.ready,
+            ready: Some(target.ready),
             source: Rc::downgrade(&target.source),
             synthetic: target.synthetic,
         };
@@ -647,8 +660,8 @@ impl Poller {
 
     fn next(&self) -> Result<Next> {
         self.open("next")?;
-        let now = Instant::now();
         let mut slots = self.core.slots.borrow_mut();
+        let now = slots.filled_at.unwrap_or_else(Instant::now);
         while let Some((index, generation)) = slots.queue.pop_front() {
             let slot = &slots.entries[index as usize];
             // Unwatched, closed or rewatched since the wait, or drained by an operation.
