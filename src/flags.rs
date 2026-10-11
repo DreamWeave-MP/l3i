@@ -27,6 +27,12 @@ pub const LUAU_FLAGS: &[&str] = &[
     "LuauCompileMoveElision",
     "LuauCompileFastpcall",
     "LuauIntegerType2",
+    // Luau 0.742's fixes for two miscompiles. Move elision (above) reused the assignment
+    // target's register while a later argument still read it, so `x = id(f(x))` passed `f` to
+    // itself. Table constant folding, which no flag gates, kept folding `t.a` after `t` had been
+    // an operand whose metamethod could write to it.
+    "LuauCompileMoveElisionFix",
+    "LuauCompileTableFoldFix",
     // DreamWeave addition: `if local x = f() then ... end` syntax. OpenMW leaves this off.
     "LuauExperimentalIfLocalSyntax",
     // Runtime side
@@ -44,6 +50,9 @@ pub const LUAU_FLAGS: &[&str] = &[
     "LuauBackedgeHeapCheck",
     "LuauFastpcall",
     "LuauFastpcallInterrupt",
+    // Luau 0.742: a protected call an error continuation starts inside a resumed coroutine is
+    // resumed, where it used to be dropped.
+    "LuauPcallErrorContinuationReentry",
     // Not in OpenMW's policy: these two gate APIs the binder exposes (embedder GC integration
     // with userdata marks and weak references; the buffer cage). Both are inert until a host
     // installs the corresponding callback.
@@ -69,6 +78,20 @@ pub const LUAU_CODEGEN_FLAGS: &[&str] = &[
     "LuauCodegenInteger3",
     "LuauCodegenIntegerCompare",
     "LuauCodegenBufferInteger",
+    // Luau 0.742's register allocator fixes: restores a VM exit would clobber are made before
+    // the exit's own stores, running out of registers fails the compilation instead of
+    // asserting, and a conditional spill no longer marks a lazy restore location materialized.
+    // Both are defined in the A64 allocator and read by the X64 one, so they exist on either.
+    "LuauCodegenExitSyncUpdate",
+    "LuauCodegenScopedSpillKeepLazy",
+    // Luau 0.742: a buffer offset multiplied by a constant zero keeps its scale.
+    "LuauCodegenNoZeroScale",
+    // Constant propagation packs a register's version into twenty bits of an operand. The first
+    // flag (0.741) stops propagating along a block chain before a version outgrows them; the
+    // second (0.742) makes stopping sound, applying pending substitutions and discarding the
+    // fallback entry tags recorded before the stop. Neither is correct without the other.
+    "LuauCodegenLimitVersions",
+    "LuauCodegenLimitVersionsExtra",
 ];
 
 static INITIALIZED: OnceLock<std::result::Result<(), String>> = OnceLock::new();

@@ -412,3 +412,30 @@ fn member_callbacks_may_compile_with_members_of_their_own() {
         assert!(listing.contains(folded), "{folded}: {listing}");
     }
 }
+
+#[test]
+fn a_call_argument_is_evaluated_before_its_target_register_is_reused() {
+    // Move elision computed `f` straight into the register of `x`, the assignment's target,
+    // while `x` was still an argument: `f` received itself. Luau 0.742 fixes it behind
+    // LuauCompileMoveElisionFix.
+    let runtime = l3i::Runtime::new().unwrap();
+    let received: String = runtime
+        .eval(
+            "local function run(...)\n    local f = ...\n    local function id(v) return v end\n    local x = {42}\n    x = id(f(x))\n    return x\nend\nreturn run(function(argument) return type(argument) end)",
+        )
+        .unwrap();
+    assert_eq!(received, "table");
+}
+
+#[test]
+fn a_table_a_metamethod_could_write_to_is_not_constant_folded() {
+    // The other operand's `__add` receives the table and may change it, so `t.a` is not the
+    // literal 4. Luau 0.742 fixes it behind LuauCompileTableFoldFix.
+    let runtime = l3i::Runtime::new().unwrap();
+    let field: f64 = runtime
+        .eval(
+            "local function read(unknown)\n    local t = { a = 4 }\n    local _ = unknown + t\n    return t.a\nend\nreturn read(setmetatable({}, { __add = function(_, rhs) rhs.a = 99 return 0 end }))",
+        )
+        .unwrap();
+    assert!((field - 99.0).abs() < f64::EPSILON, "{field}");
+}
