@@ -61,9 +61,10 @@ fails at once rather than misreading a slot.
 bytes_unchecked` and `bytes_mut_unchecked`, for trusted code that proves nothing writes the
 buffer meanwhile, which are the rules `lua_tobuffer` imposes on C.
 
-**Fast flags are frozen.** The policy is OpenMW's plus `LuauExperimentalIfLocalSyntax`, applied
-before the first VM or the first compile and never changed by the crate afterwards. An unknown
-flag name is a logic error.
+**Fast flags are frozen.** The policy is one named list, l3i's own (`flags::LUAU_FLAGS` and,
+under `jit`, `flags::LUAU_CODEGEN_FLAGS`), applied before the first VM or the first compile and
+never changed by the crate afterwards. A flag name the linked Luau lacks is a logic error, never
+a silent no-op, so a Luau bump cannot drop a flag quietly.
 
 ## Questionable semantics carried over from the C++ binder
 
@@ -108,4 +109,5 @@ assert(not ok)
 - **A missing required argument is one message.** The C++ binder nested `bad argument count
   (got M)` inside `bad argument #N (expected T)`. Here it is `<name>: bad argument #N (expected
   T): missing argument`.
-- **`LuauExperimentalIfLocalSyntax` is on.** OpenMW leaves it off.
+- **`LuauExperimentalIfLocalSyntax` is on.** The C++ binder leaves it off; `if local x = f()
+  then .. end` parses here.

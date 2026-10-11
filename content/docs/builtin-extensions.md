@@ -1392,7 +1392,7 @@ if not result.success then error(`tes3cmd exited with {result.code}`) end
 |---|---|
 | `run(program, args?, { cwd?, env?, clearEnv?, stdin?, stdout?, stderr? }?)` | `{ success, code?, signal?, stdout?, stderr? }`; `stdout` and `stderr` are `"inherit"` (the default), `"capture"` or `"null"` |
 | `env(name)` | An environment variable, or nil |
-| `write(stream, data)` | `true`: data to `"stdout"` or `"stderr"`, unbuffered, without `print`'s newline; a closed pipe is not an error |
+| `write(stream, data)` | `true`: data to `"stdout"` or `"stderr"`, unbuffered, without `print`'s newline. A closed pipe is not an error in a host that ignores `SIGPIPE`, which every Rust binary does on startup; a host that has restored the default disposition dies on it, as `| head` has always killed writers |
 | `isTerminal(stream)` | Whether the stream is a terminal |
 
 The program is found the way the OS finds one, and its arguments reach it as they are, with no
@@ -1412,7 +1412,7 @@ loop or scheduler behind the module, and only `poller:wait` ever waits, for a bo
 
 ```luau
 local tcp = require("@dream/tcp")
-local listener = assert(tcp.listen("127.0.0.1:0", { noDelay = true }))
+local listener = assert(tcp.listen("127.0.0.1:0"))
 local poller = tcp.poller()
 assert(poller:watch(listener, 0, "read"))
 local scratch = buffer.create(65536)
@@ -1461,10 +1461,10 @@ end
 |---|---|---|---|
 | `listen` | `backlog` | 1 to 65535: connections the OS queues before `accept` | 128 |
 | `listen` | `reuseAddress` | `SO_REUSEADDR`, to bind a port a closed listener left in `TIME_WAIT`; ignored on Windows, where it would let another socket take a port in use, and on macOS and the BSDs without `network.tcp.public`, where it would let a loopback listener bind over a listening wildcard socket on the same port | `true` |
-| `listen` | `noDelay` | Nagle's algorithm off on every accepted stream | `false` |
+| `listen` | `noDelay` | Nagle's algorithm off on every accepted stream. Pass `false` to get Nagle back, for a protocol that really does want small writes coalesced at the cost of latency | `true` |
 | `listen` | `maxStreams` | 1 to 65536: accepted streams that may be open at once | 1024 |
-| `connect` | `noDelay` | Nagle's algorithm off | `false` |
-| `poller` | `maxEvents` | 1 to 65536: events one `wait` queues | 256 |
+| `connect` | `noDelay` | Nagle's algorithm off; `false` turns it back on | `true` |
+| `poller` | `maxEvents` | 1 to 65536: the most events one `wait` queues. The event buffer is not allocated at that size up front: it starts at 256 entries and doubles whenever a wait fills it, up to this cap | 256 |
 | `poller` | `maxWatches` | 1 to 65536: handles one poller watches | 1024 |
 | `poller` | `maxWaitMs` | 0 to 60000: the longest `wait` this poller allows | 1000 |
 
@@ -1485,7 +1485,7 @@ encoding, NUL bytes included. Nothing is buffered behind it in either direction.
 | `finishConnect()` | `true` once connected, `false` while the connect is pending, or `nil`, the message and the kind (`"connectionRefused"`, `"timedOut"`, ...) when it failed. It reads the socket's pending error and then its peer, never writability alone |
 | `shutdown(how)` | `"write"` sends end of stream and leaves reading open (a half-close, not `close`); `"read"` and `"both"` as named |
 | `close()` | Closes the socket and drops its registration at once; closing twice does nothing |
-| `localAddress`, `peerAddress` | `"127.0.0.1:50211"`, `"[::1]:50211"`; `localAddress` is nil until the OS assigns one |
+| `localAddress`, `peerAddress` | `"127.0.0.1:50211"`, `"[::1]:50211"`. `localAddress` is asked of the OS the first time it is read and remembered, so it is nil while a connect is still unassigned, and nil on a closed stream that was never asked before closing |
 | `state` | `"connecting"`, `"connected"`, `"failed"`, `"closed"`, or `"consumed"` once a TLS session has taken the stream |
 | `closed` | Whether `close()` was called |
 
@@ -1513,7 +1513,7 @@ within the poller. Tokens are not descriptors and mean nothing to the OS.
 | `modify(token, interest)` | Changes what a watch reports, without a system call |
 | `unwatch(token)` | Stops watching; the token may be used again at once |
 | `wait(timeoutMs)` | Waits at most `timeoutMs`, `0` to check without waiting, and queues up to `maxEvents` ready watches; returns how many. Never longer than `maxWaitMs`, and never past the runtime's execution time limit: inside a watched call the wait ends at the deadline and the watchdog raises as soon as Luau runs again |
-| `next()` | The next queued event as `token, readable, writable, closed`, or `nil` when the queue is drained |
+| `next()` | The next queued event as `token, readable, writable, closed`, or `nil` when the queue is drained. Deadline-based readiness (a DNS request's timeout, a TLS handshake deadline) is judged by the clock reading the `wait` took, once, not per event: a deadline that passes between a `wait` and `next` is reported by the next `wait` |
 | `close()` | Releases every watch, the OS poller and its event buffer; the handles stay open. Closing twice does nothing |
 | `watching`, `closed` | Getters: watches held, and whether `close()` was called |
 
@@ -1633,15 +1633,18 @@ rows do the same with nonblocking `std::net` sockets.
 | the same two calls through `std::net` | 169 | 4853 |
 | connect, accept, settle and close both ends, from Luau | 21142 | 47337 |
 | the same through blocking `std::net` | 334 | 33448 |
-| `wait(0)`, 1 / 32 / 256 idle watches | 1210 / 2636 / 12940 | 241 / 365 / 1277 |
+| `wait(0)`, one ready among 1024 / 8192 idle watches (µs) | | 0.4 / 0.4 |
 | `wait(0)` and draining `next()`, all of 1 / 32 / 256 ready | 2230 / 25945 / 197305 | 289 / 1840 / 13136 |
 
 Warm reads and writes allocate nothing native, and a transfer's throughput is within 13 to 18 %
 of `std::net` at every size: the system calls dominate, and the binder's call (about 760
 instructions, 50 ns) is the rest. Dispatch costs about 52 ns an event at 256 ready watches,
-the bound `next()` call; an idle `wait(0)` is one `epoll_wait` plus a scan of the watches, about
-4 ns each. The connection row is dominated by the helper pollers the bench makes per pair (22
-native allocations, mostly theirs) and by loopback's own handshake.
+the bound `next()` call. A `wait` scans only the watches with something to report, so idle
+sockets cost it nothing; listeners and TLS and DNS handles are always looked at, since their
+readiness can come from a deadline rather than the OS. One ready stream among 8192 idle ones
+costs the same 0.4 µs as among 1024 (it was 5 and 42 µs when every watch was walked). The
+connection row is dominated by the helper pollers the bench makes per pair (22 native
+allocations, mostly theirs) and by loopback's own handshake.
 
 Waiting does not spin: 256 idle watches over four `wait(250)` used 0.9 ms of CPU in a second,
 and a writer blocked on a full send buffer, writing until `"wouldBlock"` and waiting for
@@ -1649,10 +1652,15 @@ writability ten times, used 1.3 ms in 0.9 s. Retention, live after a full collec
 is about 210 VM bytes and 90 native bytes, a listener 96 and 120, a watch 79 native bytes and
 no VM bytes; kernel socket buffers are the OS's and not counted.
 
-The bottlenecks are the system calls themselves (one per `readInto` or `write`, by design: no
-hidden queue to batch them) and, for many connections, `wait`'s scan of every watch, which is
-linear in the watches held. The feature adds one crate, mio (socket2 is already in the tree
+The bottleneck is the system calls themselves, one per `readInto` or `write`, by design: there
+is no hidden queue to batch them. The feature adds one crate, mio (socket2 is already in the tree
 through dream-net).
+
+Sockets are native memory the VM's memory limit does not see. Streams a script connects have no
+per-runtime cap beyond the `network.tcp.connect` grant, and accepted streams are capped per
+listener by `maxStreams` only; pollers are capped per runtime (`TcpExtension::max_pollers`, 64)
+and a poller's event buffer grows only as waits fill it. A host that must bound a tenant's
+sockets does it at the capability, or gives the tenant its own runtime.
 
 ## dream.dns
 
@@ -1725,7 +1733,7 @@ way at once while its worker stays busy until the OS returns, and the pool's siz
 many such calls run. Nothing is cached: the OS may cache, as it always does.
 
 Because those calls keep their workers, a shared resolver is shared capacity.
-`DnsExtension::max_lookups` (default 2, 1 to 4096) caps how many of a runtime's lookups may
+`DnsExtension::max_lookups` (default 8, 1 to 4096) caps how many of a runtime's lookups may
 occupy the pool at once, queued or running, including those it cancelled or that timed out,
 so one runtime cannot hold every worker of a shared resolver; a lookup's place is given back
 when its worker is done with it, and literals never count. This is a per-runtime share, not
@@ -1770,7 +1778,7 @@ local count = secure:readInto(buffer.create(65536))  -- 0 only after close_notif
 |---|---|
 | `handshake()` | Moves the handshake as far as the socket allows: `true` once authenticated, `false` when it needs the socket again, `nil, message, kind` when it failed |
 | `readInto(target, offset?, length?)` | Decrypted bytes into the buffer; `0` only after the peer's close_notify; `nil, message, "wouldBlock"` when nothing is ready; `"truncated"` when the connection ended without close_notify |
-| `write(data, offset?, length?)` | Encrypts as much as the bounded send buffer takes and returns that plaintext count, not bytes on the wire; the ciphertext goes to the socket at once as far as it takes it. `"wouldBlock"` when the buffer is full |
+| `write(data, offset?, length?)` | Encrypts as much as the bounded send buffer takes and returns that plaintext count, not bytes on the wire; the ciphertext goes to the socket at once as far as it takes it, and a socket that has just refused bytes is not tried again within the same call: the record leaves with the next `write` or `flush`, which is when a script waiting for writability calls anyway. `"wouldBlock"` when the buffer is full |
 | `flush()` | Pushes pending ciphertext: `true` when none is left in the session (handed to the OS, not necessarily received), `false` when the socket is full |
 | `shutdownWrite()` | Queues close_notify and flushes; once it has left, the TCP write half is shut. Reading stays open |
 | `close()` | Closes the socket at once without close_notify, drops its watch and its place in the listener's count; idempotent |
@@ -1858,12 +1866,17 @@ roots; ALPN at most 16 protocols. Server sessions resume through rustls's bounde
 cache (256 sessions per configuration); clients keep rustls's default resumption cache.
 
 Configurations, sessions and their buffers live in native memory, which the VM's memory limit
-does not see. A runtime keeps at most 32 configurations alive (the host's
+does not see: a session may hold up to `bufferLimit` of ciphertext (16 MiB at most, 64 KiB by
+default) plus rustls's own buffers, and nothing caps sessions per runtime beyond the TCP streams
+they take over. A runtime keeps at most 32 configurations alive (the host's
 `TlsExtension::max_configs`): past that, `clientConfig` and `serverConfig` first run a full
 collection, since a configuration has no `close` and one the script dropped waits for the
 collector, and then answer `limitReached`. The platform's store alone is loaded once per
 runtime, for `tls.client` without a configuration and for every `clientConfig` without extra
-roots; an unusable store is not read again.
+roots; an unusable store is not read again, and a store that becomes usable later is not noticed
+until a new runtime. `clientConfig{ roots = ... }` with the platform store caches the verifier
+per distinct set of roots, 8 sets of at most 256 KiB each per runtime; a larger set, or a ninth,
+is rebuilt on every call.
 
 ### Keys
 
@@ -1919,13 +1932,15 @@ about 7 µs. 65 requests blocked on a stalled resolver, watched by one poller th
 | connect, accept and close a pair (µs) | 42 | 368 (325 for both handshakes, ECDSA P-256, 198 allocations) |
 | a 16-byte round trip (µs) | 6.9 | 10.3 |
 | a read with nothing ready (µs) | 0.4 | 0.4 |
-| throughput at 1 / 4 / 16 / 64 KiB writes (MiB/s) | 183 / 554 / 1945 / 4339 | 121 / 314 / 756 / 1106 |
+| throughput at 16 / 64 KiB writes (MiB/s) | 1937 / 3940 | 731 / 1113 |
 | held per connected pair, VM / native bytes | 416 / 176 | 2848 / 13302 open, 2848 / 266 closed |
 
 `tls.clientConfig` over explicit roots costs 4.3 µs, `tls.serverConfig` 18.8 µs (parsing and
-matching the key), and the platform store 3.7 ms. Throughput is bounded by AES-GCM and by rustls
-allocating an output buffer per record (about two allocations per write, 192 per MiB at 64 KiB
-writes); a warm read makes none. A session's userdata holds the rustls state inline, so the
+matching the key), and the platform store 3.7 ms. The throughput gap is cryptography: AES-GCM
+on both ends of a single thread, plus rustls's copies and its output buffer per record (about
+two allocations per write, 192 per MiB at 64 KiB writes; a warm read makes none). It is not
+system calls: a read-side staging buffer that cut the `recv` count was measured at no gain and
+rejected. A session's userdata holds the rustls state inline, so the
 VM's memory accounting sees it (the VM bytes above); its buffers are native and `close` drops
 them at once, so closed handles a script keeps cost almost nothing native.
 

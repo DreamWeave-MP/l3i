@@ -818,7 +818,10 @@ binds, which keep it alive, laid out `#[repr(C)]` for native code.
 
 Module `l3i::intl`, feature `intl`; the Luau side is in
 [Built-in extensions](@/docs/builtin-extensions.md#dream-intl). Every type works from Rust
-without a VM.
+without a VM. The enums `Grouping`, `FormatterError`, `Operand`, `NumberError` and `LocaleError`
+and the structs `DecimalOptions` and `UnsupportedLocale` are `#[non_exhaustive]`: match them
+with a wildcard arm and build them with their constructors. `PluralKind` and `Category` are
+closed sets and stay exhaustive.
 
 {{ api_signature(value="pub struct IntlExtension") }}
 
@@ -852,9 +855,9 @@ Result<Category, NumberError>`, `categories()`, `locale()`, `kind()`. `PluralKin
 
 {{ api_signature(value="pub struct DecimalFormatter") }}
 
-One locale's decimal format under `DecimalOptions { grouping, min_fraction_digits,
-max_fraction_digits }` (`Grouping` is `Auto`, `Never` or `Min2`; the digit counts are
-`Option<u8>`, at most `MAX_FRACTION_DIGITS`, 100). `new(&Locale, DecimalOptions) ->
+One locale's decimal format under `DecimalOptions::new().grouping(..).fraction_digits(min,
+max)` (`Grouping` is `Auto`, `Never` or `Min2`; the digit counts are `Option<u8>`, at most
+`MAX_FRACTION_DIGITS`, 100). `new(&Locale, DecimalOptions) ->
 Result<DecimalFormatter, FormatterError>`, `format_to(Operand, &mut String) -> Result<(),
 NumberError>`, `format(Operand)`, `locale()`, `grouping()`, `min_fraction_digits()`,
 `max_fraction_digits()` (resolved). `FormatterError` is `FractionDigitsOutOfRange`,
@@ -914,7 +917,8 @@ it. `local_address()`, `is_closed()`, `close()`.
 The userdata behind `tcp.connect` and `Listener:accept` (`"dream.tcp.Stream"`).
 `from_std(std::net::TcpStream) -> io::Result<Stream>` wraps a connected stream the host made;
 `push(scope, stream)`. `state() -> StreamState` (`Connecting`, `Connected`, `Failed`, `Closed`,
-with `name()` the script's spelling), `peer_address()`, `local_address()`, `close()`.
+with `name()` the script's spelling; `#[non_exhaustive]`, so match with a wildcard arm),
+`peer_address()`, `local_address()`, `close()`.
 
 {{ api_signature(value="pub struct Poller") }}
 
@@ -930,22 +934,24 @@ Module `l3i::dns`, feature `dns`; the Luau side is in
 {{ api_signature(value="pub struct DnsExtension") }}
 
 `new(Resolver)`, `max_requests(u32)` (open requests per runtime, default 64), `max_lookups(u32)`
-(a runtime's lookups occupying the resolver, queued or running, default 2), `Default` over
+(a runtime's lookups occupying the resolver, queued or running, default 8), `Default` over
 `Resolver::system()`. `id()` is `"dream.dns"`; `RESOLVE_CAPABILITY` is
 `"network.dns.resolve"`; `MAX_TIMEOUT_MS` 60000, `MAX_ADDRESSES` 64.
 
 {{ api_signature(value="pub struct Resolver") }}
 
 A bounded pool of lookup threads, cheap to clone and shareable between runtimes.
-`new(ResolverConfig { workers, queue }, Arc<dyn Lookup>)` (clamped to 1..=64 and 1..=4096),
+`new(ResolverConfig::new(workers, queue), Arc<dyn Lookup>)` (clamped to 1..=64 and 1..=4096),
 `system()` (the process's default over `SystemLookup`), `config()`, `load()` (queued lookups,
-threads started). Dropping the last handle ends the workers as they finish.
+threads started). Dropping the last handle ends the workers as they finish. `ResolverConfig`
+has public `workers` and `queue` fields and is `#[non_exhaustive]`, so it is built with `new`,
+never with a struct literal.
 
 {{ api_signature(value="pub trait Lookup: Send + Sync + 'static") }}
 
 `fn lookup(&self, host: &str, port: u16) -> Result<Vec<SocketAddr>, LookupError>`, run only on
 the resolver's threads; `SystemLookup` is the OS's. `LookupError` is `NotFound`,
-`TemporaryFailure` or `Other(String)`, with `kind()` the script's spelling.
+`TemporaryFailure` or `Other(String)`, with `kind()` the script's spelling; `#[non_exhaustive]`.
 
 {{ api_signature(value="pub struct Request") }}
 
@@ -969,7 +975,8 @@ holds native memory the VM's memory limit does not see). `Clone`, `Copy`, `Debug
 {{ api_signature(value="pub struct TlsStream") }}
 
 The userdata behind `tls.client` and `tls.server` (`"dream.tls.Stream"`): `state() ->
-TlsState` (`Handshaking`, `Open`, `Failed`, `Closed`, with `name()`), `close()`.
+TlsState` (`Handshaking`, `Open`, `Failed`, `Closed`, with `name()`; `#[non_exhaustive]`),
+`close()`.
 `ClientConfig` and `ServerConfig` are the configuration userdata (`"dream.tls.ClientConfig"`,
 `"dream.tls.ServerConfig"`).
 

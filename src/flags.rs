@@ -10,10 +10,11 @@ use std::sync::OnceLock;
 use crate::error::{Error, Result};
 use crate::raw::ffi;
 
-/// Luau feature flags OpenMW enables that live in the Ast, Bytecode, Compiler, and VM
-/// components, which are always linked. Runtime flags must be set before `luaL_openlibs`.
-/// Luau 0.741 graduated two of OpenMW's flags, `LuauNoDuplicateBinaryPrefix` and
-/// `LuauCompileIifeInline`: their enabled behavior is now unconditional, so they are gone.
+/// l3i's flag policy for the Ast, Bytecode, Compiler, and VM components, which are always
+/// linked: every flag here is on for the reason beside it. Runtime flags must be set before
+/// `luaL_openlibs`. Luau 0.741 graduated two flags this list carried,
+/// `LuauNoDuplicateBinaryPrefix` and `LuauCompileIifeInline`: their enabled behavior is now
+/// unconditional, so they are gone.
 pub const LUAU_FLAGS: &[&str] = &[
     // Compiler side
     "LuauCompileCleanBlockDeadClose",
@@ -33,7 +34,7 @@ pub const LUAU_FLAGS: &[&str] = &[
     // an operand whose metamethod could write to it.
     "LuauCompileMoveElisionFix",
     "LuauCompileTableFoldFix",
-    // DreamWeave addition: `if local x = f() then ... end` syntax. OpenMW leaves this off.
+    // `if local x = f() then ... end` syntax. The C++ binder leaves this off.
     "LuauExperimentalIfLocalSyntax",
     // Runtime side
     "LuauIntegerLibrary",
@@ -57,17 +58,17 @@ pub const LUAU_FLAGS: &[&str] = &[
     // text directly, 1.9 to 6.9 times faster on literal patterns measured here. A dynamic flag,
     // off upstream by default.
     "LuauOptimizeStringGsub",
-    // Not in OpenMW's policy: these two gate APIs the binder exposes (embedder GC integration
-    // with userdata marks and weak references; the buffer cage). Both are inert until a host
-    // installs the corresponding callback.
+    // These two gate APIs the binder exposes (embedder GC integration with userdata marks and
+    // weak references; the memory cage). Both are inert until a host installs the corresponding
+    // callback.
     "LuauGcTraceUdata",
     "LuauBufferCage",
-    // Not in OpenMW's policy either: Luau 0.741's fix for GC pacing, which read a heap that shrank
-    // between measurements as an enormous allocation rate. A dynamic flag, off upstream by default.
+    // Luau 0.741's fix for GC pacing, which read a heap that shrank between measurements as an
+    // enormous allocation rate. A dynamic flag, off upstream by default.
     "LuauGcHeapShrinkFix",
 ];
 
-/// The remaining OpenMW flags, defined in Luau's CodeGen component. CodeGen is compiled only
+/// The rest of the policy, defined in Luau's CodeGen component. CodeGen is compiled only
 /// with the `jit` feature; without it these symbols do not exist. The X64/A64 flags are defined
 /// in the per-architecture lowering files, which the linker only keeps for the target
 /// architecture, so each of those exists at run time on its own architecture only.

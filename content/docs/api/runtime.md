@@ -34,7 +34,7 @@ initialization category 0, no atom catalogue, no buffer cage, no native code.
 | `fn buffer_cage(self, cage: impl BufferCage) -> Self` | Routes every `buffer` allocation through `cage` (`lua_setmemorycage`), installed before any buffer exists |
 | `fn coroutine_finalizers(self, enabled: bool) -> Self` | Luau's coroutine finalizers: `coroutine.finally` for scripts, `Thread::add_finalizer` and `Thread::finalizer_function` for the host. Off by default. Luau's flag is process-wide, so the first runtime built decides: asking after a runtime was built without them fails `build`, and once one runtime has them every later one does. `flags::coroutine_finalizers()` reports the decision |
 | `fn native_code(self, options: NativeCodeOptions) -> Self` | Feature `jit`: enables native code generation with `options`. Off by default |
-| `fn build(self) -> Result<Runtime>` | Creates the VM in OpenMW's order: flag policy, `luaL_newstate`, pointer key, buffer cage, per-VM state and callbacks, native code, atom catalogue, standard libraries, the value-layout self test, l3i's packed kinds |
+| `fn build(self) -> Result<Runtime>` | Creates the VM in the C++ binder's order: flag policy, `luaL_newstate`, pointer key, buffer cage, per-VM state and callbacks, native code, atom catalogue, standard libraries, the value-layout self test, l3i's packed kinds |
 
 Errors from `build`: the flag policy names a flag this Luau build lacks (`Error::Logic`),
 coroutine finalizers are asked for after a runtime was built without them (`Error::Logic`), the
@@ -531,10 +531,11 @@ anything else.
 
 {{ api_signature(value="const LUAU_CODEGEN_FLAGS: &[&str]") }}
 
-The flags OpenMW enables in the Ast, Bytecode, Compiler and VM components, plus
-`LuauExperimentalIfLocalSyntax` (on here, off in OpenMW) and the two that gate APIs the binder
-exposes (`LuauGcTraceUdata`, `LuauBufferCage`); and the CodeGen flags, applied only with the
-`jit` feature. The X64 and A64 flags exist only on their own architecture.
+l3i's flag policy: the flags in the Ast, Bytecode, Compiler and VM components, which are always
+linked, including `LuauExperimentalIfLocalSyntax` and the two that gate APIs the binder exposes
+(`LuauGcTraceUdata`, `LuauBufferCage`); and the CodeGen flags, applied only with the `jit`
+feature. Each name carries its reason in the source. The X64 and A64 flags exist only on their
+own architecture, and `LuauCoroutineFinally` is raised separately by the builder.
 
 {{ api_signature(value="fn initialize() -> Result<()>") }}
 

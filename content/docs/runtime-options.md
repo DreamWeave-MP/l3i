@@ -8,7 +8,7 @@ kind = "guide"
 +++
 
 The host owns a `Runtime`, which owns one `lua_State`. `Runtime::new()` takes every default;
-`Runtime::builder()` makes each step of OpenMW's creation order a choice: flag policy,
+`Runtime::builder()` makes each step of the C++ binder's creation order a choice: flag policy,
 `luaL_newstate`, the pointer-encoding seed, the buffer cage, the per-VM shared block and its
 callbacks, native code generation, the atom catalogue, and last the standard libraries. Nothing
 is entrenched by the constructor.
@@ -27,6 +27,7 @@ is entrenched by the constructor.
 | `atom_catalogue(AtomCatalogue)` | none | This VM's atoms, installed before the libraries open; see [Direct access](@/docs/direct-access.md) |
 | `buffer_cage(cage)` | none | Routes every `buffer` allocation through a `memory::BufferCage` |
 | `native_code(options)` (`jit`) | off | Luau native code generation; see [Native code](@/docs/native-code.md) |
+| `coroutine_finalizers(bool)` | off | Luau's coroutine finalizers: `coroutine.finally` for scripts, `Thread::add_finalizer` and `Thread::finalizer_function` for the host. The flag is process-wide, so the first runtime built in a process decides for every runtime after it: asking once a runtime exists without them fails `build`, and a runtime that does not ask gets them anyway once one has. `RuntimePlan` has no finalizer option, so a plan-built runtime cannot ask; build one plain runtime with them first |
 
 ```rust
 use std::time::Duration;
@@ -175,17 +176,24 @@ averages and a peak that decays by `PEAK_DECAY` per frame. `stats_frame()` and
 
 Luau feature flags are global to the process, and several change the bytecode the compiler
 emits, so `flags::initialize()` freezes one policy before the first VM is created or the first
-`source::compile` runs; both call it, and it is idempotent. The policy is OpenMW's list
+`source::compile` runs; both call it, and it is idempotent. The policy is l3i's own named list
 (`flags::LUAU_FLAGS`, plus `flags::LUAU_CODEGEN_FLAGS` under `jit`), never Luau's "enable
-everything", with these additions:
+everything". Every flag on it is there for a stated reason, in the source next to its name:
 
-- `LuauExperimentalIfLocalSyntax` is on, so `if local x = f() then .. end` parses. OpenMW leaves
-  it off.
-- `LuauGcTraceUdata` and `LuauBufferCage` gate the embedder GC and buffer cage APIs the binder
-  exposes; both are inert until a host installs the callback.
+- The compiler and runtime optimizations and fixes that Luau 0.742 still gates, including the
+  two 0.742 miscompile fixes (`LuauCompileMoveElisionFix`, `LuauCompileTableFoldFix`) and the
+  0.741 GC pacing fix (`LuauGcHeapShrinkFix`), which read a heap that shrank between
+  measurements as an enormous allocation rate.
+- `LuauExperimentalIfLocalSyntax`, so `if local x = f() then .. end` parses. The C++ binder
+  leaves it off.
+- `LuauGcTraceUdata` and `LuauBufferCage`, which gate the embedder GC and memory cage APIs the
+  binder exposes; both are inert until a host installs the callback.
+- `LuauCoroutineFinally` is the one flag not on the list: the builder's `coroutine_finalizers`
+  raises it, once per process, before the first VM.
 
-An unknown flag name is a logic error rather than a silent no-op, so drift against the linked
-Luau release is caught at once. `memory::fast_flags()`, `fast_flag(name)`, `fast_int(name)`,
+A flag name the linked Luau lacks is a logic error rather than a silent no-op, so drift against
+the linked Luau release is caught at once; flags that graduate, as `LuauCompileIifeInline` did in
+0.741, come off the list with the bump. `memory::fast_flags()`, `fast_flag(name)`, `fast_int(name)`,
 `set_fast_flag` and `set_fast_int` read and set flags by name; setting is for Luau's `Debug*`
 flags only once a runtime exists.
 
