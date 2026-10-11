@@ -89,7 +89,22 @@ pub(crate) struct Context {
     max_configs: u32,
     verifier: RefCell<Option<std::result::Result<Arc<dyn ServerCertVerifier>, Failure>>>,
     default_client: RefCell<Option<std::result::Result<Arc<rustls::ClientConfig>, Failure>>>,
+    /// Platform verifiers with extra roots, by the roots given, so repeating `clientConfig{
+    /// roots }` does not read the platform's store again each time. Bounded in entries and
+    /// bytes; larger root sets are built on every call, as the store is.
+    extra_verifiers: RefCell<Vec<ExtraVerifier>>,
 }
+
+/// A cached platform verifier over extra roots, with the roots that key it.
+struct ExtraVerifier {
+    roots: Vec<CertificateDer<'static>>,
+    verifier: std::result::Result<Arc<dyn ServerCertVerifier>, Failure>,
+}
+
+/// How many root sets a runtime keeps verifiers for, and how many bytes of roots one set may
+/// hold to be kept.
+const MAX_CACHED_ROOT_SETS: usize = 8;
+const MAX_CACHED_ROOT_BYTES: usize = 256 * 1024;
 
 impl Context {
     pub(crate) fn new(max_configs: u32) -> Context {
@@ -98,6 +113,7 @@ impl Context {
             max_configs,
             verifier: RefCell::new(None),
             default_client: RefCell::new(None),
+            extra_verifiers: RefCell::new(Vec::new()),
         }
     }
 
@@ -123,6 +139,31 @@ impl Context {
     /// The platform's verifier over its own store alone, read once per runtime.
     fn platform(&self) -> std::result::Result<Arc<dyn ServerCertVerifier>, Failure> {
         self.verifier.borrow_mut().get_or_insert_with(|| platform_verifier(Vec::new())).clone()
+    }
+
+    /// The platform's verifier with `roots` added, built once per distinct set of roots a
+    /// runtime gives (the platform's store is read each time it is built).
+    fn platform_with(
+        &self,
+        roots: Vec<CertificateDer<'static>>,
+    ) -> std::result::Result<Arc<dyn ServerCertVerifier>, Failure> {
+        if roots.is_empty() {
+            return self.platform();
+        }
+        let mut cached = self.extra_verifiers.borrow_mut();
+        if let Some(entry) = cached.iter().find(|entry| entry.roots == roots) {
+            return entry.verifier.clone();
+        }
+        let bytes: usize = roots.iter().map(|root| root.len()).sum();
+        if bytes > MAX_CACHED_ROOT_BYTES {
+            return platform_verifier(roots);
+        }
+        let verifier = platform_verifier(roots.clone());
+        if cached.len() >= MAX_CACHED_ROOT_SETS {
+            cached.remove(0);
+        }
+        cached.push(ExtraVerifier { roots, verifier: verifier.clone() });
+        verifier
     }
 
     /// The configuration `tls.client` uses when given none: the platform verifier, TLS 1.2
@@ -397,7 +438,7 @@ pub(crate) fn client_config(
         Err(failure) => return Ok(Outcome::Failed(failure)),
     };
     let verifier: Arc<dyn ServerCertVerifier> = if platform {
-        match if roots.is_empty() { context.platform() } else { platform_verifier(roots) } {
+        match context.platform_with(roots) {
             Ok(verifier) => verifier,
             Err(failure) => return Ok(Outcome::Failed(failure)),
         }
@@ -494,4 +535,34 @@ pub(crate) fn describe(d: &mut ExtensionDescriptor) {
         .installed("serverConfig")
         .signature("(options: dream_tls_ServerConfigOptions) -> (dream_tls_ServerConfig?, string?, dream_tls_ErrorKind?)")
         .doc("Builds server settings once from a PEM or DER chain and its private key, checking that they match. New configs serve new sessions; sessions keep the config they started with.");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A root set given again does not read the platform's store again: whatever the first
+    /// build produced is returned, and only sets small enough to keep are kept.
+    #[test]
+    fn platform_verifiers_with_extra_roots_are_built_once_per_root_set() {
+        let context = Context::new(32);
+        let roots = |byte: u8, length: usize| vec![CertificateDer::from(vec![byte; length])];
+        let first = context.platform_with(roots(1, 64));
+        let again = context.platform_with(roots(1, 64));
+        assert_eq!(first.is_ok(), again.is_ok());
+        if let (Ok(first), Ok(again)) = (&first, &again) {
+            assert!(Arc::ptr_eq(first, again));
+        }
+        assert_eq!(context.extra_verifiers.borrow().len(), 1);
+        context.platform_with(roots(2, 64)).ok();
+        assert_eq!(context.extra_verifiers.borrow().len(), 2);
+        context.platform_with(roots(3, MAX_CACHED_ROOT_BYTES + 1)).ok();
+        assert_eq!(context.extra_verifiers.borrow().len(), 2, "an oversized set is not kept");
+        for byte in 10..30 {
+            context.platform_with(roots(byte, 64)).ok();
+        }
+        assert_eq!(context.extra_verifiers.borrow().len(), MAX_CACHED_ROOT_SETS);
+        assert!(context.extra_verifiers.borrow().iter().all(|entry| entry.roots != roots(1, 64)), "the oldest went");
+        assert_eq!(context.platform_with(Vec::new()).is_ok(), context.platform().is_ok());
+    }
 }
