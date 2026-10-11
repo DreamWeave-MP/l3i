@@ -585,7 +585,7 @@ private:
         if (node.statement)
             out += ";"; // Separate the call from the previous statement; Luau would otherwise call its result.
         const size_t callBegin = out.size();
-        out += "(function() local " + prefix + "_src = ";
+        out += std::string(node.varargs ? "(function(...)" : "(function()") + " local " + prefix + "_src = ";
         site.source = expression(out, node.source, "({} :: {any})");
         out += " local " + prefix + "_first = ";
         site.first = expression(out, node.first, "(1 :: number)");
@@ -613,13 +613,13 @@ private:
                 out += "for " + prefix + "_i = 0, " + prefix + "_n - 1 do " + operations + "_buffer.write" + typed->kind + "(" + prefix +
                     "_out, " + prefix + "_i * " + size + ", " + operations + "_buffer.read" + typed->kind + "(" + prefix + "_src, " +
                     typed->at(prefix + "_first + " + prefix + "_i") + ")) end ";
-            out += "return " + prefix + "_out end)()";
+            out += "return " + prefix + "_out end)" + call(node.varargs);
             site.call = {callBegin, out.size()};
             out.sliceSites.push_back(std::move(site));
             return out;
         }
         sliceChecks(out, prefix, node.source, node.first, node.last, true);
-        out += "local " + prefix + "_len = 0 if " + prefix + "_kind == \"buffer\" then " + prefix + "_len = " + operations + "_buffer.len(" + prefix + "_src :: any) else " + prefix + "_len = #(" + prefix + "_src :: any) end if " + prefix + "_first < 1 then " + prefix + "_first = 1 end if " + prefix + "_last > " + prefix + "_len then " + prefix + "_last = " + prefix + "_len end local " + prefix + "_n = 0 if " + prefix + "_last >= " + prefix + "_first then " + prefix + "_n = " + prefix + "_last - " + prefix + "_first + 1 end if " + prefix + "_kind == \"buffer\" then local " + prefix + "_out = (" + operations + "_buffer.create(" + prefix + "_n) :: any) :: typeof(" + prefix + "_src) if " + prefix + "_n > 0 then " + operations + "_buffer.copy(" + prefix + "_out :: any, 0, " + prefix + "_src :: any, " + prefix + "_first - 1, " + prefix + "_n) end return " + prefix + "_out else local " + prefix + "_out = (" + operations + "_table_create(" + prefix + "_n) :: any) :: typeof(" + prefix + "_src) if " + prefix + "_n > 0 then " + operations + "_table_move(" + prefix + "_src :: any, " + prefix + "_first, " + prefix + "_last, 1, " + prefix + "_out :: any) end return " + prefix + "_out end end)()";
+        out += "local " + prefix + "_len = 0 if " + prefix + "_kind == \"buffer\" then " + prefix + "_len = " + operations + "_buffer.len(" + prefix + "_src :: any) else " + prefix + "_len = #(" + prefix + "_src :: any) end if " + prefix + "_first < 1 then " + prefix + "_first = 1 end if " + prefix + "_last > " + prefix + "_len then " + prefix + "_last = " + prefix + "_len end local " + prefix + "_n = 0 if " + prefix + "_last >= " + prefix + "_first then " + prefix + "_n = " + prefix + "_last - " + prefix + "_first + 1 end if " + prefix + "_kind == \"buffer\" then local " + prefix + "_out = (" + operations + "_buffer.create(" + prefix + "_n) :: any) :: typeof(" + prefix + "_src) if " + prefix + "_n > 0 then " + operations + "_buffer.copy(" + prefix + "_out :: any, 0, " + prefix + "_src :: any, " + prefix + "_first - 1, " + prefix + "_n) end return " + prefix + "_out else local " + prefix + "_out = (" + operations + "_table_create(" + prefix + "_n) :: any) :: typeof(" + prefix + "_src) if " + prefix + "_n > 0 then " + operations + "_table_move(" + prefix + "_src :: any, " + prefix + "_first, " + prefix + "_last, 1, " + prefix + "_out :: any) end return " + prefix + "_out end end)" + call(node.varargs);
         site.call = {callBegin, out.size()};
         out.sliceSites.push_back(std::move(site));
         return out;
@@ -1251,42 +1251,46 @@ private:
         }
     }
 
+    // The arguments of a lowered call: the enclosing varargs when its body uses them.
+    static std::string call(bool varargs) { return varargs ? "(...)" : "()"; }
+
     // What the pipeline returns once every stage has run.
     void epilogue(Text& out, const Emission& e)
     {
+        const std::string args = call(e.node.varargs);
         switch (e.pipeline.consumer)
         {
         case Consumer::Materialize:
-            out += "return " + e.output + " end)()";
+            out += "return " + e.output + " end)" + args;
             return;
         case Consumer::Count:
         case Consumer::Sum:
-            out += "return " + e.cursor + " end)()";
+            out += "return " + e.cursor + " end)" + args;
             return;
         case Consumer::Min:
         case Consumer::Max:
             // An if-expression, not a guard statement: its error branch has type never, so
             // both Luau solvers type the result as the element type rather than optional.
             out += "return if " + e.cursor + " == nil then " + operations + "_error(\"JSL " +
-                (e.pipeline.consumer == Consumer::Min ? "min" : "max") + " reducer received no elements\") else " + e.cursor + " end)()";
+                (e.pipeline.consumer == Consumer::Min ? "min" : "max") + " reducer received no elements\") else " + e.cursor + " end)" + args;
             return;
         case Consumer::Any:
-            out += "return false end)()";
+            out += "return false end)" + args;
             return;
         case Consumer::All:
-            out += "return true end)()";
+            out += "return true end)" + args;
             return;
         case Consumer::Sink:
             if (!e.sinkWrite.empty())
             {
                 // A buffer sink evaluates to the destination and the count written.
-                out += "return " + e.sink + ", " + e.cursor + " end)()";
+                out += "return " + e.sink + ", " + e.cursor + " end)" + args;
                 return;
             }
             // Replace semantics: entries past the written count are cleared so the result is
             // dense; the destination's prior length was captured before the pipeline ran.
             out += "for " + e.name + "_i = " + e.cursor + " + 1, " + e.sink + "_len do " + e.sink + "[" + e.name + "_i] = nil end return " +
-                e.sink + " end)()";
+                e.sink + " end)" + args;
             return;
         }
     }
@@ -1441,7 +1445,7 @@ private:
         if (node.sinkStatement)
             out += ";"; // Separate the call from the previous statement; Luau would otherwise call its result.
         const size_t callBegin = out.size();
-        out += "(function() ";
+        out += node.varargs ? "(function(...) " : "(function() ";
         comments(out, node, out.anchor.begin);
         ComprehensionSite site;
         site.comprehension = index;

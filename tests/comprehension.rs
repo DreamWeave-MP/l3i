@@ -121,6 +121,34 @@ fn inclusive_slices_fuse_into_comprehension_consumers() {
         .unwrap();
 }
 
+/// A comprehension or slice lowers to a function call, which forwards the varargs its body
+/// uses. A `...` that a function literal inside it owns, or that is a type pack, is not the
+/// enclosing function's, and a function without varargs keeps compiling.
+#[test]
+fn comprehensions_and_slices_use_the_enclosing_varargs() {
+    Runtime::new()
+        .unwrap()
+        .exec(
+            r"
+        local function count(...) return [for x in {1, 2} => x + select('#', ...)] end
+        local counted = count('a', 'b', 'c')
+        assert(counted[1] == 4 and counted[2] == 5)
+        local function front(...) local all = {...} return all[1:select('#', ...)] end
+        local kept = front(7, 8)
+        assert(#kept == 2 and kept[2] == 8)
+        local function total(...) return sum[for x in {...} => x] end
+        assert(total(1, 2, 3) == 6)
+        local function fill(...) local _, written = into(select(1, ...), 'u8')[for x in {5, 6} => x] return written end
+        assert(fill(buffer.create(2)) == 2)
+        local function owned(values) return [for x in values => function(...) return select('#', ...) + x end] end
+        assert(owned({1})[1](1, 2) == 3)
+        local function typed(values) return [for x in values => (x :: any) :: (...number) -> ()] end
+        assert(#typed({print}) == 1)
+    ",
+        )
+        .unwrap();
+}
+
 #[test]
 fn standalone_slices_materialize_dense_tables_with_single_evaluation() {
     let runtime = Runtime::new().unwrap();

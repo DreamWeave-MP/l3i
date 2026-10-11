@@ -66,6 +66,10 @@ The dense entry function's only calls are `table.create` and the cold `error` pa
 Luau still emits an unused wrapper prototype in the listing; that is not a runtime
 closure or call. Expression-result register placement adds one setup `MOVE`.
 
+A comprehension or slice that uses its enclosing function's `...` (not one a function
+literal inside it owns) lowers to a wrapper that takes and is passed `...`. Luau does not
+inline that wrapper, so such a pipeline costs a closure and a call.
+
 The deterministic test uses Luau's single-step callbacks on a host-driven coroutine,
 with default interpreter compilation. Counts are executed VM instructions, not AUX
 words, native C implementation instructions, or CPU instructions. Setup of the input

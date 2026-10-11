@@ -47,6 +47,19 @@ public:
             if (!clause)
                 error(loop, "record patterns are not supported in generic for loops; destructure the loop variable in the body");
         }
+        // Each lowers to a function call, which must forward the varargs it uses.
+        if (source.find("...") != std::string_view::npos)
+        {
+            for (Comprehension& c : document.comprehensions)
+            {
+                size_t begin = c.range.begin;
+                for (const Range prefix : {c.lengthPrefix, c.reducerPrefix, c.sinkPrefix})
+                    if (!prefix.empty()) begin = std::min(begin, prefix.begin);
+                c.varargs = usesVarargs({begin, c.range.end});
+            }
+            for (Slice& s : document.slices)
+                s.varargs = usesVarargs(s.range);
+        }
         return std::move(document);
     }
 private:
@@ -740,6 +753,32 @@ private:
 
     // From an opening '(', '[', '{' or interpolated string to just past its matching closer.
     size_t skipBalanced(const std::vector<Token>&, size_t i) const { return i < strictClose.size() ? strictClose[i] : SIZE_MAX; }
+
+    // Whether `range` uses its enclosing function's varargs: a `...` expression in it that no
+    // function literal inside it owns. A `...` after a name, or before a name or ':', is a type
+    // pack (`T...`, `...number`), not an expression.
+    bool usesVarargs(Range range)
+    {
+        const std::vector<Token>& all = codeTokens();
+        if (blockEnd.size() != all.size())
+            indexPartners();
+        size_t i = size_t(std::lower_bound(all.begin(), all.end(), range.begin, [](const Token& token, size_t at) {
+            return token.range.begin < at;
+        }) - all.begin());
+        for (; i < all.size() && all[i].range.begin < range.end; ++i)
+        {
+            const int t = all[i].type;
+            if (t == T::ReservedFunction)
+            {
+                if (blockEnd[i] == SIZE_MAX) return false; // Never closed: Luau reports that.
+                i = blockEnd[i] - 1;
+            }
+            else if (t == T::Dot3 && (i == 0 || all[i - 1].type != T::Name) &&
+                (i + 1 >= all.size() || (all[i + 1].type != T::Name && all[i + 1].type != ':')))
+                return true;
+        }
+        return false;
+    }
 
     // From '<' to just past its matching '>', brackets inside balanced.
     size_t skipAngles(const std::vector<Token>& all, size_t i) const

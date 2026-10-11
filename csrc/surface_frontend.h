@@ -148,6 +148,8 @@ struct Comprehension
     std::vector<Clause> clauses;
     bool postfix = false; // Invalid unparenthesized collection-index usage.
     bool complete = false;
+    // Uses the enclosing function's `...`: the lowered call forwards them.
+    bool varargs = false;
 };
 
 struct Slice
@@ -161,6 +163,8 @@ struct Slice
     // Starts a statement right after an expression (`local f = g` then `t[1:2][1] = 5`): its
     // lowered call needs a ';' before it, or Luau would call the expression with it.
     bool statement = false;
+    // Uses the enclosing function's `...`: the lowered call forwards them.
+    bool varargs = false;
 };
 
 struct Document
