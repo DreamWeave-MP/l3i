@@ -95,6 +95,13 @@ fn zip_generators_lower_to_indexed_loops_with_explicit_length_rules() {
             return [for a, b in zipStrict({1}, {2, 3}) => a + b]
         end)
         assert(not ok and string.find(tostring(message), "zipStrict inputs must have equal lengths", 1, true))
+        -- A shorter later argument is as unequal as a shorter first one.
+        for _, mismatched in { {{1, 2}, {1}}, {{1, 2}, {1, 2}, {1}}, {{1, 2}, {1}, {1, 2}} } do
+            ok, message = pcall(function()
+                return [for a, b, c in zipStrict(mismatched[1], mismatched[2], mismatched[3] or mismatched[2]) => a]
+            end)
+            assert(not ok and string.find(tostring(message), "zipStrict inputs must have equal lengths", 1, true))
+        end
         assert(sum[for a, b in zipShortest({1, 2, 3}, {10, 20}) => a + b] == 33)
     "#,
         )

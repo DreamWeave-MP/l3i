@@ -1157,9 +1157,11 @@ private:
             out += "local " + prefix + "_n = " + prefix + "_len0 ";
             for (size_t argument = 1; argument < clause.zipArguments.size(); ++argument)
                 out += "if " + prefix + "_len" + std::to_string(argument) + " < " + prefix + "_n then " + prefix + "_n = " + prefix + "_len" + std::to_string(argument) + " end ";
+            // Every length against the first: `_n` is already the minimum, so a shorter later
+            // argument would pass a comparison with it when the first is the longest.
             if (clause.zipStrict)
                 for (size_t argument = 1; argument < clause.zipArguments.size(); ++argument)
-                    out += "if " + prefix + "_len" + std::to_string(argument) + " ~= " + prefix + "_n then " + operations + "_error(\"JSL zipStrict inputs must have equal lengths\") end ";
+                    out += "if " + prefix + "_len" + std::to_string(argument) + " ~= " + prefix + "_len0 then " + operations + "_error(\"JSL zipStrict inputs must have equal lengths\") end ";
             if (e.sized)
                 allocation(out, e, prefix + "_n");
             out += "for " + prefix + "_i = 1, " + prefix + "_n do local ";

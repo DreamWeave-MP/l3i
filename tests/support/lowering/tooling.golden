@@ -464,7 +464,7 @@ local __l3i_comp_45_error = error return (function() local __l3i_comp_10_g0_src 
 ==== all_zip
 return all[for a, b in zipStrict(xs, ys) => a <= b]
 ----
-local __l3i_comp_51_error = error return (function() local __l3i_comp_10_g0_src0 = (xs) local __l3i_comp_10_g0_len0 = #__l3i_comp_10_g0_src0 local __l3i_comp_10_g0_src1 = (ys) local __l3i_comp_10_g0_len1 = #__l3i_comp_10_g0_src1 local __l3i_comp_10_g0_n = __l3i_comp_10_g0_len0 if __l3i_comp_10_g0_len1 < __l3i_comp_10_g0_n then __l3i_comp_10_g0_n = __l3i_comp_10_g0_len1 end if __l3i_comp_10_g0_len1 ~= __l3i_comp_10_g0_n then __l3i_comp_51_error("JSL zipStrict inputs must have equal lengths") end for __l3i_comp_10_g0_i = 1, __l3i_comp_10_g0_n do local a, b = __l3i_comp_10_g0_src0[__l3i_comp_10_g0_i], __l3i_comp_10_g0_src1[__l3i_comp_10_g0_i] local __l3i_comp_10_value = (a <= b) if __l3i_comp_10_value == nil then __l3i_comp_51_error("L3i comprehension projection produced nil; filter nil explicitly") end if not __l3i_comp_10_value then return false end end return true end)()
+local __l3i_comp_51_error = error return (function() local __l3i_comp_10_g0_src0 = (xs) local __l3i_comp_10_g0_len0 = #__l3i_comp_10_g0_src0 local __l3i_comp_10_g0_src1 = (ys) local __l3i_comp_10_g0_len1 = #__l3i_comp_10_g0_src1 local __l3i_comp_10_g0_n = __l3i_comp_10_g0_len0 if __l3i_comp_10_g0_len1 < __l3i_comp_10_g0_n then __l3i_comp_10_g0_n = __l3i_comp_10_g0_len1 end if __l3i_comp_10_g0_len1 ~= __l3i_comp_10_g0_len0 then __l3i_comp_51_error("JSL zipStrict inputs must have equal lengths") end for __l3i_comp_10_g0_i = 1, __l3i_comp_10_g0_n do local a, b = __l3i_comp_10_g0_src0[__l3i_comp_10_g0_i], __l3i_comp_10_g0_src1[__l3i_comp_10_g0_i] local __l3i_comp_10_value = (a <= b) if __l3i_comp_10_value == nil then __l3i_comp_51_error("L3i comprehension projection produced nil; filter nil explicitly") end if not __l3i_comp_10_value then return false end end return true end)()
 --prelude 1
 --segment 0 34 10 51 synthetic
 --segment 34 41 0 7 copied
@@ -477,19 +477,19 @@ local __l3i_comp_51_error = error return (function() local __l3i_comp_10_g0_src0
 --segment 171 172 37 37 synthetic
 --segment 172 174 37 39 copied
 --segment 174 175 39 39 synthetic
---segment 175 556 37 39 synthetic
---segment 556 557 15 16 copied
---segment 557 559 37 39 synthetic
---segment 559 560 18 19 copied
---segment 560 648 37 39 synthetic
---segment 648 676 44 50 synthetic
---segment 676 677 44 44 synthetic
---segment 677 683 44 50 copied
---segment 683 684 50 50 synthetic
---segment 684 861 44 50 synthetic
---segment 861 883 50 51 synthetic
---site 0 call=41,883 projection=677,683
---clause binding=556,557 binding=559,560 expression=41,41 zip=83,87 zip=171,175
+--segment 175 559 37 39 synthetic
+--segment 559 560 15 16 copied
+--segment 560 562 37 39 synthetic
+--segment 562 563 18 19 copied
+--segment 563 651 37 39 synthetic
+--segment 651 679 44 50 synthetic
+--segment 679 680 44 44 synthetic
+--segment 680 686 44 50 copied
+--segment 686 687 50 50 synthetic
+--segment 687 864 44 50 synthetic
+--segment 864 886 50 51 synthetic
+--site 0 call=41,886 projection=680,686
+--clause binding=559,560 binding=562,563 expression=41,41 zip=83,87 zip=171,175
 ==== member_min_is_not_a_reducer
 return math.min[for x in xs => x]
 ----
@@ -2747,7 +2747,7 @@ local __l3i_comp_60_error = error local __l3i_comp_60_table_create = table.creat
 ==== zip_strict
 return [for a, b in zipStrict(xs, ys) => a * b]
 ----
-local __l3i_comp_47_error = error local __l3i_comp_47_table_create = table.create return (function() local __l3i_comp_7_g0_src0 = (xs) local __l3i_comp_7_g0_len0 = #__l3i_comp_7_g0_src0 local __l3i_comp_7_g0_src1 = (ys) local __l3i_comp_7_g0_len1 = #__l3i_comp_7_g0_src1 local __l3i_comp_7_g0_n = __l3i_comp_7_g0_len0 if __l3i_comp_7_g0_len1 < __l3i_comp_7_g0_n then __l3i_comp_7_g0_n = __l3i_comp_7_g0_len1 end if __l3i_comp_7_g0_len1 ~= __l3i_comp_7_g0_n then __l3i_comp_47_error("JSL zipStrict inputs must have equal lengths") end local __l3i_comp_7_out = __l3i_comp_47_table_create(__l3i_comp_7_g0_n) :: typeof({}) for __l3i_comp_7_g0_i = 1, __l3i_comp_7_g0_n do local a, b = __l3i_comp_7_g0_src0[__l3i_comp_7_g0_i], __l3i_comp_7_g0_src1[__l3i_comp_7_g0_i] local __l3i_comp_7_value = (a * b) if __l3i_comp_7_value == nil then __l3i_comp_47_error("L3i comprehension projection produced nil; filter nil explicitly") end __l3i_comp_7_out[__l3i_comp_7_g0_i] = __l3i_comp_7_value end return __l3i_comp_7_out end)()
+local __l3i_comp_47_error = error local __l3i_comp_47_table_create = table.create return (function() local __l3i_comp_7_g0_src0 = (xs) local __l3i_comp_7_g0_len0 = #__l3i_comp_7_g0_src0 local __l3i_comp_7_g0_src1 = (ys) local __l3i_comp_7_g0_len1 = #__l3i_comp_7_g0_src1 local __l3i_comp_7_g0_n = __l3i_comp_7_g0_len0 if __l3i_comp_7_g0_len1 < __l3i_comp_7_g0_n then __l3i_comp_7_g0_n = __l3i_comp_7_g0_len1 end if __l3i_comp_7_g0_len1 ~= __l3i_comp_7_g0_len0 then __l3i_comp_47_error("JSL zipStrict inputs must have equal lengths") end local __l3i_comp_7_out = __l3i_comp_47_table_create(__l3i_comp_7_g0_n) :: typeof({}) for __l3i_comp_7_g0_i = 1, __l3i_comp_7_g0_n do local a, b = __l3i_comp_7_g0_src0[__l3i_comp_7_g0_i], __l3i_comp_7_g0_src1[__l3i_comp_7_g0_i] local __l3i_comp_7_value = (a * b) if __l3i_comp_7_value == nil then __l3i_comp_47_error("L3i comprehension projection produced nil; filter nil explicitly") end __l3i_comp_7_out[__l3i_comp_7_g0_i] = __l3i_comp_7_value end return __l3i_comp_7_out end)()
 --prelude 2
 --segment 0 82 7 47 synthetic
 --segment 82 89 0 7 copied
@@ -2760,23 +2760,23 @@ local __l3i_comp_47_error = error local __l3i_comp_47_table_create = table.creat
 --segment 215 216 34 34 synthetic
 --segment 216 218 34 36 copied
 --segment 218 219 36 36 synthetic
---segment 219 673 34 36 synthetic
---segment 673 674 12 13 copied
---segment 674 676 34 36 synthetic
---segment 676 677 15 16 copied
---segment 677 761 34 36 synthetic
---segment 761 788 41 46 synthetic
---segment 788 789 41 41 synthetic
---segment 789 794 41 46 copied
---segment 794 795 46 46 synthetic
---segment 795 979 41 46 synthetic
---segment 979 1013 46 47 synthetic
---site 0 call=89,1013 projection=789,794
---clause binding=673,674 binding=676,677 expression=89,89 zip=130,134 zip=215,219
+--segment 219 676 34 36 synthetic
+--segment 676 677 12 13 copied
+--segment 677 679 34 36 synthetic
+--segment 679 680 15 16 copied
+--segment 680 764 34 36 synthetic
+--segment 764 791 41 46 synthetic
+--segment 791 792 41 41 synthetic
+--segment 792 797 41 46 copied
+--segment 797 798 46 46 synthetic
+--segment 798 982 41 46 synthetic
+--segment 982 1016 46 47 synthetic
+--site 0 call=89,1016 projection=792,797
+--clause binding=676,677 binding=679,680 expression=89,89 zip=130,134 zip=215,219
 ==== zip_filtered_sum
 return sum[for a, b in zipStrict(xs, ys) if a > b => a - b]
 ----
-local __l3i_comp_59_error = error return (function() local __l3i_comp_10_g0_src0 = (xs) local __l3i_comp_10_g0_len0 = #__l3i_comp_10_g0_src0 local __l3i_comp_10_g0_src1 = (ys) local __l3i_comp_10_g0_len1 = #__l3i_comp_10_g0_src1 local __l3i_comp_10_g0_n = __l3i_comp_10_g0_len0 if __l3i_comp_10_g0_len1 < __l3i_comp_10_g0_n then __l3i_comp_10_g0_n = __l3i_comp_10_g0_len1 end if __l3i_comp_10_g0_len1 ~= __l3i_comp_10_g0_n then __l3i_comp_59_error("JSL zipStrict inputs must have equal lengths") end local __l3i_comp_10_sum = 0 for __l3i_comp_10_g0_i = 1, __l3i_comp_10_g0_n do local a, b = __l3i_comp_10_g0_src0[__l3i_comp_10_g0_i], __l3i_comp_10_g0_src1[__l3i_comp_10_g0_i] if (a > b) then local __l3i_comp_10_value = (a - b) if __l3i_comp_10_value == nil then __l3i_comp_59_error("L3i comprehension projection produced nil; filter nil explicitly") end __l3i_comp_10_sum += __l3i_comp_10_value end end return __l3i_comp_10_sum end)()
+local __l3i_comp_59_error = error return (function() local __l3i_comp_10_g0_src0 = (xs) local __l3i_comp_10_g0_len0 = #__l3i_comp_10_g0_src0 local __l3i_comp_10_g0_src1 = (ys) local __l3i_comp_10_g0_len1 = #__l3i_comp_10_g0_src1 local __l3i_comp_10_g0_n = __l3i_comp_10_g0_len0 if __l3i_comp_10_g0_len1 < __l3i_comp_10_g0_n then __l3i_comp_10_g0_n = __l3i_comp_10_g0_len1 end if __l3i_comp_10_g0_len1 ~= __l3i_comp_10_g0_len0 then __l3i_comp_59_error("JSL zipStrict inputs must have equal lengths") end local __l3i_comp_10_sum = 0 for __l3i_comp_10_g0_i = 1, __l3i_comp_10_g0_n do local a, b = __l3i_comp_10_g0_src0[__l3i_comp_10_g0_i], __l3i_comp_10_g0_src1[__l3i_comp_10_g0_i] if (a > b) then local __l3i_comp_10_value = (a - b) if __l3i_comp_10_value == nil then __l3i_comp_59_error("L3i comprehension projection produced nil; filter nil explicitly") end __l3i_comp_10_sum += __l3i_comp_10_value end end return __l3i_comp_10_sum end)()
 --prelude 1
 --segment 0 34 10 59 synthetic
 --segment 34 41 0 7 copied
@@ -2789,25 +2789,25 @@ local __l3i_comp_59_error = error return (function() local __l3i_comp_10_g0_src0
 --segment 171 172 37 37 synthetic
 --segment 172 174 37 39 copied
 --segment 174 175 39 39 synthetic
---segment 175 584 37 39 synthetic
---segment 584 585 15 16 copied
---segment 585 587 37 39 synthetic
---segment 587 588 18 19 copied
---segment 588 676 37 39 synthetic
---segment 676 679 41 49 synthetic
---segment 679 680 44 44 synthetic
---segment 680 685 44 49 copied
---segment 685 686 49 49 synthetic
---segment 686 692 44 49 synthetic
---segment 692 720 53 58 synthetic
---segment 720 721 53 53 synthetic
---segment 721 726 53 58 copied
---segment 726 727 58 58 synthetic
---segment 727 896 53 58 synthetic
---segment 896 935 58 59 synthetic
---site 0 call=41,935 projection=721,726
---clause binding=584,585 binding=587,588 expression=41,41 zip=83,87 zip=171,175
---clause binding=41,41 expression=680,685
+--segment 175 587 37 39 synthetic
+--segment 587 588 15 16 copied
+--segment 588 590 37 39 synthetic
+--segment 590 591 18 19 copied
+--segment 591 679 37 39 synthetic
+--segment 679 682 41 49 synthetic
+--segment 682 683 44 44 synthetic
+--segment 683 688 44 49 copied
+--segment 688 689 49 49 synthetic
+--segment 689 695 44 49 synthetic
+--segment 695 723 53 58 synthetic
+--segment 723 724 53 53 synthetic
+--segment 724 729 53 58 copied
+--segment 729 730 58 58 synthetic
+--segment 730 899 53 58 synthetic
+--segment 899 938 58 59 synthetic
+--site 0 call=41,938 projection=724,729
+--clause binding=587,588 binding=590,591 expression=41,41 zip=83,87 zip=171,175
+--clause binding=41,41 expression=683,688
 ==== zip_count
 return #[for a, b in zipShortest(xs, ys) => a]
 ----
@@ -3511,7 +3511,7 @@ local __l3i_comp_47_error = error local __l3i_comp_47_typeof = typeof return (fu
 ==== nested_zip_inner
 return [for x in xs for a, b in zipStrict(x.l, x.r) => a + b]
 ----
-local __l3i_comp_61_error = error return (function() local __l3i_comp_7_out = {} local __l3i_comp_7_n = 0 local __l3i_comp_7_g0_src = (xs) local __l3i_comp_7_g0_len = #__l3i_comp_7_g0_src for __l3i_comp_7_g0_i = 1, __l3i_comp_7_g0_len do local x = __l3i_comp_7_g0_src[__l3i_comp_7_g0_i] local __l3i_comp_7_g1_src0 = (x.l) local __l3i_comp_7_g1_len0 = #__l3i_comp_7_g1_src0 local __l3i_comp_7_g1_src1 = (x.r) local __l3i_comp_7_g1_len1 = #__l3i_comp_7_g1_src1 local __l3i_comp_7_g1_n = __l3i_comp_7_g1_len0 if __l3i_comp_7_g1_len1 < __l3i_comp_7_g1_n then __l3i_comp_7_g1_n = __l3i_comp_7_g1_len1 end if __l3i_comp_7_g1_len1 ~= __l3i_comp_7_g1_n then __l3i_comp_61_error("JSL zipStrict inputs must have equal lengths") end for __l3i_comp_7_g1_i = 1, __l3i_comp_7_g1_n do local a, b = __l3i_comp_7_g1_src0[__l3i_comp_7_g1_i], __l3i_comp_7_g1_src1[__l3i_comp_7_g1_i] local __l3i_comp_7_value = (a + b) if __l3i_comp_7_value == nil then __l3i_comp_61_error("L3i comprehension projection produced nil; filter nil explicitly") end __l3i_comp_7_n += 1 __l3i_comp_7_out[__l3i_comp_7_n] = __l3i_comp_7_value end end return __l3i_comp_7_out end)()
+local __l3i_comp_61_error = error return (function() local __l3i_comp_7_out = {} local __l3i_comp_7_n = 0 local __l3i_comp_7_g0_src = (xs) local __l3i_comp_7_g0_len = #__l3i_comp_7_g0_src for __l3i_comp_7_g0_i = 1, __l3i_comp_7_g0_len do local x = __l3i_comp_7_g0_src[__l3i_comp_7_g0_i] local __l3i_comp_7_g1_src0 = (x.l) local __l3i_comp_7_g1_len0 = #__l3i_comp_7_g1_src0 local __l3i_comp_7_g1_src1 = (x.r) local __l3i_comp_7_g1_len1 = #__l3i_comp_7_g1_src1 local __l3i_comp_7_g1_n = __l3i_comp_7_g1_len0 if __l3i_comp_7_g1_len1 < __l3i_comp_7_g1_n then __l3i_comp_7_g1_n = __l3i_comp_7_g1_len1 end if __l3i_comp_7_g1_len1 ~= __l3i_comp_7_g1_len0 then __l3i_comp_61_error("JSL zipStrict inputs must have equal lengths") end for __l3i_comp_7_g1_i = 1, __l3i_comp_7_g1_n do local a, b = __l3i_comp_7_g1_src0[__l3i_comp_7_g1_i], __l3i_comp_7_g1_src1[__l3i_comp_7_g1_i] local __l3i_comp_7_value = (a + b) if __l3i_comp_7_value == nil then __l3i_comp_61_error("L3i comprehension projection produced nil; filter nil explicitly") end __l3i_comp_7_n += 1 __l3i_comp_7_out[__l3i_comp_7_n] = __l3i_comp_7_value end end return __l3i_comp_7_out end)()
 --prelude 1
 --segment 0 34 7 61 synthetic
 --segment 34 41 0 7 copied
@@ -3531,20 +3531,20 @@ local __l3i_comp_61_error = error return (function() local __l3i_comp_7_out = {}
 --segment 402 403 47 47 synthetic
 --segment 403 406 47 50 copied
 --segment 406 407 50 50 synthetic
---segment 407 776 47 50 synthetic
---segment 776 777 24 25 copied
---segment 777 779 47 50 synthetic
---segment 779 780 27 28 copied
---segment 780 864 47 50 synthetic
---segment 864 891 55 60 synthetic
---segment 891 892 55 55 synthetic
---segment 892 897 55 60 copied
---segment 897 898 60 60 synthetic
---segment 898 1099 55 60 synthetic
---segment 1099 1137 60 61 synthetic
---site 0 call=41,1137 projection=892,897
+--segment 407 779 47 50 synthetic
+--segment 779 780 24 25 copied
+--segment 780 782 47 50 synthetic
+--segment 782 783 27 28 copied
+--segment 783 867 47 50 synthetic
+--segment 867 894 55 60 synthetic
+--segment 894 895 55 55 synthetic
+--segment 895 900 55 60 copied
+--segment 900 901 60 60 synthetic
+--segment 901 1102 55 60 synthetic
+--segment 1102 1140 60 61 synthetic
+--site 0 call=41,1140 projection=895,900
 --clause binding=244,245 expression=135,137
---clause binding=776,777 binding=779,780 expression=41,41 zip=316,321 zip=402,407
+--clause binding=779,780 binding=782,783 expression=41,41 zip=316,321 zip=402,407
 ==== nested_enumerate_inner
 return [for outer in rows for i, v in enumerate(outer) => v + i]
 ----
