@@ -72,7 +72,7 @@ function HttpServer:acceptAll()
 		end
 		local token = self.nextToken
 		self.nextToken += 1
-		self.connections[token] = { stream = stream, head = '', out = nil, sent = 0, peer = peer }
+		self.connections[token] = { stream = stream, chunks = {}, tail = '', received = 0, out = nil, sent = 0, peer = peer }
 		assert(self.poller:watch(stream, token, 'read'))
 	end
 end
@@ -101,7 +101,9 @@ function HttpServer:respondTo(token, connection, status, contentType, body)
 	self:writeResponse(token, connection)
 end
 
--- Gathers the request head across as many reads as it arrives in.
+-- Gathers the request head across as many reads as it arrives in. The chunks are kept apart
+-- and joined once, when the blank line that ends the head has arrived: appending each to one
+-- string would copy the whole head so far on every read, quadratic in a head that trickles in.
 function HttpServer:readRequest(token, connection)
 	while true do
 		local count, _, kind = connection.stream:readInto(self.scratch)
@@ -112,18 +114,21 @@ function HttpServer:readRequest(token, connection)
 			self:finish(token) -- reset, or closed before a whole request
 			return
 		end
-		-- Only where new bytes arrived: the head before them was searched already.
-		local from = math.max(1, #connection.head - 2)
-		connection.head ..= buffer.readstring(self.scratch, 0, count)
-		local ending = string.find(connection.head, '\r\n\r\n', from, true)
-		if ending then
-			local method, path = string.match(connection.head, '^(%u+) (%S+) HTTP/1%.[01]\r\n')
+		local chunk = buffer.readstring(self.scratch, 0, count)
+		table.insert(connection.chunks, chunk)
+		connection.received += count
+		-- The blank line may straddle chunks: the new one is searched with the three bytes before it.
+		local window = connection.tail .. chunk
+		if string.find(window, '\r\n\r\n', 1, true) then
+			local head = table.concat(connection.chunks)
+			local method, path = string.match(head, '^(%u+) (%S+) HTTP/1%.[01]\r\n')
 			if not method then
 				return self:respondTo(token, connection, 400, 'text/plain', 'bad request\n')
 			end
 			return self:respondTo(token, connection, self.respond(method, path))
 		end
-		if #connection.head > MAX_HEAD then
+		connection.tail = string.sub(window, -3)
+		if connection.received > MAX_HEAD then
 			return self:respondTo(token, connection, 431, 'text/plain', 'request head too large\n')
 		end
 	end

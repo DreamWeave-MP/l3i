@@ -244,9 +244,11 @@ function HttpsClient.request(secure, method: string, host: string, path: string,
 	end
 	poller:modify(1, 'read')
 	local scratch = buffer.create(65536)
-	-- The head is searched only where new bytes arrived, and may be at most MAX_HEAD bytes; the
-	-- body's chunks are joined once, at the end. The deadline holds while data keeps arriving.
-	local head = ''
+	-- The head's chunks are kept apart and joined once the blank line that ends it arrives (it
+	-- may straddle chunks, so each new chunk is searched with the three bytes before it); the
+	-- head may be at most MAX_HEAD bytes. The body's chunks are joined once, at the end. The
+	-- deadline holds while data keeps arriving.
+	local headChunks, tail, headSize = {}, '', 0
 	local received = {}
 	local size = 0
 	local bodySize = 0
@@ -270,10 +272,13 @@ function HttpsClient.request(secure, method: string, host: string, path: string,
 				table.insert(received, chunk)
 				bodySize += count
 			else
-				local from = math.max(1, #head - 2)
-				head ..= chunk
-				local ending = string.find(head, '\r\n\r\n', from, true)
-				if ending then
+				table.insert(headChunks, chunk)
+				headSize += count
+				local window = tail .. chunk
+				if string.find(window, '\r\n\r\n', 1, true) then
+					-- Earlier chunks were searched as they came: the first blank line is in the window.
+					local head = table.concat(headChunks)
+					local ending = string.find(head, '\r\n\r\n', math.max(1, #head - #window + 1), true)
 					response = parseHead(string.sub(head, 1, ending - 1))
 					if not response then
 						poller:close()
@@ -281,9 +286,11 @@ function HttpsClient.request(secure, method: string, host: string, path: string,
 					end
 					received = { string.sub(head, ending + 4) }
 					bodySize = #received[1]
-				elseif #head > MAX_HEAD then
+				elseif headSize > MAX_HEAD then
 					poller:close()
 					return nil, 'the response head is larger than 16 KiB', 'limitReached'
+				else
+					tail = string.sub(window, -3)
 				end
 			end
 			local length = response and tonumber(response.headers['content-length'])

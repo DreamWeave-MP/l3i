@@ -210,8 +210,9 @@ fn a_luau_client_resolves_races_verifies_and_fetches_from_a_luau_server() {
     assert_eq!(server.join().unwrap(), 3.0);
 }
 
-/// One keep-alive connection from an independent rustls client: `count` requests in turn.
-fn keep_alive_client(address: SocketAddr, count: usize) -> Vec<(String, Vec<u8>)> {
+/// One keep-alive connection from an independent rustls client: `count` requests in turn, or
+/// all sent at once (pipelined) before the first response is read.
+fn keep_alive_client(address: SocketAddr, count: usize, pipelined: bool) -> Vec<(String, Vec<u8>)> {
     let mut roots = rustls::RootCertStore::empty();
     roots.add(rustls::pki_types::CertificateDer::from_pem_slice(pki().ca.as_bytes()).unwrap()).unwrap();
     let config = rustls::ClientConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
@@ -226,9 +227,16 @@ fn keep_alive_client(address: SocketAddr, count: usize) -> Vec<(String, Vec<u8>)
     let mut stream = rustls::StreamOwned::new(connection, socket);
     let mut responses = Vec::new();
     let mut pending = Vec::new();
-    for _ in 0..count {
-        stream.write_all(b"GET /hello HTTP/1.1\r\nHost: test.local\r\n\r\n").unwrap();
+    let request = b"GET /hello HTTP/1.1\r\nHost: test.local\r\n\r\n";
+    if pipelined {
+        stream.write_all(&request.repeat(count)).unwrap();
         stream.flush().unwrap();
+    }
+    for _ in 0..count {
+        if !pipelined {
+            stream.write_all(request).unwrap();
+            stream.flush().unwrap();
+        }
         // Read one response: the head, then Content-Length bytes.
         let mut chunk = [0u8; 4096];
         let head_end = loop {
@@ -275,7 +283,10 @@ fn a_luau_server_serves_concurrent_keep_alive_clients_within_its_limits() {
         .unwrap();
     let address: String = runtime.eval("return server.address").unwrap();
     let address: SocketAddr = address.parse().unwrap();
-    let clients: Vec<_> = (0..4).map(|_| std::thread::spawn(move || keep_alive_client(address, 3))).collect();
+    // Two clients pipeline their three requests: the server finds the next head in what the
+    // last response left behind.
+    let clients: Vec<_> =
+        (0..4).map(|index| std::thread::spawn(move || keep_alive_client(address, 3, index % 2 == 1))).collect();
     let step = runtime.load_function("return function() server:step(20) return server.served end").unwrap();
     let started = Instant::now();
     while !clients.iter().all(std::thread::JoinHandle::is_finished) {

@@ -70,7 +70,7 @@ function HttpsServer:acceptAll()
 		else
 			local token = self.nextToken
 			self.nextToken += 1
-			self.connections[token] = { stream = secure, head = '', searched = 1, out = nil, sent = 0, requests = 0, closing = false }
+			self.connections[token] = { stream = secure, chunks = {}, tail = '', received = 0, out = nil, sent = 0, requests = 0, closing = false }
 			assert(self.poller:watch(secure, token, 'read'))
 		end
 	end
@@ -83,21 +83,37 @@ local function response(status: number, contentType: string, body: string, keepA
 		.. body
 end
 
--- Answers the request at the front of the head buffer, if a whole head is there.
-function HttpsServer:handle(token, connection)
-	-- Only where new bytes arrived: the head before them was searched already.
-	local ending = string.find(connection.head, '\r\n\r\n', connection.searched, true)
-	if not ending then
-		connection.searched = math.max(1, #connection.head - 2)
-		if #connection.head > MAX_HEAD then
+-- Adds `chunk`, if one arrived, to the head buffer and answers the request at its front, if a
+-- whole head is there. The chunks are kept apart and joined once: appending each to one string
+-- would copy the whole head so far on every read, quadratic in a head that trickles in. The
+-- blank line that ends a head may straddle chunks, so a new chunk is searched together with
+-- the three bytes before it; without a chunk, what the last response left behind is searched
+-- whole, since a pipelined request may be complete already.
+function HttpsServer:handle(token, connection, chunk)
+	local window
+	if chunk then
+		table.insert(connection.chunks, chunk)
+		connection.received += #chunk
+		window = connection.tail .. chunk
+		connection.tail = string.sub(window, -3)
+	else
+		window = table.concat(connection.chunks)
+	end
+	if not string.find(window, '\r\n\r\n', 1, true) then
+		if connection.received > MAX_HEAD then
 			connection.closing = true
 			connection.out = response(431, 'text/plain', 'request head too large\n', false)
 		end
 		return
 	end
-	local head = string.sub(connection.head, 1, ending - 1)
-	connection.head = string.sub(connection.head, ending + 4)
-	connection.searched = 1
+	-- Earlier chunks were searched as they came, so the first blank line is within the window.
+	local all = table.concat(connection.chunks)
+	local ending = string.find(all, '\r\n\r\n', math.max(1, #all - #window + 1), true)
+	local head = string.sub(all, 1, ending - 1)
+	local rest = string.sub(all, ending + 4)
+	connection.chunks = if #rest > 0 then { rest } else {}
+	connection.received = #rest
+	connection.tail = string.sub(rest, -3)
 	connection.requests += 1
 	local method, path = string.match(head, '^(%u+) (%S+) HTTP/1%.[01]\r?\n?')
 	local lowered = string.lower(head)
@@ -131,8 +147,7 @@ function HttpsServer:readFrom(token, connection)
 			self:drop(token) -- the client's close_notify
 			return
 		end
-		connection.head ..= buffer.readstring(self.scratch, 0, count)
-		self:handle(token, connection)
+		self:handle(token, connection, buffer.readstring(self.scratch, 0, count))
 	end
 end
 
