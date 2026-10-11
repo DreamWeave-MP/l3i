@@ -4,16 +4,10 @@
 owns its own Luau build, plans every VM before it exists, and lowers hot script calls to native
 code.
 
-l3i is its author's second Luau binder. The first is C++: `components/luau`, which Dave Corley
-(S3kshun8) wrote for OpenMW on the
-[`feat/least-mergeable-branch`](https://gitlab.com/magicaldave1/openmw/-/commits/feat/least-mergeable-branch)
-branch of his fork. That branch is not in OpenMW's master and may never be: OpenMW's own
-scripting is `components/lua`, and OpenMW has no Luau binder. l3i is that binder done again in
-Rust, then given what a multi-crate engine needs on top. "The C++ binder" in the documentation
-is that one, and every `components/luau/...` file and `testluau*.cpp` test the sources cite is a
-file on that branch, at [commit `f69579c8`](https://gitlab.com/magicaldave1/openmw/-/tree/f69579c8d54fb2ae4d7a79a4d7033205effaec0e/components/luau).
-[Where the fast paths came from](https://DreamWeave-MP.github.io/l3i/docs/performance/#where-the-fast-paths-came-from) links each optimisation to the C++ lines it
-started as. l3i is not affiliated with or endorsed by the OpenMW project.
+l3i began as [a C++ Luau binder](https://gitlab.com/magicaldave1/openmw/-/tree/f69579c8d54fb2ae4d7a79a4d7033205effaec0e/components/luau)
+its author wrote for OpenMW. This is the same design done again in Rust, then given what a
+multi-crate engine needs on top. "The C++ binder" in the documentation and the source comments
+means that one.
 
 Documentation: **<https://DreamWeave-MP.github.io/l3i/>**. This file is the short version.
 
@@ -99,9 +93,9 @@ Each row is a page of the guide.
 
 | Area | In one line | Read |
 |---|---|---|
-| **Stack and values** | Borrowed views bound to a `Frame`, owned registry pins, and a typed binder that accepts scalars, views, `&T` receivers, `Option<T>` with OpenMW's rules, `VarArgs`, `Overload`, and returns tuples, `Owned<T>`, `Result<T>` and more. | [Stack and values](https://DreamWeave-MP.github.io/l3i/docs/stack-and-values/) |
+| **Stack and values** | Borrowed views bound to a `Frame`, owned registry pins, and a typed binder that accepts scalars, views, `&T` receivers, `Option<T>` with the C++ binder's rules, `VarArgs`, `Overload`, and returns tuples, `Owned<T>`, `Result<T>` and more. | [Stack and values](https://DreamWeave-MP.github.io/l3i/docs/stack-and-values/) |
 | **Userdata** | Tagged (inline payload, one tag read to check) or untagged (exact metatable identity, borrowed engine objects), decided per runtime; `MetatableBuilder` for methods, properties, metamethods and `__iter` factories; generated dispatchers that cost one Luau call frame. | [Userdata](https://DreamWeave-MP.github.io/l3i/docs/userdata/) |
-| **Modules and sandboxes** | Frozen package tables, read-only views, OpenMW's prelude, one environment per script instance cloned from a compiled template, `require` over a host navigator. | [Modules and sandboxes](https://DreamWeave-MP.github.io/l3i/docs/modules-and-sandboxes/) |
+| **Modules and sandboxes** | Frozen package tables, read-only views, a sandbox prelude, one environment per script instance cloned from a compiled template, `require` over a host navigator. | [Modules and sandboxes](https://DreamWeave-MP.github.io/l3i/docs/modules-and-sandboxes/) |
 | **Runtime options** | Watchdog on time and heap, memory categories, call scopes with self-time accounting, collector control, a sampling profiler, frozen fast flags. | [Runtime options](https://DreamWeave-MP.github.io/l3i/docs/runtime-options/) |
 | **Direct access** | Atoms let `GETTABLEKS`/`NAMECALL` reach a native callback with no metatable walk; `DirectPlan` validates Luau's inline cache in O(1) and serves a type under any tag. | [Direct access](https://DreamWeave-MP.github.io/l3i/docs/direct-access/) |
 | **Extensions and plans** | A crate declares its Luau surface once (`describe`), a plan composes crates and assigns every tag, slot and atom (`finalize`), a runtime is built from it (`from_plan`); the plan renders the `.d.luau` and can type check it. | [Extensions](https://DreamWeave-MP.github.io/l3i/docs/extensions/) |
@@ -172,8 +166,9 @@ binder.
   slots of one call. Mutation goes through interior mutability.
 - Bound callables are `Fn`, not `FnMut`: a binding can re-enter itself through Lua.
 - Every `unsafe` block states the invariant it relies on. GC destructors never call the Lua API.
-- Tags are `1..254`; tag 0 is Luau's untagged default. Fast flags follow OpenMW's policy (plus
-  `LuauExperimentalIfLocalSyntax`) and are frozen before the first VM or compile.
+- Tags are `1..254`; tag 0 is Luau's untagged default. Fast flags are one named policy,
+  l3i's own, frozen before the first VM or compile; a flag the linked Luau lacks is an error,
+  never a silent no-op.
 - Luau integers (`42i`) compare with `==` only and never equal a number, so identities (peers,
   events, handles, packed scalars) are integers and everything a script counts or thresholds is
   a plain number.

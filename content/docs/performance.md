@@ -339,11 +339,12 @@ sized by the tags and atoms the plan uses (1.4 KB for five tags and 39 atoms).
 
 ## Where the fast paths came from
 
-l3i is its author's second Luau binder. The first is C++: `components/luau`, on a branch of his
-OpenMW fork that OpenMW itself does not have. Most of what makes a call cheap here was worked
-out there first, and the honest way to say so is to point at the lines. Every link below is
-pinned to one commit of that branch, [`f69579c8`](https://gitlab.com/magicaldave1/openmw/-/tree/f69579c8d54fb2ae4d7a79a4d7033205effaec0e/components/luau), so the line numbers cannot drift
-under it. A few of the files live in `components/lua` on the same branch; the links say which.
+l3i is its author's second Luau binder. The first is C++, `components/luau` on a branch of an
+OpenMW fork. Most of what makes a call cheap here was worked out there first, and the honest way
+to say so is to point at the lines. Every link below is pinned to one commit of that branch,
+[`f69579c8`](https://gitlab.com/magicaldave1/openmw/-/tree/f69579c8d54fb2ae4d7a79a4d7033205effaec0e/components/luau),
+so the line numbers cannot drift under it. A few of the files live in `components/lua` on the
+same branch; the links say which.
 
 Each entry says what the C++ does, what l3i does with the idea, and where l3i goes further. The
 last one lists what has no C++ ancestor at all.

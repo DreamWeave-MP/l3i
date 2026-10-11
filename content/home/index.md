@@ -16,12 +16,13 @@ objects at the cost of a table lookup, not a registry walk. The engine must be a
 thousands of script instances in sandboxes it can measure, limit and profile. And the surface a
 script sees has to be declared once, typed, and impossible to drift from what the runtime does.
 
-l3i is that binder. Its author wrote one in C++ first, for OpenMW, on
-[a branch of his fork](https://gitlab.com/magicaldave1/openmw/-/tree/f69579c8d54fb2ae4d7a79a4d7033205effaec0e/components/luau)
-that is not part of OpenMW and may never be. l3i is that binder done again in Rust, with the
-parts a multi-crate engine needs on top: a planner that composes a VM from extensions before the
-VM exists, a packed integer vocabulary for values that should never allocate, the network bridge
-in every runtime, and Luau's native code generator with lowering hooks written in Rust.
+l3i is that binder. It started life as
+[a C++ Luau binder for OpenMW](https://gitlab.com/magicaldave1/openmw/-/tree/f69579c8d54fb2ae4d7a79a4d7033205effaec0e/components/luau),
+and this is the same design done again in Rust, with the parts a multi-crate engine needs on
+top: a planner that composes a VM from extensions before the VM exists, a packed integer
+vocabulary for values that should never allocate, the network bridge in every runtime, Luau's
+native code generator with lowering hooks written in Rust, and a dialect of Luau whose
+comprehensions, slices and record patterns compile to the loops you would have written by hand.
 
 {{ pipeline(data_path="data/pipeline/plan.json") }}
 
@@ -44,9 +45,13 @@ in every runtime, and Luau's native code generator with lowering hooks written i
 - **The network is not optional.** Every plan carries the `dream.udp` bridge; the policy's
   capabilities decide what a script may do with it. Nothing calls into Luau from inside the
   transport.
-- **Sandboxes the engine can account for.** OpenMW's prelude, per-script instances cloned from
+- **Sandboxes the engine can account for.** A sandbox prelude, per-script instances cloned from
   compiled templates, a watchdog on time and heap, memory categories, call scopes with self-time
   accounting, and a sampling profiler.
+- **Loops you did not have to write.** `[for e in entities if e.active => e.id]`,
+  `sum[for x in samples[a:b, "f32"] => x]` and `local {x, y, z} = position` are source syntax.
+  They lower to the same-contract handwritten loop, one setup instruction apart, and a reduction
+  over a buffer slice becomes one native call when `@dream/data` is in the plan.
 - **Lowering hooks in Rust.** With `jit`, hosts write Luau's userdata and vector lowering hooks
   against an `IrBuilder` C ABI. The quaternion, colour and vertex-writer paths compile to IR with
   no C call and exit to the interpreter only on malformed input.
@@ -143,7 +148,8 @@ Criterion tables, the memory per runtime, and the toolchain measurements behind 
 - **[Start here](@/docs/start-here.md)**: the toolchain, the first runtime, a bound function and a
   userdata type.
 - **[Guide](@/docs/_index.md)**: the stack model, userdata, sandboxes, runtime options, direct
-  access, extensions and plans, packed primitives, the built-in extensions, and native code.
+  access, extensions and plans, packed primitives, the built-in extensions, the dialect, and
+  native code.
 - **[Rust API](@/docs/api/_index.md)**: every public module.
 - **[Safety model](@/docs/safety.md)**: what unwinds, what aborts, what panics, and the deliberate
   divergences from the C++ binder.

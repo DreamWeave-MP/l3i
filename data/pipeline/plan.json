@@ -6,7 +6,7 @@
     { "kind": "describe", "title": "Extension::describe", "detail": "Modules and their typed members, userdata types under stable keys with tag and compiler-slot policies, packed kinds, services, capabilities, memory categories, lowering hooks. No VM is touched.", "page": "@/docs/extensions.md" },
     { "kind": "plan", "title": "RuntimePlan::finalize", "detail": "Orders extensions by dependency, merges owners with augmenters, assigns tags, Luau's 32 compiler slots, atoms and direct slots, validates every identifier and path, and inserts the dream.udp bridge.", "page": "@/docs/extensions.md" },
     { "kind": "runtime", "title": "Runtime::from_plan", "detail": "A VM with the planned metatables, generic direct-access callbacks, opened and frozen modules, every extension's install run in order, and compiler metadata for the compatibility globals. Any number per plan.", "page": "@/docs/runtime-options.md" },
-    { "kind": "script", "title": "Sandbox", "detail": "OpenMW's prelude, one environment per script instance cloned from a compiled template, and the watchdog, memory categories and call scopes around every call.", "page": "@/docs/modules-and-sandboxes.md" }
+    { "kind": "script", "title": "Sandbox", "detail": "A sandbox prelude, one environment per script instance cloned from a compiled template, and the watchdog, memory categories and call scopes around every call.", "page": "@/docs/modules-and-sandboxes.md" }
   ],
   "alongside": [
     { "from": 2, "label": "the plan renders", "title": "Type definitions", "detail": "The composition's declare extern type grammar, served to Luau's analysis frontend and type checked against strict scripts in the crate's tests, so the declared API and the runtime cannot drift.", "page": "@/docs/extensions.md" },
