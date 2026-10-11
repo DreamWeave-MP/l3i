@@ -561,7 +561,7 @@ fn a_runtime_holds_only_its_share_of_a_shared_resolver() {
         let policy = RuntimePolicy::new().compat_global("@dream/dns", "dns").capability(RESOLVE_CAPABILITY);
         Runtime::from_plan(&RuntimePlan::builder().policy(policy).extension(extension).finalize().unwrap()).unwrap()
     };
-    let greedy = plan(DnsExtension::new(resolver.clone()));
+    let greedy = plan(DnsExtension::new(resolver.clone()).max_lookups(2));
     let other = plan(DnsExtension::new(resolver.clone()));
     greedy
         .exec(

@@ -193,14 +193,14 @@ pub struct DnsExtension {
 }
 
 impl DnsExtension {
-    /// Over `resolver`, with at most 64 open requests and 2 lookups occupying the resolver per
+    /// Over `resolver`, with at most 64 open requests and 8 lookups occupying the resolver per
     /// runtime.
     pub fn new(resolver: Resolver) -> DnsExtension {
-        DnsExtension { resolver, max_requests: 64, max_lookups: 2 }
+        DnsExtension { resolver, max_requests: 64, max_lookups: 8 }
     }
 
     /// At most `max` of a runtime's lookups may occupy the resolver at once (1 to 4096,
-    /// default 2): queued, or running on a worker, including lookups the script cancelled or
+    /// default 8): queued, or running on a worker, including lookups the script cancelled or
     /// that timed out, since the OS call cannot be stopped and the worker stays busy. This is
     /// what keeps one runtime from taking a shared resolver's every worker; literals never
     /// count. Separate resolvers per trust tier isolate runtimes completely.
