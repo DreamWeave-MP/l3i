@@ -149,12 +149,15 @@ fn listen(
             "dream.tcp.listen: {address} is not a loopback address; binding it needs the '{PUBLIC_CAPABILITY}' capability, which this runtime does not grant"
         )));
     }
-    let mut resolved = ListenOptions { backlog: 128, reuse_address: true, no_delay: false, max_streams: 1024 };
+    // Nagle's algorithm is off unless asked for: with it on, a write that follows another
+    // before the peer's acknowledgement waits for the delayed ACK, which turns a header-then-body
+    // pair into a round trip of tens of milliseconds.
+    let mut resolved = ListenOptions { backlog: 128, reuse_address: true, no_delay: true, max_streams: 1024 };
     if let Some(options) = options.filter(|view| !view.is_nil()) {
         Options::read(call, options, "dream.tcp.listen", |o| {
             resolved.backlog = bounded("listen", "backlog", o.optional("backlog")?, 128, 65_535)?;
             resolved.reuse_address = o.or("reuseAddress", true)?;
-            resolved.no_delay = o.or("noDelay", false)?;
+            resolved.no_delay = o.or("noDelay", true)?;
             resolved.max_streams = bounded("listen", "maxStreams", o.optional("maxStreams")?, 1024, MAX_STREAM_LIMIT)?;
             Ok(())
         })?;
@@ -185,10 +188,10 @@ fn connect(
     if !granted.connect {
         return Err(denied("connect", CONNECT_CAPABILITY));
     }
-    let mut no_delay = false;
+    let mut no_delay = true;
     if let Some(options) = options.filter(|view| !view.is_nil()) {
         Options::read(call, options, "dream.tcp.connect", |o| {
-            no_delay = o.or("noDelay", false)?;
+            no_delay = o.or("noDelay", true)?;
             Ok(())
         })?;
     }

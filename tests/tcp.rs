@@ -981,3 +981,79 @@ fn pollers_are_capped_per_runtime() {
         )
         .unwrap();
 }
+
+/// Whether `TCP_NODELAY` is set on this process's socket with the given local and peer ports,
+/// found among its own descriptors.
+#[cfg(target_os = "linux")]
+fn nodelay_of(local_port: u16, peer_port: u16) -> bool {
+    fn port_of(
+        fd: i32,
+        name: unsafe extern "C" fn(i32, *mut libc::sockaddr, *mut libc::socklen_t) -> i32,
+    ) -> Option<u16> {
+        let mut storage: libc::sockaddr_storage = unsafe { std::mem::zeroed() };
+        let mut len = std::mem::size_of::<libc::sockaddr_storage>() as libc::socklen_t;
+        // SAFETY: `len` is the storage's size, so the call writes within it; a descriptor that
+        // is not a socket fails and is skipped.
+        if unsafe { name(fd, std::ptr::from_mut(&mut storage).cast(), &mut len) } != 0 {
+            return None;
+        }
+        if storage.ss_family != libc::AF_INET as libc::sa_family_t {
+            return None;
+        }
+        // SAFETY: the family says the storage holds a `sockaddr_in`, which is smaller.
+        let address: libc::sockaddr_in = unsafe { std::ptr::from_ref(&storage).cast::<libc::sockaddr_in>().read() };
+        Some(u16::from_be(address.sin_port))
+    }
+    for entry in std::fs::read_dir("/proc/self/fd").unwrap() {
+        let Some(fd) = entry.unwrap().file_name().to_str().and_then(|name| name.parse::<i32>().ok()) else { continue };
+        if port_of(fd, libc::getsockname) != Some(local_port) || port_of(fd, libc::getpeername) != Some(peer_port) {
+            continue;
+        }
+        let mut value: libc::c_int = 0;
+        let mut size = std::mem::size_of::<libc::c_int>() as libc::socklen_t;
+        // SAFETY: `value` is a `c_int` and `size` says so; the option's value is an int.
+        let result = unsafe {
+            libc::getsockopt(fd, libc::IPPROTO_TCP, libc::TCP_NODELAY, std::ptr::from_mut(&mut value).cast(), &mut size)
+        };
+        assert_eq!(result, 0, "getsockopt on descriptor {fd}");
+        return value != 0;
+    }
+    panic!("no connected socket from port {local_port} to port {peer_port}");
+}
+
+/// Nagle's algorithm is off on connected and accepted streams unless `noDelay = false` asks
+/// for it: a header written before its body must not wait for the peer's delayed ACK.
+#[cfg(target_os = "linux")]
+#[test]
+fn streams_disable_nagle_unless_asked_not_to() {
+    let runtime = both();
+    let ports = runtime
+        .load_function(
+            r"
+            return function()
+                local client, server, listener = pair()
+                local quiet = assert(tcp.connect(listener.localAddress, { noDelay = false }))
+                local quietServer = acceptOne(listener)
+                assert(settle(quiet) == true)
+                local quietListener = assert(tcp.listen('127.0.0.1:0', { noDelay = false }))
+                local toQuiet = assert(tcp.connect(quietListener.localAddress))
+                local fromQuiet = acceptOne(quietListener)
+                assert(settle(toQuiet) == true)
+                keep = { client, server, listener, quiet, quietServer, quietListener, toQuiet, fromQuiet }
+                local function port(address) return tonumber(string.match(address, ':(%d+)$')) end
+                return `{port(client.localAddress)} {port(listener.localAddress)} {port(quiet.localAddress)} {port(toQuiet.localAddress)} {port(quietListener.localAddress)}`
+            end",
+        )
+        .unwrap()
+        .invoke::<String, _>(&runtime.stack(), ())
+        .unwrap();
+    let ports: Vec<u16> = ports.split(' ').map(|port| port.parse().unwrap()).collect();
+    let [client, listener, quiet, to_quiet, quiet_listener] = ports[..] else { panic!("{ports:?}") };
+    assert!(nodelay_of(client, listener), "a connected stream");
+    assert!(nodelay_of(listener, client), "a stream the listener accepted");
+    assert!(!nodelay_of(quiet, listener), "connect with noDelay = false");
+    assert!(nodelay_of(listener, quiet), "accepted from a connect with noDelay = false");
+    assert!(nodelay_of(to_quiet, quiet_listener), "a connected stream to a listener with noDelay = false");
+    assert!(!nodelay_of(quiet_listener, to_quiet), "accepted by a listener with noDelay = false");
+    runtime.exec("for _, handle in keep do handle:close() end").unwrap();
+}
