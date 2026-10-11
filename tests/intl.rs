@@ -198,6 +198,11 @@ fn decimal_formatters_refuse_bad_options_and_numbers() {
              fails(\"DecimalFormatter:format: '1,5' is not a decimal number\", en.format, en, '1,5') \
              fails('number or decimal string', en.format, en, {}) \
              fails('has more digits than a decimal holds', en.format, en, string.rep('9', 40000)) \
+             fails('has more digits than a decimal holds', en.format, en, '1e32768') \
+             fails('has more digits than a decimal holds', en.format, en, '1e-40000') \
+             fails('has more digits than a decimal holds', en.format, en, '1e99999999999') \
+             fails('has more digits than a decimal holds', intl.pluralRules('en').category, intl.pluralRules('en'), '1e40000') \
+             assert(#en:format('1e32767') > 32767) \
              assert(new('en', nil):format(1) == '1' and new('en', {}):format(1) == '1')",
         )
         .unwrap();

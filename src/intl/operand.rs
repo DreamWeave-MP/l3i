@@ -57,6 +57,20 @@ impl std::error::Error for NumberError {}
 /// Doubles below this magnitude that are whole convert to `i64` exactly.
 const WHOLE_LIMIT: f64 = 9_223_372_036_854_775_808.0;
 
+/// The largest exponent a decimal's `i16` magnitude holds.
+const EXPONENT_LIMIT: &str = "32767";
+
+/// Whether a decimal string's exponent, if any, fits the decimal's magnitude. `fixed_decimal`
+/// accumulates the exponent's digits into an `i16` unchecked, so `1e32768` would overflow there
+/// (a panic with overflow checks, a wrapped exponent without) before its own limit check runs.
+fn exponent_fits(text: &str) -> bool {
+    let Some(at) = text.find(['e', 'E']) else {
+        return true;
+    };
+    let digits = text[at + 1..].trim_start_matches(['+', '-']).trim_start_matches('0');
+    digits.len() < EXPONENT_LIMIT.len() || (digits.len() == EXPONENT_LIMIT.len() && digits <= EXPONENT_LIMIT)
+}
+
 impl Operand<'_> {
     /// The operand as a whole number, when it is one with no visible fraction: integers, and
     /// whole doubles inside `i64`.
@@ -77,6 +91,7 @@ impl Operand<'_> {
             Operand::Number(value) => {
                 Decimal::try_from_f64(value, FloatPrecision::RoundTrip).map_err(|_| NumberError::NotFinite(value))
             }
+            Operand::Decimal(text) if !exponent_fits(text) => Err(NumberError::TooLong(text.to_owned())),
             Operand::Decimal(text) => Decimal::try_from_str(text).map_err(|error| match error {
                 fixed_decimal::ParseError::Limit => NumberError::TooLong(text.to_owned()),
                 _ => NumberError::Malformed(text.to_owned()),
@@ -175,6 +190,12 @@ mod tests {
         let long = "9".repeat(40_000);
         assert_eq!(Operand::Decimal(&long).decimal(), Err(NumberError::TooLong(long.clone())));
         assert!(NumberError::TooLong(long).to_string().starts_with("a decimal string of 40000 bytes"));
+        // Exponents past the decimal's magnitude are refused before the parser's i16 overflows.
+        for huge in ["1e32768", "1e-32768", "1e99999999999", "1E+40000", "5.5e000032768"] {
+            assert_eq!(Operand::Decimal(huge).decimal(), Err(NumberError::TooLong(huge.to_owned())), "{huge:?}");
+        }
+        assert_eq!(Operand::Decimal("1e000032767").decimal().unwrap().to_string().len(), 32768);
+        assert_eq!(Operand::Decimal("1e-32767").decimal().unwrap().to_string().len(), 32769);
         for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
             assert!(matches!(Operand::Number(value).decimal(), Err(NumberError::NotFinite(_))));
         }
