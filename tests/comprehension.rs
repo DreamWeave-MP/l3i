@@ -1097,3 +1097,19 @@ fn typed_slices_read_buffers_as_a_layout_and_copy_contiguously() {
         )
         .unwrap();
 }
+
+/// Delimiters inside a clause are not comprehension nesting: the frontend leaves their depth to
+/// Luau's parser, which allows far more than 128, while 128 nested comprehensions stay the limit.
+#[test]
+fn clause_delimiters_do_not_count_toward_the_comprehension_nesting_limit() {
+    let runtime = Runtime::new().unwrap();
+    let parens = format!(
+        "local xs = {{1, 2, 3}} local r = [for x in {}xs{} => x * 2] assert(#r == 3 and r[3] == 6)",
+        "(".repeat(150),
+        ")".repeat(150)
+    );
+    runtime.exec(&parens).unwrap();
+    let nested = format!("return {}xs{}", "[for x in ".repeat(140), " => x]".repeat(140));
+    let error = runtime.exec(&nested).unwrap_err().to_string();
+    assert!(error.contains("surface nesting limit exceeded (128)"), "{error}");
+}

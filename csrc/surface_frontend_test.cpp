@@ -534,8 +534,10 @@ int main()
         assert(found);
     }
     {
+        // Parentheses in a clause are not comprehension nesting: stock Luau allows far more
+        // than 128, and so does the frontend.
         std::string s = "[for x in " + std::string(140, '(') + "xs" + std::string(140, ')') + " => x]";
-        assert(!parseSurface(s).errors.empty());
+        assert(parseSurface(s).errors.empty() && parseSurface(s).comprehensions.size() == 1);
         assert(parseSurface(std::string(8388609, ' ')).errors.empty());
         // A large module is not refused for its size: more than 262144 tokens after the first
         // opener (the former cap) scan like any others.

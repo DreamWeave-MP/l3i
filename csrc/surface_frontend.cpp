@@ -1152,7 +1152,7 @@ private:
             const int t = type(i);
             if (isComprehension(i))
             {
-                comprehension(i, depth + closers.size() + 1);
+                comprehension(i, depth + 1);
                 end = i > start ? tokens[i - 1].range.end : end;
                 continue;
             }
@@ -1194,11 +1194,10 @@ private:
             if (t == '[') close = ']';
             if (t == '{') close = '}';
             if (t == T::InterpStringBegin) close = T::InterpStringEnd;
+            // Delimiters inside a clause are tracked on this vector, not the C stack, so only
+            // comprehension nesting counts toward the limit; Luau's own parser bounds the rest.
             if (close)
-            {
-                if (limit(i, depth + closers.size() + 1)) break;
                 closers.push_back(close);
-            }
             else if (t == ')' || t == ']' || t == '}' || t == T::InterpStringEnd)
             {
                 if (closers.empty() || closers.back() != t) break;
