@@ -329,12 +329,22 @@ impl Listener {
             return Ok(Outcome::Failed(refused("Listener.accept", Some(peer), &error)));
         }
         streams.live.set(streams.live.get() + 1);
-        let local = stream.local_addr().ok();
-        let stream = Stream::new(stream, StreamState::Connected, local, peer, Some(Rc::clone(streams)));
+        let stream = Stream::new(stream, StreamState::Connected, None, peer, Some(Rc::clone(streams)));
         crate::userdata::push_owned(call, stream)?;
-        call.push(peer.to_string().as_str())?;
+        push_address(call, peer)?;
         Ok(Outcome::Done(StackResults))
     }
+}
+
+/// Pushes `address` as a string without allocating: it is at most 47 bytes.
+fn push_address(call: &Call<'_>, address: SocketAddr) -> Result<()> {
+    use std::io::Write as _;
+    let mut text = [0u8; 64];
+    let mut cursor = io::Cursor::new(&mut text[..]);
+    write!(cursor, "{address}").expect("a socket address fits 64 bytes");
+    let written = usize::try_from(cursor.position()).expect("at most 64");
+    call.push(std::str::from_utf8(&text[..written]).expect("an address is ASCII"))?;
+    Ok(())
 }
 
 /// Options an accepted stream gets: Nagle off when the listener asked, and on Apple platforms
@@ -464,8 +474,7 @@ impl Stream {
         if no_delay {
             stream.set_nodelay(true)?;
         }
-        let local = stream.local_addr().ok();
-        Ok(Stream::new(stream, StreamState::Connecting, local, address, None))
+        Ok(Stream::new(stream, StreamState::Connecting, None, address, None))
     }
 
     /// Wraps a connected stream the host made, for scripts that hold no connect capability.
@@ -493,9 +502,15 @@ impl Stream {
         self.peer
     }
 
-    /// The local address, once the OS assigned one.
+    /// The local address, once the OS assigned one. Asked of the OS on first use, not on every
+    /// accept or connect, and remembered.
     pub fn local_address(&self) -> Option<SocketAddr> {
-        self.local.get()
+        if let Some(local) = self.local.get() {
+            return Some(local);
+        }
+        let local = self.io.with_stream(|stream| stream.local_addr().ok()).flatten();
+        self.local.set(local);
+        local
     }
 
     pub(super) fn target(&self) -> Result<Target> {
@@ -540,7 +555,7 @@ impl Stream {
         Ok(Taken {
             io: Rc::clone(&self.io),
             peer: self.peer,
-            local: self.local.get(),
+            local: self.local_address(),
             counted: self.counted.borrow_mut().take(),
         })
     }
@@ -599,9 +614,6 @@ impl Stream {
         Ok(match settled {
             Ok(true) => {
                 self.state.set(StreamState::Connected);
-                if let Ok(local) = self.with_stream(what, mio::net::TcpStream::local_addr)? {
-                    self.local.set(Some(local));
-                }
                 Gate::Open
             }
             Ok(false) => {
@@ -755,7 +767,7 @@ pub(super) fn describe_stream(d: &mut ExtensionDescriptor) {
         .method("close", |s: &Stream| s.close())
         .signature("(self)")
         .doc("Closes the socket and drops its registration at once. Closing twice does nothing.");
-    stream.getter("localAddress", |s: &Stream| s.local.get().map(|a| a.to_string())).signature("string?");
+    stream.getter("localAddress", |s: &Stream| s.local_address().map(|a| a.to_string())).signature("string?");
     stream.getter("peerAddress", |s: &Stream| s.peer.to_string()).signature("string");
     stream.getter("state", |s: &Stream| s.state.get().name()).signature("dream_tcp_StreamState");
     stream.getter("closed", |s: &Stream| s.state.get() == StreamState::Closed).signature("boolean");
