@@ -288,6 +288,16 @@ remapping the many locations whose columns the holders shift.
   last token Luau could read as continuing onto the next line.
 - A module dense with patterns compiles in about 1.8 times the instructions of its handwritten
   equivalent (see Compile cost).
+- A holder is a local like any other, so it holds one of the function's 200 registers, and keeps
+  its record reachable, until its block ends: `local {a} = v` costs two registers to the end of
+  the block where `local a = v.a` costs one (a nested record costs one more per level; the
+  field count adds only the bound names). A function or chunk body with about a hundred
+  single-field patterns in one block runs out of registers where the direct reads would not.
+  Group related bindings in one pattern, or wrap sections of a long body in `do ... end`, which
+  releases the registers at `end`. Freeing the holder in the lowering itself (declare the
+  targets, read inside a `do` block) was measured and rejected: the targets become locals
+  assigned after their declaration, 11 % slower to extract and 70 % slower when a closure
+  captures one, since Luau then captures by reference.
 - Because the generated reads share their source line, a same-line warning that Luau reports once
   per line can be spent on a generated read and then dropped: `local {a} = t print(a)` gets no
   `SameLineStatement` warning, where `local a = t.a print(a)` would.
