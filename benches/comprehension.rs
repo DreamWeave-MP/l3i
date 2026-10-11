@@ -101,6 +101,10 @@ fn runtime() -> Runtime {
             end"
         ))
         .unwrap();
+    // Hosts run scripts in a safe environment, where Luau's builtin fast calls fire (`typeof`,
+    // `math.*`, `buffer.*`); a bare runtime has none, and would charge every builtin a full
+    // call. Sandboxed after the setup chunk, since it also makes the globals read-only.
+    runtime.sandbox_globals();
     runtime
 }
 
