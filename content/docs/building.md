@@ -73,7 +73,7 @@ re-checking the flag policy.
 
 ```toml
 [dependencies]
-l3i = { version = "1.0", features = ["jit"] }
+l3i = { version = "2", features = ["jit"] }
 ```
 
 | Feature | Default | Adds |

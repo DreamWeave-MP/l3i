@@ -11,7 +11,7 @@ kind = "tutorial"
 
 ```toml
 [dependencies]
-l3i = { version = "1", features = ["jit"] }
+l3i = { version = "2", features = ["jit"] }
 ```
 
 The crate's name in code is `l3i`. It needs Rust 1.92 or newer and edition 2024. Three features

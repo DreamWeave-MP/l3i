@@ -129,3 +129,49 @@ added = [
     "`net.server{ schema, address, protocolId, maxClients? }` creates a dream.net server from Luau when `network.transport` is granted. The generated signing key remains private inside the server userdata; `server:connectToken(clientId, expiresInSeconds?, timeoutSeconds?)` returns only the token clients need.",
     "`l3i::source::disassemble(source, options)` emits Luau's textual bytecode listing for every function, including instructions, source lines, locals and constants, using the same compiler options and library callbacks as `source::compile`.",
 ]
+
+[[releases]]
+version = "2.0.0"
+date = 2026-10-11
+summary = "A dialect of Luau whose comprehensions, reducers, sinks, slices and record patterns lower to the handwritten loop with tooling in original coordinates; a bulk-data plane over typed buffer spans with native loops; raw TCP, DNS and verified TLS; locales, plural rules and decimal formatting; Luau 0.742; and the renames and defaults that needed a major version to change."
+breaking = [
+    "`@dream/net` is `@dream/udp`: the extension is `dream.udp`, the Rust module `l3i::udp`, the type `UdpExtension`, the C symbols `dream_udp_*`. The capability is still `network.transport`.",
+    "`TcpExtension` and `TlsExtension` are no longer unit structs. `.extension(TcpExtension)` becomes `.extension(TcpExtension::default())`; `TlsExtension::new()` or `::default()` likewise.",
+    "`noDelay` defaults to `true` on `tcp.connect` and `tcp.listen`: Nagle's algorithm is off unless a script passes `{ noDelay = false }`.",
+    "`luau.parse` defaults to the `l3i` dialect, so comprehensions, slices and record patterns come back as source nodes; `{ dialect = \"luau\" }` selects strict stock syntax.",
+    "Luau 0.742 (from 0.740). `ffi::lua_setbuffercage` is `lua_setmemorycage`; `disable_native_execution_for_function` is gone with Luau's own; `LuauNoDuplicateBinaryPrefix` and `LuauCompileIifeInline` graduated and left the flag list.",
+    "Coroutine finalizers are chosen on the builder: `RuntimeBuilder::coroutine_finalizers(bool)` replaces `Runtime::enable_coroutine_finalizers`, and `Thread::finalizer_function(scope, close)` replaces `Runtime::finalizer_function()`. The first runtime built in a process decides for the process.",
+    "`DnsExtension::new` lets 8 of a runtime's lookups occupy a shared resolver by default, not 2.",
+    "The growable public types new since 1.3.1 are `#[non_exhaustive]`: `tcp::StreamState`, `tls::TlsState`, `dns::LookupError`, `dns::ResolverConfig`, `data::Kind`, `data::Layout`, `data::ReductionOp`, `data::Reduction`, `intl::Grouping`, `intl::DecimalOptions`, `intl::FormatterError`, `intl::Operand`, `intl::NumberError`, `intl::LocaleError`, `intl::UnsupportedLocale`. Matches need a wildcard arm; the structs are built with `ResolverConfig::new(workers, queue)`, `Layout::new(kind, stride, offset)`, `Reduction::new(op, filter)` and `DecimalOptions::new().grouping(..).fraction_digits(min, max)`.",
+]
+added = [
+    "The l3i dialect: `[for e in entities if e.active => e.id]` comprehensions with `range`, `enumerate`, `zipShortest` and `zipStrict` generators; `#`, `sum`, `min`, `max`, `any` and `all` consumers that allocate no result; `into(destination)` table sinks and `into(buffer, \"kind\"[, offset])` buffer sinks; inclusive slices `t[a:b]` of tables and buffers and typed slices `buf[1:n, \"f32@16\"]`; and record patterns `local {x, y} = p` in declarations, parameters and generator slots. One frontend built on Luau's lexer lowers all of it to the same-contract handwritten loop, one setup instruction apart, and compilation is strict while Analysis and `@dream/luau` recover unfinished constructs.",
+    "Original coordinates everywhere: Analysis diagnostics and autocomplete, `analysis::parse`, `@dream/luau` trees, compile errors, runtime errors, tracebacks, breakpoints and coverage all report the source you wrote, through a source map the frontend records as it lowers.",
+    "`@dream/data` (feature `data`): reductions, comparisons into reusable selections, selection algebra, `gather`, `scatter`, `fill`, `add`, `scale`, `clamp`, stable `argsort` with optional caller scratch, and `partition` over typed, optionally strided buffer spans, bound once per operation with no per-element callback. Typed receivers `data.u8()` through `data.f64()` lower their thirty-nine reductions and selects to unrolled native loops under `jit`, and the dialect's recognized reductions over buffer slices call the plane automatically.",
+    "`@dream/tcp` (feature `tcp`): nonblocking listeners and byte streams over numeric addresses, `readInto` into caller buffers with end of stream kept apart from would-block, partial writes with no hidden queue, half-close, and a bounded, level-triggered poller that never calls Luau and watches only what has something to report. Behind `network.tcp.connect`, `network.tcp.listen` and `network.tcp.public`.",
+    "`@dream/dns` (feature `dns`): host name resolution through the OS resolver on a bounded worker pool: one-shot requests that never block the script, IDNA names, both address families in the OS's order, deadlines and cancellation, watchable by the TCP poller. Behind `network.dns.resolve`.",
+    "`@dream/tls` (feature `tls`): verified TLS 1.3 and 1.2 client and server sessions over TCP streams with rustls, the platform trust store or explicit roots, name verification independent of the address, ALPN and SNI, bounded buffers, close_notify kept apart from truncation, nonblocking and watchable. There is no way to skip verification.",
+    "`@dream/intl` (feature `intl`): BCP 47 locale identity, CLDR cardinal and ordinal plural categories that see visible fraction digits, and locale-aware decimal formatting from ICU4X's compiled data; no catalog and no current locale.",
+    "`ExtensionDescriptor::widen_type_alias`, so an extension can add its handle type to a union another extension declared without that extension knowing it; `dream_tcp_Watchable` is widened by `dream.dns` and `dream.tls`.",
+    "Luau 0.741's GC heap-shrink pacing fix and 0.742's compiler and code generator fixes are on, each with its reason beside its name in `flags::LUAU_FLAGS`.",
+]
+changed = [
+    "A tcp `Poller:wait` scans only the watches with something to report, so idle sockets cost it nothing: one ready stream among 8192 idle watches costs 0.4 µs, as among 1024. The event buffer starts at 256 entries and doubles as waits fill it, up to `maxEvents`, instead of being allocated at `maxEvents` up front.",
+    "A tcp stream's `localAddress` is asked of the OS on first use and remembered. Deadline-based readiness is judged once per `wait`, not per `next()`.",
+    "`tls.clientConfig{ roots }` with the platform store caches the verifier per distinct root set (8 sets of at most 256 KiB each per runtime) instead of reloading the store per call; the platform store alone is still loaded once per runtime. A TLS `write` whose socket has just refused bytes does not try the socket again in the same call.",
+    "Pollers and TLS configurations are capped per runtime (`TcpExtension::max_pollers` 64, `TlsExtension::max_configs` 32), and the documentation says which native memory the VM's memory limit does not see.",
+    "A slice bound spelled as an integer literal skips its run-time check; a standalone slice of a 16-element table costs about 215 ns against 150 for a handwritten `table.create` plus `table.move`.",
+    "Plain Luau that never uses the dialect is lexed once by the frontend, and only when it contains a `[`: about 17 to 20 percent over stock `luau_compile` on 16,000 lines with indexing in loops or calls inside brackets, nothing without a bracket.",
+    "The fast-flag policy is documented as l3i's own named list rather than as another project's.",
+]
+fixed = [
+    "Standalone slices after a `.name`, `:method()`, call or index chain, slices of slices, and slices or comprehensions that use the enclosing function's `...` lowered to broken Luau; a slice that starts a statement was refused.",
+    "`zipStrict` never compared the first argument's length. `any` and `all` over a buffer slice past the end asked the data plane for a span at an out-of-range offset.",
+    "Data span arithmetic could overflow (an abort when bound, a wrap when native); `any`/`all` consumers now guard an empty span like the other reductions.",
+    "A handshaking TLS session reported a stale readable bit while rustls had unsent flight bytes, a latent busy loop. `Poller:close` leaked a descriptor. An accept refused for want of descriptors re-armed the listener on every wait.",
+    "SIGPIPE from a TLS `writev` and from `process.run`'s stdin feeder killed the host; stack overflows in the location remapper and tree builder on deep shadow chains; quadratic prescans in the frontend; `intl` decimal exponents past 32767 overflowed an i16 in the parser.",
+    "The comprehension nesting limit counted clause delimiters; parentheses and brackets inside a clause no longer count toward the 128 levels.",
+]
+migration = """
+Downstream plans need one line per network extension: `.extension(TcpExtension::default())` and `.extension(TlsExtension::new())`. Rename `@dream/net` requires and `net` compat globals to `@dream/udp` and `udp`. A `match` over any of the types listed above needs a wildcard arm. Tools that read `@dream/luau` trees and expect generated wrappers pass `{ dialect = "luau" }` or, better, handle the dialect's nodes. Scripts that relied on Nagle pass `{ noDelay = false }`. Recompile cached bytecode to pick up original debug lines.
+"""
