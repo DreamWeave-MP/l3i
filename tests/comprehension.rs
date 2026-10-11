@@ -228,6 +228,14 @@ fn standalone_buffer_slices_copy_inclusive_one_based_byte_ranges() {
         local empty = input[99:100]
         assert(builtinBuffer.len(empty) == 0)
         assert(sum[for byte in input[1:2] => byte] == 21)
+        -- `lo:hi()` reads as a stock method call on `lo` (COMPREHENSIONS.md), but with a kind
+        -- after it the content is no stock expression, so it is the typed slice it looks like.
+        local lo = 2
+        local function hi() return 4 end
+        local typed = input[lo:hi(), 'u8']
+        assert(builtinBuffer.len(typed) == 3 and builtinBuffer.readu8(typed, 0) == 11)
+        local ok = pcall(function() return input[lo:hi()] end)
+        assert(not ok, 'a method call on a number fails at runtime')
     "#,
         )
         .unwrap();

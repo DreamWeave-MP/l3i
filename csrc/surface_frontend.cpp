@@ -27,6 +27,7 @@ public:
     // size of the source does not bind on such a module either.
     explicit Frontend(std::string_view source)
         : source(source)
+        , names(namesAllocator)
         , maxPrefixBytes(8388608 + 8 * source.size())
         , maxPrefixCalls(4096 + source.size())
     {
@@ -166,37 +167,23 @@ private:
             scanSlices();
             return;
         }
-        bool surfaceSeen = false;
-        // Code tokens and comments merged back into source order.
+        // The code tokens, lexed once, are the list every scan reads; comments are kept apart
+        // (trivia never interrupts `[ for`) and recorded for the lowering.
         const std::vector<Token>& all = codeTokens();
-        for (size_t next = 0, comment = 0; next < all.size();)
+        document.comments.reserve(comments.size());
+        for (const Token& comment : comments)
+            document.comments.push_back(comment.range);
+        bool surfaceSeen = false;
+        for (size_t i = 0; i + 1 < all.size(); ++i)
+            if (all[i].type == '[' && all[i + 1].type == T::ReservedFor)
+            {
+                surfaceSeen = true;
+                break;
+            }
+        if (!surfaceSeen)
         {
-            const bool trivia = comment < comments.size() && comments[comment].range.begin < all[next].range.begin;
-            const Token& current = trivia ? comments[comment++] : all[next++];
-            if (current.type == T::Comment || current.type == T::BlockComment || current.type == T::BrokenComment)
-            {
-                document.comments.push_back(current.range);
-                // Trivia doesn't interrupt [ ... for detection.
-                continue;
-            }
-            // Every code token is retained so a consumer prefix of any length (`into(...)`)
-            // can be read back from the first opener.
-            tokens.push_back(current);
-            if (!surfaceSeen)
-            {
-                if (tokens.size() >= 2 && tokens[tokens.size() - 2].type == '[' && current.type == T::ReservedFor)
-                    surfaceSeen = true;
-                else
-                {
-                    if (current.type == T::Eof)
-                    {
-                        scanSlices();
-                        return;
-                    }
-                    continue;
-                }
-            }
-            if (current.type == T::Eof) break;
+            scanSlices();
+            return;
         }
         prepareConditionalShapes();
         size_t i = 0;
@@ -206,21 +193,23 @@ private:
         scanSlices();
     }
     std::string_view source;
-    std::vector<Token> tokens;
+    // The source lexed once into its code tokens (ending with Eof) and, apart, its comments.
+    // The pattern, comprehension and slice scans all read these; none lexes again.
+    std::vector<Token> tokens, comments;
     Document document;
-    // The source lexed once into its code tokens (ending with Eof) and its comments. The
-    // pattern, comprehension and slice scans all read these; none lexes again.
-    std::vector<Token> code, comments;
     bool lexed = false;
+    // One name table for the lexer and every expression the scans validate: building one
+    // interns Luau's reserved words, which is most of what a small parse costs.
+    Luau::Allocator namesAllocator;
+    Luau::AstNameTable names;
     const std::vector<Token>& codeTokens()
     {
-        if (lexed) return code;
+        if (lexed) return tokens;
         lexed = true;
         std::vector<size_t> lines{0};
         for (size_t i = 0; i < source.size(); ++i)
             if (source[i] == '\n') lines.push_back(i + 1);
-        Luau::Allocator allocator;
-        Luau::AstNameTable names(allocator);
+        tokens.reserve(source.size() / 5 + 16);
         Luau::Lexer lexer(source.data(), source.size(), names);
         lexer.setSkipComments(false);
         for (;;)
@@ -231,10 +220,10 @@ private:
             if (current.type == T::Comment || current.type == T::BlockComment || current.type == T::BrokenComment)
                 comments.push_back(current);
             else
-                code.push_back(current);
+                tokens.push_back(current);
             if (token.type == T::Eof) break;
         }
-        return code;
+        return tokens;
     }
     // `for` keywords followed by `{`: comprehension clauses, or unsupported statement loops.
     std::vector<Range> loopPatterns;
@@ -249,39 +238,52 @@ private:
     void scanSlices()
     {
         const std::vector<Token>& all = codeTokens();
-        // Partners, colons and nesting are found in one pass, so no candidate rescans the
-        // source. Each bracket kind is matched on its own, as counting that kind alone would:
-        // closeOf[i] is the `]` of the `[` at i (0 when unclosed), colonOf[i] the last `:`
-        // directly inside it, depthOf[i] how many `[` enclose it, and openOf[i] the opener of
-        // the `)`, `]` or `}` at i (SIZE_MAX when unmatched). nesting[i] counts the brackets
-        // of every kind opened minus closed before i, and commasAt the commas at each nesting.
+        // One pass over the tokens records each `[`: its `]` (0 when unclosed, `[` matched on
+        // its own as counting that kind alone would), the last `:` directly inside it (nested
+        // `[` excluded, parentheses not), the first `,` after that colon at the colon's nesting
+        // (an optional `, "kind"`), and how many `[` enclose it. Only `[` tokens get a record,
+        // so a module full of indexing costs a few bytes per bracket, not several per token.
         const size_t count = all.size();
-        std::vector<size_t> closeOf(count, 0), colonOf(count, 0), depthOf(count, 0), openOf(count, SIZE_MAX);
-        std::vector<long> nesting(count + 1, 0);
-        std::unordered_map<long, std::vector<size_t>> commasAt;
+        struct Bracket
         {
-            std::vector<size_t> stacks[3];
+            size_t open, depth;
+            size_t close = 0, colon = 0, comma = 0;
+            long colonNesting = 0;
+        };
+        std::vector<Bracket> brackets;
+        {
+            std::vector<size_t> stack; // The open `[`s, as indices into brackets.
+            long nesting = 0;          // Brackets of every kind opened minus closed so far.
             for (size_t i = 0; i < count; ++i)
             {
                 const int token = all[i].type;
-                const bool opening = token == '(' || token == '[' || token == '{';
-                const bool closing = token == ')' || token == ']' || token == '}';
-                nesting[i + 1] = nesting[i] + (opening ? 1 : 0) - (closing ? 1 : 0);
-                if (token == ',') commasAt[nesting[i]].push_back(i);
-                else if (token == ':' && !stacks[1].empty()) colonOf[stacks[1].back()] = i;
-                if (!opening && !closing) continue;
-                std::vector<size_t>& stack = stacks[token == '(' || token == ')' ? 0 : token == '[' || token == ']' ? 1 : 2];
-                if (opening)
+                if (token == '[')
                 {
-                    if (token == '[') depthOf[i] = stack.size();
-                    stack.push_back(i);
+                    stack.push_back(brackets.size());
+                    brackets.push_back({i, stack.size() - 1});
+                }
+                else if (token == ']')
+                {
+                    if (!stack.empty())
+                    {
+                        brackets[stack.back()].close = i;
+                        stack.pop_back();
+                    }
                 }
                 else if (!stack.empty())
                 {
-                    openOf[i] = stack.back();
-                    if (token == ']') closeOf[stack.back()] = i;
-                    stack.pop_back();
+                    Bracket& top = brackets[stack.back()];
+                    if (token == ':')
+                    {
+                        top.colon = i;
+                        top.colonNesting = nesting;
+                        top.comma = 0;
+                    }
+                    else if (token == ',' && top.colon && !top.comma && nesting == top.colonNesting)
+                        top.comma = i;
                 }
+                if (token == '(' || token == '[' || token == '{') ++nesting;
+                else if (token == ')' || token == ']' || token == '}') --nesting;
             }
         }
         // Clause expressions that are generator slices, which their comprehension owns.
@@ -290,29 +292,31 @@ private:
             for (const Clause& clause : comprehension.clauses)
                 if (!clause.sliceSource.empty()) generatorSlices.emplace_back(clause.expression.begin, clause.expression.end);
         std::sort(generatorSlices.begin(), generatorSlices.end());
-        for (size_t open = 0; open < count; ++open)
+        for (const Bracket& bracket : brackets)
         {
+            if (stopped) return;
+            const size_t open = bracket.open;
             // A comprehension is never a slice, whatever colons its clauses contain.
-            if (all[open].type != '[' || open == 0 || (open + 1 < count && all[open + 1].type == T::ReservedFor)) continue;
-            if (!closeOf[open] || !colonOf[open]) continue;
-            const size_t close = closeOf[open] + 1, colon = colonOf[open];
+            if (open == 0 || (open + 1 < count && all[open + 1].type == T::ReservedFor)) continue;
+            if (!bracket.close || !bracket.colon) continue;
+            const size_t close = bracket.close + 1, colon = bracket.colon;
             // A slice is validated again inside each enclosing one's text and lowered inside it,
             // so an index nested as deeply as comprehensions may be is left to Luau as stock
             // syntax: the validation stays linear in the source, and no valid Luau is refused.
-            if (depthOf[open] >= maxDepth) continue;
-            // An optional `, "kind"` after the last bound makes the slice typed: the first comma
-            // after the colon at the colon's nesting.
-            size_t comma = 0;
-            if (const auto commas = commasAt.find(nesting[colon + 1]); commas != commasAt.end())
-            {
-                const auto at = std::upper_bound(commas->second.begin(), commas->second.end(), colon);
-                if (at != commas->second.end() && *at + 1 < close) comma = *at;
-            }
+            if (bracket.depth >= maxDepth) continue;
+            // An optional `, "kind"` after the last bound makes the slice typed.
+            const size_t comma = bracket.comma;
             const size_t lastEnd = comma ? comma - 1 : close - 2;
+            // `x:method(...)` is a stock method call whenever the content parses at all, so it
+            // needs no parse to know that stock syntax wins (COMPREHENSIONS.md); with a `, "kind"`
+            // the content is never one stock expression and the slice reading stands.
+            if (!comma && colon > open + 1 && colon + 2 < close - 1 && isMethodReceiver(all[colon - 1].type) &&
+                all[colon + 1].type == T::Name && startsCallArguments(all[colon + 2].type))
+                continue;
             // The source is the whole prefix expression before the bracket (`t.a`, `o:get()`,
             // `f()[1]`, `t[1:3]`), so a slice after a chain is one slice, not a slice of its
             // last link, and a slice of a slice lowers the outer one around the inner.
-            const size_t start = prefixStart(all, openOf, open);
+            const size_t start = prefixStart(all, open);
             if (start == SIZE_MAX) continue;
             Slice slice;
             slice.source = {all[start].range.begin, all[open - 1].range.end};
@@ -345,9 +349,8 @@ private:
             }
             prefixBytes += slice.range.end - slice.range.begin;
             Luau::Allocator expressionAllocator;
-            Luau::AstNameTable expressionNames(expressionAllocator);
             const auto text = source.substr(slice.range.begin, slice.range.end - slice.range.begin);
-            const auto parsed = Luau::Parser::parseExpr(text.data(), text.size(), expressionNames, expressionAllocator);
+            const auto parsed = Luau::Parser::parseExpr(text.data(), text.size(), names, expressionAllocator);
             if (parsed.root && parsed.errors.empty()) continue;
             if (missingFirst) error(slice.first, "expected slice first bound before ':'");
             if (missingLast) error(slice.last, "expected slice last bound after ':'");
@@ -364,11 +367,41 @@ private:
             return a.range.begin != b.range.begin ? a.range.begin < b.range.begin : a.range.end > b.range.end;
         });
     }
+    // Tokens that can end the receiver of a stock method call (`a:m()`, `f():m()`, `t[1]:m()`),
+    // and tokens that can begin a call's arguments after the method name.
+    static bool isMethodReceiver(int t) { return t == T::Name || t == ')' || t == ']'; }
+    static bool startsCallArguments(int t)
+    {
+        return t == '(' || t == '{' || t == T::QuotedString || t == T::RawString || t == T::InterpStringSimple ||
+            t == T::InterpStringBegin;
+    }
+    // The opener of the closer at list[at], matching its own kind as a stack would, or SIZE_MAX
+    // when none. The bytes walked count against the prefix byte budget, so unmatched closers
+    // before many brackets cannot make every bracket rescan the file.
+    size_t matchingOpen(const std::vector<Token>& list, size_t at)
+    {
+        const int close = list[at].type;
+        const int open = close == ')' ? '(' : close == ']' ? '[' : '{';
+        size_t depth = 0;
+        for (size_t i = at + 1; i-- > 0;)
+        {
+            if (list[at].range.end - list[i].range.begin > maxPrefixBytes - prefixBytes)
+            {
+                error({list[at].range.end, list[at].range.end}, prefixLimitMessage());
+                stopped = true;
+                return SIZE_MAX;
+            }
+            if (list[i].type == close) ++depth;
+            else if (list[i].type == open && --depth == 0) return i;
+        }
+        prefixBytes += list[at].range.end - list[0].range.begin;
+        return SIZE_MAX;
+    }
     // The first token of the prefix expression ending just before list[end], or SIZE_MAX when
     // none ends there: a literal stands alone, and a name or a closer is preceded by `.name`,
     // `:name`, call arguments or index brackets as long as the chain continues. Each closer
     // jumps to its opener, so the walk costs the chain's tokens.
-    static size_t prefixStart(const std::vector<Token>& list, const std::vector<size_t>& openOf, size_t end)
+    size_t prefixStart(const std::vector<Token>& list, size_t end)
     {
         if (end == 0) return SIZE_MAX;
         size_t at = end - 1;
@@ -379,8 +412,8 @@ private:
         {
             if (closer(list[at].type))
             {
-                if (openOf[at] == SIZE_MAX) return SIZE_MAX;
-                at = openOf[at];
+                at = matchingOpen(list, at);
+                if (at == SIZE_MAX) return SIZE_MAX;
                 if (at > 0 && (list[at - 1].type == T::Name || closer(list[at - 1].type)))
                 {
                     --at;
@@ -1125,7 +1158,6 @@ private:
         }
         while (!text.empty() && Luau::isSpace(text.back())) text.pop_back();
         Luau::Allocator allocator;
-        Luau::AstNameTable names(allocator);
         const auto parsed = Luau::Parser::parseExpr(text.data(), text.size(), names, allocator);
         if (!parsed.root || !parsed.errors.empty()) return false;
         // parseExpr's EOF check advances once; requiring the AST to reach the
