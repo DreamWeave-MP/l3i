@@ -248,13 +248,16 @@ local kept = {}
 local cases = {}
 function cases.tcpSetup(n) for i = 1, n do local c, s = tcpPair() c:close() s:close() end end
 function cases.tlsSetup(n) for i = 1, n do local c, s = tlsPair() c:close() s:close() end end
+-- A TLS write sends its record as far as the socket allows; only what the last write left
+-- behind (a full socket) needs a flush, so one is asked for once everything is written.
 local function pump(c, s, total, size, flush)
     local sent, got = 0, 0
     while got < total do
         if sent < total then
             local n = c:write(src, 0, math.min(size, total - sent))
             if n then sent += n end
-            if flush then c:flush() end
+        elseif flush then
+            c:flush()
         end
         while true do
             local n = s:readInto(dst, 0, 65536)
@@ -265,18 +268,19 @@ local function pump(c, s, total, size, flush)
 end
 function cases.tcpPump(total, size) pump(plainClient, plainServer, total, size, false) end
 function cases.tlsPump(total, size) pump(secureClient, secureServer, total, size, true) end
-local function roundTrip(c, s, n, flush)
+-- A 16-byte record always leaves with its write on an idle loopback socket: no flush.
+local function roundTrip(c, s, n)
     for i = 1, n do
-        c:write(small) if flush then c:flush() end
+        c:write(small)
         local got = 0
         while got < 16 do local r = s:readInto(dst, 0, 16 - got) if r then got += r end end
-        s:write(small) if flush then s:flush() end
+        s:write(small)
         got = 0
         while got < 16 do local r = c:readInto(dst, 0, 16 - got) if r then got += r end end
     end
 end
-function cases.tcpRoundTrip(n) roundTrip(plainClient, plainServer, n, false) end
-function cases.tlsRoundTrip(n) roundTrip(secureClient, secureServer, n, true) end
+function cases.tcpRoundTrip(n) roundTrip(plainClient, plainServer, n) end
+function cases.tlsRoundTrip(n) roundTrip(secureClient, secureServer, n) end
 function cases.tlsReadEmpty(n) for i = 1, n do secureServer:readInto(dst, 0, 16) end end
 function cases.tcpReadEmpty(n) for i = 1, n do plainServer:readInto(dst, 0, 16) end end
 function cases.clientConfig(n) for i = 1, n do assert(tls.clientConfig({ roots = { CA }, platform = false })) end end
