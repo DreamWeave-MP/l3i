@@ -220,3 +220,39 @@ fn the_inliner_toggle_is_accepted() {
     runtime.set_jit_inliner(false);
     runtime.exec("assert(1 + 1 == 2)").unwrap();
 }
+
+#[test]
+fn gsub_with_a_literal_pattern_substitutes_as_the_pattern_matcher_does() {
+    // LuauOptimizeStringGsub searches for a pattern without special characters directly. These
+    // hold on either path: the same answers came from the matcher before the flag was enabled.
+    let runtime = Runtime::new().unwrap();
+    runtime
+        .exec(
+            r#"
+            local function check(expected, count, ...)
+                local result, n = string.gsub(...)
+                assert(result == expected and n == count, `{result} ({n}), expected {expected} ({count})`)
+            end
+            check("hell0 w0rld", 2, "hello world", "o", "0")
+            check("bbaa", 2, "aaaa", "a", "b", 2)
+            check("aaaa", 0, "aaaa", "a", "b", 0)
+            check("ba", 1, "aaa", "aa", "b")
+            check("abcXab", 1, "abcabdab", "abd", "X")
+            check("abc", 0, "abc", "zz", "y")
+            check("abc", 0, "abc", "abcd", "y")
+            check("", 1, "abc", "abc", "")
+            check("a-b-", 2, "a\0b\0", "\0", "-")
+            check("[abc] [abc]", 2, "abc abc", "abc", "[%0]")
+            check("100% 100%", 2, "x x", "x", "100%%")
+            check("1 y x", 1, "x y x", "x", { x = "1" }, 1)
+            check("x y x", 2, "x y x", "x", function() return false end)
+            check("<x> y <x>", 2, "x y x", "x", function(match) return `<{match}>` end)
+            check("7 7", 2, "x x", "x", 7)
+            local ok, problem = pcall(string.gsub, "abc", "b", "%2")
+            assert(not ok and string.find(problem, "invalid capture index", 1, true), problem)
+            ok, problem = pcall(string.gsub, "abc", "b", "%x")
+            assert(not ok and string.find(problem, "invalid use of '%' in replacement string", 1, true), problem)
+            "#,
+        )
+        .unwrap();
+}

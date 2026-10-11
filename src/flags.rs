@@ -53,6 +53,10 @@ pub const LUAU_FLAGS: &[&str] = &[
     // Luau 0.742: a protected call an error continuation starts inside a resumed coroutine is
     // resumed, where it used to be dropped.
     "LuauPcallErrorContinuationReentry",
+    // Luau 0.742: `string.gsub` with a pattern that has no special characters searches for the
+    // text directly, 1.9 to 6.9 times faster on literal patterns measured here. A dynamic flag,
+    // off upstream by default.
+    "LuauOptimizeStringGsub",
     // Not in OpenMW's policy: these two gate APIs the binder exposes (embedder GC integration
     // with userdata marks and weak references; the buffer cage). Both are inert until a host
     // installs the corresponding callback.
