@@ -308,8 +308,16 @@ buffer slice remains a byte slice.
 
 The canonical frontend exports an `ExprSlice` node with original source and bound spans for both
 standalone and generator slices, with `elementKind` for a typed slice. Buffer specialization in dependent/nested generator positions and
-string representation-directed copies remain future work. Stock Luau indexing wins when the contents
-are already a valid colon method call, so ambiguous bounds use parentheses: `xs[(first()):(last())]`.
+string representation-directed copies remain future work.
+
+Stock Luau indexing always wins over slicing: a bracket whose contents already parse as stock
+Luau is left to Luau. `values[obj:method()]` is the method call it has always been, and so is
+`t[lo:hi()]` when `lo` is a name, a call or a parenthesized expression, because `lo:hi()` is a
+valid colon method call on `lo`. The frontend cannot tell the two readings apart at compile time
+and raises no diagnostic: a numeric `lo` fails at runtime with Luau's own "attempt to index
+number with 'hi'". Only a bound that no stock expression admits (`t[1:hi()]`, `t[lo:2]`,
+`t[:hi()]`) is a slice. When the last bound is a call, parenthesize one bound: `t[(lo):hi()]` or
+`t[lo:(hi())]`. This is language policy, not a limitation to be fixed.
 
 ## Post-baseline JSL reducer experiment: `sum[for ...]`
 
