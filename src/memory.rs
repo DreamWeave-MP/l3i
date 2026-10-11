@@ -359,14 +359,18 @@ impl Thread {
         if !callback.is_function() {
             return Err(Error::logic("A finalizer must be a function"));
         }
+        // A live thread of this scope's VM, or an error.
+        self.coroutine_status(scope)?;
         let co = self.state_ptr();
         scope.with_frame(|frame| {
             frame.push_value(callback)?;
-            // SAFETY: the callback is on top; lua_addfinalizer raises for the main thread or a
-            // dead coroutine, which the protected call turns into an error.
+            // SAFETY: `co` is a live thread of this VM and the callback is on top, which is
+            // where `raising` leaves it at host level and inside a Lua call alike.
+            // lua_addfinalizer raises for the main thread or a dead coroutine, which the
+            // protected call turns into an error.
             unsafe {
                 frame.raising(1, 0, |state| {
-                    ffi::lua_addfinalizer(state, co, 1);
+                    ffi::lua_addfinalizer(state, co, -1);
                     ffi::lua_pop(state, 1);
                     0
                 })

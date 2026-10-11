@@ -317,6 +317,49 @@ fn coroutine_finalizers_run_when_asked() {
 }
 
 #[test]
+fn a_finalizer_registers_from_inside_a_lua_call() {
+    use l3i::bind::Call;
+    use l3i::value::Function;
+    if passed_in_a_child_process("memory::a_finalizer_registers_from_inside_a_lua_call") {
+        return;
+    }
+    let runtime = Runtime::builder().coroutine_finalizers(true).build().unwrap();
+    let thread = Rc::new(runtime.new_thread().unwrap());
+    let running = Rc::clone(&thread);
+    // The callback is the call's second argument, so the value to register is the one the
+    // binding pushed on top, not whatever sits in the native call's first slot.
+    let watch = runtime
+        .bind_function("dreamweave.test.watch", move |call: &Call, _tag: f64, callback: Function| -> l3i::Result<()> {
+            call.with_frame(|frame| running.add_finalizer(frame, callback.push_to(frame)?))
+        })
+        .unwrap();
+    runtime.set_global("watch", &watch).unwrap();
+    let body = runtime
+        .load_function("return function() watch(42, function(how) finalized = how end) coroutine.yield() end")
+        .unwrap();
+    assert!(matches!(thread.start(&runtime.stack(), &body, ()).unwrap(), Resume::Yielded(_)));
+    assert!(thread.has_finalizers());
+    assert!(matches!(thread.resume(&runtime.stack(), ()).unwrap(), Resume::Finished(_)));
+    let finalize = thread.finalizer_function(&runtime.stack(), false).unwrap();
+    finalize.invoke::<(), _>(&runtime.stack(), ()).unwrap();
+    assert_eq!(
+        runtime.global("finalized").unwrap().with_value(&runtime.stack(), |_, v| v.read::<String>()).unwrap(),
+        "finished"
+    );
+
+    // A thread of another VM is refused before Luau is asked.
+    let other = Runtime::new().unwrap();
+    let foreign = other.new_thread().unwrap();
+    let callback = runtime.load_function("return function() end").unwrap();
+    let error = runtime
+        .stack()
+        .with_frame(|frame| foreign.add_finalizer(frame, callback.push_to(frame)?))
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("different VM"), "{error}");
+}
+
+#[test]
 fn fast_flags_are_introspectable() {
     let _runtime = Runtime::new().unwrap();
     assert_eq!(memory::fast_flag("LuauFastpcall"), Some(true), "policy flag is on");
