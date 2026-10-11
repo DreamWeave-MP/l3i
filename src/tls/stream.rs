@@ -559,14 +559,17 @@ impl TlsStream {
         let src = unsafe { &data.bytes_unchecked()[offset..offset + length] };
         let mut conn = self.conn.borrow_mut();
         let conn = conn.as_mut().expect("only a closed session has no connection, and calls check that first");
-        if let Err(error) = self.pump_out(conn) {
-            return Ok(Outcome::Failed(self.fatal_io(conn, WHAT, &error)));
-        }
+        let drained = match self.pump_out(conn) {
+            Ok((drained, _)) => drained,
+            Err(error) => return Ok(Outcome::Failed(self.fatal_io(conn, WHAT, &error))),
+        };
         let accepted = match conn.writer().write(src) {
             Ok(count) => count,
             Err(error) => return Ok(Outcome::Failed(self.fatal_io(conn, WHAT, &error))),
         };
-        if let Err(error) = self.pump_out(conn) {
+        // A socket that just refused bytes refuses the new record too: it leaves with the next
+        // call or flush, once the poller reports the socket writable again.
+        if drained && let Err(error) = self.pump_out(conn) {
             return Ok(Outcome::Failed(self.fatal_io(conn, WHAT, &error)));
         }
         if let Err(failure) = self.refresh(conn, WHAT) {
