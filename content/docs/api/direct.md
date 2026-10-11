@@ -386,7 +386,7 @@ function that runs the pending finalizers when called, once. With `close` false 
 must have finished or failed, and its finalizers receive `"finished"` and its results or
 `"error"` and its error; with `close` true it must be suspended or idle, the call resets it and
 its finalizers receive `"cancelled"`. It fails when nothing is pending, in the wrong state, and
-for a failure reported by `resume`, which takes the error the finalizers would receive.
+for a coroutine that died of a memory or error-handler error instead of a runtime error.
 
 ## Threads
 

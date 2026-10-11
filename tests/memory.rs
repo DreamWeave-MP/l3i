@@ -360,6 +360,42 @@ fn a_finalizer_registers_from_inside_a_lua_call() {
 }
 
 #[test]
+fn a_failed_coroutine_hands_its_error_to_its_finalizers() {
+    if passed_in_a_child_process("memory::a_failed_coroutine_hands_its_error_to_its_finalizers") {
+        return;
+    }
+    let runtime = Runtime::builder().coroutine_finalizers(true).build().unwrap();
+    let body = runtime.load_function("return function() coroutine.yield() error('boom') end").unwrap();
+    let on_finish =
+        runtime.load_function("return function(how, problem) finalized = how .. ': ' .. problem end").unwrap();
+    let thread = runtime.new_thread().unwrap();
+    assert!(matches!(thread.start(&runtime.stack(), &body, ()).unwrap(), Resume::Yielded(_)));
+    runtime.stack().with_frame(|frame| thread.add_finalizer(frame, on_finish.push_to(frame)?)).unwrap();
+    let reported = thread.resume(&runtime.stack(), ()).unwrap_err().to_string();
+    let message = reported.strip_prefix("Lua error: ").unwrap();
+    assert!(message.ends_with(":1: boom"), "{message}");
+
+    // `resume` reported the failure and left the error object for the finalizers: the message
+    // with its position, not the `'boom'` argument still lying in the dead frame under it. The
+    // function runs them and then raises the error again, as Luau does for a failed coroutine.
+    let finalize = thread.finalizer_function(&runtime.stack(), false).unwrap();
+    let raised = finalize.invoke::<(), _>(&runtime.stack(), ()).unwrap_err().to_string();
+    assert!(raised.ends_with(message), "{raised}");
+    let finalized =
+        runtime.global("finalized").unwrap().with_value(&runtime.stack(), |_, v| v.read::<String>()).unwrap();
+    assert_eq!(finalized, format!("error: {message}"));
+    assert!(!thread.has_finalizers());
+
+    // The thread starts over after a reset, and a failure with nothing pending has no function.
+    thread.reset().unwrap();
+    assert!(matches!(thread.start(&runtime.stack(), &body, ()).unwrap(), Resume::Yielded(_)));
+    assert!(thread.resume(&runtime.stack(), ()).is_err());
+    assert!(thread.finalizer_function(&runtime.stack(), false).is_err(), "nothing is pending");
+    thread.reset().unwrap();
+    assert!(thread.is_reset());
+}
+
+#[test]
 fn fast_flags_are_introspectable() {
     let _runtime = Runtime::new().unwrap();
     assert_eq!(memory::fast_flag("LuauFastpcall"), Some(true), "policy flag is on");

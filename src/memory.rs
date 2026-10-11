@@ -12,7 +12,7 @@ use crate::error::{Error, Result};
 use crate::raw::ffi;
 use crate::runtime::Runtime;
 use crate::stack::{Scope, Type, ValueView};
-use crate::thread::{CoroutineStatus, Thread};
+use crate::thread::{CoroutineStatus, Thread, ThreadStatus};
 use crate::userdata::{RuntimeTag, Userdata};
 
 /// `lua_gc` commands. Sizes are in kilobytes where Luau's are.
@@ -396,9 +396,10 @@ impl Thread {
     /// used again: Luau checks the coroutine's state here, not at the call.
     ///
     /// Fails when no finalizer is pending, when the coroutine is in the wrong state for `close`,
-    /// when `scope`'s thread is itself suspended, and for a failed coroutine whose error is no
-    /// longer on its stack: [`Thread::resume`] takes the error, so a failure it reported cannot
-    /// be finalized.
+    /// when `scope`'s thread is itself suspended, and for a coroutine that died of a memory or
+    /// error-handler error rather than a runtime error: Luau leaves a runtime error on the
+    /// coroutine's stack twice, so the finalizers still get it after [`Thread::resume`] reported
+    /// it, but the other two are a single message that `resume` takes.
     pub fn finalizer_function(&self, scope: &impl Scope, close: bool) -> Result<crate::value::Function> {
         let status = self.coroutine_status(scope)?;
         if !self.has_finalizers() {
@@ -412,15 +413,19 @@ impl Thread {
         }
         let ready = match (close, status) {
             (true, CoroutineStatus::Suspended | CoroutineStatus::Finished) | (false, CoroutineStatus::Finished) => true,
-            // Luau moves the error off the coroutine's stack when the function runs.
-            (false, CoroutineStatus::FinishedWithError) => held > 0,
+            // Luau moves the value on top of the coroutine's stack to the finalizers when the
+            // function runs. After a runtime error that is the error: lua_resume leaves it
+            // there twice and `resume` pops one. After a memory or handler error it is not.
+            (false, CoroutineStatus::FinishedWithError) => {
+                held > 0 && self.status() == ThreadStatus::Error(ffi::LUA_ERRRUN)
+            }
             _ => false,
         };
         if !ready {
             return Err(Error::logic(if close {
                 "Only a suspended or idle coroutine can be cancelled"
             } else {
-                "Only a finished coroutine, or a failed one still holding its error, can be finalized"
+                "Only a finished coroutine, or one that failed with a runtime error, can be finalized"
             }));
         }
         scope.with_frame(|frame| {
