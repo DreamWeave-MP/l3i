@@ -228,7 +228,7 @@ fn standalone_buffer_slices_copy_inclusive_one_based_byte_ranges() {
         local empty = input[99:100]
         assert(builtinBuffer.len(empty) == 0)
         assert(sum[for byte in input[1:2] => byte] == 21)
-        -- `lo:hi()` reads as a stock method call on `lo` (COMPREHENSIONS.md), but with a kind
+        -- `lo:hi()` reads as a stock method call on `lo` (the dialect page, "Slices"), but with a kind
         -- after it the content is no stock expression, so it is the typed slice it looks like.
         local lo = 2
         local function hi() return 4 end

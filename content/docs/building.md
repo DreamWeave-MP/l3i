@@ -205,3 +205,67 @@ cross-language LTO, so one file's tests run with `cargo test <file>::`. The clea
 `cargo clippy` compiles Luau, so it needs the same clang and lld as a build; CI's daily quality
 job sets them up before running it.
 {% end %}
+
+### The C++ suites
+
+The surface frontend, the lowering and the source map under `csrc/` have standalone C++ tests
+that run outside Cargo, so they can run under clang's ASan and UBSan and probe allocation
+failure, which the Rust host must never see. Run them after any change under `csrc/`. They link
+against the archives `build.rs` already built: `LUAU_OUT` is the build script's `OUT_DIR`
+(`target/debug/build/l3i-*/out`, or what `cargo build -vv` prints) and `OUT` any scratch
+directory. clang only; add `-fsanitize=address,undefined` for the sanitized run.
+
+The frontend's own tests, and the lowering and provenance tests, link the frontend, the syntax
+module and the source map with Luau's Ast, Common and VM archives:
+
+```bash
+clang++ -std=c++17 -O1 -fuse-ld=lld -Wall -Wextra -Werror -pedantic \
+  -isystem luau/Ast/include -isystem luau/Common/include -Icsrc \
+  csrc/surface_frontend.cpp csrc/surface_syntax.cpp csrc/source_map.cpp csrc/surface_frontend_test.cpp \
+  -Wl,--start-group "$LUAU_OUT/libluauast.a" "$LUAU_OUT/libluaucommon.a" \
+  "$LUAU_OUT/libluauvm.a" -Wl,--end-group \
+  -o "$OUT"/l3i-frontend-test
+"$OUT"/l3i-frontend-test
+
+clang++ -std=c++17 -O1 -fuse-ld=lld -Wall -Wextra -Werror -pedantic \
+  -isystem luau/Ast/include -isystem luau/Common/include -Icsrc \
+  csrc/surface_frontend.cpp csrc/surface_syntax.cpp csrc/source_map.cpp csrc/surface_syntax_test.cpp \
+  -Wl,--start-group "$LUAU_OUT/libluauast.a" "$LUAU_OUT/libluaucommon.a" \
+  "$LUAU_OUT/libluauvm.a" -Wl,--end-group \
+  -o "$OUT"/l3i-surface-test
+"$OUT"/l3i-surface-test
+```
+
+The remapper skips subtrees whose coordinates the lowering left in place. A second suite proves
+that every location it produces is the one a full walk produces:
+
+```bash
+clang++ -std=c++17 -O1 -fuse-ld=lld -Wall -Wextra -Werror -pedantic \
+  -isystem luau/Ast/include -isystem luau/Common/include -Icsrc \
+  csrc/source_locations_test.cpp csrc/source_locations.cpp csrc/source_map.cpp \
+  csrc/surface_frontend.cpp csrc/surface_syntax.cpp \
+  -Wl,--start-group "$LUAU_OUT/libluauast.a" "$LUAU_OUT/libluaucommon.a" -Wl,--end-group \
+  -o "$OUT"/l3i-locations-test
+"$OUT"/l3i-locations-test
+```
+
+The allocation-failure probe fails every allocation in turn through parse-error and
+compile-error serialization for both C entry points, and checks that the outer exception barrier
+returns null and a zero size without allocating, so nothing ever throws across the C ABI. It
+overrides the global `operator new`. **Never link it into the Rust host.**
+
+```bash
+clang++ -std=c++17 -O1 -fuse-ld=lld -Wall -Wextra -Werror -pedantic \
+  -isystem luau/Ast/include -isystem luau/Common/include \
+  -isystem luau/Compiler/include -isystem luau/Bytecode/include -Icsrc \
+  csrc/compiler_failure_test.cpp csrc/bytecode.cpp csrc/surface_frontend.cpp csrc/surface_syntax.cpp \
+  csrc/source_map.cpp csrc/source_locations.cpp -Wl,--start-group \
+  "$LUAU_OUT/libluaucompiler.a" "$LUAU_OUT/libluauast.a" \
+  "$LUAU_OUT/libluaubytecode.a" "$LUAU_OUT/libluaucommon.a" \
+  "$LUAU_OUT/libluauvm.a" -Wl,--end-group \
+  -o "$OUT"/l3i-compiler-failure-test
+"$OUT"/l3i-compiler-failure-test
+```
+
+Make any script that chains these stop on the first failure. A pipe into `grep` hides a failing
+suite, and a failing suite is the whole point.

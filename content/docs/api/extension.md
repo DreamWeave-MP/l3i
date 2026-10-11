@@ -727,6 +727,62 @@ In `l3i::convert`: the return type for bytes a script receives as a new `buffer`
 allocates the buffer at the vector's length and copies once; returning a `Vec<u8>` pushes a
 string instead. `Push` and a single `Return`.
 
+## dream.data
+
+Module `l3i::data`, feature `data`; the Luau side is in
+[Built-in extensions](@/docs/builtin-extensions.md#dream-data). The types are usable from Rust
+without a VM; the bound functions are the semantic oracle for the native lowering.
+
+{{ api_signature(value="pub struct DataExtension") }}
+
+The extension; `id()` is `EXTENSION_ID` (`"dream.data"`), the module path `MODULE`
+(`"@dream/data"`), and `LOWERING_GLOBAL` (`"__l3i_data"`) the global alias the install publishes
+for the dialect's recognized pipelines. `Clone`, `Copy`, `Debug`, `Default`.
+
+{{ api_signature(value="#[non_exhaustive] pub enum Kind { U8, I8, U16, I16, U32, I32, F32, F64 }") }}
+
+An element representation, named as the `buffer` library names its reads. `parse(what, name)`
+accepts a script's spelling or raises an argument error naming every one; `name()`, `size()`.
+`KINDS` is all eight in receiver order. Match with a wildcard arm: a kind can be added.
+
+{{ api_signature(value="#[non_exhaustive] pub struct Layout { pub kind: Kind, pub stride: usize, pub offset: usize }") }}
+
+A kind with the distance between consecutive elements and the field's position inside a record:
+`"f32"` is contiguous, `"f32@16"` the first f32 of every 16-byte record, `"f32@16+12"` the field
+twelve bytes in. `new(kind, stride, offset)`, `contiguous(kind)`, `parse(what, name)`. A stride
+below the element size is an error; one above it skips the rest of the record.
+
+{{ api_signature(value="pub enum Comparison { Eq, Ne, Lt, Le, Gt, Ge }") }}
+
+A comparison as a script names it (`"eq"` ... `"ge"`); `parse(what, name)`. Exhaustive: the set
+is closed.
+
+{{ api_signature(value="pub struct Selection") }}
+
+The userdata behind `data.compare` and `data.selection` (`Userdata::NAME`
+`"dream.data.Selection"`): a bitset over the positions of a span of one length, `#[repr(C)]` so
+native code reads its length word and words pointer at fixed offsets. `new(len)`, `len()`,
+`is_empty()`, `count()`, `get(index)`.
+
+{{ api_signature(value="pub struct Typed<const K: u8>") }}
+
+The typed receivers, `dream_data_Kind_u8` through `dream_data_Kind_f64` (`Userdata::NAME`
+`"dream.data.Kind.u8"` and so on), tagged and given a compiler type slot, both `Preferred`:
+`KIND`, `new(stride)`, `layout()`. The element kind is the type parameter; the stride is a
+run-time property of the value.
+
+{{ api_signature(value="#[non_exhaustive] pub enum ReductionOp { Sum, Min, Max, Count, Any, All }") }}
+
+{{ api_signature(value="#[non_exhaustive] pub struct Reduction { pub op: ReductionOp, pub filter: Option<Comparison> }") }}
+
+A reduction over every element or over those a comparison with the threshold accepts: the
+receivers' members. `Reduction::new(op, filter)`, `Reduction::MEMBERS` (all thirty-nine),
+`op.member_name(filter)` (`"sumGt"`), `op.name()`, `comparison.suffix()`.
+
+| Module | Feature | Items |
+|---|---|---|
+| `data::lowering` | `data`, `jit` | `KindLowering`, the `NativeCodeHooks` set that lowers an annotated receiver's reductions and selects to IR loops; `lowered_sites()` |
+
 ## dream.intern
 
 Module `l3i::intern`, feature `intern`; the Luau side is in

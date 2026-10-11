@@ -1,13 +1,13 @@
 +++
 title = "Built-in extensions"
-description = "The extensions l3i ships: the dream.udp bridge every plan carries, packed rotations in dream.quat, colors and clip rectangles in dream.raster, the dream.soft_render device, bytes for parsing in dream.bytes, textual identity as numbers in dream.intern, locales, plural rules and number formatting in dream.intl, Luau's own parser in dream.luau, the host filesystem in dream.fs, child processes in dream.process, raw TCP streams with a readiness poller in dream.tcp, host name resolution in dream.dns, and verified TLS sessions in dream.tls."
+description = "The extensions l3i ships: the dream.udp bridge every plan carries, packed rotations in dream.quat, colors and clip rectangles in dream.raster, the dream.soft_render device, bytes for parsing in dream.bytes, the bulk-data plane in dream.data, textual identity as numbers in dream.intern, locales, plural rules and number formatting in dream.intl, Luau's own parser in dream.luau, the host filesystem in dream.fs, child processes in dream.process, raw TCP streams with a readiness poller in dream.tcp, host name resolution in dream.dns, and verified TLS sessions in dream.tls."
 weight = 90
 
 [extra]
 kind = "guide"
 +++
 
-Thirteen extensions come with the crate. `dream.udp` is in every plan; the others are added with
+Fourteen extensions come with the crate. `dream.udp` is in every plan; the others are added with
 `RuntimePlan::builder().extension(..)`. Each is an ordinary `Extension` built on the
 [primitives](@/docs/primitives.md), with a Luau signature on every member, so a strict script
 that requires its module type checks against the plan's definitions.
@@ -19,6 +19,7 @@ that requires its module type checks against the plan's definitions.
 | `dream.raster` | `@dream/raster` | `l3i::raster::RasterExtension` | always |
 | `dream.soft_render` | `@dream/soft-render` | `l3i::soft_render::SoftRenderExtension` | `soft-render` |
 | `dream.bytes` | `@dream/bytes` | `l3i::bytes::BytesExtension` | `bytes` |
+| `dream.data` | `@dream/data` | `l3i::data::DataExtension` | `data` (native loops need `jit`) |
 | `dream.intern` | `@dream/intern` | `l3i::intern::InternExtension` | `intern` |
 | `dream.intl` | `@dream/intl` | `l3i::intl::IntlExtension` | `intl` |
 | `dream.luau` | `@dream/luau` | `l3i::syntax::SyntaxExtension` | `syntax` |
@@ -614,6 +615,252 @@ with `translate(path, "ABC…Z\\", "abc…z/")` costs 141 ns a call against 470 
 `string.gsub(string.lower(path), "\\", "/")`; a path already folded costs 108 ns against 230 ns
 for `string.lower` plus a `string.find` for the separator.
 
+## dream.data
+
+Feature `data`; module `@dream/data`, `l3i::data::DataExtension`. The bulk-data plane: dense
+typed storage, selection, movement, ordering and reduction over Luau buffers, executed natively
+with no per-element callback and no per-element host crossing. Luau is the control plane, policy
+and domain semantics; a script says which bulk operation it needs and l3i owns the element loop.
+It is also where the dialect's [recognized pipelines](@/docs/dialect.md#recognized-data-pipelines)
+go when a reduction over a buffer slice is simple enough to be one call.
+
+```luau
+local data = require("@dream/data")
+local total = data.sum(samples, "f32", 0, n)
+local hot = data.compare(samples, "f32", 0, n, "gt", threshold)
+local count = hot:count()
+local order = buffer.create(n * 4)
+data.argsort(samples, "f32", 0, n, order)
+data.gather(samples, "f32", 0, n, order, sorted, 0)
+```
+
+### Spans
+
+The operand everywhere is a **span**, `(buffer, kind, offset, count)`: `count` elements of `kind`
+starting `offset` bytes into a buffer. Kinds are the `buffer` library's own little-endian
+representations, `u8 i8 u16 i16 u32 i32 f32 f64`. A kind may carry a stride and a field offset:
+`"f32@16"` is the first f32 of every 16-byte record and `"f32@16+12"` the field twelve bytes in,
+which is how packed records live in buffers: a simulated body, an entity slot, a token record.
+Element-wise operations take the layout for every operand, so a record field updates in place;
+`gather` reads a possibly strided field into a contiguous column and `scatter` writes one back.
+
+A span is validated once, before any element is read: offset and count non-negative, and
+`offset + (count - 1) × stride + size ≤ length`, or it raises before the operation starts. The
+offset of an empty span must still be in range. A span is a descriptor, never an allocation.
+
+Element values cross as Luau numbers with exactly the `buffer` library's conversions: integer
+kinds read exactly and write by truncating toward zero then wrapping to the width (NaN writes
+zero; values beyond ±2^63 saturate before the wrap), `f32` rounds on write, `f64` is exact.
+Reductions accumulate in `f64` in element order, so `sum` over a span equals the handwritten
+`buffer.read*` loop bit for bit, `f32` included, and integer sums stay exact below 2^53.
+
+Two more shapes appear. An **index vector** is a `u32` buffer of zero-based element positions:
+the input of `gather` and `scatter`, the output of `argsort` and `partition`. A **selection**
+(`dream.data.Selection`) is a bitset over the positions of a span of one length, produced by
+`compare`, combined with boolean algebra, counted, or turned into an index vector. Every
+operation that produces output takes the storage from the caller, `into` for selections and
+`out` for buffers, so steady state allocates nothing.
+
+### The operations
+
+| Operation | Reads | Writes or returns | Empty input | NaN | Aliasing | Raises before any write |
+|---|---|---|---|---|---|---|
+| `sum` | span | number, `f64` accumulation in element order | `0` | propagates as Luau `+` | n/a | bounds |
+| `min`, `max` | span | number or nil | nil | a leading NaN stays; later NaNs never replace (Luau `<` and `>`) | n/a | bounds |
+| `argmin`, `argmax` | span | zero-based position or nil | nil | as `min` and `max` | n/a | bounds |
+| `count` | span | how many satisfy `cmp` | `0` | every comparison false except `ne` (IEEE) | n/a | bounds, comparison name |
+| `any`, `all` | span | boolean; stops at the first deciding element | `false`, `true` | as `count` | n/a | bounds, comparison name |
+| `compare`, `K:select<Cmp>` | span | selection of the positions satisfying `cmp`, into `into` (resized) or new | empty selection | as `count` | `into` may be any selection | bounds |
+| `Selection:intersect/union/xor/difference` | two selections of one length | selection, into `into` or new | | | `into` may be either operand | lengths differ |
+| `Selection:complement` | selection | selection | | | `into` may be the source | |
+| `Selection:count/len/get/any/all/clear` | selection | number, boolean, nothing | `all` of nothing is true | | | |
+| `Selection:indices` | selection | u32 index vector and count, into `out` from `offset` or a new exact buffer | empty buffer, 0 | | | `out` too small |
+| `gather` | source span, index vector | `destination[i] = source[idx[i]]`; count written | 0 | copied bit-exact | sequential, read then write per element, in index order | bounds, any index ≥ source count |
+| `scatter` | source span, index vector | `destination[idx[i]] = source[i]`; count written | 0 | copied bit-exact | sequential; a repeated index keeps the last write | bounds, any index ≥ destination count |
+| `fill` | | every element of the span | | writes zero for integer kinds | | bounds |
+| `add` | two spans | `out[i] = l[i] + r[i]` | | Luau `+` | `out` may be either input | bounds, all three spans |
+| `scale` | span | `out[i] = s[i] × factor` | | Luau `*` | `out` may be the source | bounds |
+| `clamp` | span | `out[i] = clamp(s[i], low, high)` | | passes through, as `math.clamp` | `out` may be the source | bounds, `low > high` or NaN bounds |
+| `argsort` | key span | u32 permutation into `out` from `outOffset`; count | 0 | NaN keys last, in original order | keys are copied before sorting, so `out` may overlap them | bounds |
+| `partition` | key span | u32 index vector, satisfying positions first then the rest, each in original order; the accepted count | 0 | as `count` | as `argsort` | bounds, comparison name |
+
+Comparisons are named: `"eq"`, `"ne"`, `"lt"`, `"le"`, `"gt"`, `"ge"`. Aliasing is defined,
+never assumed: element-wise operations read each element and write its result before the next,
+so an output overlapping an input sees the sequential result, and in-place forms are the ordinary
+case. Out-of-range indices raise before anything is written.
+
+`argsort` is stable: equal keys keep their position order. Without scratch it sorts a copy of
+the keys paired with positions, so the buffer is read once and `out` may overlap the keys. With a
+caller scratch of `count × 4` bytes it is a bottom-up merge of the index vector between `out` and
+the scratch, reading keys from the span as it compares, so nothing is allocated in steady state.
+That is the shape a spatial-index builder otherwise hand-rolls in Luau. Keys, `out` and scratch
+must then not overlap, and the call refuses them if they do. The scratch form reads keys on every
+compare and runs about 25 percent slower than the allocating form at 65,536 elements; use it where
+allocation, not latency, is the cost.
+
+### Typed receivers
+
+Every module function is a bound Rust function invoked once per bulk operation: one host
+crossing amortized over the span, element loops in Rust over raw pointers after the single bounds
+check. That is the portable path and the correctness oracle for everything else.
+
+The reductions also exist as methods of **typed receivers**, one class per element kind,
+`dream_data_Kind_u8` through `dream_data_Kind_f64`, from `data.u8(stride?)` through
+`data.f64(stride?)`, or `data.kind("f32@16")` when the layout is only known at run time. Every
+receiver has the same thirty-nine members: `sum`, `min` and `max` over the whole span, and each
+of `sum`, `min`, `max`, `count`, `any` and `all` with a comparison suffix (`sumGt`, `minLe`,
+`countEq`, `anyNe`, `allGe`, ...) over the elements that compare so against a threshold argument,
+plus `selectEq` through `selectGe`, which is `compare` written into a caller selection that is
+resized to `count` and returned. Bound, both spellings run one shared element loop.
+
+```luau
+--!native
+local data = require("@dream/data")
+local F: dream_data_Kind_f32 = data.f32(16)      -- the f32 field of 16-byte records
+local heaviest = F:max(bodies, 12, count)         -- offset 12: the field twelve bytes in
+local moving = F:countGt(bodies, 0, count, 0.01)
+```
+
+Under `jit`, a call on a receiver the script annotated with its class in a `--!native` chunk is
+lowered by `l3i::data::lowering` into Luau IR: the receiver tag, buffer tag, whole non-negative
+bounds and the span's fit are checked first, anything else jumps to the binder whose errors are
+the contract, and the loop reads elements with the same `BUFFER_READ*` the `buffer` library
+lowers to and accumulates in double in element order. The element kind is the receiver's *type*,
+so a site compiles exactly one loop pair, a contiguous one with constant steps and eight elements
+unrolled per cursor round trip, and a strided one stepping by the value's stride. A single
+untyped receiver dispatching on a kind word was tried first and cost sixteen loops per site,
+enough to push a function with a hundred sites past Luau's 32K-block limit, which silently leaves
+the whole function interpreted. Loop state lives in the receiver's scratch words, since Luau IR
+has no loop-carried values and the VM's registers are memory on the Lua stack anyway.
+
+Three things the lowering needs from you: the receiver annotated as a local, a local buffer, and
+exactly one result. `return K:sum(..)` in tail position compiles with a multi-value result count,
+which the hook declines; assign the result first. The dialect's bridge always does.
+
+No worker threads, no SIMD framework, no second JIT. One semantic implementation, a bound path,
+an optional native lowering: the same pattern as `bytes.math()` and the intern pool.
+
+### Reaching it from the dialect
+
+The extension publishes its module table under the global `__l3i_data` as well as `@dream/data`.
+A recognized pipeline's lowering snapshots that global in the chunk prelude and calls it once with
+the span the ordinary prologue already validated and normalized; when the global is absent, the
+runtime did not install the extension and the same code takes its scalar loop. Recognition is
+narrow and semantic: the lowered call must compute exactly what the scalar loop computes, in the
+same representation and with the same errors, or it is not emitted. An arbitrary filter or
+projection has unknown effects and is never moved into the data plane; the fused scalar loop is
+its correct and final form. Nothing requires recognition to reach the fast path: the explicit API
+is first-class.
+
+The alias is an ordinary global, read once when the chunk starts, like the other globals the
+prelude snapshots. Whoever can assign a chunk's globals can redirect its recognized pipelines, and
+with them the buffers they read, exactly as replacing `buffer` would. Scripts that do not trust
+each other must not share a writable global environment: under `Runtime::sandbox_globals` the
+globals are read-only, and a script that assigns `__l3i_data` only shadows it in its own
+environment. The outputs `argsort` and a selection allocate are host memory the VM's memory limit
+does not see.
+
+### What it costs
+
+`cargo bench --features data --bench data` (interpreter) and `--features data,jit` (every chunk
+compiled natively, so the loop baselines are CodeGen loops), on an i7-10870H: retired
+instructions per call (minimum of five rounds of 64 calls) and Criterion median time. `u8` sums
+and `> 127` counts over `n` bytes; the recognized dialect form includes the slice prologue; the
+scalar fallback is the same source run without the extension. Globals are sandboxed in both, so
+the interpreter takes the `buffer.readu8` fastcall and Luau's own loops are about three times
+faster than they would be unsandboxed. Those are the fair baselines.
+
+Interpreter:
+
+| n | dialect, recognized | dialect, scalar fallback | explicit `data.sum` / `data.count` | handwritten `readu8` loop |
+|---:|---:|---:|---:|---:|
+| sum 16 | 3,907 (431 ns) | 7,395 (778 ns) | 1,945 (238 ns) | 4,540 (586 ns) |
+| sum 256 | 7,027 (733 ns) | 77,235 (6.26 µs) | 5,065 (510 ns) | 56,860 (4.45 µs) |
+| sum 4,096 | 56,947 (5.10 µs) | 1,194,675 (89.8 µs) | 54,985 (5.94 µs) | 893,980 (62.0 µs) |
+| sum 65,536 | 855,746 (89.2 µs) | 19,073,717 (1.40 ms) | 853,705 (82.5 µs) | 14,287,901 (1.00 ms) |
+| count 16 | 3,918 (647 ns) | 7,625 (804 ns) | 2,156 (216 ns) | 5,120 (692 ns) |
+| count 256 | 7,278 (787 ns) | 82,959 (7.91 µs) | 6,716 (656 ns) | 67,204 (5.56 µs) |
+| count 4,096 | 61,038 (5.39 µs) | 1,287,792 (108 µs) | 79,676 (7.12 µs) | 1,060,282 (84.9 µs) |
+| count 65,536 | 921,198 (84.7 µs) | 20,565,998 (1.75 ms) | 1,247,036 (113 µs) | 16,949,988 (1.33 ms) |
+
+There is no small-n crossover: at 16 elements the recognized pipeline is already ahead of the
+handwritten loop, and the explicit call at well under half its instructions. The dialect form
+carries about 2,000 instructions of prologue over the explicit call, independent of n.
+
+| n | explicit `data.sum` f32 | handwritten `readf32` loop | `data.gather` f32 | handwritten indexed copy | stable `data.argsort` f32 | `table.sort` index table with a comparator (unstable) |
+|---:|---:|---:|---:|---:|---:|---:|
+| 256 | 6,273 (648 ns) | 223,837 (15.7 µs) | 14,070 (1.20 µs) | 599,977 (49.5 µs) | 63,129 (5.15 µs) | 4,247,685 (369 µs) |
+| 4,096 | | | | | 1,251,732 (106 µs) | 108,144,296 (9.22 ms) |
+| 65,536 | 1,050,753 (116 µs) | 56,952,163 (4.17 ms) | 2,886,390 (238 µs) | 153,094,071 (11.8 ms) | 16,006,037 (1.88 ms) | 2,307,862,971 (199 ms) |
+
+Native code (`jit`): the recognized sum runs the receiver's unrolled IR loop, and the handwritten
+and fallback loops are Luau CodeGen loops.
+
+| n | dialect, recognized (IR loop) | dialect, scalar fallback (CodeGen loop) | explicit `data.sum` (bound) | handwritten `readu8` (CodeGen loop) |
+|---:|---:|---:|---:|---:|
+| sum 16 | 1,367 (135 ns) | 1,719 (151 ns) | 1,635 (136 ns) | 1,395 (116 ns) |
+| sum 256 | 2,777 (393 ns) | 9,639 (879 ns) | 4,275 (361 ns) | 9,075 (831 ns) |
+| sum 4,096 | 25,337 (4.74 µs) | 136,359 (12.7 µs) | 46,515 (4.10 µs) | 131,955 (12.1 µs) |
+| sum 65,536 | 386,297 (75.3 µs) | 2,163,879 (184 µs) | 722,355 (63.3 µs) | 2,098,035 (197 µs) |
+| count 16 | 1,147 (93 ns) ¹ | 1,749 (143 ns) | 1,919 (178 ns) | 1,393 (112 ns) |
+| count 256 | 4,396 (391 ns) ¹ | 10,259 (922 ns) | 6,479 (560 ns) | 9,183 (916 ns) |
+| count 4,096 | 56,354 (5.91 µs) ¹ | 146,384 (14.6 µs) | 79,439 (6.87 µs) | 133,788 (13.7 µs) |
+| count 65,536 | 887,721 (90.3 µs) ¹ | 2,324,444 (234 µs) | 1,246,799 (101 µs) | 2,127,528 (223 µs) |
+| min 256 | 4,090 (378 ns) ¹ | | 5,823 (437 ns) | 10,350 (969 ns) |
+| min 65,536 | 787,450 (69.6 µs) ¹ | | 1,115,583 (74.4 µs) | 2,425,710 (219 µs) |
+
+¹ The receiver's IR loop called directly (`K:countGt`, `K:min` on an annotated local), which is
+what the bridge emits; the rows above it carry the slice prologue on top.
+
+| n | explicit `data.sum` f32 | `readf32` CodeGen loop | `data.gather` f32 | indexed copy, CodeGen | stable `data.argsort` | `table.sort` comparator, CodeGen (unstable) |
+|---:|---:|---:|---:|---:|---:|---:|
+| 256 | 5,514 (432 ns) | 9,843 (849 ns) | 12,913 (982 ns) | 13,184 (1.28 µs) | 63,111 (4.80 µs) | 1,138,409 (99.6 µs) |
+| 4,096 | | | | | 1,275,925 (100 µs) | 28,714,511 (2.20 ms) |
+| 65,536 | 1,049,994 (83.6 µs) | 2,294,643 (193 µs) | 2,885,233 (201 µs) | 3,146,624 (339 µs) | 16,327,107 (1.75 ms) | 612,840,657 (52.4 ms) |
+
+What the machine shape says:
+
+- Luau's own CodeGen loop costs about 32 instructions per byte: `FORNLOOP`, the `readu8`
+  fastcall with its checks, the add through a VM register. The bound Rust loop costs about 18
+  including its once-per-call argument parsing, and wins in time from 256 elements up.
+- The first IR loop kept its cursor and accumulator in the receiver's scratch, so every element
+  paid three memory round trips: fewer instructions than the bound call but slower at 65,536,
+  latency bound on store-to-load forwarding. Unrolling the pure-add `sum` body to eight elements
+  per block, one cursor and one accumulator round trip per eight, cut it to 6 instructions per
+  byte: faster than the bound call at every size and within noise of the handwritten native loop
+  at 16 elements, with no call overhead left to amortize.
+- `count`, `min` and `max` branch per element, which ends an IR block, so they cannot fold into
+  one block. They unroll as a chain of one block per element with the cursor advanced once per
+  eight and the accumulator touched only on a hit. That halves their time too, and called
+  directly they beat the handwritten native loop even at 16 elements.
+- Strided layouts made the bound loops faster, not slower: the stride-aware span let the
+  compiler vectorize the u8-to-double sum. The native loops dispatch once on contiguous versus
+  strided and keep their constant-step unrolled form for contiguous spans; a run-time stride in
+  the unrolled body cost 40 percent. Net: the IR sum wins below about 4,096 elements and the
+  bound sum above, by 19 percent at 65,536, so the bridge switches the unfiltered sum to the
+  bound call past that size and keeps the receiver for everything else. A size-based switch for
+  more cases is the one tuning deliberately left until a workload asks for it.
+- Writing comparisons into a selection from native code first measured 222 µs at 65,536 bytes:
+  a read-modify-write of the bitset word per hit through two pointer loads. Reshaped as one
+  64-element pass per word, each hit ORing a compile-time bit into a scratch word written once,
+  it runs in 89.6 µs including the `count()` afterwards, faster than the native count alone and
+  than bound `compare` then `count`. Composing selections natively is the fast path, not a
+  concession, and `compare` into a reused selection then `count()` costs within 5 percent of the
+  direct count at every size.
+
+Interpreter and native agree on the ordering of everything else: the bound operations beat the
+best obvious Luau by 2× (gather, native) to 300× (stable argsort against a comparator sort,
+native) and never lose, down to 16 elements.
+
+### What real workloads asked for
+
+Hot loops in downstream code were read for the shapes this plane must serve, and each shipped:
+strided layouts (16-byte simulation bodies, 8-byte entity slots, 12-byte token records read by
+field), `argsort` through caller scratch (a spatial-index builder otherwise hand-rolls that
+stable merge), buffer sinks (a spatial query writes a filtered index list into a caller buffer
+with a capacity), and thresholds held in locals (every comparison in those loops is against a
+local). Nothing on the original list remains deferred.
+
 ## dream.intern
 
 Feature `intern`; module `@dream/intern`, `l3i::intern::InternExtension`. Textual identity as
@@ -925,7 +1172,7 @@ end
 
 | Member | What it is |
 |---|---|
-| `luau.parse(source, options?)` | Parses a string or buffer. `options.declarations` allows definition-file syntax (`declare`, `declare extern type`); `options.tokens` adds the token stream |
+| `luau.parse(source, options?)` | Parses a string or buffer. `options.dialect` is `"l3i"` (the default: comprehensions, slices and record patterns come back as source nodes) or `"luau"` (strict stock syntax, where they are errors); `options.declarations` allows definition-file syntax (`declare`, `declare extern type`); `options.tokens` adds the token stream. An unknown dialect or option raises |
 | `luau.tokenKinds` | The token kinds in the token stream, by name (`name = 1` ... `error = 14`); read-only |
 
 ### The result
@@ -999,7 +1246,44 @@ end
 ```
 
 Interpolated strings lex as `interpolatedBegin`, `interpolatedMid` and `interpolatedEnd` around
-their expressions, or `interpolatedSimple` with none; `longString` is `[[...]]`.
+their expressions, or `interpolatedSimple` with none; `longString` is `[[...]]`. Under the `l3i`
+dialect adjacent `=` and `>` merge into one `symbol` token for `=>`. Tokens, comments, hot
+comments and `lineStarts` always describe the original bytes, interpolation regions included.
+
+### The dialect's nodes
+
+Under the default dialect, [the l3i dialect](@/docs/dialect.md) appears in the tree as what you
+wrote, never as what it lowers to: no generated function, local or read is anywhere in the tree,
+completions or diagnostics. Spans are original, like every other node's, and a node's `complete`
+flag means it has no structural hole and no parser error inside its span. It says nothing about
+whether it type checks.
+
+```luau
+local result = luau.parse('return [for e in entities if e.active => e.id]')
+local comprehension = result.root.body[1].list[1]
+assert(comprehension.kind == 'ExprComprehension')
+```
+
+| Node | Fields |
+|---|---|
+| `ExprComprehension` | ordered `clauses`, `projection`, `openLocation`, optional `arrowLocation` and `closeLocation`, and `hasArrow`, `hasClose`, `complete` |
+| `ComprehensionGenerator` | `bindings` (each a shared `Local` or a `PatternRecord`; `binding` is the first), `source`, `keywordLocation`, optional `inLocation`, `hasIn`. A generator's source is outside its own bindings' scope |
+| `ComprehensionFilter` | `condition`, `keywordLocation` |
+| `ExprRange`, `ExprEnumerate`, `ExprZip` | the intrinsic generator sources, with their original `args`; a binding named `range` is never resolved |
+| `ExprSlice` | `source`, `first`, `last`, and `elementKind` (the literal's content) for a typed slice, in generator and standalone positions alike |
+| `ExprReduction` | `op` (`"sum"`, `"min"`, `"max"`, `"any"`, `"all"`) and `expr`, the `ExprComprehension`; the span includes the reducer name |
+| `ExprSink` | `destination`, optional `elementKind` and `offset`, and `expr`; the span starts at `into`, and the destination and offset keep their own nodes |
+| `ExprUnary` with a comprehension operand | `#[for ...]`; count fusion is a lowering decision, not a tree shape |
+| `StatLocalPattern` | `pattern`, optional `annotation`, `value` and `equalsSignLocation`; a declaration still missing its `=` has no `value` |
+| `PatternRecord` | `fields`, `openLocation`, optional `closeLocation`, `hasClose`, `complete`, and in parameter position the parameter's `annotation`; appears in `ExprFunction.args` and `ComprehensionGenerator.bindings` in the slot's position |
+| `PatternField` | `key`, `keyLocation`, optional `colonLocation`, `shorthand`, and `target`, a `PatternIdentifier { name, local }` or a nested `PatternRecord`, absent while missing |
+
+A zero-width insertion point has `endColumn = column - 1` on its line. Missing expressions are
+`ExprError` with `isMissing = true` and no children; a malformed ordinary expression keeps stock
+recovery nodes or one error covering the whole expression, never a valid prefix that hides the
+bad suffix. `messageIndex` is zero-based into `errors`, `-1` when no message matches. Every prefix
+of a construct, `[for x in`, `local {position: {x`, `function f({x,`, parses to the same records,
+errors and tree on every run.
 
 ### What it costs
 

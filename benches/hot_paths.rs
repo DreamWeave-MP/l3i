@@ -1,4 +1,5 @@
-//! The hot paths PLAN.md §6 commits to, measured (see BENCHMARKS.md for the numbers).
+//! The binder's hot paths, measured; the numbers are the Criterion tables on the site's
+//! Compatibility and performance page.
 //!
 //! Luau→Rust paths run a Lua loop of `CALLS` iterations per sample so the per-call cost is the
 //! reported time divided by `CALLS` (Criterion's throughput shows it as elements/second).

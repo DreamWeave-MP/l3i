@@ -1,5 +1,6 @@
 //! `@dream/data` through Luau: typed spans reduced, compared into selections, moved by index,
-//! filled, combined, ordered and partitioned, with the semantics `DATA_PLANE.md` states.
+//! filled, combined, ordered and partitioned, with the semantics the dream.data section of the
+//! Built-in extensions page states.
 
 use l3i::Runtime;
 use l3i::data::DataExtension;

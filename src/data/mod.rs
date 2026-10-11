@@ -47,7 +47,8 @@
 //! The lowering of recognized JSL pipelines calls these same functions through the global
 //! alias the extension installs (`__l3i_data`), with the slice's bounds already normalized by
 //! the ordinary JSL prologue, so the explicit API and the recognized form share one
-//! implementation and one semantic contract; see `DATA_PLANE.md`.
+//! implementation and one semantic contract; the dream.data section of the site's Built-in
+//! extensions page is the semantic matrix.
 
 #[cfg(feature = "jit")]
 pub mod lowering;

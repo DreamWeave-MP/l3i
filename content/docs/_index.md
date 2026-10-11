@@ -1,6 +1,6 @@
 +++
 title = "Documentation"
-description = "How l3i puts a safe, scoped Rust layer over Luau 0.742: the stack tiers, userdata, modules and sandboxes, runtime options, direct access, the rest of the VM, the safety model, and the complete Rust API."
+description = "How l3i puts a safe, scoped Rust layer over Luau 0.742: the stack tiers, userdata, modules and sandboxes, runtime options, direct access, the rest of the VM, the built-in extensions, the dialect, the safety model, and the complete Rust API."
 template = "docs/section.html"
 page_template = "docs/page.html"
 sort_by = "weight"
@@ -51,8 +51,11 @@ untagged in a third.
   instantiates any number of runtimes.
 - **[Primitives](@/docs/primitives.md)**: bytes, strict options, exact integers, packed scalars,
   sequences and streams.
-- **[Built-in extensions](@/docs/builtin-extensions.md)**: `dream.udp`, `dream.raster`,
-  `dream.quat`, and `dream.soft_render`.
+- **[Built-in extensions](@/docs/builtin-extensions.md)**: the network bridge, packed rotations
+  and colours, bytes, the data plane, interning, locales, Luau's parser, the filesystem,
+  processes, TCP, DNS and TLS.
+- **[The l3i dialect](@/docs/dialect.md)**: comprehensions, reducers, sinks, slices and record
+  patterns, how they lower, what tooling sees, and what they cost.
 - **[Native code](@/docs/native-code.md)**: Luau's code generator with lowering hooks written in
   Rust.
 - **[Coroutines, debugging and the rest of the VM](@/docs/vm.md)**: threads, the debug API,

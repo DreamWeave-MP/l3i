@@ -308,7 +308,7 @@ private:
             const size_t comma = bracket.comma;
             const size_t lastEnd = comma ? comma - 1 : close - 2;
             // `x:method(...)` is a stock method call whenever the content parses at all, so it
-            // needs no parse to know that stock syntax wins (COMPREHENSIONS.md); with a `, "kind"`
+            // needs no parse to know that stock syntax wins (the dialect page, "Slices"); with a `, "kind"`
             // the content is never one stock expression and the slice reading stands.
             if (!comma && colon > open + 1 && colon + 2 < close - 1 && isMethodReceiver(all[colon - 1].type) &&
                 all[colon + 1].type == T::Name && startsCallArguments(all[colon + 2].type))

@@ -56,9 +56,9 @@ Every push to `main`, every pull request and every tag runs
 [StroggForge](https://github.com/DreamWeave-MP/StroggForge)'s library workflow, whose
 `setup-llvm` step gives every job that compiles a clang and lld whose LLVM major matches the
 active rustc: the tests on Windows, Linux and macOS; `rustfmt`; Clippy; a check against Rust
-1.92 (`msrv: auto`); and a dry run of the crates.io publish. A tag runs the Criterion hot paths
-and attaches them to its GitHub release as `BENCHMARKS.md`; publishing to crates.io is off until
-the first release.
+1.92 (`msrv: auto`); and a dry run of the crates.io publish. A bare version tag publishes that
+version to crates.io, runs the Criterion hot paths and attaches them to its GitHub release as
+`BENCHMARKS.md`.
 
 A daily job on `ubuntu-22.04` runs `cargo fmt --all --check`, `cargo clippy --workspace
 --all-targets --all-features -- -W clippy::pedantic -D warnings` (with the LLVM toolchain, since

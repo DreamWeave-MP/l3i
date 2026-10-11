@@ -787,7 +787,7 @@ private:
     // How many identifier-threshold candidates one chunk may hand the compiler's second pass.
     static constexpr size_t maxLocalFilterCandidates = 256;
     // Below this many elements the receiver's unrolled native sum beats the bound call under
-    // jit; above it the bound call's vectorized loop wins (DATA_PLANE.md §2.4).
+    // jit; above it the bound call's vectorized loop wins (dream.data, "What it costs").
     static constexpr size_t boundSumThreshold = 4096;
 
     struct KnownDataOp
@@ -1330,7 +1330,7 @@ private:
 
     // The data-plane form of a recognized pipeline over a slice of `layout`, opened as
     // `if <data available> then ... ` for the caller to close with the scalar fallback. The
-    // receiver's native loops (DATA_PLANE.md §2.4) beat the bound calls at every size except
+    // receiver's native loops (dream.data, "What it costs") beat the bound calls at every size except
     // the unfiltered sum above `boundSumThreshold`, which the bound call's vectorized loop wins.
     void dataOp(Text& out, Emission& e, const Stage& stage, const KnownDataOp& op, const SliceLayout& layout)
     {

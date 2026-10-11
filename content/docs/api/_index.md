@@ -29,6 +29,7 @@ the root.
 | `bytes-codecs` | `inflate`/`deflate` (zlib, raw, gzip), LZ4 blocks and frames, zstd and LZMA/XZ decoding | `bytes::codecs` |
 | `bytes-digests` | CRC-32, Adler-32, FNV-1a, xxHash, MD5, SHA-1, SHA-256, BLAKE3, one-shot and incremental | `bytes::digests` |
 | `bytes-text` | Decoding and encoding every WHATWG-labelled text encoding | `bytes::text` |
+| `data` | The `dream.data` extension and `@dream/data` module: reductions, selections, gather and scatter, element-wise arithmetic, stable argsort and partition over typed buffer spans, with typed receivers lowered under `jit` | `data` |
 | `intern` | The `dream.intern` extension and `@dream/intern` module: pools that turn strings and buffer spans into dense number identities | `intern` |
 | `intl` | The `dream.intl` extension and `@dream/intl` module: BCP 47 locale identity, CLDR plural rules and decimal formatting | `intl` |
 | `tcp` | The `dream.tcp` extension and `@dream/tcp` module: nonblocking TCP listeners and byte streams over numeric addresses and a bounded, level-triggered readiness poller | `tcp` |
