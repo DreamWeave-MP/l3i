@@ -1121,3 +1121,27 @@ fn clause_delimiters_do_not_count_toward_the_comprehension_nesting_limit() {
     let error = runtime.exec(&nested).unwrap_err().to_string();
     assert!(error.contains("surface nesting limit exceeded (128)"), "{error}");
 }
+
+/// A bound spelled as an integer literal is a finite integer by construction, so its check is
+/// not emitted; every other spelling keeps it, and a fractional literal still fails at run time.
+#[test]
+fn integer_literal_bounds_need_no_run_time_check() {
+    use l3i::source::{LoweringMode, lowering_snapshot};
+    let checks = |source: &str| {
+        let lowered = lowering_snapshot(source, LoweringMode::Compile).unwrap();
+        (lowered.contains("slice first bound must be"), lowered.contains("slice last bound must be"))
+    };
+    assert_eq!(checks("local t = {1, 2, 3} return t[2:3]"), (false, false));
+    assert_eq!(checks("local t = {1, 2, 3} return t[0x1:0b11]"), (false, false));
+    assert_eq!(checks("local t = {1, 2, 3} return t[1_0:2_0]"), (false, false));
+    assert_eq!(checks("local t = {1, 2, 3} local a, b = 1, 2 return t[a:2]"), (true, false));
+    assert_eq!(checks("local t = {1, 2, 3} local a, b = 1, 2 return t[1:b]"), (false, true));
+    assert_eq!(checks("local t = {1, 2, 3} return t[1.5:2]"), (true, false));
+    assert_eq!(checks("local t = {1, 2, 3} return t[-1:1e1]"), (true, true));
+    assert_eq!(checks("local t = {1, 2, 3} return t[(1):(2)]"), (true, true));
+    assert_eq!(checks("return sum[for x in values[2:3] => x]"), (false, false));
+    let runtime = Runtime::new().unwrap();
+    let error = runtime.exec("local t = {1, 2, 3} return t[1.5:2]").unwrap_err().to_string();
+    assert!(error.contains("slice first bound must be a finite integer"), "{error}");
+    runtime.exec("local t = {1, 2, 3} local s = t[0x1:0b10] assert(#s == 2 and s[2] == 2)").unwrap();
+}

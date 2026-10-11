@@ -562,16 +562,47 @@ private:
         boundChecks(out, prefix, firstRange, lastRange);
     }
 
+    // Whether a bound's source is an integer literal (`9`, `1_000`, `0x10`, `0b11`): it is then a
+    // finite integer by construction and needs no check at run time. A fraction, an exponent, a
+    // sign or any expression keeps the check.
+    static bool integerLiteral(std::string_view text)
+    {
+        if (text.empty() || !std::isdigit(static_cast<unsigned char>(text.front()))) return false;
+        size_t i = 0;
+        auto digits = [&](auto accept) {
+            const size_t begin = i;
+            while (i < text.size() && (accept(static_cast<unsigned char>(text[i])) || text[i] == '_')) ++i;
+            return i > begin;
+        };
+        if (text.size() > 2 && text[0] == '0' && (text[1] == 'x' || text[1] == 'X'))
+        {
+            i = 2;
+            return digits([](unsigned char c) { return std::isxdigit(c) != 0; }) && i == text.size();
+        }
+        if (text.size() > 2 && text[0] == '0' && (text[1] == 'b' || text[1] == 'B'))
+        {
+            i = 2;
+            return digits([](unsigned char c) { return c == '0' || c == '1'; }) && i == text.size();
+        }
+        return digits([](unsigned char c) { return std::isdigit(c) != 0; }) && i == text.size();
+    }
+
     void boundChecks(Text& out, std::string_view prefix, Range firstRange, Range lastRange)
     {
-        out.anchor = firstRange;
-        out += "if " + operations + "_typeof(" + std::string(prefix) + "_first) ~= \"number\" or " +
-            std::string(prefix) + "_first % 1 ~= 0 then " + operations +
-            "_error(\"JSL slice first bound must be a finite integer\") end ";
-        out.anchor = lastRange;
-        out += "if " + operations + "_typeof(" + std::string(prefix) + "_last) ~= \"number\" or " +
-            std::string(prefix) + "_last % 1 ~= 0 then " + operations +
-            "_error(\"JSL slice last bound must be a finite integer\") end ";
+        if (firstRange.empty() || !integerLiteral(source.substr(firstRange.begin, firstRange.end - firstRange.begin)))
+        {
+            out.anchor = firstRange;
+            out += "if " + operations + "_typeof(" + std::string(prefix) + "_first) ~= \"number\" or " +
+                std::string(prefix) + "_first % 1 ~= 0 then " + operations +
+                "_error(\"JSL slice first bound must be a finite integer\") end ";
+        }
+        if (lastRange.empty() || !integerLiteral(source.substr(lastRange.begin, lastRange.end - lastRange.begin)))
+        {
+            out.anchor = lastRange;
+            out += "if " + operations + "_typeof(" + std::string(prefix) + "_last) ~= \"number\" or " +
+                std::string(prefix) + "_last % 1 ~= 0 then " + operations +
+                "_error(\"JSL slice last bound must be a finite integer\") end ";
+        }
     }
 
     Text slice(size_t index)
