@@ -173,6 +173,28 @@ fn standalone_slices_materialize_dense_tables_with_single_evaluation() {
         assert(#high == 0)
         local key = {method = function() return 1 end}
         assert(({9})[key:method()] == 9)
+        -- The source is the whole prefix chain before the bracket.
+        local nested = {a = {1, 2, 3}, get = function(self) return self.a end}
+        local chained = nested.a[1:2]
+        assert(#chained == 2 and chained[1] == 1 and chained[2] == 2)
+        local viaMethod = nested:get()[2:3]
+        assert(#viaMethod == 2 and viaMethod[1] == 2 and viaMethod[2] == 3)
+        local viaCall = (function() return nested end)().a[3:3]
+        assert(#viaCall == 1 and viaCall[1] == 3)
+        local deep = {{{1, 2, 3}}}
+        local indexed = deep[1][1][1:2]
+        assert(#indexed == 2 and indexed[2] == 2)
+        local viaField = nested["a"][2:2]
+        assert(#viaField == 1 and viaField[1] == 2)
+        -- A slice of a slice lowers the outer one around the inner.
+        local twice = ({1, 2, 3, 4})[1:3][2:3]
+        assert(#twice == 2 and twice[1] == 2 and twice[2] == 3)
+        local thrice = ({1, 2, 3, 4, 5})[1:5][2:5][1:2]
+        assert(#thrice == 2 and thrice[1] == 2 and thrice[2] == 3)
+        local chainedTwice = nested.a[1:3][3:3]
+        assert(#chainedTwice == 1 and chainedTwice[1] == 3)
+        local mixed = nested.a[1:3][1:2][2:2]
+        assert(#mixed == 1 and mixed[1] == 2)
         -- A slice that starts a statement right after an expression is its own statement.
         local grid = {{1}, {2}, {3}}
         local before = print

@@ -309,16 +309,11 @@ private:
                 if (at != commas->second.end() && *at + 1 < close) comma = *at;
             }
             const size_t lastEnd = comma ? comma - 1 : close - 2;
-            size_t start = open - 1;
-            if (all[start].type == ')' || all[start].type == ']' || all[start].type == '}')
-            {
-                if (openOf[start] == SIZE_MAX) continue;
-                start = openOf[start];
-                if (start > 0 && all[start - 1].type == T::Name) --start;
-            }
-            else if (all[start].type != T::Name && all[start].type != T::Number &&
-                all[start].type != T::QuotedString && all[start].type != T::RawString)
-                continue;
+            // The source is the whole prefix expression before the bracket (`t.a`, `o:get()`,
+            // `f()[1]`, `t[1:3]`), so a slice after a chain is one slice, not a slice of its
+            // last link, and a slice of a slice lowers the outer one around the inner.
+            const size_t start = prefixStart(all, openOf, open);
+            if (start == SIZE_MAX) continue;
             Slice slice;
             slice.source = {all[start].range.begin, all[open - 1].range.end};
             // A name right after a token that ends an expression can only begin a statement.
@@ -362,9 +357,46 @@ private:
             slice.complete = !missingFirst && !missingLast && !badKind;
             document.slices.push_back(slice);
         }
+        // Enclosing slices first: the lowering copies a slice's range whole and lowers the
+        // slices inside its source recursively, so an inner slice sorted first would leave the
+        // outer bracket behind as stock text.
         std::sort(document.slices.begin(), document.slices.end(), [](const Slice& a, const Slice& b) {
-            return a.range.begin < b.range.begin;
+            return a.range.begin != b.range.begin ? a.range.begin < b.range.begin : a.range.end > b.range.end;
         });
+    }
+    // The first token of the prefix expression ending just before list[end], or SIZE_MAX when
+    // none ends there: a literal stands alone, and a name or a closer is preceded by `.name`,
+    // `:name`, call arguments or index brackets as long as the chain continues. Each closer
+    // jumps to its opener, so the walk costs the chain's tokens.
+    static size_t prefixStart(const std::vector<Token>& list, const std::vector<size_t>& openOf, size_t end)
+    {
+        if (end == 0) return SIZE_MAX;
+        size_t at = end - 1;
+        const auto closer = [](int t) { return t == ')' || t == ']' || t == '}'; };
+        if (list[at].type == T::Number || list[at].type == T::QuotedString || list[at].type == T::RawString) return at;
+        if (list[at].type != T::Name && !closer(list[at].type)) return SIZE_MAX;
+        for (;;)
+        {
+            if (closer(list[at].type))
+            {
+                if (openOf[at] == SIZE_MAX) return SIZE_MAX;
+                at = openOf[at];
+                if (at > 0 && (list[at - 1].type == T::Name || closer(list[at - 1].type)))
+                {
+                    --at;
+                    continue;
+                }
+                return at;
+            }
+            // A name: part of a chain when `.` or `:` joins it to a name or a closer before it.
+            if (at >= 2 && (list[at - 1].type == '.' || list[at - 1].type == ':') &&
+                (list[at - 2].type == T::Name || closer(list[at - 2].type)))
+            {
+                at -= 2;
+                continue;
+            }
+            return at;
+        }
     }
     static T::Type typeIn(const std::vector<Token>& list, size_t i) { return list[std::min(i, list.size() - 1)].type; }
     static Range pointIn(const std::vector<Token>& list, size_t i)

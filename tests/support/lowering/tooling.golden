@@ -1385,45 +1385,45 @@ local __l3i_comp_48_error = error local __l3i_comp_48_typeof = typeof local __l3
 ==== typed_slice_nested
 return [for row in rows for v in row.data[1:4, "i16"] => v]
 ----
-local __l3i_comp_59_error = error local __l3i_comp_59_typeof = typeof local __l3i_comp_59_buffer = buffer local __l3i_comp_59_table_create = table.create local __l3i_comp_59_table_move = table.move return (function() local __l3i_comp_7_out = {} local __l3i_comp_7_n = 0 local __l3i_comp_7_g0_src = (rows) local __l3i_comp_7_g0_len = #__l3i_comp_7_g0_src for __l3i_comp_7_g0_i = 1, __l3i_comp_7_g0_len do local row = __l3i_comp_7_g0_src[__l3i_comp_7_g0_i] local __l3i_comp_7_g1_src = (row.data) local __l3i_comp_7_g1_first = (1) local __l3i_comp_7_g1_last = (4) if __l3i_comp_59_typeof(__l3i_comp_7_g1_src) ~= "buffer" then __l3i_comp_59_error("JSL typed slice source must be a buffer") end if __l3i_comp_59_typeof(__l3i_comp_7_g1_first) ~= "number" or __l3i_comp_7_g1_first % 1 ~= 0 then __l3i_comp_59_error("JSL slice first bound must be a finite integer") end if __l3i_comp_59_typeof(__l3i_comp_7_g1_last) ~= "number" or __l3i_comp_7_g1_last % 1 ~= 0 then __l3i_comp_59_error("JSL slice last bound must be a finite integer") end local __l3i_comp_7_g1_len = (if __l3i_comp_59_buffer.len(__l3i_comp_7_g1_src) - 2 < 0 then 0 else (__l3i_comp_59_buffer.len(__l3i_comp_7_g1_src) - 2) // 2 + 1) if __l3i_comp_7_g1_first < 1 then __l3i_comp_7_g1_first = 1 end if __l3i_comp_7_g1_last > __l3i_comp_7_g1_len then __l3i_comp_7_g1_last = __l3i_comp_7_g1_len end for __l3i_comp_7_g1_i = __l3i_comp_7_g1_first, __l3i_comp_7_g1_last do local v = __l3i_comp_59_buffer.readi16(__l3i_comp_7_g1_src, (__l3i_comp_7_g1_i - 1) * 2) local __l3i_comp_7_value = (v) if __l3i_comp_7_value == nil then __l3i_comp_59_error("L3i comprehension projection produced nil; filter nil explicitly") end __l3i_comp_7_n += 1 __l3i_comp_7_out[__l3i_comp_7_n] = __l3i_comp_7_value end end return __l3i_comp_7_out end)()
---prelude 5
---segment 0 198 7 59 synthetic
---segment 198 205 0 7 copied
---segment 205 270 7 59 synthetic
---segment 270 298 8 23 synthetic
---segment 298 299 19 19 synthetic
---segment 299 303 19 23 copied
---segment 303 304 23 23 synthetic
---segment 304 410 19 23 synthetic
---segment 410 413 12 15 copied
---segment 413 455 19 23 synthetic
---segment 455 483 24 53 synthetic
---segment 483 484 33 33 synthetic
---segment 484 492 33 41 copied
---segment 492 493 41 41 synthetic
---segment 493 524 33 41 synthetic
---segment 524 525 42 42 synthetic
---segment 525 526 42 43 copied
---segment 526 527 43 43 synthetic
---segment 527 557 42 43 synthetic
---segment 557 558 44 44 synthetic
---segment 558 559 44 45 copied
---segment 559 560 45 45 synthetic
---segment 560 561 44 45 synthetic
---segment 561 690 33 41 synthetic
---segment 690 862 42 43 synthetic
---segment 862 1430 44 45 synthetic
---segment 1430 1431 28 29 copied
---segment 1431 1513 44 45 synthetic
---segment 1513 1540 57 58 synthetic
---segment 1540 1541 57 57 synthetic
---segment 1541 1542 57 58 copied
---segment 1542 1543 58 58 synthetic
---segment 1543 1744 57 58 synthetic
---segment 1744 1782 58 59 synthetic
---site 0 call=205,1782 projection=1541,1542
---clause binding=410,413 expression=299,303
---clause binding=1430,1431 expression=205,205 sliceSource=483,493 sliceFirst=524,527 sliceLast=557,560
+local __l3i_comp_59_error = error local __l3i_comp_59_typeof = typeof local __l3i_comp_59_buffer = buffer return (function() local __l3i_comp_7_out = {} local __l3i_comp_7_n = 0 local __l3i_comp_7_g0_src = (rows) local __l3i_comp_7_g0_len = #__l3i_comp_7_g0_src for __l3i_comp_7_g0_i = 1, __l3i_comp_7_g0_len do local row = __l3i_comp_7_g0_src[__l3i_comp_7_g0_i] local __l3i_comp_7_g1_src = (row.data) local __l3i_comp_7_g1_first = (1) local __l3i_comp_7_g1_last = (4) if __l3i_comp_59_typeof(__l3i_comp_7_g1_src) ~= "buffer" then __l3i_comp_59_error("JSL typed slice source must be a buffer") end if __l3i_comp_59_typeof(__l3i_comp_7_g1_first) ~= "number" or __l3i_comp_7_g1_first % 1 ~= 0 then __l3i_comp_59_error("JSL slice first bound must be a finite integer") end if __l3i_comp_59_typeof(__l3i_comp_7_g1_last) ~= "number" or __l3i_comp_7_g1_last % 1 ~= 0 then __l3i_comp_59_error("JSL slice last bound must be a finite integer") end local __l3i_comp_7_g1_len = (if __l3i_comp_59_buffer.len(__l3i_comp_7_g1_src) - 2 < 0 then 0 else (__l3i_comp_59_buffer.len(__l3i_comp_7_g1_src) - 2) // 2 + 1) if __l3i_comp_7_g1_first < 1 then __l3i_comp_7_g1_first = 1 end if __l3i_comp_7_g1_last > __l3i_comp_7_g1_len then __l3i_comp_7_g1_last = __l3i_comp_7_g1_len end for __l3i_comp_7_g1_i = __l3i_comp_7_g1_first, __l3i_comp_7_g1_last do local v = __l3i_comp_59_buffer.readi16(__l3i_comp_7_g1_src, (__l3i_comp_7_g1_i - 1) * 2) local __l3i_comp_7_value = (v) if __l3i_comp_7_value == nil then __l3i_comp_59_error("L3i comprehension projection produced nil; filter nil explicitly") end __l3i_comp_7_n += 1 __l3i_comp_7_out[__l3i_comp_7_n] = __l3i_comp_7_value end end return __l3i_comp_7_out end)()
+--prelude 3
+--segment 0 106 7 59 synthetic
+--segment 106 113 0 7 copied
+--segment 113 178 7 59 synthetic
+--segment 178 206 8 23 synthetic
+--segment 206 207 19 19 synthetic
+--segment 207 211 19 23 copied
+--segment 211 212 23 23 synthetic
+--segment 212 318 19 23 synthetic
+--segment 318 321 12 15 copied
+--segment 321 363 19 23 synthetic
+--segment 363 391 24 53 synthetic
+--segment 391 392 33 33 synthetic
+--segment 392 400 33 41 copied
+--segment 400 401 41 41 synthetic
+--segment 401 432 33 41 synthetic
+--segment 432 433 42 42 synthetic
+--segment 433 434 42 43 copied
+--segment 434 435 43 43 synthetic
+--segment 435 465 42 43 synthetic
+--segment 465 466 44 44 synthetic
+--segment 466 467 44 45 copied
+--segment 467 468 45 45 synthetic
+--segment 468 469 44 45 synthetic
+--segment 469 598 33 41 synthetic
+--segment 598 770 42 43 synthetic
+--segment 770 1338 44 45 synthetic
+--segment 1338 1339 28 29 copied
+--segment 1339 1421 44 45 synthetic
+--segment 1421 1448 57 58 synthetic
+--segment 1448 1449 57 57 synthetic
+--segment 1449 1450 57 58 copied
+--segment 1450 1451 58 58 synthetic
+--segment 1451 1652 57 58 synthetic
+--segment 1652 1690 58 59 synthetic
+--site 0 call=113,1690 projection=1449,1450
+--clause binding=318,321 expression=207,211
+--clause binding=1338,1339 expression=113,113 sliceSource=391,401 sliceFirst=432,435 sliceLast=465,468
 ==== typed_slice_standalone
 return samples[a:b, "f32"]
 ----
