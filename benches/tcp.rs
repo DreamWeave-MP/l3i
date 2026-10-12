@@ -300,7 +300,16 @@ fn calls(instructions: &Instructions, runtime: &Runtime, chunk: &Function) {
         measure(instructions, N, || {
             for _ in 0..N {
                 client.write_all(&[1; 16]).unwrap();
-                assert_eq!(server.read(&mut scratch).unwrap(), 16);
+                // Loopback delivery is not synchronous everywhere: macOS can answer the read
+                // before the 16 bytes have crossed, so spin on WouldBlock like the Luau side does.
+                let mut got = 0;
+                while got < 16 {
+                    match server.read(&mut scratch[got..]) {
+                        Ok(n) => got += n,
+                        Err(error) if error.kind() == ErrorKind::WouldBlock => {}
+                        Err(error) => panic!("{error}"),
+                    }
+                }
             }
         }),
         "the same two syscalls, no VM",
