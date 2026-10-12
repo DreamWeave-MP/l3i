@@ -175,3 +175,15 @@ fixed = [
 migration = """
 Downstream plans need one line per network extension: `.extension(TcpExtension::default())` and `.extension(TlsExtension::new())`. Rename `@dream/net` requires and `net` compat globals to `@dream/udp` and `udp`. A `match` over any of the types listed above needs a wildcard arm. Tools that read `@dream/luau` trees and expect generated wrappers pass `{ dialect = "luau" }` or, better, handle the dialect's nodes. Scripts that relied on Nagle pass `{ noDelay = false }`. Recompile cached bytecode to pick up original debug lines.
 """
+
+[[releases]]
+version = "2.0.1"
+date = 2026-10-12
+summary = "A sink or slice statement may open a function body, and the `@dream/luau` definitions declare the record pattern nodes the tree has carried since 2.0.0."
+fixed = [
+    "A statement that begins with a sink or a slice (`into(out)[for x in xs => x]`, `grid[2:3][1][1] = 5`) failed to compile as the first statement of a function body, with `Expected identifier when parsing expression, got ';'`: the lowering separated it from a statement that was not there. A body's first statement now gets no separator, whatever the header ends with, and where a return type ends is decided by Luau's parser, not estimated.",
+    "The `@dream/luau` definitions did not declare `StatLocalPattern`, `PatternRecord`, `PatternField` or `PatternIdentifier`, and typed `ExprFunction.args` and `ComprehensionGenerator.bindings` as lists of `dream_luau_Local` although a record pattern can stand in either. They are declared now, `dream_luau_StatLocalPattern` is a member of `dream_luau_Stat`, and a slot that may hold a pattern is a `dream_luau_Binding`, `dream_luau_Local | dream_luau_PatternRecord`.",
+]
+migration = """
+A strict script that reads `name` off an element of `ExprFunction.args` or of a generator's `bindings` refines it by `kind` first, `"Local"` or `"PatternRecord"`. Nothing changes at run time.
+"""
