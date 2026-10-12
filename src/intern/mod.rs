@@ -431,9 +431,6 @@ impl Interner {
 
     #[inline(always)]
     fn intern_with<const FOLD: bool>(&mut self, bytes: &[u8]) -> Result<u32> {
-        if (self.entries.len() + 1) * 4 > self.slots.len() * 3 {
-            self.grow()?;
-        }
         let hash = hash::<FOLD>(bytes);
         let at = match self.probe::<FOLD>(bytes, hash) {
             Ok(token) => return Ok(token),
@@ -442,11 +439,22 @@ impl Interner {
         self.insert(bytes, hash, at)
     }
 
+    /// Adds a key `probe` did not find, at the empty slot it stopped on. Only a new key grows
+    /// the table: a key the pool already holds must leave every array where native code last saw
+    /// it.
     #[cold]
     #[inline(never)]
-    fn insert(&mut self, bytes: &[u8], hash: u32, at: usize) -> Result<u32> {
+    fn insert(&mut self, bytes: &[u8], hash: u32, mut at: usize) -> Result<u32> {
         if self.text.len() + bytes.len() > u32::MAX as usize {
             return Err(Error::runtime("intern: the pool's text passed 4 GiB"));
+        }
+        if (self.entries.len() + 1) * 4 > self.slots.len() * 3 {
+            self.grow()?;
+            let mask = self.slots.len() - 1;
+            at = hash as usize & mask;
+            while self.slots[at] != 0 {
+                at = (at + 1) & mask;
+            }
         }
         let start = self.text.len() as u32;
         self.text.extend_from_slice(bytes);
@@ -908,5 +916,34 @@ mod tests {
         assert_eq!(pool.resolve(100_001), None);
         assert_eq!(pool.intern(b"").unwrap(), 100_001);
         assert_eq!(pool.find(b""), Some(100_001));
+    }
+
+    /// Native code reads the arrays through addresses it is handed when the pool's length
+    /// changes, so interning a key the pool already holds may move none of them, whatever the
+    /// load.
+    #[test]
+    fn a_key_the_pool_holds_moves_no_array() {
+        for policy in [Policy::Exact, Policy::AsciiNoCase, Policy::Rules] {
+            let mut pool = Interner::new(policy);
+            let names: Vec<String> = (0..4096).map(|i| format!("record_{i:x}")).collect();
+            for (count, name) in names.iter().enumerate() {
+                pool.intern(name.as_bytes()).unwrap();
+                let arrays = (pool.slots.as_ptr(), pool.slots.len(), pool.entries.as_ptr(), pool.text.as_ptr());
+                for held in &names[..=count.min(3)] {
+                    pool.intern(held.as_bytes()).unwrap();
+                }
+                pool.intern(name.as_bytes()).unwrap();
+                assert_eq!(
+                    (pool.slots.as_ptr(), pool.slots.len(), pool.entries.as_ptr(), pool.text.as_ptr()),
+                    arrays,
+                    "{policy:?}: a duplicate moved an array at {} keys",
+                    count + 1
+                );
+                assert_eq!(pool.len(), count + 1);
+            }
+            for (i, name) in names.iter().enumerate() {
+                assert_eq!(pool.find(name.as_bytes()), Some(i as u32 + 1));
+            }
+        }
     }
 }

@@ -316,3 +316,74 @@ end
     assert_eq!(binder_calls() - calls, 0, "a duplicate never reaches the binder");
     assert_eq!(generator.execution_stats(&runtime.stack()).vm_exits_taken - exits, 0, "nor leaves native code");
 }
+
+/// A key the pool already holds, interned through the binder when the pool is at its load limit,
+/// leaves the slot table where lowered code last saw it: the next lowered `find` and `intern`
+/// answer as the binder does.
+#[cfg(feature = "jit")]
+#[test]
+fn a_duplicate_at_the_load_limit_leaves_lowered_lookups_right() {
+    use l3i::extension::NativeCodePolicy;
+    use l3i::native_code::NativeCodeMode;
+
+    let policy = RuntimePolicy::new()
+        .compat_global("@dream/intern", "intern")
+        .native_code(NativeCodePolicy { mode: NativeCodeMode::Eager, ..NativeCodePolicy::default() });
+    let plan = RuntimePlan::builder().policy(policy).extension(InternExtension).finalize().unwrap();
+    let runtime = Runtime::from_plan(&plan).unwrap();
+    if !runtime.native_code().expect("built with native code").is_available() {
+        eprintln!("no Luau code generator on this platform; skipping");
+        return;
+    }
+    let before = l3i::intern::lowering::lowered_sites();
+    let failures: String = runtime
+        .load_function(
+            r"--!native
+local function found(ids: dream_intern_Pool, key: string): number?
+  local token = ids:find(key)
+  return token
+end
+
+local function interned(ids: dream_intern_Pool, key: string): number
+  local token = ids:intern(key)
+  return token
+end
+
+return function(): string
+  local failures = {}
+
+  for _, policy in { 'exact', 'ascii-nocase', { nocase = true } } do
+    for count = 1, 100 do
+      local ids = intern.new(policy)
+      local keys = {}
+      for index = 1, count do
+        keys[index] = if index == 1 then '' else `key{index}`
+        ids.intern(ids, keys[index])
+      end
+
+      -- Through the binder: at 12, 24, 48 and 96 keys this used to move the slot table.
+      ids.intern(ids, keys[1])
+
+      for index, key in keys do
+        if found(ids, key) ~= index or interned(ids, key) ~= index then
+          table.insert(failures, `{count} keys, key {index}: {found(ids, key)}`)
+        end
+      end
+
+      if found(ids, 'absent') ~= nil or ids.count(ids) ~= count then
+        table.insert(failures, `{count} keys: a key the pool never held`)
+      end
+    end
+  end
+
+  return table.concat(failures, '\n')
+end
+",
+        )
+        .unwrap()
+        .invoke(&runtime.stack(), ())
+        .unwrap();
+    assert!(l3i::intern::lowering::lowered_sites() - before >= 2, "the lookups lowered");
+    let failures: Vec<&str> = failures.lines().collect();
+    assert!(failures.is_empty(), "{} differences: {:#?}", failures.len(), &failures[..failures.len().min(20)]);
+}
