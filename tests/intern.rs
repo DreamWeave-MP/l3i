@@ -324,7 +324,10 @@ end
 #[test]
 fn a_duplicate_at_the_load_limit_leaves_lowered_lookups_right() {
     use l3i::extension::NativeCodePolicy;
-    use l3i::native_code::NativeCodeMode;
+    use l3i::intern::lowering::lowered_sites;
+    use l3i::native_code::{NativeCodeMode, NativeCodeStatus};
+    use l3i::runtime::{CallContext, MemoryCategory};
+    use l3i::sandbox::{InstanceSpec, SandboxOptions};
 
     let policy = RuntimePolicy::new()
         .compat_global("@dream/intern", "intern")
@@ -335,9 +338,14 @@ fn a_duplicate_at_the_load_limit_leaves_lowered_lookups_right() {
         eprintln!("no Luau code generator on this platform; skipping");
         return;
     }
-    let before = l3i::intern::lowering::lowered_sites();
-    let failures: String = runtime
-        .load_function(
+    let sandbox = runtime
+        .sandbox(|_| {}, SandboxOptions { compile_options: runtime.compile_options(), ..SandboxOptions::default() })
+        .unwrap();
+    let before = lowered_sites();
+    let template = sandbox
+        .load_template(
+            &runtime,
+            "duplicate.lua",
             r"--!native
 local function found(ids: dream_intern_Pool, key: string): number?
   local token = ids:find(key)
@@ -380,10 +388,18 @@ return function(): string
 end
 ",
         )
-        .unwrap()
-        .invoke(&runtime.stack(), ())
         .unwrap();
-    assert!(l3i::intern::lowering::lowered_sites() - before >= 2, "the lookups lowered");
+    let native = template.native_code().expect("compiled");
+    assert_eq!(native.status, NativeCodeStatus::Success, "{native:?}");
+    assert!(lowered_sites() - before >= 2, "the lookups lowered");
+    let loader = runtime.load_function("return function(name) error('module ' .. name .. ' not found') end").unwrap();
+    let instance = sandbox
+        .new_instance(&runtime, &InstanceSpec { name: "i", packages: &[], hidden_data: None, loader: &loader })
+        .unwrap();
+    let results =
+        sandbox.run(&runtime, &template, &instance, CallContext { id: 1, category: MemoryCategory(0) }).unwrap();
+    let function = l3i::value::Function::from_value(results.into_iter().next().unwrap()).unwrap();
+    let failures: String = function.invoke(&runtime.stack(), ()).unwrap();
     let failures: Vec<&str> = failures.lines().collect();
     assert!(failures.is_empty(), "{} differences: {:#?}", failures.len(), &failures[..failures.len().min(20)]);
 }
