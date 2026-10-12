@@ -347,6 +347,25 @@ fn push_address(call: &Call<'_>, address: SocketAddr) -> Result<()> {
     Ok(())
 }
 
+/// Whether a socket whose `getpeername` succeeded is connected. Everywhere but Windows that is
+/// the answer: the peer name appears when the handshake completes. Winsock gives a socket its
+/// peer name as soon as `connect` has been called, in progress or not, so there a zero-byte
+/// `send` asks the question `getpeername` cannot: `WSAENOTCONN` while the handshake is pending,
+/// success once it is up, and the connect error once it has failed.
+#[cfg(not(windows))]
+fn connected_for_sure(_stream: &mio::net::TcpStream) -> io::Result<bool> {
+    Ok(true)
+}
+
+#[cfg(windows)]
+fn connected_for_sure(mut stream: &mio::net::TcpStream) -> io::Result<bool> {
+    match stream.write(&[]) {
+        Ok(_) => Ok(true),
+        Err(error) if matches!(error.kind(), io::ErrorKind::NotConnected | io::ErrorKind::WouldBlock) => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
 /// `EINPROGRESS`: a nonblocking connect that has started and will settle later. Rust gives it no
 /// `ErrorKind`, the number differs per libc, and `libc` is not a dependency of `tcp`, so the
 /// values are written out. Windows reports the same state as `WSAEWOULDBLOCK`, which is
@@ -651,7 +670,7 @@ impl Stream {
         let settled = self.with_stream(what, |stream| match stream.take_error() {
             Ok(Some(error)) | Err(error) => Err(error),
             Ok(None) => match stream.peer_addr() {
-                Ok(_) => Ok(true),
+                Ok(_) => connected_for_sure(stream),
                 Err(error) if error.kind() == io::ErrorKind::NotConnected => Ok(false),
                 Err(error) => Err(error),
             },
