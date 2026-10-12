@@ -1523,10 +1523,10 @@ impl Reduction {
 
 fn describe_module(module: &mut ModuleDecl) {
     // `kind` is an element kind or a layout `kind@stride` (bytes between elements).
-    const SPAN: &str = "buffer: buffer, kind: dream_data_ElementKind, offset: number, count: number";
+    const SPAN: &str = "buffer: buffer, kind: dream_data_Layout, offset: number, count: number";
     module
         .function("kind", kind)
-        .signature("(kind: dream_data_ElementKind) -> dream_data_Kind")
+        .signature("(kind: dream_data_Layout) -> dream_data_Kind")
         .doc("The receiver for a kind or layout named at run time (one of the typed receivers); prefer data.u8() and friends, whose static type lets jit lower the calls.")
         .function("sum", sum)
         .signature(format!("({SPAN}, comparison: dream_data_Comparison?, threshold: number?) -> number"))
@@ -1561,16 +1561,16 @@ fn describe_module(module: &mut ModuleDecl) {
         .signature("(len: number) -> dream_data_Selection")
         .doc("An empty selection over len positions, for reuse as `into`.")
         .function("gather", gather)
-        .signature("(source: buffer, kind: dream_data_Kind, sourceOffset: number, sourceCount: number, indices: buffer, destination: buffer, destinationOffset: number, indexCount: number?) -> number")
+        .signature("(source: buffer, kind: dream_data_Layout,sourceOffset: number, sourceCount: number, indices: buffer, destination: buffer, destinationOffset: number, indexCount: number?) -> number")
         .doc("destination[i] = source[indices[i]] for every u32 index (all of the indices buffer by default); the count written. The source may be a strided field; the destination column is contiguous. Every index is checked before anything is written.")
         .function("scatter", scatter)
-        .signature("(source: buffer, kind: dream_data_Kind, sourceOffset: number, sourceCount: number, indices: buffer, destination: buffer, destinationOffset: number, destinationCount: number) -> number")
+        .signature("(source: buffer, kind: dream_data_Layout,sourceOffset: number, sourceCount: number, indices: buffer, destination: buffer, destinationOffset: number, destinationCount: number) -> number")
         .doc("destination[indices[i]] = source[i] for every source element; the count written. The source column is contiguous; the destination may be a strided field. Every index is checked against destinationCount before anything is written.")
         .function("fill", fill)
         .signature(format!("({SPAN}, value: number) -> ()"))
-        .doc("Every element set to value, converted as buffer.write<kind> converts.")
+        .doc("Every element set to value, a number, written as every data-plane write is: an integer kind truncates toward zero and wraps to the width (NaN is zero, beyond 2^63 saturates first), f32 rounds.")
         .function("add", add)
-        .signature("(left: buffer, kind: dream_data_Kind, leftOffset: number, right: buffer, rightOffset: number, out: buffer, outOffset: number, count: number) -> ()")
+        .signature("(left: buffer, kind: dream_data_Layout,leftOffset: number, right: buffer, rightOffset: number, out: buffer, outOffset: number, count: number) -> ()")
         .doc("out[i] = left[i] + right[i], element by element; out may be either input.")
         .function("scale", scale)
         .signature(format!("({SPAN}, factor: number, out: buffer, outOffset: number) -> ()"))
@@ -1596,6 +1596,9 @@ impl Extension for DataExtension {
             "dream_data_ElementKind",
             "\"u8\" | \"i8\" | \"u16\" | \"i16\" | \"u32\" | \"i32\" | \"f32\" | \"f64\"",
         );
+        // What a span's `kind` takes: a bare kind, or one with a stride and a field offset
+        // (`"f32@16+12"`), which no union of literals can spell.
+        d.type_alias("dream_data_Layout", "dream_data_ElementKind | string");
         d.type_alias("dream_data_Comparison", "\"eq\" | \"ne\" | \"lt\" | \"le\" | \"gt\" | \"ge\"");
         describe_selection(d);
         describe_receivers(d);

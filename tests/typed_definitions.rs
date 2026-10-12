@@ -36,6 +36,8 @@ fn plan() -> Rc<RuntimePlan> {
         .extension(SoftRenderExtension);
     #[cfg(feature = "bytes")]
     let builder = builder.extension(l3i::bytes::BytesExtension);
+    #[cfg(feature = "data")]
+    let builder = builder.extension(l3i::data::DataExtension);
     #[cfg(feature = "intern")]
     let builder = builder.extension(l3i::intern::InternExtension);
     #[cfg(feature = "intl")]
@@ -54,6 +56,37 @@ fn plan() -> Rc<RuntimePlan> {
     let builder = builder.extension(l3i::tls::TlsExtension::default());
     builder.finalize().unwrap()
 }
+
+/// Every module function over a span, with a bare kind and with a strided layout, which is a
+/// string and not a receiver; and the receivers, whose class names the kind.
+#[cfg(feature = "data")]
+const DATA_SCRIPT: (&str, &str) = (
+    "data_script",
+    "--!strict\n\
+     local data = require('@dream/data')\n\
+     local bodies = buffer.create(16 * 8)\n\
+     local column = buffer.create(4 * 8)\n\
+     local order = buffer.create(4 * 8)\n\
+     local total: number = data.sum(bodies, 'f32@16+12', 0, 8) + data.sum(column, 'i32', 0, 8, 'gt', 0)\n\
+     local least: number? = data.min(column, 'i32', 0, 8)\n\
+     local most: number? = data.max(bodies, 'f32@16', 0, 8, 'le', 4)\n\
+     local some: boolean = data.any(column, 'i32', 0, 8, 'ge', 0) and data.all(bodies, 'f32@16+4', 0, 8, 'ne', 1)\n\
+     local first: number? = data.argmin(column, 'i32', 0, 8) or data.argmax(bodies, 'f32@16+8', 0, 8)\n\
+     local live: number = data.count(column, 'i32', 0, 8, 'gt', 0)\n\
+     local selection: dream_data_Selection = data.compare(column, 'i32', 0, 8, 'gt', 0, data.selection(8))\n\
+     local gathered: number = data.gather(bodies, 'f32@16+12', 0, 8, order, column, 0, 8)\n\
+     local scattered: number = data.scatter(column, 'f32', 0, 8, order, bodies, 0, 8)\n\
+     data.fill(bodies, 'f32@16+12', 0, 8, 1)\n\
+     data.add(bodies, 'f32@16', 0, bodies, 4, bodies, 0, 8)\n\
+     data.scale(column, 'i32', 0, 8, 2, column, 0)\n\
+     data.clamp(column, 'i32', 0, 8, 0, 255, column, 0)\n\
+     local sorted: number = data.argsort(column, 'i32', 0, 8, order, 0, buffer.create(32))\n\
+     local kept: number = data.partition(bodies, 'f32@16+12', 0, 8, 'lt', 1, order)\n\
+     local masses: dream_data_Kind_f32 = data.f32(16)\n\
+     local cells: dream_data_Kind = data.kind('i32@8+4')\n\
+     local heaviest: number? = masses:max(bodies, 12, 8)\n\
+     print(total, least, most, some, first, live, selection:count(), gathered, scattered, sorted, kept, cells, heaviest)\n",
+);
 
 /// Every feature's members are declared, so the bytes script only needs the core to exist.
 #[cfg(feature = "bytes")]
@@ -434,6 +467,8 @@ fn the_generated_definitions_type_check_and_typed_scripts_pass_strict_mode() {
     let mut all_scripts: Vec<(&str, &str)> = SCRIPTS.to_vec();
     #[cfg(feature = "bytes")]
     all_scripts.push(BYTES_SCRIPT);
+    #[cfg(feature = "data")]
+    all_scripts.push(DATA_SCRIPT);
     #[cfg(feature = "intern")]
     all_scripts.push(INTERN_SCRIPT);
     #[cfg(feature = "intl")]
