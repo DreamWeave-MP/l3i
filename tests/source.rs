@@ -340,7 +340,7 @@ fn large_modules_compile_past_the_former_frontend_budgets() {
 #[test]
 fn hostile_source_is_scanned_in_linear_time() {
     use l3i::source::{LoweringMode, lowering_snapshot};
-    use std::time::{Duration, Instant};
+    use std::time::Instant;
     type Case = (&'static str, fn(usize) -> String);
     let cases: [Case; 9] = [
         ("spellings like generated names", |n| {
@@ -364,12 +364,9 @@ fn hostile_source_is_scanned_in_linear_time() {
             })
             .min()
             .unwrap()
-            .max(Duration::from_millis(5))
     };
     for (name, make) in cases {
-        let small = time(&make(2000));
-        let large = time(&make(8000));
-        assert!(large < small * 10, "{name}: {small:?} for 2000, {large:?} for 8000");
+        crate::grows_linearly(|size| time(&make(size)), 2000).unwrap_or_else(|measured| panic!("{name}: {measured}"));
     }
 }
 

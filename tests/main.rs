@@ -24,6 +24,44 @@
     clippy::needless_pass_by_value
 )]
 
+/// Whether work grows no worse than linearly from `small` to four times it, where `fastest(size)`
+/// is the quickest of a few runs at that size. Wall time on a shared runner is noisy in one
+/// direction only: a sample can be slowed, never sped up. So one slow sample proves nothing, and
+/// the bound has to fail on every attempt to fail. Quadratic growth is sixteen times for four
+/// times the input and fails all of them. `Err` holds what each attempt measured.
+fn grows_linearly(mut fastest: impl FnMut(usize) -> std::time::Duration, small: usize) -> Result<(), String> {
+    use std::time::Duration;
+    const ATTEMPTS: usize = 5;
+    // Below this a run is mostly its fixed costs, and a ratio of two of those says nothing.
+    let floor = Duration::from_millis(5);
+    let mut measured = Vec::with_capacity(ATTEMPTS);
+    for _ in 0..ATTEMPTS {
+        let (few, many) = (fastest(small).max(floor), fastest(small * 4).max(floor));
+        if many < few * 10 {
+            return Ok(());
+        }
+        measured.push((few, many));
+    }
+    Err(format!("{measured:?} for {small} and {} on every attempt", small * 4))
+}
+
+#[test]
+fn grows_linearly_fails_only_what_is_slow_on_every_attempt() {
+    use std::time::Duration;
+    let ms = |count: usize| Duration::from_millis(count as u64);
+    // Four times the input for four times the time passes; for sixteen times, never.
+    assert!(grows_linearly(ms, 100).is_ok());
+    assert!(grows_linearly(|size| ms(size * size / 100), 100).is_err());
+    // A sample slowed once is noise, and the attempt after it decides.
+    let mut samples = 0;
+    let slowed_once = |size| {
+        samples += 1;
+        if samples == 2 { ms(1_000_000) } else { ms(size) }
+    };
+    assert!(grows_linearly(slowed_once, 100).is_ok());
+    assert_eq!(samples, 4);
+}
+
 #[cfg(feature = "analysis")]
 mod analysis;
 #[cfg(feature = "bytes")]

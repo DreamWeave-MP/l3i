@@ -1469,7 +1469,7 @@ fn analysis_relocates_pattern_boundaries_its_parse_does_not_confirm() {
 #[test]
 fn completion_time_grows_linearly_with_the_module() {
     use std::fmt::Write as _;
-    use std::time::{Duration, Instant};
+    use std::time::Instant;
     let module = |functions: usize, surface: bool| {
         let mut text = String::from("--!strict\n");
         for k in 0..functions {
@@ -1488,7 +1488,7 @@ fn completion_time_grows_linearly_with_the_module() {
         let mut modules = HashMap::new();
         modules.insert("big", &*Box::leak(text.into_boxed_str()));
         let analysis = Analysis::new(Sources { modules }, AnalysisOptions::default()).unwrap();
-        (0..2)
+        (0..3)
             .map(|_| {
                 let start = Instant::now();
                 let completions = analysis.autocomplete("big", line, 11).unwrap();
@@ -1497,11 +1497,9 @@ fn completion_time_grows_linearly_with_the_module() {
             })
             .min()
             .unwrap()
-            .max(Duration::from_millis(5))
     };
     for surface in [false, true] {
-        let small = time(module(250, surface));
-        let large = time(module(1000, surface));
-        assert!(large < small * 10, "surface {surface}: {small:?} for 250 functions, {large:?} for 1000");
+        crate::grows_linearly(|functions| time(module(functions, surface)), 250)
+            .unwrap_or_else(|measured| panic!("surface {surface}: {measured}"));
     }
 }
