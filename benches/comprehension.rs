@@ -71,7 +71,9 @@ fn runtime() -> Runtime {
         .exec(&format!(
             r"values = table.create({ITEMS})
             for i = 1, {ITEMS} do values[i] = i end
-            sink_out = table.create({ITEMS})
+            -- Held one level below the globals: `luaL_sandbox` makes every table that is itself a
+            -- global read-only, and the sink cases write into this one on every call.
+            sink = {{ out = table.create({ITEMS}) }}
             function pred(x) return x % 2 == 0 end
             function transform(x) return x * 2 end
             function filter(src, predicate)
@@ -447,14 +449,14 @@ fn sink_comparisons(c: &mut Criterion) {
     bench_case(
         &mut sinks,
         "l3i sink nil-checked",
-        "return into(sink_out)[for x in values if x % 2 == 0 => x * 2]",
+        "return into(sink.out)[for x in values if x % 2 == 0 => x * 2]",
         Output::Filtered,
     );
     bench_case(
         &mut sinks,
         "handwritten reuse loop nil-checked",
         &format!(
-            "local src, out = values, sink_out local len = #out local j = 0 \
+            "local src, out = values, sink.out local len = #out local j = 0 \
              for i = 1, #src do local x = src[i] if x % 2 == 0 then \
              local value = x * 2 {NIL_GUARD} j += 1 out[j] = value end end \
              for i = j + 1, len do out[i] = nil end return out"
@@ -464,7 +466,7 @@ fn sink_comparisons(c: &mut Criterion) {
     bench_case(
         &mut sinks,
         "materialize then copy into destination",
-        "local tmp = [for x in values if x % 2 == 0 => x * 2] local out = sink_out local len = #out \
+        "local tmp = [for x in values if x % 2 == 0 => x * 2] local out = sink.out local len = #out \
          table.move(tmp, 1, #tmp, 1, out) for i = #tmp + 1, len do out[i] = nil end return out",
         Output::Filtered,
     );
