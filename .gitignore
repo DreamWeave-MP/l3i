@@ -19,3 +19,6 @@
 /content/**/_changelog.md
 
 __pycache__/
+
+# Local working notes, never published
+/research_notes/
