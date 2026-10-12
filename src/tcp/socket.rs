@@ -353,6 +353,7 @@ fn push_address(call: &Call<'_>, address: SocketAddr) -> Result<()> {
 /// `send` asks the question `getpeername` cannot: `WSAENOTCONN` while the handshake is pending,
 /// success once it is up, and the connect error once it has failed.
 #[cfg(not(windows))]
+#[allow(clippy::unnecessary_wraps, reason = "one signature for both platforms")]
 fn connected_for_sure(_stream: &mio::net::TcpStream) -> io::Result<bool> {
     Ok(true)
 }
