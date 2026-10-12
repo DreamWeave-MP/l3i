@@ -359,6 +359,37 @@ int main()
             const std::string_view s = "into(out)[for x in xs => x]";
             assert(slice(s, parseSurface(s).comprehensions[0].sinkDestination) == "out");
         }
+        // A sink or a slice that starts a statement is separated from the statement before it,
+        // and the first statement of a function's body has none before it: Luau's parser says
+        // where a return type ends, so a type that merely looks like statements is still a type.
+        for (std::string_view s : {"prepare() into(out)[for x in xs => x]", "local n = 1 into(out)[for x in xs => x]",
+                 "function f(xs) prepare() into(out)[for x in xs => x] end", "function f(xs): number prepare() into(out)[for x in xs => x] end",
+                 "function f(xs): number local n = 1 into(out)[for x in xs => x] end",
+                 "function f(xs): (number) -> number g(1) into(out)[for x in xs => x] end",
+                 "function f(xs): number end local n = f into(out)[for x in xs => x]"})
+        {
+            const auto sink = parseSurface(s);
+            assert(sink.errors.empty() && sink.comprehensions.size() == 1 && sink.comprehensions[0].sinkStatement);
+        }
+        for (std::string_view s : {"function f(xs) into(out)[for x in xs => x] end", "function f(xs): number into(out)[for x in xs => x] end",
+                 "local function f<T>(xs: {T}): (number, {T}?) into(out)[for x in xs => x] end",
+                 "return function(xs): typeof(setmetatable({}, {})) into(out)[for x in xs => x] end",
+                 "function t.a:f(xs): (...number) into(out)[for x in xs => x] end",
+                 "function f(g: (number) -> number): (number) -> number into(out)[for x in g => x] end",
+                 "function f(): {read x: number, [string]: T<U>} into(out, \"u8\")[for x in xs => x] end",
+                 "if ready then into(out)[for x in xs => x] end", "into(out)[for x in xs => x]"})
+        {
+            const auto sink = parseSurface(s);
+            assert(sink.errors.empty() && sink.comprehensions.size() == 1 && !sink.comprehensions[0].sinkStatement);
+        }
+        for (const auto& [s, statement] : {std::pair<std::string_view, bool>{"local before = print grid[2:3][1][1] = 5", true},
+                 {"function f(grid) local n = 1 grid[2:3][1][1] = n end", true}, {"function f(grid) grid[2:3][1][1] = 5 end", false},
+                 {"function f(grid: {{number}}): () grid[2:3][1][1] = 5 end", false},
+                 {"function f(grid): number g() grid[2:3][1][1] = 5 end", true}})
+        {
+            const auto d = parseSurface(s);
+            assert(d.errors.empty() && d.slices.size() == 1 && d.slices[0].statement == statement);
+        }
         for (std::string_view s : {"t.into(out)[for x in xs => x]", "t:into(out)[for x in xs => x]", "fill(out)[for x in xs => x]",
                  "into[for x in xs => x]"})
         {

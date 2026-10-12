@@ -88,6 +88,21 @@ const CORPUS: &[(&str, &str)] = &[
     ("sink_buffer_too_many_arguments", "return into(out, \"f32\", 0, 1)[for x in xs => x]"),
     ("sink_buffer_missing_offset", "return into(out, \"f32\",)[for x in xs => x]"),
     ("sink_spaced", "return into (out) -- note\n[for x in xs => x]"),
+    // A sink statement is separated from the statement before it, and a body's first has none.
+    ("sink_after_statement", "local function fill(xs)\n    prepare()\n    into(out)[for x in xs => x]\nend"),
+    ("sink_opens_function_body", "local function fill(xs)\n    into(out)[for x in xs => x]\nend"),
+    (
+        "sink_opens_typed_function_body",
+        "local function fill(xs: {number}): {number}\n    into(out)[for x in xs => x]\n    return out\nend",
+    ),
+    (
+        "sink_opens_pack_typed_function_body",
+        "return function<T>(xs: {T}): (number, {T}?)\n    into(out, \"f32\")[for x in xs => x]\n    return 0, nil\nend",
+    ),
+    (
+        "sink_after_statement_in_typed_function_body",
+        "function M.fill(xs): number\n    prepare()\n    into(out)[for x in xs => x]\n    return #out\nend",
+    ),
     ("member_into_is_not_a_sink", "return t.into(out)[for x in xs => x]"),
     ("call_before_comprehension_is_postfix", "return f(out)[for x in xs => x]"),
     ("sink_empty_destination", "return into()[for x in xs => x]"),
@@ -118,6 +133,12 @@ const CORPUS: &[(&str, &str)] = &[
     ("slice_standalone_in_expression", "local part = values[2:n]\nreturn #part + 1"),
     ("slice_standalone_call_source", "return make()[i:j]"),
     ("slice_standalone_twice", "return xs[1:2], ys[3:4]"),
+    ("slice_statement_after_expression", "local before = print\ngrid[2:3][1][1] = 5"),
+    ("slice_statement_opens_function_body", "local function mark(grid)\n    grid[2:3][1][1] = 5\nend"),
+    (
+        "slice_statement_opens_typed_function_body",
+        "local function mark(grid: {{{number}}}): ()\n    grid[2:3][1][1] = 5\nend",
+    ),
     ("slice_inside_comprehension_source", "return [for x in f(xs[1:2]) => x]"),
     ("slice_of_comprehension", "return [for x in xs => x][1:2]"),
     ("comprehension_in_slice_bound", "return xs[1:#[for x in ys => x]]"),

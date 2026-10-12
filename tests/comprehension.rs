@@ -982,6 +982,103 @@ fn sinks_fill_a_caller_owned_table_in_place_with_replace_semantics() {
 }
 
 #[test]
+fn a_sink_or_a_slice_may_be_the_first_statement_of_a_function_body() {
+    // The lowered call is separated from the statement before it with a ';', and Luau has no
+    // empty statement: a body's first statement must get none, whatever the header ends with.
+    let runtime = Runtime::new().unwrap();
+    runtime
+        .exec(
+            r#"
+        local out = {}
+        local function plain(xs)
+            into(out)[for x in xs => x + 1]
+        end
+        plain({1, 2})
+        assert(#out == 2 and out[1] == 2 and out[2] == 3)
+
+        local function annotated(xs: {number}): {number}
+            into(out)[for x in xs => x * 2]
+            return out
+        end
+        assert(annotated({4})[1] == 8 and #out == 1)
+
+        local function optional(xs: {number}): number?
+            into(out)[for x in xs => x]
+            return out[1]
+        end
+        assert(optional({7}) == 7)
+
+        local function packed<T>(xs: {T}): (number, {T}?)
+            into(out)[for x in xs => x]
+            return #out, out
+        end
+        assert(packed({"a", "b", "c"}) == 3)
+
+        local function generic(xs: {number}): typeof(setmetatable({}, {}))
+            into(out)[for x in xs => -x]
+            return setmetatable({}, {})
+        end
+        generic({5})
+        assert(out[1] == -5)
+
+        local holder = {}
+        function holder.fill(xs: {number}): ()
+            into(out)[for x in xs => x]
+        end
+        function holder:method(xs): (...number)
+            into(out)[for x in xs => x * 3]
+            return table.unpack(out)
+        end
+        holder.fill({1, 2, 3})
+        assert(#out == 3)
+        assert(select('#', holder:method({1, 2})) == 2 and out[2] == 6)
+
+        local samples = buffer.create(8)
+        local write = function(xs): number
+            into(samples, "f32")[for x in xs => x]
+            return buffer.readf32(samples, 4)
+        end
+        assert(write({1.5, 2.5}) == 2.5)
+
+        -- A body's later sinks still end the statement before them.
+        local calls = 0
+        local function count() calls += 1 return out end
+        local function later(xs): number
+            local before = count
+            into(out)[for x in xs => x]
+            count()
+            into(out)[for x in xs => x + 10]
+            return calls
+        end
+        assert(later({1}) == 1 and out[1] == 11)
+
+        -- A statement that is a slice, first in a body, with and without a return type.
+        local function mark(grid)
+            grid[2:3][1][1] = 5
+        end
+        local function markTyped(grid: {{number}}): ()
+            grid[1:1][1][1] = 6
+        end
+        local grid = {{1}, {2}, {3}}
+        mark(grid)
+        markTyped(grid)
+        assert(grid[1][1] == 6 and grid[2][1] == 5)
+
+        -- A nested function's body, and one that follows another function's `end`.
+        local function outer(xs): () -> number
+            local function inner(): number
+                into(out)[for x in xs => x * 100]
+                return out[1]
+            end
+            return inner
+        end
+        assert(outer({2})() == 200)
+    "#,
+        )
+        .unwrap();
+}
+
+#[test]
 fn buffer_sinks_write_typed_elements_into_caller_buffers() {
     let runtime = Runtime::new().unwrap();
     runtime

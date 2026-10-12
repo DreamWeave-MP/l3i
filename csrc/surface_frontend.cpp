@@ -320,9 +320,11 @@ private:
             if (start == SIZE_MAX) continue;
             Slice slice;
             slice.source = {all[start].range.begin, all[open - 1].range.end};
-            // A name right after a token that ends an expression can only begin a statement.
+            // A name right after a token that ends an expression can only begin a statement,
+            // and a statement that opens a function's body has none before it to end.
             slice.statement = all[start].type == T::Name && start > 0 &&
-                isPostfix(all[start - 1], start >= 2 ? all[start - 2] : Token{T::Eof, {0, 0}});
+                isPostfix(all[start - 1], start >= 2 ? all[start - 2] : Token{T::Eof, {0, 0}}) && !opensFunctionBody(start);
+            if (stopped) return;
             const bool missingFirst = colon == open + 1;
             const bool missingLast = colon == lastEnd;
             slice.first = missingFirst ? Range{all[colon].range.begin, all[colon].range.begin}
@@ -1059,6 +1061,72 @@ private:
             t == T::InterpStringSimple || t == T::InterpStringEnd || t == T::ReservedNil ||
             t == T::ReservedTrue || t == T::ReservedFalse || t == ')' || t == ']' || t == '}';
     }
+    // The ')' that closes each function's parameter list, in source order, found once.
+    std::vector<size_t> headerCloses;
+    bool headersIndexed = false;
+    void indexHeaders()
+    {
+        if (headersIndexed) return;
+        headersIndexed = true;
+        const std::vector<Token>& all = codeTokens();
+        if (anyClose.size() != all.size())
+            indexPartners();
+        for (size_t i = 0; i < all.size(); ++i)
+        {
+            if (all[i].type != T::ReservedFunction) continue;
+            size_t at = i + 1;
+            if (typeIn(all, at) == T::Name)
+            {
+                ++at;
+                while ((typeIn(all, at) == '.' || typeIn(all, at) == ':') && typeIn(all, at + 1) == T::Name)
+                    at += 2;
+            }
+            if (typeIn(all, at) == '<' && (at = skipAngles(all, at)) == SIZE_MAX) continue;
+            if (typeIn(all, at) == '(' && anyClose[at] != SIZE_MAX) headerCloses.push_back(anyClose[at]);
+        }
+        std::sort(headerCloses.begin(), headerCloses.end());
+    }
+    // Whether the statement that starts at code token `at`, after a token that could end an
+    // expression, is the first of a function's body. Luau has no empty statement, so no ';' may
+    // stand before it, and it needs none: a parameter list or a return type is not called. A
+    // body opens right after the parameter list or after the return type, and where a type ends
+    // is Luau's parser's decision: the tokens between the ':' and the statement are the return
+    // type exactly when a function declared with them parses with an empty body.
+    bool opensFunctionBody(size_t at)
+    {
+        indexHeaders();
+        const std::vector<Token>& all = tokens;
+        // The last parameter list that closes before the statement.
+        const auto after = std::lower_bound(headerCloses.begin(), headerCloses.end(), at);
+        if (after == headerCloses.begin()) return false;
+        const size_t close = *(after - 1);
+        if (close + 1 == at) return true;
+        if (typeIn(all, close + 1) != ':' || close + 2 >= at) return false;
+        // No type holds a statement keyword, an assignment or a ';' outside its brackets: one
+        // before the statement means the body began earlier, and no parse is spent finding out.
+        for (size_t i = close + 2; i < at; ++i)
+        {
+            const int t = all[i].type;
+            if (t == '=' || keywordStop(t)) return false;
+            if ((t == '(' || t == '[' || t == '{') && anyClose[i] != SIZE_MAX && anyClose[i] < at) i = anyClose[i];
+        }
+        const Range type{all[close + 2].range.begin, all[at - 1].range.end};
+        if (++prefixCalls > maxPrefixCalls || type.end - type.begin > maxPrefixBytes - prefixBytes)
+        {
+            error({type.end, type.end}, prefixLimitMessage());
+            stopped = true;
+            return false;
+        }
+        prefixBytes += type.end - type.begin;
+        std::string declaration = "local function f(): ";
+        declaration += source.substr(type.begin, type.end - type.begin);
+        declaration += "\nend";
+        Luau::Allocator allocator;
+        const Luau::ParseResult parsed = Luau::Parser::parse(declaration.data(), declaration.size(), names, allocator);
+        if (!parsed.root || !parsed.errors.empty() || parsed.root->body.size != 1) return false;
+        const Luau::AstStatLocalFunction* declared = parsed.root->body.data[0]->as<Luau::AstStatLocalFunction>();
+        return declared && declared->func->body->body.size == 0;
+    }
     // Linear shape hints, not an expression parser. A failed prefix may still
     // precede an ordinary conditional; then/else at the same delimiter level
     // distinguish it from a damaged expression followed by a filter. Nested
@@ -1419,7 +1487,8 @@ private:
                 source.substr(tokens[open - 1].range.begin, tokens[open - 1].range.end - tokens[open - 1].range.begin) == "into")
             {
                 c.sinkPrefix = {tokens[open - 1].range.begin, tokens[i - 1].range.end};
-                c.sinkStatement = open >= 2 && isPostfix(tokens[open - 2], open >= 3 ? tokens[open - 3] : Token{T::Eof, {0, 0}});
+                c.sinkStatement = open >= 2 && isPostfix(tokens[open - 2], open >= 3 ? tokens[open - 3] : Token{T::Eof, {0, 0}}) &&
+                    !opensFunctionBody(open - 1);
                 if (open + 1 < i - 1)
                 {
                     // Top-level commas split `into(destination[, "kind"[, offset]])`.

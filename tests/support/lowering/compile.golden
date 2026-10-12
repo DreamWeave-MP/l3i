@@ -1873,6 +1873,152 @@ local __l3i_comp_26_into = out if __l3i_comp_44_typeof(__l3i_comp_26_into) ~= "t
 --segment 979 1130 43 44 synthetic
 --site 0 call=153,1130 projection=771,772
 --clause binding=698,699 expression=409,411
+==== sink_after_statement
+local function fill(xs)
+    prepare()
+    into(out)[for x in xs => x]
+end
+----
+local __l3i_comp_73_error = error local __l3i_comp_73_typeof = typeof local __l3i_comp_73_rawequal = rawequal local __l3i_comp_73_buffer = buffer local function fill(xs)
+    prepare()
+    ;(function() local __l3i_comp_51_into = out if __l3i_comp_73_typeof(__l3i_comp_51_into) ~= "table" then __l3i_comp_73_error("JSL sink destination must be a table") end local __l3i_comp_51_into_len = #__l3i_comp_51_into local __l3i_comp_51_g0_src = xs local __l3i_comp_51_g0_len = #__l3i_comp_51_g0_src if __l3i_comp_73_rawequal(__l3i_comp_51_g0_src, __l3i_comp_51_into) then __l3i_comp_73_error("JSL sink destination must not be a pipeline source") end local __l3i_comp_51_n = 0 for __l3i_comp_51_g0_i = 1, __l3i_comp_51_g0_len do local x = __l3i_comp_51_g0_src[__l3i_comp_51_g0_i] local __l3i_comp_51_value = x if __l3i_comp_51_value == nil then __l3i_comp_73_error("L3i comprehension projection produced nil; filter nil explicitly") end __l3i_comp_51_n += 1 __l3i_comp_51_into[__l3i_comp_51_n] = __l3i_comp_51_value end for __l3i_comp_51_i = __l3i_comp_51_n + 1, __l3i_comp_51_into_len do __l3i_comp_51_into[__l3i_comp_51_i] = nil end return __l3i_comp_51_into end)()
+end
+--prelude 4
+--segment 0 146 51 69 synthetic
+--segment 146 188 0 42 copied
+--segment 188 201 42 69 synthetic
+--segment 201 228 47 50 synthetic
+--segment 228 231 47 50 copied
+--segment 231 407 47 50 synthetic
+--segment 407 436 52 63 synthetic
+--segment 436 438 61 63 copied
+--segment 438 725 61 63 synthetic
+--segment 725 726 56 57 copied
+--segment 726 770 61 63 synthetic
+--segment 770 798 67 68 synthetic
+--segment 798 799 67 68 copied
+--segment 799 1006 67 68 synthetic
+--segment 1006 1157 68 69 synthetic
+--segment 1157 1161 69 73 copied
+--site 0 call=189,1157 projection=798,799
+--clause binding=725,726 expression=436,438
+==== sink_opens_function_body
+local function fill(xs)
+    into(out)[for x in xs => x]
+end
+----
+local __l3i_comp_59_error = error local __l3i_comp_59_typeof = typeof local __l3i_comp_59_rawequal = rawequal local __l3i_comp_59_buffer = buffer local function fill(xs)
+    (function() local __l3i_comp_37_into = out if __l3i_comp_59_typeof(__l3i_comp_37_into) ~= "table" then __l3i_comp_59_error("JSL sink destination must be a table") end local __l3i_comp_37_into_len = #__l3i_comp_37_into local __l3i_comp_37_g0_src = xs local __l3i_comp_37_g0_len = #__l3i_comp_37_g0_src if __l3i_comp_59_rawequal(__l3i_comp_37_g0_src, __l3i_comp_37_into) then __l3i_comp_59_error("JSL sink destination must not be a pipeline source") end local __l3i_comp_37_n = 0 for __l3i_comp_37_g0_i = 1, __l3i_comp_37_g0_len do local x = __l3i_comp_37_g0_src[__l3i_comp_37_g0_i] local __l3i_comp_37_value = x if __l3i_comp_37_value == nil then __l3i_comp_59_error("L3i comprehension projection produced nil; filter nil explicitly") end __l3i_comp_37_n += 1 __l3i_comp_37_into[__l3i_comp_37_n] = __l3i_comp_37_value end for __l3i_comp_37_i = __l3i_comp_37_n + 1, __l3i_comp_37_into_len do __l3i_comp_37_into[__l3i_comp_37_i] = nil end return __l3i_comp_37_into end)()
+end
+--prelude 4
+--segment 0 146 37 55 synthetic
+--segment 146 174 0 28 copied
+--segment 174 186 28 55 synthetic
+--segment 186 213 33 36 synthetic
+--segment 213 216 33 36 copied
+--segment 216 392 33 36 synthetic
+--segment 392 421 38 49 synthetic
+--segment 421 423 47 49 copied
+--segment 423 710 47 49 synthetic
+--segment 710 711 42 43 copied
+--segment 711 755 47 49 synthetic
+--segment 755 783 53 54 synthetic
+--segment 783 784 53 54 copied
+--segment 784 991 53 54 synthetic
+--segment 991 1142 54 55 synthetic
+--segment 1142 1146 55 59 copied
+--site 0 call=174,1142 projection=783,784
+--clause binding=710,711 expression=421,423
+==== sink_opens_typed_function_body
+local function fill(xs: {number}): {number}
+    into(out)[for x in xs => x]
+    return out
+end
+----
+local __l3i_comp_94_error = error local __l3i_comp_94_typeof = typeof local __l3i_comp_94_rawequal = rawequal local __l3i_comp_94_buffer = buffer local function fill(xs: {number}): {number}
+    (function() local __l3i_comp_57_into = out if __l3i_comp_94_typeof(__l3i_comp_57_into) ~= "table" then __l3i_comp_94_error("JSL sink destination must be a table") end local __l3i_comp_57_into_len = #__l3i_comp_57_into local __l3i_comp_57_g0_src = xs local __l3i_comp_57_g0_len = #__l3i_comp_57_g0_src if __l3i_comp_94_rawequal(__l3i_comp_57_g0_src, __l3i_comp_57_into) then __l3i_comp_94_error("JSL sink destination must not be a pipeline source") end local __l3i_comp_57_n = 0 for __l3i_comp_57_g0_i = 1, __l3i_comp_57_g0_len do local x = __l3i_comp_57_g0_src[__l3i_comp_57_g0_i] local __l3i_comp_57_value = x if __l3i_comp_57_value == nil then __l3i_comp_94_error("L3i comprehension projection produced nil; filter nil explicitly") end __l3i_comp_57_n += 1 __l3i_comp_57_into[__l3i_comp_57_n] = __l3i_comp_57_value end for __l3i_comp_57_i = __l3i_comp_57_n + 1, __l3i_comp_57_into_len do __l3i_comp_57_into[__l3i_comp_57_i] = nil end return __l3i_comp_57_into end)()
+    return out
+end
+--prelude 4
+--segment 0 146 57 75 synthetic
+--segment 146 194 0 48 copied
+--segment 194 206 48 75 synthetic
+--segment 206 233 53 56 synthetic
+--segment 233 236 53 56 copied
+--segment 236 412 53 56 synthetic
+--segment 412 441 58 69 synthetic
+--segment 441 443 67 69 copied
+--segment 443 730 67 69 synthetic
+--segment 730 731 62 63 copied
+--segment 731 775 67 69 synthetic
+--segment 775 803 73 74 synthetic
+--segment 803 804 73 74 copied
+--segment 804 1011 73 74 synthetic
+--segment 1011 1162 74 75 synthetic
+--segment 1162 1181 75 94 copied
+--site 0 call=194,1162 projection=803,804
+--clause binding=730,731 expression=441,443
+==== sink_opens_pack_typed_function_body
+return function<T>(xs: {T}): (number, {T}?)
+    into(out, "f32")[for x in xs => x]
+    return 0, nil
+end
+----
+local __l3i_comp_104_error = error local __l3i_comp_104_typeof = typeof local __l3i_comp_104_rawequal = rawequal local __l3i_comp_104_buffer = buffer return function<T>(xs: {T}): (number, {T}?)
+    (function() local __l3i_comp_64_into = out if __l3i_comp_104_typeof(__l3i_comp_64_into) ~= "buffer" then __l3i_comp_104_error("JSL sink buffer destination must be a buffer") end local __l3i_comp_64_into_len = __l3i_comp_104_buffer.len(__l3i_comp_64_into) local __l3i_comp_64_into_at = 0 if __l3i_comp_104_typeof(__l3i_comp_64_into_at) ~= "number" or __l3i_comp_64_into_at % 1 ~= 0 or __l3i_comp_64_into_at < 0 then __l3i_comp_104_error("JSL sink buffer offset must be a non-negative integer") end local __l3i_comp_64_g0_src = xs local __l3i_comp_64_g0_len = #__l3i_comp_64_g0_src if __l3i_comp_104_rawequal(__l3i_comp_64_g0_src, __l3i_comp_64_into) then __l3i_comp_104_error("JSL sink destination must not be a pipeline source") end local __l3i_comp_64_n = 0 for __l3i_comp_64_g0_i = 1, __l3i_comp_64_g0_len do local x = __l3i_comp_64_g0_src[__l3i_comp_64_g0_i] local __l3i_comp_64_value = x if __l3i_comp_64_value == nil then __l3i_comp_104_error("L3i comprehension projection produced nil; filter nil explicitly") end if __l3i_comp_64_into_at + __l3i_comp_64_n * 4 + 4 > __l3i_comp_64_into_len then __l3i_comp_104_error("JSL sink buffer destination is full") end __l3i_comp_104_buffer.writef32(__l3i_comp_64_into, __l3i_comp_64_into_at + __l3i_comp_64_n * 4, __l3i_comp_64_value) __l3i_comp_64_n += 1 end return __l3i_comp_64_into, __l3i_comp_64_n end)()
+    return 0, nil
+end
+--prelude 4
+--segment 0 150 64 82 synthetic
+--segment 150 198 0 48 copied
+--segment 198 210 48 82 synthetic
+--segment 210 237 53 56 synthetic
+--segment 237 240 53 56 copied
+--segment 240 453 53 56 synthetic
+--segment 453 695 58 63 synthetic
+--segment 695 724 65 76 synthetic
+--segment 724 726 74 76 copied
+--segment 726 1015 74 76 synthetic
+--segment 1015 1016 69 70 copied
+--segment 1016 1060 74 76 synthetic
+--segment 1060 1088 80 81 synthetic
+--segment 1088 1089 80 81 copied
+--segment 1089 1501 80 81 synthetic
+--segment 1501 1554 81 82 synthetic
+--segment 1554 1576 82 104 copied
+--site 0 call=198,1554 projection=1088,1089
+--clause binding=1015,1016 expression=724,726
+==== sink_after_statement_in_typed_function_body
+function M.fill(xs): number
+    prepare()
+    into(out)[for x in xs => x]
+    return #out
+end
+----
+local __l3i_comp_93_error = error local __l3i_comp_93_typeof = typeof local __l3i_comp_93_rawequal = rawequal local __l3i_comp_93_buffer = buffer function M.fill(xs): number
+    prepare()
+    ;(function() local __l3i_comp_55_into = out if __l3i_comp_93_typeof(__l3i_comp_55_into) ~= "table" then __l3i_comp_93_error("JSL sink destination must be a table") end local __l3i_comp_55_into_len = #__l3i_comp_55_into local __l3i_comp_55_g0_src = xs local __l3i_comp_55_g0_len = #__l3i_comp_55_g0_src if __l3i_comp_93_rawequal(__l3i_comp_55_g0_src, __l3i_comp_55_into) then __l3i_comp_93_error("JSL sink destination must not be a pipeline source") end local __l3i_comp_55_n = 0 for __l3i_comp_55_g0_i = 1, __l3i_comp_55_g0_len do local x = __l3i_comp_55_g0_src[__l3i_comp_55_g0_i] local __l3i_comp_55_value = x if __l3i_comp_55_value == nil then __l3i_comp_93_error("L3i comprehension projection produced nil; filter nil explicitly") end __l3i_comp_55_n += 1 __l3i_comp_55_into[__l3i_comp_55_n] = __l3i_comp_55_value end for __l3i_comp_55_i = __l3i_comp_55_n + 1, __l3i_comp_55_into_len do __l3i_comp_55_into[__l3i_comp_55_i] = nil end return __l3i_comp_55_into end)()
+    return #out
+end
+--prelude 4
+--segment 0 146 55 73 synthetic
+--segment 146 192 0 46 copied
+--segment 192 205 46 73 synthetic
+--segment 205 232 51 54 synthetic
+--segment 232 235 51 54 copied
+--segment 235 411 51 54 synthetic
+--segment 411 440 56 67 synthetic
+--segment 440 442 65 67 copied
+--segment 442 729 65 67 synthetic
+--segment 729 730 60 61 copied
+--segment 730 774 65 67 synthetic
+--segment 774 802 71 72 synthetic
+--segment 802 803 71 72 copied
+--segment 803 1010 71 72 synthetic
+--segment 1010 1161 72 73 synthetic
+--segment 1161 1181 73 93 copied
+--site 0 call=193,1161 projection=802,803
+--clause binding=729,730 expression=440,442
 ==== member_into_is_not_a_sink
 return t.into(out)[for x in xs => x]
 ----
@@ -2493,6 +2639,67 @@ local __l3i_comp_23_error = error local __l3i_comp_23_typeof = typeof local __l3
 --segment 1972 3545 16 18 synthetic
 --slice 0 call=205,1852 source=248,250 first=284,285 last=318,319
 --slice 1 call=1854,3545 source=1898,1900 first=1935,1936 last=1970,1971
+==== slice_statement_after_expression
+local before = print
+grid[2:3][1][1] = 5
+----
+local __l3i_comp_40_error = error local __l3i_comp_40_typeof = typeof local __l3i_comp_40_buffer = buffer local __l3i_comp_40_table_create = table.create local __l3i_comp_40_table_move = table.move local before = print
+;(function() local __l3i_comp_21_slice_src = grid local __l3i_comp_21_slice_first = 2 local __l3i_comp_21_slice_last = 3 local __l3i_comp_21_slice_kind = __l3i_comp_40_typeof(__l3i_comp_21_slice_src) if __l3i_comp_21_slice_kind ~= "table" and __l3i_comp_21_slice_kind ~= "buffer" then __l3i_comp_40_error("JSL slice source must be a table or buffer") end local __l3i_comp_21_slice_len = 0 if __l3i_comp_21_slice_kind == "buffer" then __l3i_comp_21_slice_len = __l3i_comp_40_buffer.len(__l3i_comp_21_slice_src :: any) else __l3i_comp_21_slice_len = #(__l3i_comp_21_slice_src :: any) end if __l3i_comp_21_slice_first < 1 then __l3i_comp_21_slice_first = 1 end if __l3i_comp_21_slice_last > __l3i_comp_21_slice_len then __l3i_comp_21_slice_last = __l3i_comp_21_slice_len end local __l3i_comp_21_slice_n = 0 if __l3i_comp_21_slice_last >= __l3i_comp_21_slice_first then __l3i_comp_21_slice_n = __l3i_comp_21_slice_last - __l3i_comp_21_slice_first + 1 end if __l3i_comp_21_slice_kind == "buffer" then local __l3i_comp_21_slice_out = (__l3i_comp_40_buffer.create(__l3i_comp_21_slice_n) :: any) :: typeof(__l3i_comp_21_slice_src) if __l3i_comp_21_slice_n > 0 then __l3i_comp_40_buffer.copy(__l3i_comp_21_slice_out :: any, 0, __l3i_comp_21_slice_src :: any, __l3i_comp_21_slice_first - 1, __l3i_comp_21_slice_n) end return __l3i_comp_21_slice_out else local __l3i_comp_21_slice_out = (__l3i_comp_40_table_create(__l3i_comp_21_slice_n) :: any) :: typeof(__l3i_comp_21_slice_src) if __l3i_comp_21_slice_n > 0 then __l3i_comp_40_table_move(__l3i_comp_21_slice_src :: any, __l3i_comp_21_slice_first, __l3i_comp_21_slice_last, 1, __l3i_comp_21_slice_out :: any) end return __l3i_comp_21_slice_out end end)()[1][1] = 5
+--prelude 5
+--segment 0 198 21 30 synthetic
+--segment 198 219 0 21 copied
+--segment 219 264 21 30 synthetic
+--segment 264 268 21 25 copied
+--segment 268 303 21 25 synthetic
+--segment 303 304 26 27 copied
+--segment 304 338 26 27 synthetic
+--segment 338 339 28 29 copied
+--segment 339 340 28 29 synthetic
+--segment 340 1913 21 25 synthetic
+--segment 1913 1923 30 40 copied
+--slice 0 call=220,1913 source=264,268 first=303,304 last=338,339
+==== slice_statement_opens_function_body
+local function mark(grid)
+    grid[2:3][1][1] = 5
+end
+----
+local __l3i_comp_53_error = error local __l3i_comp_53_typeof = typeof local __l3i_comp_53_buffer = buffer local __l3i_comp_53_table_create = table.create local __l3i_comp_53_table_move = table.move local function mark(grid)
+    (function() local __l3i_comp_30_slice_src = grid local __l3i_comp_30_slice_first = 2 local __l3i_comp_30_slice_last = 3 local __l3i_comp_30_slice_kind = __l3i_comp_53_typeof(__l3i_comp_30_slice_src) if __l3i_comp_30_slice_kind ~= "table" and __l3i_comp_30_slice_kind ~= "buffer" then __l3i_comp_53_error("JSL slice source must be a table or buffer") end local __l3i_comp_30_slice_len = 0 if __l3i_comp_30_slice_kind == "buffer" then __l3i_comp_30_slice_len = __l3i_comp_53_buffer.len(__l3i_comp_30_slice_src :: any) else __l3i_comp_30_slice_len = #(__l3i_comp_30_slice_src :: any) end if __l3i_comp_30_slice_first < 1 then __l3i_comp_30_slice_first = 1 end if __l3i_comp_30_slice_last > __l3i_comp_30_slice_len then __l3i_comp_30_slice_last = __l3i_comp_30_slice_len end local __l3i_comp_30_slice_n = 0 if __l3i_comp_30_slice_last >= __l3i_comp_30_slice_first then __l3i_comp_30_slice_n = __l3i_comp_30_slice_last - __l3i_comp_30_slice_first + 1 end if __l3i_comp_30_slice_kind == "buffer" then local __l3i_comp_30_slice_out = (__l3i_comp_53_buffer.create(__l3i_comp_30_slice_n) :: any) :: typeof(__l3i_comp_30_slice_src) if __l3i_comp_30_slice_n > 0 then __l3i_comp_53_buffer.copy(__l3i_comp_30_slice_out :: any, 0, __l3i_comp_30_slice_src :: any, __l3i_comp_30_slice_first - 1, __l3i_comp_30_slice_n) end return __l3i_comp_30_slice_out else local __l3i_comp_30_slice_out = (__l3i_comp_53_table_create(__l3i_comp_30_slice_n) :: any) :: typeof(__l3i_comp_30_slice_src) if __l3i_comp_30_slice_n > 0 then __l3i_comp_53_table_move(__l3i_comp_30_slice_src :: any, __l3i_comp_30_slice_first, __l3i_comp_30_slice_last, 1, __l3i_comp_30_slice_out :: any) end return __l3i_comp_30_slice_out end end)()[1][1] = 5
+end
+--prelude 5
+--segment 0 198 30 39 synthetic
+--segment 198 228 0 30 copied
+--segment 228 272 30 39 synthetic
+--segment 272 276 30 34 copied
+--segment 276 311 30 34 synthetic
+--segment 311 312 35 36 copied
+--segment 312 346 35 36 synthetic
+--segment 346 347 37 38 copied
+--segment 347 348 37 38 synthetic
+--segment 348 1921 30 34 synthetic
+--segment 1921 1935 39 53 copied
+--slice 0 call=228,1921 source=272,276 first=311,312 last=346,347
+==== slice_statement_opens_typed_function_body
+local function mark(grid: {{{number}}}): ()
+    grid[2:3][1][1] = 5
+end
+----
+local __l3i_comp_71_error = error local __l3i_comp_71_typeof = typeof local __l3i_comp_71_buffer = buffer local __l3i_comp_71_table_create = table.create local __l3i_comp_71_table_move = table.move local function mark(grid: {{{number}}}): ()
+    (function() local __l3i_comp_48_slice_src = grid local __l3i_comp_48_slice_first = 2 local __l3i_comp_48_slice_last = 3 local __l3i_comp_48_slice_kind = __l3i_comp_71_typeof(__l3i_comp_48_slice_src) if __l3i_comp_48_slice_kind ~= "table" and __l3i_comp_48_slice_kind ~= "buffer" then __l3i_comp_71_error("JSL slice source must be a table or buffer") end local __l3i_comp_48_slice_len = 0 if __l3i_comp_48_slice_kind == "buffer" then __l3i_comp_48_slice_len = __l3i_comp_71_buffer.len(__l3i_comp_48_slice_src :: any) else __l3i_comp_48_slice_len = #(__l3i_comp_48_slice_src :: any) end if __l3i_comp_48_slice_first < 1 then __l3i_comp_48_slice_first = 1 end if __l3i_comp_48_slice_last > __l3i_comp_48_slice_len then __l3i_comp_48_slice_last = __l3i_comp_48_slice_len end local __l3i_comp_48_slice_n = 0 if __l3i_comp_48_slice_last >= __l3i_comp_48_slice_first then __l3i_comp_48_slice_n = __l3i_comp_48_slice_last - __l3i_comp_48_slice_first + 1 end if __l3i_comp_48_slice_kind == "buffer" then local __l3i_comp_48_slice_out = (__l3i_comp_71_buffer.create(__l3i_comp_48_slice_n) :: any) :: typeof(__l3i_comp_48_slice_src) if __l3i_comp_48_slice_n > 0 then __l3i_comp_71_buffer.copy(__l3i_comp_48_slice_out :: any, 0, __l3i_comp_48_slice_src :: any, __l3i_comp_48_slice_first - 1, __l3i_comp_48_slice_n) end return __l3i_comp_48_slice_out else local __l3i_comp_48_slice_out = (__l3i_comp_71_table_create(__l3i_comp_48_slice_n) :: any) :: typeof(__l3i_comp_48_slice_src) if __l3i_comp_48_slice_n > 0 then __l3i_comp_71_table_move(__l3i_comp_48_slice_src :: any, __l3i_comp_48_slice_first, __l3i_comp_48_slice_last, 1, __l3i_comp_48_slice_out :: any) end return __l3i_comp_48_slice_out end end)()[1][1] = 5
+end
+--prelude 5
+--segment 0 198 48 57 synthetic
+--segment 198 246 0 48 copied
+--segment 246 290 48 57 synthetic
+--segment 290 294 48 52 copied
+--segment 294 329 48 52 synthetic
+--segment 329 330 53 54 copied
+--segment 330 364 53 54 synthetic
+--segment 364 365 55 56 copied
+--segment 365 366 55 56 synthetic
+--segment 366 1939 48 52 synthetic
+--segment 1939 1953 57 71 copied
+--slice 0 call=246,1939 source=290,294 first=329,330 last=364,365
 ==== slice_inside_comprehension_source
 return [for x in f(xs[1:2]) => x]
 ----
