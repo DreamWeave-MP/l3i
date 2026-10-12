@@ -187,3 +187,16 @@ fixed = [
 migration = """
 A strict script that reads `name` off an element of `ExprFunction.args` or of a generator's `bindings` refines it by `kind` first, `"Local"` or `"PatternRecord"`. Nothing changes at run time.
 """
+
+[[releases]]
+version = "2.0.2"
+date = 2026-10-12
+summary = "A natively lowered `@dream/intern` lookup no longer reads a slot table the pool has freed, and the `@dream/data` definitions say what a span's `kind` is."
+fixed = [
+    "Interning a key a pool already held, through the binder, while the pool sat at its load limit (12, 24, 48 ... identities) grew the slot table before looking the key up, and did not tell native code the table had moved, because the pool's length had not changed. Until the next new key, a lowered `pool:find` or `pool:intern` on an annotated `dream_intern_Pool` read the freed table: wrong tokens, `nil` for a key the pool held. A pool now looks a key up first and grows only to add one, so a key it holds moves nothing. Unannotated pools were never affected.",
+    "The `@dream/data` definitions gave `gather`, `scatter` and `add` a `kind: dream_data_Kind` parameter, the union of receiver classes, where the runtime takes the layout string every other span takes; and they typed a span's `kind` as the eight bare kinds, so the documented strided form (`\"f32@16+12\"`) was a type error under `--!strict`. A span's `kind` is now a `dream_data_Layout`, `dream_data_ElementKind | string`, in every signature, and the strict-script gate that checks the definitions against the runtime covers `@dream/data`, which it had left out.",
+    "`data.fill`'s description said the value converts as `buffer.write<kind>` converts. It is written as every data-plane write is: a number, truncated toward zero and wrapped to the width, saturating first beyond 2^63. The description says so now; the behaviour is unchanged.",
+]
+migration = """
+Nothing to change. A pool annotated `dream_intern_Pool` that also receives keys through unannotated code was the exposed case, and is correct after an upgrade. A strict script that cast a strided layout to pass it to `@dream/data` can drop the cast.
+"""
