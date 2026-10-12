@@ -14,9 +14,8 @@
 
 #![allow(clippy::cast_precision_loss, clippy::too_many_lines, clippy::missing_panics_doc)]
 
-use std::alloc::{GlobalAlloc, Layout, System};
 use std::hint::black_box;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::Ordering;
 use std::time::Instant;
 
 use l3i::Runtime;
@@ -28,44 +27,8 @@ use l3i::intl::{
 use l3i::memory::GcControl;
 
 #[cfg(target_os = "linux")]
-#[path = "instructions/counter.rs"]
-mod counter;
-
-/// The system allocator, counting calls and bytes.
-struct Counting;
-
-static ALLOCATIONS: AtomicU64 = AtomicU64::new(0);
-static ALLOCATED: AtomicU64 = AtomicU64::new(0);
-static LIVE: AtomicUsize = AtomicUsize::new(0);
-
-// SAFETY: forwards to `System` unchanged; the counters are plain atomics.
-unsafe impl GlobalAlloc for Counting {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
-        ALLOCATED.fetch_add(layout.size() as u64, Ordering::Relaxed);
-        LIVE.fetch_add(layout.size(), Ordering::Relaxed);
-        // SAFETY: forwarded.
-        unsafe { System.alloc(layout) }
-    }
-
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        LIVE.fetch_sub(layout.size(), Ordering::Relaxed);
-        // SAFETY: forwarded.
-        unsafe { System.dealloc(ptr, layout) }
-    }
-
-    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
-        ALLOCATED.fetch_add(new_size.saturating_sub(layout.size()) as u64, Ordering::Relaxed);
-        LIVE.fetch_add(new_size, Ordering::Relaxed);
-        LIVE.fetch_sub(layout.size(), Ordering::Relaxed);
-        // SAFETY: forwarded.
-        unsafe { System.realloc(ptr, layout, new_size) }
-    }
-}
-
-#[global_allocator]
-static GLOBAL: Counting = Counting;
+use crate::counter;
+use crate::counting_alloc::{ALLOCATED, ALLOCATIONS, LIVE};
 
 const ROUNDS: usize = 5;
 
@@ -382,7 +345,7 @@ fn luau_rows(instructions: &Instructions) {
     );
 }
 
-fn main() {
+pub fn main() {
     let instructions = Instructions::open();
     rust_rows(&instructions);
     luau_rows(&instructions);

@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use std::hint::black_box;
 
-use criterion::{Criterion, Throughput, criterion_group, criterion_main};
+use criterion::{Criterion, Throughput, criterion_group};
 use l3i::Runtime;
 use l3i::extension::{RuntimePlan, RuntimePolicy};
 use l3i::quat::{PackedRotation, QuatExtension};
@@ -176,4 +176,3 @@ fn lowered(c: &mut Criterion) {
 fn lowered(_: &mut Criterion) {}
 
 criterion_group! { name = benches; config = configure(); targets = raw, through_luau, lowered }
-criterion_main!(benches);

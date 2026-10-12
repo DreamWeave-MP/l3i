@@ -7,7 +7,7 @@
 //! `perf_event_open` shim the comprehension bench uses.
 
 use criterion::measurement::WallTime;
-use criterion::{BenchmarkGroup, Criterion, Throughput, criterion_group, criterion_main};
+use criterion::{BenchmarkGroup, Criterion, Throughput, criterion_group};
 use l3i::Runtime;
 use l3i::extension::{RuntimePlan, RuntimePolicy};
 use l3i::source::LoadScope;
@@ -17,8 +17,7 @@ const NIL_GUARD: &str =
     "if value == nil then error(\"L3i comprehension projection produced nil; filter nil explicitly\") end";
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-#[path = "instructions/counter.rs"]
-mod counter;
+use crate::counter;
 
 fn runtime() -> Runtime {
     let policy = RuntimePolicy::new();
@@ -281,4 +280,3 @@ fn execution(c: &mut Criterion) {
 }
 
 criterion_group!(benches, execution, compilation);
-criterion_main!(benches);

@@ -6,7 +6,7 @@
 //! not arbitrary side effects. No transform-then-filter comparison is made.
 
 use criterion::measurement::WallTime;
-use criterion::{BenchmarkGroup, Criterion, Throughput, criterion_group, criterion_main};
+use criterion::{BenchmarkGroup, Criterion, Throughput, criterion_group};
 use l3i::Runtime;
 use l3i::value::Table;
 
@@ -16,8 +16,7 @@ const NIL_GUARD: &str =
 
 // The shared perf shim currently declares the x86-64 Linux syscall number.
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-#[path = "instructions/counter.rs"]
-mod counter;
+use crate::counter;
 
 fn retired_instructions(label: &str, runtime: &Runtime, invoke: &mut dyn FnMut()) {
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
@@ -513,5 +512,3 @@ fn reducer_comparisons(c: &mut Criterion) {
 }
 
 criterion_group!(benches, eager_list_comprehensions, sink_comparisons, reducer_comparisons);
-
-criterion_main!(benches);

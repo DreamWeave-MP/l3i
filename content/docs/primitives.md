@@ -294,8 +294,8 @@ receiver is one tag-to-type compare, the key one tag test.
 
 ## What they cost
 
-Per call, in retired instructions on Luau 0.740, from `cargo bench --bench
-instructions` (see [Compatibility and performance](@/docs/performance.md)):
+Per call, in retired instructions on Luau 0.740, from `cargo bench -- instructions`
+(see [Compatibility and performance](@/docs/performance.md)):
 
 | Path | Instructions |
 |---|---|

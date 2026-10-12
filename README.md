@@ -205,7 +205,7 @@ Criterion numbers for the hot paths; a release tag regenerates them and attaches
 the GitHub release.
 
 Wall time is noise past a few nanoseconds, so the binder's own cost is tracked in retired
-instructions per call from the CPU's counters (`cargo bench --bench instructions`), the loop
+instructions per call from the CPU's counters (`cargo bench -- instructions`), the loop
 subtracted, on Luau 0.740:
 
 | Per call | Instructions | Cycles |

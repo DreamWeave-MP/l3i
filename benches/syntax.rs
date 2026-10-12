@@ -18,11 +18,7 @@
 
 #![allow(clippy::cast_precision_loss, clippy::missing_panics_doc)]
 
-#[cfg(target_os = "linux")]
-#[path = "instructions/counter.rs"]
-mod counter;
-
-fn main() {
+pub fn main() {
     #[cfg(target_os = "linux")]
     linux::main();
     #[cfg(not(target_os = "linux"))]

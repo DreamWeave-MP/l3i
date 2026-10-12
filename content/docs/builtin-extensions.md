@@ -575,7 +575,7 @@ spec substitutes. `encodingName(label)` gives the canonical name, `isUtf8(data)`
 
 ### What it costs
 
-Measured by `benches/bytes.rs` (`cargo bench --bench bytes --features bytes,bytes-codecs,bytes-digests,bytes-text,jit`)
+Measured by `benches/bytes.rs` (`cargo bench --features bytes,bytes-codecs,bytes-digests,bytes-text,jit -- bytes_`)
 on an i7-10870H. Per call, from a Luau loop:
 
 | Read | Interpreted | Native |
@@ -762,7 +762,7 @@ does not see.
 
 ### What it costs
 
-`cargo bench --features data --bench data` (interpreter) and `--features data,jit` (every chunk
+`cargo bench --features data -- data_` (interpreter) and `--features data,jit` (every chunk
 compiled natively, so the loop baselines are CodeGen loops), on an i7-10870H: retired
 instructions per call (minimum of five rounds of 64 calls) and Criterion median time. `u8` sums
 and `> 127` counts over `n` bytes; the recognized dialect form includes the slice prologue; the
@@ -964,7 +964,7 @@ Use it only in interpreted code. The bound function keeps its pool alive.
 
 ### What it costs
 
-Counted by `benches/intern.rs` (`cargo bench --bench intern --features intern,jit`) on an
+Counted by `benches/intern.rs` (`cargo bench --features intern,jit -- intern`) on an
 i7-10870H in retired instructions and cache misses from the CPU's own counters, not time, every
 chunk native. The workload is parse-shaped: 350K record-id-like identities, 5M occurrences
 drawn Zipf-distributed, a quarter of them in random case, read from a text buffer through an
@@ -1114,7 +1114,7 @@ real percent formatting rather than an approximation.
 
 ### What it costs
 
-Counted by `benches/intl.rs` (`cargo bench --features intl --bench intl`) on an i7-10870H:
+Counted by `benches/intl.rs` (`cargo bench --features intl -- intl`) on an i7-10870H:
 retired instructions from the CPU's counters, best of five rounds, with nanoseconds beside
 them. Luau rows are interpreted and have the loop subtracted.
 
@@ -1288,8 +1288,8 @@ errors and tree on every run.
 ### What it costs
 
 Every table is made at its final size and every key string is pushed once per call, so building
-a node hashes no string. Counted by `benches/syntax.rs` (`cargo bench --bench syntax --features
-syntax,analysis`) in retired instructions per source line, on a typed module of ordinary script
+a node hashes no string. Counted by `benches/syntax.rs` (`cargo bench --features syntax,analysis
+-- syntax`) in retired instructions per source line, on a typed module of ordinary script
 code repeated to 4701 lines, the minimum of five rounds, the tree collected after each:
 
 | | Instructions per line |
@@ -1613,7 +1613,7 @@ tested on Linux only so far.
 
 ### What it costs
 
-Measured by `benches/tcp.rs` (`cargo bench --features tcp --bench tcp`) on an i7-10870H,
+Measured by `benches/tcp.rs` (`cargo bench --features tcp -- tcp`) on an i7-10870H,
 Linux 7.2, over loopback in one thread; times are the best of five rounds, instructions are
 retired user-space instructions. Luau drives `@dream/tcp` from an interpreted loop; the Rust
 rows do the same with nonblocking `std::net` sockets.
@@ -1913,7 +1913,7 @@ no redirects, chunked bodies, request bodies or connection reuse.
 
 ### What it costs
 
-Measured by `benches/dns_tls.rs` (`cargo bench --features dns,tls --bench dns_tls`) on an
+Measured by `benches/dns_tls.rs` (`cargo bench --features dns,tls -- dns_tls`) on an
 i7-10870H, Linux 7.2, loopback, one thread, best of five rounds; Luau drives the modules.
 
 | DNS | instr | µs | native allocs |

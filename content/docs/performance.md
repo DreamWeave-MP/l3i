@@ -105,11 +105,12 @@ The integration tests link as one binary (`tests/main.rs`), one file's tests run
 
 ## What it costs
 
-Criterion wall-clock means from `cargo bench --bench hot_paths`, generated on 2026-09-28 by
+Criterion wall-clock means from the hot-path groups of `cargo bench`, generated on 2026-09-28 by
 `scripts/gen_benchmarks.py` on an Intel Core i7-10870H at 2.20 GHz, with debug assertions off
-and default features (interpreter only), under the verified toolchain. The other suites are
-`cargo bench --bench udp`, `packed_quat`, `raster`, `soft_render` (feature `soft-render`) and
-`instructions`.
+and default features (interpreter only), under the verified toolchain. Every bench is one
+binary, `benches/main.rs`, because each binary pays a full cross-language LTO link; a group or
+harness is selected by name, `cargo bench -- udp_bridge`, `-- packed_quat`, `-- raster_`,
+`--features soft-render -- soft_render`, `-- instructions`.
 
 ### Rust to Luau
 
@@ -267,7 +268,7 @@ The encode's floor is the three float-to-integer conversions.
 
 ### Bytes
 
-`cargo bench --bench bytes`, with every `bytes-*` feature and `jit`. Per call from a Luau loop:
+`cargo bench -- bytes_`, with every `bytes-*` feature and `jit`. Per call from a Luau loop:
 `buffer.readu32` plus `bit32.byteswap` 116 ns interpreted and 4.3 ns native; the module's
 `readu32be` 65 ns; the receiver's `readu32be` 68 ns interpreted and 5.9 ns lowered, `readi64be`
 5.1 ns, `readu24be` 6.5 ns, `writeu32be` 5.3 ns; `readCString` of a 16-byte field 157 ns,
@@ -279,8 +280,8 @@ Windows-1252 1.5 GiB/s.
 ## Instructions and cycles
 
 Past a few nanoseconds wall time is noise, so the binder's own cost is tracked in retired
-instructions and cycles per call, read from the CPU's counters by `cargo bench --bench
-instructions` (Linux, `perf_event_paranoid` at 2 or lower, no `perf` binary needed). The loop is
+instructions and cycles per call, read from the CPU's counters by `cargo bench -- instructions`
+(Linux, `perf_event_paranoid` at 2 or lower, no `perf` binary needed). The loop is
 subtracted, the minimum over seven rounds is reported, and the floors are measured the same way:
 a hand-written `lua_CFunction` and a typed direct handler. On Luau 0.740:
 
@@ -557,7 +558,7 @@ No C++ ancestor, for better or worse:
 
 The rule on [Building](@/docs/building.md) comes from this measurement, taken on 2026-09-27 with
 `scripts/toolchain_campaign.py` (a clean `cargo build --release --lib`, then
-`cargo bench --bench hot_paths --no-run`, then a five-case subset at 2 s per case) on an
+`cargo bench --no-run`, then a five-case subset of the hot paths at 2 s per case) on an
 i7-10870H in a Fedora 44 toolbox: gcc 16.2.1, clang/lld 22.1.8, mold 2.40.4, rustc 1.98.1
 (LLVM 22). Each contender ran three times, interleaved. Nanoseconds per call.
 

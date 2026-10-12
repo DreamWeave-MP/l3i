@@ -11,7 +11,7 @@
 
 use std::time::Duration;
 
-use criterion::{Criterion, Throughput, criterion_group, criterion_main};
+use criterion::{Criterion, Throughput, criterion_group};
 use l3i::extension::{RuntimePlan, RuntimePolicy};
 use l3i::stack::Scope;
 use l3i::udp::{self, Server, UdpSchema};
@@ -131,4 +131,3 @@ fn configure() -> Criterion {
 }
 
 criterion_group! { name = benches; config = configure(); targets = udp_bridge }
-criterion_main!(benches);

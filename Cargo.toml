@@ -1,5 +1,8 @@
 [package]
+# The integration tests and the benches each link as one binary (tests/main.rs, benches/main.rs):
+# under cross-language thin LTO every binary pays a full link, so one is the budget.
 autotests = false
+autobenches = false
 name = "l3i"
 version = "2.0.0"
 description = "Luau binder for DreamWeave component crates: typed function binding, tagged and untagged userdata, direct userdata access, sandboxed runtimes"
@@ -128,72 +131,10 @@ required-features = ["tcp"]
 name = "https_get"
 required-features = ["dns", "tls"]
 
+# One bench binary, like the one test binary: each bench file is a module of benches/main.rs,
+# feature-gated there, and `cargo bench -- <group or harness name>` selects within it.
 [[bench]]
-name = "hot_paths"
-harness = false
-
-[[bench]]
-name = "udp"
-harness = false
-
-[[bench]]
-name = "packed_quat"
-harness = false
-
-[[bench]]
-name = "raster"
-harness = false
-
-[[bench]]
-name = "instructions"
-harness = false
-
-[[bench]]
-name = "soft_render"
-harness = false
-required-features = ["soft-render"]
-
-[[bench]]
-name = "bytes"
-harness = false
-required-features = ["bytes"]
-
-[[bench]]
-name = "syntax"
-harness = false
-required-features = ["syntax", "analysis"]
-
-[[bench]]
-name = "intern"
-harness = false
-required-features = ["intern"]
-
-[[bench]]
-name = "data"
-harness = false
-required-features = ["data"]
-
-[[bench]]
-name = "intl"
-harness = false
-required-features = ["intl"]
-
-[[bench]]
-name = "tcp"
-harness = false
-required-features = ["tcp"]
-
-[[bench]]
-name = "dns_tls"
-harness = false
-required-features = ["dns", "tls"]
-
-[[bench]]
-name = "comprehension"
-harness = false
-
-[[bench]]
-name = "patterns"
+name = "main"
 harness = false
 
 [features]

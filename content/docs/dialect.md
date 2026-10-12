@@ -475,7 +475,7 @@ executed_instruction_counts -- --nocapture`, interpreter, default compilation:
 Every lowering family adds exactly one setup instruction to the same-contract loop at every size.
 The dense form's one extra instruction per element over the unchecked loop is the nil guard,
 which is the contract, not overhead. Retired CPU instructions per call from
-`cargo bench --bench comprehension` tell the same story: dense, filtered, count and sum fusion
+`cargo bench -- comprehension` tell the same story: dense, filtered, count and sum fusion
 within 0.03 percent of the handwritten loop; `enumerate` and the zips 25 to 12 percent over
 deliberately unchecked baselines, the difference being the guard and the index binding; a
 sink 1,140 instructions over a handwritten destination-reuse loop per call of 4,096 elements, all
@@ -484,8 +484,8 @@ instructions of their loops. The bench sandboxes its runtime after setup so buil
 fire as they do in a host; absolute times quoted anywhere from earlier runs are pessimistic by
 the builtin-call cost and the ratios hold either way.
 
-Record patterns, retired instructions per call over 4,096 records, `cargo bench --bench
-patterns`, l3i against the handwritten extraction:
+Record patterns, retired instructions per call over 4,096 records, `cargo bench -- patterns`,
+l3i against the handwritten extraction:
 
 | Case | Interpreter | Native (`jit`) |
 |---|---:|---:|
@@ -512,7 +512,7 @@ loops and about 20 percent when it has dotted or method calls inside brackets; a
 thirds, and the remaining fix would be not lexing at all, which no exact textual test for a slice
 allows. A module dense with patterns compiles in about 1.8 times the instructions of its
 handwritten twin: lexing, building the lowered text and map, and remapping the many locations the
-holders shift. `cargo bench --bench patterns -- patterns_compile` tracks it;
+holders shift. `cargo bench -- patterns_compile` tracks it;
 `L3I_PROFILE_CASE=<label>` runs one case for a profiler.
 
 Wall-clock times are secondary everywhere on this page. Sequential Criterion runs have reversed

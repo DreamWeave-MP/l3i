@@ -31,7 +31,7 @@ use std::cell::Cell;
 use std::ffi::c_int;
 use std::time::Duration;
 
-use criterion::{BatchSize, Criterion, Throughput, criterion_group, criterion_main};
+use criterion::{BatchSize, Criterion, Throughput, criterion_group};
 use l3i::bind::Call;
 use l3i::convert::Vector3;
 use l3i::direct::field::{DirectField, FieldValue};
@@ -300,7 +300,6 @@ fn configure() -> Criterion {
 }
 
 criterion_group! { name = benches; config = configure(); targets = rust_to_luau, luau_to_rust, methods_and_properties, host_side, plan_dispatch, extension_dispatch, typed_variants }
-criterion_main!(benches);
 
 // ---- Runtime-resolved plans: cached direct index and namecall at several plan sizes ---------
 

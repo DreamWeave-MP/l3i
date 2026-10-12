@@ -5,7 +5,7 @@
 
 use std::time::Duration;
 
-use criterion::{Criterion, Throughput, criterion_group, criterion_main};
+use criterion::{Criterion, Throughput, criterion_group};
 use l3i::Runtime;
 use l3i::extension::{RuntimePlan, RuntimePolicy};
 use l3i::raster::RasterExtension;
@@ -107,4 +107,3 @@ fn configure() -> Criterion {
 }
 
 criterion_group! { name = benches; config = configure(); targets = module_functions, lowered }
-criterion_main!(benches);

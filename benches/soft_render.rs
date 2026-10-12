@@ -7,7 +7,7 @@
 
 use std::time::Duration;
 
-use criterion::{Criterion, Throughput, criterion_group, criterion_main};
+use criterion::{Criterion, Throughput, criterion_group};
 use dream_soft_render::{ClipRect, Color, Mesh, Rect, SoftwareRenderer, Vertex};
 use l3i::Runtime;
 use l3i::extension::{RuntimePlan, RuntimePolicy};
@@ -357,4 +357,3 @@ fn configure() -> Criterion {
 }
 
 criterion_group! { name = benches; config = configure(); targets = native, through_luau, lowered }
-criterion_main!(benches);

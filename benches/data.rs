@@ -16,15 +16,14 @@
 )]
 
 use criterion::measurement::WallTime;
-use criterion::{BenchmarkGroup, Criterion, Throughput, criterion_group, criterion_main};
+use criterion::{BenchmarkGroup, Criterion, Throughput, criterion_group};
 use l3i::Runtime;
 use l3i::data::DataExtension;
 use l3i::extension::{RuntimePlan, RuntimePolicy};
 use l3i::source::LoadScope;
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-#[path = "instructions/counter.rs"]
-mod counter;
+use crate::counter;
 
 fn policy(with_data: bool) -> RuntimePolicy {
     let policy = RuntimePolicy::new();
@@ -297,4 +296,3 @@ fn all(c: &mut Criterion) {
 }
 
 criterion_group!(benches, all);
-criterion_main!(benches);

@@ -20,9 +20,8 @@
     clippy::similar_names
 )]
 
-use std::alloc::{GlobalAlloc, Layout, System};
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
@@ -35,40 +34,8 @@ use l3i::tls::TlsExtension;
 use l3i::value::Function;
 
 #[cfg(target_os = "linux")]
-#[path = "instructions/counter.rs"]
-mod counter;
-
-struct Counting;
-
-static ALLOCATIONS: AtomicU64 = AtomicU64::new(0);
-static LIVE: AtomicUsize = AtomicUsize::new(0);
-
-// SAFETY: forwards to `System` unchanged; the counters are plain atomics.
-unsafe impl GlobalAlloc for Counting {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
-        LIVE.fetch_add(layout.size(), Ordering::Relaxed);
-        // SAFETY: forwarded.
-        unsafe { System.alloc(layout) }
-    }
-
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        LIVE.fetch_sub(layout.size(), Ordering::Relaxed);
-        // SAFETY: forwarded.
-        unsafe { System.dealloc(ptr, layout) }
-    }
-
-    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
-        LIVE.fetch_add(new_size, Ordering::Relaxed);
-        LIVE.fetch_sub(layout.size(), Ordering::Relaxed);
-        // SAFETY: forwarded.
-        unsafe { System.realloc(ptr, layout, new_size) }
-    }
-}
-
-#[global_allocator]
-static GLOBAL: Counting = Counting;
+use crate::counter;
+use crate::counting_alloc::{ALLOCATIONS, LIVE};
 
 const ROUNDS: usize = 5;
 
@@ -515,7 +482,7 @@ fn pki() -> (String, String, String) {
     (ca.pem(), leaf.pem(), key.serialize_pem())
 }
 
-fn main() {
+pub fn main() {
     let instructions = Instructions::open();
     if let Ok(cpuinfo) = std::fs::read_to_string("/proc/cpuinfo")
         && let Some(model) = cpuinfo.lines().find(|line| line.starts_with("model name"))

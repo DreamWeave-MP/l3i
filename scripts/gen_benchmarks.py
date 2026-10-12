@@ -2,7 +2,7 @@
 """
 Generate BENCHMARKS.md from Criterion output.
 
-Run `cargo bench --bench hot_paths` first, then `python3 scripts/gen_benchmarks.py`.
+Run `cargo bench` first (the hot-path groups are what it reads), then `python3 scripts/gen_benchmarks.py`.
 Reads target/criterion/**/new/{benchmark,estimates}.json; writes BENCHMARKS.md.
 
 Groups whose benchmark runs a Lua loop of 1000 calls per sample (throughput = 1000 elements)
@@ -91,7 +91,7 @@ def chart(title, labels, values_ns):
 def main():
     records = load()
     if not records:
-        raise SystemExit("no Criterion output under target/criterion; run cargo bench --bench hot_paths")
+        raise SystemExit("no Criterion output under target/criterion; run cargo bench")
     machine = f"{platform.machine()}, {platform.system()} {platform.release()}"
     cpu = ""
     try:
@@ -104,7 +104,7 @@ def main():
     lines = [
         "# Benchmarks",
         "",
-        f"> Generated {date.today()} · `cargo bench --bench hot_paths` → Criterion → "
+        f"> Generated {date.today()} · `cargo bench` → Criterion →"
         f"[scripts/gen_benchmarks.py](scripts/gen_benchmarks.py) · {cpu or machine}",
         "",
         "All times are wall-clock means measured by [Criterion.rs](https://github.com/bheisler/criterion.rs)"

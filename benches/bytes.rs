@@ -7,7 +7,7 @@
 
 use std::time::Duration;
 
-use criterion::{Criterion, Throughput, criterion_group, criterion_main};
+use criterion::{Criterion, Throughput, criterion_group};
 use l3i::Runtime;
 use l3i::bytes::BytesExtension;
 use l3i::extension::{RuntimePlan, RuntimePolicy};
@@ -249,4 +249,3 @@ fn configure() -> Criterion {
 }
 
 criterion_group! { name = benches; config = configure(); targets = per_call, lowered, throughput, framing_and_regex }
-criterion_main!(benches);
