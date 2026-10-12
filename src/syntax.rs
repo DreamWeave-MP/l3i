@@ -197,13 +197,26 @@ pub const TYPES: &[(&str, &str)] = &[
     ),
     (
         "dream_luau_ComprehensionGenerator",
-        "{ kind: \"ComprehensionGenerator\", line: number, column: number, endLine: number, endColumn: number, binding: dream_luau_Local?, bindings: { dream_luau_Local }, source: dream_luau_Expr, inLocation: dream_luau_Span?, keywordLocation: dream_luau_Span, hasIn: boolean }",
+        "{ kind: \"ComprehensionGenerator\", line: number, column: number, endLine: number, endColumn: number, binding: dream_luau_Binding?, bindings: { dream_luau_Binding }, source: dream_luau_Expr, inLocation: dream_luau_Span?, keywordLocation: dream_luau_Span, hasIn: boolean }",
     ),
     (
         "dream_luau_ComprehensionFilter",
         "{ kind: \"ComprehensionFilter\", line: number, column: number, endLine: number, endColumn: number, condition: dream_luau_Expr, keywordLocation: dream_luau_Span }",
     ),
     ("dream_luau_ComprehensionClause", "dream_luau_ComprehensionGenerator | dream_luau_ComprehensionFilter"),
+    (
+        "dream_luau_PatternIdentifier",
+        "{ kind: \"PatternIdentifier\", line: number, column: number, endLine: number, endColumn: number, name: string, ['local']: dream_luau_Local? }",
+    ),
+    (
+        "dream_luau_PatternField",
+        "{ kind: \"PatternField\", line: number, column: number, endLine: number, endColumn: number, key: string, keyLocation: dream_luau_Span, colonLocation: dream_luau_Span?, shorthand: boolean, target: (dream_luau_PatternIdentifier | dream_luau_PatternRecord)? }",
+    ),
+    (
+        "dream_luau_PatternRecord",
+        "{ kind: \"PatternRecord\", line: number, column: number, endLine: number, endColumn: number, fields: { dream_luau_PatternField }, openLocation: dream_luau_Span, closeLocation: dream_luau_Span?, hasClose: boolean, complete: boolean, annotation: dream_luau_Type? }",
+    ),
+    ("dream_luau_Binding", "dream_luau_Local | dream_luau_PatternRecord"),
     (
         "dream_luau_ExprRange",
         "{ kind: \"ExprRange\", line: number, column: number, endLine: number, endColumn: number, args: { dream_luau_Expr } }",
@@ -282,7 +295,7 @@ pub const TYPES: &[(&str, &str)] = &[
     ),
     (
         "dream_luau_ExprFunction",
-        "{ kind: \"ExprFunction\", line: number, column: number, endLine: number, endColumn: number, attributes: { dream_luau_Attr }, generics: { dream_luau_GenericType }, genericPacks: { dream_luau_GenericTypePack }, self: dream_luau_Local?, args: { dream_luau_Local }, vararg: boolean, varargAnnotation: dream_luau_TypePack?, returnAnnotation: dream_luau_TypePack?, body: dream_luau_StatBlock, functionDepth: number, debugname: string?, argLocation: dream_luau_Span? }",
+        "{ kind: \"ExprFunction\", line: number, column: number, endLine: number, endColumn: number, attributes: { dream_luau_Attr }, generics: { dream_luau_GenericType }, genericPacks: { dream_luau_GenericTypePack }, self: dream_luau_Local?, args: { dream_luau_Binding }, vararg: boolean, varargAnnotation: dream_luau_TypePack?, returnAnnotation: dream_luau_TypePack?, body: dream_luau_StatBlock, functionDepth: number, debugname: string?, argLocation: dream_luau_Span? }",
     ),
     (
         "dream_luau_ExprTable",
@@ -371,6 +384,10 @@ pub const TYPES: &[(&str, &str)] = &[
     (
         "dream_luau_StatFunction",
         "{ kind: \"StatFunction\", line: number, column: number, endLine: number, endColumn: number, hasSemicolon: boolean, name: dream_luau_Expr, func: dream_luau_ExprFunction }",
+    ),
+    (
+        "dream_luau_StatLocalPattern",
+        "{ kind: \"StatLocalPattern\", line: number, column: number, endLine: number, endColumn: number, hasSemicolon: boolean, pattern: dream_luau_PatternRecord, annotation: dream_luau_Type?, value: dream_luau_Expr?, equalsSignLocation: dream_luau_Span? }",
     ),
     (
         "dream_luau_StatLocalFunction",
@@ -466,7 +483,7 @@ pub const TYPES: &[(&str, &str)] = &[
     ),
     (
         "dream_luau_Stat",
-        "dream_luau_StatBlock | dream_luau_StatIf | dream_luau_StatWhile | dream_luau_StatRepeat | dream_luau_StatBreak | dream_luau_StatContinue | dream_luau_StatReturn | dream_luau_StatExpr | dream_luau_StatLocal | dream_luau_StatFor | dream_luau_StatForIn | dream_luau_StatAssign | dream_luau_StatCompoundAssign | dream_luau_StatFunction | dream_luau_StatLocalFunction | dream_luau_StatTypeAlias | dream_luau_StatTypeFunction | dream_luau_StatDeclareGlobal | dream_luau_StatDeclareFunction | dream_luau_StatDeclareExternType | dream_luau_StatClass | dream_luau_StatError",
+        "dream_luau_StatBlock | dream_luau_StatIf | dream_luau_StatWhile | dream_luau_StatRepeat | dream_luau_StatBreak | dream_luau_StatContinue | dream_luau_StatReturn | dream_luau_StatExpr | dream_luau_StatLocal | dream_luau_StatLocalPattern | dream_luau_StatFor | dream_luau_StatForIn | dream_luau_StatAssign | dream_luau_StatCompoundAssign | dream_luau_StatFunction | dream_luau_StatLocalFunction | dream_luau_StatTypeAlias | dream_luau_StatTypeFunction | dream_luau_StatDeclareGlobal | dream_luau_StatDeclareFunction | dream_luau_StatDeclareExternType | dream_luau_StatClass | dream_luau_StatError",
     ),
     (
         "dream_luau_Type",
@@ -475,7 +492,7 @@ pub const TYPES: &[(&str, &str)] = &[
     ("dream_luau_TypePack", "dream_luau_TypePackExplicit | dream_luau_TypePackVariadic | dream_luau_TypePackGeneric"),
     (
         "dream_luau_Node",
-        "dream_luau_Expr | dream_luau_Stat | dream_luau_Type | dream_luau_TypePack | dream_luau_Local | dream_luau_Attr | dream_luau_GenericType | dream_luau_GenericTypePack | dream_luau_TableItem | dream_luau_TableProp | dream_luau_TableIndexer | dream_luau_DeclaredProp | dream_luau_ArgumentName | dream_luau_ComprehensionClause",
+        "dream_luau_Expr | dream_luau_Stat | dream_luau_Type | dream_luau_TypePack | dream_luau_Local | dream_luau_Attr | dream_luau_GenericType | dream_luau_GenericTypePack | dream_luau_TableItem | dream_luau_TableProp | dream_luau_TableIndexer | dream_luau_DeclaredProp | dream_luau_ArgumentName | dream_luau_ComprehensionClause | dream_luau_PatternRecord | dream_luau_PatternField | dream_luau_PatternIdentifier",
     ),
     (
         "dream_luau_Comment",

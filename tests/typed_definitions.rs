@@ -293,12 +293,58 @@ const SYNTAX_SCRIPT: (&str, &str) = (
        end\n\
        return nil\n\
      end\n\
+     local function bound(stat: dream_luau_Stat): { string }\n\
+       if stat.kind ~= 'StatLocalPattern' then\n\
+         return {}\n\
+       end\n\
+       local out = {}\n\
+       local function collect(record: dream_luau_PatternRecord)\n\
+         for _, field in record.fields do\n\
+           local target = field.target\n\
+           if not target then\n\
+             continue\n\
+           end\n\
+           if target.kind == 'PatternRecord' then\n\
+             collect(target)\n\
+           else\n\
+             local declared: dream_luau_Local? = target['local']\n\
+             table.insert(out, if declared then declared.name else target.name)\n\
+           end\n\
+         end\n\
+       end\n\
+       collect(stat.pattern)\n\
+       return out\n\
+     end\n\
+     local function parameters(func: dream_luau_ExprFunction): { string }\n\
+       local out = {}\n\
+       for _, argument in func.args do\n\
+         if argument.kind == 'Local' then\n\
+           table.insert(out, argument.name)\n\
+         else\n\
+           table.insert(out, `{#argument.fields} fields`)\n\
+         end\n\
+       end\n\
+       return out\n\
+     end\n\
+     local function slots(generator: dream_luau_ComprehensionGenerator): number\n\
+       local patterns = 0\n\
+       for _, binding: dream_luau_Binding in generator.bindings do\n\
+         if binding.kind == 'PatternRecord' then\n\
+           patterns += 1\n\
+         end\n\
+       end\n\
+       return patterns\n\
+     end\n\
+     local function isNode(node: dream_luau_Node): boolean\n\
+       return node.kind == 'PatternField' or node.kind == 'PatternIdentifier'\n\
+     end\n\
      local first: dream_luau_Stat = result.root.body[1]\n\
      local line: number = first.line + first.endColumn + result.lineStarts[1]\n\
      local comment: dream_luau_Comment? = result.comments[1]\n\
      local kinds: dream_luau_TokenKinds = luau.tokenKinds\n\
      local tokens: buffer? = result.tokens\n\
-     print(names(first), callee, line, comment, kinds.name, tokens, #result.errors)\n",
+     print(names(first), callee, line, comment, kinds.name, tokens, #result.errors)\n\
+     print(bound(first), parameters, slots, isNode)\n",
 );
 
 const SCRIPTS: &[(&str, &str)] = &[

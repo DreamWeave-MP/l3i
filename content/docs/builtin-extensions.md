@@ -1278,6 +1278,11 @@ assert(comprehension.kind == 'ExprComprehension')
 | `PatternRecord` | `fields`, `openLocation`, optional `closeLocation`, `hasClose`, `complete`, and in parameter position the parameter's `annotation`; appears in `ExprFunction.args` and `ComprehensionGenerator.bindings` in the slot's position |
 | `PatternField` | `key`, `keyLocation`, optional `colonLocation`, `shorthand`, and `target`, a `PatternIdentifier { name, local }` or a nested `PatternRecord`, absent while missing |
 
+The definitions type these too: `dream_luau_StatLocalPattern` is a member of `dream_luau_Stat`,
+and a slot that may hold a pattern is a `dream_luau_Binding`, `dream_luau_Local |
+dream_luau_PatternRecord`, which is what `ExprFunction.args` and a generator's `bindings` hold. A
+strict walker refines one by its `kind`, `"Local"` or `"PatternRecord"`, before reading a `name`.
+
 A zero-width insertion point has `endColumn = column - 1` on its line. Missing expressions are
 `ExprError` with `isMissing = true` and no children; a malformed ordinary expression keeps stock
 recovery nodes or one error covering the whole expression, never a valid prefix that hides the
