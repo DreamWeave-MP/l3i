@@ -423,10 +423,19 @@ fn writes_are_partial_under_backpressure_and_nothing_is_queued_behind_them() {
             end
             assert(blocked, 'the receiver never pushed back')
             assert(sent > 0 and sent < 64 * 1024 * 1024, `{sent} bytes accepted with nobody reading`)
-            -- A blocked stream is not writable until the receiver drains.
+            -- A blocked stream is not writable until the receiver drains. Loopback is not
+            -- synchronous everywhere: macOS may still be moving bytes into the server's receive
+            -- buffer, freeing send-buffer space after the last write refused. Readiness is a hint,
+            -- so when it is reported, write until the socket refuses again and count what it took.
             local poller = tcp.poller()
             assert(poller:watch(client, 1, 'write'))
-            assert(poller:wait(0) == 0)
+            if poller:wait(0) == 1 then
+                for _ = 1, 100000 do
+                    local n, message, kind = client:write(pattern, sent % 65511)
+                    if n == nil then assert(kind == 'wouldBlock', message) break end
+                    sent += n
+                end
+            end
             -- Drain everything and check every byte.
             local scratch = buffer.create(65536)
             local got = 0
