@@ -475,11 +475,20 @@ fn a_half_close_ends_one_direction_only() {
             writeAll(client, 'request')
             assert(client:shutdown('write') == true)
             -- The peer of a half-closed stream sees the end of stream, flagged as closed.
+            -- Loopback is not synchronous everywhere: macOS may deliver the bytes and the end
+            -- of the stream apart, so the stream can turn readable a wait before the flag
+            -- comes. Readiness is level-triggered, so every wait until then reports it again.
             local poller = tcp.poller()
             assert(poller:watch(server, 5, 'read'))
-            assert(poller:wait(1000) == 1)
-            local token, readable, writable, closed = poller:next()
-            assert(token == 5 and readable and not writable and closed)
+            local closed = false
+            local deadline = os.clock() + 5
+            repeat
+                assert(poller:wait(1000) == 1)
+                local token, readable, writable, ended = poller:next()
+                assert(token == 5 and readable and not writable)
+                closed = ended
+            until closed or os.clock() >= deadline
+            assert(closed, 'the end of the stream was never flagged')
             poller:unwatch(5)
             assert(readToEnd(server) == 'request')
             -- ...but can still answer, and the half-closed side still reads.
