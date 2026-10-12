@@ -347,6 +347,29 @@ fn push_address(call: &Call<'_>, address: SocketAddr) -> Result<()> {
     Ok(())
 }
 
+/// `EINPROGRESS`: a nonblocking connect that has started and will settle later. Rust gives it no
+/// `ErrorKind`, the number differs per libc, and `libc` is not a dependency of `tcp`, so the
+/// values are written out. Windows reports the same state as `WSAEWOULDBLOCK`, which is
+/// `ErrorKind::WouldBlock`; its `WSAEINPROGRESS` is here for completeness.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+const EINPROGRESS: i32 = 115;
+#[cfg(any(
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "tvos",
+    target_os = "watchos",
+    target_os = "visionos",
+    target_os = "freebsd",
+    target_os = "netbsd",
+    target_os = "openbsd",
+    target_os = "dragonfly"
+))]
+const EINPROGRESS: i32 = 36;
+#[cfg(any(target_os = "solaris", target_os = "illumos"))]
+const EINPROGRESS: i32 = 150;
+#[cfg(windows)]
+const EINPROGRESS: i32 = 10036;
+
 /// Options an accepted stream gets: Nagle off when the listener asked, and on Apple platforms
 /// no SIGPIPE (Linux sends with MSG_NOSIGNAL; an accepted socket there does not inherit it).
 fn configure_accepted(stream: &mio::net::TcpStream, no_delay: bool) -> io::Result<()> {
@@ -471,10 +494,31 @@ impl Stream {
 
     /// Starts a nonblocking connect; the stream is `Connecting` unless the OS finished at once.
     pub(super) fn connect(address: SocketAddr, no_delay: bool) -> io::Result<Stream> {
-        let stream = mio::net::TcpStream::connect(address)?;
+        use socket2::{Domain, Protocol, Socket as RawSocket, Type};
+        // Options go on before the connect starts: macOS answers EINVAL to TCP_NODELAY on a socket
+        // whose nonblocking connect is still in progress, where Linux accepts it.
+        let socket = RawSocket::new(Domain::for_address(address), Type::STREAM, Some(Protocol::TCP))?;
         if no_delay {
-            stream.set_nodelay(true)?;
+            socket.set_tcp_nodelay(true)?;
         }
+        #[cfg(any(
+            target_os = "macos",
+            target_os = "ios",
+            target_os = "tvos",
+            target_os = "watchos",
+            target_os = "visionos"
+        ))]
+        socket.set_nosigpipe(true)?;
+        socket.set_nonblocking(true)?;
+        // A nonblocking connect reports that it has started as EINPROGRESS (WSAEWOULDBLOCK on
+        // Windows); the socket error settles it later, which `finish_connect` reads.
+        match socket.connect(&address.into()) {
+            Ok(()) => {}
+            Err(error) if error.raw_os_error() == Some(EINPROGRESS) => {}
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
+            Err(error) => return Err(error),
+        }
+        let stream = mio::net::TcpStream::from_std(socket.into());
         Ok(Stream::new(stream, StreamState::Connecting, None, address, None))
     }
 
