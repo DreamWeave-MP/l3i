@@ -1,0 +1,3 @@
+# The lowering goldens are compared byte for byte against text the frontend generates with LF
+# line ends, so a checkout must never convert them.
+*.golden text eol=lf

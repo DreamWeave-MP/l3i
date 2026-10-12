@@ -228,6 +228,9 @@ fn check(mode: LoweringMode, label: &str) {
     }
     let expected = std::fs::read_to_string(&path)
         .unwrap_or_else(|error| panic!("{}: {error}; run with L3I_UPDATE_LOWERING=1 to create it", path.display()));
+    // A checkout with core.autocrlf (GitHub's Windows runners) hands the golden back with CRLF
+    // line ends; the lowering itself never writes a carriage return, so compare without them.
+    let expected = expected.replace("\r\n", "\n");
     if expected != actual {
         let scratch = std::env::temp_dir().join(format!("l3i-lowering-{label}.actual"));
         std::fs::write(&scratch, &actual).unwrap();
