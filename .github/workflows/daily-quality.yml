@@ -3,7 +3,6 @@ name: Daily Rust Quality Checks
 on:
   workflow_dispatch:
   schedule:
-    # GitHub cron is UTC. 15:00 UTC is 9 AM Central Standard Time.
     - cron: '0 15 * * *'
 
 permissions:
@@ -25,7 +24,6 @@ jobs:
         with:
           submodules: true
       - uses: dtolnay/rust-toolchain@stable
-      # Clippy runs the build script, which refuses a toolchain without a matching clang and lld.
       - uses: DreamWeave-MP/StroggForge/.github/actions/setup-llvm@v55
       - name: Run Clippy
         run: cargo clippy --workspace --all-targets --all-features -- -W clippy::pedantic -D warnings
