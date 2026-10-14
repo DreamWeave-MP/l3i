@@ -857,10 +857,20 @@ int db_analysis_check(db_analysis* analysis, const char* name, size_t name_lengt
         }
         Luau::FrontendOptions options = analysis->options;
         options.runLintChecks = lint != 0;
+        // A slice generator is lowered for a buffer once Luau has inferred its source as one, and
+        // a module keeps the types it inferred only with its full type graph. Without it every
+        // buffer slice would be checked as a table slice, in this module and in what it requires.
+        options.retainFullTypeGraphs = true;
         Luau::CheckResult result = analysis->frontend->check(module, options);
         if (confirmBoundaries(*analysis->frontend, analysis->files, module))
             result = analysis->frontend->check(module, options);
-        if (specializeBufferGenerators(*analysis->frontend, analysis->files, module))
+        std::unordered_set<std::string> reached;
+        std::vector<std::string> required;
+        reachableModules(*analysis->frontend, module, reached, required);
+        bool specialized = false;
+        for (const auto& name : required)
+            specialized |= specializeBufferGenerators(*analysis->frontend, analysis->files, name);
+        if (specialized)
             result = analysis->frontend->check(module, options);
         int errors = 0;
         std::unordered_set<std::string> seen;

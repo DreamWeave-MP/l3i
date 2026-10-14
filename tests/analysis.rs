@@ -1503,3 +1503,39 @@ fn completion_time_grows_linearly_with_the_module() {
             .unwrap_or_else(|measured| panic!("surface {surface}: {measured}"));
     }
 }
+
+/// A buffer slice generator type-checks as a buffer with the default options, which keep no full
+/// type graph, in the module checked and in a module it requires: Luau's inference of the slice
+/// source is what the buffer lowering waits for, and a module keeps it only with its type graph.
+#[test]
+fn buffer_slice_generators_specialize_without_retained_type_graphs_and_in_required_modules() {
+    let library = concat!(
+        "--!strict\n",
+        "local data: buffer = buffer.create(4)\n",
+        "local function total(): number\n",
+        "  return sum[for byte in data[1:4] => byte]\n",
+        "end\n",
+        "return { total = total }\n",
+    );
+    let main = concat!(
+        "--!strict\n",
+        "local library = require('library')\n",
+        "local values = buffer.create(8)\n",
+        "local nonzero: boolean = any[for byte in values[1:8] => byte ~= 0]\n",
+        "local bytes: { number } = [for byte in values[1:8] => byte * 2]\n",
+        "return library.total(), nonzero, bytes\n",
+    );
+    for solver in [analysis::Solver::New, analysis::Solver::Old] {
+        let analysis = Analysis::new(
+            Sources { modules: HashMap::from([("library", library), ("main", main)]) },
+            AnalysisOptions { solver, ..AnalysisOptions::default() },
+        )
+        .unwrap();
+        let report = analysis.check("main", false);
+        assert!(report.is_clean(), "{solver:?}: {report:#?}");
+        // Checked again with nothing changed, the buffer lowering stays.
+        analysis.mark_dirty("library");
+        let report = analysis.check("main", false);
+        assert!(report.is_clean(), "{solver:?}, again: {report:#?}");
+    }
+}
