@@ -200,3 +200,16 @@ fixed = [
 migration = """
 Nothing to change. A pool annotated `dream_intern_Pool` that also receives keys through unannotated code was the exposed case, and is correct after an upgrade. A strict script that cast a strided layout to pass it to `@dream/data` can drop the cast.
 """
+
+[[releases]]
+version = "2.0.3"
+date = 2026-10-14
+summary = "Analysis checks a buffer slice generator as a buffer with the default options, and in the modules a checked module requires."
+fixed = [
+    "A slice generator over a buffer (`[for byte in data[1:4] => byte]`, `any[for byte in data[1:n] => byte ~= 0]`) is lowered for analysis as a table slice until Luau has inferred its source, then as a buffer. That second step read the types Luau inferred, which a module keeps only with its full type graph, so with `retain_full_type_graphs` off, the default, every buffer slice generator was checked as a table: `Expected type table, got 'buffer' instead` and two operator errors at each one. It also ran for the module named in the check only, so a required module's buffer slices were checked as tables whatever the options. A check now keeps each module's type graph, and specializes every module it reaches.",
+]
+migration = """
+Nothing to change. A strict package that reported the three errors above at its buffer slice generators reports none.
+
+Known, and not l3i's to fix: under Luau's new solver, a function literal inside an `if` condition has its returns checked against the declared return type of the function holding the `if`. A reducer is lowered for analysis to such a literal, so `if any[for value in values => value > 2] then` inside a function declared to return, say, `buffer?` reports `Expected this to be 'buffer?', but got 'boolean'` twice. The code is correct and runs as written. To check clean, bind the reducer to a local before the `if`: `local found = any[...]`, then `if found then`.
+"""
