@@ -140,3 +140,21 @@ fn a_child_still_running_at_the_execution_time_limit_is_killed() {
     assert!(started.elapsed() < Duration::from_secs(2), "the child outlived the limit: {:?}", started.elapsed());
     runtime.exec("assert(process.run('/bin/sh', { '-c', 'exit 0' }).success)").unwrap();
 }
+
+#[test]
+fn sleep_blocks_for_its_seconds_and_never_past_the_execution_time_limit() {
+    let runtime = runtime_granting(&[], Limits::default());
+    let started = Instant::now();
+    runtime.exec("process.sleep(0.05) process.sleep(0)").unwrap();
+    assert!(started.elapsed() >= Duration::from_millis(50));
+    for bad in ["-1", "0/0", "math.huge", "'soon'"] {
+        assert!(runtime.exec(&format!("process.sleep({bad})")).is_err(), "{bad}");
+    }
+
+    let limits = Limits { execution_time: Duration::from_millis(100), memory_bytes: 0 };
+    let runtime = runtime_granting(&[], limits);
+    let started = Instant::now();
+    let error = runtime.exec("pcall(process.sleep, 10) local after = true").unwrap_err();
+    assert!(matches!(error, l3i::Error::ExecutionTimeLimit(_)), "{error:?}");
+    assert!(started.elapsed() < Duration::from_secs(2), "slept past the limit: {:?}", started.elapsed());
+}

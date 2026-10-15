@@ -14,6 +14,8 @@
 //!   a sandboxed script's output goes where its host routes `print`, not to the host's streams.
 //! - `process.isTerminal(stream)`: whether a stream is a terminal (to decide on colors); no
 //!   capability.
+//! - `process.sleep(seconds)`: blocks the script's thread, never past the runtime's execution time
+//!   limit; no capability.
 //!
 //! A function whose capability the runtime lacks exists, typed, and raises a permission error.
 //! A program the OS can't start, or a stream it can't write, is an answer, not an exception:
@@ -343,6 +345,29 @@ fn write(name: &str, data: BytesView<'_>) -> Result<Outcome<bool>> {
     })
 }
 
+/// `process.sleep(seconds)`: blocks the script's thread for `seconds`, never past the runtime's
+/// execution time limit: a sleep the deadline cuts short marks the call expired, so the watchdog
+/// stops the script as soon as it runs again.
+fn sleep(call: &Call<'_>, seconds: f64) -> Result<()> {
+    if !(seconds.is_finite() && seconds >= 0.0) {
+        return Err(Error::runtime(format!(
+            "dream.process.sleep: seconds must be a finite number of at least 0, got {seconds}"
+        )));
+    }
+    // Above `Duration::MAX` a sleep is forever in every sense that matters.
+    let mut duration = std::time::Duration::try_from_secs_f64(seconds).unwrap_or(std::time::Duration::MAX);
+    let remaining = crate::runtime::watchdog_remaining(call);
+    let cut = remaining.is_some_and(|remaining| remaining < duration);
+    if let Some(remaining) = remaining {
+        duration = duration.min(remaining);
+    }
+    std::thread::sleep(duration);
+    if cut {
+        crate::runtime::expire_if_due(call);
+    }
+    Ok(())
+}
+
 fn is_terminal(name: &str) -> Result<bool> {
     use std::io::IsTerminal as _;
     Ok(if stream("isTerminal", name)? { std::io::stderr().is_terminal() } else { std::io::stdout().is_terminal() })
@@ -377,7 +402,10 @@ impl Extension for ProcessExtension {
             .doc("Writes data to the host's standard output or error, without the newline print adds; needs the process.stdio capability.")
             .function("isTerminal", is_terminal)
             .signature("(stream: \"stdout\" | \"stderr\") -> boolean")
-            .doc("Whether the stream is a terminal.");
+            .doc("Whether the stream is a terminal.")
+            .function("sleep", sleep)
+            .signature("(seconds: number) -> ()")
+            .doc("Blocks the script for seconds, never past the runtime's execution time limit.");
         Ok(())
     }
 
