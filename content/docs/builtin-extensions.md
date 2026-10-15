@@ -1448,9 +1448,11 @@ A child inherits the host's environment only when the runtime grants `process.en
 without it the child starts with the host's `PATH` and exactly the variables `env` names, since
 inheriting would hand the script every variable `env` refuses it. `PATH` stays so the program,
 and whatever it starts in turn, is found where the host would find it; a script can learn it by
-running a program that prints it. `clearEnv = true` clears `PATH` too. `run` waits no longer than the runtime's execution
-time limit: a child still running at the deadline is killed and reaped, and the watchdog stops
-the script at its next instruction.
+running a program that prints it. `clearEnv = true` clears `PATH` too.
+
+`run` waits no longer than the runtime's execution time limit: a child still running at the
+deadline is killed and reaped, a capture still open then (a process the child started can hold
+the pipe after the child is gone) is abandoned, and the script stops with the time limit.
 
 ## dream.tcp
 

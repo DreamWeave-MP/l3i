@@ -187,3 +187,20 @@ fn a_wait_the_deadline_cuts_short_fails_the_call_it_ends() {
     assert!(started.elapsed() < Duration::from_secs(2), "slept past the limit: {:?}", started.elapsed());
     runtime.exec("local after = true").unwrap();
 }
+
+/// A process the child started can hold a captured pipe open after the child is gone; the run
+/// still ends at the time limit, without waiting for it.
+#[cfg(unix)]
+#[test]
+fn a_capture_a_grandchild_holds_open_ends_at_the_time_limit() {
+    let limits = Limits { execution_time: Duration::from_millis(100), memory_bytes: 0 };
+    let runtime = runtime_granting(&[SPAWN_CAPABILITY], limits);
+    for script in ["sleep 10; echo late", "sleep 10 & echo early"] {
+        let started = Instant::now();
+        let error = runtime
+            .exec(&format!("process.run('/bin/sh', {{ '-c', '{script}' }}, {{ stdout = 'capture' }})"))
+            .unwrap_err();
+        assert!(matches!(error, l3i::Error::ExecutionTimeLimit(_)), "{script}: {error:?}");
+        assert!(started.elapsed() < Duration::from_secs(2), "{script}: waited {:?}", started.elapsed());
+    }
+}

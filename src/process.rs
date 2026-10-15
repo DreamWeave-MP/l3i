@@ -232,11 +232,10 @@ fn run(
         }
         Err(error) => Outcome::Failed(failed(error)),
     });
-    if let Some(feeder) = feeder {
-        // A child that exits without reading all of its input closes the pipe; that is its
-        // business, not an error of the run.
-        let _ = feeder.join();
-    }
+    // The input thread is left to finish on its own: a child that exits without reading all of
+    // its input closes the pipe, which is its business, and one it started may hold the pipe
+    // open past the time limit, which joining would wait out.
+    drop(feeder);
     let status = output.status;
     #[cfg(unix)]
     let signal = std::os::unix::process::ExitStatusExt::signal(&status);
@@ -260,8 +259,15 @@ fn run(
 /// Waits for `child` and collects what it was asked to capture, as `wait_with_output` does, but
 /// never past the runtime's execution time limit: a child still running at the deadline is
 /// killed and reaped, the call is marked expired so the watchdog stops the script at its next
-/// safepoint, and the answer is `None`.
+/// safepoint, and the answer is `None`. So is a capture still open at the deadline after the
+/// child exited, which a process it started can hold: the readers are left to end with the pipe.
 fn wait(call: &Call<'_>, child: &mut std::process::Child) -> std::io::Result<Option<std::process::Output>> {
+    /// Kills and reaps `child`, so nothing is left running behind the script; it may have exited
+    /// on its own since it was last asked.
+    fn stop(child: &mut std::process::Child) {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
     fn drain(pipe: Option<impl std::io::Read + Send + 'static>) -> Option<std::thread::JoinHandle<Vec<u8>>> {
         pipe.map(|mut pipe| {
             std::thread::spawn(move || {
@@ -278,31 +284,39 @@ fn wait(call: &Call<'_>, child: &mut std::process::Child) -> std::io::Result<Opt
     let collect = |reader: Option<std::thread::JoinHandle<Vec<u8>>>| {
         reader.map(|reader| reader.join().unwrap_or_default()).unwrap_or_default()
     };
-    let status = match crate::runtime::watchdog_remaining(call) {
-        None => child.wait()?,
-        Some(remaining) => {
-            let deadline = std::time::Instant::now() + remaining;
-            let mut pause = std::time::Duration::from_millis(1);
-            loop {
-                if let Some(status) = child.try_wait()? {
-                    break status;
-                }
-                let now = std::time::Instant::now();
-                if now >= deadline {
-                    // The child may have exited between the check and the kill; either way it
-                    // is reaped here, so nothing is left running behind the script.
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    collect(stdout);
-                    collect(stderr);
-                    crate::runtime::expire_if_due(call);
-                    return Ok(None);
-                }
-                std::thread::sleep(pause.min(deadline - now));
-                pause = (pause * 2).min(std::time::Duration::from_millis(20));
+    let Some(remaining) = crate::runtime::watchdog_remaining(call) else {
+        let status = child.wait()?;
+        return Ok(Some(std::process::Output { status, stdout: collect(stdout), stderr: collect(stderr) }));
+    };
+    let deadline = std::time::Instant::now() + remaining;
+    let mut pause = std::time::Duration::from_millis(1);
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => {}
+            Err(error) => {
+                stop(child);
+                return Err(error);
             }
         }
+        let now = std::time::Instant::now();
+        if now >= deadline {
+            stop(child);
+            crate::runtime::expire_if_due(call);
+            return Ok(None);
+        }
+        std::thread::sleep(pause.min(deadline - now));
+        pause = (pause * 2).min(std::time::Duration::from_millis(20));
     };
+    while ![&stdout, &stderr].into_iter().flatten().all(std::thread::JoinHandle::is_finished) {
+        let now = std::time::Instant::now();
+        if now >= deadline {
+            crate::runtime::expire_if_due(call);
+            return Ok(None);
+        }
+        std::thread::sleep(pause.min(deadline - now));
+        pause = (pause * 2).min(std::time::Duration::from_millis(20));
+    }
     Ok(Some(std::process::Output { status, stdout: collect(stdout), stderr: collect(stderr) }))
 }
 
