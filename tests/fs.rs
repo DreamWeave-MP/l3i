@@ -254,3 +254,23 @@ fn fifos_and_devices_are_refused_instead_of_blocking_or_never_ending() {
         ))
         .unwrap();
 }
+
+#[test]
+fn shutdown_flushes_writers_a_script_never_closed() {
+    let scratch = Scratch::new("shutdown");
+    let runtime = runtime();
+    runtime
+        .exec(&format!(
+            "kept = fs.openWrite({} .. '/kept.txt') kept:write(string.rep('x', 100)) \
+             local dropped = fs.openWrite({} .. '/dropped.txt') dropped:write('y')",
+            scratch.lua(),
+            scratch.lua()
+        ))
+        .unwrap();
+    assert_eq!(std::fs::read(scratch.0.join("kept.txt")).unwrap().len(), 0, "the writer buffers");
+    runtime.shutdown();
+    // The process's exit would reclaim the heap; nothing is dropped.
+    std::mem::forget(runtime);
+    assert_eq!(std::fs::read(scratch.0.join("kept.txt")).unwrap(), vec![b'x'; 100]);
+    assert_eq!(std::fs::read(scratch.0.join("dropped.txt")).unwrap(), b"y");
+}

@@ -29,6 +29,13 @@ pub struct Limits {
     pub memory_bytes: usize,
 }
 
+/// A native resource that holds state the OS won't finish for it at exit, such as a write
+/// buffer. [`crate::Runtime::shutdown`] closes every live one.
+pub(crate) trait Resource {
+    /// Flushes and closes; a resource closed already does nothing. Errors have nowhere to go.
+    fn close_for_shutdown(&self);
+}
+
 /// One active call on the scope stack.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct ActiveCall {
@@ -146,6 +153,9 @@ pub(crate) struct Shared {
     initialization_category: MemoryCategory,
     /// The registry reference of the protected-call thunk (`raw::protect`), made once at build.
     protected_thunk: Cell<c_int>,
+    /// Live resources [`crate::Runtime::shutdown`] closes: writers whose buffers must reach the
+    /// disk before a host exits without dropping the VM. Pruned of dead entries as it grows.
+    resources: RefCell<Vec<Weak<dyn Resource>>>,
     /// The native code generator, when the runtime was built with one. It lives here, with the
     /// VM, so template loading needs only a thread of the VM; the block is a `Runtime` field and
     /// drops after `lua_close`, as Luau requires for shared code contexts.
@@ -215,6 +225,7 @@ impl Shared {
             profiler,
             initialization_category,
             protected_thunk: Cell::new(ffi::LUA_NOREF),
+            resources: RefCell::new(Vec::new()),
             #[cfg(feature = "jit")]
             native_code: std::cell::OnceCell::new(),
             active_calls: RefCell::new(Vec::new()),
@@ -274,6 +285,25 @@ impl Shared {
                 self.packed_names[index].set(kind.name);
                 Ok(())
             }
+        }
+    }
+
+    /// Records a live resource for [`Shared::close_resources`]. Dead entries go once the list has
+    /// doubled since the last sweep, so registering stays amortized O(1).
+    #[cfg(feature = "fs")]
+    pub(crate) fn register_resource(&self, resource: Weak<dyn Resource>) {
+        let mut resources = self.resources.borrow_mut();
+        if resources.len() == resources.capacity() {
+            resources.retain(|resource| resource.strong_count() > 0);
+        }
+        resources.push(resource);
+    }
+
+    /// Closes every live registered resource, flushing what it buffers.
+    pub(crate) fn close_resources(&self) {
+        let resources = std::mem::take(&mut *self.resources.borrow_mut());
+        for resource in resources.iter().filter_map(Weak::upgrade) {
+            resource.close_for_shutdown();
         }
     }
 
@@ -490,6 +520,7 @@ impl Shared {
     }
 
     /// Records the armed deadline as run out when it has passed.
+    #[cfg(feature = "process")]
     pub(crate) fn expire_if_due(&self) {
         if let Some(deadline) = self.deadline.get()
             && Instant::now() >= deadline.end

@@ -1373,7 +1373,10 @@ walk's answer.
 
 A reader's `read`, `readInto`, `readAt` and `readAtInto` copy from the map; its position moves
 with `read`, `readInto`, `seek` and `skip`. A writer's `write`, `writeAt`, `seek`, `truncate`,
-`flush` and `close` answer the same way as the module's functions.
+`flush` and `close` answer the same way as the module's functions. A writer buffers: what a
+script never flushes or closes reaches the file when the writer is collected, when the runtime
+drops, or at `Runtime::shutdown()`, which a host that exits without dropping the runtime calls
+first.
 
 ### Capabilities
 

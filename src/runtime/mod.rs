@@ -59,6 +59,15 @@ pub(crate) fn expire_if_due(scope: &impl crate::stack::Scope) {
     }
 }
 
+/// Records `resource` with the runtime `scope` belongs to, for [`Runtime::shutdown`].
+#[cfg(feature = "fs")]
+pub(crate) fn register_resource(scope: &impl crate::stack::Scope, resource: std::rc::Weak<dyn shared::Resource>) {
+    // SAFETY: as in `watchdog_remaining`.
+    if let Some(shared) = unsafe { shared_for(scope.state()) } {
+        shared.register_resource(resource);
+    }
+}
+
 /// The VM lifetime token of the runtime owning `state`, or a dead token for a foreign VM.
 ///
 /// # Safety
@@ -366,6 +375,15 @@ impl Runtime {
         unsafe {
             (*ffi::lua_callbacks(self.state)).interrupt = if needed { Some(shared::interrupt) } else { None };
         }
+    }
+
+    /// Closes every live native resource that buffers what the OS won't finish for it, flushing
+    /// `@dream/fs` writers, without freeing the heap. A host that exits without dropping the
+    /// runtime (leaving the memory for the process's exit to reclaim, which is much faster than
+    /// freeing a large heap piece by piece) calls this first, or a writer a script never closed
+    /// leaves its file short. The VM stays usable; a closed writer refuses further writes.
+    pub fn shutdown(&self) {
+        self.shared.close_resources();
     }
 
     /// The configured limits.

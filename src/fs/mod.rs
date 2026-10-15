@@ -551,7 +551,10 @@ impl Extension for FsExtension {
          -> Result<Outcome<Owned<Writer>>> {
             let options = io::OpenWrite::read(call, options)?;
             Ok(match Writer::open(path, options)? {
-                Outcome::Done(writer) => Outcome::Done(Owned(writer)),
+                Outcome::Done(writer) => {
+                    crate::runtime::register_resource(call, writer.resource());
+                    Outcome::Done(Owned(writer))
+                }
                 Outcome::Failed(failure) => Outcome::Failed(failure),
             })
         });

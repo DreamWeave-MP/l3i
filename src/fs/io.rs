@@ -7,6 +7,7 @@ use std::cell::{Cell, RefCell};
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufWriter, Seek, SeekFrom, Write};
 use std::path::Path;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use crate::bind::{Call, StackResults};
@@ -554,9 +555,22 @@ pub(crate) fn write_file(
     Ok(Outcome::of(write.write(&host, bytes).map(|()| bytes.len() as f64), "writeFile", path))
 }
 
+/// A writer's open file: `None` once closed.
+#[derive(Debug)]
+pub(crate) struct WriterFile(RefCell<Option<BufWriter<File>>>);
+
+impl crate::runtime::shared::Resource for WriterFile {
+    fn close_for_shutdown(&self) {
+        if let Some(mut file) = self.0.borrow_mut().take() {
+            let _ = file.flush();
+        }
+    }
+}
+
 /// `dream.fs.Writer`: a buffered writer over one file.
 pub struct Writer {
-    file: RefCell<Option<BufWriter<File>>>,
+    /// Shared with the runtime's resource list, so `Runtime::shutdown` can flush it.
+    file: Rc<WriterFile>,
     position: Cell<u64>,
     append: bool,
     name: Box<[u8]>,
@@ -567,7 +581,7 @@ impl std::fmt::Debug for Writer {
         f.debug_struct("Writer")
             .field("name", &display(&self.name))
             .field("position", &self.position.get())
-            .field("open", &self.file.borrow().is_some())
+            .field("open", &self.file.0.borrow().is_some())
             .finish_non_exhaustive()
     }
 }
@@ -583,17 +597,23 @@ impl Writer {
         let host = super::host_path("openWrite", path)?;
         let (file, position) = done!(Outcome::of(options.open(&host), "openWrite", path));
         Ok(Outcome::Done(Writer {
-            file: RefCell::new(Some(BufWriter::new(file))),
+            file: Rc::new(WriterFile(RefCell::new(Some(BufWriter::new(file))))),
             position: Cell::new(position),
             append: options.append,
             name: path.into(),
         }))
     }
 
+    /// The open file, for the runtime's resource list.
+    pub(crate) fn resource(&self) -> std::rc::Weak<dyn crate::runtime::shared::Resource> {
+        let file: Rc<dyn crate::runtime::shared::Resource> = self.file.clone();
+        Rc::downgrade(&file)
+    }
+
     /// Runs `body` on the open file: a closed writer is the script's mistake and raises; the OS
     /// refusing is an outcome.
     fn with_file<R>(&self, what: &str, body: impl FnOnce(&mut BufWriter<File>) -> io::Result<R>) -> Result<Outcome<R>> {
-        let mut file = self.file.borrow_mut();
+        let mut file = self.file.0.borrow_mut();
         let Some(file) = file.as_mut() else {
             return Err(Error::runtime(format!(
                 "dream.fs.Writer.{what}: the writer over {} is closed",
@@ -644,7 +664,7 @@ impl Writer {
 
     /// Flushes and closes; closing a closed writer does nothing and answers true.
     fn close(&self) -> Outcome<bool> {
-        let Some(mut file) = self.file.borrow_mut().take() else {
+        let Some(mut file) = self.file.0.borrow_mut().take() else {
             return Outcome::Done(true);
         };
         Outcome::of(file.flush().map(|()| true), "Writer.close", &self.name)

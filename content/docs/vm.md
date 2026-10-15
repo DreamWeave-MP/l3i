@@ -116,6 +116,7 @@ and the defaults are on [Runtime options](@/docs/runtime-options.md#the-collecto
 | Coroutine finalizers | `RuntimeBuilder::coroutine_finalizers(true)` on the first runtime of the process turns them on, for every runtime after it too (Luau's flag is process-wide), and gives scripts `coroutine.finally`; `Thread::add_finalizer(scope, callback)` attaches a function to a live coroutine, `has_finalizers()` asks, and `Thread::finalizer_function(scope, close)` is the pinned, single-use function that runs them: for a finished or failed coroutine, or with `close` to cancel a suspended one |
 | Raw tags | `memory::raw::set_userdata_tag` and `new_userdata_tagged`, both `unsafe`, for hosts that manage a tag's meaning themselves |
 | Fast flags | `fast_flags()`, `fast_flag(name)`, `set_fast_flag`, `fast_int`, `set_fast_int` |
+| Shutdown | `shutdown()` closes every live native resource that buffers what the OS won't finish for it (`@dream/fs` writers) without freeing the heap, for a host that leaves the heap to the process's exit instead of dropping the runtime |
 
 `Runtime::clock()` is Luau's high-resolution clock in seconds, and `encode_pointer(pointer)`
 encodes an address with the VM's pointer-encoding key, as `tostring` does.
