@@ -279,7 +279,11 @@ impl Push for LightUserdata {
                 ffi::LUA_LUTAG_LIMIT
             )));
         }
-        unsafe { ffi::lua_pushlightuserdatatagged(scope.state(), self.pointer, self.tag) };
+        unsafe {
+            crate::stack::push_fixed(scope.state(), |state| {
+                ffi::lua_pushlightuserdatatagged(state, self.pointer, self.tag)
+            })
+        }?;
         Ok(scope.top_value())
     }
 }
@@ -335,7 +339,13 @@ pub mod raw {
         size: usize,
         tag: RuntimeTag,
     ) -> Result<(*mut c_void, ValueView<'s>)> {
-        let data = unsafe { ffi::lua_newuserdatatagged(scope.state(), size, c_int::from(tag)) };
+        let mut data = std::ptr::null_mut();
+        // SAFETY: allocates one userdata, protected at host level, where out of memory raises.
+        unsafe {
+            crate::stack::push_allocating(scope.state(), scope.is_host_level(), |state| {
+                data = ffi::lua_newuserdatatagged(state, size, c_int::from(tag));
+            })?;
+        }
         if data.is_null() {
             return Err(Error::runtime("Unable to allocate userdata"));
         }

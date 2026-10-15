@@ -204,10 +204,13 @@ pub fn push<'s, T: Userdata>(scope: &'s impl Scope, value: T) -> Result<ValueVie
     };
     // SAFETY: registration verified the tag has T's metatable and destructor. The allocation
     // is fully initialised by `ptr::write` before anything else can observe it. Luau raises
-    // only for out of memory, before the destructor could see the slot.
+    // only for out of memory, before the destructor could see the slot: at host level the
+    // allocation runs protected, and nothing between it and the write can collect.
     unsafe {
-        let storage =
-            ffi::lua_newuserdatataggedwithmetatable(scope.state(), std::mem::size_of::<T>(), c_int::from(tag));
+        let mut storage = ptr::null_mut();
+        crate::stack::push_allocating(scope.state(), scope.is_host_level(), |state| {
+            storage = ffi::lua_newuserdatataggedwithmetatable(state, std::mem::size_of::<T>(), c_int::from(tag));
+        })?;
         if storage.is_null() {
             return Err(Error::runtime("Unable to allocate tagged userdata"));
         }

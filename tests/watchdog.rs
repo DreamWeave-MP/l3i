@@ -301,3 +301,21 @@ fn the_memory_limit_holds_outside_any_scope_and_at_host_level() {
     runtime.set_limits(Limits::default());
     runtime.exec("local x = string.rep('y', 1000000)").unwrap();
 }
+
+/// A host-level pin, table, or global lookup allocates outside any pcall, so under the cap it
+/// runs protected and fails as the cap says, rather than raising through Rust and aborting.
+#[test]
+fn host_level_allocations_through_value_fail_at_the_memory_limit() {
+    let runtime = Runtime::new().unwrap();
+    runtime.set_limits(Limits { execution_time: Duration::ZERO, memory_bytes: runtime.total_bytes() + 512 * 1024 });
+    let stack = runtime.stack();
+    let error = l3i::value::Value::new_table(&stack, 10_000_000, 0).unwrap_err();
+    assert!(matches!(error, l3i::Error::MemoryLimit(_)), "{error:?}");
+    let name = "g".repeat(1024 * 1024);
+    let error = l3i::value::Value::get_global(&stack, &name).unwrap_err();
+    assert!(matches!(error, l3i::Error::MemoryLimit(_)), "{error:?}");
+    assert_eq!(stack.top(), 0);
+    drop(stack);
+    runtime.set_limits(Limits::default());
+    runtime.exec("local x = {}").unwrap();
+}

@@ -309,6 +309,61 @@ pub(crate) fn reserve(state: *mut ffi::lua_State, slots: c_int) -> Result<()> {
     Ok(())
 }
 
+/// Runs a push that allocates nothing, after making room for it: past the stack's end it would
+/// write over memory Luau doesn't own.
+///
+/// # Safety
+/// `state` is live and `push` pushes exactly one value without allocating.
+#[inline]
+pub(crate) unsafe fn push_fixed(state: *mut ffi::lua_State, push: impl FnOnce(*mut ffi::lua_State)) -> Result<()> {
+    reserve(state, 1)?;
+    push(state);
+    Ok(())
+}
+
+/// Pins the value at `index` in the registry (`lua_ref`), which allocates when the registry grows
+/// and so can raise out of memory: directly inside a Lua call, where the raise unwinds to Luau's
+/// `pcall`, and protected at host level, where it becomes `Err`.
+///
+/// # Safety
+/// `state` is live and `index` names a value on it (or a pseudo-index).
+pub(crate) unsafe fn pin(state: *mut ffi::lua_State, index: c_int) -> Result<c_int> {
+    // SAFETY: forwarded contract; the copy pushed here is consumed by the protected call.
+    unsafe {
+        if ffi::l3i_host_level(state) == 0 {
+            return Ok(ffi::lua_ref(state, index));
+        }
+        reserve(state, 1)?;
+        ffi::lua_pushvalue(state, index);
+        let mut reference = ffi::LUA_NOREF;
+        if ffi::lua_status(state) == ffi::LUA_OK {
+            crate::raw::protect::protected_call(state, 1, 0, |state| {
+                reference = ffi::lua_ref(state, 1);
+                0
+            })?;
+            return Ok(reference);
+        }
+        // A suspended coroutine can't run a pcall: pin from the main thread, which shares the
+        // registry, as push_allocating makes its values there.
+        let main = ffi::lua_mainthread(state);
+        if ffi::lua_status(main) != ffi::LUA_OK {
+            reference = ffi::lua_ref(state, -1);
+            ffi::lua_pop(state, 1);
+            return Ok(reference);
+        }
+        if let Err(error) = reserve(main, 1) {
+            ffi::lua_pop(state, 1);
+            return Err(error);
+        }
+        ffi::lua_xmove(state, main, 1);
+        crate::raw::protect::protected_call(main, 1, 0, |main| {
+            reference = ffi::lua_ref(main, 1);
+            0
+        })?;
+        Ok(reference)
+    }
+}
+
 /// Runs a push that allocates and so can raise out of memory: directly inside a Lua call, where
 /// the raise unwinds to Luau's `pcall`, and under [`crate::raw::protect::protected_call`] at
 /// host level, where it becomes `Err`.

@@ -442,6 +442,43 @@ fn host_pushes_past_the_stack_limit_fail_instead_of_aborting() {
     runtime.exec("local x = 1").unwrap();
 }
 
+/// Every push that allocates nothing makes room first, as the allocating ones do: past the end of
+/// the stack Luau writes over memory it doesn't own, or raises through Rust and aborts.
+#[test]
+fn scalar_and_pinned_pushes_past_the_stack_limit_fail_instead_of_aborting() {
+    let runtime = Runtime::new().unwrap();
+    let stack = runtime.stack();
+    let pinned = stack
+        .with_frame(|frame| {
+            frame.push_table(0, 0)?;
+            l3i::value::Value::store(frame.top_value())
+        })
+        .unwrap();
+    for kind in 0..8 {
+        let error = stack
+            .with_frame(|frame| {
+                for index in 0..100_000_i32 {
+                    match kind {
+                        0 => frame.push(&true).map(drop)?,
+                        1 => frame.push(&l3i::convert::Integer(i64::from(index))).map(drop)?,
+                        2 => frame.push(&f64::from(index)).map(drop)?,
+                        3 => frame.push(&1.5_f32).map(drop)?,
+                        4 => frame.push(&index).map(drop)?,
+                        5 => frame.push(&()).map(drop)?,
+                        6 => frame.push(&None::<f64>).map(drop)?,
+                        _ => pinned.push_to(frame).map(drop)?,
+                    }
+                }
+                Ok(())
+            })
+            .unwrap_err();
+        assert!(error.to_string().contains("stack overflow"), "{kind}: {error}");
+        assert_eq!(stack.top(), 0, "{kind}");
+    }
+    drop(stack);
+    runtime.exec("local x = 1").unwrap();
+}
+
 #[test]
 fn luau_checks_its_assertions_exactly_when_rust_debug_assertions_are_on() {
     assert_eq!(l3i::flags::luau_assertions(), cfg!(debug_assertions));

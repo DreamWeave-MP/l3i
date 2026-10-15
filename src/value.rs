@@ -47,7 +47,7 @@ impl Value {
                 return Err(Error::logic("Cannot pin a value on a VM that no Runtime owns"));
             }
             let owner = ffi::lua_mainthread(view.state());
-            let reference = ffi::lua_ref(view.state(), view.index());
+            let reference = crate::stack::pin(view.state(), view.index())?;
             Ok(Value { owner, reference, vm })
         }
     }
@@ -59,10 +59,12 @@ impl Value {
         let state = scope.state();
         // SAFETY: live state; the table is pinned and popped within this call.
         unsafe {
-            ffi::lua_createtable(state, narr, nrec);
-            let value = Value::store(scope.top_value())?;
+            crate::stack::push_allocating(state, scope.is_host_level(), |state| {
+                ffi::lua_createtable(state, narr, nrec)
+            })?;
+            let value = Value::store(scope.top_value());
             ffi::lua_pop(state, 1);
-            Ok(value)
+            value
         }
     }
 
@@ -78,10 +80,12 @@ impl Value {
     ) -> Result<Value> {
         let state = scope.state();
         unsafe {
-            ffi::lua_pushcfunction(state, function, debug_name);
-            let value = Value::store(scope.top_value())?;
+            crate::stack::push_allocating(state, scope.is_host_level(), |state| {
+                ffi::lua_pushcfunction(state, function, debug_name);
+            })?;
+            let value = Value::store(scope.top_value());
             ffi::lua_pop(state, 1);
-            Ok(value)
+            value
         }
     }
 
@@ -92,10 +96,13 @@ impl Value {
         // SAFETY: globals lookup on the raw globals table cannot invoke metamethods... unless
         // the host set one; hosts that do must read globals through a frame instead.
         unsafe {
-            ffi::lua_rawgetfield(state, ffi::LUA_GLOBALSINDEX, name.as_ptr());
-            let value = Value::store(scope.top_value())?;
+            // The lookup interns `name`, which allocates.
+            crate::stack::push_allocating(state, scope.is_host_level(), |state| {
+                ffi::lua_rawgetfield(state, ffi::LUA_GLOBALSINDEX, name.as_ptr());
+            })?;
+            let value = Value::store(scope.top_value());
             ffi::lua_pop(state, 1);
-            Ok(value)
+            value
         }
     }
 
@@ -147,7 +154,11 @@ impl Value {
             return Err(Error::logic("Lua reference belongs to a different VM"));
         }
         // SAFETY: the registry is shared by all threads of the VM; getref pushes one value.
-        unsafe { ffi::lua_getref(frame.state(), self.reference) };
+        unsafe {
+            crate::stack::push_fixed(frame.state(), |state| {
+                ffi::lua_getref(state, self.reference);
+            })
+        }?;
         Ok(frame.top_value())
     }
 
@@ -158,7 +169,11 @@ impl Value {
             return Err(Error::logic("Lua reference belongs to a different VM"));
         }
         // SAFETY: the registry is shared by all threads of the VM; getref pushes one value.
-        unsafe { ffi::lua_getref(scope.state(), self.reference) };
+        unsafe {
+            crate::stack::push_fixed(scope.state(), |state| {
+                ffi::lua_getref(state, self.reference);
+            })
+        }?;
         Ok(scope.top_value())
     }
 
@@ -179,9 +194,10 @@ impl Value {
         })
     }
 
-    /// The pinned value's type. Uses one balanced push/pop on the owning main thread.
+    /// The pinned value's type. Uses one balanced push/pop on the owning main thread, and answers
+    /// `Type::None`, as for an invalid value, when that thread has no slot left to look with.
     pub fn type_of(&self) -> Type {
-        if !self.is_valid() {
+        if !self.is_valid() || crate::stack::reserve(self.owner, 1).is_err() {
             return Type::None;
         }
         // SAFETY: balanced: one push, one type query, one pop on the main thread.
@@ -240,17 +256,21 @@ impl<'v> crate::convert::FromView<'v> for Function {
 }
 
 impl Clone for Value {
-    /// An independent pin of the same value.
+    /// An independent pin of the same value, or an invalid value, as cloning one gives, when the
+    /// VM can't pin another: no slot left on its main thread, or no memory for the registry.
     fn clone(&self) -> Value {
-        if !self.is_valid() {
+        if !self.is_valid() || crate::stack::reserve(self.owner, 1).is_err() {
             return Value::invalid();
         }
         // SAFETY: balanced push/pin/pop on the owning main thread.
         unsafe {
             ffi::lua_getref(self.owner, self.reference);
-            let reference = ffi::lua_ref(self.owner, -1);
+            let pinned = crate::stack::pin(self.owner, -1);
             ffi::lua_pop(self.owner, 1);
-            Value { owner: self.owner, reference, vm: self.vm.clone() }
+            match pinned {
+                Ok(reference) => Value { owner: self.owner, reference, vm: self.vm.clone() },
+                Err(_) => Value::invalid(),
+            }
         }
     }
 }
@@ -277,6 +297,10 @@ impl PartialEq for Value {
         }
         if self.reference == other.reference {
             return true;
+        }
+        // Two pins of one value compare on the main thread; with no room there, they can't.
+        if crate::stack::reserve(self.owner, 2).is_err() {
+            return false;
         }
         // SAFETY: balanced: two pushes, rawequal, two pops on the shared main thread.
         unsafe {

@@ -40,7 +40,7 @@ impl Push for bool {
     }
     #[inline]
     fn push_only<S: Scope>(&self, scope: &S) -> Result<()> {
-        unsafe { ffi::lua_pushboolean(scope.state(), c_int::from(*self)) };
+        unsafe { crate::stack::push_fixed(scope.state(), |state| ffi::lua_pushboolean(state, c_int::from(*self))) }?;
         Ok(())
     }
 }
@@ -79,7 +79,7 @@ impl<'v> FromView<'v> for Integer {
 impl Push for Integer {
     #[inline]
     fn push_only<S: Scope>(&self, scope: &S) -> Result<()> {
-        unsafe { ffi::lua_pushinteger64(scope.state(), self.0) };
+        unsafe { crate::stack::push_fixed(scope.state(), |state| ffi::lua_pushinteger64(state, self.0)) }?;
         Ok(())
     }
     #[inline]
@@ -210,7 +210,7 @@ macro_rules! integer_conversions {
                 if !exactly_representable_as_f64(magnitude) {
                     return Err(Error::runtime("Integer cannot be represented exactly as a Lua number"));
                 }
-                unsafe { ffi::lua_pushnumber(scope.state(), *self as f64) };
+                unsafe { crate::stack::push_fixed(scope.state(), |state| ffi::lua_pushnumber(state, *self as f64)) }?;
                 Ok(())
             }
         }
@@ -301,12 +301,12 @@ impl<'v> FromView<'v> for f64 {
 impl Push for f64 {
     #[inline]
     fn push_only<S: Scope>(&self, scope: &S) -> Result<()> {
-        unsafe { ffi::lua_pushnumber(scope.state(), *self) };
+        unsafe { crate::stack::push_fixed(scope.state(), |state| ffi::lua_pushnumber(state, *self)) }?;
         Ok(())
     }
     #[inline]
     fn push_into<'s, S: Scope>(&self, scope: &'s S) -> Result<ValueView<'s>> {
-        unsafe { ffi::lua_pushnumber(scope.state(), *self) };
+        unsafe { crate::stack::push_fixed(scope.state(), |state| ffi::lua_pushnumber(state, *self)) }?;
         Ok(scope.top_value())
     }
 }
@@ -354,12 +354,12 @@ impl<'v> FromView<'v> for f32 {
 impl Push for f32 {
     #[inline]
     fn push_only<S: Scope>(&self, scope: &S) -> Result<()> {
-        unsafe { ffi::lua_pushnumber(scope.state(), f64::from(*self)) };
+        unsafe { crate::stack::push_fixed(scope.state(), |state| ffi::lua_pushnumber(state, f64::from(*self))) }?;
         Ok(())
     }
     #[inline]
     fn push_into<'s, S: Scope>(&self, scope: &'s S) -> Result<ValueView<'s>> {
-        unsafe { ffi::lua_pushnumber(scope.state(), f64::from(*self)) };
+        unsafe { crate::stack::push_fixed(scope.state(), |state| ffi::lua_pushnumber(state, f64::from(*self))) }?;
         Ok(scope.top_value())
     }
 }
@@ -372,7 +372,7 @@ impl Push for () {
     /// Unit pushes nil, the counterpart of `Option::None`.
     #[inline]
     fn push_into<'s, S: Scope>(&self, scope: &'s S) -> Result<ValueView<'s>> {
-        unsafe { ffi::lua_pushnil(scope.state()) };
+        unsafe { crate::stack::push_fixed(scope.state(), |state| ffi::lua_pushnil(state)) }?;
         Ok(scope.top_value())
     }
 }

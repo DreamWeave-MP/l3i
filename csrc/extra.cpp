@@ -231,6 +231,13 @@ int l3i_read_vector(lua_State* L, int idx, float* out)
 // Whether lua_resetthread may run on `L`: it asserts the thread is not executing and holds no
 // call frames unless it ended in an error, and resetting a running thread frees the stack it
 // runs on.
+// Whether no Lua function is running on `L`: the host called in, and a raise here would find no
+// pcall above it.
+int l3i_host_level(lua_State* L)
+{
+    return L->ci == L->base_ci;
+}
+
 int l3i_thread_resettable(lua_State* L)
 {
     return !L->isactive && (L->status != LUA_OK || L->ci == L->base_ci);

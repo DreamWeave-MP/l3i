@@ -209,6 +209,7 @@ impl<'v> TableView<'v> {
         // (absolute indexes of the outer frame are meaningless inside it); cleartable raises
         // only for read-only tables.
         unsafe {
+            crate::stack::reserve(frame.state(), 1)?;
             ffi::lua_pushvalue(frame.state(), self.index());
             frame.raising(1, 0, |state| {
                 ffi::lua_cleartable(state, 1);

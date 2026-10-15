@@ -136,8 +136,8 @@ impl<'v> FromView<'v> for Bits64 {
 impl Push for Bits64 {
     #[inline]
     fn push_only<S: Scope>(&self, scope: &S) -> Result<()> {
-        // SAFETY: pushes one integer; the scope's stack has room by the scope contract.
-        unsafe { ffi::lua_pushinteger64(scope.state(), self.0 as i64) };
+        // SAFETY: pushes one integer, after push_fixed makes room for it.
+        unsafe { crate::stack::push_fixed(scope.state(), |state| ffi::lua_pushinteger64(state, self.0 as i64)) }?;
         Ok(())
     }
     #[inline]

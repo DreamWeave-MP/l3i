@@ -194,14 +194,19 @@ fn push_storage<'s, T: Userdata>(scope: &'s impl Scope, storage: Storage<T>) -> 
     let identity = identity_of::<T>(state)
         .ok_or_else(|| Error::logic(format!("Unknown or writable untagged userdata metatable: {}", T::NAME)))?;
     // SAFETY: allocate, write immediately (Luau owns the destructor from allocation on), then
-    // attach the registered metatable. Out of memory is the only raise.
+    // attach the registered metatable. Out of memory is the only raise, protected at host level.
     unsafe {
-        let raw = ffi::lua_newuserdatadtor(state, std::mem::size_of::<Storage<T>>(), destroy_storage::<T>);
+        let mut raw = ptr::null_mut();
+        crate::stack::push_allocating(state, scope.is_host_level(), |state| {
+            raw = ffi::lua_newuserdatadtor(state, std::mem::size_of::<Storage<T>>(), destroy_storage::<T>);
+        })?;
         if raw.is_null() {
             return Err(Error::runtime("Unable to allocate untagged userdata"));
         }
         ptr::write(raw.cast::<Storage<T>>(), storage);
-        ffi::lua_getref(state, identity.reference);
+        crate::stack::push_fixed(state, |state| {
+            ffi::lua_getref(state, identity.reference);
+        })?;
         if ffi::lua_setmetatable(state, -2) == 0 {
             return Err(Error::logic("Unable to attach untagged userdata metatable"));
         }

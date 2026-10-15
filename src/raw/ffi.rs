@@ -614,6 +614,7 @@ unsafe extern "C" {
     pub fn l3i_call_base(L: *mut lua_State) -> *const crate::convert::RawValue;
     pub fn l3i_stack_slot(L: *mut lua_State, idx: c_int) -> *const crate::convert::RawValue;
     pub fn l3i_read_vector(L: *mut lua_State, idx: c_int, out: *mut f32) -> c_int;
+    pub fn l3i_host_level(L: *mut lua_State) -> c_int;
     pub fn l3i_thread_resettable(L: *mut lua_State) -> c_int;
     pub fn l3i_luau_assertions() -> c_int;
     pub fn l3i_direct_enter(
