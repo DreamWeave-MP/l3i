@@ -498,3 +498,28 @@ fn trim_strips_whitespace_or_a_byte_set_and_returns_untouched_text_as_is() {
         )
         .unwrap();
 }
+
+/// Shortest round-trip digits at either width, and rounding to single precision.
+#[test]
+fn shortest_digits_round_trip_at_their_width_and_to_f32_rounds() {
+    runtime()
+        .exec(
+            "local function check(value, width, digits, exponent) \
+               local d, e = bytes.shortest(value, width) \
+               assert(d == digits and e == exponent, `{value} {width}: {d} {e}`) \
+               local back = tonumber(d .. 'e' .. e) \
+               if width == 'f32' then back, value = bytes.toF32(back), bytes.toF32(value) end \
+               assert(back == value, `reads back {d}e{e}`) \
+             end \
+             check(0.1, nil, '1', -1) check(0.1, 'f32', '1', -1) check(1/3, nil, '3333333333333333', -16) \
+             check(1/3, 'f32', '33333334', -8) check(100, nil, '1', 2) check(-2.5, nil, '-25', -1) \
+             check(0, nil, '0', 0) check(1e300, nil, '1', 300) check(5e-324, nil, '5', -324) \
+             check(16777217, 'f32', '16777216', 0) check(123456789, nil, '123456789', 0) \
+             assert(bytes.shortest(-0) == '-0', 'negative zero') \
+             assert(bytes.shortest(0/0) == nil and bytes.shortest(math.huge) == nil, 'non-finite') \
+             assert(not pcall(bytes.shortest, 1, 'f16'), 'width') \
+             assert(bytes.toF32(0.1) == 0.10000000149011612, `toF32 {bytes.toF32(0.1)}`) \
+             assert(bytes.toF32(1e40) == math.huge and bytes.toF32(2) == 2, 'toF32 range')",
+        )
+        .unwrap();
+}

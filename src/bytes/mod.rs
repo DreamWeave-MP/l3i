@@ -181,6 +181,36 @@ fn slice(source: BytesView<'_>, offset: Exact<i64>, len: Exact<i64>) -> Result<N
     Ok(NewBuffer(unsafe { bytes(&source) }[start..start + len].to_vec()))
 }
 
+/// `bytes.shortest(value, width?)`: the fewest decimal digits that read back as `value` at
+/// `width` (`'f64'` by default, or `'f32'`), as the integer `digits` and the power of ten that
+/// scales them (`value = digits * 10^exponent`), so any layout (`%g`, a JSON number, a tool's own
+/// float text) is spelling around the same digits. The sign leads `digits`; zero is `"0"` (or
+/// `"-0"`) with exponent 0. A NaN or an infinity has no digits: `nil`.
+fn shortest(value: f64, width: Option<&str>) -> Result<(Option<String>, Option<f64>)> {
+    if !value.is_finite() {
+        return Ok((None, None));
+    }
+    // Rust's `{:e}` is the shortest scientific spelling that round-trips at the type's width.
+    let scientific = match width.unwrap_or("f64") {
+        "f64" => format!("{value:e}"),
+        #[allow(clippy::cast_possible_truncation)]
+        "f32" => format!("{:e}", value as f32),
+        other => return Err(Error::runtime(format!("bytes.shortest: width must be 'f64' or 'f32', got '{other}'"))),
+    };
+    let (mantissa, exponent) = scientific.split_once('e').expect("{:e} always writes an exponent");
+    let exponent: i32 = exponent.parse().expect("{:e} writes a decimal exponent");
+    let (whole, fraction) = mantissa.split_once('.').unwrap_or((mantissa, ""));
+    let fraction_digits = i32::try_from(fraction.len()).expect("a double has under 800 digits");
+    Ok((Some(format!("{whole}{fraction}")), Some(f64::from(exponent - fraction_digits))))
+}
+
+/// `bytes.toF32(value)`: `value` rounded to the nearest single-precision float, as storing it in
+/// a 32-bit field and reading it back would give.
+#[allow(clippy::cast_possible_truncation)]
+fn to_f32(value: f64) -> f64 {
+    f64::from(value as f32)
+}
+
 /// Which ends `bytes.trim` strips.
 #[derive(Clone, Copy)]
 enum Ends {
@@ -599,6 +629,12 @@ fn describe_core(module: &mut ModuleDecl) {
         })
         .signature("(text: string, characters: string?) -> string")
         .doc("As trim, at the end only.")
+        .function("shortest", shortest)
+        .signature("(value: number, width: (\"f64\" | \"f32\")?) -> (string?, number?)")
+        .doc("The fewest digits that read back as value at width (f64 by default), as an integer digit string with its sign and the power of ten scaling it; nil for a NaN or an infinity.")
+        .function("toF32", to_f32)
+        .signature("(value: number) -> number")
+        .doc("value rounded to the nearest single-precision float, as a 32-bit field would hold it.")
         .function("slice", slice)
         .signature("(source: buffer | string, offset: number, length: number) -> buffer")
         .doc("A new buffer holding length bytes from offset.")
