@@ -609,9 +609,16 @@ impl TlsStream {
         })
     }
 
-    fn shutdown_write(&self) -> Result<Outcome<bool>> {
-        const WHAT: &str = "Stream.shutdownWrite";
-        if let Some(failure) = self.ready(WHAT, "dream.tls.Stream.shutdownWrite: the handshake is in progress")? {
+    /// `Stream:shutdown(how)`, as on a TCP stream; TLS half-closes only the write side, with
+    /// close_notify, so `how` must be `'write'`.
+    fn shutdown(&self, how: &str) -> Result<Outcome<bool>> {
+        const WHAT: &str = "Stream.shutdown";
+        if how != "write" {
+            return Err(Error::runtime(format!(
+                "dream.tls.Stream.shutdown: TLS half-closes only 'write' (close_notify), got '{how}'; close the stream to stop reading"
+            )));
+        }
+        if let Some(failure) = self.ready(WHAT, "dream.tls.Stream.shutdown: the handshake is in progress")? {
             return Ok(Outcome::Failed(failure));
         }
         if !self.write_closed.get() {
@@ -825,9 +832,9 @@ pub(crate) fn describe(d: &mut ExtensionDescriptor) {
         .signature("(self): (boolean?, string?, dream_tls_ErrorKind?)")
         .doc("Writes pending ciphertext: true once none is left in the session (handed to the OS, not necessarily received), false when the socket is full.");
     stream
-        .method("shutdownWrite", |s: &TlsStream| s.shutdown_write())
-        .signature("(self): (boolean?, string?, dream_tls_ErrorKind?)")
-        .doc("Queues close_notify and flushes; once it has left, the TCP write half is shut. Reading stays open. true when flushed.");
+        .method("shutdown", |s: &TlsStream, how: &str| s.shutdown(how))
+        .signature("(self, how: \"write\"): (boolean?, string?, dream_tls_ErrorKind?)")
+        .doc("Half-closes the write side as a TCP stream's shutdown('write') does: queues close_notify and flushes; once it has left, the TCP write half is shut. Reading stays open. true when flushed.");
     stream
         .method("close", |s: &TlsStream| s.close())
         .signature("(self)")

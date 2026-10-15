@@ -1827,7 +1827,7 @@ local count = secure:readInto(buffer.create(65536))  -- 0 only after close_notif
 | `readInto(target, offset?, length?)` | Decrypted bytes into the buffer; `0` only after the peer's close_notify; `nil, message, "wouldBlock"` when nothing is ready; `"truncated"` when the connection ended without close_notify |
 | `write(data, offset?, length?)` | Encrypts as much as the bounded send buffer takes and returns that plaintext count, not bytes on the wire; the ciphertext goes to the socket at once as far as it takes it, and a socket that has just refused bytes is not tried again within the same call: the record leaves with the next `write` or `flush`, which is when a script waiting for writability calls anyway. `"wouldBlock"` when the buffer is full |
 | `flush()` | Pushes pending ciphertext: `true` when none is left in the session (handed to the OS, not necessarily received), `false` when the socket is full |
-| `shutdownWrite()` | Queues close_notify and flushes; once it has left, the TCP write half is shut. Reading stays open |
+| `shutdown("write")` | As a TCP stream's `shutdown("write")`; the only half-close TLS has. Queues close_notify and flushes; once it has left, the TCP write half is shut. Reading stays open |
 | `close()` | Closes the socket at once without close_notify, drops its watch and its place in the listener's count; idempotent |
 | `state`, `handshaking`, `closed` | `"handshaking"`, `"open"`, `"failed"` or `"closed"`; `close()` always leaves it `"closed"` |
 | `failure`, `failureKind` | Why the session failed, if it did, kept after `close` |

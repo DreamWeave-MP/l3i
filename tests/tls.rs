@@ -305,7 +305,9 @@ fn a_verified_tls13_session_carries_bytes_both_ways_and_closes_cleanly() {
             local reply = string.rep('reply\0', 1000)
             assert(transfer(server, client, reply) == reply, 'server to client')
             -- close_notify is a clean end of stream, and the other direction stays open.
-            assert(client:shutdownWrite() ~= nil)
+            local refused, why = pcall(client.shutdown, client, 'read')
+            assert(not refused and why:find('only %pwrite%p'), why)
+            assert(client:shutdown('write') ~= nil)
             assert(flushAll(client))
             assert(readToEnd(server) == '')
             assert(server:readInto(buffer.create(4)) == 0, 'end of stream stays 0')
@@ -313,7 +315,7 @@ fn a_verified_tls13_session_carries_bytes_both_ways_and_closes_cleanly() {
             assert(transfer(server, client, late) == late)
             local n, m, k = client:write('more')
             assert(n == nil and k == 'brokenPipe', m)
-            assert(server:shutdownWrite() ~= nil and flushAll(server))
+            assert(server:shutdown('write') ~= nil and flushAll(server))
             assert(readToEnd(client) == '')
             client:close() client:close() server:close() listener:close()
             assert(client.closed and client.state == 'closed')
@@ -920,7 +922,7 @@ fn a_failed_session_closes_like_any_other() {
                     function() client:readInto(buffer.create(4)) end,
                     function() client:write('x') end,
                     function() client:flush() end,
-                    function() client:shutdownWrite() end,
+                    function() client:shutdown('write') end,
                     function() poller:watch(client, 4, 'read') end,
                 } do
                     local ok, err = pcall(call)

@@ -178,7 +178,7 @@ function HttpsServer:writeTo(token, connection)
 	self.served += 1
 	connection.out = nil
 	if connection.closing then
-		local closed = stream:shutdownWrite()
+		local closed = stream:shutdown('write')
 		if closed ~= false then
 			self:drop(token) -- flushed, or failed
 		else

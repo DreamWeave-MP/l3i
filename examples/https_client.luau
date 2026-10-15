@@ -324,7 +324,7 @@ end
 -- Sends close_notify, flushes it within timeoutMs, and closes.
 function HttpsClient.close(secure, timeoutMs: number?)
 	local deadline = os.clock() + (timeoutMs or 1000) / 1000
-	if secure.state == 'open' and secure:shutdownWrite() == false then
+	if secure.state == 'open' and secure:shutdown('write') == false then
 		local poller = tcp.poller()
 		poller:watch(secure, 1, 'write')
 		while secure:flush() == false and os.clock() < deadline do
