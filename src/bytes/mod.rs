@@ -184,16 +184,22 @@ fn slice(source: BytesView<'_>, offset: Exact<i64>, len: Exact<i64>) -> Result<N
 /// `width` (`'f64'` by default, or `'f32'`), as the integer `digits` and the power of ten that
 /// scales them (`value = digits * 10^exponent`), so any layout (`%g`, a JSON number, a tool's own
 /// float text) is spelling around the same digits. The sign leads `digits`; zero is `"0"` (or
-/// `"-0"`) with exponent 0. A NaN or an infinity has no digits: `nil`.
+/// `"-0"`) with exponent 0. A value that isn't finite at `width` has no digits: `nil`, for a NaN,
+/// an infinity, and a double past single precision's range at `'f32'`.
 fn shortest(value: f64, width: Option<&str>) -> Result<(Option<String>, Option<f64>)> {
-    if !value.is_finite() {
-        return Ok((None, None));
-    }
-    // Rust's `{:e}` is the shortest scientific spelling that round-trips at the type's width.
+    // Rust's `{:e}` is the shortest scientific spelling that round-trips at the type's width, and
+    // writes an infinity as `inf`, with no exponent.
     let scientific = match width.unwrap_or("f64") {
-        "f64" => format!("{value:e}"),
-        #[allow(clippy::cast_possible_truncation)]
-        "f32" => format!("{:e}", value as f32),
+        "f64" if value.is_finite() => format!("{value:e}"),
+        "f32" => {
+            #[allow(clippy::cast_possible_truncation)]
+            let narrowed = value as f32;
+            if !narrowed.is_finite() {
+                return Ok((None, None));
+            }
+            format!("{narrowed:e}")
+        }
+        "f64" => return Ok((None, None)),
         other => return Err(Error::runtime(format!("bytes.shortest: width must be 'f64' or 'f32', got '{other}'"))),
     };
     let (mantissa, exponent) = scientific.split_once('e').expect("{:e} always writes an exponent");

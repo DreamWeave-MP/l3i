@@ -520,6 +520,8 @@ fn shortest_digits_round_trip_at_their_width_and_to_f32_rounds() {
              check(16777217, 'f32', '16777216', 0) check(123456789, nil, '123456789', 0) \
              assert(bytes.shortest(-0) == '-0', 'negative zero') \
              assert(bytes.shortest(0/0) == nil and bytes.shortest(math.huge) == nil, 'non-finite') \
+             assert(bytes.shortest(1e40, 'f32') == nil and bytes.shortest(-1e40, 'f32') == nil, 'past f32') \
+             assert(not pcall(bytes.shortest, 0/0, 'f16'), 'a bad width, whatever the value') \
              assert(not pcall(bytes.shortest, 1, 'f16'), 'width') \
              assert(bytes.toF32(0.1) == 0.10000000149011612, `toF32 {bytes.toF32(0.1)}`) \
              assert(bytes.toF32(1e40) == math.huge and bytes.toF32(2) == 2, 'toF32 range')",
