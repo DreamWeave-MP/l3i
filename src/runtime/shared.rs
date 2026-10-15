@@ -489,6 +489,15 @@ impl Shared {
         }
     }
 
+    /// Records the armed deadline as run out when it has passed.
+    pub(crate) fn expire_if_due(&self) {
+        if let Some(deadline) = self.deadline.get()
+            && Instant::now() >= deadline.end
+        {
+            self.expired.set(Some(deadline.end));
+        }
+    }
+
     /// Forgets an expiry once no deadline is armed any more.
     pub(crate) fn clear_expired_if_disarmed(&self) {
         if self.deadline.get().is_none() {

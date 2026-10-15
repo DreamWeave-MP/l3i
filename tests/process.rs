@@ -3,15 +3,24 @@
 
 use l3i::Runtime;
 use l3i::extension::{RuntimePlan, RuntimePolicy};
-use l3i::process::{ENVIRONMENT_CAPABILITY, ProcessExtension, SPAWN_CAPABILITY};
+use std::time::{Duration, Instant};
 
-fn runtime_with(granted: bool) -> Runtime {
-    let mut policy = RuntimePolicy::new().compat_global("@dream/process", "process");
-    if granted {
-        policy = policy.capability(SPAWN_CAPABILITY).capability(ENVIRONMENT_CAPABILITY);
+use l3i::process::{ENVIRONMENT_CAPABILITY, ProcessExtension, SPAWN_CAPABILITY, STDIO_CAPABILITY};
+use l3i::runtime::Limits;
+
+fn runtime_granting(capabilities: &[&str], limits: Limits) -> Runtime {
+    let mut policy = RuntimePolicy::new().compat_global("@dream/process", "process").limits(limits);
+    for capability in capabilities {
+        policy = policy.capability(capability);
     }
     let plan = RuntimePlan::builder().policy(policy).extension(ProcessExtension).finalize().unwrap();
     Runtime::from_plan(&plan).unwrap()
+}
+
+fn runtime_with(granted: bool) -> Runtime {
+    let capabilities: &[&str] =
+        if granted { &[SPAWN_CAPABILITY, ENVIRONMENT_CAPABILITY, STDIO_CAPABILITY] } else { &[] };
+    runtime_granting(capabilities, Limits::default())
 }
 
 #[cfg(unix)]
@@ -78,9 +87,9 @@ fn running_and_the_environment_need_their_capabilities() {
              assert(not ok and err:find(\"needs the 'process.spawn' capability\"), err) \
              ok, err = pcall(process.env, 'PATH') \
              assert(not ok and err:find(\"needs the 'process.environment' capability\"), err) \
-             assert(process.write('stdout', '') == true and process.write('stderr', buffer.create(0)) == true) \
-             assert(type(process.isTerminal('stdout')) == 'boolean') \
-             ok, err = pcall(process.write, 'stdin', 'x') assert(not ok and err:find('stream must be'), err)",
+             ok, err = pcall(process.write, 'stdout', '') \
+             assert(not ok and err:find(\"needs the 'process.stdio' capability\"), err) \
+             assert(type(process.isTerminal('stdout')) == 'boolean')",
         )
         .unwrap();
 }
@@ -92,4 +101,42 @@ fn the_environment_reads_variables() {
     runtime_with(true)
         .exec("assert(process.env('DREAM_PROCESS_TEST') == 'caf\\u{e9}') assert(process.env('DREAM_PROCESS_UNSET_VARIABLE') == nil)")
         .unwrap();
+}
+
+#[test]
+fn writing_to_the_standard_streams_needs_its_capability() {
+    runtime_granting(&[STDIO_CAPABILITY], Limits::default())
+        .exec(
+            "assert(process.write('stdout', '') == true and process.write('stderr', buffer.create(0)) == true) \
+             local ok, err = pcall(process.write, 'stdin', 'x') assert(not ok and err:find('stream must be'), err)",
+        )
+        .unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn a_child_inherits_the_environment_only_under_its_capability() {
+    // SAFETY: the integration binary's tests touch no other variable of this name.
+    unsafe { std::env::set_var("DREAM_PROCESS_INHERITED", "leaked") };
+    let script = "local result = process.run('/bin/sh', { '-c', 'printf \"%s|%s\" \"$DREAM_PROCESS_INHERITED\" \"$GIVEN\"' }, \
+                    { env = { GIVEN = 'given' }, stdout = 'capture' }) \
+                  assert(result.stdout == EXPECTED, result.stdout)";
+    runtime_granting(&[SPAWN_CAPABILITY], Limits::default())
+        .exec(&format!("local EXPECTED = '|given' {script}"))
+        .unwrap();
+    runtime_granting(&[SPAWN_CAPABILITY, ENVIRONMENT_CAPABILITY], Limits::default())
+        .exec(&format!("local EXPECTED = 'leaked|given' {script}"))
+        .unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn a_child_still_running_at_the_execution_time_limit_is_killed() {
+    let limits = Limits { execution_time: Duration::from_millis(100), memory_bytes: 0 };
+    let runtime = runtime_granting(&[SPAWN_CAPABILITY], limits);
+    let started = Instant::now();
+    let error = runtime.exec("process.run('/bin/sleep', { '10' }) while true do end").unwrap_err();
+    assert!(matches!(error, l3i::Error::ExecutionTimeLimit(_)), "{error:?}");
+    assert!(started.elapsed() < Duration::from_secs(2), "the child outlived the limit: {:?}", started.elapsed());
+    runtime.exec("assert(process.run('/bin/sh', { '-c', 'exit 0' }).success)").unwrap();
 }

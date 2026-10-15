@@ -3,12 +3,17 @@
 //!
 //! - `process.run`: start a program with arguments, wait for it, and get its exit code, with its
 //!   output passed through, captured or discarded. It needs the `process.spawn` capability
-//!   ([`SPAWN_CAPABILITY`]), which no plan grants unless the host asks for it.
+//!   ([`SPAWN_CAPABILITY`]), which no plan grants unless the host asks for it. The child inherits
+//!   the host's environment only under `process.environment`; without it, it gets only the
+//!   variables `env` names. The wait never outlasts the runtime's execution time limit: a child
+//!   still running at the deadline is killed and reaped.
 //! - `process.env(name)`: an environment variable, with the `process.environment` capability
 //!   ([`ENVIRONMENT_CAPABILITY`]).
-//! - `process.write(stream, data)` and `process.isTerminal(stream)`: bytes to the host's standard
-//!   output or error, unbuffered and without the newline `print` adds, and whether a stream is a
-//!   terminal (to decide on colors). They need no capability: `print` already reaches stdout.
+//! - `process.write(stream, data)`: bytes to the host's standard output or error, unbuffered and
+//!   without the newline `print` adds, with the `process.stdio` capability ([`STDIO_CAPABILITY`]):
+//!   a sandboxed script's output goes where its host routes `print`, not to the host's streams.
+//! - `process.isTerminal(stream)`: whether a stream is a terminal (to decide on colors); no
+//!   capability.
 //!
 //! A function whose capability the runtime lacks exists, typed, and raises a permission error.
 //! A program the OS can't start, or a stream it can't write, is an answer, not an exception:
@@ -42,6 +47,8 @@ pub const MODULE: &str = "@dream/process";
 pub const SPAWN_CAPABILITY: &str = "process.spawn";
 /// The capability `process.env` needs.
 pub const ENVIRONMENT_CAPABILITY: &str = "process.environment";
+/// The capability `process.write` needs: the host's standard streams.
+pub const STDIO_CAPABILITY: &str = "process.stdio";
 
 const RUN_SIGNATURE: &str = "(program: string, args: { string }?, options: dream_process_RunOptions?) -> (dream_process_Result?, string?, dream_process_ErrorKind?)";
 const OPTIONS_TYPE: &str = "{ cwd: string?, env: { [string]: string }?, clearEnv: boolean?, stdin: (buffer | string)?, \
@@ -150,11 +157,15 @@ fn os_string(what: &str, bytes: &[u8]) -> Result<std::ffi::OsString> {
     }
 }
 
+/// `process.run`. Without the environment capability the child starts with an empty environment
+/// plus what `env` names: inheriting the host's would hand a script every variable `process.env`
+/// refuses it.
 fn run(
     call: &Call<'_>,
     program: &[u8],
     args: Option<ValueView<'_>>,
     options: Option<ValueView<'_>>,
+    inherit_environment: bool,
 ) -> Result<Outcome<StackResults>> {
     let mut arguments = Vec::new();
     if let Some(args) = args.filter(|view| !view.is_nil()) {
@@ -179,7 +190,7 @@ fn run(
     if let Some(cwd) = &options.cwd {
         command.current_dir(os_string("cwd", cwd)?);
     }
-    if options.clear_env {
+    if options.clear_env || !inherit_environment {
         command.env_clear();
     }
     for (key, value) in &options.env {
@@ -204,8 +215,12 @@ fn run(
         })),
         _ => None,
     };
-    let output = done!(match child.wait_with_output() {
-        Ok(output) => Outcome::Done(output),
+    let output = done!(match wait(call, &mut child) {
+        Ok(Some(output)) => Outcome::Done(output),
+        Ok(None) => {
+            let error = std::io::Error::new(std::io::ErrorKind::TimedOut, "stopped at the execution time limit");
+            Outcome::Failed(failed(error))
+        }
         Err(error) => Outcome::Failed(failed(error)),
     });
     if let Some(feeder) = feeder {
@@ -231,6 +246,55 @@ fn run(
     }
     frame.release();
     Ok(Outcome::Done(StackResults))
+}
+
+/// Waits for `child` and collects what it was asked to capture, as `wait_with_output` does, but
+/// never past the runtime's execution time limit: a child still running at the deadline is
+/// killed and reaped, the call is marked expired so the watchdog stops the script at its next
+/// safepoint, and the answer is `None`.
+fn wait(call: &Call<'_>, child: &mut std::process::Child) -> std::io::Result<Option<std::process::Output>> {
+    fn drain(pipe: Option<impl std::io::Read + Send + 'static>) -> Option<std::thread::JoinHandle<Vec<u8>>> {
+        pipe.map(|mut pipe| {
+            std::thread::spawn(move || {
+                let mut bytes = Vec::new();
+                // A read error ends the capture where it stopped, as wait_with_output would
+                // surface; the exit status still says how the child ended.
+                let _ = pipe.read_to_end(&mut bytes);
+                bytes
+            })
+        })
+    }
+    let stdout = drain(child.stdout.take());
+    let stderr = drain(child.stderr.take());
+    let collect = |reader: Option<std::thread::JoinHandle<Vec<u8>>>| {
+        reader.map(|reader| reader.join().unwrap_or_default()).unwrap_or_default()
+    };
+    let status = match crate::runtime::watchdog_remaining(call) {
+        None => child.wait()?,
+        Some(remaining) => {
+            let deadline = std::time::Instant::now() + remaining;
+            let mut pause = std::time::Duration::from_millis(1);
+            loop {
+                if let Some(status) = child.try_wait()? {
+                    break status;
+                }
+                let now = std::time::Instant::now();
+                if now >= deadline {
+                    // The child may have exited between the check and the kill; either way it
+                    // is reaped here, so nothing is left running behind the script.
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    collect(stdout);
+                    collect(stderr);
+                    crate::runtime::expire_if_due(call);
+                    return Ok(None);
+                }
+                std::thread::sleep(pause.min(deadline - now));
+                pause = (pause * 2).min(std::time::Duration::from_millis(20));
+            }
+        }
+    };
+    Ok(Some(std::process::Output { status, stdout: collect(stdout), stderr: collect(stderr) }))
 }
 
 /// Blocks SIGPIPE on the calling thread: a child that exits without reading all of its input
@@ -299,6 +363,7 @@ impl Extension for ProcessExtension {
         d.type_alias("dream_process_ErrorKind", crate::outcome::ERROR_KIND_TYPE);
         d.optional_capability(SPAWN_CAPABILITY);
         d.optional_capability(ENVIRONMENT_CAPABILITY);
+        d.optional_capability(STDIO_CAPABILITY);
         d.module(MODULE)
             .doc("The script's process and the ones it starts: run a program and wait for its exit code, environment variables, and the standard streams.")
             .installed("run")
@@ -307,9 +372,9 @@ impl Extension for ProcessExtension {
             .installed("env")
             .signature("(name: string) -> string?")
             .doc("The environment variable name, or nil when it is unset; needs the process.environment capability.")
-            .function("write", write)
+            .installed("write")
             .signature("(stream: \"stdout\" | \"stderr\", data: buffer | string) -> (boolean?, string?, dream_process_ErrorKind?)")
-            .doc("Writes data to the host's standard output or error, without the newline print adds.")
+            .doc("Writes data to the host's standard output or error, without the newline print adds; needs the process.stdio capability.")
             .function("isTerminal", is_terminal)
             .signature("(stream: \"stdout\" | \"stderr\") -> boolean")
             .doc("Whether the stream is a terminal.");
@@ -319,6 +384,7 @@ impl Extension for ProcessExtension {
     fn install(&self, cx: &mut InstallContext<'_>) -> Result<()> {
         let granted = cx.has_capability(SPAWN_CAPABILITY)?;
         let environment = cx.has_capability(ENVIRONMENT_CAPABILITY)?;
+        let stdio = cx.has_capability(STDIO_CAPABILITY)?;
         let module = cx.module(MODULE)?;
         if environment {
             module.function("env", |name: &[u8]| -> Result<Option<Vec<u8>>> {
@@ -331,8 +397,22 @@ impl Extension for ProcessExtension {
                 )))
             })?;
         }
+        if stdio {
+            module.function("write", write)?;
+        } else {
+            module.function("write", |_: ArgView<'_>| -> Result<()> {
+                Err(Error::permission(format!(
+                    "dream.process.write: needs the '{STDIO_CAPABILITY}' capability, which this runtime does not grant"
+                )))
+            })?;
+        }
         if granted {
-            module.function("run", run)?;
+            module.function(
+                "run",
+                move |call: &Call<'_>, program: &[u8], args: Option<ValueView<'_>>, options: Option<ValueView<'_>>| {
+                    run(call, program, args, options, environment)
+                },
+            )?;
         } else {
             module.function("run", |_: ArgView<'_>| -> Result<()> {
                 Err(Error::permission(format!(

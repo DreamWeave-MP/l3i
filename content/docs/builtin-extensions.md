@@ -1402,9 +1402,16 @@ if not result.success then error(`tes3cmd exited with {result.code}`) end
 
 The program is found the way the OS finds one, and its arguments reach it as they are, with no
 shell in between. A program the OS can't start returns `nil`, the message and the kind, as
-`@dream/fs` does. `run` needs `process.spawn` (`l3i::process::SPAWN_CAPABILITY`) and `env` needs
-`process.environment`; `write` and `isTerminal` need nothing, since `print` already reaches
-standard output.
+`@dream/fs` does. `run` needs `process.spawn` (`l3i::process::SPAWN_CAPABILITY`), `env` needs
+`process.environment` (`ENVIRONMENT_CAPABILITY`), and `write` needs `process.stdio`
+(`STDIO_CAPABILITY`), so a sandboxed script's output goes where its host routes `print`;
+`isTerminal` needs nothing.
+
+A child inherits the host's environment only when the runtime grants `process.environment`;
+without it the child starts with exactly the variables `env` names, since inheriting would hand
+the script every variable `env` refuses it. `run` waits no longer than the runtime's execution
+time limit: a child still running at the deadline is killed and reaped, and the watchdog stops
+the script at its next instruction.
 
 ## dream.tcp
 
