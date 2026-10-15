@@ -13,7 +13,7 @@ hide_child_cards = true
 
 ```toml
 [dependencies]
-l3i = "1"
+l3i = "2.1"
 ```
 
 The crate is `l3i`. Its modules are public and are reached by their module path
