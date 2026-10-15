@@ -649,7 +649,7 @@ go when a reduction over a buffer slice is simple enough to be one call.
 ```luau
 local data = require("@dream/data")
 local total = data.sum(samples, "f32", 0, n)
-local hot = data.compare(samples, "f32", 0, n, "gt", threshold)
+local hot = data.select(samples, "f32", 0, n, "gt", threshold)
 local count = hot:count()
 local order = buffer.create(n * 4)
 data.argsort(samples, "f32", 0, n, order)
@@ -679,7 +679,7 @@ Reductions accumulate in `f64` in element order, so `sum` over a span equals the
 Two more shapes appear. An **index vector** is a `u32` buffer of zero-based element positions:
 the input of `gather` and `scatter`, the output of `argsort` and `partition`. A **selection**
 (`dream.data.Selection`) is a bitset over the positions of a span of one length, produced by
-`compare`, combined with boolean algebra, counted, or turned into an index vector. Every
+`select`, combined with boolean algebra, counted, or turned into an index vector. Every
 operation that produces output takes the storage from the caller, `into` for selections and
 `out` for buffers, so steady state allocates nothing.
 
@@ -690,9 +690,9 @@ operation that produces output takes the storage from the caller, `into` for sel
 | `sum` | span | number, `f64` accumulation in element order | `0` | propagates as Luau `+` | n/a | bounds |
 | `min`, `max` | span | number or nil | nil | a leading NaN stays; later NaNs never replace (Luau `<` and `>`) | n/a | bounds |
 | `argmin`, `argmax` | span | zero-based position or nil | nil | as `min` and `max` | n/a | bounds |
-| `count` | span | how many satisfy `cmp` | `0` | every comparison false except `ne` (IEEE) | n/a | bounds, comparison name |
-| `any`, `all` | span | boolean; stops at the first deciding element | `false`, `true` | as `count` | n/a | bounds, comparison name |
-| `compare`, `K:select<Cmp>` | span | selection of the positions satisfying `cmp`, into `into` (resized) or new | empty selection | as `count` | `into` may be any selection | bounds |
+| `countWhere`, `K:count<Cmp>` | span | how many satisfy `cmp` | `0` | every comparison false except `ne` (IEEE) | n/a | bounds, comparison name |
+| `any`, `all` | span | boolean; stops at the first deciding element | `false`, `true` | as `countWhere` | n/a | bounds, comparison name |
+| `select`, `K:select<Cmp>` | span | selection of the positions satisfying `cmp`, into `into` (resized) or new | empty selection | as `countWhere` | `into` may be any selection | bounds |
 | `Selection:intersect/union/xor/difference` | two selections of one length | selection, into `into` or new | | | `into` may be either operand | lengths differ |
 | `Selection:complement` | selection | selection | | | `into` may be the source | |
 | `Selection:count/len/get/any/all/clear` | selection | number, boolean, nothing | `all` of nothing is true | | | |
@@ -704,7 +704,7 @@ operation that produces output takes the storage from the caller, `into` for sel
 | `scale` | span | `out[i] = s[i] × factor` | | Luau `*` | `out` may be the source | bounds |
 | `clamp` | span | `out[i] = clamp(s[i], low, high)` | | passes through, as `math.clamp` | `out` may be the source | bounds, `low > high` or NaN bounds |
 | `argsort` | key span | u32 permutation into `out` from `outOffset`; count | 0 | NaN keys last, in original order | keys are copied before sorting, so `out` may overlap them | bounds |
-| `partition` | key span | u32 index vector, satisfying positions first then the rest, each in original order; the accepted count | 0 | as `count` | as `argsort` | bounds, comparison name |
+| `partition` | key span | u32 index vector, satisfying positions first then the rest, each in original order; the accepted count | 0 | as `countWhere` | as `argsort` | bounds, comparison name |
 
 Comparisons are named: `"eq"`, `"ne"`, `"lt"`, `"le"`, `"gt"`, `"ge"`. Aliasing is defined,
 never assumed: element-wise operations read each element and write its result before the next,
@@ -732,7 +732,7 @@ The reductions also exist as methods of **typed receivers**, one class per eleme
 receiver has the same thirty-nine members: `sum`, `min` and `max` over the whole span, and each
 of `sum`, `min`, `max`, `count`, `any` and `all` with a comparison suffix (`sumGt`, `minLe`,
 `countEq`, `anyNe`, `allGe`, ...) over the elements that compare so against a threshold argument,
-plus `selectEq` through `selectGe`, which is `compare` written into a caller selection that is
+plus `selectEq` through `selectGe`, which is `select` written into a caller selection that is
 resized to `count` and returned. Bound, both spellings run one shared element loop.
 
 ```luau
@@ -794,7 +794,7 @@ faster than they would be unsandboxed. Those are the fair baselines.
 
 Interpreter:
 
-| n | dialect, recognized | dialect, scalar fallback | explicit `data.sum` / `data.count` | handwritten `readu8` loop |
+| n | dialect, recognized | dialect, scalar fallback | explicit `data.sum` / `data.countWhere` | handwritten `readu8` loop |
 |---:|---:|---:|---:|---:|
 | sum 16 | 3,907 (431 ns) | 7,395 (778 ns) | 1,945 (238 ns) | 4,540 (586 ns) |
 | sum 256 | 7,027 (733 ns) | 77,235 (6.26 µs) | 5,065 (510 ns) | 56,860 (4.45 µs) |
@@ -866,8 +866,8 @@ What the machine shape says:
   a read-modify-write of the bitset word per hit through two pointer loads. Reshaped as one
   64-element pass per word, each hit ORing a compile-time bit into a scratch word written once,
   it runs in 89.6 µs including the `count()` afterwards, faster than the native count alone and
-  than bound `compare` then `count`. Composing selections natively is the fast path, not a
-  concession, and `compare` into a reused selection then `count()` costs within 5 percent of the
+  than bound `select` then `count`. Composing selections natively is the fast path, not a
+  concession, and `select` into a reused selection then `count()` costs within 5 percent of the
   direct count at every size.
 
 Interpreter and native agree on the ordering of everything else: the bound operations beat the

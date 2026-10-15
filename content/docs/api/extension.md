@@ -759,7 +759,7 @@ is closed.
 
 {{ api_signature(value="pub struct Selection") }}
 
-The userdata behind `data.compare` and `data.selection` (`Userdata::NAME`
+The userdata behind `data.select` and `data.selection` (`Userdata::NAME`
 `"dream.data.Selection"`): a bitset over the positions of a span of one length, `#[repr(C)]` so
 native code reads its length word and words pointer at fixed offsets. `new(len)`, `len()`,
 `is_empty()`, `count()`, `get(index)`.

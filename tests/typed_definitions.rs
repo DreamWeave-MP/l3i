@@ -72,8 +72,8 @@ const DATA_SCRIPT: (&str, &str) = (
      local most: number? = data.max(bodies, 'f32@16', 0, 8, 'le', 4)\n\
      local some: boolean = data.any(column, 'i32', 0, 8, 'ge', 0) and data.all(bodies, 'f32@16+4', 0, 8, 'ne', 1)\n\
      local first: number? = data.argmin(column, 'i32', 0, 8) or data.argmax(bodies, 'f32@16+8', 0, 8)\n\
-     local live: number = data.count(column, 'i32', 0, 8, 'gt', 0)\n\
-     local selection: dream_data_Selection = data.compare(column, 'i32', 0, 8, 'gt', 0, data.selection(8))\n\
+     local live: number = data.countWhere(column, 'i32', 0, 8, 'gt', 0)\n\
+     local selection: dream_data_Selection = data.select(column, 'i32', 0, 8, 'gt', 0, data.selection(8))\n\
      local gathered: number = data.gather(bodies, 'f32@16+12', 0, 8, order, column, 0, 8)\n\
      local scattered: number = data.scatter(column, 'f32', 0, 8, order, bodies, 0, 8)\n\
      data.fill(bodies, 'f32@16+12', 0, 8, 1)\n\

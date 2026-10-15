@@ -67,8 +67,8 @@ fn nan_ordering_and_bounds_follow_the_documented_rules() {
         assert(data.min(buf, 'f32', 4, 4) == 0 and data.max(buf, 'f32', 4, 4) == 2, 'later NaNs never replace')
         assert(data.argmin(buf, 'f32', 4, 4) == 1, 'positions are zero-based within the span')
         -- Every comparison with NaN is false except ne.
-        assert(data.count(buf, 'f32', 0, 5, 'lt', 10) == 3 and data.count(buf, 'f32', 0, 5, 'ne', 10) == 5)
-        assert(data.count(buf, 'f32', 0, 5, 'ge', 1) == 2 and data.count(buf, 'f32', 0, 5, 'eq', 0) == 1)
+        assert(data.countWhere(buf, 'f32', 0, 5, 'lt', 10) == 3 and data.countWhere(buf, 'f32', 0, 5, 'ne', 10) == 5)
+        assert(data.countWhere(buf, 'f32', 0, 5, 'ge', 1) == 2 and data.countWhere(buf, 'f32', 0, 5, 'eq', 0) == 1)
         local ok, message = pcall(data.sum, buf, 'f32', 4, 5)
         assert(not ok and string.find(message, 'exceeds the buffer length 20', 1, true), message)
         ok, message = pcall(data.sum, buf, 'f32', -4, 1)
@@ -77,7 +77,7 @@ fn nan_ordering_and_bounds_follow_the_documented_rules() {
         assert(not ok and string.find(message, 'negative count', 1, true), message)
         ok, message = pcall(data.sum, buf, 'f16', 0, 1)
         assert(not ok and string.find(message, 'unknown element kind', 1, true), message)
-        ok, message = pcall(data.count, buf, 'f32', 0, 5, 'between', 1)
+        ok, message = pcall(data.countWhere, buf, 'f32', 0, 5, 'between', 1)
         assert(not ok and string.find(message, 'unknown comparison', 1, true), message)
         assert(data.sum(buf, 'f32', 20, 0) == 0, 'an empty span at the very end is in bounds')
     ",
@@ -91,12 +91,12 @@ fn selections_compose_without_materializing_and_reuse_their_storage() {
         local n = 130
         local buf = buffer.create(n * 4)
         for i = 0, n - 1 do buffer.writei32(buf, i * 4, i) end
-        local big = data.compare(buf, 'i32', 0, n, 'ge', 100)
-        local even = data.compare(buf, 'i32', 0, n, 'eq', 0)
+        local big = data.select(buf, 'i32', 0, n, 'ge', 100)
+        local even = data.select(buf, 'i32', 0, n, 'eq', 0)
         assert(big:len() == n and big:count() == 30 and not big:get(99) and big:get(100) and not big:get(1000))
         -- Reused output: the same selection object comes back, resized and overwritten.
         local scratch = data.selection(3)
-        local reused = data.compare(buf, 'i32', 0, n, 'lt', 10, scratch)
+        local reused = data.select(buf, 'i32', 0, n, 'lt', 10, scratch)
         assert(reused == scratch and scratch:len() == n and scratch:count() == 10)
         local both = big:intersect(reused)
         assert(both:count() == 0 and not both:any())
@@ -402,7 +402,7 @@ fn kind_receiver_methods_match_the_module_functions() {
         assert(F32:sum(buf, 8, n) == data.sum(buf, 'f32', 8, n))
         assert(F32:min(buf, 8, n) == data.min(buf, 'f32', 8, n) and F32:max(buf, 8, n) == data.max(buf, 'f32', 8, n))
         assert(F32:min(buf, 8, 0) == nil and F32:sum(buf, 8, 0) == 0)
-        assert(F32:countGt(buf, 8, n, 0) == data.count(buf, 'f32', 8, n, 'gt', 0))
+        assert(F32:countGt(buf, 8, n, 0) == data.countWhere(buf, 'f32', 8, n, 'gt', 0))
         assert(F32:countNe(buf, 8, n, 0 / 0) == n and F32:countEq(buf, 8, n, 0 / 0) == 0)
         local ok, message = pcall(F32.sum, F32, buf, 8, n + 1)
         assert(not ok and string.find(message, 'Kind:sum: span of 301 f32', 1, true), message)
@@ -484,7 +484,7 @@ fn kind_receiver_reductions_lower_to_native_loops_with_the_bound_semantics() {
         assert(K:sum(buf, 5, n) == data.sum(buf, name, 5, n), name .. ' sum')
         assert(K:sum(buf, 5 + 10 * size, 0) == 0, name .. ' empty sum')
         assert(S:sum(buf, 5, n // 2) == data.sum(buf, name .. '@' .. (size * 2), 5, n // 2), name .. ' strided sum')
-        assert(S:countGt(buf, 5, n // 2, 3) == data.count(buf, name .. '@' .. (size * 2), 5, n // 2, 'gt', 3), name .. ' strided count')
+        assert(S:countGt(buf, 5, n // 2, 3) == data.countWhere(buf, name .. '@' .. (size * 2), 5, n // 2, 'gt', 3), name .. ' strided count')
         assert(S:min(buf, 5, n // 2) == data.min(buf, name .. '@' .. (size * 2), 5, n // 2), name .. ' strided min')
         if name == 'f32' or name == 'f64' then
             write(buf, 5 + 400 * size, nan)
@@ -535,7 +535,7 @@ fn strided_layouts_read_one_field_of_packed_records() {
         assert(data.sum(motion, 'f32@16', 4 + 12, n) == sumVy, 'vy column sum')
         assert(data.max(motion, 'f32@16', 4 + 12, n) == maxVy and data.argmax(motion, 'f32@16', 4 + 12, n) == 30, 'the first body with (i * 37) % 101 == 100')
         assert(data.sum(motion, 'f32@16', 4, n) == (n - 1) * n / 2, 'x column')
-        assert(data.count(motion, 'f32@16', 4 + 4, n, 'lt', -100) == n - 101, 'y column compare')
+        assert(data.countWhere(motion, 'f32@16', 4 + 4, n, 'lt', -100) == n - 101, 'y column compare')
         local VY = data.kind('f32@16')
         assert(VY:sum(motion, 16, n) == sumVy and VY:max(motion, 16, n) == maxVy)
         -- The last record may end exactly at the buffer: (count - 1) * stride + size.
@@ -577,16 +577,18 @@ fn every_receiver_member_lowers_and_agrees_with_the_module_functions() {
     let Some((runtime, _)) = native_runtime() else { return };
     let mut total_blocks = 0;
     for op in ["sum", "min", "max", "count", "any", "all"] {
+        // The module spells the filtered count countWhere, apart from bytes.count.
+        let module = if op == "count" { "countWhere" } else { op };
         let mut checks = String::new();
         for comparison in ["Eq", "Ne", "Lt", "Le", "Gt", "Ge"] {
             let lower = comparison.to_lowercase();
             writeln!(
                 checks,
-                "do local got = K:{op}{comparison}(buf, 5, n, 3) local want = data.{op}(buf, name, 5, n, '{lower}', 3) \
+                "do local got = K:{op}{comparison}(buf, 5, n, 3) local want = data.{module}(buf, name, 5, n, '{lower}', 3) \
                  assert(got == want or (got ~= got and want ~= want), name .. ' {op}{comparison}: ' .. tostring(got) .. ' vs ' .. tostring(want)) \
-                 got = K:{op}{comparison}(buf, 5, n, nan) want = data.{op}(buf, name, 5, n, '{lower}', nan) \
+                 got = K:{op}{comparison}(buf, 5, n, nan) want = data.{module}(buf, name, 5, n, '{lower}', nan) \
                  assert(got == want or (got ~= got and want ~= want), name .. ' {op}{comparison} NaN threshold') \
-                 got = K:{op}{comparison}(buf, 5, 0, 3) want = data.{op}(buf, name, 5, 0, '{lower}', 3) \
+                 got = K:{op}{comparison}(buf, 5, 0, 3) want = data.{module}(buf, name, 5, 0, '{lower}', 3) \
                  assert(got == want, name .. ' {op}{comparison} empty: ' .. tostring(got) .. ' vs ' .. tostring(want)) end"
             )
             .unwrap();
@@ -605,7 +607,7 @@ fn every_receiver_member_lowers_and_agrees_with_the_module_functions() {
              local K: dream_data_Kind_{{name}} = {{ctor}}()\n\
              {checks}\
              local S: dream_data_Kind_{{name}} = {{ctor}}(size * 2)\n\
-             assert(S:{op}Gt(buf, 5, n // 2, 1) == data.{op}(buf, name .. '@' .. (size * 2), 5, n // 2, 'gt', 1), name .. ' strided {op}')\n"
+             assert(S:{op}Gt(buf, 5, n // 2, 1) == data.{module}(buf, name .. '@' .. (size * 2), 5, n // 2, 'gt', 1), name .. ' strided {op}')\n"
         ));
         total_blocks += run_native(&runtime, &chunk);
     }
@@ -613,7 +615,7 @@ fn every_receiver_member_lowers_and_agrees_with_the_module_functions() {
 }
 
 #[test]
-fn receiver_selections_match_compare_for_every_kind() {
+fn receiver_selections_match_select_for_every_kind() {
     exec(
         r"
         local kinds = {'u8', 'i8', 'u16', 'i16', 'u32', 'i32', 'f32', 'f64'}
@@ -626,7 +628,7 @@ fn receiver_selections_match_compare_for_every_kind() {
             local mine, theirs = data.selection(1), data.selection(1)
             for _, op in {'Eq', 'Ne', 'Lt', 'Le', 'Gt', 'Ge'} do
                 assert(K['select' .. op](K, buf, 3, n, 2, mine) == mine, name .. ' returns the selection')
-                data.compare(buf, name, 3, n, string.lower(op), 2, theirs)
+                data.select(buf, name, 3, n, string.lower(op), 2, theirs)
                 assert(mine:len() == n and mine:xor(theirs):count() == 0, name .. ' select' .. op)
             end
             assert(K:selectGt(buf, 3, 0, 2, mine):len() == 0, name .. ' empty')
@@ -649,15 +651,15 @@ fn receiver_selections_lower_to_native_loops() {
         local S: dream_data_Kind_{name} = {ctor}(size * 2)
         local mine, theirs = data.selection(n), data.selection(1)
         local a = K:selectGt(buf, 3, n, 2, mine)
-        data.compare(buf, name, 3, n, 'gt', 2, theirs)
+        data.select(buf, name, 3, n, 'gt', 2, theirs)
         assert(a == mine and mine:xor(theirs):count() == 0 and mine:count() == theirs:count(), name .. ' selectGt native')
         local b = K:selectEq(buf, 3, n, 0, mine)
-        data.compare(buf, name, 3, n, 'eq', 0, theirs)
+        data.select(buf, name, 3, n, 'eq', 0, theirs)
         assert(mine:xor(theirs):count() == 0, name .. ' selectEq native')
         -- A strided receiver and a selection of the wrong length (resized by the binder).
         local half = data.selection(3)
         S:selectNe(buf, 3, n // 2, 1, half)
-        data.compare(buf, name .. '@' .. (size * 2), 3, n // 2, 'ne', 1, theirs)
+        data.select(buf, name .. '@' .. (size * 2), 3, n // 2, 'ne', 1, theirs)
         assert(half:len() == n // 2 and half:xor(theirs):count() == 0, name .. ' strided select')
         ",
     );

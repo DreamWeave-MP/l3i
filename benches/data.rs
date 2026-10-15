@@ -159,10 +159,10 @@ fn counts(c: &mut Criterion) {
         case(&mut group, "jsl scalar fallback", false, &setup, jsl, expected_count(n));
         case(
             &mut group,
-            "explicit data.count",
+            "explicit data.countWhere",
             true,
             &setup,
-            "return data.count(buf, 'u8', 0, n, 'gt', 127)",
+            "return data.countWhere(buf, 'u8', 0, n, 'gt', 127)",
             expected_count(n),
         );
         case(
@@ -170,7 +170,7 @@ fn counts(c: &mut Criterion) {
             "explicit compare into selection then count",
             true,
             &setup,
-            "return data.compare(buf, 'u8', 0, n, 'gt', 127, sel):count()",
+            "return data.select(buf, 'u8', 0, n, 'gt', 127, sel):count()",
             expected_count(n),
         );
         case(

@@ -37,7 +37,7 @@
 //! ```lua
 //! local data = require('@dream/data')
 //! local total = data.sum(samples, 'f32', 0, n)
-//! local hot = data.compare(samples, 'f32', 0, n, 'gt', threshold)
+//! local hot = data.select(samples, 'f32', 0, n, 'gt', threshold)
 //! local count = hot:count()
 //! local order = buffer.create(n * 4)
 //! data.argsort(samples, 'f32', 0, n, order)
@@ -658,8 +658,8 @@ fn count(
     comparison: &str,
     threshold: f64,
 ) -> Result<f64> {
-    let span = Span::new("data.count", &buffer, Layout::parse("data.count", kind)?, offset, count)?;
-    let comparison = Comparison::parse("data.count", comparison)?;
+    let span = Span::new("data.countWhere", &buffer, Layout::parse("data.countWhere", kind)?, offset, count)?;
+    let comparison = Comparison::parse("data.countWhere", comparison)?;
     let mut selected = 0usize;
     for i in 0..span.count {
         selected += usize::from(comparison.test(span.get(i), threshold));
@@ -682,8 +682,8 @@ fn compare(
     threshold: f64,
     into: Option<&Selection>,
 ) -> Result<StackResults> {
-    let span = Span::new("data.compare", &buffer, Layout::parse("data.compare", kind)?, offset, count)?;
-    let comparison = Comparison::parse("data.compare", comparison)?;
+    let span = Span::new("data.select", &buffer, Layout::parse("data.select", kind)?, offset, count)?;
+    let comparison = Comparison::parse("data.select", comparison)?;
     let target = Target::prepare(into, span.count);
     {
         let selection = target.selection();
@@ -1549,10 +1549,10 @@ fn describe_module(module: &mut ModuleDecl) {
         .function("argmax", argmax)
         .signature(format!("({SPAN}) -> number?"))
         .doc("The zero-based position of the first greatest element, or nil.")
-        .function("count", count)
+        .function("countWhere", count)
         .signature(format!("({SPAN}, comparison: dream_data_Comparison, threshold: number) -> number"))
         .doc("How many elements satisfy the comparison against threshold.")
-        .function("compare", compare)
+        .function("select", compare)
         .signature(format!(
             "({SPAN}, comparison: dream_data_Comparison, threshold: number, into: dream_data_Selection?) -> dream_data_Selection"
         ))
