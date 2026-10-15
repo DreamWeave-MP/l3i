@@ -232,3 +232,25 @@ fn every_function_needs_its_capability() {
         .unwrap();
     assert!(scratch.0.join("x").exists() && !scratch.0.join("y").exists());
 }
+
+#[cfg(unix)]
+#[test]
+fn fifos_and_devices_are_refused_instead_of_blocking_or_never_ending() {
+    let scratch = Scratch::new("fifo");
+    let fifo = scratch.0.join("pipe");
+    let name = std::ffi::CString::new(fifo.display().to_string()).unwrap();
+    // SAFETY: a NUL-terminated path in a folder this test owns.
+    assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+    runtime()
+        .exec(&format!(
+            "local root = {} \
+             for _, read in {{ fs.readFile, fs.readFileString, fs.open }} do \
+               local value, message, kind = read(root .. '/pipe') \
+               assert(value == nil and kind == 'invalidInput' and message:find('not a regular file'), message) \
+             end \
+             local value, message, kind = fs.readFile('/dev/zero') \
+             assert(value == nil and kind == 'invalidInput', message)",
+            scratch.lua()
+        ))
+        .unwrap();
+}

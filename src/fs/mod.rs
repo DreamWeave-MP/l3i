@@ -195,7 +195,7 @@ fn push_list<T>(scope: &impl Scope, items: &[T], mut push: impl FnMut(&Frame<'_>
 
 fn read_file(call: &Call<'_>, path: &[u8]) -> Result<Outcome<StackResults>> {
     let host = host_path("readFile", path)?;
-    let bytes = done!(Outcome::of(std::fs::read(&host), "readFile", path));
+    let bytes = done!(Outcome::of(io::read_regular(&host), "readFile", path));
     let mut buffer = new_buffer(call, bytes.len())?;
     // SAFETY: the buffer was created by this call and no other view of it exists.
     unsafe { buffer.bytes_mut_unchecked() }.copy_from_slice(&bytes);
@@ -512,7 +512,7 @@ impl Extension for FsExtension {
         }
         bind!("readFile", read_file);
         bind!("readFileString", |path: &[u8]| -> Result<Outcome<Vec<u8>>> {
-            Ok(Outcome::of(std::fs::read(host_path("readFileString", path)?), "readFileString", path))
+            Ok(Outcome::of(io::read_regular(&host_path("readFileString", path)?), "readFileString", path))
         });
         bind!("readAt", io::read_at);
         bind!("open", |path: &[u8]| -> Result<Outcome<Owned<Reader>>> {

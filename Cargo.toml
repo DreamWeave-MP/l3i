@@ -166,7 +166,7 @@ data = []
 syntax = []
 # The `@dream/fs` extension (`fs`): the host filesystem over byte paths, gated by the
 # `filesystem.read` and `filesystem.write` capabilities.
-fs = ["dep:memmap2", "dep:walkdir", "dep:same-file"]
+fs = ["dep:memmap2", "dep:walkdir", "dep:same-file", "dep:libc"]
 # The `@dream/process` extension (`process`): run a child process and wait for its exit code,
 # gated by the `process.spawn` capability.
 process = ["dep:libc"]

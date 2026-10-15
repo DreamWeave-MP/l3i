@@ -19,6 +19,43 @@ use crate::userdata::Userdata;
 
 use super::{Outcome, display, done};
 
+/// What reading a FIFO, socket or device as a file fails with: such a file would block the VM
+/// thread waiting for a writer, or never end.
+fn not_a_regular_file() -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidInput, "not a regular file")
+}
+
+/// Opens `path` for reading, refusing anything but a regular file. On Unix the open itself is
+/// non-blocking, so a FIFO with no writer is refused at once instead of hanging the open; the
+/// flag changes nothing for the regular file that passes.
+pub(crate) fn open_regular(path: &Path) -> io::Result<File> {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::custom_flags(&mut options, libc::O_NONBLOCK);
+    let file = match options.open(path) {
+        Ok(file) => file,
+        // Windows refuses to open a directory as a file with ERROR_ACCESS_DENIED; say what it is.
+        Err(_) if std::fs::metadata(path).is_ok_and(|metadata| metadata.is_dir()) => return Err(is_a_directory()),
+        Err(error) => return Err(error),
+    };
+    let metadata = file.metadata()?;
+    if metadata.is_dir() {
+        return Err(is_a_directory());
+    }
+    if !metadata.is_file() {
+        return Err(not_a_regular_file());
+    }
+    Ok(file)
+}
+
+/// The whole regular file at `path`, as `std::fs::read` reads it.
+pub(crate) fn read_regular(path: &Path) -> io::Result<Vec<u8>> {
+    let mut file = open_regular(path)?;
+    let mut bytes = Vec::new();
+    io::Read::read_to_end(&mut file, &mut bytes)?;
+    Ok(bytes)
+}
 /// Where a reader's bytes come from.
 #[derive(Debug)]
 pub(crate) enum Backing {
@@ -43,17 +80,8 @@ fn is_a_directory() -> io::Error {
 impl Backing {
     /// Maps the file at `path`, or opens it for positional reads when mapping fails.
     pub(crate) fn open(path: &Path) -> io::Result<Backing> {
-        let file = match File::open(path) {
-            Ok(file) => file,
-            // Windows refuses to open a directory as a file with ERROR_ACCESS_DENIED; say what it is.
-            Err(_) if std::fs::metadata(path).is_ok_and(|metadata| metadata.is_dir()) => return Err(is_a_directory()),
-            Err(error) => return Err(error),
-        };
-        let metadata = file.metadata()?;
-        if metadata.is_dir() {
-            return Err(is_a_directory());
-        }
-        let len = metadata.len();
+        let file = open_regular(path)?;
+        let len = file.metadata()?.len();
         if len == 0 {
             return Ok(Backing::Empty);
         }

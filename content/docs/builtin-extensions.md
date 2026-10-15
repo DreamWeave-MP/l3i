@@ -1349,9 +1349,9 @@ handle.
 
 | Function | Returns |
 |---|---|
-| `readFile(path)`, `readFileString(path)` | The whole file as a buffer or a string |
+| `readFile(path)`, `readFileString(path)` | The whole file as a buffer or a string. A FIFO, socket or device is refused (`invalidInput`, `not a regular file`) rather than read: it would block the thread or never end |
 | `readAt(path, offset, length)` | `length` bytes from `offset` as a buffer, fewer at the end |
-| `open(path)` | A `dream_fs_Reader` over a memory map of the file |
+| `open(path)` | A `dream_fs_Reader` over a memory map of the file; refuses what `readFile` refuses |
 | `stat(path)`, `lstat(path)` | `{ kind, size, isFile, isDir, isSymlink, readonly, modified, modifiedSeconds, modifiedNanoseconds }`; `lstat` describes a link instead of following it |
 | `exists(path)` | Whether something is there, following links |
 | `list(path)` | The names in a directory, sorted by their bytes |
