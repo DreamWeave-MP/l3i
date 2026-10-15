@@ -236,4 +236,14 @@ int l3i_thread_resettable(lua_State* L)
     return !L->isactive && (L->status != LUA_OK || L->ci == L->base_ci);
 }
 
+// Whether this build of Luau checks its internal assertions (LUAU_ASSERT and api_check).
+int l3i_luau_assertions(void)
+{
+#ifdef LUAU_ASSERTENABLED
+    return 1;
+#else
+    return 0;
+#endif
+}
+
 } // extern "C"

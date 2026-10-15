@@ -114,6 +114,9 @@ fn main() {
         // Luau's internal api_check assertions, as OpenMW's debug builds have them.
         base.define("LUAU_ENABLE_ASSERT", None);
     } else {
+        // Luau enables its assertions whenever NDEBUG is undefined (Luau/Common.h), and cc never
+        // defines it: without this a release VM traps on every failed api_check.
+        base.define("NDEBUG", None);
         // Lets the compiler lower sqrt() to one instruction.
         base.flag_if_supported("-fno-math-errno");
     }

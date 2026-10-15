@@ -441,3 +441,8 @@ fn host_pushes_past_the_stack_limit_fail_instead_of_aborting() {
     drop(stack);
     runtime.exec("local x = 1").unwrap();
 }
+
+#[test]
+fn luau_checks_its_assertions_exactly_when_rust_debug_assertions_are_on() {
+    assert_eq!(l3i::flags::luau_assertions(), cfg!(debug_assertions));
+}

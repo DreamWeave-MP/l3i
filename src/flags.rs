@@ -166,6 +166,13 @@ pub(crate) fn decide_coroutine_finalizers(requested: bool) -> Result<bool> {
     Ok(decided)
 }
 
+/// Whether this build of Luau checks its internal assertions (`LUAU_ASSERT`, `api_check`): on in
+/// builds with Rust debug assertions, off otherwise, where a failed check would trap.
+pub fn luau_assertions() -> bool {
+    // SAFETY: a constant the C++ build fixed; no VM involved.
+    unsafe { ffi::l3i_luau_assertions() != 0 }
+}
+
 /// Whether this process runs with coroutine finalizers
 /// ([`crate::runtime::RuntimeBuilder::coroutine_finalizers`]). False until a runtime is built.
 pub fn coroutine_finalizers() -> bool {
