@@ -569,9 +569,7 @@ impl Extension for UdpExtension {
         let clock = Rc::clone(&self.clock);
         cx.module(MODULE)?.function("client", move |call: &Call, options: ValueView| -> Result<Owned<UdpClient>> {
             if !transport_allowed {
-                return Err(Error::permission(format!(
-                    "udp.client requires the '{TRANSPORT_CAPABILITY}' capability, which this runtime does not grant"
-                )));
+                return Err(Error::denied("dream.udp.client", TRANSPORT_CAPABILITY));
             }
             let (bind, schema) = Options::read(call, options, "udp.client", |o| {
                 let bind: Option<String> = o.optional("bind")?;
@@ -592,9 +590,7 @@ impl Extension for UdpExtension {
         let clock = Rc::clone(&self.clock);
         cx.module(MODULE)?.function("server", move |call: &Call, options: ValueView| -> Result<Owned<Server>> {
             if !transport_allowed {
-                return Err(Error::permission(format!(
-                    "udp.server requires the '{TRANSPORT_CAPABILITY}' capability, which this runtime does not grant"
-                )));
+                return Err(Error::denied("dream.udp.server", TRANSPORT_CAPABILITY));
             }
             let (address, protocol_id, max_clients, schema) = Options::read(call, options, "udp.server", |o| {
                 let address: String = o.required("address")?;

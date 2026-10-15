@@ -57,12 +57,12 @@ use std::path::{Path, PathBuf};
 
 pub use io::{Reader, Writer};
 
-use crate::bind::{ArgView, Call, StackResults};
+use crate::bind::{Call, StackResults};
 use crate::convert::new_buffer;
-use crate::error::{Error, Result};
+use crate::error::Result;
 use crate::extension::{Extension, ExtensionDescriptor, InstallContext};
 use crate::options::Options;
-use crate::stack::{Frame, Scope, ValueView};
+use crate::stack::{Scope, ValueView};
 use crate::userdata::Owned;
 
 /// The extension id.
@@ -183,18 +183,6 @@ fn stat(call: &Call<'_>, what: &str, path: &[u8], follow: bool) -> Result<Outcom
     }
 }
 
-/// Pushes `items` as a sequence table.
-fn push_list<T>(scope: &impl Scope, items: &[T], mut push: impl FnMut(&Frame<'_>, &T) -> Result<()>) -> Result<()> {
-    let mut frame = scope.frame();
-    let table = frame.push_table(items.len(), 0)?;
-    for (index, item) in items.iter().enumerate() {
-        push(&frame, item)?;
-        table.raw_set_index(&frame, index as i64 + 1)?;
-    }
-    frame.release();
-    Ok(())
-}
-
 fn read_file(call: &Call<'_>, path: &[u8]) -> Result<Outcome<StackResults>> {
     let host = host_path("readFile", path)?;
     let bytes = done!(Outcome::of(io::read_regular(&host), "readFile", path));
@@ -213,7 +201,7 @@ fn list(call: &Call<'_>, path: &[u8]) -> Result<Outcome<StackResults>> {
     });
     let mut names = done!(Outcome::of(names, "list", path));
     names.sort_unstable();
-    push_list(call, &names, |frame, name| frame.push(name.as_slice()).map(drop))?;
+    crate::stack::push_list(call, names.iter(), |frame, name| frame.push(name.as_slice()).map(drop))?;
     Ok(Outcome::Done(StackResults))
 }
 
@@ -546,23 +534,11 @@ impl Extension for FsExtension {
         let module = cx.module(MODULE)?;
         macro_rules! bind {
             ($name:literal, $callable:expr) => {{
-                let access = MEMBERS.iter().find(|member| member.name == $name).map(|member| member.access);
-                let (granted, capability) = match access {
-                    Some(Access::Path) => (true, ""),
-                    Some(Access::Write) => (write, WRITE_CAPABILITY),
-                    _ => (read, READ_CAPABILITY),
+                match MEMBERS.iter().find(|member| member.name == $name).map(|member| member.access) {
+                    Some(Access::Path) => module.function($name, $callable)?,
+                    Some(Access::Write) => module.gated($name, WRITE_CAPABILITY, write, $callable)?,
+                    _ => module.gated($name, READ_CAPABILITY, read, $callable)?,
                 };
-                if granted {
-                    module.function($name, $callable)?;
-                } else {
-                    let message = format!(
-                        "dream.fs.{}: needs the '{capability}' capability, which this runtime does not grant",
-                        $name
-                    );
-                    module.function($name, move |_: ArgView<'_>| -> Result<()> {
-                        Err(Error::permission(message.clone()))
-                    })?;
-                }
             }};
         }
         bind!("readFile", read_file);

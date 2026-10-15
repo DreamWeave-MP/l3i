@@ -33,7 +33,7 @@
 
 use std::process::{Command, Stdio};
 
-use crate::bind::{ArgView, Call, StackResults};
+use crate::bind::{Call, StackResults};
 use crate::convert::{BytesView, FromView};
 use crate::error::{Error, Result};
 use crate::extension::{Extension, ExtensionDescriptor, InstallContext};
@@ -414,40 +414,18 @@ impl Extension for ProcessExtension {
         let environment = cx.has_capability(ENVIRONMENT_CAPABILITY)?;
         let stdio = cx.has_capability(STDIO_CAPABILITY)?;
         let module = cx.module(MODULE)?;
-        if environment {
-            module.function("env", |name: &[u8]| -> Result<Option<Vec<u8>>> {
-                Ok(std::env::var_os(os_string("a variable name", name)?).map(|value| value.as_encoded_bytes().to_vec()))
-            })?;
-        } else {
-            module.function("env", |_: ArgView<'_>| -> Result<()> {
-                Err(Error::permission(format!(
-                    "dream.process.env: needs the '{ENVIRONMENT_CAPABILITY}' capability, which this runtime does not grant"
-                )))
-            })?;
-        }
-        if stdio {
-            module.function("write", write)?;
-        } else {
-            module.function("write", |_: ArgView<'_>| -> Result<()> {
-                Err(Error::permission(format!(
-                    "dream.process.write: needs the '{STDIO_CAPABILITY}' capability, which this runtime does not grant"
-                )))
-            })?;
-        }
-        if granted {
-            module.function(
-                "run",
-                move |call: &Call<'_>, program: &[u8], args: Option<ValueView<'_>>, options: Option<ValueView<'_>>| {
-                    run(call, program, args, options, environment)
-                },
-            )?;
-        } else {
-            module.function("run", |_: ArgView<'_>| -> Result<()> {
-                Err(Error::permission(format!(
-                    "dream.process.run: needs the '{SPAWN_CAPABILITY}' capability, which this runtime does not grant"
-                )))
-            })?;
-        }
+        module.gated("env", ENVIRONMENT_CAPABILITY, environment, |name: &[u8]| -> Result<Option<Vec<u8>>> {
+            Ok(std::env::var_os(os_string("a variable name", name)?).map(|value| value.as_encoded_bytes().to_vec()))
+        })?;
+        module.gated("write", STDIO_CAPABILITY, stdio, write)?;
+        module.gated(
+            "run",
+            SPAWN_CAPABILITY,
+            granted,
+            move |call: &Call<'_>, program: &[u8], args: Option<ValueView<'_>>, options: Option<ValueView<'_>>| {
+                run(call, program, args, options, environment)
+            },
+        )?;
         Ok(())
     }
 }

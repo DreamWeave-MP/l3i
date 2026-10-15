@@ -68,6 +68,8 @@ fn main() -> l3i::Result<()> {
 cannot borrow anything the frame pushed: `name` is a `ValueView` tied to `frame` and cannot
 leave the closure, while the `i32` can. `Scope` is the trait both `Stack` and `Frame`
 implement (and `bind::Call`), with `at`, `frame`, `top_value`, `with_frame` and `push`.
+`stack::push_list(scope, items, push)` pushes an iterator's items as one sequence table, each
+through `push` onto a frame holding the table.
 
 Frame topology is strictly nested. A stack or a frame has at most one open child frame; opening
 a sibling panics at the opening line with `a frame is already open on this scope; open nested

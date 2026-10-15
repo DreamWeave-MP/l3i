@@ -343,6 +343,22 @@ impl<'c> ModuleInstaller<'c> {
         Ok(self)
     }
 
+    /// Binds `callable` as `name` when the runtime was `granted` the `capability` it needs, and
+    /// otherwise a stub that raises [`Error::denied`] for it: the member exists, typed, either way.
+    pub fn gated<F: Binding<M>, M>(
+        &mut self,
+        name: &str,
+        capability: &str,
+        granted: bool,
+        callable: F,
+    ) -> Result<&mut Self> {
+        if granted {
+            return self.function(name, callable);
+        }
+        let error = Error::denied(&format!("{}.{name}", self.prefix), capability);
+        self.function(name, move |_: crate::bind::ArgView<'_>| -> Result<()> { Err(error.clone()) })
+    }
+
     /// Any other value for the declared install-time member `name` (a nested table, a userdata
     /// instance); unknown to the compiler.
     pub fn set<T: Push + ?Sized>(&mut self, name: &str, value: &T) -> Result<&mut Self> {

@@ -242,9 +242,7 @@ fn new_poller(
 }
 
 fn denied(what: &str, capability: &str) -> Error {
-    Error::permission(format!(
-        "dream.tcp.{what}: needs the '{capability}' capability, which this runtime does not grant"
-    ))
+    Error::denied(&format!("dream.tcp.{what}"), capability)
 }
 
 /// The capabilities a runtime granted, read once at install.

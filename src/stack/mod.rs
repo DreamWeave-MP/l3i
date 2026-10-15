@@ -385,3 +385,23 @@ pub(crate) fn same_vm(left: *mut ffi::lua_State, right: *mut ffi::lua_State) -> 
 pub(crate) fn checked_capacity(capacity: usize) -> Result<c_int> {
     c_int::try_from(capacity).map_err(|_| Error::logic("Lua table capacity exceeds the supported range"))
 }
+
+/// Pushes `items` onto `scope` as one sequence table, each element pushed by `push` onto a frame
+/// that holds the table; the table is left on top of `scope`.
+///
+/// # Errors
+/// Whatever `push` or the table's growth fails with.
+pub fn push_list<T>(
+    scope: &impl Scope,
+    items: impl ExactSizeIterator<Item = T>,
+    mut push: impl FnMut(&Frame<'_>, T) -> Result<()>,
+) -> Result<()> {
+    let mut frame = scope.frame();
+    let table = frame.push_table(items.len(), 0)?;
+    for (index, item) in items.enumerate() {
+        push(&frame, item)?;
+        table.raw_set_index(&frame, index as i64 + 1)?;
+    }
+    frame.release();
+    Ok(())
+}

@@ -37,6 +37,12 @@ impl Error {
         Error::Permission(message.into())
     }
 
+    /// What `function` raises in a runtime whose policy doesn't grant `capability`, worded the same
+    /// for every module and host.
+    pub fn denied(function: &str, capability: &str) -> Self {
+        Error::Permission(format!("{function}: needs the '{capability}' capability, which this runtime does not grant"))
+    }
+
     /// True when a runtime limit, not the script or the host, ended the call.
     pub fn is_limit(&self) -> bool {
         matches!(self, Error::ExecutionTimeLimit(_) | Error::MemoryLimit(_))

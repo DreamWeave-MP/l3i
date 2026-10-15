@@ -197,13 +197,7 @@ fn push_str(call: &Call<'_>, text: &str) -> Result<StackResults> {
 
 /// `items` as a sequence table, the call's one result.
 fn push_list<'a>(call: &Call<'_>, items: impl ExactSizeIterator<Item = &'a str>) -> Result<StackResults> {
-    let mut frame: Frame<'_> = call.frame();
-    let table = frame.push_table(items.len(), 0)?;
-    for (index, item) in items.enumerate() {
-        frame.push(item)?;
-        table.raw_set_index(&frame, index as i64 + 1)?;
-    }
-    frame.release();
+    crate::stack::push_list(call, items, |frame, item| frame.push(item).map(drop))?;
     Ok(StackResults)
 }
 

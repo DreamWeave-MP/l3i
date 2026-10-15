@@ -46,7 +46,7 @@ use std::net::SocketAddr;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use crate::bind::{ArgView, Call, StackResults};
+use crate::bind::{Call, StackResults};
 use crate::convert::Exact;
 use crate::error::{Error, Result};
 use crate::extension::{Extension, ExtensionDescriptor, InstallContext};
@@ -253,27 +253,21 @@ impl Extension for DnsExtension {
     fn install(&self, cx: &mut InstallContext<'_>) -> Result<()> {
         let granted = cx.has_capability(RESOLVE_CAPABILITY)?;
         let module = cx.module(MODULE)?;
-        if granted {
-            let context = Rc::new(Context {
-                resolver: self.resolver.clone(),
-                active: Rc::new(Cell::new(0)),
-                max_requests: self.max_requests,
-                lookups: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
-                max_lookups: self.max_lookups as usize,
-            });
-            module.function(
-                "resolve",
-                move |call: &Call<'_>, host: &str, port: Exact<i64>, options: Option<ValueView<'_>>| {
-                    resolve(call, &context, host, port, options)
-                },
-            )?;
-        } else {
-            module.function("resolve", |_: ArgView<'_>| -> Result<()> {
-                Err(Error::permission(format!(
-                    "dream.dns.resolve: needs the '{RESOLVE_CAPABILITY}' capability, which this runtime does not grant"
-                )))
-            })?;
-        }
+        let context = Rc::new(Context {
+            resolver: self.resolver.clone(),
+            active: Rc::new(Cell::new(0)),
+            max_requests: self.max_requests,
+            lookups: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            max_lookups: self.max_lookups as usize,
+        });
+        module.gated(
+            "resolve",
+            RESOLVE_CAPABILITY,
+            granted,
+            move |call: &Call<'_>, host: &str, port: Exact<i64>, options: Option<ValueView<'_>>| {
+                resolve(call, &context, host, port, options)
+            },
+        )?;
         Ok(())
     }
 }

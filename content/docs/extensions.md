@@ -137,10 +137,11 @@ still valid in its destructor. `Runtime::state_of::<S>(owner)` reads it from the
 | Call | Gives |
 |---|---|
 | `runtime()`, `plan()`, `extension_id()` | The runtime being built, its plan, and the extension being installed |
-| `module(path)?` | The `ModuleInstaller` for a module this extension declared, to `function(name, callable)?` or `set(name, &value)?` declared `installed` members |
+| `module(path)?` | The `ModuleInstaller` for a module this extension declared, to `function(name, callable)?` or `set(name, &value)?` declared `installed` members, or `gated(name, capability, granted, callable)?`: the function when granted, otherwise a stub raising `Error::denied`, so the member exists, typed, either way |
 | `service::<S>()?` | A service the extension declared with `service::<S>()`; reading an undeclared one is a logic error |
 | `has_capability(name)?` | Whether the policy grants a capability the extension declared as required or optional; an undeclared name is a logic error, so a misspelling never reads as "not granted" |
 | `require_capability(name)?` | A permission error unless granted |
+| `Error::denied(function, capability)` | The permission error every module raises for a capability the policy lacks: `<function>: needs the '<capability>' capability, which this runtime does not grant` |
 | `memory_category(name)?` | The `MemoryCategory` a declared symbolic name resolved to |
 | `insert_state(value)`, `state::<S>()` | This extension's runtime state |
 | `state_of::<S>(owner)?` | Another extension's state; `owner` must be this extension, a declared `requires`, or a declared `optional` that is in the plan, because the dependency graph, not installation order, guarantees it installed first |
