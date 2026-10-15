@@ -176,26 +176,34 @@ fn perform_pcall(
     nresults: c_int,
     style: ErrorStyle,
 ) -> Result<c_int> {
-    // SAFETY: function and arguments are on the frame; pcall never unwinds into Rust.
-    let _lua_call = unsafe { crate::runtime::shared::LuaCall::enter(frame.state()) };
-    let status = unsafe { ffi::lua_pcall(frame.state(), nargs, nresults, 0) };
-    if status == ffi::LUA_OK {
-        return Ok(frame.top() - function_index + 1);
+    let state = frame.state();
+    // SAFETY: function and arguments are on the frame; pcall never unwinds into Rust, and the
+    // failure is classified inside the transition, while its deadline is still armed.
+    unsafe {
+        crate::runtime::shared::host_transition(state, || {
+            let status = ffi::lua_pcall(state, nargs, nresults, 0);
+            if status == ffi::LUA_OK {
+                return Ok(frame.top() - function_index + 1);
+            }
+            if status == ffi::LUA_YIELD {
+                return Err(Error::runtime("Lua function yielded through a non-yielding invocation"));
+            }
+            let message = if frame.top() >= function_index {
+                error_text(frame)
+            } else if status == ffi::LUA_ERRMEM {
+                "out of memory".to_owned()
+            } else {
+                status.to_string()
+            };
+            let error = match style {
+                ErrorStyle::BorrowedView => {
+                    Error::runtime(format!("Lua error at stack index {function_index}: {message}"))
+                }
+                ErrorStyle::Pinned => Error::runtime(format!("Lua error: {message}")),
+            };
+            Err(crate::runtime::shared::classify_failure(state, error))
+        })
     }
-    if status == ffi::LUA_YIELD {
-        return Err(Error::runtime("Lua function yielded through a non-yielding invocation"));
-    }
-    let message = if frame.top() >= function_index {
-        error_text(frame)
-    } else if status == ffi::LUA_ERRMEM {
-        "out of memory".to_owned()
-    } else {
-        status.to_string()
-    };
-    Err(match style {
-        ErrorStyle::BorrowedView => Error::runtime(format!("Lua error at stack index {function_index}: {message}")),
-        ErrorStyle::Pinned => Error::runtime(format!("Lua error: {message}")),
-    })
 }
 
 /// A borrowed view of a function slot.

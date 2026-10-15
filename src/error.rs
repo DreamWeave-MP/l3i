@@ -15,6 +15,9 @@ pub enum Error {
     /// A capability the runtime policy did not grant, or a host facility a script may not use.
     /// Distinct from `Runtime` so a denial is never mistaken for an operating-system failure.
     Permission(String),
+    /// The watchdog stopped the call: its execution time limit ran out. Distinct from `Runtime`
+    /// so a host can tell a timeout from a script's own error, whatever the script caught.
+    ExecutionTimeLimit(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -31,12 +34,20 @@ impl Error {
     pub fn permission(message: impl Into<String>) -> Self {
         Error::Permission(message.into())
     }
+
+    /// True when a runtime limit, not the script or the host, ended the call.
+    pub fn is_limit(&self) -> bool {
+        matches!(self, Error::ExecutionTimeLimit(_))
+    }
 }
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Error::Logic(message) | Error::Runtime(message) | Error::Permission(message) => f.write_str(message),
+            Error::Logic(message)
+            | Error::Runtime(message)
+            | Error::Permission(message)
+            | Error::ExecutionTimeLimit(message) => f.write_str(message),
             Error::LuaErrorOnStack => f.write_str("Lua error"),
         }
     }

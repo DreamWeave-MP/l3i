@@ -123,7 +123,8 @@ impl RuntimeBuilder {
         self
     }
 
-    /// Wall-clock budget per outermost script call, enforced at Luau safepoints. Zero disables.
+    /// Wall-clock budget per outermost call into Luau, enforced at Luau safepoints and sticky
+    /// once it runs out (see `CallScope`). Zero disables.
     pub fn execution_time_limit(mut self, limit: Duration) -> Self {
         self.limits.execution_time = limit;
         self
@@ -649,12 +650,16 @@ impl Runtime {
         stack.with_frame(|frame| {
             self.load(frame, "=exec", source, &options)?;
             // SAFETY: the chunk function is on top; pcall contains any raise.
-            let _lua_call = unsafe { shared::LuaCall::enter(self.state) };
-            let status = unsafe { ffi::lua_pcall(self.state, 0, 0, 0) };
-            if status != ffi::LUA_OK {
-                return Err(unsafe { crate::raw::protect::pop_error(self.state, status) });
+            unsafe {
+                shared::host_transition(self.state, || {
+                    let status = ffi::lua_pcall(self.state, 0, 0, 0);
+                    if status != ffi::LUA_OK {
+                        let error = crate::raw::protect::pop_error(self.state, status);
+                        return Err(shared::classify_failure(self.state, error));
+                    }
+                    Ok(())
+                })
             }
-            Ok(())
         })
     }
 }

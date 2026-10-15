@@ -33,6 +33,12 @@ pub struct CallContext {
     pub category: MemoryCategory,
 }
 
+impl CallContext {
+    /// The context of the implicit scope a host call opens when the host opened none: id 0,
+    /// category 0. Profiles attribute unscoped host calls to it.
+    pub const HOST: CallContext = CallContext { id: 0, category: MemoryCategory(0) };
+}
+
 /// An active script call; see the module docs.
 pub struct CallScope<'r> {
     shared: &'r Shared,
@@ -63,8 +69,9 @@ pub(crate) fn open_scope<'r>(
     {
         let limits = shared.limits();
         let profiler = shared.profiler_enabled();
-        let watchdog_needed =
-            limits.memory_bytes != 0 || (kind != CallKind::Initialization && !limits.execution_time.is_zero());
+        // An Initialization scope arms no deadline, but it still registers as active when a time
+        // limit is set: that is what keeps the implicit host scope from arming one around it.
+        let watchdog_needed = limits.memory_bytes != 0 || !limits.execution_time.is_zero();
         if !profiler && !watchdog_needed {
             return CallScope {
                 shared,
@@ -141,5 +148,6 @@ impl Drop for CallScope<'_> {
             unsafe { ffi::lua_setmemcat(self.state, c_int::from(self.previous_category.0)) };
         }
         shared.deadline().set(self.previous_deadline);
+        shared.clear_expired_if_disarmed();
     }
 }

@@ -22,7 +22,7 @@ pub struct MemoryCategory(pub u8);
 /// Watchdog limits. Zero disables a limit.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Limits {
-    /// Wall-clock budget per outermost script call.
+    /// Wall-clock budget per outermost call into Luau.
     pub execution_time: Duration,
     /// Heap ceiling in bytes across all categories, polled at safepoints (see
     /// `RuntimeBuilder::memory_limit` for what that does and does not guarantee).
@@ -100,6 +100,9 @@ pub(crate) struct Shared {
     // ---- the interrupt hook and the call scopes ----
     limits: Cell<Limits>,
     deadline: Cell<Option<Deadline>>,
+    /// The end of the deadline that ran out, while it is still the armed one: from then on
+    /// every safepoint raises, so a `pcall` that catches the timeout gets no grace.
+    expired: Cell<Option<Instant>>,
     safepoints_until_poll: Cell<u32>,
     safepoints_until_sample: Cell<u32>,
     sampled_context: Cell<Option<u64>>,
@@ -210,6 +213,7 @@ impl Shared {
             native_code: std::cell::OnceCell::new(),
             active_calls: RefCell::new(Vec::new()),
             deadline: Cell::new(None),
+            expired: Cell::new(None),
             safepoints_until_poll: Cell::new(0),
             stats: RefCell::new(CallStats::default()),
             sampled_context: Cell::new(None),
@@ -431,6 +435,12 @@ impl Shared {
         self.limits.set(limits);
     }
 
+    /// True when a time or memory limit is set, so host calls need a scope to enforce it.
+    pub(crate) fn has_limits(&self) -> bool {
+        let limits = self.limits.get();
+        !limits.execution_time.is_zero() || limits.memory_bytes != 0
+    }
+
     pub(crate) fn needs_interrupt(&self) -> bool {
         let limits = self.limits.get();
         !limits.execution_time.is_zero() || limits.memory_bytes != 0 || self.sampled_context.get().is_some()
@@ -450,6 +460,21 @@ impl Shared {
 
     pub(crate) fn reset_watchdog_poll(&self) {
         self.safepoints_until_poll.set(0);
+    }
+
+    /// True once the armed deadline has run out: the call it bounds is being stopped.
+    pub(crate) fn time_limit_hit(&self) -> bool {
+        match (self.expired.get(), self.deadline.get()) {
+            (Some(expired), Some(deadline)) => expired == deadline.end,
+            _ => false,
+        }
+    }
+
+    /// Forgets an expiry once no deadline is armed any more.
+    pub(crate) fn clear_expired_if_disarmed(&self) {
+        if self.deadline.get().is_none() {
+            self.expired.set(None);
+        }
     }
 
     /// Records a measured call; returns true when this call should sample its own overhead.
@@ -568,6 +593,48 @@ impl Drop for LuaCall {
     }
 }
 
+/// Runs one host-to-Lua transition on `state` (`body` is the `lua_pcall` or `lua_resume` and
+/// whatever reads its outcome). The transition is marked on the thread's record, and when a
+/// limit is set and no call scope is active an implicit `HostInterface` scope opens around it,
+/// so the runtime's limits hold for every way into Luau, not only the calls a host scoped
+/// itself. `body` runs inside the scope: a failure it classifies still sees the deadline that
+/// stopped it.
+///
+/// # Safety
+/// `state` is a live thread.
+pub(crate) unsafe fn host_transition<R>(state: *mut ffi::lua_State, body: impl FnOnce() -> R) -> R {
+    // SAFETY: forwarded contract; the block outlives the VM, so it outlives this call.
+    let shared = unsafe { shared_of(state).as_ref() };
+    let _scope = shared.filter(|shared| shared.has_limits() && shared.active_calls.borrow().is_empty()).map(|shared| {
+        // SAFETY: the main thread of a live VM.
+        let main = unsafe { ffi::lua_mainthread(state) };
+        super::call_scope::open_scope(
+            shared,
+            main,
+            super::call_scope::CallContext::HOST,
+            super::call_scope::CallKind::HostInterface,
+        )
+    });
+    // SAFETY: forwarded contract.
+    let _lua_call = unsafe { LuaCall::enter(state) };
+    body()
+}
+
+/// `error` as the host should see it: a script the watchdog is stopping failed because of the
+/// limit, whatever its error object says, so the host can tell a timeout from a script error.
+///
+/// # Safety
+/// `state` is a live thread; call it inside the [`host_transition`] that failed.
+pub(crate) unsafe fn classify_failure(state: *mut ffi::lua_State, error: crate::error::Error) -> crate::error::Error {
+    use crate::error::Error;
+    // SAFETY: forwarded contract.
+    let timed_out = unsafe { shared_of(state).as_ref() }.is_some_and(Shared::time_limit_hit);
+    match error {
+        Error::Runtime(message) if timed_out => Error::ExecutionTimeLimit(message),
+        other => other,
+    }
+}
+
 /// The `Shared` block of the VM that owns `state`, or null when the VM was not created by a
 /// [`crate::Runtime`].
 ///
@@ -577,9 +644,27 @@ pub(crate) unsafe fn shared_of(state: *mut ffi::lua_State) -> *const Shared {
     unsafe { (*ffi::lua_callbacks(state)).userdata.cast_const().cast::<Shared>() }
 }
 
+/// Raises the execution time limit error for the deadline that ran out.
+///
+/// # Safety
+/// Called from the interrupt at a safepoint of `state`, where raising is permitted.
+unsafe fn raise_time_limit(state: *mut ffi::lua_State, deadline: Deadline) -> ! {
+    let elapsed = Instant::now().duration_since(deadline.start).as_millis();
+    let message = format!("Lua execution time limit exceeded after {elapsed} ms");
+    // SAFETY: raising from the interrupt is how Luau's watchdog contract works; no Rust value
+    // that must drop is live here once `message` is pushed.
+    unsafe {
+        ffi::lua_pushlstring(state, message.as_ptr().cast(), message.len());
+        drop(message);
+        ffi::lua_error(state)
+    }
+}
+
 /// The interrupt hook (`State::interruptHook`): runs at VM safepoints (`gc == -1`) and during
 /// GC (any other value, ignored so collection never charges a script's budget). Every 64th
 /// safepoint it polls the deadline and the memory limit and raises when either is exceeded.
+/// Once the deadline has run out it raises at every safepoint until the scope that armed it
+/// ends, so a script can't catch the timeout and carry on.
 pub(crate) unsafe extern "C-unwind" fn interrupt(state: *mut ffi::lua_State, gc: c_int) {
     if gc != -1 {
         return;
@@ -592,6 +677,13 @@ pub(crate) unsafe extern "C-unwind" fn interrupt(state: *mut ffi::lua_State, gc:
     let shared = unsafe { &*shared };
     let innermost = shared.active_calls.borrow().last().map(|call| call.context);
     let Some(innermost) = innermost else { return };
+
+    if shared.time_limit_hit()
+        && let Some(deadline) = shared.deadline.get()
+    {
+        // SAFETY: a safepoint of `state`.
+        unsafe { raise_time_limit(state, deadline) };
+    }
 
     if let Some(sampled) = shared.sampled_context.get() {
         let remaining = shared.safepoints_until_sample.get();
@@ -613,19 +705,12 @@ pub(crate) unsafe extern "C-unwind" fn interrupt(state: *mut ffi::lua_State, gc:
     }
     shared.safepoints_until_poll.set(SAFEPOINTS_PER_WATCHDOG_POLL - 1);
 
-    if let Some(deadline) = shared.deadline.get() {
-        let now = Instant::now();
-        if now >= deadline.end {
-            let elapsed = now.duration_since(deadline.start).as_millis();
-            let message = format!("Lua execution time limit exceeded after {elapsed} ms");
-            // SAFETY: raising from the interrupt is how Luau's watchdog contract works; no
-            // Rust value that must drop is live here once `message` is pushed.
-            unsafe {
-                ffi::lua_pushlstring(state, message.as_ptr().cast(), message.len());
-                drop(message);
-                ffi::lua_error(state);
-            }
-        }
+    if let Some(deadline) = shared.deadline.get()
+        && Instant::now() >= deadline.end
+    {
+        shared.expired.set(Some(deadline.end));
+        // SAFETY: a safepoint of `state`.
+        unsafe { raise_time_limit(state, deadline) };
     }
     let memory_limit = shared.limits.get().memory_bytes;
     // SAFETY: lua_totalbytes(-1) is a plain read.

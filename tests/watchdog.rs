@@ -2,11 +2,12 @@
 
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use l3i::Runtime;
 use l3i::bind::Call;
 use l3i::runtime::{CallContext, CallKind, Limits, MemoryCategory};
+use l3i::thread::Resume;
 
 fn context(id: u64, category: u8) -> CallContext {
     CallContext { id, category: MemoryCategory(category) }
@@ -28,16 +29,80 @@ fn execution_time_limit_interrupts_runaway_scripts_and_leaves_the_vm_usable() {
 }
 
 #[test]
-fn the_watchdog_only_watches_inside_a_scope_and_never_during_initialization() {
-    let runtime = Runtime::builder().execution_time_limit(Duration::from_millis(10)).build().unwrap();
+fn every_host_entry_is_limited_without_a_scope_and_an_initialization_scope_opts_out() {
+    let runtime = Runtime::builder().execution_time_limit(Duration::from_millis(30)).build().unwrap();
+    let spin = "local t = os.clock() while os.clock() - t < 2 do end";
+    let limited = |result: l3i::Result<()>| {
+        let error = result.unwrap_err();
+        assert!(matches!(error, l3i::Error::ExecutionTimeLimit(_)), "{error:?}");
+    };
+    let started = Instant::now();
+    limited(runtime.exec(spin));
+    limited(runtime.eval::<()>(spin));
+    limited(runtime.load_function(&format!("{spin} return function() end")).map(drop));
+    let function = runtime.load_function(&format!("return function() {spin} end")).unwrap();
+    limited(function.invoke::<(), _>(&runtime.stack(), ()));
+    limited(function.invoke_multi(&runtime.stack(), ()).map(drop));
+    let thread = runtime.new_thread().unwrap();
+    limited(thread.start(&runtime.stack(), &function, ()).map(drop));
+    let yielder = runtime.load_function(&format!("return function() coroutine.yield() {spin} end")).unwrap();
+    let thread = runtime.new_thread().unwrap();
+    assert!(matches!(thread.start(&runtime.stack(), &yielder, ()).unwrap(), Resume::Yielded(_)));
+    limited(thread.resume(&runtime.stack(), ()).map(drop));
+    assert!(started.elapsed() < Duration::from_secs(2), "every entry stopped at its limit");
+
     let busy = runtime
-        .load_function("return function() local t = os.clock() while os.clock() - t < 0.03 do end return 1 end")
+        .load_function("return function() local t = os.clock() while os.clock() - t < 0.08 do end return 1 end")
         .unwrap();
-    // No scope: the interrupt sees no active call and lets the script run.
-    assert_eq!(busy.invoke::<i32, _>(&runtime.stack(), ()).unwrap(), 1);
-    // Initialization scopes are never time-limited.
     let _init = runtime.call_scope(context(9, 0), CallKind::Initialization);
     assert_eq!(busy.invoke::<i32, _>(&runtime.stack(), ()).unwrap(), 1);
+}
+
+#[test]
+fn a_timeout_is_sticky_through_pcall_xpcall_and_coroutines() {
+    let runtime = Runtime::builder().execution_time_limit(Duration::from_millis(50)).build().unwrap();
+    let scripts = [
+        "while os.clock() < deadline do pcall(function() while true do end end) end",
+        "while os.clock() < deadline do xpcall(function() while true do end end, function(e) return e end) end",
+        "while os.clock() < deadline do \
+           xpcall(function() pcall(function() while true do end end) end, function() while true do end end) end",
+        "while os.clock() < deadline do coroutine.resume(coroutine.create(function() while true do end end)) end",
+        "while os.clock() < deadline do \
+           local co = coroutine.wrap(function() while true do coroutine.yield() end end) \
+           pcall(function() while true do co() end end) end",
+    ];
+    for script in scripts {
+        let started = Instant::now();
+        let error = runtime.exec(&format!("local deadline = os.clock() + 3 {script}")).unwrap_err();
+        assert!(error.is_limit(), "{script}: {error:?}");
+        assert!(error.to_string().contains("Lua execution time limit exceeded after"), "{error}");
+        assert!(started.elapsed() < Duration::from_millis(1000), "{script} ran {:?}", started.elapsed());
+    }
+    assert_eq!(runtime.eval::<f64>("return 1 + 1").unwrap(), 2.0, "the runtime is usable afterwards");
+}
+
+#[test]
+fn an_inner_scope_that_runs_out_leaves_the_outer_deadline_its_own() {
+    let runtime = Runtime::builder().execution_time_limit(Duration::from_secs(5)).build().unwrap();
+    let spin = runtime.load_function("return function() while true do end end").unwrap();
+    let busy = runtime
+        .load_function("return function() local t = os.clock() while os.clock() - t < 0.1 do end return 1 end")
+        .unwrap();
+    let _outer = runtime.call_scope(context(1, 0), CallKind::ScriptCall);
+    {
+        runtime.set_limits(Limits { execution_time: Duration::from_millis(20), memory_bytes: 0 });
+        let _inner = runtime.call_scope(context(2, 0), CallKind::ScriptCall);
+        assert!(spin.invoke::<(), _>(&runtime.stack(), ()).unwrap_err().is_limit());
+    }
+    // The inner deadline is gone with its scope; the outer one has seconds left.
+    assert_eq!(busy.invoke::<i32, _>(&runtime.stack(), ()).unwrap(), 1);
+}
+
+#[test]
+fn a_script_error_is_not_mistaken_for_a_timeout() {
+    let runtime = Runtime::builder().execution_time_limit(Duration::from_secs(5)).build().unwrap();
+    let error = runtime.exec("error('mine')").unwrap_err();
+    assert!(matches!(error, l3i::Error::Runtime(_)), "{error:?}");
 }
 
 #[test]

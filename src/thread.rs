@@ -13,7 +13,7 @@ use crate::call::PushArgs;
 use crate::error::{Error, Result};
 use crate::raw::ffi;
 use crate::runtime::Runtime;
-use crate::runtime::shared::LuaCall;
+use crate::runtime::shared::{classify_failure, host_transition};
 use crate::stack::{Scope, Stack, same_vm};
 use crate::value::{Function, Value};
 
@@ -159,25 +159,29 @@ impl Thread {
         if self.status() != ThreadStatus::Yielded {
             return Err(Error::logic("Lua thread is not suspended in a yield"));
         }
-        // SAFETY: the error object goes on the coroutine's stack before lua_resumeerror.
-        let status = unsafe {
+        // SAFETY: the error object goes on the coroutine's stack before lua_resumeerror; the
+        // outcome is collected inside the transition, while its deadline is still armed.
+        unsafe {
             ffi::lua_pushlstring(self.state, message.as_ptr().cast(), message.len());
-            let _call = LuaCall::enter(scope.state());
-            ffi::lua_resumeerror(self.state, scope.state())
-        };
-        self.collect(status)
+            host_transition(scope.state(), || {
+                let status = ffi::lua_resumeerror(self.state, scope.state());
+                self.collect(status)
+            })
+        }
     }
 
     fn step(&self, scope: &impl Scope, nargs: c_int) -> Result<Resume> {
         // SAFETY: the function and arguments are on the coroutine's stack; `from` is a live
         // thread of the same VM.
-        let status = unsafe {
-            let _call = LuaCall::enter(scope.state());
-            ffi::lua_resume(self.state, scope.state(), nargs)
-        };
-        self.collect(status)
+        unsafe {
+            host_transition(scope.state(), || {
+                let status = ffi::lua_resume(self.state, scope.state(), nargs);
+                self.collect(status)
+            })
+        }
     }
 
+    /// Reads what a resume left. Runs inside its transition, so a timeout is reported as one.
     fn collect(&self, status: c_int) -> Result<Resume> {
         // SAFETY: after lua_resume the coroutine's stack holds its yielded/returned values or
         // the error object; everything is pinned or read, then popped.
@@ -197,7 +201,8 @@ impl Thread {
                 ffi::LUA_BREAK => Ok(Resume::Break),
                 error => {
                     let message = crate::raw::protect::pop_error(self.state, error);
-                    Err(Error::runtime(format!("Lua error: {}", message_text(&message))))
+                    let error = Error::runtime(format!("Lua error: {}", message_text(&message)));
+                    Err(classify_failure(self.state, error))
                 }
             }
         }
@@ -272,7 +277,9 @@ impl Thread {
 
 fn message_text(error: &Error) -> String {
     match error {
-        Error::Runtime(text) | Error::Logic(text) | Error::Permission(text) => text.clone(),
+        Error::Runtime(text) | Error::Logic(text) | Error::Permission(text) | Error::ExecutionTimeLimit(text) => {
+            text.clone()
+        }
         Error::LuaErrorOnStack => "error object left on the stack".to_owned(),
     }
 }

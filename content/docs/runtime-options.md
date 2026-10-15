@@ -20,7 +20,7 @@ is entrenched by the constructor.
 | `debug_roots(&["openmw", "string", "vector"])` | `dreamweave` | The root vocabulary for debug names. Every native function and userdata type registered into the VM must be named under one of them |
 | `pointer_encoding(bool)` | on | Whether Luau's pointer-encoding key is seeded from OS entropy right after the state is created, before any table exists. Off leaves Luau's identity map, for deterministic test fixtures only |
 | `standard_libraries(bool)` | on | Whether `build` opens the standard libraries. Hosts that need to install callbacks first turn it off and call `Runtime::open_standard_libraries()` |
-| `execution_time_limit(Duration)` | zero, off | The watchdog's wall-clock budget per outermost script call |
+| `execution_time_limit(Duration)` | zero, off | The watchdog's wall-clock budget per outermost call into Luau |
 | `memory_limit(bytes)` | zero, off | The watchdog's heap ceiling across every memory category |
 | `profiler(bool)` | off | Time script calls, switch memory categories per call, record allocation activity |
 | `initialization_category(MemoryCategory)` | 0 | The category charged while sandboxes and templates are set up |
@@ -68,9 +68,18 @@ The error unwinds to the nearest `pcall`, comes back to the host as `Err`, and l
 usable. The hook ignores the safepoints Luau reports during collection, so a GC step never
 charges a script's budget.
 
-The execution time limit is per outermost script call, armed by a call scope (below). Without an
-open scope the interrupt sees no active call and lets the script run, and an `Initialization`
-scope is never time-limited.
+A timeout is sticky. Once the deadline has run out, every safepoint raises again until the scope
+that armed the deadline ends, so a script that catches the error with `pcall` or `xpcall`, or
+runs the loop inside a coroutine, stops at the next instruction boundary instead of carrying on.
+The host sees `Error::ExecutionTimeLimit` (`Error::is_limit()`), never an ordinary
+`Error::Runtime`, whatever the script did with the error object on the way out.
+
+The execution time limit is per outermost call into Luau. A call scope (below) arms it; every
+host entry that runs Luau code (`exec`, `eval`, `load_function`, the `Function::invoke` family,
+`Thread::start` and `resume`, and host-level table access that can run a metamethod) opens an
+implicit `HostInterface` scope with context `CallContext::HOST` when no scope is active, so the
+runtime's limits hold for each of them. An `Initialization` scope is never time-limited: a host
+that genuinely needs an unlimited call opens one around it.
 
 {% callout(kind="warning", title="What the memory limit is") %}
 `memory_limit` is a heap ceiling polled every 64th safepoint, not an allocator cap. A script can
