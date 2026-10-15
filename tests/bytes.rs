@@ -428,3 +428,57 @@ fn integer_reads_and_writes_lower_to_native_code() {
     assert!(stats.regular_blocks_executed > 0, "{stats:?}");
     assert_eq!(stats.vm_exits_taken, 1, "only the out-of-bounds read exits: {stats:?}");
 }
+
+/// Groups, every match, replacement by template or function, and splitting.
+#[cfg(feature = "bytes-regex")]
+#[test]
+fn regex_captures_iterates_replaces_and_splits() {
+    runtime()
+        .exec(
+            r"
+            local re = bytes.regex('(?<key>\\w+)=(\\d+)')
+            assert(re:match('a x=1 y=22') == 'x=1' and re:match('nothing') == nil)
+            local groups = re:captures('a x=1 y=22')
+            assert(groups[0] == 'x=1' and groups[1] == 'x' and groups[2] == '1' and groups.key == 'x')
+            assert(re:captures('a x=1 y=22', 5).key == 'y' and re:captures('none') == nil)
+            local optional = bytes.regex('(a)|(b)'):captures('b')
+            assert(optional[1] == nil and optional[2] == 'b')
+
+            local seen = {}
+            for text, first, last in re:matches('x=1 y=22', 0) do
+                table.insert(seen, `{text}@{first}:{last}`)
+            end
+            assert(table.concat(seen, ',') == 'x=1@0:3,y=22@4:8', table.concat(seen, ','))
+            local count = 0
+            for text in bytes.regex('a*'):matches('baa') do count += 1 end
+            assert(count == 3, `empty matches end: {count}`)
+            local offsets = {}
+            for _, first in bytes.regex('o'):matches('foo boo', 4) do table.insert(offsets, first) end
+            assert(table.concat(offsets, ',') == '5,6', table.concat(offsets, ','))
+
+            local text, replaced = re:replace('x=1 y=22', '${key}:$2')
+            assert(text == 'x:1 y=22' and replaced == 1)
+            text, replaced = re:replaceAll('x=1 y=22 z=3', '$2=$1', 2)
+            assert(text == '1=x 22=y z=3' and replaced == 2, text)
+            text, replaced = re:replaceAll('x=1 y=22', function(groups)
+                if groups.key == 'x' then return nil end
+                return groups[2] .. groups[2]
+            end)
+            assert(text == 'x=1 2222' and replaced == 1, text)
+            text, replaced = bytes.regex('q'):replaceAll('abc', 'z')
+            assert(text == 'abc' and replaced == 0)
+            assert(not pcall(re.replace, re, 'x=1', 5))
+            assert(not pcall(re.replaceAll, re, 'x=1', function() return 5 end))
+
+            local parts = bytes.regex(',\\s*'):split('a, b,c')
+            assert(#parts == 3 and parts[1] == 'a' and parts[2] == 'b' and parts[3] == 'c')
+            parts = bytes.regex(','):split('a,b,c', 2)
+            assert(#parts == 2 and parts[2] == 'b,c')
+
+            assert(bytes.regexEscape('a.b*c') == 'a\\.b\\*c')
+            assert(bytes.regex(bytes.regexEscape('1+1=2')):isMatch('is 1+1=2?'))
+            assert(tostring(re) == re:pattern())
+            ",
+        )
+        .unwrap();
+}

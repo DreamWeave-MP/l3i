@@ -26,7 +26,8 @@
 //! - **Framing**: `frame` walks a run of tag-length-payload chunks natively and returns where
 //!   each one is ([`framing`]).
 //! - **Regular expressions** (`bytes-regex`): `regex` compiles a pattern once; its `matchSpans`
-//!   tests many ranges of one buffer in one call ([`regex`]).
+//!   tests many ranges of one buffer in one call, and it captures, iterates, replaces and splits
+//!   text ([`regex`]).
 //!
 //! Every input that is "some bytes" is a `buffer | string` ([`crate::convert::BytesView`]);
 //! every output that is bytes is a new `buffer` ([`crate::convert::NewBuffer`]). Offsets are

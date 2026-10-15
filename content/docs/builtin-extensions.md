@@ -510,6 +510,25 @@ for i = 0, count - 1 do
 end
 ```
 
+The rest work on text. `match(source, offset?, length?)` is the first match's text,
+`captures(source, offset?, length?)` its groups (`[0]` the whole match, `[n]` group `n`, a named
+group under its name; a group that took no part is absent), and `matches(source, offset?,
+length?)` an iterator over every match answering its text, start and end, 0-based with the end
+exclusive, as `find` answers. `replace(source, replacement)` replaces the first match and
+`replaceAll(source, replacement, limit?)` every one (at most `limit`); both return the text and how
+many matches they replaced. A string replacement expands `$1` and `${name}` to groups (`$$` is a
+dollar); a function gets the groups table and returns the replacement, or `nil` or `false` to keep
+the match. `split(source, limit?)` is the pieces between matches, and `bytes.regexEscape(text)`
+escapes every character a pattern treats specially. A range given by `offset` and `length` is
+matched as if it were the whole input, so `^` anchors at `offset`. `tostring(regex)` is its pattern.
+
+```luau
+local setting = bytes.regex([[(?<key>\w+)\s*=\s*(?<value>.*)]])
+local groups = setting:captures('fallback = Data Files')
+print(groups.key, groups.value) --> fallback  Data Files
+print((setting:replaceAll('a=1', '${value}=${key}'))) --> 1=a
+```
+
 ### The widths and orders buffer lacks
 
 `readu16be`, `readi16be`, `readu24`, `readi24`, `readu24be`, `readi24be`, `readu32be`,

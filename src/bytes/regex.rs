@@ -1,6 +1,8 @@
 //! Regular expressions over bytes (feature `bytes-regex`): `bytes.regex(pattern)` compiles a
 //! pattern once, and the [`Regex`] it returns matches it against a range of a buffer or string,
-//! or against many ranges of one buffer in a single call, `matchSpans`.
+//! or against many ranges of one buffer in a single call, `matchSpans`. On text it also answers
+//! the first match and its groups, iterates every match, replaces matches by template or
+//! function, and splits; `bytes.regexEscape` makes text match literally.
 //!
 //! `matchSpans` answers with a buffer of one byte per range, 1 where the pattern matches. It is
 //! for the script that has a thousand small texts to test, the fields of every
@@ -14,12 +16,16 @@
 //! data in another encoding. No look-around and no backreferences; matching is linear in the
 //! input.
 
-use crate::bind::Call;
+use std::cell::Cell;
+
+use regex::bytes::Captures;
+
+use crate::bind::{ArgView, Call, StackResults};
 use crate::convert::{BytesView, Exact, NewBuffer};
 use crate::error::{Error, Result};
 use crate::extension::{ExtensionDescriptor, ModuleDecl, TagPolicy};
 use crate::options::Options;
-use crate::stack::ValueView;
+use crate::stack::{Scope, ValueView};
 use crate::userdata::Owned;
 
 /// A compiled pattern (`dream.bytes.Regex`, from `bytes.regex(pattern, options?)`).
@@ -83,6 +89,219 @@ fn find(
     })
 }
 
+/// The text the pattern first matches in the range, or nil.
+fn match_text(
+    re: &Regex,
+    source: BytesView<'_>,
+    offset: Option<Exact<i64>>,
+    length: Option<Exact<i64>>,
+) -> Result<Option<Vec<u8>>> {
+    // SAFETY: as `is_match`.
+    let data = unsafe { super::bytes(&source) };
+    let text = range("bytes.Regex:match", data, offset, length)?;
+    Ok(re.regex.find(text).map(|found| found.as_bytes().to_vec()))
+}
+
+/// Pushes a match's groups as a table: `[0]` the whole match, `[n]` group `n`, and each named
+/// group under its name; a group that took no part is absent.
+fn push_captures(scope: &impl Scope, regex: &regex::bytes::Regex, captures: &Captures<'_>) -> Result<()> {
+    let mut frame = scope.frame();
+    let table = frame.push_table(captures.len(), 0)?;
+    for (index, group) in captures.iter().enumerate() {
+        if let Some(group) = group {
+            frame.push(group.as_bytes())?;
+            table.raw_set_index(&frame, index as i64)?;
+        }
+    }
+    for name in regex.capture_names().flatten() {
+        if let Some(group) = captures.name(name) {
+            table.raw_set_value(&frame, name, group.as_bytes())?;
+        }
+    }
+    frame.release();
+    Ok(())
+}
+
+/// The first match's groups in the range, or nil.
+fn captures(
+    re: &Regex,
+    call: &Call<'_>,
+    source: BytesView<'_>,
+    offset: Option<Exact<i64>>,
+    length: Option<Exact<i64>>,
+) -> Result<StackResults> {
+    // SAFETY: as `is_match`; the table is built from copies.
+    let data = unsafe { super::bytes(&source) };
+    let text = range("bytes.Regex:captures", data, offset, length)?;
+    match re.regex.captures(text) {
+        Some(found) => push_captures(call, &re.regex, &found)?,
+        None => {
+            call.push(&())?;
+        }
+    }
+    Ok(StackResults)
+}
+
+/// An iterator over the matches in the range: each step answers the text, its start and its end
+/// (0-based, end exclusive, as `find`), then nothing. The range is copied when the iterator is
+/// made, so a buffer changed afterwards doesn't change what it yields.
+fn matches(
+    re: &Regex,
+    call: &Call<'_>,
+    source: BytesView<'_>,
+    offset: Option<Exact<i64>>,
+    length: Option<Exact<i64>>,
+) -> Result<crate::value::Function> {
+    // SAFETY: as `is_match`; the range is copied out.
+    let data = unsafe { super::bytes(&source) };
+    let text = range("bytes.Regex:matches", data, offset, length)?.to_vec();
+    let base = offset.map_or(0, |offset| offset.0) as f64;
+    let regex = re.regex.clone();
+    let position = Cell::new(Some(0usize));
+    crate::bind::function(
+        call.stack(),
+        &["dream"],
+        "dream.bytes.Regex.matches",
+        move |call: &Call<'_>, _: ArgView<'_>| -> Result<StackResults> {
+            let Some(at) = position.get() else { return Ok(StackResults) };
+            let Some(found) = regex.find_at(&text, at) else {
+                position.set(None);
+                return Ok(StackResults);
+            };
+            // An empty match moves on a byte, so iteration always ends.
+            let next = if found.is_empty() { found.end() + 1 } else { found.end() };
+            position.set((next <= text.len()).then_some(next));
+            call.push(found.as_bytes())?;
+            call.push(&(base + found.start() as f64))?;
+            call.push(&(base + found.end() as f64))?;
+            Ok(StackResults)
+        },
+    )
+}
+
+/// What a match is replaced with: a string, in which `$1` and `${name}` expand to groups (`$$` is
+/// a dollar), or a function given the match's groups table, whose string replaces the match;
+/// `nil` or `false` keeps the match, which then counts neither as replaced nor toward a limit.
+enum Replacement {
+    Text(Vec<u8>),
+    Function(crate::value::Function),
+}
+
+impl Replacement {
+    fn read(what: &str, value: ValueView<'_>) -> Result<Replacement> {
+        if value.is_string() {
+            return Ok(Replacement::Text(value.read::<&[u8]>()?.to_vec()));
+        }
+        if value.is_function() {
+            return Ok(Replacement::Function(crate::value::Function::from_value(crate::value::Value::store(value)?)?));
+        }
+        Err(Error::runtime(format!(
+            "{what}: a replacement is a string or a function, not {}",
+            crate::diagnostics::object_type_name(value)
+        )))
+    }
+
+    /// `text` with up to `limit` matches replaced (0 for all), and how many were.
+    fn apply(
+        &self,
+        what: &str,
+        call: &Call<'_>,
+        regex: &regex::bytes::Regex,
+        text: &[u8],
+        limit: usize,
+    ) -> Result<(Vec<u8>, f64)> {
+        let mut out = Vec::with_capacity(text.len());
+        let mut last = 0;
+        let mut count = 0usize;
+        for found in regex.captures_iter(text) {
+            if limit != 0 && count == limit {
+                break;
+            }
+            let whole = found.get(0).expect("group 0 is the whole match");
+            out.extend_from_slice(&text[last..whole.start()]);
+            match self {
+                Replacement::Text(replacement) => {
+                    found.expand(replacement, &mut out);
+                    count += 1;
+                }
+                Replacement::Function(function) => {
+                    let replaced = call.with_frame(|frame| {
+                        push_captures(frame, regex, &found)?;
+                        let groups = frame.top_value();
+                        function.invoke_with(frame, (groups,), |_, returned| {
+                            if returned.is_nil() || (returned.is_boolean() && !returned.read::<bool>()?) {
+                                return Ok(None);
+                            }
+                            if returned.is_string() {
+                                return Ok(Some(returned.read::<&[u8]>()?.to_vec()));
+                            }
+                            Err(Error::runtime(format!(
+                                "{what}: a replacement function returns a string, nil or false, not {}",
+                                crate::diagnostics::object_type_name(returned)
+                            )))
+                        })
+                    })?;
+                    match replaced {
+                        Some(replacement) => {
+                            out.extend_from_slice(&replacement);
+                            count += 1;
+                        }
+                        None => out.extend_from_slice(whole.as_bytes()),
+                    }
+                }
+            }
+            last = whole.end();
+        }
+        out.extend_from_slice(&text[last..]);
+        Ok((out, count as f64))
+    }
+}
+
+fn replace(re: &Regex, call: &Call<'_>, source: BytesView<'_>, replacement: ValueView<'_>) -> Result<(Vec<u8>, f64)> {
+    const WHAT: &str = "bytes.Regex:replace";
+    let replacement = Replacement::read(WHAT, replacement)?;
+    // SAFETY: copied out before the replacement function can run and change a buffer.
+    let text = unsafe { super::bytes(&source) }.to_vec();
+    replacement.apply(WHAT, call, &re.regex, &text, 1)
+}
+
+fn replace_all(
+    re: &Regex,
+    call: &Call<'_>,
+    source: BytesView<'_>,
+    replacement: ValueView<'_>,
+    limit: Option<Exact<i64>>,
+) -> Result<(Vec<u8>, f64)> {
+    const WHAT: &str = "bytes.Regex:replaceAll";
+    let replacement = Replacement::read(WHAT, replacement)?;
+    let limit = match limit {
+        Some(limit) => super::count(WHAT, limit)?,
+        None => 0,
+    };
+    // SAFETY: as `replace`.
+    let text = unsafe { super::bytes(&source) }.to_vec();
+    replacement.apply(WHAT, call, &re.regex, &text, limit)
+}
+
+/// The pieces between matches; with `limit`, at most that many, the last holding the rest.
+fn split(re: &Regex, call: &Call<'_>, source: BytesView<'_>, limit: Option<Exact<i64>>) -> Result<StackResults> {
+    const WHAT: &str = "bytes.Regex:split";
+    // SAFETY: the pieces are copied into strings before anything else runs.
+    let text = unsafe { super::bytes(&source) };
+    let pieces: Vec<&[u8]> = match limit {
+        Some(limit) if limit.0 != 0 => re.regex.splitn(text, super::count(WHAT, limit)?).collect(),
+        _ => re.regex.split(text).collect(),
+    };
+    let mut frame = call.frame();
+    let table = frame.push_table(pieces.len(), 0)?;
+    for (index, piece) in pieces.into_iter().enumerate() {
+        frame.push(piece)?;
+        table.raw_set_index(&frame, index as i64 + 1)?;
+    }
+    frame.release();
+    Ok(StackResults)
+}
+
 /// One byte per `(start, end)` `u32` pair in `spans`: 1 where the pattern matches that range of
 /// `source`, 0 where it doesn't.
 fn match_spans(
@@ -130,7 +349,36 @@ pub(crate) fn describe_regex(d: &mut ExtensionDescriptor) {
     regex
         .method("matchSpans", match_spans)
         .signature("(self, source: buffer | string, spans: buffer | string, count: number?): buffer");
+    regex
+        .method("match", match_text)
+        .signature("(self, source: buffer | string, offset: number?, length: number?): string?")
+        .doc("The text the pattern first matches in the range, or nil.");
+    regex
+        .method("captures", captures)
+        .signature(
+            "(self, source: buffer | string, offset: number?, length: number?): { [number | string]: string }?",
+        )
+        .doc("The first match's groups: [0] the whole match, [n] group n, named groups by name; nil when nothing matches.");
+    regex
+        .method("matches", matches)
+        .signature(
+            "(self, source: buffer | string, offset: number?, length: number?): () -> (string?, number?, number?)",
+        )
+        .doc("An iterator over every match in the range: its text, start and end (0-based, end exclusive).");
+    regex
+        .method("replace", replace)
+        .signature("(self, source: buffer | string, replacement: string | ({ [number | string]: string }) -> string?): (string, number)")
+        .doc("source with the first match replaced, and how many were (0 or 1). In a string,  and  expand to groups; a function gets the groups and returns the replacement, or nil or false to keep the match.");
+    regex
+        .method("replaceAll", replace_all)
+        .signature("(self, source: buffer | string, replacement: string | ({ [number | string]: string }) -> string?, limit: number?): (string, number)")
+        .doc("source with every match replaced (at most limit when given), and how many were.");
+    regex
+        .method("split", split)
+        .signature("(self, source: buffer | string, limit: number?): { string }")
+        .doc("The pieces between matches; with limit, at most that many, the last holding the rest.");
     regex.method("pattern", |re: &Regex| re.regex.as_str().to_owned()).signature("(self): string");
+    regex.metamethod("__tostring", |re: &Regex| re.regex.as_str().to_owned());
 }
 
 pub(crate) fn describe(module: &mut ModuleDecl) {
@@ -140,4 +388,8 @@ pub(crate) fn describe(module: &mut ModuleDecl) {
             "(pattern: string, options: { caseInsensitive: boolean?, unicode: boolean?, multiLine: boolean?, dotAll: boolean? }?) -> dream_bytes_Regex",
         )
         .doc("A pattern compiled once, to match over bytes: one range, or many ranges of one buffer in one call.");
+    module
+        .function("regexEscape", |text: &str| regex::escape(text))
+        .signature("(text: string) -> string")
+        .doc("text with every character a pattern treats specially escaped, so it matches literally.");
 }
