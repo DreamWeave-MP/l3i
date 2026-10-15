@@ -251,6 +251,10 @@ impl Runtime {
                     let name = name.to_owned();
                     step.push_value(value)?;
                     if value.is_table() {
+                        // SAFETY: the library table is on top of `step`. The view protects the table
+                        // itself; what it reaches is frozen in place, since a view's reads hand out
+                        // nested tables as they are.
+                        unsafe { readonly::freeze_reachable(step.state(), -1, false)? };
                         readonly::build_read_only_view(self, step, false)?;
                         common.insert(name.clone(), Value::store(step.top_value())?);
                     } else if value.is_userdata() {
@@ -309,17 +313,17 @@ impl Sandbox {
         &self.common_packages
     }
 
-    /// Adds (or replaces) a package every instance receives. Tables are frozen in place; a
-    /// function is a factory called per instance with the hidden data.
+    /// Adds (or replaces) a package every instance receives. A table is frozen in place, with
+    /// every table and metatable it reaches, since every instance shares it; a function is a
+    /// factory called per instance with the hidden data.
     pub fn add_common_package(&mut self, runtime: &Runtime, name: impl Into<String>, package: Value) -> Result<()> {
         require_same_vm(runtime, &package, "Common package")?;
-        let package = if package.is_table() {
-            let table = Table::from_value(package)?;
-            readonly::make_read_only(runtime, &table)?;
-            table.into_value()
-        } else {
-            package
-        };
+        if package.is_table() {
+            // SAFETY: the pinned table is pushed onto a frame of the live main thread.
+            package.with_value(&runtime.stack(), |frame, view| unsafe {
+                readonly::freeze_reachable(frame.state(), view.index(), true)
+            })?;
+        }
         self.common_packages.insert(name.into(), package);
         Ok(())
     }

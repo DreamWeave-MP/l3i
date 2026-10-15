@@ -236,3 +236,50 @@ fn a_rust_require_loader_can_instantiate_templates_from_inside_the_call() {
     drop(loader);
     drop(sandbox);
 }
+
+#[test]
+fn nothing_shared_between_instances_can_carry_one_instances_writes_to_another() {
+    let runtime = Runtime::new().unwrap();
+    runtime.exec("library = { inner = { value = 1, deeper = { 2 } } }").unwrap();
+    let (mut sandbox, _log) = sandbox_with_log(&runtime, SandboxOptions::default());
+    let package = runtime
+        .load_function(
+            "return function() \
+               return setmetatable({ data = { count = 0 } }, { __index = { inherited = 1 } }) \
+             end",
+        )
+        .unwrap()
+        .invoke::<Value, _>(&runtime.stack(), ())
+        .unwrap();
+    sandbox.add_common_package(&runtime, "shared", package).unwrap();
+    let loader = runtime.load_function("return function(name) error('no ' .. name) end").unwrap();
+    let spec = InstanceSpec { name: "a", packages: &[], hidden_data: None, loader: &loader };
+    let a = sandbox.new_instance(&runtime, &spec).unwrap();
+    let b = sandbox.new_instance(&runtime, &InstanceSpec { name: "b", ..spec }).unwrap();
+    let writer = sandbox
+        .load_template(
+            &runtime,
+            "writer.lua",
+            "local shared = require('shared')\n\
+             for _, write in {\n\
+               function() string.marker = true end,\n\
+               function() library.inner.value = 99 end,\n\
+               function() library.inner.deeper[1] = 99 end,\n\
+               function() shared.data.count = 99 end,\n\
+               function() getmetatable(shared).__index.inherited = 99 end,\n\
+               function() getmetatable(shared).__newindex = function() end end,\n\
+             } do assert(not pcall(write)) end",
+        )
+        .unwrap();
+    let reader = sandbox
+        .load_template(
+            &runtime,
+            "reader.lua",
+            "local shared = require('shared')\n\
+             assert(string.marker == nil and library.inner.value == 1 and library.inner.deeper[1] == 2)\n\
+             assert(shared.data.count == 0 and shared.inherited == 1)",
+        )
+        .unwrap();
+    sandbox.run(&runtime, &writer, &a, context()).unwrap();
+    sandbox.run(&runtime, &reader, &b, context()).unwrap();
+}

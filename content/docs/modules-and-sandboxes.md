@@ -111,7 +111,9 @@ receives each `print` line, already tab-joined and prefixed with the instance's 
   escape hatches (`getfenv`, `setfenv`, `newproxy`), exposes tables as read-only views, and
   replaces `getmetatable` with a tables-only version. `print` and `require` are left out
   because every instance gets its own. The base environment is frozen and marked safe so Luau's
-  import fast paths apply. The real `_G` is never frozen.
+  import fast paths apply. The real `_G` is never frozen, and neither are the library tables the
+  views stand for, but every table they reach (nested tables and metatables, at any depth) is
+  frozen in place: a view hands those out as they are, and every instance shares them.
 - An **instance** is a writable table whose frozen metatable indexes the base environment, with
   `_G`, a named `print`, a `loaded` table of packages, and a `require` reading from it.
 - A **template** is a chunk compiled once and loaded on a loader thread whose globals are the
@@ -164,7 +166,7 @@ own `counter`; the real globals never saw it, and a second instance would start 
 | Call | Does |
 |---|---|
 | `Sandbox::base_env()` | The frozen base environment every instance indexes |
-| `Sandbox::common_packages()`, `add_common_package(&runtime, name, value)` | Packages every instance receives: the base environment's tables and userdata plus those added. A table is frozen in place; a function is a factory called once per instance with the hidden data |
+| `Sandbox::common_packages()`, `add_common_package(&runtime, name, value)` | Packages every instance receives: the base environment's tables and userdata plus those added. A table is frozen in place with every table and metatable it reaches; a function is a factory called once per instance with the hidden data |
 | `Sandbox::new_instance(&runtime, &spec)` | One instance, built inside an initialization call scope |
 | `Sandbox::load_template(&runtime, chunk_name, source)` | Compiles once and loads on the loader thread, with its imports resolved against the base environment. Binary chunks are rejected; a syntax error is `Err` with Luau's message |
 | `Sandbox::instantiate(&runtime, &template, env)` | A fresh closure sharing the template's prototype, running in `env`, or in the real globals for `None` |

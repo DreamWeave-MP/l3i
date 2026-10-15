@@ -469,3 +469,50 @@ pub fn make_frozen_package(runtime: &Runtime, package: &Table, to_string: &Funct
         Ok(())
     })
 }
+
+/// Freezes every table reachable from the table at `index` through table keys, table values and
+/// metatables, the root itself only when `include_root`, so nothing a sandbox shares between
+/// instances can carry one instance's writes to another. Each table is visited once, so cycles
+/// end.
+///
+/// # Safety
+/// `state` is live, at a level where pushing is allowed, and `index` names a table.
+pub(crate) unsafe fn freeze_reachable(state: *mut ffi::lua_State, index: c_int, include_root: bool) -> Result<()> {
+    let mut seen = std::collections::HashSet::new();
+    // SAFETY: forwarded contract.
+    unsafe { freeze_from(state, ffi::lua_absindex(state, index), include_root, &mut seen) }
+}
+
+unsafe fn freeze_from(
+    state: *mut ffi::lua_State,
+    index: c_int,
+    freeze: bool,
+    seen: &mut std::collections::HashSet<*const c_void>,
+) -> Result<()> {
+    unsafe {
+        if !seen.insert(ffi::lua_topointer(state, index)) {
+            return Ok(());
+        }
+        crate::stack::reserve(state, 4)?;
+        ffi::lua_pushnil(state);
+        while ffi::lua_next(state, index) != 0 {
+            let value = ffi::lua_gettop(state);
+            if ffi::lua_type(state, value) == ffi::LUA_TTABLE {
+                freeze_from(state, value, true, seen)?;
+            }
+            if ffi::lua_type(state, value - 1) == ffi::LUA_TTABLE {
+                freeze_from(state, value - 1, true, seen)?;
+            }
+            ffi::lua_pop(state, 1);
+        }
+        if ffi::lua_getmetatable(state, index) != 0 {
+            let result = freeze_from(state, ffi::lua_gettop(state), true, seen);
+            ffi::lua_pop(state, 1);
+            result?;
+        }
+        if freeze {
+            ffi::lua_setreadonly(state, index, 1);
+        }
+    }
+    Ok(())
+}
