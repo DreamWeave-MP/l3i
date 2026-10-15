@@ -74,11 +74,9 @@ pub mod lowering;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use crate::byte_rules::one_byte;
 use crate::convert::{BytesView, Exact};
 use crate::error::{Error, Result};
 use crate::extension::{CompilerTypePolicy, Extension, ExtensionDescriptor, TagPolicy};
-use crate::options::Options;
 use crate::stack::ValueView;
 use crate::userdata::Owned;
 
@@ -118,22 +116,15 @@ impl Rules {
     /// How many replacements a pool takes: what native code applies to every word it reads.
     pub const MAX_REPLACEMENTS: usize = 2;
 
-    /// The byte each byte becomes.
-    fn map(&self, byte: u8) -> u8 {
-        match self.replace.iter().find(|(old, _)| *old == byte) {
-            Some((_, new)) => *new,
-            None if self.nocase => byte.to_ascii_lowercase(),
-            None => byte,
-        }
-    }
-
     fn byte_rules(&self) -> crate::byte_rules::ByteRules {
-        crate::byte_rules::ByteRules {
-            map: std::array::from_fn(|byte| self.map(byte as u8)),
+        crate::byte_rules::RuleOptions {
+            nocase: self.nocase,
+            replace: self.replace.clone(),
             collapse: self.collapse,
             trim_start: self.trim_start,
             trim_end: self.trim_end,
         }
+        .byte_rules()
     }
 }
 
@@ -698,38 +689,16 @@ fn span<'a>(
     }
 }
 
-const RULES_TYPE: &str = "{ nocase: boolean?, replace: { [string]: string }?, collapse: string?, \
-    trimStart: string?, trimEnd: string? }";
-
 /// The rules a script's table names.
 fn read_rules(call: &crate::bind::Call<'_>, options: ValueView<'_>) -> Result<Rules> {
-    const WHAT: &str = "intern.new";
-    let mut rules = Rules::default();
-    Options::read(call, options, WHAT, |o| {
-        rules.nocase = o.or("nocase", false)?;
-        rules.collapse = o.optional_bytes("collapse", |text| one_byte(WHAT, "collapse", text))?.flatten();
-        rules.trim_start = o.optional_bytes("trimStart", |text| one_byte(WHAT, "trimStart", text))?.flatten();
-        rules.trim_end = o.optional_bytes("trimEnd", |text| one_byte(WHAT, "trimEnd", text))?.flatten();
-        o.optional_table("replace", |frame, table| {
-            table.for_each(frame, |_, key, value| {
-                let old =
-                    key.read::<&[u8]>().ok().and_then(|text| one_byte(WHAT, "a replaced byte", text).ok().flatten());
-                let new =
-                    value.read::<&[u8]>().ok().and_then(|text| one_byte(WHAT, "a replacement", text).ok().flatten());
-                match (old, new) {
-                    (Some(old), Some(new)) => {
-                        rules.replace.push((old, new));
-                        Ok(())
-                    }
-                    _ => Err(Error::runtime(format!("{WHAT}: replace maps one-byte strings to one-byte strings"))),
-                }
-            })
-        })?;
-        Ok(())
-    })?;
-    // Table order is no order: sorted, the same rules make the same pool.
-    rules.replace.sort_unstable();
-    Ok(rules)
+    let options = crate::byte_rules::RuleOptions::read(call, "intern.new", options)?;
+    Ok(Rules {
+        nocase: options.nocase,
+        replace: options.replace,
+        collapse: options.collapse,
+        trim_start: options.trim_start,
+        trim_end: options.trim_end,
+    })
 }
 
 /// `intern.new(policy?)`.
@@ -765,7 +734,7 @@ impl Extension for InternExtension {
     }
 
     fn describe(&self, d: &mut ExtensionDescriptor) -> Result<()> {
-        d.type_alias("dream_intern_Rules", RULES_TYPE);
+        d.type_alias("dream_intern_Rules", crate::byte_rules::RULES_TYPE);
         let mut pool = d.userdata::<Pool>("dream.intern.Pool");
         pool.tag(TagPolicy::Required)
             .compiler_type(CompilerTypePolicy::Required)

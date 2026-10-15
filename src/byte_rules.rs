@@ -12,6 +12,83 @@ pub(crate) fn one_byte(what: &str, name: &str, text: &[u8]) -> Result<Option<u8>
     }
 }
 
+/// The rules table `bytes.translate` and `intern.new` both read, as Luau declares it.
+#[cfg(any(feature = "bytes", feature = "intern"))]
+pub(crate) const RULES_TYPE: &str = "{ nocase: boolean?, replace: { [string]: string }?, collapse: string?, \
+    trimStart: string?, trimEnd: string? }";
+
+/// A rules table as a script spells it: `nocase` lowers `A`..`Z`, `replace` maps single bytes to
+/// single bytes (a replaced byte is not also lowered), then `collapse` makes runs of one byte one,
+/// and `trimStart` and `trimEnd` remove one byte from the ends.
+#[cfg(any(feature = "bytes", feature = "intern"))]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct RuleOptions {
+    pub(crate) nocase: bool,
+    /// Sorted: table order is no order, so the same table is the same rules.
+    pub(crate) replace: Vec<(u8, u8)>,
+    pub(crate) collapse: Option<u8>,
+    pub(crate) trim_start: Option<u8>,
+    pub(crate) trim_end: Option<u8>,
+}
+
+#[cfg(any(feature = "bytes", feature = "intern"))]
+impl RuleOptions {
+    /// The rules `options` names, for the function `what`.
+    pub(crate) fn read(
+        scope: &impl crate::stack::Scope,
+        what: &str,
+        options: crate::stack::ValueView<'_>,
+    ) -> Result<RuleOptions> {
+        let mut rules = RuleOptions::default();
+        crate::options::Options::read(scope, options, what, |o| {
+            rules.nocase = o.or("nocase", false)?;
+            rules.collapse = o.optional_bytes("collapse", |text| one_byte(what, "collapse", text))?.flatten();
+            rules.trim_start = o.optional_bytes("trimStart", |text| one_byte(what, "trimStart", text))?.flatten();
+            rules.trim_end = o.optional_bytes("trimEnd", |text| one_byte(what, "trimEnd", text))?.flatten();
+            o.optional_table("replace", |frame, table| {
+                table.for_each(frame, |_, key, value| {
+                    let old = key
+                        .read::<&[u8]>()
+                        .ok()
+                        .and_then(|text| one_byte(what, "a replaced byte", text).ok().flatten());
+                    let new = value
+                        .read::<&[u8]>()
+                        .ok()
+                        .and_then(|text| one_byte(what, "a replacement", text).ok().flatten());
+                    match (old, new) {
+                        (Some(old), Some(new)) => {
+                            rules.replace.push((old, new));
+                            Ok(())
+                        }
+                        _ => Err(Error::runtime(format!("{what}: replace maps one-byte strings to one-byte strings"))),
+                    }
+                })
+            })?;
+            Ok(())
+        })?;
+        rules.replace.sort_unstable();
+        Ok(rules)
+    }
+
+    /// The byte each byte becomes.
+    pub(crate) fn map(&self, byte: u8) -> u8 {
+        match self.replace.iter().find(|(old, _)| *old == byte) {
+            Some((_, new)) => *new,
+            None if self.nocase => byte.to_ascii_lowercase(),
+            None => byte,
+        }
+    }
+
+    pub(crate) fn byte_rules(&self) -> ByteRules {
+        ByteRules {
+            map: std::array::from_fn(|byte| self.map(byte as u8)),
+            collapse: self.collapse,
+            trim_start: self.trim_start,
+            trim_end: self.trim_end,
+        }
+    }
+}
+
 /// A normalization: map every byte, collapse runs of `collapse`, trim `trim_start` from the
 /// front and `trim_end` from the back.
 #[derive(Clone, Debug, PartialEq, Eq)]

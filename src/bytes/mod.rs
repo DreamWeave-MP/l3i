@@ -61,11 +61,10 @@ pub mod regex;
 pub mod text;
 
 use crate::bind::{Call, StackResults};
-use crate::byte_rules::{ByteRules, one_byte};
+use crate::byte_rules::ByteRules;
 use crate::convert::{BufferView, BytesView, Exact, Integer, NewBuffer};
 use crate::error::{Error, Result};
 use crate::extension::{Extension, ExtensionDescriptor, ModuleDecl};
-use crate::options::Options;
 use crate::stack::{Scope, ValueView};
 
 /// The extension id.
@@ -269,41 +268,36 @@ fn trim(
     call.push(kept)?;
     Ok(StackResults)
 }
-/// `bytes.translate(text, from, to, { collapse?, trimStart?, trimEnd? }?)`: every byte found in
-/// `from` replaced by the byte at the same position in `to`, like `tr`; then runs of `collapse`
-/// made one, and `trimStart` and `trimEnd` removed from the ends. Nothing to change returns
-/// `text` itself, with no copy, so a key already in its normal spelling costs one scan.
-fn translate(
-    call: &Call<'_>,
-    text: ValueView<'_>,
-    from: &[u8],
-    to: &[u8],
-    options: Option<ValueView<'_>>,
-) -> Result<StackResults> {
+/// Rules compiled once (`dream.bytes.Rules`, from `bytes.rules(table)`), so a translation in a
+/// loop doesn't read its table on every call.
+pub struct Rules(ByteRules);
+
+// SAFETY: plain Rust data; the destructor never touches the Lua API.
+unsafe impl crate::userdata::Userdata for Rules {
+    const NAME: &'static str = "dream.bytes.Rules";
+}
+
+/// `bytes.translate(text, rules?)`: `text` normalized by a rules table, the one `intern.new`
+/// takes, or by rules `bytes.rules` compiled from one: `nocase` lowers `A`..`Z`, `replace` maps single bytes to single bytes, then runs of
+/// `collapse` are made one and `trimStart` and `trimEnd` removed from the ends. Nothing to change
+/// returns `text` itself, with no copy, so a key already in its normal spelling costs one scan.
+fn translate(call: &Call<'_>, text: ValueView<'_>, options: Option<ValueView<'_>>) -> Result<StackResults> {
     const WHAT: &str = "bytes.translate";
-    if from.len() != to.len() {
-        return Err(Error::runtime(format!(
-            "{WHAT}: from and to must be the same length, got {} and {}",
-            from.len(),
-            to.len()
-        )));
-    }
     if text.type_of() != crate::stack::Type::String {
         return Err(Error::runtime(format!("{WHAT}: text must be a string, got {}", text.type_of().name())));
     }
-    let mut rules = ByteRules::identity();
-    // A byte named twice in from maps as its first appearance says.
-    for (&old, &new) in from.iter().zip(to).rev() {
-        rules.map[usize::from(old)] = new;
-    }
-    if let Some(options) = options.filter(|view| !view.is_nil()) {
-        Options::read(call, options, WHAT, |o| {
-            rules.collapse = o.optional_bytes("collapse", |text| one_byte(WHAT, "collapse", text))?.flatten();
-            rules.trim_start = o.optional_bytes("trimStart", |text| one_byte(WHAT, "trimStart", text))?.flatten();
-            rules.trim_end = o.optional_bytes("trimEnd", |text| one_byte(WHAT, "trimEnd", text))?.flatten();
-            Ok(())
-        })?;
-    }
+    let parsed;
+    let rules = match options.filter(|view| !view.is_nil()) {
+        Some(view) if view.is_userdata() => &crate::userdata::check_receiver::<Rules>(view)?.0,
+        Some(view) => {
+            parsed = crate::byte_rules::RuleOptions::read(call, WHAT, view)?.byte_rules();
+            &parsed
+        }
+        None => {
+            parsed = ByteRules::identity();
+            &parsed
+        }
+    };
     let source = text.read::<&[u8]>()?;
     if rules.is_normal(source) {
         let mut frame = call.frame();
@@ -561,6 +555,10 @@ impl Extension for BytesExtension {
     }
 
     fn describe(&self, d: &mut ExtensionDescriptor) -> Result<()> {
+        d.type_alias("dream_bytes_RulesTable", crate::byte_rules::RULES_TYPE);
+        d.userdata::<Rules>("dream.bytes.Rules")
+            .tag(crate::extension::TagPolicy::Never)
+            .doc("A rules table compiled once, for bytes.translate.");
         let mut math = d.userdata::<Math>("dream.bytes.Math");
         math.tag(crate::extension::TagPolicy::Required)
             .compiler_type(crate::extension::CompilerTypePolicy::Required)
@@ -612,8 +610,14 @@ fn describe_core(module: &mut ModuleDecl) {
         .function("startsWith", starts_with)
         .signature("(haystack: buffer | string, prefix: buffer | string, offset: number?) -> boolean")
         .function("translate", translate)
-        .signature("(text: string, from: string, to: string, options: { collapse: string?, trimStart: string?, trimEnd: string? }?) -> string")
-        .doc("text with each byte found in from replaced by the byte at the same position in to, then runs of collapse made one and trimStart and trimEnd removed from the ends; text itself when nothing changes.")
+        .signature("(text: string, rules: (dream_bytes_RulesTable | dream_bytes_Rules)?) -> string")
+        .doc("text normalized by rules (the table intern.new takes, or bytes.rules compiled from one): nocase lowers A..Z, replace maps single bytes, then runs of collapse are made one and trimStart and trimEnd removed from the ends; text itself when nothing changes.")
+        .function("rules", |call: &Call<'_>, table: ValueView<'_>| -> Result<crate::userdata::Owned<Rules>> {
+            let options = crate::byte_rules::RuleOptions::read(call, "bytes.rules", table)?;
+            Ok(crate::userdata::Owned(Rules(options.byte_rules())))
+        })
+        .signature("(rules: dream_bytes_RulesTable) -> dream_bytes_Rules")
+        .doc("rules compiled once, for translate in a loop.")
         .function("trim", |call: &Call<'_>, text: ValueView<'_>, characters: Option<&[u8]>| {
             trim(call, "bytes.trim", text, characters, Ends::Both)
         })

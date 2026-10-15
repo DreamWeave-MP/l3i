@@ -43,24 +43,27 @@ fn searching_comparing_and_slicing_work_on_buffers_and_strings() {
         .unwrap();
 }
 
-/// `translate` maps bytes like `tr`, hands back the same string when nothing changes, and keeps
-/// bytes that aren't UTF-8.
+/// `translate` normalizes by the rules table `intern.new` takes, hands back the same string when
+/// nothing changes, and keeps bytes that aren't UTF-8.
 #[test]
-fn translate_maps_bytes_and_returns_unchanged_text_as_is() {
+fn translate_normalizes_by_rules_and_returns_unchanged_text_as_is() {
     runtime()
         .exec(
-            "local upper, lower = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ\\\\', 'abcdefghijklmnopqrstuvwxyz/' \
-             assert(bytes.translate('Meshes\\\\X\\\\Rock.NIF', upper, lower) == 'meshes/x/rock.nif') \
-             assert(bytes.translate('already/plain', upper, lower) == 'already/plain', 'unchanged') \
-             assert(bytes.translate('', upper, lower) == '', 'empty') \
-             assert(bytes.translate('A\\255B', 'AB', 'ab') == 'a\\255b', 'other bytes kept') \
-             assert(bytes.translate('aab', 'aa', 'xy') == 'xxb', 'the first mapping of a byte wins') \
-             assert(bytes.translate('\\\\\\\\Data//Files\\\\', upper, lower, { collapse = '/', trimStart = '/' }) == 'data/files/', 'collapse and trim') \
-             assert(bytes.translate('a//b//', '', '', { collapse = '/', trimEnd = '/' }) == 'a/b', 'trimEnd') \
-             local ok, err = pcall(bytes.translate, 'x', 'ab', 'a') assert(not ok and err:find('same length'), err) \
-             ok, err = pcall(bytes.translate, 'x', '', '', { collapse = '//' }) assert(not ok and err:find('one byte'), err) \
-             ok, err = pcall(bytes.translate, 'x', '', '', { colapse = '/' }) assert(not ok and err:find('colapse'), err) \
-             ok, err = pcall(bytes.translate, buffer.create(1), 'a', 'b') assert(not ok and err:find('must be a string'), err)",
+            "local path = { nocase = true, replace = { ['\\\\'] = '/' } } \
+             assert(bytes.translate('Meshes\\\\X\\\\Rock.NIF', path) == 'meshes/x/rock.nif') \
+             local plain = 'already/plain' assert(rawequal(bytes.translate(plain, path), plain), 'unchanged') \
+             assert(bytes.translate('', path) == '' and bytes.translate('Same') == 'Same', 'empty and no rules') \
+             assert(bytes.translate('A\\255B', { nocase = true }) == 'a\\255b', 'other bytes kept') \
+             assert(bytes.translate('A\\\\', { nocase = true, replace = { A = 'Z' } }) == 'Z\\\\', 'a replaced byte is not also lowered') \
+             assert(bytes.translate('\\\\\\\\Data//Files\\\\', { nocase = true, replace = { ['\\\\'] = '/' }, collapse = '/', trimStart = '/' }) == 'data/files/', 'collapse and trim') \
+             assert(bytes.translate('a//b//', { collapse = '/', trimEnd = '/' }) == 'a/b', 'trimEnd') \
+             local ok, err = pcall(bytes.translate, 'x', { replace = { ab = 'a' } }) assert(not ok and err:find('one%-byte'), err) \
+             ok, err = pcall(bytes.translate, 'x', { collapse = '//' }) assert(not ok and err:find('one byte'), err) \
+             ok, err = pcall(bytes.translate, 'x', { colapse = '/' }) assert(not ok and err:find('colapse'), err) \
+             local compiled = bytes.rules(path) \
+             assert(bytes.translate('A\\\\B', compiled) == 'a/b' and rawequal(bytes.translate(plain, compiled), plain), 'compiled') \
+             assert(tostring(compiled):find('dream.bytes.Rules') and not pcall(bytes.rules, { nocase = 1 }), 'rules') \
+             ok, err = pcall(bytes.translate, buffer.create(1), path) assert(not ok and err:find('must be a string'), err)",
         )
         .unwrap();
 }

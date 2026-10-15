@@ -36,8 +36,8 @@ fn per_call(c: &mut Criterion) {
         ("readCString (module)", "s = bytes.readCString(buf, 0, 16)"),
         ("readVarint (module)", "w = bytes.readVarint(buf, 0)"),
         ("find, 64 byte haystack", "v = bytes.find(buf, needle)"),
-        ("translate, a path to fold", "s = bytes.translate(path, UP, LO)"),
-        ("translate, a path already folded", "s = bytes.translate(folded, UP, LO)"),
+        ("translate, a path to fold", "s = bytes.translate(path, FOLD)"),
+        ("translate, a path already folded", "s = bytes.translate(folded, FOLD)"),
         ("string.lower + gsub, a path to fold (Luau builtin)", "s = string.gsub(string.lower(path), '\\\\', '/')"),
         (
             "string.lower + find, a path already folded (Luau builtin)",
@@ -52,7 +52,7 @@ fn per_call(c: &mut Criterion) {
                 "return function() local bytes = bytes local B = bytes.math() \
                  local buf = buffer.create(64) buffer.writestring(buf, 0, 'record name here') \
                  local needle = 'here' local v, w, s = 0, 0i, '' \
-                 local UP, LO = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ\\\\', 'abcdefghijklmnopqrstuvwxyz/' \
+                 local FOLD = bytes.rules({{ nocase = true, replace = {{ ['\\\\'] = '/' }} }}) \
                  local path, folded = 'Meshes\\\\Architecture\\\\Rock_01.NIF', 'meshes/architecture/rock_01.nif' \
                  for i = 1, {CALLS} do {body} end return v end"
             ))

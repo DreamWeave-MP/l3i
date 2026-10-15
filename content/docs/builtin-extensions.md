@@ -458,7 +458,8 @@ local count, after = bytes.readVarint(header, next)
 | `equals(a, b)`, `startsWith(haystack, prefix, offset?)` | Booleans |
 | `compare(a, aOffset, b, bOffset, length)` | -1, 0 or 1 over `length` bytes of each |
 | `slice(source, offset, length)` | A new buffer |
-| `translate(text, from, to, { collapse?, trimStart?, trimEnd? }?)` | `text` with each byte found in `from` replaced by the byte at the same position in `to`, like `tr`, then runs of `collapse` made one and `trimStart` and `trimEnd` removed from the ends; `text` itself, uncopied, when nothing changes |
+| `translate(text, rules?)` | `text` normalized by the rules table `intern.new` takes (`dream_bytes_RulesTable`), or by `rules(table)` compiled from one: `nocase` lowers `A`..`Z`, `replace` maps single bytes to single bytes (`{ ["\\"] = "/" }`; a replaced byte is not also lowered), then runs of `collapse` are made one and `trimStart` and `trimEnd` removed from the ends; `text` itself, uncopied, when nothing changes |
+| `rules(table)` | A `dream.bytes.Rules`: the table read once, so `translate` in a loop doesn't read it on every call |
 | `trim(text, characters?)`, `trimStart`, `trimEnd` | `text` without whitespace at both ends, the start or the end: Unicode `White_Space` when `text` is UTF-8, ASCII whitespace when it isn't, or, given `characters`, any of those bytes; `text` itself, uncopied, when nothing goes |
 | `shortest(value, width?)` | The fewest decimal digits that read back as `value` at `width` (`"f64"` by default, or `"f32"`): the digits as an integer string led by the sign, and the power of ten that scales them (`0.1` is `"1", -1`; zero is `"0", 0`); `nil` for a NaN or an infinity. Every float layout (`%g`, a JSON number, a tool's own float text) is a spelling of these digits |
 | `toF32(value)` | `value` rounded to the nearest single-precision float, as a 32-bit field would hold it |
@@ -632,10 +633,9 @@ fields (26000 records, 78000 fields; a verified build under a load average of 4.
 About 9 ns per chunk framed and 39 ns per span matched, the regex's own time included.
 
 `translate` is for when the normalized text itself is needed; to compare or key by it, an intern
-pool's rules policy (below) does the same without making the string. Folding a 36-byte path
-with `translate(path, "ABC…Z\\", "abc…z/")` costs 141 ns a call against 470 ns for
-`string.gsub(string.lower(path), "\\", "/")`; a path already folded costs 108 ns against 230 ns
-for `string.lower` plus a `string.find` for the separator.
+pool's rules policy (below) does the same without making the string. Folding a path is one scan,
+and a path already folded costs that scan and no copy; in a loop, pass rules compiled once with
+`bytes.rules` rather than a table, which `translate` would read on every call.
 
 ## dream.data
 
