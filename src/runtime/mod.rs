@@ -40,8 +40,8 @@ pub(crate) unsafe fn shared_for<'a>(state: *mut ffi::lua_State) -> Option<&'a Sh
 /// How much longer the watched call `scope` runs in may take before the watchdog raises, or
 /// `None` when no execution time limit is armed. A native call that waits clamps its wait to
 /// this, so the limit holds even while no Luau instruction runs.
-#[cfg(any(feature = "tcp", feature = "dns", feature = "process"))]
-pub(crate) fn watchdog_remaining(scope: &impl crate::stack::Scope) -> Option<Duration> {
+#[must_use]
+pub fn watchdog_remaining(scope: &impl crate::stack::Scope) -> Option<Duration> {
     // SAFETY: a scope's state is a live thread of a VM that outlives the scope, and the borrow
     // of its shared block ends in this function.
     let shared = unsafe { shared_for(scope.state()) }?;
@@ -51,8 +51,7 @@ pub(crate) fn watchdog_remaining(scope: &impl crate::stack::Scope) -> Option<Dur
 /// Marks the watched call `scope` runs in as expired when its deadline has passed, so the
 /// watchdog raises at the very next safepoint rather than at its next poll. A native call that
 /// waited out the deadline calls this before it returns.
-#[cfg(feature = "process")]
-pub(crate) fn expire_if_due(scope: &impl crate::stack::Scope) {
+pub fn expire_if_due(scope: &impl crate::stack::Scope) {
     // SAFETY: as in `watchdog_remaining`.
     if let Some(shared) = unsafe { shared_for(scope.state()) } {
         shared.expire_if_due();

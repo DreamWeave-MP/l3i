@@ -520,7 +520,6 @@ impl Shared {
     }
 
     /// Records the armed deadline as run out when it has passed.
-    #[cfg(feature = "process")]
     pub(crate) fn expire_if_due(&self) {
         if let Some(deadline) = self.deadline.get()
             && Instant::now() >= deadline.end

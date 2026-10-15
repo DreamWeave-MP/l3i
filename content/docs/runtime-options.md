@@ -63,6 +63,8 @@ the deadline; when it has passed it raises a Lua error, as OpenMW does:
 Lua execution time limit exceeded after 20 ms
 ```
 
+A native call that waits (a socket read, a sleep, a host's own blocking receive) runs no Luau, so no safepoint polls the deadline while it blocks. It clamps its wait to `runtime::watchdog_remaining(scope)`, which is `None` when no limit is armed, and after a wait the deadline cut short it calls `runtime::expire_if_due(scope)`, so the watchdog raises as soon as Luau runs again. `process.sleep`, the TCP and DNS waits, and child-process waits all do.
+
 The memory limit is the VM's allocator's. Every block Luau allocates goes through a counting
 allocator, and a growth that would take the heap past the limit fails at the allocation with
 Luau's out-of-memory error. A script can catch that with `pcall`; when it reaches the host it is
