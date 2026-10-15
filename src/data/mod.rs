@@ -1364,7 +1364,7 @@ impl Answer {
         match self {
             Answer::Number(value) => Push::push_only(&value, call)?,
             Answer::Nil => {
-                call.stack().push_nil();
+                call.stack().push_nil()?;
             }
             Answer::Bool(value) => Push::push_only(&value, call)?,
         }

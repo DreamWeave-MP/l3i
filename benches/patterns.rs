@@ -40,7 +40,7 @@ fn runtime() -> Runtime {
         .unwrap();
     // Native code exits to the interpreter on a global access unless the environment is
     // marked safe; the inputs are globals, so sandbox them once they exist.
-    runtime.sandbox_globals();
+    runtime.sandbox_globals().unwrap();
     runtime
 }
 

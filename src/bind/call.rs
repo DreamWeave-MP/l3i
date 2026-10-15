@@ -164,6 +164,9 @@ impl<'c> Scope for Call<'c> {
     fn frame(&self) -> Frame<'_> {
         self.stack.frame()
     }
+    fn is_host_level(&self) -> bool {
+        false
+    }
 }
 
 impl crate::stack::sealed::Sealed for Call<'_> {}

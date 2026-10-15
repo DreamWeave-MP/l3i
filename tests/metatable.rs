@@ -292,5 +292,5 @@ fn script_visible_identity_and_protected_metatable() {
 fn protected_marker(runtime: &Runtime) -> l3i::value::Value {
     let stack = runtime.stack();
     let frame = stack.frame();
-    l3i::value::Value::store(frame.push_string("Baz protected")).unwrap()
+    l3i::value::Value::store(frame.push_string("Baz protected").unwrap()).unwrap()
 }

@@ -166,35 +166,46 @@ impl<'p> Frame<'p> {
         }
     }
 
-    pub fn push_nil(&self) -> ValueView<'_> {
+    pub fn push_nil(&self) -> Result<ValueView<'_>> {
         self.assert_no_open_child();
+        super::reserve(self.state, 1)?;
         unsafe { ffi::lua_pushnil(self.state) };
-        self.top_value()
+        Ok(self.top_value())
     }
 
-    pub fn push_boolean(&self, value: bool) -> ValueView<'_> {
+    pub fn push_boolean(&self, value: bool) -> Result<ValueView<'_>> {
         self.assert_no_open_child();
+        super::reserve(self.state, 1)?;
         unsafe { ffi::lua_pushboolean(self.state, c_int::from(value)) };
-        self.top_value()
+        Ok(self.top_value())
     }
 
-    pub fn push_number(&self, value: f64) -> ValueView<'_> {
+    pub fn push_number(&self, value: f64) -> Result<ValueView<'_>> {
         self.assert_no_open_child();
+        super::reserve(self.state, 1)?;
         unsafe { ffi::lua_pushnumber(self.state, value) };
-        self.top_value()
+        Ok(self.top_value())
     }
 
-    pub fn push_string(&self, value: &str) -> ValueView<'_> {
+    pub fn push_string(&self, value: &str) -> Result<ValueView<'_>> {
         self.assert_no_open_child();
-        unsafe { ffi::lua_pushlstring(self.state, value.as_ptr().cast(), value.len()) };
-        self.top_value()
+        // SAFETY: lua_pushlstring copies `value`; it allocates, so it runs protected at host level.
+        unsafe {
+            super::push_allocating(self.state, self.host_level, |state| {
+                ffi::lua_pushlstring(state, value.as_ptr().cast(), value.len());
+            })?;
+        }
+        Ok(self.top_value())
     }
 
     pub fn push_table(&self, array_capacity: usize, hash_capacity: usize) -> Result<TableView<'_>> {
         self.assert_no_open_child();
         let narr = checked_capacity(array_capacity)?;
         let nrec = checked_capacity(hash_capacity)?;
-        unsafe { ffi::lua_createtable(self.state, narr, nrec) };
+        // SAFETY: lua_createtable allocates, so it runs protected at host level.
+        unsafe {
+            super::push_allocating(self.state, self.host_level, |state| ffi::lua_createtable(state, narr, nrec))?;
+        };
         Ok(TableView::new(self.top_value()))
     }
 
@@ -207,10 +218,19 @@ impl<'p> Frame<'p> {
 
     /// # Safety
     /// `debug_name` is null or a pointer that stays valid until the VM closes.
-    pub unsafe fn push_c_function(&self, function: ffi::lua_CFunction, debug_name: *const c_char) -> ValueView<'_> {
+    pub unsafe fn push_c_function(
+        &self,
+        function: ffi::lua_CFunction,
+        debug_name: *const c_char,
+    ) -> Result<ValueView<'_>> {
         self.assert_no_open_child();
-        unsafe { ffi::lua_pushcfunction(self.state, function, debug_name) };
-        self.top_value()
+        // SAFETY: a C closure allocates, so it runs protected at host level; forwarded contract.
+        unsafe {
+            super::push_allocating(self.state, self.host_level, |state| {
+                ffi::lua_pushcfunction(state, function, debug_name);
+            })?;
+        }
+        Ok(self.top_value())
     }
 
     /// Pops the frame's top value into the global `name`. Raises (or fails at host level) when

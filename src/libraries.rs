@@ -94,8 +94,8 @@ impl Runtime {
             // SAFETY: the opener is called like `luaL_openlibs` does: pushed with its name as
             // the argument. Openers raise only for out of memory.
             unsafe {
-                frame.push_c_function(library.opener(), std::ptr::null());
-                frame.push_string(library.global_name());
+                frame.push_c_function(library.opener(), std::ptr::null())?;
+                frame.push_string(library.global_name())?;
                 frame.raising(2, 0, |state| {
                     ffi::lua_call(state, 1, 0);
                     0
@@ -107,9 +107,18 @@ impl Runtime {
     /// Luau's own sandbox (`luaL_sandbox`): freezes every library table and the globals table
     /// itself, marks it safe, and gives the string metatable read-only protection. After this,
     /// [`crate::thread::Thread::sandbox`] gives threads writable global proxies.
-    pub fn sandbox_luau(&self) {
-        // SAFETY: live main thread; the helper only flips read-only flags and metatables.
-        unsafe { ffi::luaL_sandbox(self.stack().state_ptr()) };
+    ///
+    /// # Errors
+    /// Running out of memory.
+    pub fn sandbox_luau(&self) -> Result<()> {
+        // SAFETY: live main thread at host level; the helper flips read-only flags and
+        // metatables and raises only on out of memory.
+        unsafe {
+            crate::raw::protect::protected_call(self.stack().state_ptr(), 0, 0, |state| {
+                ffi::luaL_sandbox(state);
+                0
+            })
+        }
     }
 
     /// `luaL_register`: creates (or reuses) the global table `name`, fills it with C functions,
@@ -141,7 +150,7 @@ impl Runtime {
                 let table = frame.top_value().as_table()?;
                 for (function_name, function) in functions {
                     let debug_name = crate::debug_name::retain(state, &format!("{name}.{function_name}"), &[name])?;
-                    frame.push_c_function(*function, debug_name);
+                    frame.push_c_function(*function, debug_name)?;
                     table.raw_set(frame, function_name)?;
                 }
                 crate::value::Table::from_value(crate::value::Value::store(table.value())?)

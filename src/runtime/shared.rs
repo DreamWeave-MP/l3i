@@ -142,6 +142,8 @@ pub(crate) struct Shared {
     userdata_types: RefCell<HashMap<TypeId, u8, BuildHasherDefault<TypeIdHasher>>>,
     /// The memory category initialization work (sandboxes, templates) is charged to.
     initialization_category: MemoryCategory,
+    /// The registry reference of the protected-call thunk (`raw::protect`), made once at build.
+    protected_thunk: Cell<c_int>,
     /// The native code generator, when the runtime was built with one. It lives here, with the
     /// VM, so template loading needs only a thread of the VM; the block is a `Runtime` field and
     /// drops after `lua_close`, as Luau requires for shared code contexts.
@@ -209,6 +211,7 @@ impl Shared {
             limits: Cell::new(limits),
             profiler,
             initialization_category,
+            protected_thunk: Cell::new(ffi::LUA_NOREF),
             #[cfg(feature = "jit")]
             native_code: std::cell::OnceCell::new(),
             active_calls: RefCell::new(Vec::new()),
@@ -269,6 +272,15 @@ impl Shared {
                 Ok(())
             }
         }
+    }
+
+    /// The protected-call thunk's registry reference, `LUA_NOREF` before build installs it.
+    pub(crate) fn protected_thunk(&self) -> c_int {
+        self.protected_thunk.get()
+    }
+
+    pub(crate) fn set_protected_thunk(&self, reference: c_int) {
+        self.protected_thunk.set(reference);
     }
 
     /// The compiler's bytecode type for the Rust type `id`, if it was named to the compiler.

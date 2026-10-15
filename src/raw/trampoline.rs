@@ -140,8 +140,8 @@ mod tests {
         // Argument 2 is a table whose __index errors. Everything here stays inside `frame`;
         // the only raising call is the pcall itself.
         unsafe {
-            frame.push_c_function(probe, ptr::null());
-            frame.push_number(f64::from(mode));
+            frame.push_c_function(probe, ptr::null()).unwrap();
+            frame.push_number(f64::from(mode)).unwrap();
             frame.push_table(0, 0).unwrap();
             frame.push_table(0, 1).unwrap();
             runtime

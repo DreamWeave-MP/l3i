@@ -260,7 +260,7 @@ fn root_stacks_can_be_taken_again_once_released() {
         let stack = runtime.stack();
         stack
             .with_frame(|frame| {
-                frame.push_number(1.0);
+                frame.push_number(1.0).unwrap();
                 Ok(())
             })
             .unwrap();

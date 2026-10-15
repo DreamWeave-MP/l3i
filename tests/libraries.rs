@@ -28,7 +28,7 @@ fn libraries_open_one_at_a_time() {
 fn luau_sandbox_freezes_globals_and_threads_get_writable_proxies() {
     let runtime = Runtime::new().unwrap();
     runtime.exec("shared = 1").unwrap();
-    runtime.sandbox_luau();
+    runtime.sandbox_luau().unwrap();
     let error = runtime.exec("shared = 2").unwrap_err().to_string();
     assert!(error.contains("readonly") || error.contains("read-only"), "{error}");
     assert!(runtime.exec("math.sqrt = nil").is_err());
@@ -109,9 +109,9 @@ fn tables_clone_and_clear_and_values_compare_and_concatenate_through_metamethods
             frame.push_value(view.value())?;
             frame.push_value(other_view.value())?;
             assert_eq!(frame.concat(2)?.read::<String>()?, "cat");
-            frame.push_string("a");
-            frame.push_number(1.0);
-            frame.push_string("b");
+            frame.push_string("a").unwrap();
+            frame.push_number(1.0).unwrap();
+            frame.push_string("b").unwrap();
             assert_eq!(frame.concat(3)?.read::<String>()?, "a1b");
             assert!(frame.concat(99).is_err());
             Ok(())
@@ -130,7 +130,7 @@ fn the_string_builder_assembles_text_and_values() {
     let stack = runtime.stack();
     let text = stack
         .with_frame(|frame| {
-            let number = frame.push_number(42.0);
+            let number = frame.push_number(42.0).unwrap();
             let mut builder = StringBuilder::new(frame);
             builder.push_str("answer=").push_value(number)?.push_bytes(b";").push_str(&"x".repeat(2000));
             let result = builder.finish();

@@ -177,7 +177,7 @@ impl Runtime {
         let generated = self.stack().with_frame(|frame| {
             // SAFETY: the name is a static C string, valid until the VM closes.
             let raw_metamethod =
-                unsafe { frame.push_c_function(compat_metamethod, c"l3i.internal.getCompatMetamethod".as_ptr()) };
+                unsafe { frame.push_c_function(compat_metamethod, c"l3i.internal.getCompatMetamethod".as_ptr()) }?;
             let raw_metamethod = Function::from_value(Value::store(raw_metamethod)?)?;
             let pairs = Value::get_global(frame, "pairs")?;
             let ipairs = Value::get_global(frame, "ipairs")?;
@@ -283,7 +283,11 @@ impl Runtime {
             // it, moved onto the loader's own stack and made its globals, so the loader's stack
             // stays empty and the thread is left on top of the frame.
             unsafe {
-                let loader = ffi::lua_newthread(state);
+                frame.raising(0, 1, |state| {
+                    ffi::lua_newthread(state);
+                    1
+                })?;
+                let loader = ffi::lua_tothread(state, -1);
                 base_env.push_to(frame)?;
                 ffi::lua_xmove(state, loader, 1);
                 ffi::lua_replace(loader, ffi::LUA_GLOBALSINDEX);

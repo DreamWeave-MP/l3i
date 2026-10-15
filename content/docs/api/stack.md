@@ -53,12 +53,12 @@ native-call stack created for a bound function while Lua is calling into Rust.
 | `fn frame(&self) -> Frame<'_>` | Opens a temporary frame. Panics if a frame opened from this stack is still alive |
 | `fn with_frame<R>(&self, body: impl FnOnce(&Frame<'_>) -> Result<R>) -> Result<R>` | Runs `body` inside a temporary frame |
 | `fn check(&self, extra: usize) -> Result<()>` | Ensures `extra` free slots (`lua_checkstack`); `Lua error: stack overflow` otherwise |
-| `fn push_nil(&self) -> ValueView<'_>` | Call-level pushes: results of a native function, or host setup before any frame. Nothing pops these within the current scope, so their views borrow the stack |
-| `fn push_boolean(&self, value: bool) -> ValueView<'_>` | |
-| `fn push_number(&self, value: f64) -> ValueView<'_>` | |
-| `fn push_string(&self, value: &str) -> ValueView<'_>` | |
+| `fn push_nil(&self) -> Result<ValueView<'_>>` | Call-level pushes: results of a native function, or host setup before any frame. Nothing pops these within the current scope, so their views borrow the stack. Every push checks the stack has room and, at host level, runs an allocating push protected, so it fails with `Err` instead of raising |
+| `fn push_boolean(&self, value: bool) -> Result<ValueView<'_>>` | |
+| `fn push_number(&self, value: f64) -> Result<ValueView<'_>>` | |
+| `fn push_string(&self, value: &str) -> Result<ValueView<'_>>` | |
 | `fn push_value(&self, value: ValueView<'_>) -> Result<ValueView<'_>>` | Pushes a copy of `value`, which must belong to this VM (`lua_xpush` from another thread of it) |
-| `unsafe fn push_c_function(&self, function: lua_CFunction, debug_name: *const c_char) -> ValueView<'_>` | Pushes a C function; `debug_name` is null or a pointer valid until the VM closes |
+| `unsafe fn push_c_function(&self, function: lua_CFunction, debug_name: *const c_char) -> Result<ValueView<'_>>` | Pushes a C function; `debug_name` is null or a pointer valid until the VM closes |
 
 Pushing through a `Stack` while a frame opened from it is alive is a debug assertion.
 
@@ -86,13 +86,13 @@ one at a time.
 | `fn pop(&mut self, count: c_int)` | Pops `count` values, never below the floor; negative counts pop nothing |
 | `fn release(&mut self)` | Disarms the frame: whatever it holds stays on the stack when it drops. How a value built inside a frame is handed to the enclosing scope |
 | `fn preserve_top_and_release(&mut self)` | Keeps the current top value (normally an error object), discards every other value the frame holds, and disarms the frame |
-| `fn push_nil(&self) -> ValueView<'_>` | |
-| `fn push_boolean(&self, value: bool) -> ValueView<'_>` | |
-| `fn push_number(&self, value: f64) -> ValueView<'_>` | |
-| `fn push_string(&self, value: &str) -> ValueView<'_>` | |
+| `fn push_nil(&self) -> Result<ValueView<'_>>` | |
+| `fn push_boolean(&self, value: bool) -> Result<ValueView<'_>>` | |
+| `fn push_number(&self, value: f64) -> Result<ValueView<'_>>` | |
+| `fn push_string(&self, value: &str) -> Result<ValueView<'_>>` | |
 | `fn push_table(&self, array_capacity: usize, hash_capacity: usize) -> Result<TableView<'_>>` | `lua_createtable` |
 | `fn push_value(&self, value: ValueView<'_>) -> Result<ValueView<'_>>` | A copy of `value`, from any scope of this VM |
-| `unsafe fn push_c_function(&self, function: lua_CFunction, debug_name: *const c_char) -> ValueView<'_>` | As on `Stack` |
+| `unsafe fn push_c_function(&self, function: lua_CFunction, debug_name: *const c_char) -> Result<ValueView<'_>>` | As on `Stack` |
 | `fn set_global(&self, name: &str) -> Result<()>` | Pops the frame's top value into the global `name`. Raises (or fails at host level) when the globals table is read-only; a logic error when the frame is empty |
 | `fn concat(&self, count: c_int) -> Result<ValueView<'_>>` | Concatenates the top `count` values into one string honouring `__concat`; the result replaces them |
 | `fn equal(&self, a: ValueView<'_>, b: ValueView<'_>) -> Result<bool>` | `a == b` honouring `__eq` |
@@ -107,7 +107,7 @@ fn main() -> l3i::Result<()> {
     let stack = runtime.stack();
     let table = stack.with_frame(|frame| {
         let table = frame.push_table(0, 1)?;
-        frame.push_number(42.0);
+        frame.push_number(42.0)?;
         table.raw_set(frame, "answer")?;
         Value::store(table.value())
     })?;

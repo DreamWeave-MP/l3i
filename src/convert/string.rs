@@ -98,12 +98,14 @@ fn push_bytes<'s, S: Scope>(scope: &'s S, bytes: &[u8]) -> Result<ValueView<'s>>
     Ok(scope.top_value())
 }
 
-// Keeps the `push_only` shape the Push impls forward to.
-#[allow(clippy::unnecessary_wraps)]
 fn push_bytes_only<S: Scope>(scope: &S, bytes: &[u8]) -> Result<()> {
     // SAFETY: lua_pushlstring copies `bytes.len()` bytes; an empty slice's pointer is not read.
-    unsafe { ffi::lua_pushlstring(scope.state(), bytes.as_ptr().cast(), bytes.len()) };
-    Ok(())
+    // It allocates, so it runs protected at host level.
+    unsafe {
+        crate::stack::push_allocating(scope.state(), scope.is_host_level(), |state| {
+            ffi::lua_pushlstring(state, bytes.as_ptr().cast(), bytes.len());
+        })
+    }
 }
 
 impl Push for str {

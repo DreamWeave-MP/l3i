@@ -129,7 +129,7 @@ fn a_coroutine_thread_leases_its_stack_like_the_main_thread() {
     let stack = runtime.stack();
     thread
         .with_stack(&stack, |outer| {
-            outer.push_number(1.0);
+            outer.push_number(1.0).unwrap();
             // A second root on the same coroutine thread would let its frames alias the first's.
             thread.with_stack(&stack, |_inner| Ok(()))
         })
@@ -145,12 +145,12 @@ fn thread_stacks_are_leased_per_thread_not_per_vm() {
     // different stacks.
     let stack = runtime.stack();
     let frame = stack.frame();
-    frame.push_number(1.0);
+    frame.push_number(1.0).unwrap();
     thread
         .with_stack(&stack, |a| {
-            a.push_number(2.0);
+            a.push_number(2.0).unwrap();
             other.with_stack(&stack, |b| {
-                b.push_number(3.0);
+                b.push_number(3.0).unwrap();
                 assert_eq!((a.top(), b.top(), frame.len()), (1, 1, 1));
                 Ok(())
             })

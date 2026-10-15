@@ -177,7 +177,7 @@ pub fn describe_value(value: ValueView<'_>, max_length: usize) -> String {
 }
 
 /// Shortest round-trip text for a double, as `std::to_chars` prints it.
-fn format_number(number: f64) -> String {
+pub(crate) fn format_number(number: f64) -> String {
     if number.is_finite() && number.fract() == 0.0 && number.abs() < 1e15 {
         // to_chars prints whole doubles without a fraction.
         return format!("{}", number as i64);

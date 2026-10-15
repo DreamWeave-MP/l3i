@@ -32,7 +32,7 @@ fn error_text<R: crate::call::CallResults + std::fmt::Debug, A: crate::call::Pus
 fn nil(runtime: &Runtime) -> Value {
     let stack = runtime.stack();
     let frame = stack.frame();
-    Value::store(frame.push_nil()).unwrap()
+    Value::store(frame.push_nil().unwrap()).unwrap()
 }
 
 #[test]

@@ -839,7 +839,7 @@ end
             let runtime = Runtime::from_plan(&plan).unwrap();
             // A safe environment, as a host ships one: Luau's builtins (buffer.readu32,
             // string.lower) take their fast paths only there.
-            runtime.sandbox_globals();
+            runtime.sandbox_globals().unwrap();
             let function = dispatcher(&runtime);
             function
                 .invoke::<(f64, f64), _>(

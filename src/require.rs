@@ -355,7 +355,7 @@ impl Runtime {
     pub fn register_require_module(&self, path: &str, value: &Value) -> Result<()> {
         let stack = self.stack();
         stack.with_frame(|frame| {
-            frame.push_string(path);
+            frame.push_string(path)?;
             value.push_to(frame)?;
             // SAFETY: the two arguments are on top; registermodule consumes them and may raise.
             unsafe {
@@ -383,7 +383,7 @@ impl Runtime {
     pub fn clear_require_cache_entry(&self, cache_key: &str) -> Result<()> {
         let stack = self.stack();
         stack.with_frame(|frame| {
-            frame.push_string(cache_key);
+            frame.push_string(cache_key)?;
             unsafe {
                 frame.raising(1, 0, |state| {
                     ffi::luarequire_clearcacheentry(state);

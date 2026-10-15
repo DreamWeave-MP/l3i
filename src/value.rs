@@ -371,7 +371,7 @@ mod tests {
     fn string_value(runtime: &Runtime, text: &str) -> Value {
         let stack = runtime.stack();
         let frame = stack.frame();
-        let view = frame.push_string(text);
+        let view = frame.push_string(text).unwrap();
         Value::store(view).unwrap()
     }
 
@@ -446,7 +446,7 @@ mod tests {
         let frame = stack.frame();
         assert!(Value::store(frame.at(1)).is_err());
         assert!(Value::store(frame.at(ffi::LUA_REGISTRYINDEX)).is_err());
-        let nil = Value::store(frame.push_nil()).unwrap();
+        let nil = Value::store(frame.push_nil().unwrap()).unwrap();
         assert!(nil.is_valid());
         assert!(nil.is_nil());
     }
@@ -461,7 +461,7 @@ mod tests {
         {
             let frame = stack.frame();
             let view = table.push_to(&frame).unwrap();
-            frame.push_number(42.0);
+            frame.push_number(42.0).unwrap();
             view.raw_set(&frame, "answer").unwrap();
         }
         runtime.collect_garbage();

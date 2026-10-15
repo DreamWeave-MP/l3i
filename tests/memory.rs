@@ -408,3 +408,36 @@ fn fast_flags_are_introspectable() {
     assert_eq!(memory::fast_int("NoSuchIntAtAll"), None);
     assert!(memory::fast_int("LuauInlineHitsThreshold").is_some());
 }
+
+#[test]
+fn host_pushes_past_the_stack_limit_fail_instead_of_aborting() {
+    let runtime = Runtime::new().unwrap();
+    let stack = runtime.stack();
+    for push in [0, 1, 2] {
+        let error = stack
+            .with_frame(|frame| {
+                for index in 0..100_000 {
+                    match push {
+                        0 => frame.push_number(f64::from(index)).map(drop)?,
+                        1 => frame.push_string("slot").map(drop)?,
+                        _ => frame.push_table(0, 0).map(drop)?,
+                    }
+                }
+                Ok(())
+            })
+            .unwrap_err();
+        assert!(error.to_string().contains("stack overflow"), "{error}");
+        assert_eq!(stack.top(), 0);
+    }
+    let error = stack
+        .with_frame(|frame| {
+            for _ in 0..100_000 {
+                frame.push(&"argument")?;
+            }
+            Ok(())
+        })
+        .unwrap_err();
+    assert!(error.to_string().contains("stack overflow"), "{error}");
+    drop(stack);
+    runtime.exec("local x = 1").unwrap();
+}

@@ -118,7 +118,7 @@ fn with_result_visitor_and_argument_edges() {
     assert_eq!(concat.invoke::<String, _>(&stack, ("hello", "world")).unwrap(), "helloworld");
     let error = add
         .invoke_with(&stack, (2, 3), |frame, _| {
-            frame.push_number(99.0);
+            frame.push_number(99.0).unwrap();
             Err::<(), _>(Error::logic("visitor failure"))
         })
         .unwrap_err();
@@ -172,5 +172,5 @@ fn compiled_source_can_be_invoked_through_a_view() {
     let chunk = runtime.load(&frame, "=value-test", "return 6 * 7", &CompileOptions::default()).unwrap();
     assert_eq!(chunk.as_function().unwrap().invoke::<i32, ()>(&frame, ()).unwrap(), 42);
     assert_eq!(<() as CallResults>::COUNT, 0);
-    assert!(frame.push_number(1.0).as_function().is_err());
+    assert!(frame.push_number(1.0).unwrap().as_function().is_err());
 }

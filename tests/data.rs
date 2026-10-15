@@ -429,7 +429,7 @@ fn native_runtime() -> Option<(Runtime, usize)> {
         eprintln!("no Luau code generator on this platform; skipping");
         return None;
     }
-    runtime.sandbox_globals();
+    runtime.sandbox_globals().unwrap();
     let before = l3i::data::lowering::lowered_sites();
     Some((runtime, before))
 }

@@ -75,7 +75,7 @@ fn runtime_with_probe() -> Runtime {
     {
         let stack = runtime.stack();
         let frame = stack.frame();
-        unsafe { frame.push_c_function(make_probe, std::ptr::null()) };
+        unsafe { frame.push_c_function(make_probe, std::ptr::null()).unwrap() };
         frame.set_global("make_probe").unwrap();
     }
     runtime

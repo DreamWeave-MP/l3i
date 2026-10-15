@@ -477,7 +477,7 @@ pub(crate) fn instantiate(plan: &Rc<RuntimePlan>) -> Result<Runtime> {
     runtime.install_compile_options(compile_options(plan, &members));
     runtime.set_module_members(members);
     if plan.policy.sandbox {
-        runtime.sandbox_globals();
+        runtime.sandbox_globals()?;
     }
     Ok(runtime)
 }

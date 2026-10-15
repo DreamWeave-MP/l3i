@@ -178,25 +178,25 @@ fn atom_catalogues_are_per_vm_and_resolve_every_spelling() {
     {
         let stack = runtime.stack();
         let frame = stack.frame();
-        assert_eq!(direct::atom_of_view(frame.push_string("set")), Some(1025));
-        assert_eq!(direct::atom_of_view(frame.push_string("nothing")), None);
+        assert_eq!(direct::atom_of_view(frame.push_string("set").unwrap()), Some(1025));
+        assert_eq!(direct::atom_of_view(frame.push_string("nothing").unwrap()), None);
     }
     // A second runtime carries its own catalogue; the two never see each other's atoms.
     let other = Runtime::builder().standard_libraries(false).build().unwrap();
     direct::install_atom_callback(&other, AtomCatalogue::try_new([("zzz", 9000), ("name", 5)]).unwrap()).unwrap();
-    other.open_standard_libraries();
+    other.open_standard_libraries().unwrap();
     {
         let stack = other.stack();
         let frame = stack.frame();
-        assert_eq!(direct::atom_of_view(frame.push_string("zzz")), Some(9000));
-        assert_eq!(direct::atom_of_view(frame.push_string("name")), Some(5));
-        assert_eq!(direct::atom_of_view(frame.push_string("get")), None);
+        assert_eq!(direct::atom_of_view(frame.push_string("zzz").unwrap()), Some(9000));
+        assert_eq!(direct::atom_of_view(frame.push_string("name").unwrap()), Some(5));
+        assert_eq!(direct::atom_of_view(frame.push_string("get").unwrap()), None);
     }
     {
         let stack = runtime.stack();
         let frame = stack.frame();
-        assert_eq!(direct::atom_of_view(frame.push_string("name")), Some(1026));
-        assert_eq!(direct::atom_of_view(frame.push_string("zzz")), None);
+        assert_eq!(direct::atom_of_view(frame.push_string("name").unwrap()), Some(1026));
+        assert_eq!(direct::atom_of_view(frame.push_string("zzz").unwrap()), None);
     }
     // One catalogue per VM.
     assert!(direct::install_atom_callback(&other, catalogue()).is_err());

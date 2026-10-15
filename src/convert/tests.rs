@@ -39,21 +39,21 @@ fn integers_convert_by_range_and_numbers_by_rounding() {
         assert!(!too_large.is::<u8>());
         assert!(too_large.read::<u8>().is_err());
 
-        assert_eq!(frame.push_number(1.0).read::<i32>().unwrap(), 1);
-        assert_eq!(frame.push_number(1.5).read::<i32>().unwrap(), 2);
-        assert_eq!(frame.push_number(-1.5).read::<i32>().unwrap(), -2);
-        assert_eq!(frame.push_number(-128.4).read::<i8>().unwrap(), -128);
-        assert_eq!(frame.push_number(127.4).read::<i8>().unwrap(), 127);
-        assert_eq!(frame.push_number(4.0).read::<i32>().unwrap(), 4);
+        assert_eq!(frame.push_number(1.0).unwrap().read::<i32>().unwrap(), 1);
+        assert_eq!(frame.push_number(1.5).unwrap().read::<i32>().unwrap(), 2);
+        assert_eq!(frame.push_number(-1.5).unwrap().read::<i32>().unwrap(), -2);
+        assert_eq!(frame.push_number(-128.4).unwrap().read::<i8>().unwrap(), -128);
+        assert_eq!(frame.push_number(127.4).unwrap().read::<i8>().unwrap(), 127);
+        assert_eq!(frame.push_number(4.0).unwrap().read::<i32>().unwrap(), 4);
 
         for value in [-129.5, -128.5, 127.5, 128.5] {
-            let invalid = frame.push_number(value);
+            let invalid = frame.push_number(value).unwrap();
             assert!(!invalid.is::<i8>(), "{value}");
             let error = invalid.read::<i8>().unwrap_err().to_string();
             assert!(error.ends_with(&format!("number {value} is out of range for i8")), "{error}");
         }
         for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, 1e300] {
-            let invalid = frame.push_number(value);
+            let invalid = frame.push_number(value).unwrap();
             assert!(!invalid.is::<i32>(), "{value}");
             let error = invalid.read::<i32>().unwrap_err().to_string();
             assert!(error.ends_with(&format!("number {value} is out of range for i32")), "{error}");
@@ -62,13 +62,13 @@ fn integers_convert_by_range_and_numbers_by_rounding() {
         }
 
         let two_63 = 2f64.powi(63);
-        assert!(frame.push_number(two_63).read::<i64>().is_err());
-        assert!(frame.push_number(two_63.next_down()).read::<i64>().is_ok());
+        assert!(frame.push_number(two_63).unwrap().read::<i64>().is_err());
+        assert!(frame.push_number(two_63.next_down()).unwrap().read::<i64>().is_ok());
         let two_64 = 2f64.powi(64);
-        assert!(frame.push_number(two_64).read::<u64>().is_err());
-        assert!(frame.push_number(two_64.next_down()).read::<u64>().is_ok());
+        assert!(frame.push_number(two_64).unwrap().read::<u64>().is_err());
+        assert!(frame.push_number(two_64.next_down()).unwrap().read::<u64>().is_ok());
 
-        let huge = frame.push_number(f64::MAX);
+        let huge = frame.push_number(f64::MAX).unwrap();
         assert!(!huge.is::<f32>());
         assert_eq!(
             huge.read::<f32>().unwrap_err(),
@@ -90,11 +90,11 @@ fn integers_convert_by_range_and_numbers_by_rounding() {
 #[test]
 fn floats_keep_nan_and_infinity_but_reject_out_of_range_finite_values() {
     with_frame(|frame| {
-        assert!(frame.push_number(f64::INFINITY).is::<f32>());
-        assert!(frame.push_number(f64::INFINITY).read::<f32>().unwrap().is_infinite());
-        assert!(frame.push_number(f64::NAN).is::<f32>());
-        assert!(frame.push_number(f64::NAN).read::<f32>().unwrap().is_nan());
-        assert!(frame.push_number(f64::MAX).read::<f32>().is_err());
+        assert!(frame.push_number(f64::INFINITY).unwrap().is::<f32>());
+        assert!(frame.push_number(f64::INFINITY).unwrap().read::<f32>().unwrap().is_infinite());
+        assert!(frame.push_number(f64::NAN).unwrap().is::<f32>());
+        assert!(frame.push_number(f64::NAN).unwrap().read::<f32>().unwrap().is_nan());
+        assert!(frame.push_number(f64::MAX).unwrap().read::<f32>().is_err());
         assert_eq!(frame.push(&2.5f32).unwrap().read::<f32>().unwrap(), 2.5);
         assert_eq!(frame.push(&2.5f64).unwrap().read::<f64>().unwrap(), 2.5);
     });
@@ -104,17 +104,17 @@ fn floats_keep_nan_and_infinity_but_reject_out_of_range_finite_values() {
 fn numeric_strings_never_convert_to_integral_and_numbers_never_to_strings() {
     with_frame(|frame| {
         for text in ["5", " 5 ", "0x10"] {
-            let value = frame.push_string(text);
+            let value = frame.push_string(text).unwrap();
             assert!(!value.is::<i32>(), "{text}");
             assert!(value.read::<i32>().unwrap_err().to_string().ends_with("expected number, got string"));
             assert!(value.read::<i64>().unwrap_err().to_string().ends_with("expected number, got string"));
             assert!(value.read::<f64>().unwrap_err().to_string().ends_with("expected number, got string"));
         }
-        let number = frame.push_number(5.0);
+        let number = frame.push_number(5.0).unwrap();
         assert!(number.read::<String>().unwrap_err().to_string().ends_with("expected string, got number"));
         assert!(number.read::<&str>().is_err());
         assert!(number.read::<bool>().unwrap_err().to_string().ends_with("expected boolean, got number"));
-        let text = frame.push_string("héllo");
+        let text = frame.push_string("héllo").unwrap();
         assert_eq!(text.read::<&str>().unwrap(), "héllo");
         assert_eq!(text.read::<&[u8]>().unwrap(), "héllo".as_bytes());
         assert_eq!(text.read::<String>().unwrap(), "héllo");
@@ -129,14 +129,14 @@ fn numeric_strings_never_convert_to_integral_and_numbers_never_to_strings() {
 fn booleans_are_exact_and_options_map_nil() {
     with_frame(|frame| {
         assert!(frame.push(&true).unwrap().read::<bool>().unwrap());
-        assert!(frame.push_number(1.0).read::<bool>().is_err());
+        assert!(frame.push_number(1.0).unwrap().read::<bool>().is_err());
         assert_eq!(frame.push(&None::<i32>).unwrap().type_of(), Type::Nil);
-        assert_eq!(frame.push_nil().read::<Option<i32>>().unwrap(), None);
+        assert_eq!(frame.push_nil().unwrap().read::<Option<i32>>().unwrap(), None);
         assert_eq!(frame.push(&Some(3i32)).unwrap().read::<Option<i32>>().unwrap(), Some(3));
-        assert!(frame.push_string("x").read::<Option<i32>>().is_err());
+        assert!(frame.push_string("x").unwrap().read::<Option<i32>>().is_err());
         assert!(frame.at(500).read::<Option<i32>>().is_err(), "absence is not nil");
         assert!(frame.at(500).read::<crate::stack::ValueView<'_>>().is_err());
-        assert!(frame.push_nil().read::<crate::stack::ValueView<'_>>().is_ok());
+        assert!(frame.push_nil().unwrap().read::<crate::stack::ValueView<'_>>().is_ok());
     });
 }
 
@@ -199,7 +199,13 @@ fn vectors_and_buffers_are_first_class() {
         assert_eq!(v.read::<Vector3>().unwrap(), Vector3::new(1.0, 2.5, -3.0));
         assert!(v.read::<f64>().unwrap_err().to_string().ends_with("expected number, got vector"));
         assert!(
-            frame.push_number(1.0).read::<Vector3>().unwrap_err().to_string().ends_with("expected vector, got number")
+            frame
+                .push_number(1.0)
+                .unwrap()
+                .read::<Vector3>()
+                .unwrap_err()
+                .to_string()
+                .ends_with("expected vector, got number")
         );
 
         let buffer = new_buffer(frame, 16).unwrap();
@@ -221,7 +227,7 @@ fn vectors_and_buffers_are_first_class() {
         assert!(slot.is_buffer() && slot.is::<BufferView<'_>>());
         let again = slot.read::<BufferView<'_>>().unwrap();
         assert_eq!(again.read_u8(15).unwrap(), 0xAB);
-        assert!(frame.push_number(1.0).read::<BufferView<'_>>().is_err());
+        assert!(frame.push_number(1.0).unwrap().read::<BufferView<'_>>().is_err());
     });
 }
 

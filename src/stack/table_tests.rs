@@ -38,7 +38,7 @@ fn integer_and_number_keys_are_checked_and_distinct() {
     assert_eq!(table.len(&frame).unwrap(), 2);
 
     let out_of_range = i64::from(i32::MAX) + 1;
-    frame.push_nil();
+    frame.push_nil().unwrap();
     assert_eq!(
         table.raw_set_index(&frame, out_of_range).unwrap_err(),
         Error::logic("Lua table integer key exceeds the supported range")

@@ -94,7 +94,7 @@ fn activation_records_locals_arguments_and_upvalues_are_readable_from_a_bound_fu
             );
             let (name, value) = frame.upvalue(view, 1).expect("upvalue n");
             assert_eq!((name.as_str(), value.read::<i32>()?), ("n", 10));
-            frame.push_number(100.0);
+            frame.push_number(100.0).unwrap();
             assert_eq!(frame.set_upvalue(view, 1).as_deref(), Some("n"));
             Ok(())
         })

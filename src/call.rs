@@ -260,6 +260,7 @@ impl Function {
     /// `R::COUNT` results. Extra results are dropped, missing ones read as nil.
     pub fn invoke<R: CallResults, A: PushArgs>(&self, scope: &impl Scope, args: A) -> Result<R> {
         self.prepare(scope, |call| {
+            crate::stack::reserve(call.state(), A::COUNT + 1 + R::COUNT.max(0))?;
             let function_index = self.value().push_to(call)?.index();
             args.push_all(call)?;
             perform_pcall(call, function_index, A::COUNT, R::COUNT, ErrorStyle::Pinned)?;
@@ -293,6 +294,7 @@ impl Function {
         visitor: impl FnOnce(&Frame<'_>, ValueView<'_>) -> Result<R>,
     ) -> Result<R> {
         self.prepare(scope, |call| {
+            crate::stack::reserve(call.state(), A::COUNT + 1)?;
             let function_index = self.value().push_to(call)?.index();
             args.push_all(call)?;
             perform_pcall(call, function_index, A::COUNT, 1, ErrorStyle::Pinned)?;
@@ -305,6 +307,7 @@ impl Function {
     pub fn invoke_multi<A: PushArgs>(&self, scope: &impl Scope, args: A) -> Result<Vec<Value>> {
         const MAX_RESULTS: c_int = 256;
         self.prepare(scope, |call| {
+            crate::stack::reserve(call.state(), A::COUNT + 1)?;
             let function_index = self.value().push_to(call)?.index();
             args.push_all(call)?;
             let count = perform_pcall(call, function_index, A::COUNT, ffi::LUA_MULTRET, ErrorStyle::Pinned)?;

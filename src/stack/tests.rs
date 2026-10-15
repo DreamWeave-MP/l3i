@@ -10,11 +10,11 @@ fn negative_indexes_resolve_against_the_current_top() {
     with_stack(|stack| {
         let frame = stack.frame();
         let base = frame.floor();
-        frame.push_number(1.0);
-        frame.push_number(2.0);
+        frame.push_number(1.0).unwrap();
+        frame.push_number(2.0).unwrap();
         let second = frame.at(-1);
         assert_eq!(second.index(), base + 2);
-        frame.push_number(3.0);
+        frame.push_number(3.0).unwrap();
         // The view still names slot base+2 after another push.
         assert_eq!(second.type_of(), Type::Number);
         assert_eq!(frame.at(0).type_of(), Type::None);
@@ -30,24 +30,24 @@ fn frames_restore_the_entry_height_and_never_grow() {
         let base = stack.top();
         {
             let frame = stack.frame();
-            frame.push_nil();
-            frame.push_boolean(true);
+            frame.push_nil().unwrap();
+            frame.push_boolean(true).unwrap();
             assert_eq!(frame.len(), 2);
         }
         assert_eq!(stack.top(), base);
 
         let mut frame = stack.frame();
-        frame.push_nil();
+        frame.push_nil().unwrap();
         frame.release();
         drop(frame);
         assert_eq!(stack.top(), base + 1, "a released frame leaves its value behind");
 
         // Nested frames close in order, each to its own floor.
         let outer = stack.frame();
-        outer.push_number(1.0);
+        outer.push_number(1.0).unwrap();
         {
             let inner = outer.frame();
-            inner.push_number(2.0);
+            inner.push_number(2.0).unwrap();
             assert_eq!(inner.len(), 1);
         }
         assert_eq!(outer.len(), 1);
@@ -78,10 +78,10 @@ fn a_new_frame_may_open_once_the_previous_one_closed() {
     with_stack(|stack| {
         {
             let first = stack.frame();
-            first.push_nil();
+            first.push_nil().unwrap();
         }
         let second = stack.frame();
-        second.push_nil();
+        second.push_nil().unwrap();
         assert_eq!(second.len(), 1);
     });
 }
@@ -90,10 +90,10 @@ fn a_new_frame_may_open_once_the_previous_one_closed() {
 fn pop_is_clamped_to_the_frame_floor() {
     with_stack(|stack| {
         let outer = stack.frame();
-        outer.push_number(1.0);
+        outer.push_number(1.0).unwrap();
         let mut inner = outer.frame();
-        inner.push_number(2.0);
-        inner.push_number(3.0);
+        inner.push_number(2.0).unwrap();
+        inner.push_number(3.0).unwrap();
         inner.pop(-5);
         assert_eq!(inner.len(), 2);
         inner.pop(50);
@@ -107,9 +107,9 @@ fn preserve_top_keeps_only_the_top_value() {
     with_stack(|stack| {
         let base = stack.top();
         let mut frame = stack.frame();
-        frame.push_number(1.0);
-        frame.push_number(2.0);
-        frame.push_string("error object");
+        frame.push_number(1.0).unwrap();
+        frame.push_number(2.0).unwrap();
+        frame.push_string("error object").unwrap();
         frame.preserve_top_and_release();
         drop(frame);
         assert_eq!(stack.top(), base + 1);
@@ -123,7 +123,7 @@ fn with_frame_rebalances_on_success_and_error() {
         let base = stack.top();
         let count = stack
             .with_frame(|frame| {
-                frame.push_number(7.0);
+                frame.push_number(7.0).unwrap();
                 Ok(frame.len())
             })
             .unwrap();
@@ -132,7 +132,7 @@ fn with_frame_rebalances_on_success_and_error() {
 
         let error = stack
             .with_frame(|frame| {
-                frame.push_number(7.0);
+                frame.push_number(7.0).unwrap();
                 Err::<(), _>(Error::runtime("nope"))
             })
             .unwrap_err();
@@ -146,9 +146,9 @@ fn tables_get_and_set_through_frames() {
     with_stack(|stack| {
         let frame = stack.frame();
         let table = frame.push_table(0, 2).unwrap();
-        frame.push_number(5.0);
+        frame.push_number(5.0).unwrap();
         table.raw_set(&frame, "five").unwrap();
-        frame.push_string("text");
+        frame.push_string("text").unwrap();
         table.set(&frame, "word").unwrap();
         assert_eq!(frame.len(), 1, "stores consumed their values");
 
@@ -168,7 +168,7 @@ fn tables_get_and_set_through_frames() {
         table.set_read_only(true).unwrap();
         assert!(table.is_read_only());
 
-        frame.push_number(1.0);
+        frame.push_number(1.0).unwrap();
         let error = table.raw_set(&frame, "frozen").unwrap_err();
         assert_eq!(error.to_string(), "attempt to modify a readonly table", "host-level raises become errors");
         assert_eq!(frame.len(), 1, "the failed store still consumed its operands");
@@ -177,7 +177,7 @@ fn tables_get_and_set_through_frames() {
             let empty = frame.frame();
             assert!(table.set(&empty, "nothing").is_err(), "storing with no value on the frame is a logic error");
         }
-        let error = frame.push_boolean(false).as_table().unwrap_err();
+        let error = frame.push_boolean(false).unwrap().as_table().unwrap_err();
         assert_eq!(error.to_string(), format!("Lua stack index {}: expected table, got boolean", frame.top()));
     });
 }
@@ -187,7 +187,7 @@ fn registry_pseudo_index_cannot_be_assigned() {
     with_stack(|stack| {
         let frame = stack.frame();
         let registry = frame.at(ffi::LUA_REGISTRYINDEX).as_table().unwrap();
-        frame.push_nil();
+        frame.push_nil().unwrap();
         assert!(registry.raw_set(&frame, "x").is_err());
     });
 }
@@ -195,10 +195,10 @@ fn registry_pseudo_index_cannot_be_assigned() {
 #[test]
 fn call_level_pushes_survive_frames_opened_after_them() {
     with_stack(|stack| {
-        let result = stack.push_number(42.0);
+        let result = stack.push_number(42.0).unwrap();
         {
             let frame = stack.frame();
-            frame.push_string("scratch");
+            frame.push_string("scratch").unwrap();
             assert_eq!(result.type_of(), Type::Number);
         }
         assert_eq!(result.type_of(), Type::Number);

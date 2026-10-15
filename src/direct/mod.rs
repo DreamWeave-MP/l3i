@@ -175,7 +175,7 @@ pub fn install_atom_callback(runtime: &Runtime, catalogue: AtomCatalogue) -> Res
         (*callbacks).useratom = Some(user_atom);
         let verified = stack.with_frame(|frame| {
             for (name, atom) in catalogue.entries() {
-                let view = frame.push_string(name);
+                let view = frame.push_string(name)?;
                 let mut resolved: c_int = UNKNOWN_ATOM as c_int;
                 // SAFETY: the string is on the frame.
                 let text = ffi::lua_tostringatom(frame.state(), view.index(), &mut resolved);

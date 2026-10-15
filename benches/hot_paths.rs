@@ -151,7 +151,7 @@ fn runtime() -> Runtime {
         frame.set_global("untagged").unwrap();
         tagged::push(&frame, Sequence).unwrap();
         frame.set_global("sequence").unwrap();
-        unsafe { frame.push_c_function(raw_add, c"dreamweave.bench.rawAdd".as_ptr()) };
+        unsafe { frame.push_c_function(raw_add, c"dreamweave.bench.rawAdd".as_ptr()).unwrap() };
         frame.set_global("raw_add").unwrap();
     }
     let typed = runtime.bind_function("dreamweave.bench.typedAdd", |a: f64, b: f64| a + b).unwrap();

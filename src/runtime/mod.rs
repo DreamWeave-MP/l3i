@@ -215,6 +215,8 @@ impl RuntimeBuilder {
             compile_options: RefCell::new(CompileOptions::default()),
             module_members: RefCell::new(None),
         };
+        // SAFETY: the fresh main thread; every later host-level raise goes through this thunk.
+        runtime.shared.set_protected_thunk(unsafe { crate::raw::protect::install_thunk(state) }?);
         // SAFETY: the state has its pointer key and callbacks; native execution must be set up
         // before any function is loaded, which nothing below this point does before it.
         #[cfg(feature = "jit")]
@@ -226,7 +228,7 @@ impl RuntimeBuilder {
             crate::direct::install_atom_callback(&runtime, catalogue)?;
         }
         if self.standard_libraries {
-            runtime.open_standard_libraries();
+            runtime.open_standard_libraries()?;
         }
         // The binder reads argument slots through a mirror of Luau's value layout; prove the
         // mirror against this build's API before any binding trusts it.
@@ -441,9 +443,18 @@ impl Runtime {
     }
 
     /// Opens every Luau standard library (`luaL_openlibs`). Idempotent in effect; call once.
-    pub fn open_standard_libraries(&self) {
-        // SAFETY: live state; openlibs raises only on out of memory.
-        unsafe { ffi::luaL_openlibs(self.state) };
+    ///
+    /// # Errors
+    /// Running out of memory, under the runtime's memory limit or the system's.
+    pub fn open_standard_libraries(&self) -> Result<()> {
+        // SAFETY: live main thread at host level; openlibs raises only on out of memory, which
+        // the protected call turns into `Err`.
+        unsafe {
+            crate::raw::protect::protected_call(self.state, 0, 0, |state| {
+                ffi::luaL_openlibs(state);
+                0
+            })
+        }
     }
 
     /// Runs a full collection cycle. Rust destructors of unreachable userdata run inside.
@@ -616,9 +627,17 @@ impl Runtime {
 
     /// `luaL_sandbox`: globals and the standard library tables become read-only and the
     /// globals table a safe environment. Call after every module is installed.
-    pub fn sandbox_globals(&self) {
-        // SAFETY: live main thread; luaL_sandbox raises only on out of memory.
-        unsafe { ffi::luaL_sandbox(self.state) };
+    ///
+    /// # Errors
+    /// Running out of memory.
+    pub fn sandbox_globals(&self) -> Result<()> {
+        // SAFETY: live main thread at host level; luaL_sandbox raises only on out of memory.
+        unsafe {
+            crate::raw::protect::protected_call(self.state, 0, 0, |state| {
+                ffi::luaL_sandbox(state);
+                0
+            })
+        }
     }
 
     /// Compiles and runs `source`, which must return one function, and pins that function.
@@ -729,7 +748,7 @@ mod tests {
         let runtime = Runtime::builder().standard_libraries(false).build().unwrap();
         runtime.exec("return 1").unwrap();
         assert!(runtime.exec("assert(true)").unwrap_err().to_string().contains("attempt to call a nil value"));
-        runtime.open_standard_libraries();
+        runtime.open_standard_libraries().unwrap();
         runtime.exec("assert(true)").unwrap();
     }
 

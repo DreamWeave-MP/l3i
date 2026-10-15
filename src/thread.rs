@@ -61,8 +61,15 @@ impl Runtime {
     pub fn new_thread(&self) -> Result<Thread> {
         let stack = self.stack();
         stack.with_frame(|frame| {
-            // SAFETY: lua_newthread pushes the thread; the frame pops it after pinning.
-            let state = unsafe { ffi::lua_newthread(frame.state()) };
+            // SAFETY: lua_newthread pushes the thread, protected at host level since it allocates;
+            // the frame pops it after pinning.
+            unsafe {
+                frame.raising(0, 1, |state| {
+                    ffi::lua_newthread(state);
+                    1
+                })?;
+            }
+            let state = unsafe { ffi::lua_tothread(frame.state(), -1) };
             if state.is_null() {
                 return Err(Error::runtime("Unable to allocate a Lua thread"));
             }
@@ -246,9 +253,19 @@ impl Thread {
     /// (frozen) main globals.
     pub fn sandbox(&self, scope: &impl Scope) -> Result<()> {
         self.require_live(scope)?;
-        // SAFETY: live thread; the helper only touches this thread's globals slot.
-        unsafe { ffi::luaL_sandboxthread(self.state) };
-        Ok(())
+        let thread = self.state;
+        // SAFETY: live thread; lua_status only reads it.
+        if unsafe { ffi::lua_status(thread) } != ffi::LUA_OK {
+            return Err(Error::logic("Cannot sandbox a Lua thread that is suspended or failed"));
+        }
+        // SAFETY: an idle live thread; the helper allocates this thread's globals proxy, so it
+        // runs protected, on the thread itself.
+        unsafe {
+            crate::raw::protect::protected_call(thread, 0, 0, |_| {
+                ffi::luaL_sandboxthread(thread);
+                0
+            })
+        }
     }
 
     /// Host data attached to the thread; null when none. (Luau's own `lua_setthreaddata` slot

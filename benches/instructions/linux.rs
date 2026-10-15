@@ -166,7 +166,7 @@ fn runtime() -> Runtime {
         .stack()
         .with_frame(|frame| {
             // SAFETY: a plain C function with a static debug name.
-            unsafe { frame.push_c_function(raw_add, c"dream.bench.rawAdd".as_ptr()) };
+            unsafe { frame.push_c_function(raw_add, c"dream.bench.rawAdd".as_ptr()).unwrap() };
             frame.set_global("raw_add")
         })
         .unwrap();

@@ -22,7 +22,8 @@
 //!
 //! Error model: Luau raises C++ exceptions. Inside a native call they unwind through the
 //! binding's Rust frames to Luau's `pcall`; a Rust panic inside a native call aborts. Host-level
-//! code never sees a Luau raise: operations that can raise run under `lua_pcall` there.
+//! code never sees a Luau raise: operations that can raise, out of memory included, run under
+//! `lua_pcall` there, and every push checks the stack has room before it writes.
 
 // Pedantic Clippy policy. The shared CI runs `-W clippy::pedantic -D warnings`; the groups
 // below are deliberate in an FFI binder, each for the stated reason. Everything else pedantic

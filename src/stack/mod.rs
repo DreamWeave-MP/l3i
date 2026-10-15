@@ -56,6 +56,8 @@ pub trait Scope: sealed::Sealed {
     fn at(&self, index: c_int) -> ValueView<'_>;
     /// Opens a temporary frame on this scope.
     fn frame(&self) -> Frame<'_>;
+    /// True outside any Lua call, where a raise has no `pcall` above it to land in.
+    fn is_host_level(&self) -> bool;
     /// The most recently pushed value.
     fn top_value(&self) -> ValueView<'_> {
         self.at(-1)
@@ -84,6 +86,9 @@ impl Scope for Stack<'_> {
     fn frame(&self) -> Frame<'_> {
         Stack::frame(self)
     }
+    fn is_host_level(&self) -> bool {
+        self.host_level
+    }
 }
 
 impl Scope for Frame<'_> {
@@ -95,6 +100,9 @@ impl Scope for Frame<'_> {
     }
     fn frame(&self) -> Frame<'_> {
         Frame::frame(self)
+    }
+    fn is_host_level(&self) -> bool {
+        Frame::is_host_level(self)
     }
 }
 
@@ -228,32 +236,40 @@ impl<'vm> Stack<'vm> {
     }
 
     // Pushes at the call level: results of a native function, or host setup before any frame.
-    // Nothing pops these within the current scope, so their views borrow the stack.
+    // Nothing pops these within the current scope, so their views borrow the stack. Each checks
+    // the stack has room and runs allocating pushes protected at host level, so a push fails
+    // with `Err` instead of raising past the host.
 
-    pub fn push_nil(&self) -> ValueView<'_> {
+    pub fn push_nil(&self) -> Result<ValueView<'_>> {
         self.assert_no_open_frame();
-        // SAFETY: live state; Luau guarantees LUA_MINSTACK free slots on entry and callers use
-        // `check` before pushing more than that.
+        reserve(self.state, 1)?;
         unsafe { ffi::lua_pushnil(self.state) };
-        self.at(-1)
+        Ok(self.at(-1))
     }
 
-    pub fn push_boolean(&self, value: bool) -> ValueView<'_> {
+    pub fn push_boolean(&self, value: bool) -> Result<ValueView<'_>> {
         self.assert_no_open_frame();
+        reserve(self.state, 1)?;
         unsafe { ffi::lua_pushboolean(self.state, c_int::from(value)) };
-        self.at(-1)
+        Ok(self.at(-1))
     }
 
-    pub fn push_number(&self, value: f64) -> ValueView<'_> {
+    pub fn push_number(&self, value: f64) -> Result<ValueView<'_>> {
         self.assert_no_open_frame();
+        reserve(self.state, 1)?;
         unsafe { ffi::lua_pushnumber(self.state, value) };
-        self.at(-1)
+        Ok(self.at(-1))
     }
 
-    pub fn push_string(&self, value: &str) -> ValueView<'_> {
+    pub fn push_string(&self, value: &str) -> Result<ValueView<'_>> {
         self.assert_no_open_frame();
-        unsafe { ffi::lua_pushlstring(self.state, value.as_ptr().cast(), value.len()) };
-        self.at(-1)
+        // SAFETY: lua_pushlstring copies `value`.
+        unsafe {
+            push_allocating(self.state, self.host_level, |state| {
+                ffi::lua_pushlstring(state, value.as_ptr().cast(), value.len());
+            })?;
+        }
+        Ok(self.at(-1))
     }
 
     /// Pushes a copy of `value`, which must belong to this stack.
@@ -267,10 +283,69 @@ impl<'vm> Stack<'vm> {
     ///
     /// # Safety
     /// `debug_name` is null or a pointer that stays valid until the VM closes.
-    pub unsafe fn push_c_function(&self, function: ffi::lua_CFunction, debug_name: *const c_char) -> ValueView<'_> {
+    pub unsafe fn push_c_function(
+        &self,
+        function: ffi::lua_CFunction,
+        debug_name: *const c_char,
+    ) -> Result<ValueView<'_>> {
         self.assert_no_open_frame();
-        unsafe { ffi::lua_pushcfunction(self.state, function, debug_name) };
-        self.at(-1)
+        // SAFETY: forwarded contract.
+        unsafe {
+            push_allocating(self.state, self.host_level, |state| {
+                ffi::lua_pushcfunction(state, function, debug_name);
+            })?;
+        }
+        Ok(self.at(-1))
+    }
+}
+
+/// Ensures `slots` free slots on `state` without raising (`lua_checkstack`). Luau guarantees only
+/// `LUA_MINSTACK` on entry, and pushing past the end of the stack corrupts memory.
+pub(crate) fn reserve(state: *mut ffi::lua_State, slots: c_int) -> Result<()> {
+    // SAFETY: a live state; lua_checkstack never raises.
+    if unsafe { ffi::lua_checkstack(state, slots) } == 0 {
+        return Err(Error::runtime("Lua error: stack overflow"));
+    }
+    Ok(())
+}
+
+/// Runs a push that allocates and so can raise out of memory: directly inside a Lua call, where
+/// the raise unwinds to Luau's `pcall`, and under [`crate::raw::protect::protected_call`] at
+/// host level, where it becomes `Err`.
+///
+/// # Safety
+/// `state` is live and `push` pushes exactly one value.
+pub(crate) unsafe fn push_allocating(
+    state: *mut ffi::lua_State,
+    host_level: bool,
+    push: impl FnOnce(*mut ffi::lua_State),
+) -> Result<()> {
+    reserve(state, 1)?;
+    if !host_level {
+        push(state);
+        return Ok(());
+    }
+    // SAFETY: forwarded contract; lua_status and lua_mainthread only read.
+    unsafe {
+        if ffi::lua_status(state) == ffi::LUA_OK {
+            return crate::raw::protect::protected_call(state, 0, 1, |state| {
+                push(state);
+                1
+            });
+        }
+        // A suspended coroutine can't run a pcall: make the value on the main thread, under
+        // protection there, and move it across (lua_xmove doesn't allocate).
+        let main = ffi::lua_mainthread(state);
+        if ffi::lua_status(main) != ffi::LUA_OK {
+            push(state);
+            return Ok(());
+        }
+        crate::raw::protect::protected_call(main, 0, 1, |main| {
+            push(main);
+            1
+        })?;
+        ffi::lua_xmove(main, state, 1);
+        Ok(())
     }
 }
 
