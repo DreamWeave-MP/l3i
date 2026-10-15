@@ -277,7 +277,8 @@ fn shutdown_flushes_writers_a_script_never_closed() {
 
 #[test]
 fn paths_join_and_come_apart_without_a_capability() {
-    let separator = std::path::MAIN_SEPARATOR;
+    // Windows' separator is a backslash, which a Luau string literal needs escaped.
+    let separator = std::path::MAIN_SEPARATOR.escape_default();
     runtime_with(&[])
         .exec(&format!(
             "local sep = '{separator}' \
