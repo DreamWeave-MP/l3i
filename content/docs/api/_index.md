@@ -80,9 +80,11 @@ crate returns. [The raw C API](@/docs/api/ffi.md) covers `ffi` and the two VM co
   as the Lua error the script sees. `Error::LuaErrorOnStack` re-raises the error object already
   on top instead of replacing it with a message. `Error::Permission` is a capability the
   runtime policy did not grant, kept apart from `Runtime` so a denial never reads as an
-  operating-system failure. Host-level calls that could raise (a `__index` metamethod, a store
-  into a read-only table) run under `lua_pcall` and come back as `Err`; the same call inside a
-  native call raises straight through to Luau's `pcall`.
+  operating-system failure. `Error::ExecutionTimeLimit` and `Error::MemoryLimit` say a runtime
+  limit ended the call (`Error::is_limit`). Host-level calls that could raise (a `__index`
+  metamethod, a store into a read-only table, a push that runs out of memory or stack) run under
+  `lua_pcall` or check first and come back as `Err`; the same call inside a native call raises
+  straight through to Luau's `pcall`.
 - **Frames.** `Stack` is the exclusive handle to a thread's stack and never pops. Temporaries go
   through a `Frame`, and every view a frame returns borrows the frame. A scope has at most one
   open child frame: opening a sibling panics at its opening line. Inside a bound function read

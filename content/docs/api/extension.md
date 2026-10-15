@@ -337,6 +337,7 @@ provider's `install` adds, then frozen by the planner.
 |---|---|
 | `fn path(&self) -> &str`, `fn table(&self) -> &Table` | |
 | `fn function<F: Binding<M>, M>(&mut self, name: &str, callable: F) -> Result<&mut Self>` | Binds `callable` as the declared install-time member `name` |
+| `fn gated<F: Binding<M>, M>(&mut self, name: &str, capability: &str, granted: bool, callable: F) -> Result<&mut Self>` | Binds `callable` as `name` when `granted`, otherwise a stub raising `Error::denied` for `capability`: the member exists, typed, either way |
 | `fn set<T: Push + ?Sized>(&mut self, name: &str, value: &T) -> Result<&mut Self>` | Any other value for a declared install-time member (a nested table, a userdata instance); unknown to the compiler |
 
 A name the plan did not declare with `installed`, a declared function or constant, or a member

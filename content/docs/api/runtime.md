@@ -26,15 +26,15 @@ initialization category 0, no atom catalogue, no buffer cage, no native code.
 | `fn debug_roots<R: AsRef<str>>(self, roots: &[R]) -> Self` | Root vocabulary for debug names. Every native function and userdata type registered into the VM must be named under one of these |
 | `fn pointer_encoding(self, enabled: bool) -> Self` | Seed Luau's pointer-encoding key from OS entropy right after the state is created. Off leaves Luau's identity mapping, for deterministic test fixtures only |
 | `fn standard_libraries(self, enabled: bool) -> Self` | Whether `build` opens Luau's standard libraries. Hosts that must install callbacks first turn it off and call `Runtime::open_standard_libraries` |
-| `fn execution_time_limit(self, limit: Duration) -> Self` | Wall-clock budget per outermost script call, enforced at Luau safepoints. Zero disables |
-| `fn memory_limit(self, bytes: usize) -> Self` | Heap ceiling in bytes across every memory category, polled every 64th safepoint, not enforced by the allocator: a script can overshoot by what it allocates between two polls. Zero disables |
+| `fn execution_time_limit(self, limit: Duration) -> Self` | Wall-clock budget per outermost call into Luau, enforced at Luau safepoints and sticky once it runs out: every safepoint raises until the scope that armed it ends. Every host entry into Luau opens an implicit `HostInterface` scope when none is active, so it applies to all of them. Zero disables |
+| `fn memory_limit(self, bytes: usize) -> Self` | Heap ceiling in bytes across every memory category, enforced by the VM's allocator: a growth past it fails at the allocation (`Error::MemoryLimit` at the host), host-level setup included. Buffers behind a `BufferCage` and memory native extensions allocate from Rust are outside it. Zero disables |
 | `fn profiler(self, enabled: bool) -> Self` | Time script calls, switch memory categories per call, record allocation activity |
 | `fn initialization_category(self, category: MemoryCategory) -> Self` | The category charged while sandboxes and templates are set up. Default 0 |
 | `fn atom_catalogue(self, catalogue: AtomCatalogue) -> Self` | This VM's [atom catalogue](@/docs/api/direct.md), installed before the standard libraries open |
 | `fn buffer_cage(self, cage: impl BufferCage) -> Self` | Routes every `buffer` allocation through `cage` (`lua_setmemorycage`), installed before any buffer exists |
 | `fn coroutine_finalizers(self, enabled: bool) -> Self` | Luau's coroutine finalizers: `coroutine.finally` for scripts, `Thread::add_finalizer` and `Thread::finalizer_function` for the host. Off by default. Luau's flag is process-wide, so the first runtime built decides: asking after a runtime was built without them fails `build`, and once one runtime has them every later one does. `flags::coroutine_finalizers()` reports the decision |
 | `fn native_code(self, options: NativeCodeOptions) -> Self` | Feature `jit`: enables native code generation with `options`. Off by default |
-| `fn build(self) -> Result<Runtime>` | Creates the VM in the C++ binder's order: flag policy, `luaL_newstate`, pointer key, buffer cage, per-VM state and callbacks, native code, atom catalogue, standard libraries, the value-layout self test, l3i's packed kinds |
+| `fn build(self) -> Result<Runtime>` | Creates the VM in the C++ binder's order: flag policy, `lua_newstate` with the counting allocator, pointer key, buffer cage, per-VM state and callbacks, native code, atom catalogue, standard libraries, the value-layout self test, l3i's packed kinds |
 
 Errors from `build`: the flag policy names a flag this Luau build lacks (`Error::Logic`),
 coroutine finalizers are asked for after a runtime was built without them (`Error::Logic`), the
@@ -122,13 +122,19 @@ debug name under the roots. See `module` on [Binding and userdata](@/docs/api/bi
 
 {{ api_signature(value="fn debug_roots(&self) -> &[Box<str>]") }}
 
-{{ api_signature(value="fn open_standard_libraries(&self)") }}
+{{ api_signature(value="fn open_standard_libraries(&self) -> Result<()>") }}
 
-{{ api_signature(value="fn sandbox_globals(&self)") }}
+{{ api_signature(value="fn sandbox_globals(&self) -> Result<()>") }}
 
 The configured roots; `luaL_openlibs` (call once); `luaL_sandbox`, which makes the globals and
 the standard library tables read-only and the globals table a safe environment, for hosts that
-do not use `Sandbox`.
+do not use `Sandbox`. Both run protected and fail with `Err` when they run out of memory.
+
+{{ api_signature(value="fn shutdown(&self)") }}
+
+Closes every live native resource that buffers what the OS won't finish for it (`@dream/fs`
+writers) without freeing the heap, for a host that exits without dropping the runtime.
+
 
 ### Compile options and the plan
 
@@ -168,7 +174,8 @@ The host's namespace is `insert_state`/`host_state`; extensions store theirs thr
 
 {{ api_signature(value="fn set_limits(&self, limits: Limits)") }}
 
-The watchdog limits; a change takes effect for the next call scope.
+The watchdog limits; a new time limit takes effect for the next call scope, a new memory limit at
+the next allocation.
 
 {{ api_signature(value="fn call_scope(&self, context: CallContext, kind: CallKind) -> CallScope<'_>") }}
 
@@ -279,13 +286,14 @@ What kind of call a scope wraps. `Clone`, `Copy`, `Debug`, `Eq`.
 | Variant | Timed | Time-limited |
 |---|---|---|
 | `ScriptCall` | yes | yes |
-| `Initialization` | no | no |
+| `Initialization` | no | no; the opt-out for a host call that must not be limited |
 | `HostInterface` | no | yes |
 
 {{ api_signature(value="struct CallContext { pub id: u64, pub category: MemoryCategory }") }}
 
 Who is running, for accounting: a host-defined context id and the memory category allocations
-are attributed to. `Clone`, `Copy`, `Debug`, `Eq`.
+are attributed to. `Clone`, `Copy`, `Debug`, `Eq`. `CallContext::HOST` (id 0, category 0) is the
+context of the implicit scope a host call opens when the host opened none.
 
 {{ api_signature(value="struct CallScope<'r>") }}
 
@@ -547,11 +555,16 @@ Freezes the policy. Idempotent and thread-safe. A flag name the linked Luau lack
 Whether this process runs with coroutine finalizers, which the first runtime built decides
 (`RuntimeBuilder::coroutine_finalizers`). False until a runtime exists.
 
+{{ api_signature(value="fn luau_assertions() -> bool") }}
+
+Whether this build of Luau checks its internal assertions (`LUAU_ASSERT`, `api_check`): exactly
+when Rust debug assertions are on.
+
 ## Error
 
 Module `l3i::error`, re-exported from the root.
 
-{{ api_signature(value="enum Error { Logic(String), Runtime(String), LuaErrorOnStack, Permission(String) }") }}
+{{ api_signature(value="enum Error { Logic(String), Runtime(String), LuaErrorOnStack, Permission(String), ExecutionTimeLimit(String), MemoryLimit(String) }") }}
 
 | Variant | Meaning |
 |---|---|
@@ -559,6 +572,8 @@ Module `l3i::error`, re-exported from the root.
 | `Runtime(String)` | An ordinary failure; it becomes the Lua error message when it reaches a native entry point |
 | `LuaErrorOnStack` | The Lua error object is already on top of the stack; the native entry point re-raises it unchanged |
 | `Permission(String)` | A capability the runtime policy did not grant, or a host facility a script may not use |
+| `ExecutionTimeLimit(String)` | The watchdog stopped the call at its execution time limit, whatever the script did with the error |
+| `MemoryLimit(String)` | The allocator refused a growth past the runtime's memory limit |
 
 `Display` prints the message, or `Lua error` for `LuaErrorOnStack`. `Clone`, `Debug`, `Eq`,
 `std::error::Error`.
@@ -568,6 +583,10 @@ Module `l3i::error`, re-exported from the root.
 | `fn logic(message: impl Into<String>) -> Self` | |
 | `fn runtime(message: impl Into<String>) -> Self` | |
 | `fn permission(message: impl Into<String>) -> Self` | |
+| `fn denied(function: &str, capability: &str) -> Self` | The permission error every module raises for a capability the policy lacks |
+
+`fn is_limit(&self) -> bool` is true for `ExecutionTimeLimit` and `MemoryLimit`: a runtime limit,
+not the script or the host, ended the call.
 
 {{ api_signature(value="type Result<T> = std::result::Result<T, Error>") }}
 

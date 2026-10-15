@@ -423,10 +423,10 @@ globals and registry.
 | `fn start<A: PushArgs>(&self, scope: &impl Scope, function: &Function, args: A) -> Result<Resume>` | Runs `function` on this thread with `args` until it yields, returns, breaks or fails. The thread must be idle: fresh, finished normally, or reset |
 | `fn resume<A: PushArgs>(&self, scope: &impl Scope, args: A) -> Result<Resume>` | Resumes a yielded or broken coroutine with `args` as the results of its `yield` |
 | `fn resume_with_error(&self, scope: &impl Scope, message: &str) -> Result<Resume>` | Resumes by raising `message` inside it, as if its `yield` failed |
-| `fn reset(&self) -> Result<()>` | Returns a finished or failed thread to the fresh state |
+| `fn reset(&self) -> Result<()>` | Returns a finished, failed or suspended thread to the fresh state; a thread that is running or resuming another is refused (`Error::Logic`) |
 | `fn is_reset(&self) -> bool` | Fresh or reset, holding no function |
 | `fn with_stack<R>(&self, scope: &impl Scope, body: impl FnOnce(&Stack<'_>) -> Result<R>) -> Result<R>` | Runs `body` with the root stack of this thread, for pushing arguments or reading values between resumes. Panics if a root stack on this thread is already alive |
-| `fn sandbox(&self, scope: &impl Scope) -> Result<()>` | `luaL_sandboxthread`: a writable globals table proxying the frozen main globals |
+| `fn sandbox(&self, scope: &impl Scope) -> Result<()>` | `luaL_sandboxthread`: a writable globals table proxying the frozen main globals. The thread must be idle (status OK); the allocation runs protected |
 | `fn data(&self) -> *mut c_void` | Host data attached to the thread; null when none |
 | `unsafe fn set_data(&self, data: *mut c_void) -> Result<()>` | Attaches host data; the binder only stores the pointer |
 

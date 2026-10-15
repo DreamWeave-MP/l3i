@@ -533,7 +533,7 @@ On `Runtime`:
 | Method | Meaning |
 |---|---|
 | `fn open_library(&self, library: Library) -> Result<()>` | Opens one library selectively; `Base` must come first |
-| `fn sandbox_luau(&self)` | `luaL_sandbox`: freezes every library table and the globals table, marks it safe; `Thread::sandbox` then gives threads writable global proxies |
+| `fn sandbox_luau(&self) -> Result<()>` | `luaL_sandbox`: freezes every library table and the globals table, marks it safe; `Thread::sandbox` then gives threads writable global proxies. Fails with `Err` when it runs out of memory |
 | `fn register_library(&self, name: &str, functions: &[(&str, lua_CFunction)]) -> Result<Table>` | `luaL_register`: creates or reuses the global table `name`, fills it with C functions named `name.function`, returns it pinned |
 | `fn find_table(&self, path: &str) -> Result<Table>` | `luaL_findtable`: the table at dotted `path` under the globals, created along the way; an error names the first segment that is not a table |
 | `fn set_jit_inliner(&self, enabled: bool)` | Luau's experimental inliner for this VM |

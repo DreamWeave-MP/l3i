@@ -31,9 +31,15 @@ while a temporary goes through a frame. Sealed; implemented by `Stack`, `Frame` 
 |---|---|
 | `fn at(&self, index: c_int) -> ValueView<'_>` | A view of slot `index` bound to this scope |
 | `fn frame(&self) -> Frame<'_>` | Opens a temporary frame on this scope |
+| `fn is_host_level(&self) -> bool` | True outside any Lua call, where an allocating push runs protected (always false for `Call`) |
 | `fn top_value(&self) -> ValueView<'_>` | The most recently pushed value (`at(-1)`) |
 | `fn with_frame<R>(&self, body: impl FnOnce(&Frame<'_>) -> Result<R>) -> Result<R>` | Runs `body` inside a temporary frame; the result cannot borrow the frame |
 | `fn push<T: Push + ?Sized>(&self, value: &T) -> Result<ValueView<'_>>` | Pushes a Rust value through its `Push` conversion |
+
+{{ api_signature(value="fn push_list<T>(scope: &impl Scope, items: impl ExactSizeIterator<Item = T>, push: impl FnMut(&Frame<'_>, T) -> Result<()>) -> Result<()>") }}
+
+Pushes `items` as one sequence table, each through `push` onto a frame holding the table; the
+table is left on top of `scope`.
 
 ## Stack
 
