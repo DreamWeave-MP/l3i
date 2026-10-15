@@ -104,7 +104,7 @@ where
             if status == ffi::LUA_OK {
                 return Ok(());
             }
-            Err(crate::runtime::shared::classify_failure(state, pop_error(state, status)))
+            Err(crate::runtime::shared::classify_failure(state, status, pop_error(state, status)))
         })
     }
 }

@@ -1,6 +1,6 @@
 +++
 title = "Runtime options"
-description = "Everything Runtime::builder decides, the watchdog and what its memory limit does and does not promise, memory categories, call scopes, the collector's controls, the profiler and sampler, and the fast-flag policy."
+description = "Everything Runtime::builder decides, the watchdog, the allocator-enforced memory limit and what it counts, memory categories, call scopes, the collector's controls, the profiler and sampler, and the fast-flag policy."
 weight = 50
 
 [extra]
@@ -21,7 +21,7 @@ is entrenched by the constructor.
 | `pointer_encoding(bool)` | on | Whether Luau's pointer-encoding key is seeded from OS entropy right after the state is created, before any table exists. Off leaves Luau's identity map, for deterministic test fixtures only |
 | `standard_libraries(bool)` | on | Whether `build` opens the standard libraries. Hosts that need to install callbacks first turn it off and call `Runtime::open_standard_libraries()` |
 | `execution_time_limit(Duration)` | zero, off | The watchdog's wall-clock budget per outermost call into Luau |
-| `memory_limit(bytes)` | zero, off | The watchdog's heap ceiling across every memory category |
+| `memory_limit(bytes)` | zero, off | The heap ceiling across every memory category, enforced by the allocator |
 | `profiler(bool)` | off | Time script calls, switch memory categories per call, record allocation activity |
 | `initialization_category(MemoryCategory)` | 0 | The category charged while sandboxes and templates are set up |
 | `atom_catalogue(AtomCatalogue)` | none | This VM's atoms, installed before the libraries open; see [Direct access](@/docs/direct-access.md) |
@@ -55,14 +55,20 @@ for a runtime made from an extension plan; see [Extensions](@/docs/extensions.md
 ## The watchdog
 
 Both limits live in `runtime::Limits`, readable with `limits()` and changeable with
-`set_limits`, which takes effect for the next call scope. The interrupt hook runs at Luau's
-safepoints and, every 64th safepoint, polls the deadline and the heap size; when either is
-exceeded it raises a Lua error, as OpenMW does:
+`set_limits`: a new time limit takes effect for the next call scope, a new memory limit at the
+next allocation. The interrupt hook runs at Luau's safepoints and, every 64th safepoint, polls
+the deadline; when it has passed it raises a Lua error, as OpenMW does:
 
 ```text
 Lua execution time limit exceeded after 20 ms
-Lua memory limit exceeded
 ```
+
+The memory limit is the VM's allocator's. Every block Luau allocates goes through a counting
+allocator, and a growth that would take the heap past the limit fails at the allocation with
+Luau's out-of-memory error. A script can catch that with `pcall`; when it reaches the host it is
+`Error::MemoryLimit` (`Lua memory limit exceeded`). Frees and shrinks always succeed, so the
+collector, finalizers and closing the runtime work at any total, and the runtime stays usable
+once the memory is released.
 
 The error unwinds to the nearest `pcall`, comes back to the host as `Err`, and leaves the VM
 usable. The hook ignores the safepoints Luau reports during collection, so a GC step never
@@ -81,11 +87,11 @@ implicit `HostInterface` scope with context `CallContext::HOST` when no scope is
 runtime's limits hold for each of them. An `Initialization` scope is never time-limited: a host
 that genuinely needs an unlimited call opens one around it.
 
-{% callout(kind="warning", title="What the memory limit is") %}
-`memory_limit` is a heap ceiling polled every 64th safepoint, not an allocator cap. A script can
-overshoot it by whatever it allocates between two polls before the error fires. It bounds
-runaway scripts; it is not a hard quota against a hostile one, which would need allocator-level
-policy.
+{% callout(kind="warning", title="What the memory limit counts") %}
+`memory_limit` counts every allocation in the VM, host-level setup and the standard libraries
+included, so leave room for them. It does not count buffers routed through a
+`memory::BufferCage`, or memory a native extension allocates from Rust (`@dream/bytes`,
+`@dream/data`, `@dream/fs` readers): bound those in the extension.
 {% end %}
 
 ## Memory categories

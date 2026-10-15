@@ -201,7 +201,7 @@ fn perform_pcall(
                 }
                 ErrorStyle::Pinned => Error::runtime(format!("Lua error: {message}")),
             };
-            Err(crate::runtime::shared::classify_failure(state, error))
+            Err(crate::runtime::shared::classify_failure(state, status, error))
         })
     }
 }

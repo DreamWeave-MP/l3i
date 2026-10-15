@@ -18,6 +18,8 @@ pub enum Error {
     /// The watchdog stopped the call: its execution time limit ran out. Distinct from `Runtime`
     /// so a host can tell a timeout from a script's own error, whatever the script caught.
     ExecutionTimeLimit(String),
+    /// The call needed memory past the runtime's memory limit, refused at the allocation.
+    MemoryLimit(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -37,7 +39,7 @@ impl Error {
 
     /// True when a runtime limit, not the script or the host, ended the call.
     pub fn is_limit(&self) -> bool {
-        matches!(self, Error::ExecutionTimeLimit(_))
+        matches!(self, Error::ExecutionTimeLimit(_) | Error::MemoryLimit(_))
     }
 }
 
@@ -47,7 +49,8 @@ impl fmt::Display for Error {
             Error::Logic(message)
             | Error::Runtime(message)
             | Error::Permission(message)
-            | Error::ExecutionTimeLimit(message) => f.write_str(message),
+            | Error::ExecutionTimeLimit(message)
+            | Error::MemoryLimit(message) => f.write_str(message),
             Error::LuaErrorOnStack => f.write_str("Lua error"),
         }
     }

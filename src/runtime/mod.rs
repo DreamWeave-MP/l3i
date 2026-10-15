@@ -6,6 +6,7 @@
 //! allocation callbacks when a limit or the profiler asks for them, then the standard
 //! libraries. Every step is a builder choice so nothing is entrenched by the constructor.
 
+pub(crate) mod allocator;
 pub(crate) mod call_scope;
 pub mod profiler;
 pub(crate) mod shared;
@@ -130,11 +131,11 @@ impl RuntimeBuilder {
         self
     }
 
-    /// Heap ceiling in bytes across every memory category, matching OpenMW's watchdog: it is
-    /// **polled every 64th safepoint**, not enforced by the allocator, so a script can overshoot
-    /// it by whatever it allocates between two polls before the error fires. It bounds runaway
-    /// scripts; it is not a hard quota against a hostile one (that would need allocator-level
-    /// policy). Zero disables.
+    /// Heap ceiling in bytes across every memory category, enforced by the VM's allocator: a
+    /// growth past it fails at the allocation with Luau's out-of-memory error, which a script can
+    /// catch and the host sees as `Error::MemoryLimit`. It holds for every allocation in the VM,
+    /// host-level setup included; buffers behind a `BufferCage` and memory native extensions
+    /// allocate from Rust are outside it. Zero disables.
     pub fn memory_limit(mut self, bytes: usize) -> Self {
         self.limits.memory_bytes = bytes;
         self
@@ -164,8 +165,13 @@ impl RuntimeBuilder {
     pub fn build(self) -> Result<Runtime> {
         flags::initialize()?;
         flags::decide_coroutine_finalizers(self.coroutine_finalizers)?;
-        // SAFETY: luaL_newstate uses the default allocator; a null result is out of memory.
-        let state = unsafe { ffi::luaL_newstate() };
+        // The shared block comes first: its memory account is the allocator's userdata, so the
+        // limit holds from the state's first allocation.
+        let shared = Box::new(Shared::new(self.limits, self.profiler, self.initialization_category));
+        // SAFETY: the account lives in the boxed shared block, which never moves and drops after
+        // lua_close; a null result is out of memory.
+        let state =
+            unsafe { ffi::lua_newstate(allocator::allocate, std::ptr::from_ref(shared.memory()).cast_mut().cast()) };
         if state.is_null() {
             return Err(Error::runtime("Unable to allocate a Luau state"));
         }
@@ -189,7 +195,6 @@ impl RuntimeBuilder {
                 );
             }
         }
-        let shared = Box::new(Shared::new(self.limits, self.profiler, self.initialization_category));
         // SAFETY: fresh state; the main thread's record lives until `Drop` detaches it, just
         // before lua_close (a closed state must not be touched), and the `userthread` callback
         // gives every other thread its own. The callback block belongs to this VM; `shared` is
@@ -674,7 +679,7 @@ impl Runtime {
                     let status = ffi::lua_pcall(self.state, 0, 0, 0);
                     if status != ffi::LUA_OK {
                         let error = crate::raw::protect::pop_error(self.state, status);
-                        return Err(shared::classify_failure(self.state, error));
+                        return Err(shared::classify_failure(self.state, status, error));
                     }
                     Ok(())
                 })

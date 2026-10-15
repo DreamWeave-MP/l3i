@@ -70,8 +70,9 @@ pub(crate) fn open_scope<'r>(
         let limits = shared.limits();
         let profiler = shared.profiler_enabled();
         // An Initialization scope arms no deadline, but it still registers as active when a time
-        // limit is set: that is what keeps the implicit host scope from arming one around it.
-        let watchdog_needed = limits.memory_bytes != 0 || !limits.execution_time.is_zero();
+        // limit is set: that is what keeps the implicit host scope from arming one around it. The
+        // memory limit needs no scope; the allocator enforces it.
+        let watchdog_needed = !limits.execution_time.is_zero();
         if !profiler && !watchdog_needed {
             return CallScope {
                 shared,

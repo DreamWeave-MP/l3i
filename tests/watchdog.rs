@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 use l3i::Runtime;
 use l3i::bind::Call;
 use l3i::runtime::{CallContext, CallKind, Limits, MemoryCategory};
+use l3i::stack::Scope;
 use l3i::thread::Resume;
 
 fn context(id: u64, category: u8) -> CallContext {
@@ -269,4 +270,34 @@ fn root_stacks_can_be_taken_again_once_released() {
     assert_eq!(stack.top(), 0);
     drop(stack);
     runtime.exec("local x = 1").unwrap();
+}
+
+#[test]
+fn the_memory_limit_refuses_a_single_huge_allocation_and_the_runtime_recovers() {
+    let runtime = Runtime::builder().memory_limit(64 * 1024 * 1024).build().unwrap();
+    let error = runtime.exec("local b = buffer.create(2^30)").unwrap_err();
+    assert!(matches!(error, l3i::Error::MemoryLimit(_)), "{error:?}");
+    assert!(error.is_limit());
+    let caught: bool = runtime.eval("return not pcall(buffer.create, 2^30)").unwrap();
+    assert!(caught, "a script can catch the refusal");
+    runtime.collect_garbage();
+    assert_eq!(runtime.eval::<f64>("return buffer.len(buffer.create(1024))").unwrap(), 1024.0);
+}
+
+#[test]
+fn the_memory_limit_holds_outside_any_scope_and_at_host_level() {
+    let runtime = Runtime::new().unwrap();
+    let hog = runtime
+        .load_function("return function() local t = {} for i = 1, 10000000 do t[i] = tostring(i) end end")
+        .unwrap();
+    runtime.set_limits(Limits { execution_time: Duration::ZERO, memory_bytes: runtime.total_bytes() + 512 * 1024 });
+    assert!(matches!(hog.invoke::<(), _>(&runtime.stack(), ()).unwrap_err(), l3i::Error::MemoryLimit(_)));
+    runtime.collect_garbage();
+    let big = "x".repeat(4 * 1024 * 1024);
+    let error = runtime.stack().with_frame(|frame| frame.push_string(&big).map(drop)).unwrap_err();
+    assert!(matches!(error, l3i::Error::MemoryLimit(_)), "{error:?}");
+    let error = runtime.stack().with_frame(|frame| frame.push(big.as_str()).map(drop)).unwrap_err();
+    assert!(matches!(error, l3i::Error::MemoryLimit(_)), "{error:?}");
+    runtime.set_limits(Limits::default());
+    runtime.exec("local x = string.rep('y', 1000000)").unwrap();
 }

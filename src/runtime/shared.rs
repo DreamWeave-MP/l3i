@@ -24,8 +24,8 @@ pub struct MemoryCategory(pub u8);
 pub struct Limits {
     /// Wall-clock budget per outermost call into Luau.
     pub execution_time: Duration,
-    /// Heap ceiling in bytes across all categories, polled at safepoints (see
-    /// `RuntimeBuilder::memory_limit` for what that does and does not guarantee).
+    /// Heap ceiling in bytes across all categories, enforced by the allocator (see
+    /// `RuntimeBuilder::memory_limit` for what it covers).
     pub memory_bytes: usize,
 }
 
@@ -99,6 +99,8 @@ pub(crate) struct Shared {
     profiler: bool,
     // ---- the interrupt hook and the call scopes ----
     limits: Cell<Limits>,
+    /// The allocator's count and the memory limit it enforces (`lua_newstate`'s userdata).
+    memory: super::allocator::MemoryAccount,
     deadline: Cell<Option<Deadline>>,
     /// The end of the deadline that ran out, while it is still the armed one: from then on
     /// every safepoint raises, so a `pcall` that catches the timeout gets no grace.
@@ -209,6 +211,7 @@ impl Shared {
     pub(crate) fn new(limits: Limits, profiler: bool, initialization_category: MemoryCategory) -> Shared {
         Shared {
             limits: Cell::new(limits),
+            memory: super::allocator::MemoryAccount::new(limits.memory_bytes),
             profiler,
             initialization_category,
             protected_thunk: Cell::new(ffi::LUA_NOREF),
@@ -445,17 +448,21 @@ impl Shared {
 
     pub(crate) fn set_limits(&self, limits: Limits) {
         self.limits.set(limits);
+        self.memory.set_limit(limits.memory_bytes);
     }
 
-    /// True when a time or memory limit is set, so host calls need a scope to enforce it.
+    pub(crate) fn memory(&self) -> &super::allocator::MemoryAccount {
+        &self.memory
+    }
+
+    /// True when an execution time limit is set, so host calls need a scope to arm it. (The
+    /// memory limit needs none: the allocator enforces it everywhere.)
     pub(crate) fn has_limits(&self) -> bool {
-        let limits = self.limits.get();
-        !limits.execution_time.is_zero() || limits.memory_bytes != 0
+        !self.limits.get().execution_time.is_zero()
     }
 
     pub(crate) fn needs_interrupt(&self) -> bool {
-        let limits = self.limits.get();
-        !limits.execution_time.is_zero() || limits.memory_bytes != 0 || self.sampled_context.get().is_some()
+        self.has_limits() || self.sampled_context.get().is_some()
     }
 
     pub(crate) fn stats(&self) -> CallStats {
@@ -617,6 +624,10 @@ impl Drop for LuaCall {
 pub(crate) unsafe fn host_transition<R>(state: *mut ffi::lua_State, body: impl FnOnce() -> R) -> R {
     // SAFETY: forwarded contract; the block outlives the VM, so it outlives this call.
     let shared = unsafe { shared_of(state).as_ref() };
+    if let Some(shared) = shared {
+        // A refusal before this transition was caught or reported already.
+        shared.memory.forget_refusal();
+    }
     let _scope = shared.filter(|shared| shared.has_limits() && shared.active_calls.borrow().is_empty()).map(|shared| {
         // SAFETY: the main thread of a live VM.
         let main = unsafe { ffi::lua_mainthread(state) };
@@ -632,17 +643,27 @@ pub(crate) unsafe fn host_transition<R>(state: *mut ffi::lua_State, body: impl F
     body()
 }
 
-/// `error` as the host should see it: a script the watchdog is stopping failed because of the
-/// limit, whatever its error object says, so the host can tell a timeout from a script error.
+/// `error`, from a call that ended with `status`, as the host should see it: a script the
+/// watchdog is stopping failed because of the time limit, and an out-of-memory failure after the
+/// allocator refused a growth is the memory limit, whatever the error object says, so the host
+/// can tell a limit from a script error.
 ///
 /// # Safety
 /// `state` is a live thread; call it inside the [`host_transition`] that failed.
-pub(crate) unsafe fn classify_failure(state: *mut ffi::lua_State, error: crate::error::Error) -> crate::error::Error {
+pub(crate) unsafe fn classify_failure(
+    state: *mut ffi::lua_State,
+    status: c_int,
+    error: crate::error::Error,
+) -> crate::error::Error {
     use crate::error::Error;
     // SAFETY: forwarded contract.
-    let timed_out = unsafe { shared_of(state).as_ref() }.is_some_and(Shared::time_limit_hit);
+    let Some(shared) = (unsafe { shared_of(state).as_ref() }) else { return error };
+    if status == ffi::LUA_ERRMEM && shared.memory.refused() {
+        shared.memory.forget_refusal();
+        return Error::MemoryLimit("Lua memory limit exceeded".to_owned());
+    }
     match error {
-        Error::Runtime(message) if timed_out => Error::ExecutionTimeLimit(message),
+        Error::Runtime(message) if shared.time_limit_hit() => Error::ExecutionTimeLimit(message),
         other => other,
     }
 }
@@ -674,7 +695,8 @@ unsafe fn raise_time_limit(state: *mut ffi::lua_State, deadline: Deadline) -> ! 
 
 /// The interrupt hook (`State::interruptHook`): runs at VM safepoints (`gc == -1`) and during
 /// GC (any other value, ignored so collection never charges a script's budget). Every 64th
-/// safepoint it polls the deadline and the memory limit and raises when either is exceeded.
+/// safepoint it polls the deadline and raises when it has passed (the memory limit needs no
+/// poll: the allocator enforces it).
 /// Once the deadline has run out it raises at every safepoint until the scope that armed it
 /// ends, so a script can't catch the timeout and carry on.
 pub(crate) unsafe extern "C-unwind" fn interrupt(state: *mut ffi::lua_State, gc: c_int) {
@@ -723,14 +745,6 @@ pub(crate) unsafe extern "C-unwind" fn interrupt(state: *mut ffi::lua_State, gc:
         shared.expired.set(Some(deadline.end));
         // SAFETY: a safepoint of `state`.
         unsafe { raise_time_limit(state, deadline) };
-    }
-    let memory_limit = shared.limits.get().memory_bytes;
-    // SAFETY: lua_totalbytes(-1) is a plain read.
-    if memory_limit != 0 && unsafe { ffi::lua_totalbytes(state, -1) } > memory_limit {
-        unsafe {
-            ffi::lua_pushlstring(state, c"Lua memory limit exceeded".as_ptr(), 25);
-            ffi::lua_error(state);
-        }
     }
 }
 

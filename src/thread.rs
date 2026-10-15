@@ -206,10 +206,10 @@ impl Thread {
                     Ok(if status == ffi::LUA_OK { Resume::Finished(values) } else { Resume::Yielded(values) })
                 }
                 ffi::LUA_BREAK => Ok(Resume::Break),
-                error => {
-                    let message = crate::raw::protect::pop_error(self.state, error);
+                error_status => {
+                    let message = crate::raw::protect::pop_error(self.state, error_status);
                     let error = Error::runtime(format!("Lua error: {}", message_text(&message)));
-                    Err(classify_failure(self.state, error))
+                    Err(classify_failure(self.state, error_status, error))
                 }
             }
         }
@@ -300,9 +300,11 @@ impl Thread {
 
 fn message_text(error: &Error) -> String {
     match error {
-        Error::Runtime(text) | Error::Logic(text) | Error::Permission(text) | Error::ExecutionTimeLimit(text) => {
-            text.clone()
-        }
+        Error::Runtime(text)
+        | Error::Logic(text)
+        | Error::Permission(text)
+        | Error::ExecutionTimeLimit(text)
+        | Error::MemoryLimit(text) => text.clone(),
         Error::LuaErrorOnStack => "error object left on the stack".to_owned(),
     }
 }
