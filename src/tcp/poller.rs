@@ -653,6 +653,9 @@ impl Poller {
             // reportable yet, end the OS wait without making anything reportable; keep waiting
             // out the budget.
             if queued > 0 || now >= deadline {
+                // A wait the execution time limit cut short marks the call expired, so the
+                // watchdog stops the script as this returns, not at a poll it may never reach.
+                crate::runtime::expire_if_due(call);
                 return Ok(Outcome::Done(queued as f64));
             }
         }

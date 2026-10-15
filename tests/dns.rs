@@ -585,3 +585,16 @@ fn a_runtime_holds_only_its_share_of_a_shared_resolver() {
     until_returned(&mock, 3);
     greedy.exec("local r = assert(dns.resolve('multi.test', 85)) assert(r:wait(5000)) assert(r:take())").unwrap();
 }
+
+/// A wait the deadline cuts short is the time limit even with nothing after it.
+#[test]
+fn a_wait_the_deadline_cuts_short_fails_the_call_it_ends() {
+    let (_, mock, resolver) = mocked(1, 4);
+    let limits = Limits { execution_time: Duration::from_millis(60), memory_bytes: 0 };
+    let runtime = runtime_over(resolver, &[RESOLVE_CAPABILITY], 64, Some(limits));
+    let started = Instant::now();
+    let error = runtime.exec("assert(dns.resolve('slow.test', 1, { timeoutMs = 60000 })):wait(1000)").unwrap_err();
+    assert!(matches!(error, l3i::Error::ExecutionTimeLimit(_)), "{error:?}");
+    assert!(started.elapsed() < Duration::from_millis(900), "{:?}", started.elapsed());
+    mock.open();
+}

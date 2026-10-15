@@ -157,6 +157,8 @@ impl Request {
         }
         let until = (Instant::now() + budget).min(self.deadline);
         self.shared.wait_until(until);
+        // As tcp's wait does: a wait the execution time limit cut short marks the call expired.
+        crate::runtime::expire_if_due(call);
         self.expire(Instant::now());
         Ok(self.shared.is_terminal())
     }

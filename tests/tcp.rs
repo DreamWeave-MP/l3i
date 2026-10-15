@@ -1075,3 +1075,15 @@ fn streams_disable_nagle_unless_asked_not_to() {
     assert!(!nodelay_of(quiet_listener, to_quiet), "accepted by a listener with noDelay = false");
     runtime.exec("for _, handle in keep do handle:close() end").unwrap();
 }
+
+/// A wait the deadline cuts short is the time limit even with nothing after it: a script that
+/// returns has no next instruction for the watchdog to stop.
+#[test]
+fn a_wait_the_deadline_cuts_short_fails_the_call_it_ends() {
+    let limits = Limits { execution_time: Duration::from_millis(60), memory_bytes: 0 };
+    let runtime = runtime_with(&[], Some(limits));
+    let started = Instant::now();
+    let error = runtime.exec("tcp.poller():wait(1000)").unwrap_err();
+    assert!(matches!(error, l3i::Error::ExecutionTimeLimit(_)), "{error:?}");
+    assert!(started.elapsed() < Duration::from_millis(900), "{:?}", started.elapsed());
+}

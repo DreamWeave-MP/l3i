@@ -174,3 +174,16 @@ fn sleep_blocks_for_its_seconds_and_never_past_the_execution_time_limit() {
     assert!(matches!(error, l3i::Error::ExecutionTimeLimit(_)), "{error:?}");
     assert!(started.elapsed() < Duration::from_secs(2), "slept past the limit: {:?}", started.elapsed());
 }
+
+/// A wait the deadline cuts short is the time limit, even when the script does nothing after it:
+/// Luau checks for the watchdog at its next instruction, and a script that returns has none.
+#[test]
+fn a_wait_the_deadline_cuts_short_fails_the_call_it_ends() {
+    let limits = Limits { execution_time: Duration::from_millis(100), memory_bytes: 0 };
+    let runtime = runtime_granting(&[], limits);
+    let started = Instant::now();
+    let error = runtime.exec("process.sleep(10)").unwrap_err();
+    assert!(matches!(error, l3i::Error::ExecutionTimeLimit(_)), "{error:?}");
+    assert!(started.elapsed() < Duration::from_secs(2), "slept past the limit: {:?}", started.elapsed());
+    runtime.exec("local after = true").unwrap();
+}
