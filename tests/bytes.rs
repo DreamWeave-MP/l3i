@@ -482,3 +482,19 @@ fn regex_captures_iterates_replaces_and_splits() {
         )
         .unwrap();
 }
+
+/// Whitespace, Unicode-aware on UTF-8, or a byte set, at either end or both.
+#[test]
+fn trim_strips_whitespace_or_a_byte_set_and_returns_untouched_text_as_is() {
+    runtime()
+        .exec(
+            "assert(bytes.trim('  a b \\t\\n') == 'a b' and bytes.trimStart('  a ') == 'a ' and bytes.trimEnd('  a ') == '  a') \
+             assert(bytes.trim('\\u{3000}\\u{a0}text\\u{2003}') == 'text', 'Unicode White_Space') \
+             assert(bytes.trim(' \\255 ') == '\\255', 'ASCII whitespace for bytes that are not UTF-8') \
+             assert(bytes.trim('--x--', '-') == 'x' and bytes.trimStart('-+x+-', '+-') == 'x+-' and bytes.trimEnd('x\\0\\0', '\\0') == 'x') \
+             assert(bytes.trim('   ') == '' and bytes.trim('') == '' and bytes.trim('aaa', 'a') == '') \
+             local same = 'untouched' assert(rawequal(bytes.trim(same), same)) \
+             assert(not pcall(bytes.trim, buffer.create(2)))",
+        )
+        .unwrap();
+}

@@ -181,6 +181,64 @@ fn slice(source: BytesView<'_>, offset: Exact<i64>, len: Exact<i64>) -> Result<N
     Ok(NewBuffer(unsafe { bytes(&source) }[start..start + len].to_vec()))
 }
 
+/// Which ends `bytes.trim` strips.
+#[derive(Clone, Copy)]
+enum Ends {
+    Both,
+    Start,
+    End,
+}
+
+/// `bytes.trim(text, characters?)` and its one-ended forms: `text` with whitespace stripped from
+/// `ends`, Unicode `White_Space` when the text is UTF-8 and ASCII whitespace when it isn't; given
+/// `characters`, any of those bytes instead. Nothing to strip returns `text` itself, with no copy.
+fn trim(
+    call: &Call<'_>,
+    what: &str,
+    text: ValueView<'_>,
+    characters: Option<&[u8]>,
+    ends: Ends,
+) -> Result<StackResults> {
+    if text.type_of() != crate::stack::Type::String {
+        return Err(Error::runtime(format!("{what}: text must be a string, got {}", text.type_of().name())));
+    }
+    let bytes = text.read::<&[u8]>()?;
+    let kept = match characters {
+        Some(set) => {
+            let keep = |byte: &u8| !set.contains(byte);
+            let start = match ends {
+                Ends::End => 0,
+                _ => bytes.iter().position(keep).unwrap_or(bytes.len()),
+            };
+            let end = match ends {
+                Ends::Start => bytes.len(),
+                _ => bytes.iter().rposition(keep).map_or(start, |last| last + 1),
+            };
+            &bytes[start..end.max(start)]
+        }
+        None => match std::str::from_utf8(bytes) {
+            Ok(text) => match ends {
+                Ends::Both => text.trim(),
+                Ends::Start => text.trim_start(),
+                Ends::End => text.trim_end(),
+            }
+            .as_bytes(),
+            Err(_) => match ends {
+                Ends::Both => bytes.trim_ascii(),
+                Ends::Start => bytes.trim_ascii_start(),
+                Ends::End => bytes.trim_ascii_end(),
+            },
+        },
+    };
+    if kept.len() == bytes.len() {
+        let mut frame = call.frame();
+        frame.push_value(text)?;
+        frame.release();
+        return Ok(StackResults);
+    }
+    call.push(kept)?;
+    Ok(StackResults)
+}
 /// `bytes.translate(text, from, to, { collapse?, trimStart?, trimEnd? }?)`: every byte found in
 /// `from` replaced by the byte at the same position in `to`, like `tr`; then runs of `collapse`
 /// made one, and `trimStart` and `trimEnd` removed from the ends. Nothing to change returns
@@ -526,6 +584,21 @@ fn describe_core(module: &mut ModuleDecl) {
         .function("translate", translate)
         .signature("(text: string, from: string, to: string, options: { collapse: string?, trimStart: string?, trimEnd: string? }?) -> string")
         .doc("text with each byte found in from replaced by the byte at the same position in to, then runs of collapse made one and trimStart and trimEnd removed from the ends; text itself when nothing changes.")
+        .function("trim", |call: &Call<'_>, text: ValueView<'_>, characters: Option<&[u8]>| {
+            trim(call, "bytes.trim", text, characters, Ends::Both)
+        })
+        .signature("(text: string, characters: string?) -> string")
+        .doc("text without leading and trailing whitespace (Unicode White_Space when it is UTF-8, ASCII otherwise), or without any of the bytes in characters; text itself when nothing goes.")
+        .function("trimStart", |call: &Call<'_>, text: ValueView<'_>, characters: Option<&[u8]>| {
+            trim(call, "bytes.trimStart", text, characters, Ends::Start)
+        })
+        .signature("(text: string, characters: string?) -> string")
+        .doc("As trim, at the start only.")
+        .function("trimEnd", |call: &Call<'_>, text: ValueView<'_>, characters: Option<&[u8]>| {
+            trim(call, "bytes.trimEnd", text, characters, Ends::End)
+        })
+        .signature("(text: string, characters: string?) -> string")
+        .doc("As trim, at the end only.")
         .function("slice", slice)
         .signature("(source: buffer | string, offset: number, length: number) -> buffer")
         .doc("A new buffer holding length bytes from offset.")
