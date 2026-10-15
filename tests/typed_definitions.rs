@@ -677,3 +677,50 @@ fn views_are_typed_forward_module_references_resolve_and_owned_rows_need_no_clon
         runtime.eval(VIEW_SCRIPT).unwrap();
     assert_eq!((n, first.0, sum, len, names.as_str(), total), (3.0, 10, 6.0, 3.0, "ab", 6.0));
 }
+
+/// Every method of a `math()` receiver is also a module function of the same name, taking the
+/// same parameters (a receiver may narrow `buffer | string` to `buffer`) and returning the same:
+/// the two forms of each operation can't drift apart.
+#[cfg(feature = "jit")]
+#[test]
+fn every_math_receiver_method_matches_its_module_function() {
+    let plan = RuntimePlan::builder()
+        .policy(RuntimePolicy::new())
+        .extension(l3i::bytes::BytesExtension)
+        .extension(RasterExtension)
+        .extension(QuatExtension)
+        .finalize()
+        .unwrap();
+    let definitions = plan.type_definitions();
+    for (class, module) in [
+        ("dream_bytes_Math", "Module__dream_bytes"),
+        ("dream_raster_Math", "Module__dream_raster"),
+        ("dream_quat_Math", "Module__dream_quat"),
+    ] {
+        let methods: Vec<&str> = definitions
+            .split(&format!("declare extern type {class} with\n"))
+            .nth(1)
+            .unwrap_or_else(|| panic!("{class} is declared"))
+            .lines()
+            .take_while(|line| line.starts_with("    "))
+            .filter_map(|line| line.trim().strip_prefix("function "))
+            .collect();
+        let functions: HashMap<&str, &str> = definitions
+            .split(&format!("export type {module} = {{\n"))
+            .nth(1)
+            .unwrap_or_else(|| panic!("{module} is declared"))
+            .lines()
+            .take_while(|line| *line != "}")
+            .filter_map(|line| line.trim().strip_suffix(',')?.split_once(": "))
+            .collect();
+        assert!(!methods.is_empty(), "{class} has methods");
+        for method in methods {
+            let (name, signature) = method.split_once('(').unwrap();
+            let (parameters, result) = signature.rsplit_once("): ").unwrap();
+            let parameters = parameters.strip_prefix("self, ").unwrap_or(parameters);
+            let function = functions.get(name).unwrap_or_else(|| panic!("{class}:{name} has no module function"));
+            let narrowed = function.replace("buffer | string", "buffer");
+            assert_eq!(narrowed, format!("({parameters}) -> {result}"), "{class}:{name} against {module}.{name}");
+        }
+    }
+}

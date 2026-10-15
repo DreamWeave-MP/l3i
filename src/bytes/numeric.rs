@@ -132,6 +132,40 @@ writes! {
     (write_f16be, "bytes.writef16be", 2, f64, |v| f32_to_f16(v as f32).to_be_bytes()),
 }
 
+/// Every big-endian, 24-bit and half-float member, once: `describe_module` and
+/// `describe_receiver` both expand it, so the module function and the receiver method of a name
+/// can't drift apart.
+macro_rules! numeric_members {
+    ($read:ident, $write:ident) => {
+        $read!("readu16be", read_u16be, "number");
+        $read!("readi16be", read_i16be, "number");
+        $read!("readu24", read_u24le, "number");
+        $read!("readi24", read_i24le, "number");
+        $read!("readu24be", read_u24be, "number");
+        $read!("readi24be", read_i24be, "number");
+        $read!("readu32be", read_u32be, "number");
+        $read!("readi32be", read_i32be, "number");
+        $read!("readf32be", read_f32be, "number");
+        $read!("readf64be", read_f64be, "number");
+        $read!("readi64be", read_i64be, "integer");
+        $read!("readf16", read_f16, "number");
+        $read!("readf16be", read_f16be, "number");
+        $write!("writeu16be", write_u16be, "number");
+        $write!("writei16be", write_i16be, "number");
+        $write!("writeu24", write_u24le, "number");
+        $write!("writei24", write_i24le, "number");
+        $write!("writeu24be", write_u24be, "number");
+        $write!("writei24be", write_i24be, "number");
+        $write!("writeu32be", write_u32be, "number");
+        $write!("writei32be", write_i32be, "number");
+        $write!("writef32be", write_f32be, "number");
+        $write!("writef64be", write_f64be, "number");
+        $write!("writei64be", write_i64be, "integer");
+        $write!("writef16", write_f16, "number");
+        $write!("writef16be", write_f16be, "number");
+    };
+}
+
 pub(crate) fn describe_module(module: &mut ModuleDecl) {
     macro_rules! read {
         ($name:literal, $f:ident, $ty:literal) => {
@@ -143,32 +177,7 @@ pub(crate) fn describe_module(module: &mut ModuleDecl) {
             module.function($name, $f).signature(concat!("(target: buffer, offset: number, value: ", $ty, ") -> ()"));
         };
     }
-    read!("readu16be", read_u16be, "number");
-    read!("readi16be", read_i16be, "number");
-    read!("readu24", read_u24le, "number");
-    read!("readi24", read_i24le, "number");
-    read!("readu24be", read_u24be, "number");
-    read!("readi24be", read_i24be, "number");
-    read!("readu32be", read_u32be, "number");
-    read!("readi32be", read_i32be, "number");
-    read!("readf32be", read_f32be, "number");
-    read!("readf64be", read_f64be, "number");
-    read!("readi64be", read_i64be, "integer");
-    read!("readf16", read_f16, "number");
-    read!("readf16be", read_f16be, "number");
-    write!("writeu16be", write_u16be, "number");
-    write!("writei16be", write_i16be, "number");
-    write!("writeu24", write_u24le, "number");
-    write!("writei24", write_i24le, "number");
-    write!("writeu24be", write_u24be, "number");
-    write!("writei24be", write_i24be, "number");
-    write!("writeu32be", write_u32be, "number");
-    write!("writei32be", write_i32be, "number");
-    write!("writef32be", write_f32be, "number");
-    write!("writef64be", write_f64be, "number");
-    write!("writei64be", write_i64be, "integer");
-    write!("writef16", write_f16, "number");
-    write!("writef16be", write_f16be, "number");
+    numeric_members!(read, write);
 }
 
 pub(crate) fn describe_receiver(math: &mut UserdataBuilder<'_, Math>) {
@@ -187,32 +196,7 @@ pub(crate) fn describe_receiver(math: &mut UserdataBuilder<'_, Math>) {
             ));
         };
     }
-    read!("readu16be", read_u16be, "number");
-    read!("readi16be", read_i16be, "number");
-    read!("readu24", read_u24le, "number");
-    read!("readi24", read_i24le, "number");
-    read!("readu24be", read_u24be, "number");
-    read!("readi24be", read_i24be, "number");
-    read!("readu32be", read_u32be, "number");
-    read!("readi32be", read_i32be, "number");
-    read!("readf32be", read_f32be, "number");
-    read!("readf64be", read_f64be, "number");
-    read!("readi64be", read_i64be, "integer");
-    read!("readf16", read_f16, "number");
-    read!("readf16be", read_f16be, "number");
-    write!("writeu16be", write_u16be, "number");
-    write!("writei16be", write_i16be, "number");
-    write!("writeu24", write_u24le, "number");
-    write!("writei24", write_i24le, "number");
-    write!("writeu24be", write_u24be, "number");
-    write!("writei24be", write_i24be, "number");
-    write!("writeu32be", write_u32be, "number");
-    write!("writei32be", write_i32be, "number");
-    write!("writef32be", write_f32be, "number");
-    write!("writef64be", write_f64be, "number");
-    write!("writei64be", write_i64be, "integer");
-    write!("writef16", write_f16, "number");
-    write!("writef16be", write_f16be, "number");
+    numeric_members!(read, write);
 }
 
 #[cfg(test)]

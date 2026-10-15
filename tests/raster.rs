@@ -167,7 +167,7 @@ fn color_math_lowers_to_native_code() {
 }
 
 #[test]
-fn strict_constructors_refuse_fractions() {
+fn clip_refuses_fractions_and_colors_clamp_as_the_receiver_does() {
     let plan = RuntimePlan::builder()
         .policy(RuntimePolicy::new().compat_global("@dream/raster", "raster"))
         .extension(RasterExtension)
@@ -176,11 +176,12 @@ fn strict_constructors_refuse_fractions() {
     let runtime = Runtime::from_plan(&plan).unwrap();
     runtime
         .exec(
-            "local ok, err = pcall(raster.rgba8, 1.6, 2, 3, 4) assert(not ok and string.find(err, 'exact'), err) \
-             ok, err = pcall(raster.rgb8, 1, 2.5, 3) assert(not ok and string.find(err, 'exact'), err) \
-             ok, err = pcall(raster.clip, 1.7, 0, 3, 3) assert(not ok and string.find(err, 'exact'), err) \
-             assert(raster.rgba8(1, 2, 3, 4) == raster.rgba8(1i, 2i, 3i, 4i), 'integers and integral numbers agree') \
-             ok, err = pcall(raster.rgba8, 256, 0, 0, 0) assert(not ok and string.find(err, '0..=255'), err)",
+            "local ok, err = pcall(raster.clip, 1.7, 0, 3, 3) assert(not ok and string.find(err, 'exact'), err) \
+             local M = raster.math() \
+             assert(raster.rgba8(-4, 255.4, 254.5, 1e9) == M:rgba8(-4, 255.4, 254.5, 1e9), 'rgba8 agrees with the receiver') \
+             assert(raster.rgba8(-4, 255.4, 254.5, 1e9) == raster.rgba8(0, 255, 255, 255), 'rgba8 clamps and rounds') \
+             assert(raster.rgb8(1.6, 2, 0 / 0) == raster.rgb8(2, 2, 0), 'rgb8 rounds, and NaN is 0') \
+             assert(raster.red(raster.rgba8(7, 8, 9, 10)) == M:red(raster.rgba8(7, 8, 9, 10)), 'red on both')",
         )
         .unwrap();
 }

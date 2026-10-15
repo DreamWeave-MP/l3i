@@ -282,11 +282,12 @@ interchange; `widen` (`x * 257`) and `narrow` (`round(x / 257)`) convert exactly
 |---|---|
 | `TRANSPARENT`, `BLACK`, `WHITE`, `CLIP_ALL`, `TRANSPARENT16`, `BLACK16`, `WHITE16` | Folded `integer` constants |
 | `CLIP_MAX_COORD` | `number`, 16383 |
-| `rgba8(r, g, b, a)`, `rgb8(r, g, b)` | `-> integer`; strict: each channel an exact integer in `0..=255` |
+| `rgba8(r, g, b, a)`, `rgb8(r, g, b)` | `-> integer`; each channel clamped to `0..=255` and rounded to nearest, NaN as 0 |
+| `red(color)`, `green`, `blue`, `alpha` | `-> number`, one channel |
 | `packed(color)` | `-> number`, the `u32` for `buffer.writeu32` |
 | `channels(color)` | `-> (number, number, number, number)` |
 | `withAlpha(color, a)`, `lerp(a, b, t)`, `mul(a, b)`, `add(a, b)`, `scale(color, factor)`, `premultiply(color)` | `-> integer` |
-| `rgba16`, `rgb16`, `channels16`, `withAlpha16`, `lerp16`, `mul16`, `add16`, `scale16`, `premultiply16` | The same on `Color16` |
+| `rgba16`, `rgb16`, `red16`, `green16`, `blue16`, `alpha16`, `channels16`, `withAlpha16`, `lerp16`, `mul16`, `add16`, `scale16`, `premultiply16` | The same on `Color16` |
 | `widen(color)`, `narrow(color)` | `-> integer` between the two widths |
 | `clip(minX, minY, maxX, maxY)` | `-> integer`; exact integers in `0..=16383`, `min <= max` |
 | `clipBounds(clip)` | `-> (number, number, number, number)` |
@@ -309,7 +310,7 @@ assert(raster.narrow(raster.widen(c)) == c)
 local clip = raster.clip(1, 2, 640, 480)
 local x0, y0, x1, y1 = raster.clipBounds(clip)
 assert(not pcall(raster.channels, clip)) -- a clip is not a color
-assert(not pcall(raster.rgba8, 256, 0, 0, 0)) -- outside 0..=255
+assert(raster.rgba8(300, 0, 0, 255) == raster.rgba8(255, 0, 0, 255)) -- channels clamp
 ```
 
 ### raster.math()
@@ -332,10 +333,11 @@ local back = M:narrow(wide)
 
 Shader semantics throughout: inputs clamp to their range, results round to nearest, and a NaN
 input yields channel 0; `M:rgba8(-4, 255.4, 254.5, 1e9)` is `raster.rgba8(0, 255, 255, 255)`.
-The module's `rgba8` and `rgb8` are the strict constructors; the receiver's clamp, so both paths
-of a lowered call agree by construction. The lowering, `raster::lowering::ColorMath`, unpacks
-with shifts and masks, computes on doubles, clamps, rounds and packs into one integer store; the
-8-bit form is tag- and kind-checked, the 16-bit form tag-checked only.
+The module's functions and the receiver's methods expand from one list in `raster.rs`, so a name
+means the same arguments and the same arithmetic on both. The lowering,
+`raster::lowering::ColorMath`, unpacks with shifts and masks, computes on doubles, clamps, rounds
+and packs into one integer store; the 8-bit form is tag- and kind-checked, the 16-bit form
+tag-checked only.
 
 Measured per call (`benches/raster.rs`): `rgba8` 71 ns through the module against 2.6 ns lowered,
 `lerp` 72 ns against 15 ns, `mul` 61 ns against 17 ns, `premultiply` 52 ns against 16 ns, `lerp16`

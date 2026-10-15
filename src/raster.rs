@@ -449,11 +449,6 @@ impl PackedScalar for ClipRect {
     }
 }
 
-/// A strict integer channel: `Exact` refuses a fraction before this refuses the range.
-fn channel(name: &str, value: Exact<i64>) -> Result<u8> {
-    u8::try_from(value.0).map_err(|_| Error::runtime(format!("{name} {} is outside 0..=255", value.0)))
-}
-
 fn coordinate(name: &str, value: Exact<i64>) -> Result<u32> {
     let value = value.0;
     u32::try_from(value)
@@ -477,65 +472,100 @@ impl Extension for RasterExtension {
 
     #[allow(clippy::too_many_lines)]
     fn describe(&self, d: &mut ExtensionDescriptor) -> Result<()> {
-        type C = Packed<Color>;
+        /// Every color operation, once: the module function and the `Math` receiver method of a
+        /// name both expand from here, so the two can't drift apart in name, arguments or meaning.
+        macro_rules! color_members {
+            ($each:ident) => {
+                $each!(
+                    "rgba8",
+                    "r: number, g: number, b: number, a: number",
+                    "integer",
+                    |r: f64, g: f64, b: f64, a: f64| Color::from_numbers(r, g, b, a).pack()
+                );
+                $each!("rgb8", "r: number, g: number, b: number", "integer", |r: f64, g: f64, b: f64| {
+                    Color::from_numbers(r, g, b, 255.0).pack()
+                });
+                $each!("red", "color: integer", "number", |c: Packed<Color>| f64::from(c.0.r));
+                $each!("green", "color: integer", "number", |c: Packed<Color>| f64::from(c.0.g));
+                $each!("blue", "color: integer", "number", |c: Packed<Color>| f64::from(c.0.b));
+                $each!("alpha", "color: integer", "number", |c: Packed<Color>| f64::from(c.0.a));
+                $each!("channels", "color: integer", "(number, number, number, number)", |c: Packed<Color>| (
+                    f64::from(c.0.r),
+                    f64::from(c.0.g),
+                    f64::from(c.0.b),
+                    f64::from(c.0.a)
+                ));
+                $each!("withAlpha", "color: integer, a: number", "integer", |c: Packed<Color>, a: f64| c
+                    .0
+                    .with_alpha(a)
+                    .pack());
+                $each!(
+                    "lerp",
+                    "a: integer, b: integer, t: number",
+                    "integer",
+                    |a: Packed<Color>, b: Packed<Color>, t: f64| a.0.lerp(b.0, t).pack()
+                );
+                $each!("mul", "a: integer, b: integer", "integer", |a: Packed<Color>, b: Packed<Color>| a
+                    .0
+                    .modulate(b.0)
+                    .pack());
+                $each!("add", "a: integer, b: integer", "integer", |a: Packed<Color>, b: Packed<Color>| a
+                    .0
+                    .saturating_add(b.0)
+                    .pack());
+                $each!("scale", "color: integer, factor: number", "integer", |c: Packed<Color>, factor: f64| c
+                    .0
+                    .scale(factor)
+                    .pack());
+                $each!("premultiply", "color: integer", "integer", |c: Packed<Color>| c.0.premultiply().pack());
+                $each!(
+                    "rgba16",
+                    "r: number, g: number, b: number, a: number",
+                    "integer",
+                    |r: f64, g: f64, b: f64, a: f64| Color16::from_numbers(r, g, b, a)
+                );
+                $each!("rgb16", "r: number, g: number, b: number", "integer", |r: f64, g: f64, b: f64| {
+                    Color16::from_numbers(r, g, b, 65535.0)
+                });
+                $each!("red16", "color: integer", "number", |c: Color16| f64::from(c.r));
+                $each!("green16", "color: integer", "number", |c: Color16| f64::from(c.g));
+                $each!("blue16", "color: integer", "number", |c: Color16| f64::from(c.b));
+                $each!("alpha16", "color: integer", "number", |c: Color16| f64::from(c.a));
+                $each!("channels16", "color: integer", "(number, number, number, number)", |c: Color16| (
+                    f64::from(c.r),
+                    f64::from(c.g),
+                    f64::from(c.b),
+                    f64::from(c.a)
+                ));
+                $each!("withAlpha16", "color: integer, a: number", "integer", |c: Color16, a: f64| c.with_alpha(a));
+                $each!("lerp16", "a: integer, b: integer, t: number", "integer", |a: Color16, b: Color16, t: f64| a
+                    .lerp(b, t));
+                $each!("mul16", "a: integer, b: integer", "integer", |a: Color16, b: Color16| a.modulate(b));
+                $each!("add16", "a: integer, b: integer", "integer", |a: Color16, b: Color16| a.saturating_add(b));
+                $each!("scale16", "color: integer, factor: number", "integer", |c: Color16, factor: f64| c
+                    .scale(factor));
+                $each!("premultiply16", "color: integer", "integer", |c: Color16| c.premultiply());
+                $each!("widen", "color: integer", "integer", |c: Packed<Color>| Color16::widen(c.0));
+                $each!("narrow", "color: integer", "integer", |c: Color16| c.narrow().pack());
+            };
+        }
+
         let mut math = d.userdata::<Math>("dream.raster.Math");
         math.tag(crate::extension::TagPolicy::Required)
             .compiler_type(crate::extension::CompilerTypePolicy::Required)
             .doc("Color arithmetic; natively lowered under jit.");
-        math.method("rgba8", |_: &Math, r: f64, g: f64, b: f64, a: f64| Color::from_numbers(r, g, b, a).pack())
-            .signature("(self, r: number, g: number, b: number, a: number): integer");
-        math.method("rgb8", |_: &Math, r: f64, g: f64, b: f64| Color::from_numbers(r, g, b, 255.0).pack())
-            .signature("(self, r: number, g: number, b: number): integer");
-        math.method("red", |_: &Math, c: C| f64::from(c.0.r)).signature("(self, color: integer): number");
-        math.method("green", |_: &Math, c: C| f64::from(c.0.g)).signature("(self, color: integer): number");
-        math.method("blue", |_: &Math, c: C| f64::from(c.0.b)).signature("(self, color: integer): number");
-        math.method("alpha", |_: &Math, c: C| f64::from(c.0.a)).signature("(self, color: integer): number");
-        math.method("channels", |_: &Math, c: C| {
-            (f64::from(c.0.r), f64::from(c.0.g), f64::from(c.0.b), f64::from(c.0.a))
-        })
-        .signature("(self, color: integer): (number, number, number, number)");
-        math.method("withAlpha", |_: &Math, c: C, a: f64| c.0.with_alpha(a).pack())
-            .signature("(self, color: integer, a: number): integer");
-        math.method("lerp", |_: &Math, a: C, b: C, t: f64| a.0.lerp(b.0, t).pack())
-            .signature("(self, a: integer, b: integer, t: number): integer");
-        math.method("mul", |_: &Math, a: C, b: C| a.0.modulate(b.0).pack())
-            .signature("(self, a: integer, b: integer): integer");
-        math.method("add", |_: &Math, a: C, b: C| a.0.saturating_add(b.0).pack())
-            .signature("(self, a: integer, b: integer): integer");
-        math.method("scale", |_: &Math, c: C, factor: f64| c.0.scale(factor).pack())
-            .signature("(self, color: integer, factor: number): integer");
-        math.method("premultiply", |_: &Math, c: C| c.0.premultiply().pack())
-            .signature("(self, color: integer): integer");
-        math.method("rgba16", |_: &Math, r: f64, g: f64, b: f64, a: f64| Color16::from_numbers(r, g, b, a))
-            .signature("(self, r: number, g: number, b: number, a: number): integer");
-        math.method("rgb16", |_: &Math, r: f64, g: f64, b: f64| Color16::from_numbers(r, g, b, 65535.0))
-            .signature("(self, r: number, g: number, b: number): integer");
-        math.method("red16", |_: &Math, c: Color16| f64::from(c.r)).signature("(self, color: integer): number");
-        math.method("green16", |_: &Math, c: Color16| f64::from(c.g)).signature("(self, color: integer): number");
-        math.method("blue16", |_: &Math, c: Color16| f64::from(c.b)).signature("(self, color: integer): number");
-        math.method("alpha16", |_: &Math, c: Color16| f64::from(c.a)).signature("(self, color: integer): number");
-        math.method("channels16", |_: &Math, c: Color16| {
-            (f64::from(c.r), f64::from(c.g), f64::from(c.b), f64::from(c.a))
-        })
-        .signature("(self, color: integer): (number, number, number, number)");
-        math.method("withAlpha16", |_: &Math, c: Color16, a: f64| c.with_alpha(a))
-            .signature("(self, color: integer, a: number): integer");
-        math.method("lerp16", |_: &Math, a: Color16, b: Color16, t: f64| a.lerp(b, t))
-            .signature("(self, a: integer, b: integer, t: number): integer");
-        math.method("mul16", |_: &Math, a: Color16, b: Color16| a.modulate(b))
-            .signature("(self, a: integer, b: integer): integer");
-        math.method("add16", |_: &Math, a: Color16, b: Color16| a.saturating_add(b))
-            .signature("(self, a: integer, b: integer): integer");
-        math.method("scale16", |_: &Math, c: Color16, factor: f64| c.scale(factor))
-            .signature("(self, color: integer, factor: number): integer");
-        math.method("premultiply16", |_: &Math, c: Color16| c.premultiply())
-            .signature("(self, color: integer): integer");
-        math.method("widen", |_: &Math, c: C| Color16::widen(c.0)).signature("(self, color: integer): integer");
-        math.method("narrow", |_: &Math, c: Color16| c.narrow().pack()).signature("(self, color: integer): integer");
+        macro_rules! receiver_member {
+            ($name:literal, $args:literal, $result:literal, |$($param:ident: $ty:ty),*| $body:expr) => {
+                math.method($name, |_: &Math, $($param: $ty),*| $body)
+                    .signature(concat!("(self, ", $args, "): ", $result));
+            };
+        }
+        color_members!(receiver_member);
         #[cfg(feature = "jit")]
         d.native_hooks(lowering::ColorMath);
 
-        d.module(MODULE)
+        let module = d.module(MODULE);
+        module
             .doc("Colors and clip rectangles as packed integers.")
             .constant("TRANSPARENT", CompileConstant::Integer(Color::TRANSPARENT.pack().bits()?))
             .constant("BLACK", CompileConstant::Integer(Color::BLACK.pack().bits()?))
@@ -544,64 +574,18 @@ impl Extension for RasterExtension {
             .constant("CLIP_MAX_COORD", CompileConstant::Number(f64::from(ClipRect::MAX_COORD)))
             .constant("TRANSPARENT16", CompileConstant::Integer(Color16::TRANSPARENT.bits()))
             .constant("BLACK16", CompileConstant::Integer(Color16::BLACK.bits()))
-            .constant("WHITE16", CompileConstant::Integer(Color16::WHITE.bits()))
-            .function("rgba8", |r: Exact<i64>, g: Exact<i64>, b: Exact<i64>, a: Exact<i64>| -> Result<Packed<Color>> {
-                Ok(Color::rgba(
-                    channel("rgba8 red", r)?,
-                    channel("rgba8 green", g)?,
-                    channel("rgba8 blue", b)?,
-                    channel("rgba8 alpha", a)?,
-                )
-                .pack())
-            })
-            .signature("(r: number, g: number, b: number, a: number) -> integer")
-            .function("rgb8", |r: Exact<i64>, g: Exact<i64>, b: Exact<i64>| -> Result<Packed<Color>> {
-                Ok(Color::rgba(channel("rgb8 red", r)?, channel("rgb8 green", g)?, channel("rgb8 blue", b)?, 255)
-                    .pack())
-            })
-            .signature("(r: number, g: number, b: number) -> integer")
+            .constant("WHITE16", CompileConstant::Integer(Color16::WHITE.bits()));
+        macro_rules! module_member {
+            ($name:literal, $args:literal, $result:literal, |$($param:ident: $ty:ty),*| $body:expr) => {
+                module.function($name, |$($param: $ty),*| $body).signature(concat!("(", $args, ") -> ", $result));
+            };
+        }
+        color_members!(module_member);
+        module
             .function("packed", |c: Packed<Color>| f64::from(c.0.packed()))
             .signature("(color: integer) -> number")
-            .function("channels", |c: Packed<Color>| {
-                (f64::from(c.0.r), f64::from(c.0.g), f64::from(c.0.b), f64::from(c.0.a))
-            })
-            .signature("(color: integer) -> (number, number, number, number)")
-            .function("withAlpha", |c: Packed<Color>, a: f64| c.0.with_alpha(a).pack())
-            .signature("(color: integer, a: number) -> integer")
-            .function("lerp", |a: Packed<Color>, b: Packed<Color>, t: f64| a.0.lerp(b.0, t).pack())
-            .signature("(a: integer, b: integer, t: number) -> integer")
-            .function("mul", |a: Packed<Color>, b: Packed<Color>| a.0.modulate(b.0).pack())
-            .signature("(a: integer, b: integer) -> integer")
-            .function("add", |a: Packed<Color>, b: Packed<Color>| a.0.saturating_add(b.0).pack())
-            .signature("(a: integer, b: integer) -> integer")
-            .function("scale", |c: Packed<Color>, factor: f64| c.0.scale(factor).pack())
-            .signature("(color: integer, factor: number) -> integer")
-            .function("premultiply", |c: Packed<Color>| c.0.premultiply().pack())
-            .signature("(color: integer) -> integer")
             .function("math", || crate::userdata::Owned(Math))
             .signature("() -> dream_raster_Math")
-            .function("rgba16", |r: f64, g: f64, b: f64, a: f64| Color16::from_numbers(r, g, b, a))
-            .signature("(r: number, g: number, b: number, a: number) -> integer")
-            .function("rgb16", |r: f64, g: f64, b: f64| Color16::from_numbers(r, g, b, 65535.0))
-            .signature("(r: number, g: number, b: number) -> integer")
-            .function("channels16", |c: Color16| (f64::from(c.r), f64::from(c.g), f64::from(c.b), f64::from(c.a)))
-            .signature("(color: integer) -> (number, number, number, number)")
-            .function("withAlpha16", |c: Color16, a: f64| c.with_alpha(a))
-            .signature("(color: integer, a: number) -> integer")
-            .function("lerp16", |a: Color16, b: Color16, t: f64| a.lerp(b, t))
-            .signature("(a: integer, b: integer, t: number) -> integer")
-            .function("mul16", |a: Color16, b: Color16| a.modulate(b))
-            .signature("(a: integer, b: integer) -> integer")
-            .function("add16", |a: Color16, b: Color16| a.saturating_add(b))
-            .signature("(a: integer, b: integer) -> integer")
-            .function("scale16", |c: Color16, factor: f64| c.scale(factor))
-            .signature("(color: integer, factor: number) -> integer")
-            .function("premultiply16", |c: Color16| c.premultiply())
-            .signature("(color: integer) -> integer")
-            .function("widen", |c: Packed<Color>| Color16::widen(c.0))
-            .signature("(color: integer) -> integer")
-            .function("narrow", |c: Color16| c.narrow().pack())
-            .signature("(color: integer) -> integer")
             .function(
                 "clip",
                 |min_x: Exact<i64>,
