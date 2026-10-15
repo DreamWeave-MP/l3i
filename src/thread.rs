@@ -208,12 +208,18 @@ impl Thread {
         }
     }
 
-    /// Returns a finished or failed thread to the fresh state so it can be started again.
+    /// Returns a finished, failed or suspended thread to the fresh state so it can be started
+    /// again. A thread that is running, or waiting on a coroutine it resumed, can't be reset:
+    /// that would free the stack it runs on.
     pub fn reset(&self) -> Result<()> {
         if !self.pin.is_valid() {
             return Err(Error::logic("Cannot reset a Lua thread whose runtime has closed"));
         }
-        // SAFETY: lua_resetthread is permitted on a thread that is not currently running.
+        // SAFETY: the pin proves the thread is live; the check only reads it.
+        if unsafe { ffi::l3i_thread_resettable(self.state) } == 0 {
+            return Err(Error::logic("Cannot reset a Lua thread that is running or resuming another"));
+        }
+        // SAFETY: checked above: the thread is not executing and holds no live call frames.
         unsafe { ffi::lua_resetthread(self.state) };
         Ok(())
     }

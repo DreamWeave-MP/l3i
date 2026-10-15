@@ -200,3 +200,33 @@ fn chunks_load_on_the_thread_of_any_scope() {
     assert!(runtime.stack().load_bytecode("a\0b", &bytecode).unwrap_err().to_string().contains("NUL"));
     assert_eq!(runtime.stack().top(), 0);
 }
+
+#[test]
+fn a_thread_cannot_be_reset_while_it_runs_or_resumes_another() {
+    let runtime = Runtime::new().unwrap();
+    let thread = std::rc::Rc::new(runtime.new_thread().unwrap());
+    let reset = runtime
+        .bind_function("dreamweave.resetOwnThread", {
+            let thread = thread.clone();
+            move || -> String {
+                match thread.reset() {
+                    Ok(()) => "reset".to_owned(),
+                    Err(error) => error.to_string(),
+                }
+            }
+        })
+        .unwrap();
+    runtime.set_global("resetOwnThread", &reset).unwrap();
+    for source in [
+        "return function() return resetOwnThread() end",
+        "return function() return coroutine.wrap(function() return resetOwnThread() end)() end",
+    ] {
+        let body = runtime.load_function(source).unwrap();
+        let Resume::Finished(values) = thread.start(&runtime.stack(), &body, ()).unwrap() else {
+            panic!("expected a return")
+        };
+        let answer = values[0].with_value(&runtime.stack(), |_, view| view.read::<String>()).unwrap();
+        assert!(answer.contains("running or resuming another"), "{source}: {answer}");
+        thread.reset().unwrap();
+    }
+}
