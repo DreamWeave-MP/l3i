@@ -88,7 +88,7 @@ pub(crate) fn host_path(what: &str, bytes: &[u8]) -> Result<PathBuf> {
     {
         std::str::from_utf8(bytes)
             .map(PathBuf::from)
-            .map_err(|_| Error::runtime(format!("dream.fs.{what}: {} is not UTF-8", display(bytes))))
+            .map_err(|_| crate::error::Error::runtime(format!("dream.fs.{what}: {} is not UTF-8", display(bytes))))
     }
 }
 
