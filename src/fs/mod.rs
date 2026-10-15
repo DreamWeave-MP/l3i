@@ -27,7 +27,8 @@
 //! Reading needs the `filesystem.read` capability ([`READ_CAPABILITY`]) and anything that
 //! changes the disk needs `filesystem.write` ([`WRITE_CAPABILITY`]). Both are optional: a plan
 //! that grants neither still has the module and its types, and each function raises a permission
-//! error naming the capability it lacks.
+//! error naming the capability it lacks. The path functions (`join`, `parent`, `fileName`,
+//! `extension`, `isFileName`) touch no disk and need neither.
 //!
 //! # Errors
 //!
@@ -49,6 +50,7 @@
 //! closed handle) is the script's mistake, and raises.
 
 mod io;
+mod path;
 mod walk;
 
 use std::path::{Path, PathBuf};
@@ -308,16 +310,28 @@ fn same_file(a: &[u8], b: &[u8]) -> Result<Outcome<bool>> {
     })
 }
 
-/// A module member: its name, signature, doc, and whether it changes the disk.
+/// What a member needs: nothing (it only takes a path apart or joins one), or a capability.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Access {
+    Path,
+    Read,
+    Write,
+}
+
+/// A module member: its name, signature, doc, and what it needs.
 struct Member {
     name: &'static str,
     signature: &'static str,
     doc: &'static str,
-    writes: bool,
+    access: Access,
 }
 
 const fn member(name: &'static str, signature: &'static str, doc: &'static str, writes: bool) -> Member {
-    Member { name, signature, doc, writes }
+    Member { name, signature, doc, access: if writes { Access::Write } else { Access::Read } }
+}
+
+const fn path_member(name: &'static str, signature: &'static str, doc: &'static str) -> Member {
+    Member { name, signature, doc, access: Access::Path }
 }
 
 /// The module's functions, in declaration order.
@@ -365,6 +379,18 @@ const MEMBERS: &[Member] = &[
         false,
     ),
     member(
+        "isFile",
+        "(path: string) -> boolean",
+        "Whether path names a regular file, following symbolic links; false when nothing is there or it can't be read.",
+        false,
+    ),
+    member(
+        "isDir",
+        "(path: string) -> boolean",
+        "Whether path names a directory, following symbolic links; false when nothing is there or it can't be read.",
+        false,
+    ),
+    member(
         "list",
         "(path: string) -> ({ string }?, string?, dream_fs_ErrorKind?)",
         "The names in a directory, sorted by their bytes.",
@@ -401,10 +427,35 @@ const MEMBERS: &[Member] = &[
         false,
     ),
     member("cwd", "() -> (string?, string?, dream_fs_ErrorKind?)", "The working directory.", false),
+    path_member(
+        "join",
+        "(...string) -> string",
+        "The parts joined with the platform's separator; a part that is absolute (or, on Windows, has a prefix) replaces what came before, as Rust's Path::join does. Touches no disk.",
+    ),
+    path_member(
+        "parent",
+        "(path: string) -> string?",
+        "path without its last component ('' for a bare name), or nil for a root or an empty path. Touches no disk.",
+    ),
+    path_member(
+        "fileName",
+        "(path: string) -> string?",
+        "The last component of path, or nil when it ends in '..' or is a root. Touches no disk.",
+    ),
+    path_member(
+        "extension",
+        "(path: string) -> string?",
+        "The file name's extension after its last '.', without the dot; nil for none or a name that only starts with a dot. Touches no disk.",
+    ),
+    path_member(
+        "isFileName",
+        "(name: string) -> boolean",
+        "Whether name is exactly one plain path component: no separator, no root or prefix, not '.' or '..'. Touches no disk.",
+    ),
     member(
         "writeFile",
-        "(path: string, data: buffer | string, options: { offset: number?, append: boolean?, create: boolean? }?) -> (number?, string?, dream_fs_ErrorKind?)",
-        "Writes data to path, truncating it, and returns the count. offset writes in place without truncating; append adds at the end; create = false refuses a file that does not exist.",
+        "(path: string, data: buffer | string, options: { offset: number?, append: boolean?, create: boolean?, exclusive: boolean?, atomic: boolean?, createParents: boolean? }?) -> (number?, string?, dream_fs_ErrorKind?)",
+        "Writes data to path, truncating it, and returns the count. offset writes in place without truncating; append adds at the end; create = false refuses a file that does not exist and exclusive = true one that does. atomic writes a temporary beside path and renames it over path, so a reader sees the old file or the new one, never part of either, keeping the old file's permissions. createParents makes missing parent directories first.",
         true,
     ),
     member(
@@ -495,8 +546,12 @@ impl Extension for FsExtension {
         let module = cx.module(MODULE)?;
         macro_rules! bind {
             ($name:literal, $callable:expr) => {{
-                let writes = MEMBERS.iter().any(|member| member.name == $name && member.writes);
-                let (granted, capability) = if writes { (write, WRITE_CAPABILITY) } else { (read, READ_CAPABILITY) };
+                let access = MEMBERS.iter().find(|member| member.name == $name).map(|member| member.access);
+                let (granted, capability) = match access {
+                    Some(Access::Path) => (true, ""),
+                    Some(Access::Write) => (write, WRITE_CAPABILITY),
+                    _ => (read, READ_CAPABILITY),
+                };
                 if granted {
                     module.function($name, $callable)?;
                 } else {
@@ -526,6 +581,8 @@ impl Extension for FsExtension {
         bind!("exists", |path: &[u8]| -> Result<Outcome<bool>> {
             Ok(Outcome::of(std::fs::exists(host_path("exists", path)?), "exists", path))
         });
+        bind!("isFile", |path: &[u8]| -> Result<bool> { Ok(host_path("isFile", path)?.is_file()) });
+        bind!("isDir", |path: &[u8]| -> Result<bool> { Ok(host_path("isDir", path)?.is_dir()) });
         bind!("list", list);
         bind!("walk", walk::walk);
         bind!("canonicalize", |path: &[u8]| -> Result<Outcome<Vec<u8>>> {
@@ -544,6 +601,11 @@ impl Extension for FsExtension {
                 Err(error) => Outcome::Failed(Failure::message(format!("dream.fs.cwd: {error}"), &error)),
             }
         });
+        bind!("join", path::join);
+        bind!("parent", path::parent);
+        bind!("fileName", path::file_name);
+        bind!("extension", path::extension);
+        bind!("isFileName", path::is_file_name);
         bind!("writeFile", io::write_file);
         bind!("openWrite", |call: &Call<'_>,
                             path: &[u8],

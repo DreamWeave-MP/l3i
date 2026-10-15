@@ -1354,11 +1354,12 @@ handle.
 | `open(path)` | A `dream_fs_Reader` over a memory map of the file; refuses what `readFile` refuses |
 | `stat(path)`, `lstat(path)` | `{ kind, size, isFile, isDir, isSymlink, readonly, modified, modifiedSeconds, modifiedNanoseconds }`; `lstat` describes a link instead of following it |
 | `exists(path)` | Whether something is there, following links |
+| `isFile(path)`, `isDir(path)` | Whether a regular file or a directory is there, following links; `false` when nothing is, or it can't be read |
 | `list(path)` | The names in a directory, sorted by their bytes |
 | `walk(root, options?)` | Everything under `root`, depth first, as parallel arrays (below) |
 | `canonicalize(path)`, `absolute(path)` | The path with every link resolved, or made absolute without touching the disk |
 | `readLink(path)`, `sameFile(a, b)`, `cwd()` | A link's target as written, whether two paths are one file, the working directory |
-| `writeFile(path, data, { offset?, append?, create? }?)` | The count written; truncates unless `offset` or `append` |
+| `writeFile(path, data, { offset?, append?, create?, exclusive?, atomic?, createParents? }?)` | The count written; truncates unless `offset` or `append`. `exclusive` refuses a file that exists (`alreadyExists`); `atomic` writes a temporary beside the file and renames it over, so a reader sees the old file or the new one, keeping the old one's permissions; `createParents` makes missing parent directories |
 | `openWrite(path, { append?, truncate?, create? }?)` | A buffered `dream_fs_Writer` |
 | `mkdir(path, { recursive? }?)`, `remove(path, { recursive? }?)` | `true`; `remove` never follows a link |
 | `rename(from, to)`, `copy(from, to)`, `hardLink(source, link)`, `symlink(target, link, { directory? }?)` | `true`, or the byte count for `copy` |
@@ -1378,11 +1379,19 @@ script never flushes or closes reaches the file when the writer is collected, wh
 drops, or at `Runtime::shutdown()`, which a host that exits without dropping the runtime calls
 first.
 
+### Paths
+
+`join(...)`, `parent(path)`, `fileName(path)`, `extension(path)` and `isFileName(name)` take byte
+paths apart and join them by Rust's `Path` rules with the platform's separator, touching no disk,
+so they need no capability. `join` starts over at a part that is absolute; `parent` of a bare
+name is `''` and of a root `nil`; `isFileName` is true for exactly one plain component.
+
 ### Capabilities
 
 Reading needs `filesystem.read` (`l3i::fs::READ_CAPABILITY`) and changing the disk needs
 `filesystem.write` (`l3i::fs::WRITE_CAPABILITY`). A plan that grants neither still has the module
-and its types, and each function raises a permission error naming what it lacks.
+and its types, and each function raises a permission error naming what it lacks; the path
+functions need nothing.
 
 ## dream.process
 

@@ -274,3 +274,60 @@ fn shutdown_flushes_writers_a_script_never_closed() {
     assert_eq!(std::fs::read(scratch.0.join("kept.txt")).unwrap(), vec![b'x'; 100]);
     assert_eq!(std::fs::read(scratch.0.join("dropped.txt")).unwrap(), b"y");
 }
+
+#[test]
+fn paths_join_and_come_apart_without_a_capability() {
+    let separator = std::path::MAIN_SEPARATOR;
+    runtime_with(&[])
+        .exec(&format!(
+            "local sep = '{separator}' \
+             assert(fs.join('a', 'b', 'c.txt') == 'a' .. sep .. 'b' .. sep .. 'c.txt') \
+             assert(fs.join() == '' and fs.join('a') == 'a') \
+             assert(fs.parent('a/b/c.txt') == 'a/b' and fs.parent('c.txt') == '' and fs.parent('') == nil) \
+             assert(fs.fileName('a/b/c.txt') == 'c.txt' and fs.fileName('a/..') == nil) \
+             assert(fs.extension('a/b.tar.gz') == 'gz' and fs.extension('.hidden') == nil and fs.extension('x') == nil) \
+             assert(fs.isFileName('Morrowind.esm') and not fs.isFileName('a/b') and not fs.isFileName('..') \
+               and not fs.isFileName('') and not fs.isFileName('/abs')) \
+             local ok, err = pcall(fs.isFile, 'x') assert(not ok and err:find('filesystem.read'), err)"
+        ))
+        .unwrap();
+    #[cfg(unix)]
+    runtime_with(&[]).exec("assert(fs.join('a', '/abs', 'b') == '/abs/b')").unwrap();
+}
+
+#[test]
+fn files_are_written_exclusively_atomically_and_under_new_parents() {
+    let scratch = Scratch::new("write-modes");
+    runtime()
+        .exec(&format!(
+            "local root = {} \
+             assert(fs.isDir(root) and not fs.isFile(root) and not fs.isDir(root .. '/missing')) \
+             assert(fs.writeFile(root .. '/new/deep/file.txt', 'one', {{ createParents = true }}) == 3) \
+             assert(fs.isFile(root .. '/new/deep/file.txt')) \
+             local count, message, kind = fs.writeFile(root .. '/new/deep/file.txt', 'two', {{ exclusive = true }}) \
+             assert(count == nil and kind == 'alreadyExists', message) \
+             assert(fs.writeFile(root .. '/new/deep/fresh.txt', 'two', {{ exclusive = true }}) == 3) \
+             assert(fs.writeFile(root .. '/new/deep/file.txt', 'replaced', {{ atomic = true }}) == 8) \
+             assert(fs.readFileString(root .. '/new/deep/file.txt') == 'replaced') \
+             assert(fs.writeFile(root .. '/made/atomic.txt', 'x', {{ atomic = true, createParents = true }}) == 1) \
+             local names = fs.list(root .. '/new/deep') \
+             assert(#names == 2 and names[1] == 'file.txt' and names[2] == 'fresh.txt', table.concat(names, ',')) \
+             for _, bad in {{ {{ atomic = true, append = true }}, {{ atomic = true, offset = 0 }}, {{ exclusive = true, create = false }} }} do \
+               assert(not pcall(fs.writeFile, root .. '/x', 'y', bad)) \
+             end",
+            scratch.lua()
+        ))
+        .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let path = scratch.0.join("kept-mode");
+        std::fs::write(&path, b"old").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640)).unwrap();
+        runtime()
+            .exec(&format!("assert(fs.writeFile({} .. '/kept-mode', 'new', {{ atomic = true }}))", scratch.lua()))
+            .unwrap();
+        assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o640);
+        assert_eq!(std::fs::read(&path).unwrap(), b"new");
+    }
+}

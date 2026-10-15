@@ -495,17 +495,27 @@ impl OpenWrite {
     }
 }
 
-/// How `fs.writeFile` writes: `{ offset?, append?, create? }`.
+/// How `fs.writeFile` writes: `{ offset?, append?, create?, exclusive?, atomic?, createParents? }`.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct WriteFile {
     offset: Option<u64>,
     append: bool,
     create: bool,
+    exclusive: bool,
+    atomic: bool,
+    create_parents: bool,
 }
 
 impl WriteFile {
     pub(crate) fn read(scope: &impl Scope, options: Option<ValueView<'_>>) -> Result<WriteFile> {
-        let mut write = WriteFile { offset: None, append: false, create: true };
+        let mut write = WriteFile {
+            offset: None,
+            append: false,
+            create: true,
+            exclusive: false,
+            atomic: false,
+            create_parents: false,
+        };
         let Some(options) = options.filter(|view| !view.is_nil()) else {
             return Ok(write);
         };
@@ -515,18 +525,42 @@ impl WriteFile {
             }
             write.append = o.or("append", false)?;
             write.create = o.or("create", true)?;
+            write.exclusive = o.or("exclusive", false)?;
+            write.atomic = o.or("atomic", false)?;
+            write.create_parents = o.or("createParents", false)?;
             Ok(())
         })?;
         if write.offset.is_some() && write.append {
             return Err(Error::runtime("dream.fs.writeFile: offset and append cannot be combined"));
+        }
+        if write.exclusive && !write.create {
+            return Err(Error::runtime("dream.fs.writeFile: exclusive needs create"));
+        }
+        if write.atomic && (write.offset.is_some() || write.append || write.exclusive || !write.create) {
+            return Err(Error::runtime(
+                "dream.fs.writeFile: atomic replaces the whole file, so it takes no offset, append, exclusive or create = false",
+            ));
         }
         Ok(write)
     }
 
     /// Writes `data` to `path` as the options say.
     pub(crate) fn write(self, path: &Path, data: &[u8]) -> io::Result<()> {
+        if self.create_parents
+            && let Some(parent) = path.parent().filter(|parent| !parent.as_os_str().is_empty())
+        {
+            std::fs::create_dir_all(parent)?;
+        }
+        if self.atomic {
+            return write_atomic(path, data);
+        }
         let mut open = OpenOptions::new();
-        open.write(true).create(self.create);
+        open.write(true);
+        if self.exclusive {
+            open.create_new(true);
+        } else {
+            open.create(self.create);
+        }
         if self.append {
             open.append(true);
         } else if self.offset.is_none() {
@@ -538,6 +572,42 @@ impl WriteFile {
             None => file.write_all(data),
         }
     }
+}
+
+/// Replaces `path` with `data` through a sibling temporary renamed over it, so a reader sees
+/// the old file or the new one and never part of either. An existing file's permissions carry
+/// over; a new one gets what creating it directly would have given it.
+fn write_atomic(path: &Path, data: &[u8]) -> io::Result<()> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let name = path.file_name().ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "no file name"))?;
+    let parent = path.parent().filter(|parent| !parent.as_os_str().is_empty()).unwrap_or(Path::new("."));
+    let permissions = match std::fs::metadata(path) {
+        Ok(metadata) => Some(metadata.permissions()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error),
+    };
+    let (temporary, mut file) = loop {
+        let mut candidate = std::ffi::OsString::from(".");
+        candidate.push(name);
+        candidate.push(format!(".{}.{}.tmp", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+        let candidate = parent.join(candidate);
+        match OpenOptions::new().write(true).create_new(true).open(&candidate) {
+            Ok(file) => break (candidate, file),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error),
+        }
+    };
+    let written = file
+        .write_all(data)
+        .and_then(|()| permissions.map_or(Ok(()), |permissions| file.set_permissions(permissions)))
+        .and_then(|()| file.sync_all());
+    drop(file);
+    let result = written.and_then(|()| std::fs::rename(&temporary, path));
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    result
 }
 
 /// `fs.writeFile(path, data, options?)`: the count written.
