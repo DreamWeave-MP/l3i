@@ -1445,8 +1445,10 @@ shell in between. A program the OS can't start returns `nil`, the message and th
 `isTerminal` and `sleep` need nothing.
 
 A child inherits the host's environment only when the runtime grants `process.environment`;
-without it the child starts with exactly the variables `env` names, since inheriting would hand
-the script every variable `env` refuses it. `run` waits no longer than the runtime's execution
+without it the child starts with the host's `PATH` and exactly the variables `env` names, since
+inheriting would hand the script every variable `env` refuses it. `PATH` stays so the program,
+and whatever it starts in turn, is found where the host would find it; a script can learn it by
+running a program that prints it. `clearEnv = true` clears `PATH` too. `run` waits no longer than the runtime's execution
 time limit: a child still running at the deadline is killed and reaped, and the watchdog stops
 the script at its next instruction.
 

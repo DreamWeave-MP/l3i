@@ -159,9 +159,10 @@ fn os_string(what: &str, bytes: &[u8]) -> Result<std::ffi::OsString> {
     }
 }
 
-/// `process.run`. Without the environment capability the child starts with an empty environment
-/// plus what `env` names: inheriting the host's would hand a script every variable `process.env`
-/// refuses it.
+/// `process.run`. Without the environment capability the child starts with the host's `PATH` and
+/// what `env` names, nothing else: inheriting the host's environment would hand a script every
+/// variable `process.env` refuses it, and without `PATH` neither the program nor anything it starts
+/// is found where the host would find it. `clearEnv` clears `PATH` too.
 fn run(
     call: &Call<'_>,
     program: &[u8],
@@ -194,6 +195,12 @@ fn run(
     }
     if options.clear_env || !inherit_environment {
         command.env_clear();
+    }
+    if !options.clear_env
+        && !inherit_environment
+        && let Some(path) = std::env::var_os("PATH")
+    {
+        command.env("PATH", path);
     }
     for (key, value) in &options.env {
         command.env(os_string("an env name", key)?, os_string("an env value", value)?);

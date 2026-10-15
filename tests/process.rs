@@ -129,6 +129,22 @@ fn a_child_inherits_the_environment_only_under_its_capability() {
         .unwrap();
 }
 
+/// `PATH` is the one variable a child keeps without the environment capability, so a program is
+/// found where the host would find it, by its name alone; `clearEnv` takes it away too.
+#[cfg(unix)]
+#[test]
+fn a_child_keeps_the_host_path_unless_its_environment_is_cleared() {
+    let expected = format!("PATH={}\n", std::env::var("PATH").unwrap());
+    runtime_granting(&[SPAWN_CAPABILITY], Limits::default())
+        .exec(&format!(
+            "local kept = assert(process.run('env', nil, {{ stdout = 'capture' }})) \
+             assert(kept.stdout == {expected:?}, kept.stdout) \
+             local cleared = assert(process.run('/usr/bin/env', nil, {{ clearEnv = true, stdout = 'capture' }})) \
+             assert(cleared.stdout == '', cleared.stdout)"
+        ))
+        .unwrap();
+}
+
 #[cfg(unix)]
 #[test]
 fn a_child_still_running_at_the_execution_time_limit_is_killed() {
