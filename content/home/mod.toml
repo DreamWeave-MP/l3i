@@ -213,3 +213,45 @@ Nothing to change. A strict package that reported the three errors above at its 
 
 Known, and not l3i's to fix: under Luau's new solver, a function literal inside an `if` condition has its returns checked against the declared return type of the function holding the `if`. A reducer is lowered for analysis to such a literal, so `if any[for value in values => value > 2] then` inside a function declared to return, say, `buffer?` reports `Expected this to be 'buffer?', but got 'boolean'` twice. The code is correct and runs as written. To check clean, bind the reducer to a local before the `if`: `local found = any[...]`, then `if found then`.
 """
+
+[[releases]]
+version = "2.1.0"
+date = 2026-10-15
+summary = "Limits that hold: an uncatchable watchdog on every host call, a memory cap the allocator enforces, protected host-level pushes, deeply frozen sandboxes, and process capabilities that mean what they say; plus process.sleep, @dream/fs path functions and atomic writes, the rest of a regex API, trimming, shortest float digits, and Runtime::shutdown for hosts that exit without dropping the runtime."
+breaking = [
+    "`Stack` and `Frame` pushes, `open_standard_libraries`, `sandbox_globals` and `sandbox_luau` return `Result`: a push checks the stack has room, and host-level pushes and setup that allocate run under protection, so a stack overflow or an out of memory at host level is `Err` instead of an abort.",
+    "`process.write` needs the `process.stdio` capability. `process.run` starts a child with only the variables `env` names unless `process.environment` is granted, and kills a child still running when the execution time limit runs out.",
+    "`data.count` is `data.countWhere` and `data.compare` is `data.select`, so neither shares a name with `bytes.count` or `bytes.compare`.",
+    "`bytes.translate(text, rules)` takes the rules table `intern.new` takes (`nocase`, `replace`, `collapse`, `trimStart`, `trimEnd`), or a `bytes.rules` compiled from one, in place of its own `from`, `to` and options.",
+    "The TLS stream's `shutdownWrite()` is `shutdown('write')`, as a TCP stream half-closes.",
+    "`raster`'s module `rgba8` and `rgb8` clamp and round as the receiver's always did, instead of raising on a channel out of range.",
+]
+added = [
+    "`process.sleep(seconds)`, never past the runtime's execution time limit.",
+    "`@dream/fs` `join`, `parent`, `fileName`, `extension` and `isFileName`, which touch no disk and need no capability; `isFile` and `isDir`; `writeFile`'s `exclusive`, `atomic` and `createParents`.",
+    "`bytes.regex` `match`, `captures`, a `matches` iterator, `replace` and `replaceAll` by template or function, `split`, `tostring`, and `bytes.regexEscape`.",
+    "`bytes.trim`, `trimStart` and `trimEnd`: Unicode whitespace on UTF-8, ASCII otherwise, or a given byte set.",
+    "`bytes.shortest(value, width?)`, the fewest decimal digits that read back as a value at `f64` or `f32` width, and `bytes.toF32`.",
+    "`Runtime::shutdown()`, which flushes and closes every live `@dream/fs` writer without freeing the heap, for a host that leaves the heap to the process's exit.",
+    "`runtime::watchdog_remaining(scope)` and `runtime::expire_if_due(scope)`, so a host's own blocking native clamps its wait to the watchdog.",
+    "`Error::ExecutionTimeLimit` and `Error::MemoryLimit` (`Error::is_limit()`), `CallContext::HOST`, `Scope::is_host_level`, `flags::luau_assertions()`.",
+    "One capability denial, `Error::denied` and `ModuleInstaller::gated`, and one `stack::push_list`, for extensions.",
+    "`raster`'s module gains the channel getters its receiver has; every `math()` receiver method and its module function are expanded from one list, and a test holds them to each other.",
+]
+changed = [
+    "Every host call into Luau runs under the runtime's limits: an implicit host-interface scope arms the watchdog and the memory cap unless the host opens an `Initialization` scope itself.",
+    "Release builds define `NDEBUG`, so they no longer carry Luau's assertions and traps.",
+    "`udp`'s capability denials read like every other module's.",
+]
+fixed = [
+    "A timeout is sticky: once a call's execution time limit runs out, every safepoint raises until the scope that armed it ends, so `pcall`, `xpcall` and coroutines can't catch it and carry on.",
+    "The memory limit is the allocator's: a growth past it fails at the allocation, so one `buffer.create` can't take a gigabyte between watchdog polls.",
+    "`Thread::reset` refuses a thread that is running or resuming another, instead of tripping Luau's assertion and freeing the stack it runs on.",
+    "`readFile`, `readFileString` and `open` refuse a FIFO, a socket or a device instead of blocking on it or reading without end.",
+    "Every table and metatable a sandbox's library views and common packages reach is frozen, so one instance can't write through a nested table or a shared metatable to another.",
+]
+migration = """
+Handle the `Result` every push and setup call now returns (`?` in a function returning `l3i::Result`). Grant `process.stdio` to a runtime whose scripts write to the terminal through `process.write`, and `process.environment` to one whose children need the parent's environment, or pass `env`. Rename `data.count` and `data.compare` calls, rewrite `bytes.translate(text, from, to, options)` as `bytes.translate(text, bytes.rules { replace = { ... }, collapse = ..., ... })` (compile the rules once outside a loop), and `shutdownWrite()` as `shutdown('write')`. A script that caught a timeout with `pcall` to carry on now stops; that was the bug.
+
+`bytes.shortest` gives Rust's digits, which can differ from Ryū's (serde_json's) in the last digit where two shortest spellings both read back as the value.
+"""
