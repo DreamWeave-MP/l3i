@@ -270,3 +270,14 @@ fixed = [
 migration = """
 Nothing to change. A host that wanted a child to have no `PATH` passes `clearEnv = true`. `Value::clone`, `Value::type_of` and `Value::eq` answer as for an invalid value (an invalid clone, `Type::None`, `false`) when the main thread has no stack slot left, where they could abort before.
 """
+
+[[releases]]
+version = "2.1.2"
+date = 2026-10-15
+summary = "2.1.1's fixes, released through the pipeline: 2.1.1 went to crates.io by hand, without its GitHub release or documentation."
+changed = [
+    "Two push closures end with a semicolon, as the pedantic lints ask. Nothing else differs from 2.1.1.",
+]
+migration = """
+Nothing to change. Take 2.1.2 in place of 2.1.1; they are the same code.
+"""
