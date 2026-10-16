@@ -60,7 +60,7 @@ impl Value {
         // SAFETY: live state; the table is pinned and popped within this call.
         unsafe {
             crate::stack::push_allocating(state, scope.is_host_level(), |state| {
-                ffi::lua_createtable(state, narr, nrec)
+                ffi::lua_createtable(state, narr, nrec);
             })?;
             let value = Value::store(scope.top_value());
             ffi::lua_pop(state, 1);

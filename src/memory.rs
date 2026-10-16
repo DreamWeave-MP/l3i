@@ -281,7 +281,7 @@ impl Push for LightUserdata {
         }
         unsafe {
             crate::stack::push_fixed(scope.state(), |state| {
-                ffi::lua_pushlightuserdatatagged(state, self.pointer, self.tag)
+                ffi::lua_pushlightuserdatatagged(state, self.pointer, self.tag);
             })
         }?;
         Ok(scope.top_value())
