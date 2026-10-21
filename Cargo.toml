@@ -4,7 +4,7 @@
 autotests = false
 autobenches = false
 name = "l3i"
-version = "2.1.2"
+version = "2.1.3"
 description = "Luau binder for DreamWeave component crates: typed function binding, tagged and untagged userdata, direct userdata access, sandboxed runtimes"
 authors = ["Dave Corley (S3kshun8) <corleycomputerrepair@protonmail.ch>"]
 license = "MIT OR Apache-2.0"
@@ -63,7 +63,7 @@ memchr = { version = "2", optional = true }
 # CRC comes from crc32fast, which the digests share.
 miniz_oxide = { version = "0.9", optional = true }
 lz4_flex = { version = "0.14", optional = true }
-ruzstd = { version = "0.9", optional = true }
+ruzstd = { version = "0.9.1", optional = true }
 lzma-rs = { version = "0.3", optional = true }
 crc32fast = { version = "1", optional = true }
 # `bytes-digests`: checksums and cryptographic digests, all Rust (BLAKE3's SIMD kernels are
@@ -101,7 +101,7 @@ idna = { version = "1.1", optional = true }
 # `@dream/tls` (feature `tls`): rustls 0.23 with the ring provider (C and assembly built by cc
 # with clang), the platform trust store through rustls-platform-verifier (rustls-native-certs
 # on Linux, Security.framework on Apple, CryptoAPI on Windows), and zeroize for key buffers.
-rustls = { version = "0.23.40", optional = true, default-features = false, features = ["ring", "std", "tls12"] }
+rustls = { version = "0.23.46", optional = true, default-features = false, features = ["ring", "std", "tls12"] }
 rustls-platform-verifier = { version = "0.7", optional = true }
 zeroize = { version = "1.8", optional = true }
 
