@@ -281,3 +281,17 @@ changed = [
 migration = """
 Nothing to change. Take 2.1.2 in place of 2.1.1; they are the same code.
 """
+
+[[releases]]
+version = "2.1.3"
+date = 2026-10-21
+summary = "Security release: every dependency updated, closing seven RustSec advisories in the TLS stack and the Zstandard decoder, one of them high severity."
+changed = [
+    "ruzstd 0.9.1: RUSTSEC-2026-0344, a decompression bomb where a tiny input could exhaust memory (high). The JPK reader's zstd entries and `bytes.zstd` decode through it.",
+    "rustls 0.23.46: RUSTSEC-2026-0346 (session `Debug` impls exposed TLS secrets, medium), RUSTSEC-2026-0347, RUSTSEC-2026-0348, and RUSTSEC-2026-0349 (buffered data after ECH rejection, a 1 GiB certificate decompression before authentication, and a downgrade to classical key exchange from an unauthenticated ServerHello, all low).",
+    "rustls-webpki 0.103.16 and webpki-root-certs 1.0.10: RUSTSEC-2026-0382 and RUSTSEC-2026-0383, certificate verification and the bundled roots accepting distrusted intermediates.",
+    "The manifest's floors for rustls and ruzstd now start at the fixed versions, so a fresh resolution of a dependent can't pick the vulnerable ones. Every other dependency in the lock moved to its current compatible release. No API changed.",
+]
+migration = """
+Nothing to change. Take 2.1.3 in place of 2.1.2; `cargo update -p l3i` in a dependent does it, and `cargo audit` there should come back clean of these seven.
+"""
