@@ -295,3 +295,15 @@ changed = [
 migration = """
 Nothing to change. Take 2.1.3 in place of 2.1.2; `cargo update -p l3i` in a dependent does it, and `cargo audit` there should come back clean of these seven.
 """
+
+[[releases]]
+version = "2.2.0"
+date = 2026-10-23
+summary = "`@dream/process` says which OS it runs on and where the user's home and Documents folders are, so a script can find an application's files the way the application does."
+added = [
+    "`process.platform()`: the OS the host was built for, as Rust names it (`windows`, `macos`, `linux`, ...). A call rather than a constant, so compiled code never carries another platform's answer. No capability.",
+    "`process.knownFolder('home')`: `HOME`, or on Windows `USERPROFILE`, then `HOMEDRIVE` with `HOMEPATH`, then `HOME`. `process.knownFolder('documents')`: the Windows Documents known folder from `SHGetKnownFolderPath`, wherever the user or OneDrive moved it, and nil elsewhere. Both need `process.environment`, as `env` does.",
+]
+migration = """
+Nothing to change. Take 2.2.0 in place of 2.1.3. No dependency was added: the one Windows call is declared by l3i itself.
+"""
