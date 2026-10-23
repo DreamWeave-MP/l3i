@@ -9,6 +9,9 @@
 //!   still running at the deadline is killed and reaped.
 //! - `process.env(name)`: an environment variable, with the `process.environment` capability
 //!   ([`ENVIRONMENT_CAPABILITY`]).
+//! - `process.knownFolder(name)`: the user's `home`, or on Windows the `documents` known folder,
+//!   with the same capability: where they are says who the user is.
+//! - `process.platform()`: the OS the host was built for; no capability.
 //! - `process.write(stream, data)`: bytes to the host's standard output or error, unbuffered and
 //!   without the newline `print` adds, with the `process.stdio` capability ([`STDIO_CAPABILITY`]):
 //!   a sandboxed script's output goes where its host routes `print`, not to the host's streams.
@@ -394,6 +397,110 @@ fn is_terminal(name: &str) -> Result<bool> {
     Ok(if stream("isTerminal", name)? { std::io::stderr().is_terminal() } else { std::io::stdout().is_terminal() })
 }
 
+/// `process.platform()`: Rust's name for the OS the host was built for (`std::env::consts::OS`):
+/// `windows`, `macos`, `linux`, `android` and so on. A function rather than a compile constant,
+/// so bytecode compiled on one platform never carries another's answer.
+fn platform() -> &'static str {
+    std::env::consts::OS
+}
+
+fn non_empty_env_path(key: &str) -> Option<std::ffi::OsString> {
+    std::env::var_os(key).filter(|value| !value.is_empty())
+}
+
+/// The user's home folder as the platform's own tools find it: `HOME` on Unix; on Windows
+/// `USERPROFILE`, then `HOMEDRIVE` with `HOMEPATH`, then `HOME`.
+fn home_folder() -> Option<std::ffi::OsString> {
+    #[cfg(windows)]
+    {
+        if let Some(path) = non_empty_env_path("USERPROFILE") {
+            return Some(path);
+        }
+        if let (Some(drive), Some(path)) = (std::env::var_os("HOMEDRIVE"), std::env::var_os("HOMEPATH")) {
+            let mut merged = drive;
+            merged.push(path);
+            if !merged.is_empty() {
+                return Some(merged);
+            }
+        }
+    }
+    non_empty_env_path("HOME")
+}
+
+/// The Documents known folder, which Windows lets a user move (and OneDrive moves for them), so
+/// only `SHGetKnownFolderPath` knows where it is. Declared here rather than taken from a bindings
+/// crate: it is the one call l3i needs.
+#[cfg(windows)]
+fn documents_folder() -> Option<std::ffi::OsString> {
+    use std::ffi::c_void;
+    use std::os::windows::ffi::OsStringExt as _;
+
+    #[repr(C)]
+    struct Guid {
+        data1: u32,
+        data2: u16,
+        data3: u16,
+        data4: [u8; 8],
+    }
+
+    #[link(name = "shell32")]
+    unsafe extern "system" {
+        fn SHGetKnownFolderPath(id: *const Guid, flags: u32, token: *mut c_void, path: *mut *mut u16) -> i32;
+    }
+
+    #[link(name = "ole32")]
+    unsafe extern "system" {
+        fn CoTaskMemFree(memory: *mut c_void);
+    }
+
+    // FOLDERID_Documents, {FDD39AD0-238F-46AF-ADB4-6C85480369C7}.
+    let documents = Guid {
+        data1: 0xFDD3_9AD0,
+        data2: 0x238F,
+        data3: 0x46AF,
+        data4: [0xAD, 0xB4, 0x6C, 0x85, 0x48, 0x03, 0x69, 0xC7],
+    };
+    let mut path: *mut u16 = std::ptr::null_mut();
+    // SAFETY: `documents` outlives the call, a null token means the current user, and `path` is
+    // a valid place for the out pointer.
+    let status = unsafe { SHGetKnownFolderPath(&raw const documents, 0, std::ptr::null_mut(), &raw mut path) };
+    let folder = (status == 0 && !path.is_null()).then(|| {
+        let mut length = 0_usize;
+        // SAFETY: on success `path` is a null-terminated UTF-16 string.
+        while unsafe { *path.add(length) } != 0 {
+            length += 1;
+        }
+        // SAFETY: `path` holds `length` code units before its terminator.
+        std::ffi::OsString::from_wide(unsafe { std::slice::from_raw_parts(path, length) })
+    });
+    // SAFETY: the caller frees what SHGetKnownFolderPath allocated, whether it succeeded or not,
+    // and CoTaskMemFree accepts null.
+    unsafe { CoTaskMemFree(path.cast()) };
+    folder.filter(|folder| !folder.is_empty())
+}
+
+/// Windows is the one platform whose Documents folder only the OS can name.
+#[cfg(not(windows))]
+fn documents_folder() -> Option<std::ffi::OsString> {
+    None
+}
+
+/// `process.knownFolder(name)`: a folder the OS defines for the user, or nil when it can't name
+/// one. What an application makes of it (`.config`, `Library/Preferences`, `My Games`) is the
+/// application's to decide.
+fn known_folder(name: &str) -> Result<Option<Vec<u8>>> {
+    let folder = match name {
+        "home" => home_folder(),
+        "documents" => documents_folder(),
+        other => {
+            return Err(Error::runtime(format!(
+                "dream.process.knownFolder: name must be 'home' or 'documents', got '{other}'"
+            )));
+        }
+    };
+    Ok(folder.map(|folder| folder.as_encoded_bytes().to_vec()))
+}
+
 /// The `dream.process` extension.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ProcessExtension;
@@ -418,6 +525,12 @@ impl Extension for ProcessExtension {
             .installed("env")
             .signature("(name: string) -> string?")
             .doc("The environment variable name, or nil when it is unset; needs the process.environment capability.")
+            .installed("knownFolder")
+            .signature("(name: \"home\" | \"documents\") -> string?")
+            .doc("A folder the OS defines for the user: home, or documents (the Windows Documents known folder, wherever the user moved it; nil elsewhere). Nil when the OS can't name it; needs the process.environment capability.")
+            .function("platform", platform)
+            .signature("() -> string")
+            .doc("The OS the host was built for, as Rust names it: windows, macos, linux, android, and so on.")
             .installed("write")
             .signature("(stream: \"stdout\" | \"stderr\", data: buffer | string) -> (boolean?, string?, dream_process_ErrorKind?)")
             .doc("Writes data to the host's standard output or error, without the newline print adds; needs the process.stdio capability.")
@@ -438,6 +551,7 @@ impl Extension for ProcessExtension {
         module.gated("env", ENVIRONMENT_CAPABILITY, environment, |name: &[u8]| -> Result<Option<Vec<u8>>> {
             Ok(std::env::var_os(os_string("a variable name", name)?).map(|value| value.as_encoded_bytes().to_vec()))
         })?;
+        module.gated("knownFolder", ENVIRONMENT_CAPABILITY, environment, known_folder)?;
         module.gated("write", STDIO_CAPABILITY, stdio, write)?;
         module.gated(
             "run",

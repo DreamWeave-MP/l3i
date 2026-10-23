@@ -1433,16 +1433,18 @@ if not result.success then error(`tes3cmd exited with {result.code}`) end
 |---|---|
 | `run(program, args?, { cwd?, env?, clearEnv?, stdin?, stdout?, stderr? }?)` | `{ success, code?, signal?, stdout?, stderr? }`; `stdout` and `stderr` are `"inherit"` (the default), `"capture"` or `"null"` |
 | `env(name)` | An environment variable, or nil |
+| `knownFolder(name)` | A folder the OS defines for the user, or nil when it can't name it. `"home"`: `HOME`, or on Windows `USERPROFILE`, then `HOMEDRIVE` with `HOMEPATH`, then `HOME`. `"documents"`: the Windows Documents known folder from `SHGetKnownFolderPath`, wherever the user (or OneDrive) moved it; nil on every other platform. What an application keeps there is its own business |
+| `platform()` | The OS the host was built for, as Rust's `std::env::consts::OS` names it: `"windows"`, `"macos"`, `"linux"`, `"android"`, and so on. A call, not a constant, so compiled code never carries another platform's answer |
 | `write(stream, data)` | `true`: data to `"stdout"` or `"stderr"`, unbuffered, without `print`'s newline. A closed pipe is not an error in a host that ignores `SIGPIPE`, which every Rust binary does on startup; a host that has restored the default disposition dies on it, as `| head` has always killed writers |
 | `isTerminal(stream)` | Whether the stream is a terminal |
 | `sleep(seconds)` | Nothing: blocks the script's thread for `seconds` (finite, at least 0). Never past the runtime's execution time limit: a sleep the deadline cuts short ends there and the watchdog stops the script at its next instruction |
 
 The program is found the way the OS finds one, and its arguments reach it as they are, with no
 shell in between. A program the OS can't start returns `nil`, the message and the kind, as
-`@dream/fs` does. `run` needs `process.spawn` (`l3i::process::SPAWN_CAPABILITY`), `env` needs
-`process.environment` (`ENVIRONMENT_CAPABILITY`), and `write` needs `process.stdio`
-(`STDIO_CAPABILITY`), so a sandboxed script's output goes where its host routes `print`;
-`isTerminal` and `sleep` need nothing.
+`@dream/fs` does. `run` needs `process.spawn` (`l3i::process::SPAWN_CAPABILITY`), `env` and
+`knownFolder` need `process.environment` (`ENVIRONMENT_CAPABILITY`): where a user's folders are
+says who the user is. `write` needs `process.stdio` (`STDIO_CAPABILITY`), so a sandboxed script's
+output goes where its host routes `print`; `isTerminal`, `platform` and `sleep` need nothing.
 
 A child inherits the host's environment only when the runtime grants `process.environment`;
 without it the child starts with the host's `PATH` and exactly the variables `env` names, since

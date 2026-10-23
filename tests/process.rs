@@ -87,10 +87,32 @@ fn running_and_the_environment_need_their_capabilities() {
              assert(not ok and err:find(\"needs the 'process.spawn' capability\"), err) \
              ok, err = pcall(process.env, 'PATH') \
              assert(not ok and err:find(\"needs the 'process.environment' capability\"), err) \
+             ok, err = pcall(process.knownFolder, 'home') \
+             assert(not ok and err:find(\"needs the 'process.environment' capability\"), err) \
              ok, err = pcall(process.write, 'stdout', '') \
              assert(not ok and err:find(\"needs the 'process.stdio' capability\"), err) \
-             assert(type(process.isTerminal('stdout')) == 'boolean')",
+             assert(type(process.isTerminal('stdout')) == 'boolean') \
+             assert(type(process.platform()) == 'string')",
         )
+        .unwrap();
+}
+
+/// The platform is Rust's name for it, and the home folder the one the OS's own variables name:
+/// `HOME` on Unix, `USERPROFILE` on Windows (which every Windows session sets). Only Windows
+/// names a Documents folder.
+#[test]
+fn the_platform_and_its_known_folders() {
+    let home = std::env::var(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).unwrap();
+    let documents =
+        if cfg!(windows) { "assert(documents and #documents > 0, 'no documents')" } else { "assert(documents == nil)" };
+    runtime_with(true)
+        .exec(&format!(
+            "assert(process.platform() == {platform:?}, process.platform()) \
+             assert(process.knownFolder('home') == {home:?}, process.knownFolder('home')) \
+             local documents = process.knownFolder('documents') {documents} \
+             local ok, err = pcall(process.knownFolder, 'desktop') assert(not ok and err:find(\"name must be 'home' or 'documents'\"), err)",
+            platform = std::env::consts::OS,
+        ))
         .unwrap();
 }
 
