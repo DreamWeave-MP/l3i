@@ -107,7 +107,7 @@ or by building silently slow.
 | Side | Requirement | Where it is set |
 |---|---|---|
 | C++ (Luau, `csrc/`) | `clang++`; `build.rs` adds `-flto=thin` itself | `CXX=clang++` (`.cargo/config.toml` `[env]`) |
-| C in dependencies (BLAKE3's kernels, ring) | `clang`, never the system `cc`, which is GCC on many Linux hosts | `CC=clang` (`.cargo/config.toml` `[env]`) |
+| C (libopus under `audio`, BLAKE3's kernels, ring) | `clang`, never the system `cc`, which is GCC on many Linux hosts; `build.rs` holds libopus to the same rule as Luau | `CC=clang` (`.cargo/config.toml` `[env]`) |
 | Rust | `-Clinker-plugin-lto -Clinker=clang -Clink-arg=-fuse-ld=lld`, all three checked by `build.rs` | `.cargo/config.toml` `[target.*] rustflags` |
 | Both | clang and rustc on the same LLVM major (`clang++ --version`, `rustc -vV`) | checked by `build.rs` |
 | MSVC targets | `clang-cl` compiles (`CXX_x86_64-pc-windows-msvc`), rustc links with `-Clinker=lld-link` | `.cargo/config.toml` |
@@ -160,8 +160,8 @@ Cargo does not inherit a dependency's configuration, so a crate that depends on 
 CXX = "clang++"
 CXX_x86_64-pc-windows-msvc = "clang-cl"
 CXX_aarch64-pc-windows-msvc = "clang-cl"
-# C dependencies (BLAKE3's SIMD kernels, ring under `tls`) go through the same compiler: the
-# system `cc` is GCC on many Linux hosts, and l3i is never built with GCC.
+# C (libopus under `audio`, BLAKE3's SIMD kernels, ring under `tls`) goes through the same
+# compiler: the system `cc` is GCC on many Linux hosts, and l3i is never built with GCC.
 CC = "clang"
 CC_x86_64-pc-windows-msvc = "clang-cl"
 CC_aarch64-pc-windows-msvc = "clang-cl"

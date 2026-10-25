@@ -51,6 +51,9 @@ file states).
 The `intl` feature links ICU4X and its compiled CLDR data, under the Unicode License v3
 (`Unicode-3.0`); a product that enables it carries that notice too.
 
+The `audio` feature compiles libopus from the `opus` submodule, under the BSD 3-Clause license
+(copyright Xiph.Org and its contributors); a binary that enables it reproduces `opus/COPYING`.
+
 ## What is tested
 
 Every push to `main`, every pull request and every tag runs

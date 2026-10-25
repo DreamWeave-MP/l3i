@@ -1,13 +1,13 @@
 +++
 title = "Built-in extensions"
-description = "The extensions l3i ships: the dream.udp bridge every plan carries, packed rotations in dream.quat, colors and clip rectangles in dream.raster, the dream.soft_render device, bytes for parsing in dream.bytes, the bulk-data plane in dream.data, textual identity as numbers in dream.intern, locales, plural rules and number formatting in dream.intl, Luau's own parser in dream.luau, the host filesystem in dream.fs, child processes in dream.process, raw TCP streams with a readiness poller in dream.tcp, host name resolution in dream.dns, and verified TLS sessions in dream.tls."
+description = "The extensions l3i ships: the dream.udp bridge every plan carries, packed rotations in dream.quat, colors and clip rectangles in dream.raster, the dream.soft_render device, bytes for parsing in dream.bytes, the bulk-data plane in dream.data, textual identity as numbers in dream.intern, locales, plural rules and number formatting in dream.intl, Luau's own parser in dream.luau, the host filesystem in dream.fs, child processes in dream.process, raw TCP streams with a readiness poller in dream.tcp, host name resolution in dream.dns, verified TLS sessions in dream.tls, and MP3, Vorbis and Opus decoders in dream.audio."
 weight = 90
 
 [extra]
 kind = "guide"
 +++
 
-Fourteen extensions come with the crate. `dream.udp` is in every plan; the others are added with
+Fifteen extensions come with the crate. `dream.udp` is in every plan; the others are added with
 `RuntimePlan::builder().extension(..)`. Each is an ordinary `Extension` built on the
 [primitives](@/docs/primitives.md), with a Luau signature on every member, so a strict script
 that requires its module type checks against the plan's definitions.
@@ -28,6 +28,7 @@ that requires its module type checks against the plan's definitions.
 | `dream.tcp` | `@dream/tcp` | `l3i::tcp::TcpExtension` | `tcp` |
 | `dream.dns` | `@dream/dns` | `l3i::dns::DnsExtension` | `dns` |
 | `dream.tls` | `@dream/tls` | `l3i::tls::TlsExtension` | `tls` (with `tcp`) |
+| `dream.audio` | `@dream/audio` | `l3i::audio::AudioExtension` | `audio` |
 
 The samples below reach the modules as compat globals (`RuntimePolicy::new().compat_global("@dream/quat", "quat")`),
 which is what the tests do; `require("@dream/quat")` is the canonical path.
@@ -2006,3 +2007,119 @@ with `tls`, against 27 with no features). ring compiles C and assembly through c
 A stripped release build of `examples/https_get.rs` is 5.7 MiB against 3.5 MiB for the TCP-only
 `tcp_http_server` and 2.3 MiB for an example with no features (different programs, so only
 indicative).
+
+## dream.audio
+
+Feature `audio`; module `@dream/audio`, `l3i::audio::AudioExtension`. Decoders for the three
+compressed formats a game or an application ships audio in: MP3 (and MPEG layers I and II),
+Ogg Vorbis and Ogg Opus, each filling a caller's buffer with interleaved little-endian `f32`
+frames. Decoding reads only the bytes it was given: no file, no device, no capability. Mixing,
+resampling and playback are the host's.
+
+```luau
+local audio = require("@dream/audio")
+
+local decoder = audio.decoder(fs.readFile("theme.ogg"))
+print(decoder:format(), decoder:rate(), decoder:channels(), decoder:frames())   -- vorbis 44100 2 ...
+
+local block = buffer.create(4096 * decoder:channels() * 4)
+local frames = decoder:read(block)          -- up to 4096 frames, 0 at the end
+decoder:seek(44100)                         -- one second in, exactly
+
+local step = audio.decode(fs.readFile("step.mp3"))
+print(step.frames, step.rate, buffer.len(step.data))
+```
+
+| Function | Returns |
+|---|---|
+| `audio.detect(data)` | `"mp3"`, `"vorbis"`, `"opus"` or nil, from the first bytes of a buffer or string |
+| `audio.decoder(data, options?)` | A `dream_audio_Decoder` over a copy of the bytes; `{ format? }` names the format instead of detecting it |
+| `audio.decode(data, options?)` | `{ data, format, rate, channels, frames }`: the whole stream in one buffer, at most `maxSize` bytes (default 1 GiB) |
+| `decoder:format()`, `decoder:rate()`, `decoder:channels()` | The stream's format, frames per second and samples per frame |
+| `decoder:frames()` | The length in frames after gapless trimming, or nil when the stream does not say |
+| `decoder:position()` | The frame the next read starts at |
+| `decoder:read(target, offset?, frames?)` | Decodes up to `frames` frames (default: as many whole frames as fit) into `target` from byte `offset`; the frames written, 0 at the end |
+| `decoder:seek(frame)` | Moves to a frame; past the end is the end |
+
+A frame is one sample per channel, and positions and lengths count frames. Channels come in the
+file's own order, which for both Ogg formats is Vorbis order (5.1 is front left, centre, front
+right, rear left, rear right, LFE). Samples are nominally from -1 to 1; a decoder does not clip.
+
+### The formats
+
+**MP3** decodes through [nanomp3](https://crates.io/crates/nanomp3), a safe, bit-exact port of
+minimp3. ID3 and APE tags are skipped, and the encoder delay and padding a LAME or Xing header
+records are trimmed, so a loop cut in an encoder loops without a gap. The length comes from
+that header when there is one, as minimp3 does, and from scanning the stream when there is not:
+a file cut short after it was encoded states more frames than it holds, and reading ends where
+the data does. A stream whose rate, layer or channel count changes partway is an error where
+the change is.
+
+**Ogg Vorbis** decodes through [lewton](https://crates.io/crates/lewton)'s packet decoder.
+Each packet's output length follows from its block size without decoding it, so the length and
+every position are exact, and the first and last granule positions trim the start and the end
+as the Vorbis specification and libvorbis do: a first page that states fewer frames than its
+packets produce trims the start (unless it is also the last page, when the end is trimmed).
+
+**Ogg Opus** decodes through libopus 1.6.1, the reference implementation, built from source
+in its float configuration with the same clang and LTO as Luau.
+Opus always decodes at 48 kHz, whatever rate the encoder was given. The stream's pre-skip is
+trimmed from the start, its last granule position trims the end, and its output gain is
+applied. Mapping family 0 (mono and stereo), family 1 (up to eight channels) and family 255 are
+decoded; the ambisonic families 2 and 3 are refused, since they need a renderer.
+
+An Ogg file is indexed into its packets when it opens, copied out of their pages into one
+allocation about the file's size, so a seek is a binary search over packets. Only the first
+logical stream is read: a chained file plays its first link, and a multiplexed one its first
+stream. The framing is l3i's own: pages are checked against their CRC; a damaged one is skipped by scanning for the next
+page, and a packet that spanned it is dropped whole rather than decoded half. A file cut short
+plays up to the cut.
+
+### Seeking
+
+A seek is exact for MP3 and Vorbis: the decoder decodes what the target depends on (MP3's bit
+reservoir, the Vorbis packet whose window the target's packet overlaps) and then gives exactly
+what a straight run gives. Opus cannot be exact without decoding from the start, so decoding
+restarts 400 ms ahead of the target. RFC 7845 asks for at least 80 ms, after which a cold
+decoder still runs as much as 15% quiet: CELT codes each frame's band energies against the
+previous frame's, and the error decays a few frames at a time. After 400 ms it is under a
+millionth of full scale, for about twenty packets more per seek. A target within the first
+400 ms decodes from the start and is exact.
+
+### Errors
+
+Opening fails on bytes that are no format here, on the wrong `format`, and on headers that are
+broken or describe something unsupported, with an error naming the call:
+`audio.decoder: bad OpusHead: not an Opus stream`. A read fails where the stream is broken: an Ogg
+decoder reads on from the next packet, and an MP3 decoder stays at the end until it seeks. The
+decoders are third-party Rust fed whatever a file holds: a panic in one is caught at the call and reported, and that decoder refuses to read
+again until it seeks. `audio.decode` refuses an output past `maxSize` while decoding, before
+the buffer exists. Damaged files are a test: mutated copies of every fixture open, read and
+seek as errors or audio, never as a panic that escapes.
+
+### Checked against the reference decoders
+
+Real files decode to the reference decoders' length to the frame and agree with their output:
+thirty MP3s, from sound effects to whole songs, at 120 to 125 dB against ffmpeg's decoder, twenty Ogg
+Vorbis files at 129 to 133 dB against ffmpeg's, and fifteen Ogg Opus files at 137 to 139 dB
+against `opusdec` from the system's libopus. The exceptions are the two the rules above describe: an MP3 whose
+header states more than the file holds, and a Vorbis file whose first page trims its start,
+which libvorbis trims and ffmpeg does not.
+
+### What it costs
+
+A decoder holds a copy of the file (and for Ogg its packet index) on the native heap until it
+is collected; the VM sees one userdata. `decoder:read` writes straight into the caller's buffer
+through a scratch block the handle keeps. `audio.decode` builds the samples natively, then one
+buffer of exactly their size.
+
+The feature adds nanomp3 and its core with `wide`, `safe_arch` and `bytemuck` for its SIMD
+paths, and lewton with `byteorder` and `tinyvec`: eight crates, all Rust, under MIT,
+Apache-2.0, Zlib or the Unlicense, and both decoders forbid `unsafe`. Opus is C: libopus, the
+`opus` submodule, compiled by `build.rs` (137 files, the encoder among them for the linker
+to drop). It is under the BSD 3-Clause license, copyright Xiph.Org and its contributors,
+which asks a binary that ships it to reproduce its notice (`opus/COPYING`).
+
+Pure-Rust Opus decoders were measured first and set aside: opus-rs drifted 38 to 64 dB from
+libopus on thirteen of the fifteen real files, and ruopus matched libopus but needs an FFT
+whose dependencies require a newer Rust than l3i supports.

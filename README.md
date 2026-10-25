@@ -100,7 +100,7 @@ Each row is a page of the guide.
 | **Direct access** | Atoms let `GETTABLEKS`/`NAMECALL` reach a native callback with no metatable walk; `DirectPlan` validates Luau's inline cache in O(1) and serves a type under any tag. | [Direct access](https://DreamWeave-MP.github.io/l3i/docs/direct-access/) |
 | **Extensions and plans** | A crate declares its Luau surface once (`describe`), a plan composes crates and assigns every tag, slot and atom (`finalize`), a runtime is built from it (`from_plan`); the plan renders the `.d.luau` and can type check it. | [Extensions](https://DreamWeave-MP.github.io/l3i/docs/extensions/) |
 | **Primitives** | `BytesView`, `BufferView`, `Exact<T>`, `Integer`, `Bits64`, `PackedScalar` with a kind registry, strict `Options` tables, in-place table walks, `Sequence` and `Stream` views. | [Primitives](https://DreamWeave-MP.github.io/l3i/docs/primitives/) |
-| **Built-in extensions** | `@dream/udp` (in every plan), `@dream/quat`, `@dream/raster`, `@dream/bytes`, `@dream/data`, `@dream/intern`, `@dream/intl`, `@dream/luau`, `@dream/soft-render`, `@dream/fs`, `@dream/process`, `@dream/tcp`, `@dream/dns`, `@dream/tls`. | [Built-in extensions](https://DreamWeave-MP.github.io/l3i/docs/builtin-extensions/) |
+| **Built-in extensions** | `@dream/udp` (in every plan), `@dream/quat`, `@dream/raster`, `@dream/bytes`, `@dream/data`, `@dream/intern`, `@dream/intl`, `@dream/luau`, `@dream/soft-render`, `@dream/fs`, `@dream/process`, `@dream/tcp`, `@dream/dns`, `@dream/tls`, `@dream/audio`. | [Built-in extensions](https://DreamWeave-MP.github.io/l3i/docs/builtin-extensions/) |
 | **The dialect** | `[for e in entities if e.active => e.id]`, `sum[...]`, `into(out)[...]`, `t[a:b]`, `buf[1:n, "f32@16"]` and `local {x, y} = p`: source syntax lowered by one frontend to the same-contract handwritten loop, with tooling in original coordinates. | [The l3i dialect](https://DreamWeave-MP.github.io/l3i/docs/dialect/) |
 | **Native code** | Luau's CodeGen with lowering hooks written in Rust; which call sites lower and why. | [Native code](https://DreamWeave-MP.github.io/l3i/docs/native-code/) |
 | **The rest of the VM** | Coroutines, the debug API, memory and GC controls, libraries, `require`, Luau's analysis frontend. | [Coroutines, debugging and the rest](https://DreamWeave-MP.github.io/l3i/docs/vm/) |
@@ -124,6 +124,7 @@ Each row is a page of the guide.
 | `dream.tcp` (`tcp`) | `@dream/tcp` | Raw TCP byte streams over numeric addresses: `readInto` into caller buffers with end of stream kept apart from would-block, partial writes with no hidden queue, half-close, and a bounded, level-triggered poller that never calls Luau. Behind `network.tcp.connect`, `network.tcp.listen` and `network.tcp.public`. |
 | `dream.dns` (`dns`) | `@dream/dns` | Host name resolution through the OS resolver on a bounded worker pool: one-shot requests that never block the script, IDNA names, both address families in the OS's order, deadlines and cancellation, watchable by the TCP poller. Behind `network.dns.resolve`. |
 | `dream.tls` (`tls`) | `@dream/tls` | Verified TLS 1.3 and 1.2 client and server sessions over TCP streams with rustls: the platform trust store or explicit roots, name verification independent of the address, ALPN and SNI, bounded buffers, close_notify kept apart from truncation, nonblocking and watchable; no way to skip verification. |
+| `dream.audio` (`audio`) | `@dream/audio` | MP3, Ogg Vorbis and Ogg Opus decoders that fill caller buffers with interleaved f32 frames: exact lengths, gapless trimming of encoder delay and padding, exact seeks (Opus after a 400 ms pre-roll), and damaged files reported, never fatal. |
 
 ## Features
 
@@ -145,12 +146,13 @@ Each row is a page of the guide.
 | `tcp` | The `@dream/tcp` extension | `mio` (`socket2` is already a dependency of `dream-net`) |
 | `dns` | The `@dream/dns` extension | `idna` (ICU4X's normalizer, Unicode-3.0), `libc` on Unix |
 | `tls` | The `@dream/tls` extension (turns on `tcp`) | `rustls` with ring, `rustls-platform-verifier`, `zeroize`, `idna` |
+| `audio` | The `@dream/audio` extension | `nanomp3` (with `wide`), `lewton`; libopus from the `opus` submodule, built by cc with clang |
 | `soft-render` | The `dream.soft_render` extension | `dream-soft-render` |
 
 The default feature set is empty. The game transport is not a feature: `dream-net` is a
 dependency.
 Everything optional is Rust, except the C and assembly compiled with clang for BLAKE3's
-kernels (`bytes-digests`) and ring (`tls`).
+kernels (`bytes-digests`) and ring (`tls`), and libopus (`audio`).
 
 ## The rules
 
@@ -225,3 +227,7 @@ has every table.
 
 MIT OR Apache-2.0. Luau is Roblox's, under the MIT license; its notice ships in the package as
 `luau/LICENSE.txt` and `luau/lua_LICENSE.txt`.
+
+The `audio` feature compiles libopus, under the BSD 3-Clause license (copyright Xiph.Org and its
+contributors); its notice ships as `opus/COPYING`, and a binary that enables the feature
+reproduces it.
