@@ -64,6 +64,8 @@ fn grows_linearly_fails_only_what_is_slow_on_every_attempt() {
 
 #[cfg(feature = "analysis")]
 mod analysis;
+#[cfg(feature = "audio")]
+mod audio;
 #[cfg(feature = "bytes")]
 mod bytes;
 mod call;

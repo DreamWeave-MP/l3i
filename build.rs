@@ -101,6 +101,9 @@ fn main() {
     let jit = env::var_os("CARGO_FEATURE_JIT").is_some();
     let analysis = env::var_os("CARGO_FEATURE_ANALYSIS").is_some();
     let syntax = env::var_os("CARGO_FEATURE_SYNTAX").is_some();
+    if env::var_os("CARGO_FEATURE_AUDIO").is_some() {
+        build_opus(&target, debug);
+    }
 
     let mut base = cc::Build::new();
     base.cpp(true).std("c++17").warnings(false);
@@ -245,6 +248,67 @@ fn main() {
         .file("csrc/surface_syntax.cpp")
         .file("csrc/source_map.cpp")
         .compile("l3isurface");
+}
+
+/// libopus for `@dream/audio`, from the `opus` submodule: the reference decoder in its float
+/// build, under the same toolchain rule as Luau. The sources are the ones libopus's own makefile
+/// fragments list, so a submodule bump needs no edit here. The encoder comes along (the
+/// fragments don't separate it) and the linker drops it, since nothing calls it.
+fn build_opus(target: &str, debug: bool) {
+    println!("cargo:rerun-if-changed=opus");
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("opus");
+    assert!(
+        root.join("include/opus.h").is_file(),
+        "the libopus submodule is not checked out; run `git submodule update --init` in {}",
+        root.parent().unwrap().display()
+    );
+    let mut build = cc::Build::new();
+    build.warnings(false);
+    toolchain_policy(&mut build);
+    for include in ["include", "celt", "silk", "silk/float"] {
+        build.include(root.join(include));
+    }
+    build.define("OPUS_BUILD", None).define("HAVE_LRINTF", None).define("USE_ALLOCA", None);
+    if !target.contains("windows") {
+        build.define("HAVE_ALLOCA_H", None);
+    }
+    if !debug {
+        build.define("NDEBUG", None);
+    }
+    for (fragment, lists) in [
+        ("celt_sources.mk", &["CELT_SOURCES"][..]),
+        ("silk_sources.mk", &["SILK_SOURCES", "SILK_SOURCES_FLOAT"][..]),
+        ("opus_sources.mk", &["OPUS_SOURCES", "OPUS_SOURCES_FLOAT"][..]),
+    ] {
+        let text = std::fs::read_to_string(root.join(fragment))
+            .unwrap_or_else(|error| panic!("cannot read opus/{fragment}: {error}"));
+        for list in lists {
+            let files = make_list(&text, list);
+            assert!(!files.is_empty(), "opus/{fragment} has no {list}");
+            for file in files {
+                build.file(root.join(file));
+            }
+        }
+    }
+    build.compile("l3iopus");
+}
+
+/// The words of `NAME = a \ b \ c` in a makefile fragment: the assignment and its continued
+/// lines.
+fn make_list<'a>(text: &'a str, name: &str) -> Vec<&'a str> {
+    let mut words = Vec::new();
+    let mut lines = text.lines().skip_while(|line| line.split_whitespace().next() != Some(name));
+    let Some(first) = lines.next() else { return words };
+    let mut line = first.split_once('=').map_or("", |(_, rest)| rest);
+    loop {
+        let continued = line.trim_end().ends_with('\\');
+        words.extend(line.split_whitespace().filter(|word| *word != "\\"));
+        if !continued {
+            return words;
+        }
+        let Some(next) = lines.next() else { return words };
+        line = next;
+    }
 }
 
 /// Parses the `enum class` bodies the Rust IR layer mirrors and writes them to `OUT_DIR`.

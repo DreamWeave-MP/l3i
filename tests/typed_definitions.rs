@@ -34,6 +34,8 @@ fn plan() -> Rc<RuntimePlan> {
         .extension(QuatExtension)
         .extension(RasterExtension)
         .extension(SoftRenderExtension);
+    #[cfg(feature = "audio")]
+    let builder = builder.extension(l3i::audio::AudioExtension);
     #[cfg(feature = "bytes")]
     let builder = builder.extension(l3i::bytes::BytesExtension);
     #[cfg(feature = "data")]
@@ -110,6 +112,26 @@ const BYTES_SCRIPT: (&str, &str) = (
      B:writei64be(buf, 16, big)\n\
      local hex: string = bytes.toHex(piece)\n\
      print(at, same, after, next, after2, written, m, hex)\n",
+);
+
+#[cfg(feature = "audio")]
+const AUDIO_SCRIPT: (&str, &str) = (
+    "audio_script",
+    "--!strict\n\
+     local audio = require('@dream/audio')\n\
+     local bytes = buffer.create(16)\n\
+     local format: dream_audio_Format? = audio.detect(bytes)\n\
+     local decoder = audio.decoder(bytes, { format = 'vorbis' })\n\
+     local name: dream_audio_Format = decoder:format()\n\
+     local rate: number, channels: number = decoder:rate(), decoder:channels()\n\
+     local frames: number?, position: number = decoder:frames(), decoder:position()\n\
+     local read: number = decoder:read(buffer.create(64), 0, 4) + decoder:read(bytes)\n\
+     decoder:seek(0)\n\
+     local whole = audio.decode('', { format = 'mp3', maxSize = 1024 })\n\
+     local data: buffer = whole.data\n\
+     local count: number = whole.frames + whole.rate + whole.channels\n\
+     local kind: dream_audio_Format = whole.format\n\
+     print(format, name, rate, channels, frames, position, read, data, count, kind)\n",
 );
 
 #[cfg(feature = "intern")]
@@ -465,6 +487,8 @@ fn the_generated_definitions_type_check_and_typed_scripts_pass_strict_mode() {
     }
     assert!(!definitions.contains("declare quat"), "no compatibility global is declared:\n{definitions}");
     let mut all_scripts: Vec<(&str, &str)> = SCRIPTS.to_vec();
+    #[cfg(feature = "audio")]
+    all_scripts.push(AUDIO_SCRIPT);
     #[cfg(feature = "bytes")]
     all_scripts.push(BYTES_SCRIPT);
     #[cfg(feature = "data")]

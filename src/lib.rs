@@ -67,6 +67,8 @@
 
 #[cfg(feature = "analysis")]
 pub mod analysis;
+#[cfg(feature = "audio")]
+pub mod audio;
 pub mod bind;
 #[cfg(any(feature = "bytes", feature = "intern"))]
 mod byte_rules;
