@@ -1,6 +1,6 @@
 # l3i
 
-**The Luau runtime for DreamWeave.** A Rust binder for [Luau](https://luau.org) 0.742 that
+**The Luau runtime for DreamWeave.** A Rust binder for [Luau](https://luau.org) 0.744 that
 owns its own Luau build, plans every VM before it exists, and lowers hot script calls to native
 code.
 
@@ -180,7 +180,7 @@ binder.
 
 | | |
 |---|---|
-| Luau | git submodule `luau/`, release 0.742; `git clone --recurse-submodules` |
+| Luau | git submodule `luau/`, release 0.744; `git clone --recurse-submodules` |
 | C++ side | compiled by `build.rs` with `cc`: `LUAI_MAXCSTACK=8000`, three-component vectors, `LUA_UTAG_LIMIT=254`, `-fno-math-errno`, no `-march` |
 | Toolchain | clang++, lld, cross-language thin LTO, clang and rustc on the same LLVM major; enforced by `build.rs` |
 | Apple targets | clang and lld without `-Clinker-plugin-lto` (ld64.lld rejects it); macOS forfeits the cross-language inlining |

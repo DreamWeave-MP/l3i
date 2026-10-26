@@ -548,7 +548,7 @@ own architecture, and `LuauCoroutineFinally` is raised separately by the builder
 {{ api_signature(value="fn initialize() -> Result<()>") }}
 
 Freezes the policy. Idempotent and thread-safe. A flag name the linked Luau lacks is
-`Error::Logic` (`Luau 0.742 has no fast flag named ...`) rather than a silent no-op.
+`Error::Logic` (`Luau 0.744 has no fast flag named ...`) rather than a silent no-op.
 
 {{ api_signature(value="fn coroutine_finalizers() -> bool") }}
 

@@ -11,7 +11,7 @@ kind = "reference"
 
 l3i is on 2.x: every release in 2.x keeps the Rust API compatible, as Cargo's semver rules
 expect, and the [changelog](@/home/_changelog.md) lists what 2.0 changed against 1.3.1 and how
-to move. The Luau it embeds is release 0.742, as the `luau/` submodule; bumping it is a
+to move. The Luau it embeds is release 0.744, as the `luau/` submodule; bumping it is a
 deliberate change that re-audits the hand-declared C API and the flag list.
 
 ## Rust and dependencies

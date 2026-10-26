@@ -1,6 +1,6 @@
 +++
 title = "Documentation"
-description = "How l3i puts a safe, scoped Rust layer over Luau 0.742: the stack tiers, userdata, modules and sandboxes, runtime options, direct access, the rest of the VM, the built-in extensions, the dialect, the safety model, and the complete Rust API."
+description = "How l3i puts a safe, scoped Rust layer over Luau 0.744: the stack tiers, userdata, modules and sandboxes, runtime options, direct access, the rest of the VM, the built-in extensions, the dialect, the safety model, and the complete Rust API."
 template = "docs/section.html"
 page_template = "docs/page.html"
 sort_by = "weight"
@@ -16,7 +16,7 @@ hide_child_cards = true
 kind = "guide"
 +++
 
-l3i is a Rust binder for Luau 0.742. It began as
+l3i is a Rust binder for Luau 0.744. It began as
 [a C++ Luau binder](https://gitlab.com/magicaldave1/openmw/-/tree/f69579c8d54fb2ae4d7a79a4d7033205effaec0e/components/luau)
 its author wrote for OpenMW; when these pages say "the C++ binder", that is the one they mean,
 and [Where the fast paths came from](@/docs/performance.md#where-the-fast-paths-came-from)

@@ -1,6 +1,6 @@
 +++
 title = "l3i"
-description = "The Luau runtime for DreamWeave: a Rust binder that owns its Luau 0.742 build, plans every VM before it exists, and lowers hot script calls to native code."
+description = "The Luau runtime for DreamWeave: a Rust binder that owns its Luau 0.744 build, plans every VM before it exists, and lowers hot script calls to native code."
 
 [taxonomies]
 tags = ["Rust", "Luau", "Bindings", "Game development", "Native code"]
@@ -27,7 +27,7 @@ comprehensions, slices and record patterns compile to the loops you would have w
 {{ pipeline(data_path="data/pipeline/plan.json") }}
 
 {% features() %}
-- **Its own Luau.** Luau 0.742 is a git submodule compiled by `build.rs` with clang, lld and
+- **Its own Luau.** Luau 0.744 is a git submodule compiled by `build.rs` with clang, lld and
   cross-language thin LTO, so the Rust thunks and the Luau API inline into each other. No `mlua`,
   no separate binding crate, nothing fetched at build time.
 - **Arguments read from the value layout.** The typed binder reads stack slots straight from

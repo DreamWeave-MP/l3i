@@ -12,16 +12,16 @@ use crate::raw::ffi;
 
 /// l3i's flag policy for the Ast, Bytecode, Compiler, and VM components, which are always
 /// linked: every flag here is on for the reason beside it. Runtime flags must be set before
-/// `luaL_openlibs`. Luau 0.741 graduated two flags this list carried,
-/// `LuauNoDuplicateBinaryPrefix` and `LuauCompileIifeInline`: their enabled behavior is now
-/// unconditional, so they are gone.
+/// `luaL_openlibs`. A flag Luau graduates, its enabled behavior made unconditional, comes off
+/// the list: 0.741 graduated `LuauNoDuplicateBinaryPrefix` and `LuauCompileIifeInline`, and
+/// 0.743 and 0.744 the compiler's `LuauCompileCleanBlockDeadClose`, `LuauCompileUndoEmitAdjust`,
+/// `LuauCompileLoopUnrollZero` and `LuauCompileRecursiveAliases` and the runtime's
+/// `LuauTableArrayAdjustCheck`, `LuauSplitTableLookups`, `LuauTableMoveTimeoutFix`,
+/// `LuauNewPointerEncode`, `LuauPcallOptimize`, `LuauCallLuauTm`, `LuauBackedgeHeapCheck` and
+/// `LuauFastpcallInterrupt`.
 pub const LUAU_FLAGS: &[&str] = &[
     // Compiler side
-    "LuauCompileCleanBlockDeadClose",
-    "LuauCompileUndoEmitAdjust",
-    "LuauCompileLoopUnrollZero",
     "LuauCompileNoFoldVectorEqW",
-    "LuauCompileRecursiveAliases",
     "LuauCompileConcatTargetTop",
     "LuauIntegerFastcalls",
     "LuauIntegerBufferFastcalls",
@@ -38,19 +38,11 @@ pub const LUAU_FLAGS: &[&str] = &[
     "LuauExperimentalIfLocalSyntax",
     // Runtime side
     "LuauIntegerLibrary",
-    "LuauTableArrayAdjustCheck",
-    "LuauSplitTableLookups",
     "LuauOptimizeStringSplit",
     "LuauLoadRemapOptionalUserdata",
-    "LuauTableMoveTimeoutFix",
     "LuauTableRobustOom",
     "FixMathNoisePrecision",
-    "LuauNewPointerEncode",
-    "LuauPcallOptimize",
-    "LuauCallLuauTm",
-    "LuauBackedgeHeapCheck",
     "LuauFastpcall",
-    "LuauFastpcallInterrupt",
     // Luau 0.742: a protected call an error continuation starts inside a resumed coroutine is
     // resumed, where it used to be dropped.
     "LuauPcallErrorContinuationReentry",
@@ -73,13 +65,13 @@ pub const LUAU_FLAGS: &[&str] = &[
 /// in the per-architecture lowering files, which the linker only keeps for the target
 /// architecture, so each of those exists at run time on its own architecture only.
 /// Luau 0.742 removed `AddReturnExectargetCheck` together with
-/// `disableNativeExecutionForFunction`, the one function that needed it.
+/// `disableNativeExecutionForFunction`, the one function that needed it; 0.743 and 0.744
+/// graduated `LuauCodegenNoLinearFastpcall` and `LuauCodegenLimitVersions`.
 pub const LUAU_CODEGEN_FLAGS: &[&str] = &[
     "LuauCodegenPropagateFallbackTags",
     "LuauCodegenX64IntSpillRestore",
     "LuauCodegenA64ForgLoopArray",
     "LuauCodeGenFastpcall",
-    "LuauCodegenNoLinearFastpcall",
     "LuauCodegenInteger3",
     "LuauCodegenIntegerCompare",
     "LuauCodegenBufferInteger",
@@ -91,11 +83,10 @@ pub const LUAU_CODEGEN_FLAGS: &[&str] = &[
     "LuauCodegenScopedSpillKeepLazy",
     // Luau 0.742: a buffer offset multiplied by a constant zero keeps its scale.
     "LuauCodegenNoZeroScale",
-    // Constant propagation packs a register's version into twenty bits of an operand. The first
-    // flag (0.741) stops propagating along a block chain before a version outgrows them; the
-    // second (0.742) makes stopping sound, applying pending substitutions and discarding the
-    // fallback entry tags recorded before the stop. Neither is correct without the other.
-    "LuauCodegenLimitVersions",
+    // Constant propagation packs a register's version into twenty bits of an operand and, since
+    // 0.744 graduated the first half of the fix, stops propagating along a block chain before a
+    // version outgrows them. This flag (0.742) makes stopping sound, applying pending
+    // substitutions and discarding the fallback entry tags recorded before the stop.
     "LuauCodegenLimitVersionsExtra",
 ];
 

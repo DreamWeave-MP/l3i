@@ -197,7 +197,7 @@ emits, so `flags::initialize()` freezes one policy before the first VM is create
 (`flags::LUAU_FLAGS`, plus `flags::LUAU_CODEGEN_FLAGS` under `jit`), never Luau's "enable
 everything". Every flag on it is there for a stated reason, in the source next to its name:
 
-- The compiler and runtime optimizations and fixes that Luau 0.742 still gates, including the
+- The compiler and runtime optimizations and fixes that Luau 0.744 still gates, including the
   two 0.742 miscompile fixes (`LuauCompileMoveElisionFix`, `LuauCompileTableFoldFix`) and the
   0.741 GC pacing fix (`LuauGcHeapShrinkFix`), which read a heap that shrank between
   measurements as an enormous allocation rate.
