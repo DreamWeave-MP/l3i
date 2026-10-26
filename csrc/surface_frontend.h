@@ -150,6 +150,14 @@ struct Comprehension
     bool complete = false;
     // Uses the enclosing function's `...`: the lowered call forwards them.
     bool varargs = false;
+    // The type annotation of the one local this comprehension is the whole initializer of,
+    // `local name: T = [...]`; empty otherwise. Analysis gives the projection T's element type
+    // from it, as the loop the comprehension stands for would get from its assignment. For a
+    // `return [...]`, the lowering fills it with the declared result of the function returned
+    // from, which Luau's parse of a first lowering finds.
+    Range annotation;
+    // The whole value of a `return` statement.
+    bool returned = false;
 };
 
 struct Slice

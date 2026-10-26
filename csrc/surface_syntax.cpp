@@ -680,10 +680,11 @@ private:
         return out;
     }
 
-    void projection(Text& out, const Comprehension& node, const std::string& name, ComprehensionSite& site)
+    void projection(Text& out, const Comprehension& node, const std::string& name, ComprehensionSite& site,
+        const std::string& type = {})
     {
         out.anchor = node.projection;
-        out += "local " + name + "_value = ";
+        out += "local " + name + "_value" + (type.empty() ? "" : ": " + type) + " = ";
         site.projection = expression(out, node.projection, "(nil :: any)", node.projectionSuffix);
         out += " if " + name + "_value == nil then " + operations
             + "_error(\"L3i comprehension projection produced nil; filter nil explicitly\") end ";
@@ -1039,6 +1040,9 @@ private:
         size_t sinkSize = 0;      // A buffer sink's element size and stride in bytes.
         size_t sinkStride = 0;
         size_t sinkField = 0;     // The field's position inside each record, `f32@16+12`.
+        // Analysis only: the type of the local the result initializes, which the result, the
+        // accumulator and each projected value are given; empty otherwise.
+        std::string type;
     };
 
     // A sink destination may not also be a pipeline source: the pipeline would read elements
@@ -1054,7 +1058,12 @@ private:
     // or up front when it is not.
     void allocation(Text& out, const Emission& e, const std::string& size = {})
     {
-        if (!e.scalar)
+        if (!e.scalar && !e.type.empty())
+            // The guard removes nil from a type whose alias hides it, so `typeof(output[1])`
+            // names the element type; it never runs, as analysis never does.
+            out += "local " + e.output + " = (" + (size.empty() ? "{}" : operations + "_table_create(" + size + ")") +
+                " :: any) :: (" + e.type + ") if not " + e.output + " then return (nil :: any) end ";
+        else if (!e.scalar)
             out += "local " + e.output + " = " + (size.empty() ? "{} " : operations + "_table_create(" + size + ") :: typeof({}) ");
         if (e.needsCursor)
             out += "local " + e.cursor + " = " + e.seed + " ";
@@ -1262,7 +1271,7 @@ private:
     // The consumer's per-element step: the projection, then what the consumer does with it.
     void step(Text& out, Emission& e)
     {
-        projection(out, e.node, e.name, e.site);
+        projection(out, e.node, e.name, e.site, e.type.empty() ? std::string() : "typeof(" + e.output + "[1])");
         const std::string value = e.name + "_value";
         switch (e.pipeline.consumer)
         {
@@ -1503,7 +1512,16 @@ private:
         if (node.sinkStatement)
             out += ";"; // Separate the call from the previous statement; Luau would otherwise call its result.
         const size_t callBegin = out.size();
-        out += node.varargs ? "(function(...) " : "(function() ";
+        // Analysis gives the result the type of the local it initializes, so the projection is
+        // checked against its element type, as the loop the comprehension stands for would be.
+        // An annotation over several lines, or holding a comment, keeps the untyped lowering: the
+        // copy would add lines, or comment out the rest of the generated one.
+        std::string type = !dynamicGenerators && pipeline.consumer == Consumer::Materialize && !node.annotation.empty()
+            ? std::string(source.substr(node.annotation.begin, node.annotation.end - node.annotation.begin))
+            : std::string();
+        if (type.find('\n') != std::string::npos || type.find("--") != std::string::npos)
+            type.clear();
+        out += std::string(node.varargs ? "(function(...)" : "(function()") + (type.empty() ? "" : ": (" + type + ")") + " ";
         comments(out, node, out.anchor.begin);
         ComprehensionSite site;
         site.comprehension = index;
@@ -1516,6 +1534,7 @@ private:
         const SourceKind first = single ? pipeline.stages.front().kind : SourceKind::Plain;
         const Consumer consumer = pipeline.consumer;
         Emission e(node, pipeline, site, name, name + "_out", name + accumulator(consumer), index);
+        e.type = type;
         e.scalar = consumer != Consumer::Materialize;
         e.sized = single && first != SourceKind::Range;
         e.directIndex = single && node.clauses.size() == 1 && first != SourceKind::Range && first != SourceKind::Slice;
@@ -1590,6 +1609,60 @@ size_t originalBegin(const std::vector<Segment>& segments, size_t generated)
     if (it == segments.begin()) return 0;
     const Segment& segment = *--it;
     return segment.copied ? segment.originalBegin + (generated - segment.begin) : segment.originalBegin;
+}
+
+// A comprehension that is a whole `return` value gets, as its annotation, the one type the
+// function it returns from declares as its result, read from Luau's parse of a first lowering.
+// A function with no declared result, or a pack of other than one type, leaves it untyped.
+void returnTypes(const Text& first, std::string_view source, Document& document)
+{
+    std::unordered_map<size_t, size_t> calls; // Generated call begin -> comprehension index.
+    for (const ComprehensionSite& site : first.sites)
+        if (document.comprehensions[site.comprehension].returned)
+            calls.emplace(site.call.begin, site.comprehension);
+    if (calls.empty()) return;
+    Luau::Allocator allocator;
+    Luau::AstNameTable names(allocator);
+    const Luau::ParseResult parsed = Luau::Parser::parse(first.text.data(), first.text.size(), names, allocator);
+    if (!parsed.root) return;
+    std::vector<size_t> starts{0};
+    for (size_t i = 0; i < first.text.size(); ++i)
+        if (first.text[i] == '\n') starts.push_back(i + 1);
+    const auto offset = [&](Luau::Position p) { return p.line < starts.size() ? starts[p.line] + p.column : first.text.size(); };
+    struct Finder final : Luau::AstVisitor
+    {
+        std::vector<Luau::AstExprFunction*> functions;
+        std::function<void(Luau::AstExprCall*, Luau::AstExprFunction*)> found;
+        bool visit(Luau::AstExprFunction* node) override
+        {
+            functions.push_back(node);
+            node->body->visit(this);
+            functions.pop_back();
+            return false;
+        }
+        bool visit(Luau::AstStatReturn* node) override
+        {
+            if (node->list.size == 1 && !functions.empty())
+                if (auto* call = node->list.data[0]->as<Luau::AstExprCall>())
+                    found(call, functions.back());
+            return true;
+        }
+    } finder;
+    finder.found = [&](Luau::AstExprCall* call, Luau::AstExprFunction* function) {
+        auto it = calls.find(offset(call->location.begin));
+        auto* pack = function->returnAnnotation ? function->returnAnnotation->as<Luau::AstTypePackExplicit>() : nullptr;
+        if (it == calls.end() || !pack || pack->typeList.types.size != 1 || pack->typeList.tailType)
+            return;
+        const Luau::Location type = pack->typeList.types.data[0]->location;
+        const size_t begin = offset(type.begin), end = offset(type.end);
+        const Range original{originalBegin(first.segments, begin), originalEnd(first.segments, end)};
+        // The result type lies outside every construct, so it is copied: the same bytes.
+        if (original.end < original.begin || source.substr(original.begin, original.end - original.begin) !=
+            std::string_view(first.text).substr(begin, end - begin))
+            return;
+        document.comprehensions[it->second].annotation = original;
+    };
+    parsed.root->visit(&finder);
 }
 
 // Luau owns where a declaration's value ends and where a function body starts. The first
@@ -1686,6 +1759,14 @@ LoweredSource lower(std::string_view source, bool recovery, bool fuseLength, con
             result.document = std::move(document);
             return result;
         }
+    }
+    // Analysis types a comprehension that is a whole `return` value by the declared result of
+    // the function it returns from; which function that is, Luau's parse of a first lowering says.
+    if (!dynamicGenerators && std::any_of(document.comprehensions.begin(), document.comprehensions.end(),
+                                  [](const Comprehension& c) { return c.returned && c.annotation.empty(); }))
+    {
+        Lowerer first(source, document, recovery, fuseLength, bufferGenerators, dynamicGenerators, localFilters);
+        returnTypes(first.lower(), source, document);
     }
     Lowerer lowerer(source, document, recovery, fuseLength, bufferGenerators, dynamicGenerators, localFilters);
     Text output = lowerer.lower();

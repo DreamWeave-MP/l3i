@@ -13,6 +13,12 @@ use l3i::source::{LoweringMode, lowering_snapshot};
 const CORPUS: &[(&str, &str)] = &[
     // Single ordinary generator and its consumers.
     ("dense", "return [for x in xs => x * 2]"),
+    ("dense_annotated_local", "local items: { Item } = [for x in xs => { id = x }]"),
+    ("dense_annotated_local_range", "local items: Table = [for i in range(1, n) => { i, 'a' }]"),
+    ("dense_annotated_local_not_whole", "local items: { number } = [for x in xs => x] or {}"),
+    ("dense_annotated_two_locals", "local a: { number }, b = [for x in xs => x], 1"),
+    ("dense_returned_declared", "local function f(xs): { Item }\n    return [for x in xs => { id = x }]\nend"),
+    ("dense_returned_undeclared", "local function f(xs)\n    return [for x in xs => x]\nend"),
     ("filtered", "return [for x in xs if p(x) => f(x)]"),
     ("two_filters", "return [for x in xs if p(x) if q(x) => f(x)]"),
     ("count", "return #[for x in xs if p(x) => f(x)]"),

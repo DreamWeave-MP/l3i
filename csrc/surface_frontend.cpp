@@ -1553,6 +1553,7 @@ private:
         }
         c.postfix = c.lengthPrefix.empty() && c.reducerPrefix.empty() && c.sinkPrefix.empty() && i > 0 &&
             isPostfix(tokens[i - 1], i > 1 ? tokens[i - 2] : Token{T::Eof, {0, 0}});
+        const size_t openAt = i;
         c.open = tokens[i++].range;
         // Set the opening immediately so binary search remains ordered even
         // while an ancestor record is still being constructed.
@@ -1634,7 +1635,43 @@ private:
         else if (!stopped) error(c.close, "expected ']' to close comprehension");
         c.range = {c.open.begin, c.close.end};
         c.complete = !c.postfix && !c.close.empty() && document.errors.size() == errorsBefore;
+        if (c.complete && c.lengthPrefix.empty() && c.reducerPrefix.empty() && c.sinkPrefix.empty())
+        {
+            c.annotation = initializedAnnotation(openAt, i);
+            // A `return` is its block's last statement, so only these can follow its one value.
+            const int next = type(i);
+            c.returned = openAt > 0 && type(openAt - 1) == T::ReservedReturn &&
+                (next == T::ReservedEnd || next == T::ReservedElse || next == T::ReservedElseif || next == T::ReservedUntil ||
+                    next == ';' || next == T::Eof);
+        }
         document.comprehensions[index] = std::move(c);
+    }
+
+    // The annotation of `local name: T = [...]` when the comprehension opening at code token
+    // `open` and ending before `after` is that local's whole initializer; empty otherwise. Only
+    // one name may be declared, and the next token must begin a statement, not continue the
+    // value (`or {}`, a cast, a call).
+    Range initializedAnnotation(size_t open, size_t after)
+    {
+        const int next = type(after);
+        if (!(next == T::Name || keywordStop(next)) || next == T::ReservedIn) return {};
+        if (open < 4 || type(open - 1) != '=') return {};
+        const size_t last = open - 2;
+        int nested = 0;
+        for (size_t k = last + 1; k-- > 0;)
+        {
+            const int t = type(k);
+            if (t == ')' || t == ']' || t == '}' || t == '>') ++nested;
+            else if (t == '(' || t == '[' || t == '{' || t == '<') --nested;
+            else if (nested == 0 && t == T::ReservedLocal)
+            {
+                if (k + 3 > last || type(k + 1) != T::Name || type(k + 2) != ':') return {};
+                return {tokens[k + 3].range.begin, tokens[last].range.end};
+            }
+            else if (nested == 0 && (t == ',' || t == '=' || keywordStop(t))) return {};
+            if (nested < 0) return {};
+        }
+        return {};
     }
 };
 }

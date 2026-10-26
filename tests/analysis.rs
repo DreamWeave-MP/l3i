@@ -263,6 +263,75 @@ fn a_slice_as_a_for_in_source_checks_as_the_table_it_is() {
 }
 
 #[test]
+fn a_comprehension_initializing_an_annotated_local_checks_its_projection_against_the_element_type() {
+    // Luau's table indexers are invariant, so `{ { number | string } }` is not a `Table`; the
+    // loop the comprehension stands for checks clean because its literal is checked against
+    // `Table`'s value type, and so does the comprehension once its projection gets that type.
+    let source = "--!strict\n\
+        type Key = string | number\n\
+        type Value = boolean | number | string | Table\n\
+        type Table = { [Key]: Value }\n\
+        type Record = { id: number, name: string }\n\
+        type Maybe = { number }?\n\
+        local function pairsOf(count: number): Table\n\
+        \x20 local items: Table = [for index in range(1, count) => { index, 'a' }]\n\
+        \x20 return items\n\
+        end\n\
+        local function records(ids: { number }): { Record }\n\
+        \x20 local list: { Record } = [for id in ids => { id = id, name = 'x' }]\n\
+        \x20 return list\n\
+        end\n\
+        local function hidden(ids: { number }): Maybe\n\
+        \x20 local list: Maybe = [for id in ids => id * 2]\n\
+        \x20 return list\n\
+        end\n\
+        local function optional(ids: { number }): { number }?\n\
+        \x20 local list: { number }? = [for id in ids => id]\n\
+        \x20 return list\n\
+        end\n\
+        local function returned(count: number): Table\n\
+        \x20 return [for index in range(1, count) => { index, 'a' }]\n\
+        end\n\
+        local function branch(ids: { number }, named: boolean): { Record }?\n\
+        \x20 if named then return [for id in ids => { id = id, name = 'x' }] end\n\
+        \x20 return nil\n\
+        end\n\
+        local function outer(ids: { number }): () -> Table\n\
+        \x20 return function(): Table return [for id in ids => { id, 'a' }] end\n\
+        end\n\
+        return pairsOf, records, hidden, optional, returned, branch, outer\n";
+    // A misspelled field is still an error: an annotation checks, where a cast would accept it.
+    let misspelled = "--!strict\n\
+        type Record = { id: number, name: string }\n\
+        local ids = { 1, 2 }\n\
+        local list: { Record } = [for id in ids => { id = id, nam = 'x' }]\n\
+        return list\n";
+    let analysis = comprehension_analysis(
+        HashMap::from([("expected", source), ("misspelled", misspelled)]),
+        analysis::Solver::New,
+    );
+    let report = analysis.check("expected", false);
+    assert!(report.is_clean(), "{report:#?}");
+    let report = analysis.check("misspelled", false);
+    let errors: Vec<_> = report.errors().collect();
+    assert!(errors.len() == 1 && errors[0].text.contains("nam"), "{errors:#?}");
+    assert_eq!(errors[0].span.begin_line, 3, "{errors:#?}");
+    // Compiled code is untouched: types do not run.
+    let compile = l3i::source::lowering_snapshot(source, l3i::source::LoweringMode::Compile).unwrap();
+    assert!(!compile.contains("typeof(__l3i_comp_"), "{compile}");
+    let runtime = l3i::Runtime::new().unwrap();
+    let count: f64 = runtime
+        .eval(&format!(
+            "local pairsOf, records, hidden, optional, returned, branch, outer = (function() {} end)() \
+             return #pairsOf(3) + #records({{1, 2}}) + #hidden({{1}}) + #optional({{1, 2, 3, 4}}) \
+             + #returned(2) + #branch({{1}}, true) + #outer({{1, 2}})()",
+            source.replace("--!strict\n", "")
+        ))
+        .unwrap();
+    assert_eq!(count, 15.0);
+}
+
+#[test]
 fn standalone_buffer_slices_preserve_buffer_type() {
     let source = "--!strict\nlocal values: buffer = buffer.create(4)\nlocal part = values[1:2]\nreturn part\n";
     for solver in [analysis::Solver::New, analysis::Solver::Old] {

@@ -53,6 +53,17 @@ Allocation elimination is authorized. Observable evaluation elimination is not.
 Comprehensions nest to 128 levels. Parentheses and brackets inside a clause do not count toward
 that; Luau's own parser bounds them.
 
+A comprehension that is the whole initializer of one annotated local, `local items: T = [...]`,
+or the whole value of a `return` in a function that declares one result type, is type-checked as
+the loop it stands for: each projection is checked against `T`'s element type, so
+`local pairs: { [string | number]: Value } = [for i in range(1, n) => { i, "a" }]` is accepted
+where Luau's invariant table indexers would otherwise refuse the `{ { number | string } }` the
+projection infers on its own, and a misspelled record field is still an error. Analysis gives the
+wrapper, its accumulator and each projected value that type; compiled code is unchanged. An
+annotation spread over several lines or holding a comment, a local declared beside others, and a
+value that continues past the comprehension (`[...] or {}`) keep the untyped result; cast the
+projection there (`=> { i, "a" } :: Value`).
+
 ### Generators
 
 A generator slot is `name in source` or `a, b in source`. The source is a dense table, a slice,
