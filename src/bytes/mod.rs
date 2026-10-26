@@ -562,6 +562,12 @@ impl Extension for BytesExtension {
 
     fn describe(&self, d: &mut ExtensionDescriptor) -> Result<()> {
         d.type_alias("dream_bytes_RulesTable", crate::byte_rules::RULES_TYPE);
+        #[cfg(feature = "bytes-regex")]
+        d.type_alias("dream_bytes_RegexOptions", regex::OPTIONS_TYPE);
+        #[cfg(feature = "bytes-codecs")]
+        d.type_alias("dream_bytes_DecompressOptions", codecs::DECOMPRESS_OPTIONS_TYPE);
+        #[cfg(feature = "bytes-codecs")]
+        d.type_alias("dream_bytes_DecompressLimit", codecs::DECOMPRESS_LIMIT_TYPE);
         d.userdata::<Rules>("dream.bytes.Rules")
             .tag(crate::extension::TagPolicy::Never)
             .doc("A rules table compiled once, for bytes.translate.");

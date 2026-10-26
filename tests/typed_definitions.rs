@@ -114,6 +114,35 @@ const BYTES_SCRIPT: (&str, &str) = (
      print(at, same, after, next, after2, written, m, hex)\n",
 );
 
+/// A pattern a user wrote is compiled through `pcall`, which gives an options literal no expected
+/// type, so the caller annotates its options with the named record.
+#[cfg(feature = "bytes-regex")]
+const BYTES_REGEX_SCRIPT: (&str, &str) = (
+    "bytes_regex_script",
+    "--!strict\n\
+     local bytes = require('@dream/bytes')\n\
+     local options: dream_bytes_RegexOptions = { caseInsensitive = true }\n\
+     local compiled, guarded = pcall(bytes.regex, 'a+', options)\n\
+     local direct: dream_bytes_Regex = bytes.regex('b', { dotAll = true })\n\
+     print(compiled, guarded, direct)\n",
+);
+
+/// The decoders raise on a corrupt stream, so they are guarded the same way.
+#[cfg(feature = "bytes-codecs")]
+const BYTES_CODECS_SCRIPT: (&str, &str) = (
+    "bytes_codecs_script",
+    "--!strict\n\
+     local bytes = require('@dream/bytes')\n\
+     local options: dream_bytes_DecompressOptions = { format = 'raw', maxSize = 64 }\n\
+     local limit: dream_bytes_DecompressLimit = { maxSize = 64 }\n\
+     local inflated, a = pcall(bytes.inflate, bytes.deflate('x', { format = 'raw' }), options)\n\
+     local unpacked, b = pcall(bytes.lzmaDecompress, '', options)\n\
+     local framed, c = pcall(bytes.lz4FrameDecompress, bytes.lz4FrameCompress('x'), limit)\n\
+     local block, d = pcall(bytes.lz4Decompress, bytes.lz4Compress('x'), 1, limit)\n\
+     local data: buffer = bytes.zstdDecompress(bytes.zstdCompress('x'), limit)\n\
+     print(inflated, a, unpacked, b, framed, c, block, d, data)\n",
+);
+
 #[cfg(feature = "audio")]
 const AUDIO_SCRIPT: (&str, &str) = (
     "audio_script",
@@ -491,6 +520,10 @@ fn the_generated_definitions_type_check_and_typed_scripts_pass_strict_mode() {
     all_scripts.push(AUDIO_SCRIPT);
     #[cfg(feature = "bytes")]
     all_scripts.push(BYTES_SCRIPT);
+    #[cfg(feature = "bytes-regex")]
+    all_scripts.push(BYTES_REGEX_SCRIPT);
+    #[cfg(feature = "bytes-codecs")]
+    all_scripts.push(BYTES_CODECS_SCRIPT);
     #[cfg(feature = "data")]
     all_scripts.push(DATA_SCRIPT);
     #[cfg(feature = "intern")]

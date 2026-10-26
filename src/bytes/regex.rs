@@ -381,12 +381,16 @@ pub(crate) fn describe_regex(d: &mut ExtensionDescriptor) {
     regex.metamethod("__tostring", |re: &Regex| re.regex.as_str().to_owned());
 }
 
+/// `bytes.regex`'s options, named `dream_bytes_RegexOptions`. A pattern a user wrote is compiled
+/// through `pcall`, since `regex` raises for one it can't compile, and `pcall` gives an options
+/// literal no expected type: a named type is what such a caller annotates its options with.
+pub(crate) const OPTIONS_TYPE: &str =
+    "{ caseInsensitive: boolean?, unicode: boolean?, multiLine: boolean?, dotAll: boolean? }";
+
 pub(crate) fn describe(module: &mut ModuleDecl) {
     module
         .function("regex", compile)
-        .signature(
-            "(pattern: string, options: { caseInsensitive: boolean?, unicode: boolean?, multiLine: boolean?, dotAll: boolean? }?) -> dream_bytes_Regex",
-        )
+        .signature("(pattern: string, options: dream_bytes_RegexOptions?) -> dream_bytes_Regex")
         .doc("A pattern compiled once, to match over bytes: one range, or many ranges of one buffer in one call.");
     module
         .function("regexEscape", |text: &str| regex::escape(text))

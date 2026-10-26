@@ -501,7 +501,17 @@ The chunks before a problem are still in the result, so a parser reports it in i
 
 `regex(pattern, { caseInsensitive?, unicode?, multiLine?, dotAll? }?)` compiles a pattern once
 (the regex crate's syntax, matched over bytes: Unicode-aware by default, `unicode = false` or
-`(?-u)` for data in another encoding; no look-around, linear time). The `dream.bytes.Regex` it
+`(?-u)` for data in another encoding; no look-around, linear time). The options record is named
+`dream_bytes_RegexOptions`. `regex` raises for a pattern it can't compile, so a pattern a user
+wrote goes through `pcall`, and an options literal passed through `pcall` gets no expected type.
+Annotate the options with the name instead:
+
+```luau
+local options: dream_bytes_RegexOptions = { caseInsensitive = true }
+local compiled, regex = pcall(bytes.regex, pattern, options)
+```
+
+The `dream.bytes.Regex` it
 returns has `isMatch(source, offset?, length?)`, `find(source, offset?, length?)` (start and end,
 absolute), `pattern()`, and `matchSpans(source, spans, count?)`: one call tests every
 `(start, end)` `u32` pair in `spans` against its own range of `source`, as if that range were the
@@ -572,6 +582,11 @@ end
 | `lz4FrameDecompress(source, { maxSize? }?)`, `lz4FrameCompress(source)` | LZ4 frames |
 | `zstdDecompress(source, { maxSize? }?)`, `zstdCompress(source, { level? }?)` | Zstandard; the encoder is ruzstd's, whose only implemented level is 1 (roughly zstd's own level 1), so any other `level` is an error. Frames carry a content checksum |
 | `lzmaDecompress(source, { format?, maxSize? }?)` | `.lzma` (default) or `xz`, decoding only |
+
+The decoders' options records are named, for a caller that reaches a decoder through `pcall`, as
+the `regex` options are: `dream_bytes_DecompressOptions` is `inflate`'s and `lzmaDecompress`'s
+`{ format?, maxSize? }`, and `dream_bytes_DecompressLimit` is the LZ4 and zstd decoders'
+`{ maxSize? }`.
 
 Every decoder takes `maxSize`, the most it will produce (default 1 GiB), and enforces it while
 producing, never only afterwards: DEFLATE and zstd through their libraries' limits, LZMA and XZ

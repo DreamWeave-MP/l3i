@@ -19,6 +19,13 @@ use crate::stack::ValueView;
 /// The default output cap for a decoder, in bytes.
 pub const DEFAULT_MAX_SIZE: usize = 1 << 30;
 
+/// `inflate`'s and `lzmaDecompress`'s options, named `dream_bytes_DecompressOptions`. A decoder
+/// raises on a corrupt stream, so callers reach it through `pcall`, which gives an options
+/// literal no expected type: a named type is what such a caller annotates its options with.
+pub(crate) const DECOMPRESS_OPTIONS_TYPE: &str = "{ format: string?, maxSize: number? }";
+/// The LZ4 and zstd decoders' options, named `dream_bytes_DecompressLimit`.
+pub(crate) const DECOMPRESS_LIMIT_TYPE: &str = "{ maxSize: number? }";
+
 /// The bytes of a view for the duration of a call that never touches Lua.
 ///
 /// # Safety
@@ -325,27 +332,29 @@ fn lzma_decompress(call: &Call<'_>, source: BytesView<'_>, options: Option<Value
 pub(crate) fn describe(module: &mut ModuleDecl) {
     module
         .function("inflate", inflate)
-        .signature("(source: buffer | string, options: { format: string?, maxSize: number? }?) -> buffer")
+        .signature("(source: buffer | string, options: dream_bytes_DecompressOptions?) -> buffer")
         .doc("DEFLATE decoding: format zlib (default), raw or gzip; maxSize caps the output.")
         .function("deflate", deflate)
         .signature("(source: buffer | string, options: { format: string?, level: number? }?) -> buffer")
         .doc("DEFLATE encoding: format zlib (default), raw or gzip; level 0 to 10, default 6.")
         .function("lz4Decompress", lz4_decompress)
-        .signature("(source: buffer | string, decompressedSize: number, options: { maxSize: number? }?) -> buffer")
+        .signature(
+            "(source: buffer | string, decompressedSize: number, options: dream_bytes_DecompressLimit?) -> buffer",
+        )
         .doc("An LZ4 block; the format does not record its size, so the caller supplies it, capped by maxSize.")
         .function("lz4Compress", lz4_compress)
         .signature("(source: buffer | string) -> buffer")
         .doc("An LZ4 block, without a size prefix.")
         .function("lz4FrameDecompress", lz4_frame_decompress)
-        .signature("(source: buffer | string, options: { maxSize: number? }?) -> buffer")
+        .signature("(source: buffer | string, options: dream_bytes_DecompressLimit?) -> buffer")
         .function("lz4FrameCompress", lz4_frame_compress)
         .signature("(source: buffer | string) -> buffer")
         .function("zstdDecompress", zstd_decompress)
-        .signature("(source: buffer | string, options: { maxSize: number? }?) -> buffer")
+        .signature("(source: buffer | string, options: dream_bytes_DecompressLimit?) -> buffer")
         .function("zstdCompress", zstd_compress)
         .signature("(source: buffer | string, options: { level: number? }?) -> buffer")
         .doc("A Zstandard frame with a content checksum; level 1, the one ruzstd implements, is the only level.")
         .function("lzmaDecompress", lzma_decompress)
-        .signature("(source: buffer | string, options: { format: string?, maxSize: number? }?) -> buffer")
+        .signature("(source: buffer | string, options: dream_bytes_DecompressOptions?) -> buffer")
         .doc("LZMA (.lzma, default) or XZ (format = 'xz') decoding.");
 }
