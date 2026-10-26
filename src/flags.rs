@@ -88,6 +88,20 @@ pub const LUAU_CODEGEN_FLAGS: &[&str] = &[
     // version outgrows them. This flag (0.742) makes stopping sound, applying pending
     // substitutions and discarding the fallback entry tags recorded before the stop.
     "LuauCodegenLimitVersionsExtra",
+    // Luau 0.744's fixes. Dead store elimination kept a tag store whose load had been
+    // overwritten; `INVOKE_FASTPCALL` can replace the environment, so it now invalidates the
+    // safe-environment assumption; a VM exit's register restores are planned per exit (a crash
+    // Luau's fuzzer found, superseding the 0.742 fix above); and code with a libunwind unwinder
+    // registers each FDE where it used to register the whole frame, which Intel macOS needs.
+    "LuauCodegenDseTrackTagInvalidation",
+    "LuauCodegenUpdateSafeEnvList",
+    "LuauCodegenImprovedExitSync",
+    "LuauCodegenIntelMacUnwind",
+    // Luau 0.744's A64 fixes: `bit32.lrotate` no longer writes its result over an operand the
+    // rotate still reads, and a function with more than 256 constants reloads one past the
+    // immediate offset instead of crashing.
+    "LuauCodegenA64BitlrotateSelf",
+    "LuauCodegenA64ReloadLargeConstOffset",
 ];
 
 static INITIALIZED: OnceLock<std::result::Result<(), String>> = OnceLock::new();
