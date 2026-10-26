@@ -1079,6 +1079,50 @@ fn a_sink_or_a_slice_may_be_the_first_statement_of_a_function_body() {
 }
 
 #[test]
+fn a_lowering_keeps_its_locals_registers_until_their_last_read() {
+    // Luau's register reuse frees a local's register before a statement of its block that
+    // begins past the local's last read. A lowering's synthetic statement maps to the source it
+    // was written for, which can lie past a read that runs after it: `grid[2:3]`'s bound `3`
+    // past the slice body's reads of the bound `2`. Freed there, the register went to the next
+    // local; a debug build failed Luau's `expr->upvalue` assertion and a release build crashed,
+    // so these check answers and are worth running with `--release` too.
+    let runtime = Runtime::new().unwrap();
+    runtime
+        .exec(
+            r"
+        local function mark(grid)
+            grid[2:3][1][1] = 5
+        end
+        local grid = {{0}, {0}, {0}}
+        mark(grid)
+        assert(grid[1][1] == 0 and grid[2][1] == 5 and grid[3][1] == 0)
+
+        -- A bound on a line of its own, and a reducer over a slice.
+        local function window(xs, first, last)
+            local part = xs[first:
+                last]
+            return #part, part[1], part[#part], sum[for x in xs[first:last] => x]
+        end
+        local n, a, b, total = window({10, 20, 30, 40, 50}, 2, 4)
+        assert(n == 3 and a == 20 and b == 40 and total == 90, `{n} {a} {b} {total}`)
+
+        -- Clauses on lines of their own, a filter reading a local from outside.
+        local function above(xs, ys, floor)
+            local limit = floor * 2
+            local picked = [for x in xs
+                for y in ys
+                if x + y > limit
+                => x * 10 + y]
+            return #picked, sum[for p in picked => p], limit
+        end
+        local count, picked, limit = above({1, 2, 3}, {1, 2}, 1)
+        assert(count == 5 and picked == 118 and limit == 2, `{count} {picked} {limit}`)
+    ",
+        )
+        .unwrap();
+}
+
+#[test]
 fn buffer_sinks_write_typed_elements_into_caller_buffers() {
     let runtime = Runtime::new().unwrap();
     runtime

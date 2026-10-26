@@ -144,6 +144,8 @@ char* compileImpl(const char* source, size_t size, lua_CompileOptions* options, 
         L3i::Surface::remapLocations(parsed.result, parsed.lowered.map);
         if (!parsed.result.errors.empty())
             throw parsed.result.errors.front();
+        if (!parsed.lowered.map.empty())
+            L3i::Surface::orderLocalReads(parsed.result);
         Luau::compileOrThrow(bytecode, parsed.result, names, compileOptions);
         output = dump ? bytecode.dumpEverything() : bytecode.getBytecode();
     }

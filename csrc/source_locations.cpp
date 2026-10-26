@@ -9,6 +9,7 @@
 #include <optional>
 #include <unordered_set>
 #include <utility>
+#include <vector>
 
 namespace L3i::Surface
 {
@@ -271,7 +272,71 @@ private:
             visitNode(generic);
     }
 };
+
+// Walks in Luau's value-tracking order, which is the order the code runs in for this purpose:
+// every statement before a read is seen before it, nested ones included, as a `repeat` body is
+// before its `until`. A read's end is the line a call through it is attributed to, so reads
+// move only where one local's reads would otherwise go backwards; statements give way instead.
+class LocalReadOrder final : public Luau::AstVisitor
+{
+public:
+    bool visit(Luau::AstStat* stat) override
+    {
+        events.push_back({stat, nullptr});
+        return true;
+    }
+
+    bool visit(Luau::AstExprFunction* function) override
+    {
+        // Liveness compares a function's statements with reads of its own locals only; an
+        // enclosing function's locals are upvalues here, which Luau never frees early.
+        std::vector<Event> outer = std::move(events);
+        events.clear();
+        function->body->visit(this);
+        settle();
+        events = std::move(outer);
+        return false;
+    }
+
+    bool visit(Luau::AstExprLocal* read) override
+    {
+        if (Luau::AstExprLocal* const* previous = lastReads.find(read->local))
+            read->location.end = std::max(read->location.end, (*previous)->location.end);
+        lastReads[read->local] = read;
+        events.push_back({nullptr, read});
+        return false;
+    }
+
+    // No statement of the current function begins past a read that follows it.
+    void settle()
+    {
+        std::optional<Luau::Position> earliest;
+        for (auto event = events.rbegin(); event != events.rend(); ++event)
+            if (event->read)
+                earliest = earliest ? std::min(*earliest, event->read->location.end) : event->read->location.end;
+            else if (earliest && event->stat->location.begin > *earliest)
+                event->stat->location.begin = *earliest;
+        events.clear();
+    }
+
+private:
+    struct Event
+    {
+        Luau::AstStat* stat;
+        Luau::AstExprLocal* read;
+    };
+    std::vector<Event> events;
+    Luau::DenseHashMap<Luau::AstLocal*, Luau::AstExprLocal*> lastReads;
+};
 } // namespace
+
+void orderLocalReads(Luau::ParseResult& result)
+{
+    LocalReadOrder order;
+    if (result.root)
+        result.root->visit(&order);
+    order.settle();
+}
 
 std::string originalParseMessage(std::string text, Position context, const SourceMap& map)
 {
