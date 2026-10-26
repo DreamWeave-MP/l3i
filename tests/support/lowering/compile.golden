@@ -2639,6 +2639,46 @@ local __l3i_comp_23_error = error local __l3i_comp_23_typeof = typeof local __l3
 --segment 1972 3545 16 18 synthetic
 --slice 0 call=205,1852 source=248,250 first=284,285 last=318,319
 --slice 1 call=1854,3545 source=1898,1900 first=1935,1936 last=1970,1971
+==== slice_for_in_source
+local sum = 0
+for _, value: number in values[1:count] do sum += value end
+----
+local __l3i_comp_73_error = error local __l3i_comp_73_typeof = typeof local __l3i_comp_73_buffer = buffer local __l3i_comp_73_table_create = table.create local __l3i_comp_73_table_move = table.move local sum = 0
+local __l3i_comp_38_slice_for = (function() local __l3i_comp_38_slice_src = values local __l3i_comp_38_slice_first = 1 local __l3i_comp_38_slice_last = count local __l3i_comp_38_slice_kind = __l3i_comp_73_typeof(__l3i_comp_38_slice_src) if __l3i_comp_38_slice_kind ~= "table" and __l3i_comp_38_slice_kind ~= "buffer" then __l3i_comp_73_error("JSL slice source must be a table or buffer") end if __l3i_comp_73_typeof(__l3i_comp_38_slice_last) ~= "number" or __l3i_comp_38_slice_last % 1 ~= 0 then __l3i_comp_73_error("JSL slice last bound must be a finite integer") end local __l3i_comp_38_slice_len = 0 if __l3i_comp_38_slice_kind == "buffer" then __l3i_comp_38_slice_len = __l3i_comp_73_buffer.len(__l3i_comp_38_slice_src :: any) else __l3i_comp_38_slice_len = #(__l3i_comp_38_slice_src :: any) end if __l3i_comp_38_slice_first < 1 then __l3i_comp_38_slice_first = 1 end if __l3i_comp_38_slice_last > __l3i_comp_38_slice_len then __l3i_comp_38_slice_last = __l3i_comp_38_slice_len end local __l3i_comp_38_slice_n = 0 if __l3i_comp_38_slice_last >= __l3i_comp_38_slice_first then __l3i_comp_38_slice_n = __l3i_comp_38_slice_last - __l3i_comp_38_slice_first + 1 end if __l3i_comp_38_slice_kind == "buffer" then local __l3i_comp_38_slice_out = (__l3i_comp_73_buffer.create(__l3i_comp_38_slice_n) :: any) :: typeof(__l3i_comp_38_slice_src) if __l3i_comp_38_slice_n > 0 then __l3i_comp_73_buffer.copy(__l3i_comp_38_slice_out :: any, 0, __l3i_comp_38_slice_src :: any, __l3i_comp_38_slice_first - 1, __l3i_comp_38_slice_n) end return __l3i_comp_38_slice_out else local __l3i_comp_38_slice_out = (__l3i_comp_73_table_create(__l3i_comp_38_slice_n) :: any) :: typeof(__l3i_comp_38_slice_src) if __l3i_comp_38_slice_n > 0 then __l3i_comp_73_table_move(__l3i_comp_38_slice_src :: any, __l3i_comp_38_slice_first, __l3i_comp_38_slice_last, 1, __l3i_comp_38_slice_out :: any) end return __l3i_comp_38_slice_out end end)() for _, value: number in __l3i_comp_38_slice_for do sum += value end
+--prelude 5
+--segment 0 198 38 53 synthetic
+--segment 198 212 0 14 copied
+--segment 212 288 38 53 synthetic
+--segment 288 294 38 44 copied
+--segment 294 329 38 44 synthetic
+--segment 329 330 45 46 copied
+--segment 330 364 45 46 synthetic
+--segment 364 369 47 52 copied
+--segment 369 370 47 52 synthetic
+--segment 370 604 38 44 synthetic
+--segment 604 2120 47 52 synthetic
+--segment 2120 2121 38 53 synthetic
+--segment 2121 2145 14 38 copied
+--segment 2145 2168 38 53 synthetic
+--segment 2168 2188 53 73 copied
+--slice 0 call=244,2120 source=288,294 first=329,330 last=364,369
+==== slice_for_in_with_another_value
+for k, v in next, xs[1:2] do print(k, v) end
+----
+local __l3i_comp_44_error = error local __l3i_comp_44_typeof = typeof local __l3i_comp_44_buffer = buffer local __l3i_comp_44_table_create = table.create local __l3i_comp_44_table_move = table.move for k, v in next, (function() local __l3i_comp_18_slice_src = xs local __l3i_comp_18_slice_first = 1 local __l3i_comp_18_slice_last = 2 local __l3i_comp_18_slice_kind = __l3i_comp_44_typeof(__l3i_comp_18_slice_src) if __l3i_comp_18_slice_kind ~= "table" and __l3i_comp_18_slice_kind ~= "buffer" then __l3i_comp_44_error("JSL slice source must be a table or buffer") end local __l3i_comp_18_slice_len = 0 if __l3i_comp_18_slice_kind == "buffer" then __l3i_comp_18_slice_len = __l3i_comp_44_buffer.len(__l3i_comp_18_slice_src :: any) else __l3i_comp_18_slice_len = #(__l3i_comp_18_slice_src :: any) end if __l3i_comp_18_slice_first < 1 then __l3i_comp_18_slice_first = 1 end if __l3i_comp_18_slice_last > __l3i_comp_18_slice_len then __l3i_comp_18_slice_last = __l3i_comp_18_slice_len end local __l3i_comp_18_slice_n = 0 if __l3i_comp_18_slice_last >= __l3i_comp_18_slice_first then __l3i_comp_18_slice_n = __l3i_comp_18_slice_last - __l3i_comp_18_slice_first + 1 end if __l3i_comp_18_slice_kind == "buffer" then local __l3i_comp_18_slice_out = (__l3i_comp_44_buffer.create(__l3i_comp_18_slice_n) :: any) :: typeof(__l3i_comp_18_slice_src) if __l3i_comp_18_slice_n > 0 then __l3i_comp_44_buffer.copy(__l3i_comp_18_slice_out :: any, 0, __l3i_comp_18_slice_src :: any, __l3i_comp_18_slice_first - 1, __l3i_comp_18_slice_n) end return __l3i_comp_18_slice_out else local __l3i_comp_18_slice_out = (__l3i_comp_44_table_create(__l3i_comp_18_slice_n) :: any) :: typeof(__l3i_comp_18_slice_src) if __l3i_comp_18_slice_n > 0 then __l3i_comp_44_table_move(__l3i_comp_18_slice_src :: any, __l3i_comp_18_slice_first, __l3i_comp_18_slice_last, 1, __l3i_comp_18_slice_out :: any) end return __l3i_comp_18_slice_out end end)() do print(k, v) end
+--prelude 5
+--segment 0 198 18 25 synthetic
+--segment 198 216 0 18 copied
+--segment 216 260 18 25 synthetic
+--segment 260 262 18 20 copied
+--segment 262 297 18 20 synthetic
+--segment 297 298 21 22 copied
+--segment 298 332 21 22 synthetic
+--segment 332 333 23 24 copied
+--segment 333 334 23 24 synthetic
+--segment 334 1907 18 20 synthetic
+--segment 1907 1926 25 44 copied
+--slice 0 call=216,1907 source=260,262 first=297,298 last=332,333
 ==== slice_statement_after_expression
 local before = print
 grid[2:3][1][1] = 5

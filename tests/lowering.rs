@@ -133,6 +133,8 @@ const CORPUS: &[(&str, &str)] = &[
     ("slice_standalone_in_expression", "local part = values[2:n]\nreturn #part + 1"),
     ("slice_standalone_call_source", "return make()[i:j]"),
     ("slice_standalone_twice", "return xs[1:2], ys[3:4]"),
+    ("slice_for_in_source", "local sum = 0\nfor _, value: number in values[1:count] do sum += value end"),
+    ("slice_for_in_with_another_value", "for k, v in next, xs[1:2] do print(k, v) end"),
     ("slice_statement_after_expression", "local before = print\ngrid[2:3][1][1] = 5"),
     ("slice_statement_opens_function_body", "local function mark(grid)\n    grid[2:3][1][1] = 5\nend"),
     (

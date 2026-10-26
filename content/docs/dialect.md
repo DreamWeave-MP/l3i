@@ -155,6 +155,13 @@ The source of a slice is the whole prefix chain: `t.a[1:2]`, `o:get()[1:2]`, `t[
 `t[1:3][2:3]` all slice what the chain produces. A bound spelled as an integer literal (decimal,
 hex, binary, with or without `_`) is not checked at run time; every other spelling is.
 
+A slice that is the whole source of a `for ... in` header, `for _, v in values[1:n] do`, is bound
+to a local just before the `for`, where the header would have evaluated it. Luau's new solver
+checks a function literal called in that position against the iterator protocol rather than as
+the literal's result, so the slice written in place would analyse as the wrong type; held in a
+local it is the table it is. A header with other expressions, `for k, v in next, xs[1:2] do`,
+keeps the slice where it is written.
+
 **Stock indexing always wins.** A bracket whose contents already parse as stock Luau is left to
 Luau. `values[obj:method()]` is the method call it has always been, and so is `t[lo:hi()]` when
 `lo` is a name, a call or a parenthesized expression, because `lo:hi()` is a valid method call on

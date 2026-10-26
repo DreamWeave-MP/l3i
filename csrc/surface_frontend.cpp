@@ -324,6 +324,21 @@ private:
             // and a statement that opens a function's body has none before it to end.
             slice.statement = all[start].type == T::Name && start > 0 &&
                 isPostfix(all[start - 1], start >= 2 ? all[start - 2] : Token{T::Eof, {0, 0}}) && !opensFunctionBody(start);
+            // The whole source of a `for ... in` header: `in` before, `do` after. Only bindings
+            // and their annotations lie between the loop's `for` and the `in`.
+            if (start >= 2 && all[start - 1].type == T::ReservedIn && close < count && all[close].type == T::ReservedDo)
+                for (size_t at = start - 1; at-- > 0;)
+                {
+                    const auto t = all[at].type;
+                    if (t == T::ReservedFor)
+                    {
+                        if (at == 0 || all[at - 1].type != '[') slice.loop = all[at].range.begin;
+                        break;
+                    }
+                    if (t == T::ReservedIn || t == T::ReservedDo || t == T::ReservedEnd || t == T::ReservedThen ||
+                        t == T::ReservedLocal || t == '=' || t == ';')
+                        break;
+                }
             if (stopped) return;
             const bool missingFirst = colon == open + 1;
             const bool missingLast = colon == lastEnd;

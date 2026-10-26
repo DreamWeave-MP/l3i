@@ -348,8 +348,32 @@ public:
                     ++sliceIt;
                     continue;
                 }
-                copy(result, copied, sliceIt->range.begin);
-                result.append(slice(size_t(sliceIt - document.slices.begin())));
+                const size_t index = size_t(sliceIt - document.slices.begin());
+                if (sliceIt->loop != SIZE_MAX && sliceIt->loop >= copied)
+                {
+                    // The whole source of a `for ... in` header is bound to a local just before
+                    // the `for`, where the header would have evaluated it: the new solver checks
+                    // a function literal called as the source against the iterator protocol, and
+                    // reads a local holding its result as the table it is.
+                    const std::string name = stem(sliceIt->range.begin) + "_slice_for";
+                    copy(result, copied, sliceIt->loop);
+                    Text bound;
+                    bound.anchor = sliceIt->range;
+                    bound += "local " + name + " = ";
+                    bound.append(slice(index));
+                    bound += " ";
+                    result.append(bound);
+                    copy(result, sliceIt->loop, sliceIt->range.begin);
+                    Text read;
+                    read.anchor = sliceIt->range;
+                    read += name;
+                    result.append(read);
+                }
+                else
+                {
+                    copy(result, copied, sliceIt->range.begin);
+                    result.append(slice(index));
+                }
                 copied = sliceIt->range.end;
                 ++sliceIt;
             }

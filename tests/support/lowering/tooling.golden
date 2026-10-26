@@ -3332,6 +3332,58 @@ local __l3i_comp_23_error = error local __l3i_comp_23_typeof = typeof local __l3
 --segment 1984 3557 16 18 synthetic
 --slice 0 call=205,1858 source=249,251 first=287,288 last=323,324
 --slice 1 call=1860,3557 source=1905,1907 first=1944,1945 last=1981,1982
+==== slice_for_in_source
+local sum = 0
+for _, value: number in values[1:count] do sum += value end
+----
+local __l3i_comp_73_error = error local __l3i_comp_73_typeof = typeof local __l3i_comp_73_buffer = buffer local __l3i_comp_73_table_create = table.create local __l3i_comp_73_table_move = table.move local sum = 0
+local __l3i_comp_38_slice_for = (function() local __l3i_comp_38_slice_src = (values) local __l3i_comp_38_slice_first = (1) local __l3i_comp_38_slice_last = (count) local __l3i_comp_38_slice_kind = __l3i_comp_73_typeof(__l3i_comp_38_slice_src) if __l3i_comp_38_slice_kind ~= "table" and __l3i_comp_38_slice_kind ~= "buffer" then __l3i_comp_73_error("JSL slice source must be a table or buffer") end if __l3i_comp_73_typeof(__l3i_comp_38_slice_last) ~= "number" or __l3i_comp_38_slice_last % 1 ~= 0 then __l3i_comp_73_error("JSL slice last bound must be a finite integer") end local __l3i_comp_38_slice_len = 0 if __l3i_comp_38_slice_kind == "buffer" then __l3i_comp_38_slice_len = __l3i_comp_73_buffer.len(__l3i_comp_38_slice_src :: any) else __l3i_comp_38_slice_len = #(__l3i_comp_38_slice_src :: any) end if __l3i_comp_38_slice_first < 1 then __l3i_comp_38_slice_first = 1 end if __l3i_comp_38_slice_last > __l3i_comp_38_slice_len then __l3i_comp_38_slice_last = __l3i_comp_38_slice_len end local __l3i_comp_38_slice_n = 0 if __l3i_comp_38_slice_last >= __l3i_comp_38_slice_first then __l3i_comp_38_slice_n = __l3i_comp_38_slice_last - __l3i_comp_38_slice_first + 1 end if __l3i_comp_38_slice_kind == "buffer" then local __l3i_comp_38_slice_out = (__l3i_comp_73_buffer.create(__l3i_comp_38_slice_n) :: any) :: typeof(__l3i_comp_38_slice_src) if __l3i_comp_38_slice_n > 0 then __l3i_comp_73_buffer.copy(__l3i_comp_38_slice_out :: any, 0, __l3i_comp_38_slice_src :: any, __l3i_comp_38_slice_first - 1, __l3i_comp_38_slice_n) end return __l3i_comp_38_slice_out else local __l3i_comp_38_slice_out = (__l3i_comp_73_table_create(__l3i_comp_38_slice_n) :: any) :: typeof(__l3i_comp_38_slice_src) if __l3i_comp_38_slice_n > 0 then __l3i_comp_73_table_move(__l3i_comp_38_slice_src :: any, __l3i_comp_38_slice_first, __l3i_comp_38_slice_last, 1, __l3i_comp_38_slice_out :: any) end return __l3i_comp_38_slice_out end end)() for _, value: number in __l3i_comp_38_slice_for do sum += value end
+--prelude 5
+--segment 0 198 38 53 synthetic
+--segment 198 212 0 14 copied
+--segment 212 288 38 53 synthetic
+--segment 288 289 38 38 synthetic
+--segment 289 295 38 44 copied
+--segment 295 296 44 44 synthetic
+--segment 296 331 38 44 synthetic
+--segment 331 332 45 45 synthetic
+--segment 332 333 45 46 copied
+--segment 333 334 46 46 synthetic
+--segment 334 368 45 46 synthetic
+--segment 368 369 47 47 synthetic
+--segment 369 374 47 52 copied
+--segment 374 375 52 52 synthetic
+--segment 375 376 47 52 synthetic
+--segment 376 610 38 44 synthetic
+--segment 610 2126 47 52 synthetic
+--segment 2126 2127 38 53 synthetic
+--segment 2127 2151 14 38 copied
+--segment 2151 2174 38 53 synthetic
+--segment 2174 2194 53 73 copied
+--slice 0 call=244,2126 source=289,295 first=332,333 last=369,374
+==== slice_for_in_with_another_value
+for k, v in next, xs[1:2] do print(k, v) end
+----
+local __l3i_comp_44_error = error local __l3i_comp_44_typeof = typeof local __l3i_comp_44_buffer = buffer local __l3i_comp_44_table_create = table.create local __l3i_comp_44_table_move = table.move for k, v in next, (function() local __l3i_comp_18_slice_src = (xs) local __l3i_comp_18_slice_first = (1) local __l3i_comp_18_slice_last = (2) local __l3i_comp_18_slice_kind = __l3i_comp_44_typeof(__l3i_comp_18_slice_src) if __l3i_comp_18_slice_kind ~= "table" and __l3i_comp_18_slice_kind ~= "buffer" then __l3i_comp_44_error("JSL slice source must be a table or buffer") end local __l3i_comp_18_slice_len = 0 if __l3i_comp_18_slice_kind == "buffer" then __l3i_comp_18_slice_len = __l3i_comp_44_buffer.len(__l3i_comp_18_slice_src :: any) else __l3i_comp_18_slice_len = #(__l3i_comp_18_slice_src :: any) end if __l3i_comp_18_slice_first < 1 then __l3i_comp_18_slice_first = 1 end if __l3i_comp_18_slice_last > __l3i_comp_18_slice_len then __l3i_comp_18_slice_last = __l3i_comp_18_slice_len end local __l3i_comp_18_slice_n = 0 if __l3i_comp_18_slice_last >= __l3i_comp_18_slice_first then __l3i_comp_18_slice_n = __l3i_comp_18_slice_last - __l3i_comp_18_slice_first + 1 end if __l3i_comp_18_slice_kind == "buffer" then local __l3i_comp_18_slice_out = (__l3i_comp_44_buffer.create(__l3i_comp_18_slice_n) :: any) :: typeof(__l3i_comp_18_slice_src) if __l3i_comp_18_slice_n > 0 then __l3i_comp_44_buffer.copy(__l3i_comp_18_slice_out :: any, 0, __l3i_comp_18_slice_src :: any, __l3i_comp_18_slice_first - 1, __l3i_comp_18_slice_n) end return __l3i_comp_18_slice_out else local __l3i_comp_18_slice_out = (__l3i_comp_44_table_create(__l3i_comp_18_slice_n) :: any) :: typeof(__l3i_comp_18_slice_src) if __l3i_comp_18_slice_n > 0 then __l3i_comp_44_table_move(__l3i_comp_18_slice_src :: any, __l3i_comp_18_slice_first, __l3i_comp_18_slice_last, 1, __l3i_comp_18_slice_out :: any) end return __l3i_comp_18_slice_out end end)() do print(k, v) end
+--prelude 5
+--segment 0 198 18 25 synthetic
+--segment 198 216 0 18 copied
+--segment 216 260 18 25 synthetic
+--segment 260 261 18 18 synthetic
+--segment 261 263 18 20 copied
+--segment 263 264 20 20 synthetic
+--segment 264 299 18 20 synthetic
+--segment 299 300 21 21 synthetic
+--segment 300 301 21 22 copied
+--segment 301 302 22 22 synthetic
+--segment 302 336 21 22 synthetic
+--segment 336 337 23 23 synthetic
+--segment 337 338 23 24 copied
+--segment 338 339 24 24 synthetic
+--segment 339 340 23 24 synthetic
+--segment 340 1913 18 20 synthetic
+--segment 1913 1932 25 44 copied
+--slice 0 call=216,1913 source=261,263 first=300,301 last=337,338
 ==== slice_statement_after_expression
 local before = print
 grid[2:3][1][1] = 5

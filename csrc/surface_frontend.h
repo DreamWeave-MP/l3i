@@ -165,6 +165,11 @@ struct Slice
     bool statement = false;
     // Uses the enclosing function's `...`: the lowered call forwards them.
     bool varargs = false;
+    // The offset of the `for` keyword when the slice is the whole source of a `for ... in`
+    // header (`for _, v in xs[a:b] do`); SIZE_MAX otherwise. The lowering binds the slice to a
+    // local before that `for`, because the new solver checks a function literal called as a
+    // `for ... in` source against the iterator protocol rather than as the literal's result.
+    size_t loop = SIZE_MAX;
 };
 
 struct Document

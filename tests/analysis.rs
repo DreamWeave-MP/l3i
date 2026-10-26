@@ -228,6 +228,41 @@ fn standalone_slices_infer_dense_source_element_types() {
 }
 
 #[test]
+fn a_slice_as_a_for_in_source_checks_as_the_table_it_is() {
+    // The new solver checks a function literal called as a `for ... in` source against the
+    // iterator protocol, so the slice is bound to a local before the loop and read from there.
+    let source = "--!strict\n\
+        local function total(values: { number }, count: number): number\n\
+        \x20 local sum = 0\n\
+        \x20 for _, value in values[1:count] do sum += value end\n\
+        \x20 return sum\n\
+        end\n\
+        local function picked(picks: { { number } }, at: number): number\n\
+        \x20 local sum = 0\n\
+        \x20 for _, value in picks[at][1:2] do sum += value end\n\
+        \x20 return sum\n\
+        end\n\
+        return total, picked\n";
+    let first = "for _, value in ({ 1, 2, 3 })[2:3] do local n: number = value end\n";
+    for solver in [analysis::Solver::New, analysis::Solver::Old] {
+        let analysis =
+            comprehension_analysis(HashMap::from([("slice_for", source), ("slice_for_first", first)]), solver);
+        for module in ["slice_for", "slice_for_first"] {
+            let report = analysis.check(module, false);
+            assert!(report.is_clean(), "{solver:?} {module}: {report:#?}");
+        }
+    }
+    let runtime = l3i::Runtime::new().unwrap();
+    let sums: (f64, f64) = runtime
+        .eval(&format!(
+            "local total, picked = (function() {} end)() return total({{1, 2, 3, 4}}, 3), picked({{{{5, 6, 7}}}}, 1)",
+            source.replace("--!strict\n", "")
+        ))
+        .unwrap();
+    assert_eq!(sums, (6.0, 11.0));
+}
+
+#[test]
 fn standalone_buffer_slices_preserve_buffer_type() {
     let source = "--!strict\nlocal values: buffer = buffer.create(4)\nlocal part = values[1:2]\nreturn part\n";
     for solver in [analysis::Solver::New, analysis::Solver::Old] {
