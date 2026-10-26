@@ -50,6 +50,21 @@ name = "Más Bandwidth LLC"
 role = "netcode, reliable and serialize, beneath dream-net"
 url = "https://mas-bandwidth.com"
 
+[[credits]]
+name = "Xiph.Org Foundation and contributors"
+role = "libopus, the Opus decoder behind @dream/audio (BSD-3-Clause; a binary that ships it reproduces opus/COPYING)"
+url = "https://opus-codec.org"
+
+[[credits]]
+name = "Robert B. Langer"
+role = "nanomp3, the MP3 decoder behind @dream/audio (MIT OR Apache-2.0)"
+url = "https://github.com/robbie01/nanomp3"
+
+[[credits]]
+name = "est31"
+role = "lewton, the Vorbis decoder behind @dream/audio (MIT OR Apache-2.0)"
+url = "https://github.com/RustAudio/lewton"
+
 # Every version on crates.io, oldest first. To release, add the next one here with the day you
 # publish it, set the same version in Cargo.toml, commit, and push its tag: git tag 1.0.0.
 
@@ -306,4 +321,33 @@ added = [
 ]
 migration = """
 Nothing to change. Take 2.2.0 in place of 2.1.3. No dependency was added: the one Windows call is declared by l3i itself.
+"""
+
+[[releases]]
+version = "2.3.0"
+date = 2026-10-26
+summary = "MP3, Vorbis and Opus decoding with `@dream/audio`; Luau 0.744, with its native code fixes and faster `table.find` and `table.create`; register reuse, so the 200-local limit counts only the locals still live; and analysis that types comprehensions and slices the way the loops they stand for are typed."
+added = [
+    "`@dream/audio` (feature `audio`): MP3 (and MPEG layers I and II) through nanomp3, Ogg Vorbis through lewton, and Ogg Opus through libopus built from the `opus` submodule, into interleaved `f32` buffers. Lengths are exact after gapless trimming, seeks land on the frame asked for (Opus after a 400 ms pre-roll), `audio.decode` caps its output at `maxSize`, and a damaged stream fails the read where it breaks. Decoding reads only the bytes it is given: no file, no device, no capability.",
+    "Named option records for the `@dream/bytes` calls a script reaches through `pcall`: `dream_bytes_RegexOptions` for `regex`, `dream_bytes_DecompressOptions` for `inflate` and `lzmaDecompress`, and `dream_bytes_DecompressLimit` for the LZ4 and zstd decoders. An options literal passed through `pcall` gets no expected type, so a caller annotates a local with the name instead of spelling the record out.",
+]
+changed = [
+    "Luau 0.744, from 0.742. The C API is unchanged; the fourteen flags 0.743 and 0.744 graduated leave the policy with their behaviour kept.",
+    "`table.find` scans the array part directly when the value has no `__eq`, and `table.create` and `table.clear` compile to fastcalls. In one release build: `table.find` over eight elements 34 to 22 ns for a hit and 41 to 23 ns for a miss, over a thousand 2.99 to 0.52 us; `table.create(8)` 64 to 51 ns, `table.create(64, 0)` 149 to 128 ns; clearing eight entries about 11 to 7 ns.",
+    "Luau's register reuse is on: once a local's last read has run, its register goes to the next local, so a function needs fewer stack slots and the 200-local limit counts only the locals still live. A chain of a thousand short-lived locals compiles where it was `Out of local registers`. Dialect code gets the same, with the lowering keeping each local's register until its last read in the code that runs.",
+    "From optimisation level 1, a debugger stopped after a local's last read no longer finds that local, because its register has gone to another. Compile at optimisation level 0 to keep every local in scope until its block ends.",
+    "A comprehension that is the whole initializer of an annotated local (`local items: T = [...]`), or the whole value of a `return` in a function declaring one result type, has each projection checked against `T`'s element type, as the loop it stands for would. `local pairs: { [string | number]: Value } = [for i in range(1, n) => { i, 'a' }]` is accepted where Luau's invariant table indexers refused the `{ { number | string } }` the projection inferred alone, and a misspelled record field is still an error. Compiled code is unchanged.",
+]
+fixed = [
+    "Luau 0.744's native code fixes: dead store elimination kept a tag store whose load had been overwritten, `INVOKE_FASTPCALL` now invalidates the safe-environment assumption, a VM exit's register restores are planned per exit (a crash Luau's fuzzer found), a libunwind unwinder registers each FDE on its own as Intel macOS needs, and on A64 `bit32.lrotate` no longer overwrites an operand it still reads and a function with more than 256 constants no longer crashes reloading one.",
+    "A slice that is the whole source of a `for ... in` header, `for _, v in values[1:n] do`, type checks as the table it is. The new solver read it against the iterator protocol and reported it as the wrong type.",
+]
+migration = """
+Nothing to change for most hosts. Take 2.3.0 in place of 2.2.0.
+
+A debugger that shows every local, or a test that reads a local after its last use, compiles at `optimization_level: 0`. The defaults (level 2) now free a dead local's register.
+
+`@dream/audio` is opt-in, behind the `audio` feature. A binary built with it ships libopus and must reproduce its BSD 3-Clause notice, `opus/COPYING`.
+
+Scripts that spelled out `regex`'s options for a `pcall` can annotate with `dream_bytes_RegexOptions`, and comprehensions that cast each projection to their local's element type can drop the cast. A comprehension that reads a narrowed variable from outside its enclosing function still needs that value bound to a local first; the dialect page says why.
 """
