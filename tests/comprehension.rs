@@ -1123,6 +1123,22 @@ fn a_lowering_keeps_its_locals_registers_until_their_last_read() {
 }
 
 #[test]
+fn a_lowered_function_still_reuses_registers() {
+    // A chain of 300 short-lived locals after a comprehension exceeds the 200-local limit unless
+    // registers are reused: keeping a lowering's reads ordered does not turn reuse off.
+    use std::fmt::Write as _;
+    let mut source = String::from("local function chain(xs)\n    local doubled = [for x in xs => x * 2]\n");
+    source.push_str("    local v1 = doubled[1]\n");
+    for index in 2..=300 {
+        writeln!(source, "    local v{index} = v{} + 1", index - 1).unwrap();
+    }
+    source.push_str("    return v300\nend\nreturn chain({3})\n");
+    let runtime = Runtime::new().unwrap();
+    let last: f64 = runtime.eval(&source).unwrap();
+    assert!((last - 305.0).abs() < f64::EPSILON, "{last}");
+}
+
+#[test]
 fn buffer_sinks_write_typed_elements_into_caller_buffers() {
     let runtime = Runtime::new().unwrap();
     runtime

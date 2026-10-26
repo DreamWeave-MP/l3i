@@ -84,7 +84,10 @@ answers debug queries about its thread's call stack:
 | `coverage(view)` | Line hit counts of a function and its nested functions (`lua_getcoverage`); the chunk must be compiled with `coverage_level` above 0 |
 
 Local and upvalue names need `debug_level` 2 in the `CompileOptions`; optimisation level 2 may
-inline a small function away, which optimisation level 1 keeps as a frame.
+inline a small function away, which optimisation level 1 keeps as a frame. From optimisation
+level 1, a local's register is handed to the next local once its last read has run, so a
+debugger stopped after that read no longer finds it; optimisation level 0 keeps every local in
+scope until its block ends.
 
 `debug::RuntimeHooks` is one trait for every remaining `lua_Callbacks` slot, each method with a
 no-op default, and `Runtime::set_hooks(hooks, HookSet)` installs the slots named in the set

@@ -436,3 +436,92 @@ fn a_table_a_metamethod_could_write_to_is_not_constant_folded() {
         .unwrap();
     assert!((field - 99.0).abs() < f64::EPSILON, "{field}");
 }
+
+#[test]
+fn a_chain_of_short_lived_locals_compiles_past_the_local_limit() {
+    // Each local is dead once the next one is computed. With LuauCompileReuseLocalRegs and
+    // LuauCompileReuseLowersLimit off this was "Out of local registers when trying to allocate
+    // v201: exceeded limit 200".
+    use std::fmt::Write as _;
+    let mut source = String::from("local v1 = tonumber(\"1\")\n");
+    for index in 2..=1000 {
+        writeln!(source, "local v{index} = v{} + 1", index - 1).unwrap();
+    }
+    source.push_str("return v1000\n");
+    let runtime = l3i::Runtime::new().unwrap();
+    let last: f64 = runtime.eval(&source).unwrap();
+    assert!((last - 1000.0).abs() < f64::EPSILON, "{last}");
+}
+
+#[test]
+fn a_register_is_reused_only_once_its_local_is_dead() {
+    // LuauCompileReuseLocalRegs frees a local's register after the statement that last reads
+    // it. Each case keeps a local alive past where a careless free would hand its register on:
+    // a loop reading a local from outside it, a closure capturing one, a swap, a `repeat`
+    // whose condition reads the body, shadowing, and a local read once more after others die.
+    // Every value starts as an argument, so nothing folds.
+    let runtime = l3i::Runtime::new().unwrap();
+    runtime
+        .exec(
+            r"
+            local function check(expected, got)
+                assert(got == expected, `{got}, expected {expected}`)
+            end
+            local function loop(base)
+                local outside = base * 2
+                local sum = 0
+                for index = 1, 3 do
+                    local inside = index + outside
+                    sum += inside
+                end
+                local after = base + 1
+                return sum + after + outside
+            end
+            check(25, loop(2))
+            local function captured(base)
+                local kept = base + 1
+                local read = function() return kept end
+                local other = base * 10
+                local more = other + 1
+                return read() + more
+            end
+            check(24, captured(2))
+            local function swapped(first, second)
+                local a, b = first, second
+                local c = a + b
+                a, b = b, a
+                return a * 100 + b * 10 + c
+            end
+            check(213, swapped(1, 2))
+            local function repeated(limit)
+                local count = 0
+                repeat
+                    local next = count + 1
+                    count = next
+                until next >= limit
+                return count
+            end
+            check(5, repeated(5))
+            local function shadowed(base)
+                local x = base
+                local y = x + 1
+                local x = y * 2
+                local z = x + y
+                return x, y, z
+            end
+            local x, y, z = shadowed(1)
+            check(4, x)
+            check(2, y)
+            check(6, z)
+            local function late(base)
+                local early = base + 1
+                local a = base * 2
+                local b = a + 1
+                local c = b + 1
+                return c + early
+            end
+            check(9, late(2))
+            ",
+        )
+        .unwrap();
+}

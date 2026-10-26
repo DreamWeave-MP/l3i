@@ -136,8 +136,9 @@ fn breakpoints_stop_a_host_driven_coroutine_and_single_stepping_counts_instructi
     let breaks = Rc::new(RefCell::new(Vec::new()));
     let steps = Rc::new(Cell::new(0u32));
     runtime.set_hooks(Debugger { breaks: breaks.clone(), steps: steps.clone(), hits: Cell::new(0) }, HookSet::DEBUGGER);
-    // Values flow from the parameter so no line folds away; debug level 2 names the locals.
-    let options = CompileOptions { debug_level: 2, ..CompileOptions::default() };
+    // Values flow from the parameter so no line folds away; debug level 2 names the locals, and
+    // optimisation level 0 keeps `a` in scope at the breakpoint after its last read.
+    let options = CompileOptions { debug_level: 2, optimization_level: 0, ..CompileOptions::default() };
     let body: Function = runtime
         .stack()
         .with_frame(|frame| {

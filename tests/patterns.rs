@@ -779,10 +779,9 @@ fn debuggers_see_bound_names_and_honestly_named_holders() {
     // Debug level 2 lists every register-allocated local, generated or not; Luau has no way to
     // mark one hidden. The holders appear under their generated names holding the very record
     // they destructure (the first is the real argument), and every bound name holds its field.
-    assert_eq!(
-        listed_locals(source, 2),
-        ["__l3i_comp_17=record", "k=3", "x=1", "__l3i_comp_24=record", "z=2", "__l3i_comp_41=record", "a=6"]
-    );
+    // `y`'s holder is read for the last time when `z` is bound, so `a`'s holder takes its
+    // register and it is no longer listed.
+    assert_eq!(listed_locals(source, 2), ["__l3i_comp_17=record", "k=3", "x=1", "__l3i_comp_41=record", "z=2", "a=6"]);
 }
 
 /// A pattern pipeline means the same with the data plane installed as without it: a record

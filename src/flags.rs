@@ -34,6 +34,14 @@ pub const LUAU_FLAGS: &[&str] = &[
     // an operand whose metamethod could write to it.
     "LuauCompileMoveElisionFix",
     "LuauCompileTableFoldFix",
+    // Luau 0.741: a local's register is free for the next local once the statement that last
+    // reads it has run, rather than at the end of its block, so a function needs fewer stack
+    // slots. With 0.743's second flag the 200-local limit counts only the locals still live,
+    // so a long chain of short-lived locals compiles. A local a closure captures keeps its
+    // register, and one is freed only between statements of the block that declared it, so a
+    // loop never loses a local from outside it.
+    "LuauCompileReuseLocalRegs",
+    "LuauCompileReuseLowersLimit",
     // `if local x = f() then ... end` syntax. The C++ binder leaves this off.
     "LuauExperimentalIfLocalSyntax",
     // Runtime side
