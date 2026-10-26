@@ -256,3 +256,95 @@ fn gsub_with_a_literal_pattern_substitutes_as_the_pattern_matcher_does() {
         )
         .unwrap();
 }
+
+#[test]
+fn table_find_finds_what_a_walk_of_the_array_does() {
+    // LuauTableFindImprovement scans the array part directly when the value has no `__eq`.
+    // These hold on either path: the same answers came from Luau 0.742's walk, which has no
+    // such scan. A walk stops at the first nil, wherever the elements live.
+    let runtime = Runtime::new().unwrap();
+    runtime
+        .exec(
+            r#"
+            local function check(expected, ...)
+                local found = table.find(...)
+                assert(found == expected, `{found}, expected {expected}`)
+            end
+            local list = {1, 2, 3, 4, 5, 6, 7, 8}
+            check(6, list, 6)
+            check(nil, list, 9)
+            check(6, list, 6, 3)
+            check(nil, list, 6, 7)
+            check(nil, list, 1, 100)
+            check(nil, {}, 1)
+            check(nil, {1, nil, 3}, 3)
+            local grown = table.create(2)
+            grown[1], grown[2], grown[3], grown[4] = "a", "b", "c", "d"
+            check(4, grown, "d")
+            local keyed = {}
+            keyed[1], keyed[2], keyed[3] = "a", "b", "c"
+            check(3, keyed, "c")
+            check(2, {"a", "b", "b"}, "b")
+            check(nil, {0 / 0}, 0 / 0)
+            check(1, {0}, -0)
+            check(nil, {1}, "1")
+            local entry = {}
+            check(2, {{}, entry, {}}, entry)
+            local meta = {__eq = function(left, right) return left.id == right.id end}
+            local function item(id) return setmetatable({id = id}, meta) end
+            check(2, {item(1), item(2), item(2)}, item(2))
+            check(nil, {item(1)}, item(2))
+            local ok, problem = pcall(table.find, list, 1, 0)
+            assert(not ok and string.find(problem, "index out of range", 1, true), problem)
+            ok, problem = pcall(table.find, 5, 1)
+            assert(not ok and string.find(problem, "table expected", 1, true), problem)
+            ok, problem = pcall(table.find, list)
+            assert(not ok and string.find(problem, "argument #2", 1, true), problem)
+            "#,
+        )
+        .unwrap();
+}
+
+#[test]
+fn table_create_and_clear_as_fastcalls_do_what_the_library_does() {
+    // LuauCompileTableBuiltinsCreateClear makes both fastcalls, which run only in a safe
+    // environment, hence the sandbox; the loop runs each call site more than once. These hold
+    // on either path: the same answers came from Luau 0.742's library functions.
+    let listing =
+        l3i::source::disassemble("local t = table.create(2, 0) table.clear(t) return t", &CompileOptions::default())
+            .unwrap();
+    assert_eq!(listing.matches("FASTCALL").count(), 2, "{listing}");
+    let runtime = Runtime::new().unwrap();
+    runtime.sandbox_luau().unwrap();
+    runtime
+        .exec(
+            r#"
+            for _ = 1, 3 do
+                local filled = table.create(3, "x")
+                assert(#filled == 3 and filled[1] == "x" and filled[3] == "x" and filled[4] == nil)
+                local empty = table.create(4)
+                assert(#empty == 0 and next(empty) == nil)
+                assert(next(table.create(0)) == nil)
+                local truncated = table.create(2.5, 1)
+                assert(#truncated == 2, `{#truncated}`)
+                local first, second = table.create(2, 1)
+                assert(#first == 2 and second == nil)
+                local ok, problem = pcall(table.create, -1)
+                assert(not ok and string.find(problem, "out of range", 1, true), problem)
+                ok, problem = pcall(table.create, "two")
+                assert(not ok, problem)
+
+                local cleared = {1, 2, 3, name = "x"}
+                table.clear(cleared)
+                assert(next(cleared) == nil and #cleared == 0)
+                cleared[1] = "again"
+                assert(cleared[1] == "again")
+                ok, problem = pcall(table.clear, table.freeze({1}))
+                assert(not ok and string.find(problem, "readonly", 1, true), problem)
+                ok, problem = pcall(table.clear, 5)
+                assert(not ok and string.find(problem, "table expected", 1, true), problem)
+            end
+            "#,
+        )
+        .unwrap();
+}

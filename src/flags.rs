@@ -50,6 +50,13 @@ pub const LUAU_FLAGS: &[&str] = &[
     // text directly, 1.9 to 6.9 times faster on literal patterns measured here. A dynamic flag,
     // off upstream by default.
     "LuauOptimizeStringGsub",
+    // Luau 0.744: `table.find` scans the array part directly when the value has no `__eq`,
+    // 23 to 44% faster on eight elements and 83% on a thousand, measured here. A dynamic flag,
+    // off upstream by default.
+    "LuauTableFindImprovement",
+    // Luau 0.744: `table.create` and `table.clear` compile to fastcalls, 14 to 34% faster for
+    // create and about 4 ns off a clear, measured here.
+    "LuauCompileTableBuiltinsCreateClear",
     // These two gate APIs the binder exposes (embedder GC integration with userdata marks and
     // weak references; the memory cage). Both are inert until a host installs the corresponding
     // callback.
