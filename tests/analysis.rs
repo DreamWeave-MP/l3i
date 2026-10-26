@@ -332,6 +332,38 @@ fn a_comprehension_initializing_an_annotated_local_checks_its_projection_against
 }
 
 #[test]
+fn a_construct_reading_a_narrowed_outer_variable_needs_it_bound_to_a_local_first() {
+    // The dialect page's rule. Inside the function literal a construct lowers to, the new solver
+    // forgets the narrowing of a variable declared outside the enclosing function; a local of
+    // the enclosing function keeps it. When this test's first half starts passing, Luau has
+    // stopped forgetting and the page's section can go.
+    macro_rules! wanted {
+        ($body:literal) => {
+            concat!(
+                "--!strict\nlocal filter: string? = nil\nlocal only = if filter then string.split(filter, '|') else nil\n",
+                "local function wanted(name: string): boolean\n    if not only then return true end\n",
+                $body,
+                "end\nreturn wanted\n"
+            )
+        };
+    }
+    let forgotten = wanted!("    return any[for part in only => string.find(name, part, 1, true) ~= nil]\n");
+    let bound = wanted!(
+        "    local parts = only\n    return any[for part in parts => string.find(name, part, 1, true) ~= nil]\n"
+    );
+    let analysis =
+        comprehension_analysis(HashMap::from([("forgotten", forgotten), ("bound", bound)]), analysis::Solver::New);
+    let report = analysis.check("forgotten", false);
+    assert!(report.errors().any(|error| error.text.contains("could be nil")), "{report:#?}");
+    let report = analysis.check("bound", false);
+    assert!(report.is_clean(), "{report:#?}");
+    // The old solver keeps the narrowing either way.
+    let analysis = comprehension_analysis(HashMap::from([("forgotten", forgotten)]), analysis::Solver::Old);
+    let report = analysis.check("forgotten", false);
+    assert!(report.is_clean(), "{report:#?}");
+}
+
+#[test]
 fn standalone_buffer_slices_preserve_buffer_type() {
     let source = "--!strict\nlocal values: buffer = buffer.create(4)\nlocal part = values[1:2]\nreturn part\n";
     for solver in [analysis::Solver::New, analysis::Solver::Old] {

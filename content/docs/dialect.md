@@ -64,6 +64,39 @@ annotation spread over several lines or holding a comment, a local declared besi
 value that continues past the comprehension (`[...] or {}`) keep the untyped result; cast the
 projection there (`=> { i, "a" } :: Value`).
 
+**Bind a narrowed outer variable to a local before a construct reads it.** Every comprehension,
+reducer, sink and slice lowers to a function literal called where it is written, and Luau's new
+solver forgets, inside a function literal, the narrowing of a variable declared outside the
+function that encloses it: a module-level local, or a local of an outer function. The enclosing
+function's own locals and parameters keep theirs, and the old solver keeps every narrowing. So
+this reports `only` as possibly nil inside the reducer, though the guard just returned when it
+was:
+
+```luau
+local only = if filter then string.split(filter, '|') else nil
+
+local function wanted(name: string): boolean
+    if not only then return true end
+    return any[for part in only => string.find(name, part, 1, true) ~= nil]
+end
+```
+
+A local of the enclosing function holds the narrowed value, and that narrowing survives:
+
+```luau
+local function wanted(name: string): boolean
+    if not only then return true end
+    local parts = only
+    return any[for part in parts => string.find(name, part, 1, true) ~= nil]
+end
+```
+
+The function literal is not the solver being wrong in general: a literal that may run later must
+forget, and Luau cannot see that this one runs at once and is never kept. Lowering a construct
+without the literal for analysis would help only the constructs that are a whole local
+initializer or `return` value, never an argument or a condition, so the lowering keeps one shape
+and the rule above covers every position.
+
 ### Generators
 
 A generator slot is `name in source` or `a, b in source`. The source is a dense table, a slice,
