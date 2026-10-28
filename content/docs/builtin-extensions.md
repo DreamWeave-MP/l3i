@@ -605,6 +605,15 @@ result. All of it is pure Rust: `miniz_oxide`, `lz4_flex`, `ruzstd`, `lzma-rs`.
 for the bytes, `value()` for the integer of a checksum, `reset()` to start over. `finish` leaves
 the state intact, so a running digest can be read at any point.
 
+### Randomness and HMAC (`bytes-crypto`)
+
+`random(count)` returns `count` bytes (at most 65536 a call) from the operating system's CSPRNG,
+for keys, nonces and WebSocket masks; `math.random` is none of those. `hmac(data, key, algorithm)`
+returns the raw HMAC of `data` under `key` with `sha1`, `sha256`, `sha384` or `sha512`, and
+`hmacVerify(data, key, algorithm, tag)` says whether `tag` is that HMAC, comparing in constant
+time: check a signature with it, never with `==` on two tags. All of it is ring, the provider
+`tls` already builds. There are no ciphers and no key handling here, on purpose.
+
 ### Text (`bytes-text`)
 
 `decode(source, encoding, { strict? }?)` turns bytes in any WHATWG-labelled encoding

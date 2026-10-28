@@ -21,6 +21,8 @@
 //!   blocks and frames, zstd and LZMA/XZ decoding.
 //! - **Digests** (`bytes-digests`): CRC-32, Adler-32, FNV-1a, xxHash and the cryptographic
 //!   digests, one-shot or through a `Hasher` for data that arrives in pieces.
+//! - **Crypto** (`bytes-crypto`): bytes from the operating system's CSPRNG, and HMAC signing and
+//!   constant-time verification ([`crypto`]).
 //! - **Text** (`bytes-text`): decoding and encoding every WHATWG label, for the codepages old
 //!   formats were written in.
 //! - **Framing**: `frame` walks a run of tag-length-payload chunks natively and returns where
@@ -49,6 +51,8 @@
 
 #[cfg(feature = "bytes-codecs")]
 pub mod codecs;
+#[cfg(feature = "bytes-crypto")]
+pub mod crypto;
 #[cfg(feature = "bytes-digests")]
 pub mod digests;
 pub mod framing;
@@ -591,6 +595,8 @@ impl Extension for BytesExtension {
         codecs::describe(module);
         #[cfg(feature = "bytes-digests")]
         digests::describe(module);
+        #[cfg(feature = "bytes-crypto")]
+        crypto::describe(module);
         #[cfg(feature = "bytes-text")]
         text::describe(module);
         #[cfg(feature = "bytes-regex")]

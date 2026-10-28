@@ -28,6 +28,7 @@ the root.
 | `bytes` | The `dream.bytes` extension and `@dream/bytes` module: searching, record strings, varints, the widths and orders `buffer` lacks, and the `bytes.math()` receiver lowered under `jit` | `bytes`, `bytes::numeric` |
 | `bytes-codecs` | `inflate`/`deflate` (zlib, raw, gzip), LZ4 blocks and frames, zstd and LZMA/XZ decoding | `bytes::codecs` |
 | `bytes-digests` | CRC-32, Adler-32, FNV-1a, xxHash, MD5, SHA-1, SHA-256, BLAKE3, one-shot and incremental | `bytes::digests` |
+| `bytes-crypto` | Bytes from the OS CSPRNG, HMAC and its constant-time verification | `bytes::crypto` |
 | `bytes-text` | Decoding and encoding every WHATWG-labelled text encoding | `bytes::text` |
 | `data` | The `dream.data` extension and `@dream/data` module: reductions, selections, gather and scatter, element-wise arithmetic, stable argsort and partition over typed buffer spans, with typed receivers lowered under `jit` | `data` |
 | `intern` | The `dream.intern` extension and `@dream/intern` module: pools that turn strings and buffer spans into dense number identities | `intern` |

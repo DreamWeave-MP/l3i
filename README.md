@@ -135,6 +135,7 @@ Each row is a page of the guide.
 | `bytes` | The `@dream/bytes` extension | `memchr` |
 | `bytes-codecs` | DEFLATE, LZ4, zstd and LZMA/XZ | `miniz_oxide`, `lz4_flex`, `ruzstd`, `lzma-rs` |
 | `bytes-digests` | CRC-32 to BLAKE3, one-shot and incremental | `crc32fast`, `xxhash-rust`, RustCrypto, `blake3` |
+| `bytes-crypto` | Secure random bytes, HMAC and constant-time verification | `ring` |
 | `bytes-text` | Every WHATWG text encoding | `encoding_rs` |
 | `bytes-regex` | Regular expressions over bytes, many ranges in one call | `regex` |
 | `data` | The `@dream/data` extension | none |
@@ -152,7 +153,7 @@ Each row is a page of the guide.
 The default feature set is empty. The game transport is not a feature: `dream-net` is a
 dependency.
 Everything optional is Rust, except the C and assembly compiled with clang for BLAKE3's
-kernels (`bytes-digests`) and ring (`tls`), and libopus (`audio`).
+kernels (`bytes-digests`) and ring (`tls`, `bytes-crypto`), and libopus (`audio`).
 
 ## The rules
 

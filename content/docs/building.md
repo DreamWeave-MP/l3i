@@ -84,6 +84,7 @@ l3i = { version = "2", features = ["jit"] }
 | `bytes` | off | The `dream.bytes` extension (`l3i::bytes`) and `memchr` for its searches |
 | `bytes-codecs` | off | `miniz_oxide`, `lz4_flex`, `ruzstd`, `lzma-rs` and `crc32fast`: `inflate`, `deflate`, LZ4, zstd, LZMA/XZ |
 | `bytes-digests` | off | `crc32fast`, `adler2`, `xxhash-rust`, `md-5`, `sha1`, `sha2`, `blake3`: the checksums and digests |
+| `bytes-crypto` | off | `ring`: `bytes.random` from the OS CSPRNG, `bytes.hmac` and `bytes.hmacVerify` |
 | `bytes-text` | off | `encoding_rs`: text decoding and encoding for every WHATWG label |
 | `bytes-regex` | off | `regex`: `bytes.regex`, regular expressions over bytes, many ranges of a buffer in one call |
 | `intern` | off | The `dream.intern` extension (`l3i::intern`); no dependencies |

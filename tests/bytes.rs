@@ -330,6 +330,29 @@ fn digests_match_their_published_vectors_and_the_hasher_matches_one_shot() {
         .unwrap();
 }
 
+#[cfg(feature = "bytes-crypto")]
+#[test]
+fn random_bytes_are_fresh_and_hmac_matches_the_rfc_vectors() {
+    runtime()
+        .exec(
+            "local a, b = bytes.random(32), bytes.random(32) \
+             assert(buffer.len(a) == 32 and buffer.len(bytes.random(0)) == 0, 'length') \
+             assert(not bytes.equals(a, b), 'two draws differ') \
+             assert(buffer.len(bytes.random(65536)) == 65536, 'the most one call returns') \
+             local ok, err = pcall(bytes.random, 65537) assert(not ok and err:find('65536'), err) \
+             local ok2, err2 = pcall(bytes.random, -1) assert(not ok2 and err2:find('count'), err2) \
+             local data, key = 'what do ya want for nothing?', 'Jefe' \
+             local tag = bytes.hmac(data, key, 'sha256') \
+             assert(bytes.toHex(tag) == '5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843', 'RFC 4231 case 2') \
+             assert(bytes.toHex(bytes.hmac(data, key, 'sha1')) == 'effcdf6ae5eb2fa2d27416d5f184df9c259a7c79', 'RFC 2202 case 2') \
+             assert(bytes.hmacVerify(buffer.fromstring(data), key, 'sha256', tag), 'verifies its own tag') \
+             assert(not bytes.hmacVerify(data .. '!', key, 'sha256', tag), 'other data') \
+             assert(not bytes.hmacVerify(data, key, 'sha256', bytes.slice(tag, 0, 31)), 'a short tag') \
+             local ok3, err3 = pcall(bytes.hmac, data, key, 'md5') assert(not ok3 and err3:find('md5'), err3)",
+        )
+        .unwrap();
+}
+
 #[cfg(feature = "bytes-text")]
 #[test]
 fn text_decodes_and_encodes_the_codepages_old_formats_use() {
