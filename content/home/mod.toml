@@ -351,3 +351,20 @@ A debugger that shows every local, or a test that reads a local after its last u
 
 Scripts that spelled out `regex`'s options for a `pcall` can annotate with `dream_bytes_RegexOptions`, and comprehensions that cast each projection to their local's element type can drop the cast. A comprehension that reads a narrowed variable from outside its enclosing function still needs that value bound to a local first; the dialect page says why.
 """
+
+[[releases]]
+version = "2.4.0"
+date = 2026-10-28
+summary = "The few cryptographic primitives a network client needs around its transport, in `@dream/bytes` behind `bytes-crypto`: bytes from the operating system's CSPRNG, HMAC with constant-time verification, and RS256 signatures, all through the ring that `tls` already builds."
+added = [
+    "`bytes.random(count)`: up to 65536 bytes from the operating system's CSPRNG per call, for keys, nonces and WebSocket masks, where `math.random` is none of those.",
+    "`bytes.hmac(data, key, algorithm)` with `sha1`, `sha256`, `sha384` or `sha512`, the raw tag, and `bytes.hmacVerify(data, key, algorithm, tag)`, which compares in constant time, for checking a webhook's signature without timing what matched. Both match the RFC 2202 and RFC 4231 vectors.",
+    "`bytes.rsaSign(data, privateKey, algorithm)`: the raw PKCS#1 v1.5 RSA signature, RS256, RS384 or RS512 as JSON Web Tokens name them, from a key of at least 2048 bits in PKCS#8 or PKCS#1, PEM or DER, as services issue keys for signing tokens. The signature is byte for byte OpenSSL's. An encrypted key, an EC key or anything else is refused with a message that never quotes the key, and the decoded key bytes are zeroed when the call returns.",
+]
+migration = """
+Nothing to change. Take 2.4.0 in place of 2.3.0.
+
+`bytes-crypto` is opt-in and adds no new dependency to a build that already has `tls`: it is ring, which `tls` builds, and zeroize. Turned on without `tls`, it builds ring's C and assembly with clang, as `tls` does.
+
+There are no ciphers, no key generation and no key storage, and none are planned: a key arrives as bytes the caller holds and leaves with the call.
+"""
