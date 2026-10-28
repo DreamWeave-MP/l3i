@@ -605,14 +605,30 @@ result. All of it is pure Rust: `miniz_oxide`, `lz4_flex`, `ruzstd`, `lzma-rs`.
 for the bytes, `value()` for the integer of a checksum, `reset()` to start over. `finish` leaves
 the state intact, so a running digest can be read at any point.
 
-### Randomness and HMAC (`bytes-crypto`)
+### Randomness, HMAC and RSA signatures (`bytes-crypto`)
 
 `random(count)` returns `count` bytes (at most 65536 a call) from the operating system's CSPRNG,
 for keys, nonces and WebSocket masks; `math.random` is none of those. `hmac(data, key, algorithm)`
 returns the raw HMAC of `data` under `key` with `sha1`, `sha256`, `sha384` or `sha512`, and
 `hmacVerify(data, key, algorithm, tag)` says whether `tag` is that HMAC, comparing in constant
-time: check a signature with it, never with `==` on two tags. All of it is ring, the provider
-`tls` already builds. There are no ciphers and no key handling here, on purpose.
+time: check a signature with it, never with `==` on two tags.
+
+`rsaSign(data, privateKey, algorithm)` returns the raw PKCS#1 v1.5 RSA signature of `data`: with
+`sha256`, `sha384` or `sha512`, what JSON Web Tokens call RS256, RS384 and RS512. The key is an RSA
+private key of at least 2048 bits, PKCS#8 (`BEGIN PRIVATE KEY`) or PKCS#1 (`BEGIN RSA PRIVATE
+KEY`), as PEM text or DER bytes, which covers the keys services hand out for signing tokens.
+PKCS#1 v1.5 is deterministic, so a signature is the same bytes OpenSSL makes from the same key.
+An encrypted key, an EC key, or anything else is refused with a message that never quotes the
+key, and the decoded key bytes are zeroed once the signature is made.
+
+```lua
+-- header and claims are the token's two base64url parts, privateKeyPem the key as issued.
+local signature = bytes.rsaSign(header .. '.' .. claims, privateKeyPem, 'sha256')
+```
+
+All of it is ring, the provider `tls` already builds. There are no ciphers, no key generation
+and no key storage here, on purpose: a key arrives as bytes the caller already holds, and leaves
+with the call.
 
 ### Text (`bytes-text`)
 

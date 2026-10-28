@@ -21,8 +21,8 @@
 //!   blocks and frames, zstd and LZMA/XZ decoding.
 //! - **Digests** (`bytes-digests`): CRC-32, Adler-32, FNV-1a, xxHash and the cryptographic
 //!   digests, one-shot or through a `Hasher` for data that arrives in pieces.
-//! - **Crypto** (`bytes-crypto`): bytes from the operating system's CSPRNG, and HMAC signing and
-//!   constant-time verification ([`crypto`]).
+//! - **Crypto** (`bytes-crypto`): bytes from the operating system's CSPRNG, HMAC signing and
+//!   constant-time verification, and PKCS#1 v1.5 RSA signing ([`crypto`]).
 //! - **Text** (`bytes-text`): decoding and encoding every WHATWG label, for the codepages old
 //!   formats were written in.
 //! - **Framing**: `frame` walks a run of tag-length-payload chunks natively and returns where
@@ -390,11 +390,15 @@ pub fn to_base64(data: &[u8]) -> String {
 /// The bytes standard, padded base64 `text` holds; anything else (a stray character, a length
 /// that isn't a multiple of four, padding before the end) is an error naming where.
 fn from_base64(text: BytesView<'_>) -> Result<NewBuffer> {
-    const WHAT: &str = "bytes.fromBase64";
     // SAFETY: as `find`; the decoded bytes are copied out before returning.
-    let text = unsafe { bytes(&text) };
+    decode_base64(unsafe { bytes(&text) }, "bytes.fromBase64").map(NewBuffer)
+}
+
+/// The decoding behind `fromBase64`, for Rust callers holding bytes; `what` names the caller in
+/// errors.
+pub(crate) fn decode_base64(text: &[u8], what: &str) -> Result<Vec<u8>> {
     if !text.len().is_multiple_of(4) {
-        return Err(Error::runtime(format!("{WHAT}: {} characters is not a multiple of four", text.len())));
+        return Err(Error::runtime(format!("{what}: {} characters is not a multiple of four", text.len())));
     }
     let padding = text.iter().rev().take(2).take_while(|byte| **byte == b'=').count();
     let mut out = Vec::with_capacity(text.len() / 4 * 3);
@@ -407,7 +411,7 @@ fn from_base64(text: BytesView<'_>) -> Result<NewBuffer> {
             b'+' => 62,
             b'/' => 63,
             b'=' if at + padding >= text.len() => 0,
-            _ => return Err(Error::runtime(format!("{WHAT}: byte {byte} at {at} is not base64"))),
+            _ => return Err(Error::runtime(format!("{what}: byte {byte} at {at} is not base64"))),
         };
         Ok(u32::from(digit))
     };
@@ -417,7 +421,7 @@ fn from_base64(text: BytesView<'_>) -> Result<NewBuffer> {
         out.extend_from_slice(&[(n >> 16) as u8, (n >> 8) as u8, n as u8]);
     }
     out.truncate(out.len() - padding);
-    Ok(NewBuffer(out))
+    Ok(out)
 }
 
 /// `toBase64(source, offset?, length?)`: base64 of `length` bytes from `offset`, the whole of the

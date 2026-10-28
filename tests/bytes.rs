@@ -353,6 +353,45 @@ fn random_bytes_are_fresh_and_hmac_matches_the_rfc_vectors() {
         .unwrap();
 }
 
+/// OpenSSL's signatures of `header.payload` under `tests/fixtures/rsa`'s key: PKCS#1 v1.5 is
+/// deterministic, so ring's must be the same bytes.
+#[cfg(feature = "bytes-crypto")]
+const RS256: &str = "682ccdcda9080b5eb3733fe1ebb4684f94926e441645e691843f549440bd14a7c0708458486a4fa47d75d5a15f9392bce626e6e6d7056dbf888c5004440209c903db38b095fa9c00c67a44c8ae05ea1a62dfac2ed8e86cc1d28597286d4fce29a940d0673235b3baf870da57c4a871d1ec387fd26078004858d1318d4de89e876bbde40f681f71e635e8bb33aedc864429392ab7e1ad71aa153c9bf480890de8e3c6f675b086dd7a7b7e93a557014377a748e54372981a7d9afebcd22acc15eea5e2d79f3175d2080a65250922624b99897b4200dbddc9b9e923ba3956db1692b46c37a1622b24d06c9220c107fd349e1751aff166dc7a127afb15b372be5bec";
+#[cfg(feature = "bytes-crypto")]
+const RS512: &str = "2d7faeea555f5c893338b96010d8c424f4e034a0bd3f5eac39eb65748e5f868884422410eb3898f1e751708def38e67216b1d8fe9d5a04842c84c3c35c05c034b62cdc4cb6c29fea9df0971747c19c951cbfd877112b119436d29e3768483c9eb31bf9b7d5ff31a1634bfa36d0a146d331f7d7ba71dbba59d1dffda4c509efa5f363070766f70a3bea89643323a192a7d8093216726f8d563c4e6ddcc14ef6e0f328e3ff525227d4e13e7a4fe34b3957284c657cfc66bee1183e5585642dcb04ff3b5909d650ebc9c209ab40f52d0ca1d348ff4a99e4701e6e6d7f5816f95326f33efb31d0ddf62c494491425bd08021dd4838468aeac181c11d16c1a3602ee8";
+
+#[cfg(feature = "bytes-crypto")]
+#[test]
+fn rsa_signatures_match_openssl_for_every_form_of_the_key() {
+    let pkcs1 = include_str!("fixtures/rsa/pkcs1.pem");
+    let pkcs8 = include_str!("fixtures/rsa/pkcs8.pem");
+    use std::fmt::Write as _;
+
+    let der = include_bytes!("fixtures/rsa/pkcs8.der").iter().fold(String::new(), |mut hex, byte| {
+        let _ = write!(hex, "{byte:02x}");
+        hex
+    });
+    let ec = include_str!("fixtures/rsa/ec.pem");
+    runtime()
+        .exec(&format!(
+            "local data = 'header.payload' \
+             for name, key in {{ pkcs1 = {pkcs1:?}, pkcs8 = {pkcs8:?}, der = bytes.fromHex({der:?}) }} do \
+               assert(bytes.toHex(bytes.rsaSign(data, key, 'sha256')) == {RS256:?}, name .. ' RS256') \
+             end \
+             assert(bytes.toHex(bytes.rsaSign(buffer.fromstring(data), {pkcs8:?}, 'sha512')) == {RS512:?}, 'RS512') \
+             local ok, err = pcall(bytes.rsaSign, data, {ec:?}, 'sha256') \
+             assert(not ok and err:find('not an RSA private key'), err) \
+             local ok2, err2 = pcall(bytes.rsaSign, data, 'not a key', 'sha256') \
+             assert(not ok2 and err2:find('not an RSA private key') and not err2:find('not a key'), err2) \
+             local ok3, err3 = pcall(bytes.rsaSign, data, {pkcs8:?}, 'sha1') assert(not ok3 and err3:find('sha1'), err3) \
+             local ok4, err4 = pcall(bytes.rsaSign, data, '-----BEGIN ENCRYPTED PRIVATE KEY-----\\nAAAA\\n-----END ENCRYPTED PRIVATE KEY-----', 'sha256') \
+             assert(not ok4 and err4:find('unencrypted'), err4) \
+             local ok5, err5 = pcall(bytes.rsaSign, data, '-----BEGIN PRIVATE KEY-----\\n!!!!\\n-----END PRIVATE KEY-----', 'sha256') \
+             assert(not ok5 and err5:find('not base64') and not err5:find('!'), err5)",
+        ))
+        .unwrap();
+}
+
 #[cfg(feature = "bytes-text")]
 #[test]
 fn text_decodes_and_encodes_the_codepages_old_formats_use() {
