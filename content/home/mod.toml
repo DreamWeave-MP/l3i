@@ -384,3 +384,16 @@ Nothing to change. Take 2.5.0 in place of 2.4.0.
 
 On Unix the lock is advisory, as `flock` is: it excludes other locks, not reads or writes of the file.
 """
+
+[[releases]]
+version = "2.6.0"
+date = 2026-10-30
+summary = "ECDSA signatures in `@dream/bytes`: ES256 and ES384 tokens from the P-256 and P-384 keys API consoles hand out, SEC1 or PKCS#8, PEM or DER."
+added = [
+    "`bytes.ecdsaSign(data, privateKey, algorithm)`, behind `bytes-crypto`: the raw ECDSA signature of `data`, `r` then `s`, each fixed-width and big-endian, the form JSON Web Tokens carry. `sha256` signs under a P-256 key (ES256, 64 bytes), `sha384` under a P-384 key (ES384, 96 bytes). The key is PKCS#8 (`BEGIN PRIVATE KEY`) or SEC1 (`BEGIN EC PRIVATE KEY`, what OpenSSL writes and most consoles issue), PEM or DER, with its public point. ECDSA is randomized, so every call signs afresh and every signature verifies.",
+]
+migration = """
+Nothing to change. Take 2.6.0 in place of 2.5.0.
+
+Check an ECDSA signature by verifying it, never by comparing its bytes with another: two signatures of the same data by the same key differ. A key on the other curve, an RSA key, or anything else is refused with a message that never quotes the key, as `rsaSign` refuses one.
+"""
