@@ -4,7 +4,7 @@
 //! reads, readers over a memory map, writers with positions and truncation, metadata with and
 //! without following symbolic links, directory listings and a fast recursive walk with metadata,
 //! directories made and removed (recursively too), renames, copies, hard and symbolic links,
-//! canonical paths and file identity.
+//! canonical paths, file identity, and operating-system file locks.
 //!
 //! ```lua
 //! local fs = require('@dream/fs')
@@ -50,12 +50,14 @@
 //! closed handle) is the script's mistake, and raises.
 
 mod io;
+mod lock;
 mod path;
 mod walk;
 
 use std::path::{Path, PathBuf};
 
 pub use io::{Reader, Writer};
+pub use lock::Lock;
 
 use crate::bind::{Call, StackResults};
 use crate::convert::new_buffer;
@@ -483,6 +485,12 @@ const MEMBERS: &[Member] = &[
         true,
     ),
     member(
+        "lock",
+        "(path: string, options: { shared: boolean?, createParents: boolean? }?) -> (dream_fs_Lock?, string?, dream_fs_ErrorKind?)",
+        "Takes the operating system's lock on path, creating the file, without waiting: exclusive, or shared with shared = true. Held until unlock, the handle is collected, the runtime shuts down, or the process ends, so it never outlives its holder. A lock held elsewhere answers nil, the message and wouldBlock. Advisory on Unix: it excludes other locks, not reads or writes.",
+        true,
+    ),
+    member(
         "symlink",
         "(target: string, link: string, options: { directory: boolean? }?) -> (boolean?, string?, dream_fs_ErrorKind?)",
         "Creates link as a symbolic link to target, stored as written. directory marks a link to a directory, which Windows needs.",
@@ -514,11 +522,12 @@ impl Extension for FsExtension {
         d.type_alias("dream_fs_Walk", WALK_TYPE);
         io::describe_reader(d);
         io::describe_writer(d);
+        lock::describe_lock(d);
         d.optional_capability(READ_CAPABILITY);
         d.optional_capability(WRITE_CAPABILITY);
         let module = d.module(MODULE);
         module.doc(
-            "The host filesystem: reads, readers and writers, metadata, walks, links, and identity, over byte paths.",
+            "The host filesystem: reads, readers and writers, metadata, walks, links, identity, and locks, over byte paths.",
         );
         for member in MEMBERS {
             module.installed(member.name).signature(member.signature).doc(member.doc);
@@ -611,6 +620,16 @@ impl Extension for FsExtension {
             Ok(Outcome::of(result.map(|()| true), "hardLink", link))
         });
         bind!("symlink", symlink);
+        bind!("lock", |call: &Call<'_>, path: &[u8], options: Option<ValueView<'_>>| -> Result<Outcome<Owned<Lock>>> {
+            let options = lock::LockOptions::read(call, options)?;
+            Ok(match Lock::take(path, options)? {
+                Outcome::Done(lock) => {
+                    crate::runtime::register_resource(call, lock.resource());
+                    Outcome::Done(Owned(lock))
+                }
+                Outcome::Failed(failure) => Outcome::Failed(failure),
+            })
+        });
         Ok(())
     }
 }

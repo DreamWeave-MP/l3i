@@ -227,7 +227,8 @@ fn every_function_needs_its_capability() {
         .exec(&format!(
             "assert(fs.readFileString({path} .. '/x') == 'x') \
              local ok, err = pcall(fs.remove, {path} .. '/x') assert(not ok and err:find('filesystem.write'), err) \
-             assert(not pcall(fs.hardLink, {path} .. '/x', {path} .. '/y') and not pcall(fs.openWrite, {path} .. '/y'))"
+             assert(not pcall(fs.hardLink, {path} .. '/x', {path} .. '/y') and not pcall(fs.openWrite, {path} .. '/y')) \
+             assert(not pcall(fs.lock, {path} .. '/y'))"
         ))
         .unwrap();
     assert!(scratch.0.join("x").exists() && !scratch.0.join("y").exists());
@@ -253,6 +254,37 @@ fn fifos_and_devices_are_refused_instead_of_blocking_or_never_ending() {
             scratch.lua()
         ))
         .unwrap();
+}
+
+#[test]
+fn locks_are_the_operating_systems_and_end_with_their_holder() {
+    let scratch = Scratch::new("lock");
+    let runtime = runtime();
+    runtime
+        .exec(&format!(
+            "local path = {} .. '/state/owner.lock' \
+             local first = assert(fs.lock(path, {{ createParents = true }})) \
+             assert(first:held() and not first:shared() and tostring(first):find('exclusive')) \
+             local second, message, kind = fs.lock(path) \
+             assert(second == nil and kind == 'wouldBlock' and message:find('held by another lock'), message) \
+             assert(fs.lock(path, {{ shared = true }}) == nil, 'a shared lock waits for an exclusive one') \
+             assert(first:unlock() and not first:held() and not first:unlock(), 'unlocking twice is harmless') \
+             local reader = assert(fs.lock(path, {{ shared = true }})) \
+             local another = assert(fs.lock(path, {{ shared = true }}), 'shared locks share') \
+             assert(reader:shared() and fs.lock(path) == nil, 'an exclusive lock waits for shared ones') \
+             reader:unlock() another:unlock() \
+             held = assert(fs.lock(path))",
+            scratch.lua()
+        ))
+        .unwrap();
+
+    // The lock is the operating system's: anything else asking it for the file sees it held.
+    let file = std::fs::OpenOptions::new().read(true).write(true).open(scratch.0.join("state/owner.lock")).unwrap();
+    assert!(matches!(file.try_lock(), Err(std::fs::TryLockError::WouldBlock)));
+    runtime.shutdown();
+    // The process's exit would reclaim the heap; nothing is dropped.
+    std::mem::forget(runtime);
+    assert!(file.try_lock().is_ok(), "shutdown releases a lock a script never unlocked");
 }
 
 #[test]

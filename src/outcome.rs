@@ -13,7 +13,7 @@ use crate::stack::Scope;
 #[cfg(any(feature = "fs", feature = "process"))]
 pub(crate) const ERROR_KIND_TYPE: &str = "\"notFound\" | \"permissionDenied\" | \"alreadyExists\" | \"isADirectory\" \
     | \"notADirectory\" | \"directoryNotEmpty\" | \"readOnlyFilesystem\" | \"storageFull\" | \"crossesDevices\" \
-    | \"invalidInput\" | \"invalidFilename\" | \"unsupported\" | \"other\"";
+    | \"invalidInput\" | \"invalidFilename\" | \"unsupported\" | \"wouldBlock\" | \"other\"";
 
 /// The name a script sees for an I/O error's kind.
 #[cfg(any(feature = "fs", feature = "process"))]
@@ -32,6 +32,7 @@ pub(crate) fn kind_of(error: &std::io::Error) -> &'static str {
         ErrorKind::InvalidInput => "invalidInput",
         ErrorKind::InvalidFilename => "invalidFilename",
         ErrorKind::Unsupported => "unsupported",
+        ErrorKind::WouldBlock => "wouldBlock",
         _ => "other",
     }
 }
