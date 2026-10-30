@@ -370,8 +370,16 @@ fn end_of_stream_is_never_would_block_and_windows_are_checked() {
             -- A read lands at the offset and touches nothing else.
             local target = buffer.create(8) buffer.fill(target, 0, 0x2a)
             writeAll(client, 'xy')
-            local poller = tcp.poller() poller:watch(server, 1, 'read') poller:wait(1000) poller:close()
-            assert(server:readInto(target, 3, 2) == 2)
+            -- The two bytes may arrive apart: each read lands where the last one stopped.
+            local got, poller = 0, tcp.poller()
+            poller:watch(server, 1, 'read')
+            for _ = 1, 40 do
+                if got == 2 then break end
+                local count = server:readInto(target, 3 + got, 2 - got)
+                if count then got += count else poller:wait(1000) end
+            end
+            poller:close()
+            assert(got == 2, `read {got} of 2 bytes`)
             assert(buffer.tostring(target) == '***xy***')
             client:shutdown('write')
             assert(readToEnd(server) == '')
@@ -539,7 +547,14 @@ fn readiness_is_level_triggered_and_tokens_never_go_stale() {
             assert(poller:wait(1000) == 1 and poller:next() == 8)
             assert(server:readInto(buffer.create(1)) == 1)
             assert(poller:wait(0) == 1 and poller:next() == 8)
-            assert(server:readInto(buffer.create(8)) == 2)
+            -- The rest may still be on its way; wait for it only when a read says it isn't there.
+            local rest = 0
+            for _ = 1, 40 do
+                if rest == 2 then break end
+                local count = server:readInto(buffer.create(8))
+                if count then rest += count else assert(poller:wait(1000) == 1 and poller:next() == 8) end
+            end
+            assert(rest == 2, `read {rest} of the 2 bytes left`)
             assert(poller:wait(0) == 1, 'readable until a read says otherwise')
             assert(server:readInto(buffer.create(8)) == nil)
             assert(poller:wait(0) == 0)
