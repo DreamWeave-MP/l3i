@@ -15,10 +15,10 @@ use std::fs::{File, OpenOptions, TryLockError};
 use std::io;
 use std::rc::Rc;
 
+use crate::error::Result;
 use crate::extension::{ExtensionDescriptor, TagPolicy};
 use crate::options::Options;
 use crate::outcome::Failure;
-use crate::error::Result;
 use crate::stack::{Scope, ValueView};
 use crate::userdata::Userdata;
 
