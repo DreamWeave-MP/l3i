@@ -1380,7 +1380,7 @@ Feature `fs`; module `@dream/fs`, `l3i::fs::FsExtension`. The host filesystem, f
 work on files on disk: whole and positional reads, readers over a memory map, writers with
 positions and truncation, metadata with and without following links, listings and a fast
 recursive walk, directories made and removed, renames, copies, hard and symbolic links,
-canonical paths and file identity.
+canonical paths, file identity, and the operating system's file locks.
 
 ```luau
 local fs = require("@dream/fs")
@@ -1404,7 +1404,8 @@ are Unicode, so there a path must be UTF-8.
 An operation the OS refuses returns `nil`, the message `dream.fs.<function>: <path>: <the OS's
 message>` and the error's kind (`dream_fs_ErrorKind`: `notFound`, `permissionDenied`,
 `alreadyExists`, `isADirectory`, `notADirectory`, `directoryNotEmpty`, `readOnlyFilesystem`,
-`storageFull`, `crossesDevices`, `invalidInput`, `invalidFilename`, `unsupported`, `other`), the way
+`storageFull`, `crossesDevices`, `invalidInput`, `invalidFilename`, `unsupported`, `wouldBlock`,
+`other`), the way
 `io.open` reports one. A script branches on a missing file instead of catching it, and `assert`
 turns the answer into an error when that is what it wants. An operation with nothing to return
 returns `true`. `stat`, `lstat` and `readLink` return a lone `nil` for a path where nothing is,
@@ -1428,6 +1429,7 @@ handle.
 | `openWrite(path, { append?, truncate?, create? }?)` | A buffered `dream_fs_Writer` |
 | `mkdir(path, { recursive? }?)`, `remove(path, { recursive? }?)` | `true`; `remove` never follows a link |
 | `rename(from, to)`, `copy(from, to)`, `hardLink(source, link)`, `symlink(target, link, { directory? }?)` | `true`, or the byte count for `copy` |
+| `lock(path, { shared?, createParents? }?)` | A `dream_fs_Lock`: the operating system's lock on the file, made if it isn't there; a lock held elsewhere is `wouldBlock` (below) |
 
 `walk` takes `{ followLinks?, include?, metadata?, sort?, maxDepth?, skipErrors? }` and returns
 `{ paths, kinds, sizes?, modifiedSeconds?, modifiedNanoseconds?, errors }`: one table per column,
@@ -1443,6 +1445,33 @@ with `read`, `readInto`, `seek` and `skip`. A writer's `write`, `writeAt`, `seek
 script never flushes or closes reaches the file when the writer is collected, when the runtime
 drops, or at `Runtime::shutdown()`, which a host that exits without dropping the runtime calls
 first.
+
+### Locks
+
+`lock(path)` takes the operating system's own lock on a file (`flock` on Unix, `LockFileEx` on
+Windows), exclusive unless `shared = true` asks for one that other shared locks may hold too. It
+never waits: a lock held elsewhere, in this process or another, is answered at once with `nil`,
+`dream.fs.lock: <path>: held by another lock` and `wouldBlock`, and the script decides whether to
+try again later. `createParents` makes the file's missing folders first.
+
+The lock is held for as long as the file it was taken through is open, so it ends however its
+holder does: `lock:unlock()` (true if it was held, harmless again), the handle collected, the
+runtime dropped or shut down, or the process gone, when the system releases it. It never times
+out, and it never outlives the process that took it, which is what a file that names a single
+running owner needs: a second instance asks for the lock and is told no until the first is gone,
+whether the first exited, crashed or was killed. `lock:held()` and `lock:shared()` say what the
+handle holds.
+
+On Unix the lock is advisory, as `flock` is: it excludes other locks on the file, not reads or
+writes of it, so it guards what everyone who touches the file agrees to lock first. A lock on a
+network file system is only as good as that file system's locking.
+
+```luau
+local owner, message, kind = fs.lock("state/owner.lock", { createParents = true })
+if not owner then
+    return if kind == "wouldBlock" then "already running" else error(message)
+end
+```
 
 ### Paths
 
