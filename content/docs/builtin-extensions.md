@@ -605,7 +605,7 @@ result. All of it is pure Rust: `miniz_oxide`, `lz4_flex`, `ruzstd`, `lzma-rs`.
 for the bytes, `value()` for the integer of a checksum, `reset()` to start over. `finish` leaves
 the state intact, so a running digest can be read at any point.
 
-### Randomness, HMAC and RSA signatures (`bytes-crypto`)
+### Randomness, HMAC and signatures (`bytes-crypto`)
 
 `random(count)` returns `count` bytes (at most 65536 a call) from the operating system's CSPRNG,
 for keys, nonces and WebSocket masks; `math.random` is none of those. `hmac(data, key, algorithm)`
@@ -624,6 +624,19 @@ key, and the decoded key bytes are zeroed once the signature is made.
 ```lua
 -- header and claims are the token's two base64url parts, privateKeyPem the key as issued.
 local signature = bytes.rsaSign(header .. '.' .. claims, privateKeyPem, 'sha256')
+```
+
+`ecdsaSign(data, privateKey, algorithm)` returns the raw ECDSA signature of `data`, `r` then `s`,
+each fixed-width and big-endian, which is the form JSON Web Tokens put in a token: `sha256` signs
+under a P-256 key (ES256, 64 bytes) and `sha384` under a P-384 key (ES384, 96 bytes). The key is
+PKCS#8 (`BEGIN PRIVATE KEY`) or SEC1 (`BEGIN EC PRIVATE KEY`, the form OpenSSL writes and most
+API consoles hand out), as PEM text or DER bytes, and must carry its public point, as both forms
+do when a tool generates them. ECDSA is randomized: every call makes a different signature, and
+every one of them verifies, so compare signatures by verifying them, never by their bytes. A key
+on the other curve, an RSA key, or anything else is refused the way `rsaSign` refuses one.
+
+```lua
+local signature = bytes.ecdsaSign(header .. '.' .. claims, ecPrivateKeyPem, 'sha256')
 ```
 
 All of it is ring, the provider `tls` already builds. There are no ciphers, no key generation

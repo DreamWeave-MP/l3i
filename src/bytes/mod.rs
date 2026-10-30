@@ -22,7 +22,7 @@
 //! - **Digests** (`bytes-digests`): CRC-32, Adler-32, FNV-1a, xxHash and the cryptographic
 //!   digests, one-shot or through a `Hasher` for data that arrives in pieces.
 //! - **Crypto** (`bytes-crypto`): bytes from the operating system's CSPRNG, HMAC signing and
-//!   constant-time verification, and PKCS#1 v1.5 RSA signing ([`crypto`]).
+//!   constant-time verification, PKCS#1 v1.5 RSA signing and ECDSA signing ([`crypto`]).
 //! - **Text** (`bytes-text`): decoding and encoding every WHATWG label, for the codepages old
 //!   formats were written in.
 //! - **Framing**: `frame` walks a run of tag-length-payload chunks natively and returns where

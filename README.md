@@ -135,7 +135,7 @@ Each row is a page of the guide.
 | `bytes` | The `@dream/bytes` extension | `memchr` |
 | `bytes-codecs` | DEFLATE, LZ4, zstd and LZMA/XZ | `miniz_oxide`, `lz4_flex`, `ruzstd`, `lzma-rs` |
 | `bytes-digests` | CRC-32 to BLAKE3, one-shot and incremental | `crc32fast`, `xxhash-rust`, RustCrypto, `blake3` |
-| `bytes-crypto` | Secure random bytes, HMAC with constant-time verification, RSA signing (RS256) | `ring` |
+| `bytes-crypto` | Secure random bytes, HMAC with constant-time verification, RSA and ECDSA signing (RS256, ES256) | `ring` |
 | `bytes-text` | Every WHATWG text encoding | `encoding_rs` |
 | `bytes-regex` | Regular expressions over bytes, many ranges in one call | `regex` |
 | `data` | The `@dream/data` extension | none |

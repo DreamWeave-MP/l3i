@@ -24,7 +24,7 @@ are optional:
 | `soft-render` | dream-soft-render as the `dream.soft_render` extension |
 | `bytes` | The `dream.bytes` extension for parsing foreign formats: searching, record strings, varints, big-endian and half-float reads, natively lowered under `jit` |
 | `bytes-codecs`, `bytes-digests`, `bytes-text`, `bytes-regex` | Its codecs (DEFLATE, LZ4, zstd, LZMA), digests (CRC-32 to BLAKE3), text encodings and regular expressions, each pulling in its pure-Rust dependencies |
-| `bytes-crypto` | Its secure random bytes, HMAC and RSA signing, through ring |
+| `bytes-crypto` | Its secure random bytes, HMAC, RSA and ECDSA signing, through ring |
 | `intern` | The `dream.intern` extension: textual identities as dense numbers, from strings or buffer spans, exact or ASCII case-insensitive |
 | `intl` | The `dream.intl` extension: BCP 47 locales, CLDR cardinal and ordinal plural categories, and locale-aware decimal formatting |
 

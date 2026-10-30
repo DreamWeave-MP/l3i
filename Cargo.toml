@@ -114,7 +114,7 @@ idna = { version = "1.1", optional = true }
 rustls = { version = "0.23.46", optional = true, default-features = false, features = ["ring", "std", "tls12"] }
 rustls-platform-verifier = { version = "0.7", optional = true }
 zeroize = { version = "1.8", optional = true }
-# `bytes-crypto`: the OS CSPRNG, HMAC and RSA signing through ring, the provider `tls` already builds.
+# `bytes-crypto`: the OS CSPRNG, HMAC, RSA and ECDSA signing through ring, the provider `tls` already builds.
 ring = { version = "0.17", optional = true }
 # `@dream/audio` (feature `audio`): MPEG audio through nanomp3 (a safe port of minimp3) and Vorbis
 # through lewton's packet decoder, without its own Ogg reader. Opus is libopus itself, built by
@@ -170,7 +170,7 @@ bytes = ["dep:memchr"]
 bytes-codecs = ["bytes", "dep:miniz_oxide", "dep:lz4_flex", "dep:ruzstd", "dep:lzma-rs", "dep:crc32fast"]
 # CRC32, Adler-32, FNV-1a, xxHash, MD5, SHA-1, SHA-256 and BLAKE3, one-shot and incremental.
 bytes-digests = ["bytes", "dep:crc32fast", "dep:adler2", "dep:xxhash-rust", "dep:md-5", "dep:sha1", "dep:sha2", "dep:blake3"]
-# Bytes from the OS CSPRNG, HMAC with constant-time verification, and PKCS#1 v1.5 RSA signing,
+# Bytes from the OS CSPRNG, HMAC with constant-time verification, PKCS#1 v1.5 RSA and ECDSA signing,
 # through ring (as `tls` links it), with zeroize for decoded key bytes.
 bytes-crypto = ["bytes", "dep:ring", "dep:zeroize"]
 # Text decoding and encoding for every WHATWG label (windows-1252, shift_jis, utf-16 ...).

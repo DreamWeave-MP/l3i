@@ -392,6 +392,75 @@ fn rsa_signatures_match_openssl_for_every_form_of_the_key() {
         .unwrap();
 }
 
+/// The public points of `tests/fixtures/ecdsa`'s keys, uncompressed, as `openssl ec -pubout`
+/// prints them.
+#[cfg(feature = "bytes-crypto")]
+const P256_PUBLIC: &str = "040c0af4709df7cb960cf5937006b93cd08a8ce34f822907fe250079444d7a729772ed7f0285ccd4b5cf2e805e3b028d7428802d9dd02e6df373d28ddb34adbed1";
+#[cfg(feature = "bytes-crypto")]
+const P384_PUBLIC: &str = "040534be15994d70ab2255b5cd1dbe5a426164b75af9bfd2d4db0976781a91194aab63fc2a3e0dadf51f2c36fd294b583a87dec44e5bce9271b7483f95cc2d4be1e6a004452bc4be4703a3b4a58d0322e53abc0510545ce7606ca0e054258595be";
+
+#[cfg(feature = "bytes-crypto")]
+fn from_hex(hex: &str) -> Vec<u8> {
+    (0..hex.len()).step_by(2).map(|at| u8::from_str_radix(&hex[at..at + 2], 16).unwrap()).collect()
+}
+
+/// ECDSA is randomized, so each signature is checked against the key's public point instead of
+/// against bytes, and two signatures of the same data must differ.
+#[cfg(feature = "bytes-crypto")]
+#[test]
+fn ecdsa_signatures_verify_for_every_form_of_the_key() {
+    use ring::signature::{ECDSA_P256_SHA256_FIXED, ECDSA_P384_SHA384_FIXED, UnparsedPublicKey};
+    use std::fmt::Write as _;
+
+    let sec1 = include_str!("fixtures/ecdsa/p256-sec1.pem");
+    let pkcs8 = include_str!("fixtures/ecdsa/p256-pkcs8.pem");
+    let p384 = include_str!("fixtures/ecdsa/p384-pkcs8.pem");
+    let der = include_bytes!("fixtures/ecdsa/p256-sec1.der").iter().fold(String::new(), |mut hex, byte| {
+        let _ = write!(hex, "{byte:02x}");
+        hex
+    });
+    let runtime = runtime();
+    let p256 = UnparsedPublicKey::new(&ECDSA_P256_SHA256_FIXED, from_hex(P256_PUBLIC));
+    let mut seen = Vec::new();
+    for key in [format!("{sec1:?}"), format!("{pkcs8:?}"), format!("bytes.fromHex({der:?})")] {
+        let signed: String =
+            runtime.eval(&format!("return bytes.toHex(bytes.ecdsaSign('header.payload', {key}, 'sha256'))")).unwrap();
+        let signed = from_hex(&signed);
+        assert_eq!(signed.len(), 64, "{key}");
+        p256.verify(b"header.payload", &signed).unwrap();
+        assert!(p256.verify(b"header.payloaD", &signed).is_err(), "{key}");
+        seen.push(signed);
+    }
+    assert!(seen[0] != seen[1] && seen[1] != seen[2], "every signature is fresh");
+
+    let signed: String = runtime
+        .eval(&format!("return bytes.toHex(bytes.ecdsaSign(buffer.fromstring('header.payload'), {p384:?}, 'sha384'))"))
+        .unwrap();
+    let signed = from_hex(&signed);
+    assert_eq!(signed.len(), 96);
+    UnparsedPublicKey::new(&ECDSA_P384_SHA384_FIXED, from_hex(P384_PUBLIC)).verify(b"header.payload", &signed).unwrap();
+
+    let rsa = include_str!("fixtures/rsa/pkcs8.pem");
+    runtime
+        .exec(&format!(
+            "local data = 'header.payload' \
+             local ok, err = pcall(bytes.ecdsaSign, data, {p384:?}, 'sha256') \
+             assert(not ok and err:find('not a P%-256 private key'), err) \
+             local ok2, err2 = pcall(bytes.ecdsaSign, data, {sec1:?}, 'sha384') \
+             assert(not ok2 and err2:find('not a P%-384 private key'), err2) \
+             local ok3, err3 = pcall(bytes.ecdsaSign, data, {rsa:?}, 'sha256') \
+             assert(not ok3 and err3:find('not a P%-256 private key'), err3) \
+             local ok4, err4 = pcall(bytes.ecdsaSign, data, 'not a key', 'sha256') \
+             assert(not ok4 and err4:find('not a P%-256') and not err4:find('not a key'), err4) \
+             local ok5, err5 = pcall(bytes.ecdsaSign, data, {sec1:?}, 'sha512') assert(not ok5 and err5:find('sha512'), err5) \
+             local ok6, err6 = pcall(bytes.ecdsaSign, data, '-----BEGIN RSA PRIVATE KEY-----\\nAAAA\\n-----END RSA PRIVATE KEY-----', 'sha256') \
+             assert(not ok6 and err6:find('not an unencrypted EC private key'), err6) \
+             local ok7, err7 = pcall(bytes.ecdsaSign, data, '-----BEGIN EC PRIVATE KEY-----\\n!!!!\\n-----END EC PRIVATE KEY-----', 'sha256') \
+             assert(not ok7 and err7:find('not base64') and not err7:find('!'), err7)",
+        ))
+        .unwrap();
+}
+
 #[cfg(feature = "bytes-text")]
 #[test]
 fn text_decodes_and_encodes_the_codepages_old_formats_use() {
