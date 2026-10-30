@@ -368,3 +368,19 @@ Nothing to change. Take 2.4.0 in place of 2.3.0.
 
 There are no ciphers, no key generation and no key storage, and none are planned: a key arrives as bytes the caller holds and leaves with the call.
 """
+
+[[releases]]
+version = "2.5.0"
+date = 2026-10-29
+summary = "The operating system's file lock in `@dream/fs`: a lock that ends with its holder, so a file can name a single running owner without timeouts."
+added = [
+    "`fs.lock(path, { shared?, createParents? }?)`: the platform's own lock on a file (`flock` on Unix, `LockFileEx` on Windows), exclusive or shared, taken without waiting. A lock held elsewhere, in this process or another, answers `nil`, the message and the new `wouldBlock` kind. The `dream_fs_Lock` it returns holds it until `unlock()`, the handle is collected, the runtime shuts down, or the process ends, when the system releases it, so it never times out and never outlives its holder.",
+    "`wouldBlock` among `dream_fs_ErrorKind` and `dream_process_ErrorKind`, for an operation the OS would have had to wait on.",
+]
+migration = """
+Nothing to change. Take 2.5.0 in place of 2.4.0.
+
+`fs.lock` needs `filesystem.write`, like everything else that touches the disk, because it opens the file to lock it and makes it if it isn't there. A script that matches every `dream_fs_ErrorKind` exhaustively has one more to name.
+
+On Unix the lock is advisory, as `flock` is: it excludes other locks, not reads or writes of the file.
+"""
