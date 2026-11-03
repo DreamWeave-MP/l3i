@@ -1,0 +1,37 @@
+-- Isolated host module, not a production @dream/compute extension.
+local function input(values, rows, cols)
+    local bytes = buffer.create(#values * 4)
+    for i,v in values do buffer.writef32(bytes,(i-1)*4,v) end
+    return compute.f32(bytes,rows,cols), bytes
+end
+local function expect(t, values)
+    local bytes = t:read()
+    assert(buffer.len(bytes) == #values*4)
+    for i,v in values do assert(buffer.readf32(bytes,(i-1)*4)==v, `element {i}`) end
+end
+local a, source = input({-2,1,3,4,5,6},2,3)
+local b = input({2,3,4},1,3)
+local graph = a:expression():mul(b:expression()):add(compute.constant(2)):relu()
+local program = graph:compile()
+assert(string.find(program:ir(),'fused=true',1,true))
+buffer.writef32(source,0,999) -- import was an explicit copy
+expect(program:run(),{0,5,14,10,17,26})
+expect(program:run(),{0,5,14,10,17,26})
+local transposed = a:view(3,2,0,4,12)
+assert(a:shares(transposed))
+expect(transposed,{ -2,4,1,5,3,6 })
+local rhs = input({1,2,3,4,5,6},3,2)
+expect(a:expression():matmul(rhs:expression()):compile():run(), {16,18,49,64})
+local empty = input({},2,0)
+local zero = input({},0,3)
+expect(empty:expression():matmul(zero:expression()):compile():run(),{0,0,0,0,0,0})
+assert(not pcall(compute.f32,source,1.5,4))
+assert(not pcall(compute.f32,source,-1,6))
+assert(not pcall(function() a:view(2,3,0,1000,4) end))
+assert(not pcall(function() a:expression():matmul(b:expression()) end))
+assert(not pcall(function() empty:expression():add(a:expression()) end))
+-- Persistent owners outlive the original wrappers and survive GC; no VM pointer is retained.
+a, b, graph, transposed, source = nil,nil,nil,nil,nil
+retained = program -- host collects and executes this again after the script returns
+expect(program:run(),{0,5,14,10,17,26})
+print('typed graph: fusion, broadcast, shared views, matrix, errors, GC verified')

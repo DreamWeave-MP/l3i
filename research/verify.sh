@@ -13,3 +13,10 @@ cargo clippy --locked --manifest-path research/cubecl-cpu-010/Cargo.toml --all-t
 cargo run --locked --manifest-path research/cubecl-cpu-010/Cargo.toml --bin persistent
 cargo run --locked --manifest-path research/cubecl-cpu/Cargo.toml
 cargo clippy --locked --manifest-path research/cubecl-cpu/Cargo.toml --all-targets -- -W clippy::pedantic -D warnings
+# The typed graph has no CubeCL dependency; test optimized numerical behavior as well.
+cargo fmt --manifest-path research/graph-cpu/Cargo.toml --check
+cargo test --locked --manifest-path research/graph-cpu/Cargo.toml
+cargo test --locked --release --manifest-path research/graph-cpu/Cargo.toml
+cargo clippy --locked --manifest-path research/graph-cpu/Cargo.toml --all-targets -- -W clippy::pedantic -D warnings
+cargo check --all-features
+cargo package --allow-dirty --no-verify

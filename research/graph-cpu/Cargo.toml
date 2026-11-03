@@ -1,0 +1,9 @@
+[package]
+name = "l3i-graph-cpu-research"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.99.1"
+publish = false
+[workspace]
+[dependencies]
+l3i = { path = "../..", default-features = false, features = ["data"] }

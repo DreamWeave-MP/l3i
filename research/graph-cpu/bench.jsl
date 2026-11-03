@@ -1,0 +1,29 @@
+for _,n in {0,1,1024,65536} do
+    local a,b,two,out = buffer.create(n*4),buffer.create(n*4),buffer.create(n*4),buffer.create(n*4)
+    for i=0,n-1 do buffer.writef32(a,i*4,i%101-50); buffer.writef32(b,i*4,i%13-6); buffer.writef32(two,i*4,2) end
+    local start = compute.clock()
+    local ta,tb = compute.f32(a,1,n),compute.f32(b,1,n)
+    local imported = compute.clock()-start
+    start = compute.clock()
+    local program = ta:expression():add(tb:expression()):add(compute.constant(2)):relu():compile()
+    local compiled = compute.clock()-start
+    start = compute.clock(); local result = program:run(); local cold = compute.clock()-start
+    local used = compute.used()
+    local allocated = compute.allocations()
+    start = compute.clock()
+    for _=1,20 do result = program:run() end
+    local warm = (compute.clock()-start)/20
+    assert(compute.allocations()-allocated == 20) -- one native payload per immutable result
+    start=compute.clock(); local bytes=result:read(); local readback=compute.clock()-start
+    start=compute.clock()
+    for _=1,20 do data.add(a,'f32',0,b,0,out,0,n); data.add(out,'f32',0,two,0,out,0,n); data.clamp(out,'f32',0,n,0,math.huge,out,0) end
+    local baseline=(compute.clock()-start)/20
+    for i=0,n-1 do assert(buffer.readf32(bytes,i*4)==buffer.readf32(out,i*4)) end
+    print(string.format('n=%d import_us=%.3f compile_us=%.3f first_us=%.3f warm_us=%.3f read_us=%.3f data_us=%.3f live_before=%d',n,imported*1e6,compiled*1e6,cold*1e6,warm*1e6,readback*1e6,baseline*1e6,used))
+    -- Output publication allocates once per call; GC releases old immutable result owners.
+    result,ta,tb,program=nil,nil,nil,nil
+    -- The host collects after this benchmark chunk returns.
+end
+local start=compute.clock()
+for _=1,10000 do compute.noop() end
+print(string.format('noop_plus_jsl_loop_us=%.4f',(compute.clock()-start)*1e6/10000))
