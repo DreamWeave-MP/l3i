@@ -2,13 +2,13 @@
 for _, n in {1024, 65536} do
   local a, b, out = buffer.create(n * 4), buffer.create(n * 4), buffer.create(n * 4)
   for i = 0, n - 1 do
-    buffer.writef32(a, i * 4, i % 17)
-    buffer.writef32(b, i * 4, i % 13)
+    buffer.writef32(a, i * 4, i % 17 - 8)
+    buffer.writef32(b, i * 4, i % 13 - 6)
   end
   local started = clock()
   local cold = run_expression('+', a, b)
   local first = (clock() - started) * 1e6
-  assert(buffer.readf32(cold, 4) == 2)
+  assert(buffer.readf32(cold, 4) == -12)
   local reps = 10
   started = clock()
   for _ = 1, reps do run_expression('+', a, b) end
@@ -19,6 +19,36 @@ for _, n in {1024, 65536} do
   started = clock()
   for _ = 1, reps do data.add(a, 'f32', 0, b, 0, out, 0, n) end
   local bulk = (clock() - started) * 1e6 / reps
-  assert(buffer.readf32(out, 4) == 2)
-  print(`n={n} first_us={first} cube_warm_us={cube} rust_copy_us={native} data_preallocated_us={bulk}`)
+  assert(buffer.readf32(out, 4) == -12)
+  started = clock()
+  for _ = 1, reps do copy_inputs(a, b) end
+  local copies = (clock() - started) * 1e6 / reps
+  started = clock()
+  for _ = 1, reps do run_strided('+', a, b, 0, 4, 0, 4, n) end
+  local strided = (clock() - started) * 1e6 / reps
+  local twos = buffer.create(n * 4)
+  data.fill(twos, 'f32', 0, n, 2)
+  started = clock()
+  local fused = run_expression('+2r', a, b)
+  local fused_first = (clock() - started) * 1e6
+  data.add(a, 'f32', 0, b, 0, out, 0, n)
+  data.add(out, 'f32', 0, twos, 0, out, 0, n)
+  data.clamp(out, 'f32', 0, n, 0, math.huge, out, 0)
+  for i = 0, n - 1 do assert(buffer.readf32(fused, i * 4) == buffer.readf32(out, i * 4)) end
+  started = clock()
+  for _ = 1, reps do run_expression('+2r', a, b) end
+  local fused_warm = (clock() - started) * 1e6 / reps
+  started = clock()
+  for _ = 1, reps do
+    data.add(a, 'f32', 0, b, 0, out, 0, n)
+    data.add(out, 'f32', 0, twos, 0, out, 0, n)
+    data.clamp(out, 'f32', 0, n, 0, math.huge, out, 0)
+  end
+  local fused_data = (clock() - started) * 1e6 / reps
+  print(`fused_n={n} first_us={fused_first} cube_warm_us={fused_warm} data_three_pass_us={fused_data}`)
+  print(`n={n} first_us={first} cube_warm_us={cube} rust_copy_us={native} data_preallocated_us={bulk} input_copy_us={copies} strided_us={strided}`)
+
 end
+local started = clock()
+for _ = 1, 10000 do noop() end
+print(`noop_with_jsl_loop_us={(clock() - started) * 1e6 / 10000}`)

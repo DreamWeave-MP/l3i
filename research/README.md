@@ -23,6 +23,24 @@ The baseline kernels are predefined Rust. A separate, deliberately limited dynam
   L3i must not acquire Jess devices or depend on Jess. Any CubeCL GPU adapter must establish
   ordering with Jess commits and resource generations, beyond merely sharing a wgpu device.
 
+The proposed high-level representation and its boundary from kernel IR are specified in
+[`typed-graph-proposal.md`](typed-graph-proposal.md). It is not a production API.
+
+The isolated CPU bridge limits each input and output to 1,048,576 f32 elements, matrix products
+to 16,777,216 scalar multiply operations, and admissions to 16 distinct kernel specializations
+per process. A process-wide gate serializes the synchronous kernel launches, limiting the bridge
+to one active compilation or execution at a time. Existing admitted variants remain usable when
+that budget is exhausted. Matrix output sizing is checked even when the inner dimension is zero, and zero-filled output uses a
+fallible reservation. Invalid shapes and budget exhaustion return script errors; tests cover the
+allocation boundary, overflow, exhaustion, failure recovery and a second L3i runtime. These are
+prototype limits, not a complete process memory quota: CubeCL's allocator, worker threads and LLVM
+compiler remain outside it, and compiler/backend panics and hard compile-time deadlines are not
+contained. A production executor needs host-controlled limits and failure isolation.
+
+The prototype remains outside the existing library CI. Run `bash research/verify.sh` from the
+repository root to execute its locked checks and the repository gates with the active, matched
+Rust/Clang toolchain. No separate CI workflow is added.
+
 ## Capability and ownership audit
 
 | Area | Existing contract | Research gap / additive direction |
@@ -49,8 +67,14 @@ CubeCL 0.10's CPU feature brings a separately bundled LLVM 20 and runtime worker
 LLVM 23 and its CPU dependency graph declares Rust 1.95. The crates report MIT OR Apache-2.0;
 transitive dependencies and bundled LLVM still require a complete distribution license review.
 The isolated experiments use separate Cargo workspaces and do not add a dependency to the L3i
-package. The successful 0.10 demonstration gives no reason by itself to raise L3i's Rust 1.92
-minimum; the user has authorized considering an upgrade if subsequent evidence supports it.
+package. L3i now declares Rust 1.99.1 as its MSRV at the user's direction, matching the updated stable
+toolchain used for these experiments. The earlier Rust 1.92 observations below are historical.
+
+After the toolchain and MSRV update, the pinned 0.11.3 experiment was rebuilt with rustc
+1.99.1 (LLVM 23.1.1) and clang 23.1.2, linking an L3i runtime and executing its Luau assertion
+in the same process. Its predefined kernel verified 65,536 f32 outputs. One debug run measured
+initialization 1,455 us, upload/allocation 628 us, first dispatch plus readback 48,155 us, then
+422, 459 and 437 us. This is not a JSL-to-0.11 IR adapter or an optimized comparison.
 
 ## Evidence so far
 
@@ -85,20 +109,25 @@ the generated kernel cache identity includes that compile-time argument. This is
 left-to-right DSL (`*` and `+` use the second input, `2` adds two, `r` applies ReLU), not a
 parser for arbitrary Luau functions. It runs no Lua callback per element. Expressions are
 limited to 32 operations; only equal-length contiguous f32 inputs are accepted; the result is
-new owned storage. ReLU preserves NaN and maps nonpositive values to positive zero. There is no
-in-place update, view, broadcasting, async operation, or backend abstraction. An independent
+new owned storage. ReLU preserves NaN and maps nonpositive values to positive zero. The
+`run_strided` research binding accepts byte offsets and nonnegative byte strides; a zero stride
+broadcasts one element. It validates the complete view, copies into owned contiguous buffers, and
+never writes the inputs. It caps the view at 1,048,576 elements. It has no in-place output,
+multidimensional broadcasting, async operation, or backend abstraction. An independent
 predefined matrix kernel accepts checked contiguous 2-D shapes. Its sum is f32 in loop order;
 the expression frontend does not compile matrix multiplication.
 
 The script verifies two expressions, empty inputs, invalid opcodes and lengths, aliasing the two
 inputs, repetition, NaNs/infinities/zero, a 2x3 by 3x2 product against a JSL scalar reference,
 zero inner dimensions, and rejected shape overflow. The test runs synchronously and readback
-finishes before returning. It does not establish general failure recovery, safe use of arbitrary
-CubeCL kernels, noncontiguous views, multidimensional broadcasting, or resource teardown under
+finishes before returning. It also checks strided reads, zero-stride broadcast, invalid view bounds and unchanged aliased
+inputs. It does not establish general failure recovery, safe use of arbitrary CubeCL kernels,
+multidimensional broadcasting, or resource teardown under
 failure. `cubecl-cpu` is feature-enabled for compiler dumps; to inspect CubeCL IR and MLIR,
 create `target/cubecl-ir` and run with `CUBECL_DEBUG_MLIR=target/cubecl-ir`. Files for the same
-kernel name are overwritten by later compilations. `CUBECL_DEBUG_LOG=stdout` reports individual
-compilations, showing that distinct expressions specialize separately. The adapter relies on the
+kernel name are overwritten by later compilations. `CUBECL_DEBUG_LOG=stdout` also enables per-dispatch profiling and changes timing; its
+reported durations must not be treated as compilation times. Distinct operation sequences are
+included in the macro-generated kernel cache identity and produce different CubeCL IR. The adapter relies on the
 alpha macro frontend and its specialization cache; it is research code, not a stable API.
 
 A debug-mode experiment (`cargo run --manifest-path research/cubecl-cpu-010/Cargo.toml --bin
@@ -135,11 +164,81 @@ for this simple CPU addition workload under these storage contracts; they do not
 workloads or GPUs. Input initialization is excluded and output allocation differs as described above.
 No allocation count or standalone transfer and boundary timing was measured.
 
+The strided-copy revision added separate boundary and host-copy probes. Two fresh-process release
+runs, ten warm calls per size, measured microseconds:
+
+| Elements | CubeCL first | CubeCL warm | `dream.data` | Two host input copies | Strided pack and CubeCL |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 1,024 | 36,069.325 | 495.325 | 2.929 | 0.345 | 472.341 |
+| 65,536 | 2,149.624 | 1,072.756 | 142.692 | 26.597 | 1,126.451 |
+| 1,024 | 34,663.323 | 559.782 | 2.903 | 0.334 | 539.558 |
+| 65,536 | 2,148.037 | 1,195.549 | 145.327 | 31.584 | 1,043.875 |
+
+The host-copy probe includes a JSL/native call and allocates and drops two vectors; it does not
+isolate CubeCL upload or readback. The strided probe used stride 4 (contiguous) and includes
+bounds checks, packing, transfers, execution and readback. Differences between close figures are
+noise, not evidence that packing accelerates execution. A 10,000-iteration no-op host call plus
+JSL loop measured 0.0205 and 0.0216 microseconds per iteration; it is a lower-bound proxy, not a
+standalone crossing measurement. The first process peaked at 98,768 KiB RSS. The bridge allocates
+two host input vectors, three logical CubeCL buffers, readback storage and a returned Luau buffer;
+CubeCL's pool and internal allocation count were not measured. It has no in-place operation:
+its fresh result and input copies preserve aliased source storage. Repeated L3i runtime creation
+is tested, but failure of the CubeCL worker or JIT can still panic and is not safely translated
+into a script error by this prototype.
+
+## Fused and persistent-buffer measurements
+
+Two fresh-process release runs compared `relu(a + b + 2)` on finite integer-valued f32 inputs.
+The JSL benchmark verified every result against three preallocated `dream.data` passes. The CubeCL
+bridge includes input copies, fresh output, dispatch, synchronization and readback; `dream.data`
+uses existing output and constant buffers. Each warm number averages ten calls, in microseconds:
+
+| Elements | CubeCL first | CubeCL warm | `dream.data` three passes |
+| ---: | ---: | ---: | ---: |
+| 1,024 | 26,331.946 | 491.047 | 7.760 |
+| 65,536 | 1,281.292 | 917.584 | 527.737 |
+| 1,024 | 26,162.902 | 527.682 | 7.660 |
+| 65,536 | 1,889.490 | 1,103.540 | 452.917 |
+
+The 65,536-element call reuses the specialization compiled by the 1,024-element call. First-call
+measurements include compilation, initialization and transfers; they are not isolated JIT times.
+
+A separate **predefined Rust kernel**, not the JSL expression compiler, retains CubeCL input and
+output handles across calls and synchronizes each call without reading back until the end. It
+computes the same operation on a separately generated finite input set and checks the whole result
+against a preallocated Rust loop. Twenty warm calls are averaged; two fresh-process runs:
+
+| Elements | Allocation/upload | First dispatch + sync | Warm dispatch + sync | Final readback | Rust preallocated |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 1,024 | 13 | 68,038 | 503 | 13 | <1 |
+| 65,536 | 511 | 954 | 496 | 15 | 21 |
+| 1,024 | 18 | 39,917 | 921 | 16 | <1 |
+| 65,536 | 535 | 1,098 | 1,457 | 21 | 25 |
+
+All entries are microseconds, rounded down by `Duration::as_micros`; `<1` is below that timer's
+printed resolution. The first call includes compilation; the 65,536-element run reuses the
+compiled kernel. One process peaked at 90,012 KiB RSS. Runtime initialization is outside the
+setup timing in this experiment. Runs have substantial variance and differ in storage contract,
+input values, optimization opportunities and measurement boundaries; they establish costs on this
+machine, not a backend ranking for all fused workloads. The CPU path does not currently justify
+replacing `dream.data`, even when persistent backend buffers avoid repeated upload and readback.
+
 ## Still required
 
-Integrate a compatible CPU backend with L3i without weakening its toolchain contract; expand the
-JSL-authored expression beyond the prototype and test
-shapes, strides, aliasing, floating-point edge cases and teardown; expand the matrix workload; measure optimized cold/warm execution, copies, allocations, RSS and boundary
-costs against `dream.data` and native Rust; investigate Jess resource interoperability; and run
-all repository gates. No inference engine, CubeCL GPU integration, public tensor API, or general-purpose direct
-IR adapter is claimed here.
+Implement and validate a backend-independent tensor graph and persistent ownership contract;
+the experimental operation string is not a proposed language. Prove strict numerical semantics,
+shape inference and multidimensional broadcasting across supported backends. Contain backend
+failures, enforce hard compilation time and memory limits, and test teardown under failure.
+Measure persistent JSL-owned tensor storage rather than inferring its costs from the separate Rust
+benchmark. Prove how a Jess-owned shader or CubeCL adapter orders work with commits, generation
+lifetimes and shared resources. No inference engine, CubeCL GPU integration, public tensor API,
+or general-purpose direct IR adapter is claimed here.
+
+## Upstream references
+
+* [CubeCL releases and published versions](https://docs.rs/crate/cubecl/latest); the pinned
+  experiments use 0.10.0 and 0.11.3. CubeCL documents its alpha API as subject to breaking changes.
+* [CubeCL 0.10 kernel expansion and compilation model](https://docs.rs/crate/cubecl/0.10.0).
+* [CubeCL wgpu runtime and existing-device initialization](https://docs.rs/cubecl-wgpu/0.11.3/cubecl_wgpu/).
+* [CubeCL CPU runtime](https://docs.rs/crate/cubecl-cpu/latest), [CubeK](https://github.com/tracel-ai/cubek),
+  and [Burn](https://github.com/tracel-ai/burn); neither CubeK nor Burn is a runtime dependency here.

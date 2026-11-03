@@ -71,3 +71,44 @@ local rounded = run_expression('*2', ra, rb)
 assert(buffer.readf32(rounded, 0) == buffer.readf32(scratch, 0))
 assert(buffer.readf32(ra, 0) == buffer.readf32(rb, 0))
 print('f32 rounding and input preservation verified')
+-- Strided reads and scalar broadcasting copy from possibly aliased Luau buffers.
+local records = buffer.create(32)
+for i = 0, 3 do buffer.writef32(records, i * 8, i + 1) end
+local viewed = run_strided('+', records, records, 0, 8, 8, 0, 4)
+for i = 0, 3 do assert(buffer.readf32(viewed, i * 4) == i + 3) end
+assert(buffer.len(run_strided('+', records, records, 32, 8, 32, 0, 0)) == 0)
+assert(not pcall(run_strided, '+', records, records, 1, 16, 0, 0, 4))
+assert(not pcall(run_strided, '+', records, records, -1, 4, 0, 0, 1))
+assert(not pcall(run_strided, '+', records, records, 0, 9223372036854775807, 0, 0, 3))
+assert(buffer.readf32(records, 0) == 1)
+print('strided views, broadcast, invalid bounds and alias preservation verified')
+assert(not pcall(run_strided, '+', records, records, 0, 0, 0, 0, 1048577))
+-- Zero-inner matrices used to allocate an unbounded result despite having empty inputs.
+local ok, why = pcall(matmul, buffer.create(0), buffer.create(0), 1048577, 1, 0)
+assert(not ok and string.find(why, 'budget', 1, true))
+local edge = matmul(buffer.create(0), buffer.create(0), 1024, 1024, 0)
+assert(buffer.len(edge) == 4194304 and buffer.readf32(edge, 4194300) == 0)
+-- Exhaust new specializations; already admitted programs must remain usable after refusal.
+local exhausted = false
+for i = 1, 32 do
+  local good, problem = pcall(run_expression, string.rep('2', i), ra, rb)
+  if not good then
+    assert(string.find(problem, 'specialization budget exhausted', 1, true), problem)
+    exhausted = true
+    break
+  end
+end
+assert(exhausted)
+assert(buffer.readf32(run_expression('*2r', a, b), 12) == 6)
+print('matrix allocation budget and specialization exhaustion recovery verified')
+local oversized = buffer.create(4194308)
+local good, issue = pcall(run_expression, '+', oversized, oversized)
+assert(not good and string.find(issue, 'allocation budget exceeded', 1, true))
+local long = buffer.create(1024 * 17 * 4)
+good, issue = pcall(matmul, long, long, 1024, 1024, 17)
+assert(not good and string.find(issue, 'matrix resource budget exceeded', 1, true))
+local one = buffer.create(4)
+good, issue = pcall(matmul, one, one, 1, 1, 1)
+assert(not good and string.find(issue, 'specialization budget exhausted', 1, true))
+assert(buffer.readf32(matmul(ma, mb, 2, 2, 3), 0) == 58)
+print('input, matrix work, and shared compilation budgets verified')

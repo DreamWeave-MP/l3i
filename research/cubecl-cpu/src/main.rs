@@ -1,6 +1,6 @@
-use cubecl_runtime::runtime::Runtime;
 use cubecl::cpu::{CpuDevice, CpuRuntime};
 use cubecl::prelude::*;
+use cubecl_runtime::runtime::Runtime;
 use std::time::Instant;
 
 #[cube(launch_unchecked)]
@@ -12,6 +12,8 @@ fn fused(a: &[f32], b: &[f32], out: &mut [f32]) {
 }
 
 fn main() {
+    let runtime = l3i::Runtime::new().expect("create L3i runtime");
+    runtime.exec("assert(2 + 2 == 4)").expect("execute Luau");
     let n = 65536usize;
     let a: Vec<f32> = (0..n).map(|i| f32::from(u16::try_from(i % 101).expect("remainder fits")) - 50.0).collect();
     let b: Vec<f32> = (0..n).map(|i| f32::from(u16::try_from(i % 13).expect("remainder fits")) - 6.0).collect();

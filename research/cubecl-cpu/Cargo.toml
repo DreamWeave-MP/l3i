@@ -9,3 +9,4 @@ publish = false
 [dependencies]
 cubecl = { version = "=0.11.3", default-features = false, features = ["std", "cpu"] }
 cubecl-runtime = { version = "=0.11.3", default-features = false }
+l3i = { path = "../..", default-features = false }
