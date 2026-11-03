@@ -1,0 +1,11 @@
+[package]
+name = "l3i-cubecl-cpu-experiment"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+cubecl = { version = "=0.11.3", default-features = false, features = ["std", "cpu"] }
+cubecl-runtime = { version = "=0.11.3", default-features = false }

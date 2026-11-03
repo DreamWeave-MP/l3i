@@ -1,0 +1,37 @@
+-- JSL authors the expression; Jess builds shader IR and lowers it to WGSL.
+local shader = require('@jess/shader')
+local program = shader.compute({
+  workgroupSize = 64,
+  pass = {
+    a = shader.storage(shader.float),
+    b = shader.storage(shader.float),
+    result = shader.storage(shader.float, 'readWrite'),
+  },
+  compute = function(input)
+    local index = input.builtin.globalInvocationId.x
+    local pass = input.pass
+    shader.when(shader.less(index, shader.arrayLength(pass.result)), function()
+      shader.write(pass.result, index, shader.max(pass.a[index] * pass.b[index] + 2, 0))
+    end)
+  end,
+})
+local device = jess.gpu.device()
+print(`adapter {device.name}; backend {device.backend}; kind {device.kind}`)
+local pipeline = device:pipeline(program)
+local n = 256
+local a, b = buffer.create(n * 4), buffer.create(n * 4)
+for i = 0, n - 1 do
+  buffer.writef32(a, i * 4, i % 101 - 50)
+  buffer.writef32(b, i * 4, i % 13 - 6)
+end
+local ga, gb, result = device:buffer(n * 4, 'storage'), device:buffer(n * 4, 'storage'), device:buffer(n * 4, 'storage')
+ga:write(0, a)
+gb:write(0, b)
+local pass = pipeline:bind('pass', { [0] = ga, [1] = gb, [2] = result })
+device:dispatch({ pipeline = pipeline, pass = pass, workgroups = n / 64 })
+local got = result:read()
+for i = 0, n - 1 do
+  local expected = math.max((i % 101 - 50) * (i % 13 - 6) + 2, 0)
+  assert(buffer.readf32(got, i * 4) == expected, `element {i}`)
+end
+print(`verified {n} elements`)

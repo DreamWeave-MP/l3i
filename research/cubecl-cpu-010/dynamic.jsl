@@ -1,0 +1,73 @@
+-- A tiny JSL-authored expression DSL. Operations are compiled into a CubeCL kernel.
+local expression = '*' .. '2' .. 'r' -- a * b, add 2, then relu
+local a, b = buffer.create(16), buffer.create(16)
+for i = 0, 3 do
+  buffer.writef32(a, i * 4, i - 2)
+  buffer.writef32(b, i * 4, i + 1)
+end
+local result = run_expression(expression, a, b)
+local expected = { 0, 0, 2, 6 }
+for i = 0, 3 do
+  assert(buffer.readf32(result, i * 4) == expected[i + 1])
+end
+local other = run_expression('+2', a, b)
+for i = 0, 3 do
+  assert(buffer.readf32(other, i * 4) == (i - 2) + (i + 1) + 2)
+end
+print('two JSL-authored expressions verified')
+local empty = run_expression('*', buffer.create(0), buffer.create(0))
+assert(buffer.len(empty) == 0)
+assert(not pcall(run_expression, '', a, b))
+assert(not pcall(run_expression, 'x', a, b))
+assert(not pcall(run_expression, '*', a, buffer.create(12)))
+assert(not pcall(run_expression, '*', buffer.create(3), buffer.create(3)))
+assert(not pcall(run_expression, string.rep('*', 33), a, b))
+local square = run_expression('*', a, a)
+for i = 0, 3 do
+  assert(buffer.readf32(square, i * 4) == (i - 2) * (i - 2))
+end
+local repeated = run_expression(expression, a, b)
+assert(buffer.readf32(repeated, 12) == 6)
+print('invalid inputs, empty buffers, aliasing and repeated execution verified')
+local special = buffer.create(16)
+buffer.writef32(special, 0, 0/0)
+buffer.writef32(special, 4, math.huge)
+buffer.writef32(special, 8, -math.huge)
+buffer.writef32(special, 12, -0.0)
+local activated = run_expression('r', special, special)
+assert(buffer.readf32(activated, 0) ~= buffer.readf32(activated, 0))
+assert(buffer.readf32(activated, 4) == math.huge)
+assert(buffer.readf32(activated, 8) == 0)
+assert(buffer.readf32(activated, 12) == 0 and 1 / buffer.readf32(activated, 12) == math.huge)
+print('NaN, infinities and zero verified')
+local ma, mb = buffer.create(24), buffer.create(24)
+for i = 0, 5 do
+  buffer.writef32(ma, i * 4, i + 1)
+  buffer.writef32(mb, i * 4, i + 7)
+end
+local product = matmul(ma, mb, 2, 2, 3)
+for row = 0, 1 do
+  for col = 0, 1 do
+    local expected = 0
+    for k = 0, 2 do
+      expected += buffer.readf32(ma, (row * 3 + k) * 4) * buffer.readf32(mb, (k * 2 + col) * 4)
+    end
+    assert(buffer.readf32(product, (row * 2 + col) * 4) == expected)
+  end
+end
+assert(not pcall(matmul, ma, mb, -1, 2, 3))
+assert(not pcall(matmul, ma, mb, 3, 2, 3))
+assert(not pcall(matmul, ma, mb, 4294967295, 4294967295, 3))
+local zero = matmul(buffer.create(0), buffer.create(0), 2, 3, 0)
+assert(buffer.len(zero) == 24 and buffer.readf32(zero, 20) == 0)
+print('matrix product, empty reduction, invalid shapes and overflow verified')
+-- Compare against an independently rounded f32 intermediate and final result.
+local ra, rb, scratch = buffer.create(4), buffer.create(4), buffer.create(4)
+buffer.writef32(ra, 0, 1.0000001192092896)
+buffer.writef32(rb, 0, 1.0000001192092896)
+buffer.writef32(scratch, 0, buffer.readf32(ra, 0) * buffer.readf32(rb, 0))
+buffer.writef32(scratch, 0, buffer.readf32(scratch, 0) + 2)
+local rounded = run_expression('*2', ra, rb)
+assert(buffer.readf32(rounded, 0) == buffer.readf32(scratch, 0))
+assert(buffer.readf32(ra, 0) == buffer.readf32(rb, 0))
+print('f32 rounding and input preservation verified')
