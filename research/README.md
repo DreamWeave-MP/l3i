@@ -1,6 +1,10 @@
+# JSL compute R&D milestone
+
+See [the findings and backend decision](findings.md) and the [implemented typed graph / ownership proof](graph-cpu/README.md). The sections below preserve the earlier CubeCL experiment evidence.
+
 # Accelerated compute: preliminary experiments
 
-This is an incomplete research record, not a supported L3i API or a proposed dependency.
+This is an experimental research record, not a supported L3i API or a proposed dependency.
 The standalone crates have their own Cargo workspaces and do not affect L3i's normal build.
 The baseline kernels are predefined Rust. A separate, deliberately limited dynamic experiment builds CubeCL IR from a JSL-authored operation sequence.
 
@@ -24,7 +28,7 @@ The baseline kernels are predefined Rust. A separate, deliberately limited dynam
   ordering with Jess commits and resource generations, beyond merely sharing a wgpu device.
 
 The proposed high-level representation and its boundary from kernel IR are specified in
-[`typed-graph-proposal.md`](typed-graph-proposal.md). It is not a production API.
+[`typed-graph-proposal.md`](typed-graph-proposal.md). Its minimal scalar/rank-two subset is now implemented in `graph-cpu`; it is not a production API.
 
 The isolated CPU bridge limits each input and output to 1,048,576 f32 elements, matrix products
 to 16,777,216 scalar multiply operations, and admissions to 16 distinct kernel specializations
@@ -223,16 +227,14 @@ input values, optimization opportunities and measurement boundaries; they establ
 machine, not a backend ranking for all fused workloads. The CPU path does not currently justify
 replacing `dream.data`, even when persistent backend buffers avoid repeated upload and readback.
 
-## Still required
+## Production work intentionally deferred
 
-Implement and validate a backend-independent tensor graph and persistent ownership contract;
-the experimental operation string is not a proposed language. Prove strict numerical semantics,
-shape inference and multidimensional broadcasting across supported backends. Contain backend
-failures, enforce hard compilation time and memory limits, and test teardown under failure.
-Measure persistent JSL-owned tensor storage rather than inferring its costs from the separate Rust
-benchmark. Prove how a Jess-owned shader or CubeCL adapter orders work with commits, generation
-lifetimes and shared resources. No inference engine, CubeCL GPU integration, public tensor API,
-or general-purpose direct IR adapter is claimed here.
+The bounded typed graph, persistent immutable ownership, multidimensional rank-two broadcasting,
+resource recovery and JSL/native benchmark are now implemented in `graph-cpu`. See its README for
+the exact supported subset, numerical tests and limits. This completes an isolated CPU research
+milestone, not the production integration. General rank, rebindable inputs, native graph codegen,
+a tested graph-to-Jess/CubeCL adapter and hard LLVM failure isolation remain deferred. The backend
+verdict and next smallest steps are in `findings.md`; the old expression string is not expanded.
 
 ## Upstream references
 

@@ -1,0 +1,33 @@
+native_n=0 preallocated_us=0.004
+native_n=1 preallocated_us=0.006
+native_n=1024 preallocated_us=0.149
+native_n=65536 preallocated_us=16.750
+typed graph: fusion, broadcast, shared views, matrix, errors, GC verified
+n=0 import_us=1.067 compile_us=2.450 first_us=0.394 warm_us=0.163 read_us=0.284 data_us=0.501 live_before=0
+n=1 import_us=0.793 compile_us=1.736 first_us=0.554 warm_us=0.178 read_us=0.361 data_us=0.307 live_before=12
+n=1024 import_us=2.851 compile_us=1.657 first_us=13.252 warm_us=14.883 read_us=3.785 data_us=6.753 live_before=12380
+n=65536 import_us=150.618 compile_us=2.282 first_us=887.370 warm_us=929.215 read_us=289.404 data_us=422.560 live_before=786432
+noop_plus_jsl_loop_us=0.0247
+	Command being timed: "research/graph-cpu/target/release/l3i-graph-cpu-research --bench"
+	User time (seconds): 0.04
+	System time (seconds): 0.00
+	Percent of CPU this job got: 95%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:00.04
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 16368
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 2575
+	Voluntary context switches: 1
+	Involuntary context switches: 2
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 0
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0

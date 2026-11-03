@@ -1,6 +1,6 @@
 # Typed tensor graph: research interface proposal
 
-This is a proposed internal contract, not an implemented or approved public API. The isolated
+This remains an internal contract proposal, not an approved public API. The minimal f32 scalar/rank-two subset is now implemented and tested in [graph-cpu](graph-cpu/README.md); the broader capabilities below are not all implemented. The isolated
 CPU experiment is evidence about one possible backend; its operation string is not this graph
 and is not intended as a permanent language. No transformer or model format is assumed.
 
@@ -101,12 +101,10 @@ should fail or fall back, not silently change meaning. Importing CubeCL's wgpu s
 internals, matching versions and feature negotiation; shared device handles do not prove shared
 buffers or ordering with Jess commits. See `README.md` for the current source audit.
 
-## Small next experiments
+## Remaining integration experiments
 
-1. Implement a standalone CPU reference for this graph with shape and numerical tests, then test
-   end-to-end JSL graph construction without a production extension.
-2. Add persistent owned CPU buffers and compare fused Add/Mul/ReLU against scalar Rust and
-   `dream.data` compositions, including cold compilation, warm execution, allocations and copies.
+1. **Implemented in graph-cpu:** isolated native reference, typed JSL construction, shape/numerical tests. Inputs are captured immutable tensors; named/rebindable slots, general rank and multiple outputs remain proposals.
+2. **Implemented in graph-cpu:** persistent owners, zero-copy views, fused execution and measured native/Rust/dream.data comparisons. The reference interpreter is slower than dream.data; native lowering remains future work.
 3. Prove one graph partition can lower to existing Jess shader IR with equivalent results and
    its normal generation and commit lifecycle, including software GPU tests.
 4. Evaluate a CubeCL adapter only against that graph contract, with bounded cache, failure
