@@ -1411,7 +1411,7 @@ A successful rename is an atomic visibility guarantee, not a persistence guarant
 | Platform | File sync | Directory sync and replace | Qualification |
 | --- | --- | --- | --- |
 | Linux and other Unix | OS `sync_data` / `sync_all` | OS directory sync and rename; errors propagated | Filesystem and device must honor barriers; network and unusual filesystems may differ. |
-| macOS | Explicitly unsupported | OS directory sync and rename, if accepted | File synchronization requires `F_FULLFSYNC`, which is not implemented; do not claim power-loss durability. |
+| macOS | `F_FULLFSYNC` for both methods | `F_FULLFSYNC` on a directory and rename, if accepted | Device and filesystem must honor requests; APFS rename persistence is not power-cut validated. |
 | Windows and other non-Unix | OS file synchronization | Explicitly unsupported | No durable replacement protocol is promised. |
 
 The automated file and directory synchronization and process-kill tests have been run on Linux;

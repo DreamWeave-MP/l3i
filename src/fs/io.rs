@@ -632,15 +632,8 @@ fn sync_file(file: &File, data_only: bool) -> io::Result<()> {
     if let Some(code) = INJECT_SYNC_ERROR.with(Cell::take) {
         return Err(io::Error::from_raw_os_error(code));
     }
-    #[cfg(target_os = "macos")]
-    {
-        let _ = (file, data_only);
-        Err(io::Error::new(io::ErrorKind::Unsupported, "durable file synchronization requires F_FULLFSYNC on macOS"))
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        if data_only { file.sync_data() } else { file.sync_all() }
-    }
+    // Rust's Apple implementation uses F_FULLFSYNC for both methods, with no fsync fallback.
+    if data_only { file.sync_data() } else { file.sync_all() }
 }
 
 /// `fs.writeFile(path, data, options?)`: the count written.

@@ -365,7 +365,7 @@ fn files_are_written_exclusively_atomically_and_under_new_parents() {
     }
 }
 
-#[cfg(all(unix, not(target_os = "macos")))]
+#[cfg(unix)]
 #[test]
 fn durable_file_and_directory_operations() {
     let scratch = Scratch::new("durable");
@@ -412,7 +412,7 @@ fn failed_sync_is_reported_again_by_close() {
 
 // Invoked in a separate test process by the parent below, which kills it after a named
 // boundary. The marker is deliberately outside the protocol under test.
-#[cfg(all(unix, not(target_os = "macos")))]
+#[cfg(unix)]
 #[test]
 fn durability_process_child() {
     let Ok(root) = std::env::var("L3I_DURABILITY_CHILD_DIR") else { return };
@@ -464,7 +464,7 @@ fn durability_process_child() {
     }
 }
 
-#[cfg(all(unix, not(target_os = "macos")))]
+#[cfg(unix)]
 #[test]
 fn killed_processes_leave_reopenable_files_and_release_locks() {
     use std::time::{Duration, Instant};
@@ -550,9 +550,16 @@ fn durability_benchmark() {
 
 #[cfg(target_os = "macos")]
 #[test]
-fn macos_file_sync_is_explicitly_unsupported() {
+fn macos_file_sync_persists_and_remains_usable() {
     let scratch = Scratch::new("macos-sync");
-    runtime().exec(&format!("local w = assert(fs.openWrite({} .. '/file')) local ok, msg, kind = w:syncAll() assert(ok == nil and kind == 'unsupported' and msg:find('F_FULLFSYNC'))", scratch.lua())).unwrap();
+    runtime()
+        .exec(&format!(
+            "local path = {} .. '/file' local w = assert(fs.openWrite(path)) \
+         assert(w:write('a') == 1) assert(w:syncData()) assert(w:write('b') == 1) \
+         assert(w:syncAll()) assert(w:close()) assert(fs.readFileString(path) == 'ab')",
+            scratch.lua()
+        ))
+        .unwrap();
 }
 
 /// Run under `strace -e inject=fdatasync:error=EIO:when=1`; this tests the real syscall path.
