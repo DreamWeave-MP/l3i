@@ -459,6 +459,9 @@ fn durability_process_child() {
         }
         "lock" => format!("held = assert(fs.lock({root} .. '/lock'))"),
         "create" => format!("held = assert(fs.openWrite({root} .. '/journal', {{ exclusive = true }}))"),
+        "windows_bootstrap_probe" => format!(
+            "held = assert(fs.openWrite({root} .. '/journal', {{ exclusive = true, writeThrough = true }})) assert(held:write('header') == 6) assert(held:syncAll())"
+        ),
         "write" => format!(
             "held = assert(fs.openWrite({root} .. '/journal', {{ exclusive = true }})) assert(held:write('old') == 3)"
         ),
@@ -502,7 +505,7 @@ fn durability_process_child() {
 fn killed_processes_leave_reopenable_files_and_release_locks() {
     use std::time::{Duration, Instant};
     let boundaries: &[&str] = if cfg!(windows) {
-        &["create", "write", "file_sync", "append", "append_sync", "lock"]
+        &["create", "write", "file_sync", "append", "append_sync", "windows_bootstrap_probe", "lock"]
     } else {
         &[
             "create",
@@ -558,6 +561,7 @@ fn killed_processes_leave_reopenable_files_and_release_locks() {
             match boundary {
                 "file_sync" | "dir_sync" | "temp_write" | "temp_sync" => assert_eq!(data, b"old"),
                 "append_sync" => assert_eq!(data, b"oldnew"),
+                "windows_bootstrap_probe" => assert_eq!(data, b"header"),
                 "replace" | "replace_sync" => assert_eq!(data, b"replacement"),
                 "create" | "write" => assert!(data.is_empty() || data == b"old"),
                 "append" => assert!(data == b"old" || data == b"oldnew"),
