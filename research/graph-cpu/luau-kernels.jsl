@@ -1,0 +1,28 @@
+--!native
+-- Comparators: what Luau's JIT does with the best scalar loops a person would write. Not strict:
+-- intermediates are f64, rounded to f32 only by the final store. The results agree with strict
+-- f32 on the benchmark's small integer-valued inputs, which is all these are used for.
+local function relu_sum(a: buffer, b: buffer, out: buffer, n: number)
+    for i = 0, (n - 1) * 4, 4 do
+        local value: number = buffer.readf32(a, i) + buffer.readf32(b, i) + 2
+        buffer.writef32(out, i, if value <= 0 then 0 else value)
+    end
+end
+
+-- i-k-j, the same loop order as the native kernel, with the same zeroed start.
+local function matmul(a: buffer, b: buffer, out: buffer, side: number)
+    buffer.fill(out, 0, 0)
+    local row_bytes = side * 4
+    for i = 0, side - 1 do
+        local out_row = i * row_bytes
+        for k = 0, side - 1 do
+            local scale: number = buffer.readf32(a, out_row + k * 4)
+            local b_row = k * row_bytes
+            for j = 0, row_bytes - 4, 4 do
+                buffer.writef32(out, out_row + j, buffer.readf32(out, out_row + j) + scale * buffer.readf32(b, b_row + j))
+            end
+        end
+    end
+end
+
+return { relu_sum = relu_sum, matmul = matmul }

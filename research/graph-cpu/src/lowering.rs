@@ -1,16 +1,15 @@
-//! Lower validated dataflow into existing JSL/Luau and Jess shader frontends.
+//! Lower a validated program into existing JSL/Luau and Jess shader frontends.
 //! These strings are compiler artifacts, not a new user-authored expression language.
-use crate::{Executable, Instruction, Result, Shape, error};
+use crate::{Instruction, Program, Shape, error};
+use l3i::Result;
 use std::fmt::Write;
 
-impl Executable {
+impl Program {
     fn elementwise_slots(&self) -> Result<(Shape, usize)> {
-        let shape = self.steps.last().expect("validated plan").shape;
+        let shape = self.output_shape();
         for step in &self.steps {
             match step.op {
-                Instruction::Input(_) | Instruction::MatMul(..) => {
-                    return Err(error("backend supports elementwise input slots only"));
-                }
+                Instruction::MatMul(..) => return Err(error("backend supports elementwise input slots only")),
                 Instruction::Slot(_) if step.shape != shape => {
                     return Err(error("backend requires equal contiguous slot shapes"));
                 }
@@ -19,12 +18,14 @@ impl Executable {
         }
         Ok((shape, shape.elements()?))
     }
-    /// Existing Luau buffer intrinsics and vector f32 rounding, compiled by L3i's JIT.
+    /// One scalar Luau loop over Luau buffers, compiled by L3i's native code generator. Strict
+    /// f32: every add and multiply rounds through a typed `vector` temporary, which the JIT
+    /// lowers to a single conversion instruction.
     pub fn native_source(&self) -> Result<String> {
         let (_, n) = self.elementwise_slots()?;
         let mut source = String::from("--!native\nreturn function(inputs, output: buffer)\n");
         writeln!(source, "assert(buffer.len(output) == {})", n * 4).unwrap();
-        for slot in self.slots.keys() {
+        for slot in 0..self.slots.len() {
             writeln!(
                 source,
                 "local s{slot}: buffer = inputs[{}]\nassert(buffer.len(s{slot}) == {} and s{slot} ~= output)",
@@ -48,12 +49,18 @@ impl Executable {
                         format!("{:?}", f64::from(v))
                     }
                 }
-                Instruction::Add(a, b) => format!("vector.create(v{a}+v{b},0,0).x"),
-                Instruction::Mul(a, b) => format!("vector.create(v{a}*v{b},0,0).x"),
+                Instruction::Add(a, b) => {
+                    writeln!(source, "local t{id}: vector = vector.create(v{a}+v{b},0,0)").unwrap();
+                    format!("t{id}.x")
+                }
+                Instruction::Mul(a, b) => {
+                    writeln!(source, "local t{id}: vector = vector.create(v{a}*v{b},0,0)").unwrap();
+                    format!("t{id}.x")
+                }
                 Instruction::Relu(a) => format!("if v{a} <= 0 then 0 else v{a}"),
-                _ => unreachable!("validated lowering subset"),
+                Instruction::MatMul(..) => unreachable!("validated lowering subset"),
             };
-            writeln!(source, "local v{id} = {value}").unwrap();
+            writeln!(source, "local v{id}: number = {value}").unwrap();
         }
         writeln!(source, "buffer.writef32(output,i*4,v{})\nend\nend", self.steps.len() - 1).unwrap();
         Ok(source)
@@ -84,7 +91,7 @@ impl Executable {
         let mut s = String::from(
             "-- Generated from the validated tensor plan. Do not edit.\nlocal shader=require('@jess/shader')\nreturn function(device)\nlocal program=shader.compute({workgroupSize=64,pass={\n",
         );
-        for slot in self.slots.keys() {
+        for slot in 0..self.slots.len() {
             writeln!(s, "s{slot}=shader.storage(shader.float),").unwrap();
         }
         s.push_str("out=shader.storage(shader.float,'readWrite'),\n},compute=function(input)\nlocal index=input.builtin.globalInvocationId.x\nlocal p=input.pass\nshader.when(shader.less(index,shader.arrayLength(p.out)),function()\n");
@@ -95,7 +102,7 @@ impl Executable {
                 Instruction::Add(a, b) => format!("v{a}+v{b}"),
                 Instruction::Mul(a, b) => format!("v{a}*v{b}"),
                 Instruction::Relu(a) => format!("shader.max(v{a},shader.float(0))"),
-                _ => unreachable!("validated subset"),
+                Instruction::MatMul(..) => unreachable!("validated subset"),
             };
             writeln!(s, "local v{id}={value}").unwrap();
         }
@@ -108,28 +115,28 @@ impl Executable {
         // Existing GPU APIs require positive physical allocations. An empty logical tensor
         // retains one padding element, never dispatches and reads back as an empty Lua buffer.
         let bytes = (n * 4).max(4);
-        for slot in self.slots.keys() {
+        for slot in 0..self.slots.len() {
             writeln!(s, "local g{slot}=device:buffer({bytes},'storage')").unwrap();
         }
         writeln!(s, "local output=device:buffer({bytes},'storage')\nlocal pass=pipeline:bind('pass',{{").unwrap();
         // Jess pass binding order follows sorted declaration keys, not source insertion order:
         // 'out' precedes 's0', 's1', ... . Construct keys in the same lexical order.
         writeln!(s, "[0]=output,").unwrap();
-        let mut slots: Vec<_> = self.slots.keys().copied().collect();
+        let mut slots: Vec<usize> = (0..self.slots.len()).collect();
         slots.sort_by_key(|id| format!("s{id}"));
         for (binding, slot) in slots.iter().enumerate() {
             writeln!(s, "[{}]=g{slot},", binding + 1).unwrap();
         }
         s.push_str("})\nreturn function(inputs)\n");
         // Validate every source before enqueueing any writes; failures leave no partial upload.
-        for slot in self.slots.keys() {
+        for slot in 0..self.slots.len() {
             writeln!(s,"local s{slot}=inputs[{}]\nassert(buffer.len(s{slot})=={},'slot shape mismatch')\nfor i=0,{} do local x=buffer.readf32(s{slot},i*4); assert(x==math.floor(x) and math.abs(x)<=64,'unsupported integer-exact input') end",slot+1,n*4,i64::try_from(n).expect("bounded")-1).unwrap();
         }
         if n == 0 {
             s.push_str("return buffer.create(0)\nend\nend\n");
             return Ok(s);
         }
-        for slot in self.slots.keys() {
+        for slot in 0..self.slots.len() {
             writeln!(s, "g{slot}:write(0,s{slot})").unwrap();
         }
         writeln!(s,"device:dispatch({{pipeline=pipeline,pass=pass,workgroups={}}})\nreturn output:readLater():wait()\nend\nend",n.div_ceil(64)).unwrap();

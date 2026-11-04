@@ -6,16 +6,18 @@ assert(not pcall(function() program:shader_source('strict') end))
 local factory=program:shader_source('integer-exact')
 local testSource='local make=(function()\n'..factory..'\nend)()\nlocal run=make(jess.gpu.device())\n'
 for seed=1,3 do
- local a,b,out=buffer.create(n*4),buffer.create(n*4),buffer.create(n*4)
+ local a,b,out,direct=buffer.create(n*4),buffer.create(n*4),buffer.create(n*4),buffer.create(n*4)
  for i=0,n-1 do buffer.writef32(a,i*4,(i+seed)%101-50); buffer.writef32(b,i*4,(i*seed)%13-6) end
- local bindings=compute.bindings()
- bindings:set(0,compute.f32(a,1,n)); bindings:set(1,compute.f32(b,1,n))
- local expected=program:run_bound(bindings):read()
+ local ta,tb=compute.f32(a,1,n),compute.f32(b,1,n)
+ local expected=program:runReference(ta,tb):read()
+ local chunked=program:run(ta,tb):read()
  native({a,b},out)
+ program:runInto(direct,a,b)
  local values={}
  for i=0,n-1 do
-  assert(buffer.readf32(out,i*4)==buffer.readf32(expected,i*4))
-  values[i+1]=tostring(buffer.readf32(expected,i*4))
+  local e=buffer.readf32(expected,i*4)
+  assert(buffer.readf32(chunked,i*4)==e and buffer.readf32(out,i*4)==e and buffer.readf32(direct,i*4)==e)
+  values[i+1]=tostring(e)
  end
  testSource..=string.format([[do
 local a,b=buffer.create(%d),buffer.create(%d)
@@ -26,28 +28,26 @@ for i,v in expected do assert(buffer.readf32(result,(i-1)*4)==v,`shader mismatch
 end
 ]],n*4,n*4,n-1,seed,seed,table.concat(values,','))
 end
-local missing=compute.bindings()
-assert(not pcall(function() program:run_bound(missing) end))
-local bad=compute.bindings(); bad:set(0,compute.f32(buffer.create(4),1,1)); bad:set(1,compute.f32(buffer.create(n*4),1,n))
-assert(not pcall(function() program:run_bound(bad) end))
-assert(not pcall(function() missing:set(0,buffer.create(4)) end))
-shader_artifact=testSource.."print('same graph: CPU oracle, Luau native and Jess shader verified across three input sets')\n"
-print('rebindable graph and generated native execution verified')
+shared.state.shader_artifact=testSource.."print('same graph: CPU oracle, chunked kernels, Luau native and Jess shader verified across three input sets')\n"
+print('rebindable graph verified across the reference, chunked and generated native executors')
 -- Strict native f32 edge cases must match the reference bitwise, except NaN payloads.
 do
  local p=compute.slot(0,1,8):relu():compile()
  local kernel=p:native()
- local a,out=buffer.create(32),buffer.create(32)
+ local a,out,direct=buffer.create(32),buffer.create(32),buffer.create(32)
  local bits={0,0x80000000,1,0x80000001,0x7f800000,0xff800000,0x7fc00001,0x3f800001}
  for i,v in bits do buffer.writeu32(a,(i-1)*4,v) end
- local bound=compute.bindings();bound:set(0,compute.f32(a,1,8))
- local expected=p:run_bound(bound):read();kernel({a},out)
- for i=0,7 do local x,y=buffer.readf32(out,i*4),buffer.readf32(expected,i*4)
+ local t=compute.f32(a,1,8)
+ local expected=p:runReference(t):read();kernel({a},out);p:runInto(direct,a)
+ for i=0,7 do local x,y,z=buffer.readf32(out,i*4),buffer.readf32(expected,i*4),buffer.readf32(direct,i*4)
   assert((x~=x and y~=y) or buffer.readu32(out,i*4)==buffer.readu32(expected,i*4))
+  assert((z~=z and y~=y) or buffer.readu32(direct,i*4)==buffer.readu32(expected,i*4))
  end
  local a,b,out=buffer.create(4),buffer.create(4),buffer.create(4)
  buffer.writeu32(a,0,0x3f800001); buffer.writeu32(b,0,0x3f7ffffe)
  local p=compute.slot(0,1,1):mul(compute.slot(1,1,1)):add(compute.constant(-1)):compile()
  p:native()({a,b},out)
  assert(buffer.readu32(out,0)==0,'native FMA/rounding mismatch')
+ p:runInto(out,a,b)
+ assert(buffer.readu32(out,0)==0,'chunked FMA/rounding mismatch')
 end

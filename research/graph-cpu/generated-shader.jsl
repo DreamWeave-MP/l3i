@@ -65,4 +65,4 @@ local expected={0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
 local result=run({a,b})
 for i,v in expected do assert(buffer.readf32(result,(i-1)*4)==v,`shader mismatch {i}`) end
 end
-print('same graph: CPU oracle, Luau native and Jess shader verified across three input sets')
+print('same graph: CPU oracle, chunked kernels, Luau native and Jess shader verified across three input sets')
