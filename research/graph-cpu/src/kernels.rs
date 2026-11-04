@@ -647,8 +647,8 @@ fn accumulate1<const FUSED: bool>(out: &mut [Element], a: f32, b: &[Element]) {
 }
 
 /// Bytes of scratch `matmul` needs: one `K_BLOCK` of `b`, packed by column block.
-pub(crate) fn matmul_scratch(k: usize, n: usize) -> usize {
-    k.min(K_BLOCK) * (n / NR) * NR * 4
+pub(crate) fn matmul_scratch(m: usize, k: usize, n: usize) -> usize {
+    if m == 1 { 0 } else { k.min(K_BLOCK) * (n / NR) * NR * 4 }
 }
 
 /// The row-major `a @ b` kernel. `k` advances in ascending blocks, so each output element sees its
@@ -664,6 +664,14 @@ fn matmul_body<const FUSED: bool>(
     scratch: &mut [Element],
 ) {
     let m = out.len() / n;
+    // A single row has no reuse of packed weights. Stream each row of b directly,
+    // retaining ascending k and the same separately rounded strict operations.
+    if m == 1 {
+        for (scale, row) in a.iter().zip(b.chunks_exact(n)) {
+            accumulate1::<FUSED>(out, read(*scale), row);
+        }
+        return;
+    }
     let (whole_rows, whole_columns) = (m / MR * MR, n / NR * NR);
     let column_blocks = n / NR;
     let (pack, _) = scratch.as_chunks_mut::<NR>();

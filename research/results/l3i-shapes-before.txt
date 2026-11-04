@@ -1,0 +1,256 @@
+# isa=Avx2 chunk=1024 samples=31 sample_ms=3 
+
+# Attribution ladder: relu(a+b+2), n=65536, preallocated output unless stated
+rust_fused_f32_baseline                        n=65536    median_us=14.658       min_us=14.223       p90_us=15.431       ns_per_element=0.224
+rust_fused_f32_avx2                            n=65536    median_us=12.554       min_us=11.836       p90_us=13.575       ns_per_element=0.192
+rust_fused_bytes_avx2                          n=65536    median_us=12.494       min_us=12.261       p90_us=13.138       ns_per_element=0.191
+rust_three_pass_monomorphic_avx2               n=65536    median_us=22.451       min_us=21.653       p90_us=23.695       ns_per_element=0.343
+rust_fused_bytes_baseline                      n=65536    median_us=15.108       min_us=14.421       p90_us=16.991       ns_per_element=0.231
+rust_three_pass_monomorphic_baseline           n=65536    median_us=27.096       min_us=25.101       p90_us=29.589       ns_per_element=0.413
+dispatch_per_element_direct_slices             n=65536    median_us=442.859      min_us=395.847      p90_us=476.843      ns_per_element=6.757
+fused_checked_view_indexing_no_dispatch        n=65536    median_us=82.535       min_us=75.444       p90_us=89.890       ns_per_element=1.259
+reference_interpreter_preallocated             n=65536    median_us=713.285      min_us=650.158      p90_us=788.363      ns_per_element=10.884
+reference_interpreter_with_result_alloc        n=65536    median_us=695.463      min_us=625.744      p90_us=803.749      ns_per_element=10.612
+chunked_Baseline_preallocated                  n=65536    median_us=16.216       min_us=15.452       p90_us=16.952       ns_per_element=0.247
+chunked_Avx2_preallocated                      n=65536    median_us=12.884       min_us=12.555       p90_us=14.097       ns_per_element=0.197
+chunked_detected_with_result_alloc             n=65536    median_us=17.322       min_us=16.565       p90_us=18.646       ns_per_element=0.264
+zero_filled_result_allocation_alone            n=65536    median_us=11.837       min_us=11.571       p90_us=12.844       ns_per_element=0.181
+
+# Chunk sweep: relu(a+b+2) and a 16-operation chain, preallocated
+chunk_16_workload                              n=65536    median_us=40.343       min_us=35.544       p90_us=43.862       ns_per_element=0.616
+chunk_16_chain16                               n=65536    median_us=195.155      min_us=180.932      p90_us=208.032      ns_per_element=2.978
+chunk_64_workload                              n=65536    median_us=17.623       min_us=16.770       p90_us=18.880       ns_per_element=0.269
+chunk_64_chain16                               n=65536    median_us=68.740       min_us=60.467       p90_us=74.519       ns_per_element=1.049
+chunk_256_workload                             n=65536    median_us=13.452       min_us=12.967       p90_us=14.093       ns_per_element=0.205
+chunk_256_chain16                              n=65536    median_us=40.369       min_us=37.695       p90_us=44.309       ns_per_element=0.616
+chunk_512_workload                             n=65536    median_us=13.069       min_us=12.317       p90_us=15.004       ns_per_element=0.199
+chunk_512_chain16                              n=65536    median_us=34.598       min_us=32.545       p90_us=38.799       ns_per_element=0.528
+chunk_1024_workload                            n=65536    median_us=13.070       min_us=12.532       p90_us=14.163       ns_per_element=0.199
+chunk_1024_chain16                             n=65536    median_us=34.516       min_us=33.191       p90_us=37.236       ns_per_element=0.527
+chunk_2048_workload                            n=65536    median_us=12.607       min_us=12.503       p90_us=13.479       ns_per_element=0.192
+chunk_2048_chain16                             n=65536    median_us=31.252       min_us=29.352       p90_us=34.337       ns_per_element=0.477
+chunk_4096_workload                            n=65536    median_us=12.895       min_us=12.227       p90_us=14.058       ns_per_element=0.197
+chunk_4096_chain16                             n=65536    median_us=49.400       min_us=47.274       p90_us=55.318       ns_per_element=0.754
+chunk_16384_workload                           n=65536    median_us=13.534       min_us=12.862       p90_us=15.117       ns_per_element=0.207
+chunk_16384_chain16                            n=65536    median_us=67.838       min_us=57.984       p90_us=72.035       ns_per_element=1.035
+rust_fused_chain16_avx2                        n=65536    median_us=49.105       min_us=45.413       p90_us=65.928       ns_per_element=0.749
+rust_fused_chain16_baseline                    n=65536    median_us=75.249       min_us=74.713       p90_us=75.704       ns_per_element=1.148
+
+# Workload matrix: each executor against an independently computed result
+contiguous_chunked_preallocated                n=0        median_us=0.074        min_us=0.070        p90_us=0.077        ns_per_element=0.000
+contiguous_reference_preallocated              n=0        median_us=0.017        min_us=0.017        p90_us=0.018        ns_per_element=0.000
+contiguous_rust_fused_avx2                     n=0        median_us=0.002        min_us=0.002        p90_us=0.003        ns_per_element=0.000
+contiguous_chunked_preallocated_heap n=0 allocations_per_run=1.0 bytes_per_run=128
+contiguous_chunked_fresh_result_heap n=0 allocations_per_run=3.0 bytes_per_run=312
+contiguous_chunked_fresh_result                n=0        median_us=0.163        min_us=0.159        p90_us=0.177        ns_per_element=0.000
+readback_new_vec                               n=0        median_us=0.013        min_us=0.012        p90_us=0.014        ns_per_element=0.000
+contiguous_chunked_preallocated                n=1        median_us=0.123        min_us=0.112        p90_us=0.133        ns_per_element=122.922
+contiguous_reference_preallocated              n=1        median_us=0.029        min_us=0.027        p90_us=0.032        ns_per_element=29.218
+contiguous_rust_fused_avx2                     n=1        median_us=0.003        min_us=0.003        p90_us=0.004        ns_per_element=3.343
+contiguous_chunked_preallocated_heap n=1 allocations_per_run=2.0 bytes_per_run=312
+contiguous_chunked_fresh_result_heap n=1 allocations_per_run=5.0 bytes_per_run=500
+contiguous_chunked_fresh_result                n=1        median_us=0.239        min_us=0.234        p90_us=0.252        ns_per_element=238.904
+readback_new_vec                               n=1        median_us=0.032        min_us=0.031        p90_us=0.035        ns_per_element=32.056
+contiguous_chunked_preallocated                n=16       median_us=0.128        min_us=0.119        p90_us=0.135        ns_per_element=8.027
+contiguous_reference_preallocated              n=16       median_us=0.167        min_us=0.156        p90_us=0.178        ns_per_element=10.453
+contiguous_rust_fused_avx2                     n=16       median_us=0.006        min_us=0.005        p90_us=0.006        ns_per_element=0.351
+contiguous_chunked_preallocated_heap n=16 allocations_per_run=2.0 bytes_per_run=312
+contiguous_chunked_fresh_result_heap n=16 allocations_per_run=5.0 bytes_per_run=560
+contiguous_chunked_fresh_result                n=16       median_us=0.272        min_us=0.243        p90_us=0.306        ns_per_element=17.008
+readback_new_vec                               n=16       median_us=0.034        min_us=0.033        p90_us=0.035        ns_per_element=2.156
+contiguous_chunked_preallocated                n=1024     median_us=0.203        min_us=0.180        p90_us=0.221        ns_per_element=0.198
+contiguous_reference_preallocated              n=1024     median_us=10.284       min_us=9.298        p90_us=11.144       ns_per_element=10.043
+contiguous_rust_fused_avx2                     n=1024     median_us=0.068        min_us=0.064        p90_us=0.075        ns_per_element=0.066
+contiguous_chunked_preallocated_heap n=1024 allocations_per_run=2.0 bytes_per_run=312
+contiguous_chunked_fresh_result_heap n=1024 allocations_per_run=5.0 bytes_per_run=4592
+contiguous_chunked_fresh_result                n=1024     median_us=0.410        min_us=0.377        p90_us=0.449        ns_per_element=0.400
+readback_new_vec                               n=1024     median_us=0.139        min_us=0.131        p90_us=0.147        ns_per_element=0.136
+contiguous_chunked_preallocated                n=65536    median_us=12.925       min_us=12.546       p90_us=13.700       ns_per_element=0.197
+contiguous_reference_preallocated              n=65536    median_us=656.428      min_us=613.362      p90_us=700.092      ns_per_element=10.016
+contiguous_rust_fused_avx2                     n=65536    median_us=12.864       min_us=12.191       p90_us=14.124       ns_per_element=0.196
+contiguous_chunked_preallocated_heap n=65536 allocations_per_run=2.0 bytes_per_run=312
+contiguous_chunked_fresh_result_heap n=65536 allocations_per_run=5.0 bytes_per_run=262640
+contiguous_chunked_fresh_result                n=65536    median_us=18.236       min_us=16.993       p90_us=19.513       ns_per_element=0.278
+readback_new_vec                               n=65536    median_us=11.111       min_us=10.786       p90_us=11.762       ns_per_element=0.170
+contiguous_chunked_preallocated                n=1048576  median_us=283.413      min_us=233.595      p90_us=453.837      ns_per_element=0.270
+contiguous_reference_preallocated              n=1048576  median_us=10315.425    min_us=9670.921     p90_us=10797.677    ns_per_element=9.838
+contiguous_rust_fused_avx2                     n=1048576  median_us=256.181      min_us=222.303      p90_us=305.295      ns_per_element=0.244
+contiguous_chunked_preallocated_heap n=1048576 allocations_per_run=2.0 bytes_per_run=312
+contiguous_chunked_fresh_result_heap n=1048576 allocations_per_run=5.0 bytes_per_run=4194800
+contiguous_chunked_fresh_result                n=1048576  median_us=339.795      min_us=295.219      p90_us=400.628      ns_per_element=0.324
+readback_new_vec                               n=1048576  median_us=215.209      min_us=203.846      p90_us=251.282      ns_per_element=0.205
+
+# Strided and broadcast inputs (preallocated)
+strided_chunked                                n=1024     median_us=0.817        min_us=0.781        p90_us=0.924        ns_per_element=0.798
+strided_reference                              n=1024     median_us=10.009       min_us=9.439        p90_us=10.980       ns_per_element=9.774
+transposed_chunked                             n=1024     median_us=0.865        min_us=0.842        p90_us=0.921        ns_per_element=0.845
+transposed_reference                           n=1024     median_us=10.521       min_us=9.976        p90_us=12.385       ns_per_element=10.275
+broadcast_column_cols2_chunked                 n=1024     median_us=1.117        min_us=1.070        p90_us=1.252        ns_per_element=1.091
+broadcast_column_cols2_reference               n=1024     median_us=9.916        min_us=9.452        p90_us=10.842       ns_per_element=9.684
+broadcast_column_cols256_chunked               n=1024     median_us=0.271        min_us=0.251        p90_us=0.288        ns_per_element=0.265
+broadcast_column_cols256_reference             n=1024     median_us=10.369       min_us=9.020        p90_us=11.543       ns_per_element=10.126
+strided_chunked                                n=65536    median_us=50.139       min_us=46.546       p90_us=52.927       ns_per_element=0.765
+strided_reference                              n=65536    median_us=646.021      min_us=592.292      p90_us=713.229      ns_per_element=9.858
+transposed_chunked                             n=65536    median_us=80.235       min_us=78.098       p90_us=83.425       ns_per_element=1.224
+transposed_reference                           n=65536    median_us=774.149      min_us=710.714      p90_us=840.430      ns_per_element=11.813
+broadcast_column_cols2_chunked                 n=65536    median_us=71.449       min_us=64.611       p90_us=75.154       ns_per_element=1.090
+broadcast_column_cols2_reference               n=65536    median_us=676.183      min_us=619.166      p90_us=726.446      ns_per_element=10.318
+broadcast_column_cols256_chunked               n=65536    median_us=14.055       min_us=13.719       p90_us=14.929       ns_per_element=0.214
+broadcast_column_cols256_reference             n=65536    median_us=641.973      min_us=597.374      p90_us=682.502      ns_per_element=9.796
+
+# Compilation: cold and warm, no machine code generated
+expression_construction                        n=0        median_us=0.370        min_us=0.359        p90_us=0.407        ns_per_element=0.000
+validation_and_planning_compile                n=0        median_us=0.689        min_us=0.652        p90_us=0.740        ns_per_element=0.000
+first_compile_after_warmup_us=0.882
+
+# Independent programs: 64 distinct compiled programs, run in turn on one input
+compile_64_programs_total_us=73.347
+run_64_programs_each_once                      n=65536    median_us=13.802       min_us=12.601       p90_us=14.854       ns_per_element=0.211
+
+# Matrix multiplication, strict f32, packing included
+shape m=16 k=16 n=16
+matmul_chunked_baseline_preallocated           n=4096     median_us=0.592        min_us=0.550        p90_us=0.644        ns_per_element=0.145
+matmul_chunked_detected_preallocated           n=4096     median_us=0.413        min_us=0.379        p90_us=0.438        ns_per_element=0.101
+matmul_chunked_fresh_result                    n=4096     median_us=0.535        min_us=0.499        p90_us=0.559        ns_per_element=0.131
+matmul_reference                               n=4096     median_us=8.493        min_us=7.911        p90_us=9.346        ns_per_element=2.074
+shape m=64 k=64 n=64
+matmul_chunked_baseline_preallocated           n=262144   median_us=21.830       min_us=20.038       p90_us=23.533       ns_per_element=0.083
+matmul_chunked_detected_preallocated           n=262144   median_us=10.325       min_us=9.147        p90_us=11.040       ns_per_element=0.039
+matmul_chunked_fresh_result                    n=262144   median_us=10.115       min_us=9.734        p90_us=11.409       ns_per_element=0.039
+matmul_reference                               n=262144   median_us=410.337      min_us=383.192      p90_us=460.014      ns_per_element=1.565
+shape m=128 k=128 n=128
+matmul_chunked_baseline_preallocated           n=2097152  median_us=159.449      min_us=152.109      p90_us=181.879      ns_per_element=0.076
+matmul_chunked_detected_preallocated           n=2097152  median_us=72.790       min_us=66.821       p90_us=78.101       ns_per_element=0.035
+matmul_chunked_fresh_result                    n=2097152  median_us=75.740       min_us=68.568       p90_us=80.708       ns_per_element=0.036
+matmul_reference                               n=2097152  median_us=3628.651     min_us=3395.393     p90_us=3985.339     ns_per_element=1.730
+shape m=256 k=256 n=256
+matmul_chunked_baseline_preallocated           n=16777216 median_us=1255.402     min_us=1202.542     p90_us=1357.877     ns_per_element=0.075
+matmul_chunked_detected_preallocated           n=16777216 median_us=582.491      min_us=533.778      p90_us=654.196      ns_per_element=0.035
+matmul_chunked_fresh_result                    n=16777216 median_us=565.879      min_us=533.581      p90_us=621.503      ns_per_element=0.034
+matmul_reference                               n=16777216 median_us=36391.221    min_us=35777.480    p90_us=37571.435    ns_per_element=2.169
+shape m=400 k=400 n=400
+matmul_chunked_baseline_preallocated           n=64000000 median_us=5173.011     min_us=4717.633     p90_us=5614.384     ns_per_element=0.081
+matmul_chunked_detected_preallocated           n=64000000 median_us=2184.514     min_us=1981.036     p90_us=2341.703     ns_per_element=0.034
+matmul_chunked_fresh_result                    n=64000000 median_us=2362.733     min_us=2144.552     p90_us=2589.965     ns_per_element=0.037
+matmul_reference                               n=64000000 median_us=105182.022   min_us=102204.955   p90_us=110566.936   ns_per_element=1.643
+shape m=1 k=256 n=256
+matmul_chunked_baseline_preallocated           n=65536    median_us=21.116       min_us=19.942       p90_us=21.768       ns_per_element=0.322
+matmul_chunked_detected_preallocated           n=65536    median_us=21.178       min_us=19.903       p90_us=22.669       ns_per_element=0.323
+matmul_chunked_fresh_result                    n=65536    median_us=20.894       min_us=20.067       p90_us=22.533       ns_per_element=0.319
+matmul_reference                               n=65536    median_us=196.123      min_us=183.310      p90_us=214.702      ns_per_element=2.993
+shape m=1 k=1024 n=1024
+matmul_chunked_baseline_preallocated           n=1048576  median_us=320.020      min_us=305.153      p90_us=341.636      ns_per_element=0.305
+matmul_chunked_detected_preallocated           n=1048576  median_us=329.283      min_us=320.611      p90_us=354.763      ns_per_element=0.314
+matmul_chunked_fresh_result                    n=1048576  median_us=318.276      min_us=309.099      p90_us=342.909      ns_per_element=0.304
+matmul_reference                               n=1048576  median_us=3467.809     min_us=3228.389     p90_us=4090.862     ns_per_element=3.307
+shape m=4 k=1024 n=1024
+matmul_chunked_baseline_preallocated           n=4194304  median_us=629.165      min_us=592.899      p90_us=679.072      ns_per_element=0.150
+matmul_chunked_detected_preallocated           n=4194304  median_us=561.795      min_us=534.873      p90_us=609.028      ns_per_element=0.134
+matmul_chunked_fresh_result                    n=4194304  median_us=564.746      min_us=531.109      p90_us=632.022      ns_per_element=0.135
+matmul_reference                               n=4194304  median_us=11736.806    min_us=10975.048    p90_us=13227.135    ns_per_element=2.798
+shape m=256 k=256 n=1
+matmul_chunked_baseline_preallocated           n=65536    median_us=140.451      min_us=131.181      p90_us=149.166      ns_per_element=2.143
+matmul_chunked_detected_preallocated           n=65536    median_us=332.412      min_us=331.758      p90_us=357.840      ns_per_element=5.072
+matmul_chunked_fresh_result                    n=65536    median_us=341.644      min_us=325.348      p90_us=369.000      ns_per_element=5.213
+matmul_reference                               n=65536    median_us=143.793      min_us=132.213      p90_us=160.153      ns_per_element=2.194
+shape m=31 k=127 n=17
+matmul_chunked_baseline_preallocated           n=66929    median_us=14.457       min_us=13.081       p90_us=15.970       ns_per_element=0.216
+matmul_chunked_detected_preallocated           n=66929    median_us=23.299       min_us=22.204       p90_us=26.563       ns_per_element=0.348
+matmul_chunked_fresh_result                    n=66929    median_us=24.309       min_us=23.203       p90_us=27.206       ns_per_element=0.363
+matmul_reference                               n=66929    median_us=106.544      min_us=100.189      p90_us=114.713      ns_per_element=1.592
+shape m=128 k=64 n=512
+matmul_chunked_baseline_preallocated           n=4194304  median_us=323.766      min_us=308.129      p90_us=358.644      ns_per_element=0.077
+matmul_chunked_detected_preallocated           n=4194304  median_us=151.015      min_us=139.317      p90_us=160.055      ns_per_element=0.036
+matmul_chunked_fresh_result                    n=4194304  median_us=150.091      min_us=141.516      p90_us=169.025      ns_per_element=0.036
+matmul_reference                               n=4194304  median_us=8242.490     min_us=7693.418     p90_us=8698.305     ns_per_element=1.965
+shape m=512 k=64 n=32
+matmul_chunked_baseline_preallocated           n=1048576  median_us=87.442       min_us=80.819       p90_us=93.433       ns_per_element=0.083
+matmul_chunked_detected_preallocated           n=1048576  median_us=39.539       min_us=36.903       p90_us=42.641       ns_per_element=0.038
+matmul_chunked_fresh_result                    n=1048576  median_us=43.137       min_us=38.392       p90_us=48.862       ns_per_element=0.041
+matmul_reference                               n=1048576  median_us=1612.419     min_us=1536.892     p90_us=1813.503     ns_per_element=1.538
+budget_peak_bytes=12582912
+programs: rebinding, fusion, broadcast, shared views, matrix, borrowed buffers, errors verified
+rebindable graph verified across the reference, chunked and generated native executors
+
+# JSL end to end: relu(a+b+2)
+phases n=0 graph_build_us=4.783 plan_compile_us=5.380 import_both_inputs_us=1.022
+first_runInto n=0 us=2.057
+jsl_chunked_runInto_borrowed_buffers           n=0        median_us=0.226        min_us=0.214        p90_us=0.244        ns_per_element=0.000
+run_payload_allocations n=0 count=0
+jsl_chunked_run_fresh_tensor                   n=0        median_us=0.411        min_us=0.377        p90_us=0.525        ns_per_element=0.000
+jsl_reference_run_fresh_tensor                 n=0        median_us=0.320        min_us=0.308        p90_us=0.364        ns_per_element=0.000
+jsl_readback_new_buffer                        n=0        median_us=0.084        min_us=0.073        p90_us=0.107        ns_per_element=0.000
+jsl_data_three_pass                            n=0        median_us=0.297        min_us=0.281        p90_us=0.327        ns_per_element=0.000
+luau_native_load_and_jit n=0 us=100.116
+jsl_generated_luau_native_strict               n=0        median_us=0.114        min_us=0.113        p90_us=0.133        ns_per_element=0.000
+jsl_handwritten_luau_native_f64                n=0        median_us=0.033        min_us=0.033        p90_us=0.040        ns_per_element=0.000
+jsl_handwritten_luau_interpreted_f64           n=0        median_us=0.034        min_us=0.034        p90_us=0.046        ns_per_element=0.000
+phases n=1 graph_build_us=4.137 plan_compile_us=5.517 import_both_inputs_us=1.119
+first_runInto n=1 us=3.119
+jsl_chunked_runInto_borrowed_buffers           n=1        median_us=0.266        min_us=0.260        p90_us=0.290        ns_per_element=265.833
+run_payload_allocations n=1 count=1
+jsl_chunked_run_fresh_tensor                   n=1        median_us=0.497        min_us=0.430        p90_us=0.547        ns_per_element=496.937
+jsl_reference_run_fresh_tensor                 n=1        median_us=0.396        min_us=0.344        p90_us=0.447        ns_per_element=395.848
+jsl_readback_new_buffer                        n=1        median_us=0.102        min_us=0.089        p90_us=0.138        ns_per_element=102.385
+jsl_data_three_pass                            n=1        median_us=0.290        min_us=0.260        p90_us=0.323        ns_per_element=290.134
+luau_native_load_and_jit n=1 us=117.893
+jsl_generated_luau_native_strict               n=1        median_us=0.175        min_us=0.151        p90_us=0.201        ns_per_element=174.698
+jsl_handwritten_luau_native_f64                n=1        median_us=0.058        min_us=0.057        p90_us=0.074        ns_per_element=57.660
+jsl_handwritten_luau_interpreted_f64           n=1        median_us=0.060        min_us=0.059        p90_us=0.074        ns_per_element=60.031
+phases n=16 graph_build_us=4.134 plan_compile_us=5.543 import_both_inputs_us=1.776
+first_runInto n=16 us=3.187
+jsl_chunked_runInto_borrowed_buffers           n=16       median_us=0.290        min_us=0.261        p90_us=0.340        ns_per_element=18.106
+run_payload_allocations n=16 count=1
+jsl_chunked_run_fresh_tensor                   n=16       median_us=0.520        min_us=0.470        p90_us=0.585        ns_per_element=32.514
+jsl_reference_run_fresh_tensor                 n=16       median_us=0.554        min_us=0.460        p90_us=0.646        ns_per_element=34.652
+jsl_readback_new_buffer                        n=16       median_us=0.106        min_us=0.091        p90_us=0.146        ns_per_element=6.605
+jsl_data_three_pass                            n=16       median_us=0.292        min_us=0.270        p90_us=0.323        ns_per_element=18.266
+luau_native_load_and_jit n=16 us=115.328
+jsl_generated_luau_native_strict               n=16       median_us=0.908        min_us=0.871        p90_us=0.979        ns_per_element=56.731
+jsl_handwritten_luau_native_f64                n=16       median_us=0.498        min_us=0.445        p90_us=0.543        ns_per_element=31.107
+jsl_handwritten_luau_interpreted_f64           n=16       median_us=0.493        min_us=0.436        p90_us=0.555        ns_per_element=30.814
+phases n=1024 graph_build_us=4.021 plan_compile_us=4.886 import_both_inputs_us=2.501
+first_runInto n=1024 us=3.246
+jsl_chunked_runInto_borrowed_buffers           n=1024     median_us=0.367        min_us=0.347        p90_us=0.407        ns_per_element=0.358
+run_payload_allocations n=1024 count=1
+jsl_chunked_run_fresh_tensor                   n=1024     median_us=0.839        min_us=0.742        p90_us=1.320        ns_per_element=0.820
+jsl_reference_run_fresh_tensor                 n=1024     median_us=10.326       min_us=10.123       p90_us=10.786       ns_per_element=10.084
+jsl_readback_new_buffer                        n=1024     median_us=0.604        min_us=0.548        p90_us=0.664        ns_per_element=0.590
+jsl_data_three_pass                            n=1024     median_us=0.540        min_us=0.485        p90_us=0.597        ns_per_element=0.527
+luau_native_load_and_jit n=1024 us=108.143
+jsl_generated_luau_native_strict               n=1024     median_us=51.217       min_us=46.906       p90_us=55.363       ns_per_element=50.017
+jsl_handwritten_luau_native_f64                n=1024     median_us=28.219       min_us=25.228       p90_us=31.641       ns_per_element=27.558
+jsl_handwritten_luau_interpreted_f64           n=1024     median_us=27.048       min_us=25.808       p90_us=29.197       ns_per_element=26.414
+phases n=65536 graph_build_us=4.972 plan_compile_us=6.356 import_both_inputs_us=44.705
+first_runInto n=65536 us=23.882
+jsl_chunked_runInto_borrowed_buffers           n=65536    median_us=12.842       min_us=12.390       p90_us=14.132       ns_per_element=0.196
+run_payload_allocations n=65536 count=1
+jsl_chunked_run_fresh_tensor                   n=65536    median_us=30.834       min_us=20.785       p90_us=67.209       ns_per_element=0.470
+jsl_reference_run_fresh_tensor                 n=65536    median_us=709.183      min_us=604.103      p90_us=816.298      ns_per_element=10.821
+jsl_readback_new_buffer                        n=65536    median_us=26.444       min_us=25.484       p90_us=29.130       ns_per_element=0.403
+jsl_data_three_pass                            n=65536    median_us=29.266       min_us=28.284       p90_us=31.139       ns_per_element=0.447
+luau_native_load_and_jit n=65536 us=209.401
+jsl_generated_luau_native_strict               n=65536    median_us=3338.717     min_us=3007.438     p90_us=3602.223     ns_per_element=50.945
+jsl_handwritten_luau_native_f64                n=65536    median_us=1733.333     min_us=1600.809     p90_us=1892.337     ns_per_element=26.449
+jsl_handwritten_luau_interpreted_f64           n=65536    median_us=1759.928     min_us=1617.707     p90_us=1930.971     ns_per_element=26.854
+phases n=1048576 graph_build_us=6.290 plan_compile_us=6.529 import_both_inputs_us=923.137
+first_runInto n=1048576 us=774.760
+jsl_chunked_runInto_borrowed_buffers           n=1048576  median_us=243.211      min_us=223.689      p90_us=281.579      ns_per_element=0.232
+run_payload_allocations n=1048576 count=1
+jsl_chunked_run_fresh_tensor                   n=1048576  median_us=481.867      min_us=419.468      p90_us=765.292      ns_per_element=0.460
+jsl_readback_new_buffer                        n=1048576  median_us=777.942      min_us=589.484      p90_us=1652.534     ns_per_element=0.742
+jsl_data_three_pass                            n=1048576  median_us=632.899      min_us=557.850      p90_us=877.503      ns_per_element=0.604
+luau_native_load_and_jit n=1048576 us=114.037
+
+# JSL matrix multiplication, fresh tensor
+jsl_matmul_chunked_runInto                     n=4096     median_us=0.551        min_us=0.526        p90_us=0.635        ns_per_element=0.135
+jsl_matmul_reference                           n=4096     median_us=9.117        min_us=8.159        p90_us=10.084       ns_per_element=2.226
+jsl_matmul_handwritten_luau_native_f64         n=4096     median_us=108.637      min_us=99.918       p90_us=117.620      ns_per_element=26.523
+jsl_matmul_chunked_runInto                     n=262144   median_us=10.310       min_us=9.933        p90_us=11.265       ns_per_element=0.039
+jsl_matmul_reference                           n=262144   median_us=416.942      min_us=387.223      p90_us=463.857      ns_per_element=1.591
+jsl_matmul_handwritten_luau_native_f64         n=262144   median_us=6639.754     min_us=6205.144     p90_us=7114.346     ns_per_element=25.329
+jsl_matmul_chunked_runInto                     n=16777216 median_us=572.279      min_us=511.253      p90_us=611.845      ns_per_element=0.034
+jsl_matmul_reference                           n=16777216 median_us=38893.572    min_us=35923.198    p90_us=41138.662    ns_per_element=2.318
+jsl_matmul_handwritten_luau_native_f64         n=16777216 median_us=484027.294   min_us=421386.330   p90_us=508661.190   ns_per_element=28.850
+noop_plus_jsl_loop_us=0.0129
+budget_peak_bytes=67108864

@@ -726,7 +726,7 @@ fn fast_mode_fuses_multiply_adds_and_nothing_else() {
         .collect();
     assert_same(&read(&twice.run(&[&ta, &tb], &budget).unwrap()), &want, "shared product");
     // Matmul: each element fuses its products, still in increasing k.
-    for (m, k, c) in [(9, 70, 37), (4, 16, 16), (3, 5, 2)] {
+    for (m, k, c) in [(9, 70, 37), (4, 16, 16), (3, 5, 2), (1, 257, 17)] {
         let (p, q): (Vec<f32>, Vec<f32>) =
             ((0..m * k).map(|_| random.moderate()).collect(), (0..k * c).map(|_| random.moderate()).collect());
         let mut want = vec![0.0f32; m * c];
@@ -766,6 +766,10 @@ fn matmul_blocks_and_tails_match_the_ordered_triple_loop() {
         (8, 128, 32),
         (7, 63, 33),
         (1, 1, 1),
+        (1, 257, 15),
+        (1, 257, 16),
+        (1, 257, 17),
+        (1, 1024, 128),
         (16, 200, 48),
         (4, 1, 16),
         (9, 3, 16),
@@ -869,4 +873,31 @@ fn strict_matmul_ignores_the_fusing_instantiation() {
     let mut out = vec![0x55u8; m * n * 4];
     program.run_with(&[ta.borrow(), tb.borrow()], &mut out, &budget, Isa::Fma, CHUNK).unwrap();
     assert_same(&floats(&out), &reference_matmul(&a, &b, m, k, n), "strict matmul on Isa::Fma");
+}
+
+#[test]
+fn streaming_matvec_preserves_special_values_without_packing_budget() {
+    let domain = domain();
+    let a = [0.0, -0.0, 1.0, -1.0, f32::from_bits(1), f32::MAX, f32::INFINITY, f32::NAN];
+    for k in 0..=a.len() {
+        for n in [0, 1, 7, 8, 15, 16, 17, 33] {
+            let budget = Budget::new(1 << 20);
+            let b: Vec<f32> = (0..k * n).map(|i| a[(i * 3 + 1) % a.len()]).collect();
+            let ta = tensor(&a[..k], Shape::Matrix(1, k), &budget);
+            let tb = tensor(&b, Shape::Matrix(k, n), &budget);
+            let program = Expr::slot(0, Shape::Matrix(1, k), domain.clone())
+                .unwrap()
+                .matmul(&Expr::slot(1, Shape::Matrix(k, n), domain.clone()).unwrap())
+                .unwrap()
+                .compile()
+                .unwrap();
+            let expected = reference_matmul(&a[..k], &b, 1, k, n);
+            for isa in isas() {
+                let mut out = vec![0x55; n * 4];
+                program.run_with(&[ta.borrow(), tb.borrow()], &mut out, &budget, isa, CHUNK).unwrap();
+                assert_same(&floats(&out), &expected, "streaming special values");
+            }
+            assert_eq!(crate::kernels::matmul_scratch(1, k, n), 0);
+        }
+    }
 }

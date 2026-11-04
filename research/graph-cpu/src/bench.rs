@@ -497,21 +497,36 @@ fn matrix() {
         }
     });
 
-    println!("\n# Matrix multiplication, square, fresh result");
-    for side in [16usize, 64, 128, 256, 400] {
-        let shape = Shape::Matrix(side, side);
-        let a: Vec<u8> = (0..side * side).flat_map(|i| ((i % 17) as f32 * 0.25 - 2.0).to_le_bytes()).collect();
-        let b: Vec<u8> = (0..side * side).flat_map(|i| ((i % 23) as f32 * 0.125 - 1.0).to_le_bytes()).collect();
-        let program = Expr::slot(0, shape, domain.clone())
+    println!("\n# Matrix multiplication, strict f32, packing included");
+    for (m, k, n) in [
+        (16usize, 16, 16),
+        (64, 64, 64),
+        (128, 128, 128),
+        (256, 256, 256),
+        (400, 400, 400),
+        (1, 256, 256),
+        (1, 1024, 1024),
+        (4, 1024, 1024),
+        (256, 256, 1),
+        (31, 127, 17),
+        (128, 64, 512),
+        (512, 64, 32),
+    ] {
+        println!("shape m={m} k={k} n={n}");
+        let left = Shape::Matrix(m, k);
+        let right = Shape::Matrix(k, n);
+        let a: Vec<u8> = (0..m * k).flat_map(|i| ((i % 17) as f32 * 0.25 - 2.0).to_le_bytes()).collect();
+        let b: Vec<u8> = (0..k * n).flat_map(|i| ((i % 23) as f32 * 0.125 - 1.0).to_le_bytes()).collect();
+        let program = Expr::slot(0, left, domain.clone())
             .unwrap()
-            .matmul(&Expr::slot(1, shape, domain.clone()).unwrap())
+            .matmul(&Expr::slot(1, right, domain.clone()).unwrap())
             .unwrap()
             .compile()
             .unwrap();
-        let (ta, tb) = (Tensor::import(&a, shape, &budget).unwrap(), Tensor::import(&b, shape, &budget).unwrap());
+        let (ta, tb) = (Tensor::import(&a, left, &budget).unwrap(), Tensor::import(&b, right, &budget).unwrap());
         let views = [ta.borrow(), tb.borrow()];
-        let scalar_operations = side * side * side;
-        let mut out = vec![0u8; side * side * 4];
+        let scalar_operations = m * k * n;
+        let mut out = vec![0u8; m * n * 4];
         row("matmul_chunked_baseline_preallocated", scalar_operations, || {
             program.run_with(black_box(&views), black_box(&mut out), &budget, Isa::Baseline, CHUNK).unwrap();
         });
