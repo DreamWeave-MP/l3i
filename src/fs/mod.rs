@@ -300,12 +300,22 @@ fn same_file(a: &[u8], b: &[u8]) -> Result<Outcome<bool>> {
     })
 }
 
+#[cfg(all(test, unix))]
+thread_local! {
+    static INJECT_DIRECTORY_ERROR: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static INJECT_RENAME_ERROR: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 fn sync_directory(path: &[u8]) -> Result<Outcome<bool>> {
     let host = host_path("syncDirectory", path)?;
     #[cfg(unix)]
     let result = std::fs::File::open(host).and_then(|file| {
         if !file.metadata()?.is_dir() {
             return Err(std::io::Error::new(std::io::ErrorKind::NotADirectory, "not a directory"));
+        }
+        #[cfg(test)]
+        if INJECT_DIRECTORY_ERROR.with(|slot| slot.replace(false)) {
+            return Err(std::io::Error::from_raw_os_error(5));
         }
         file.sync_all()
     });
@@ -321,7 +331,16 @@ fn replace(source: &[u8], destination: &[u8]) -> Result<Outcome<bool>> {
     let from = host_path("replace", source)?;
     let to = host_path("replace", destination)?;
     #[cfg(unix)]
-    let result = std::fs::rename(from, to);
+    let result = {
+        #[cfg(test)]
+        if INJECT_RENAME_ERROR.with(|slot| slot.replace(false)) {
+            Err(std::io::Error::from_raw_os_error(5))
+        } else {
+            std::fs::rename(from, to)
+        }
+        #[cfg(not(test))]
+        std::fs::rename(from, to)
+    };
     #[cfg(not(unix))]
     let result: std::io::Result<()> = {
         let _ = (from, to);
@@ -675,5 +694,50 @@ impl Extension for FsExtension {
             })
         });
         Ok(())
+    }
+}
+
+#[cfg(all(test, unix))]
+mod durability_failure_tests {
+    use super::*;
+    use crate::extension::{RuntimePlan, RuntimePolicy};
+
+    #[test]
+    fn rename_and_directory_sync_failures_leave_the_observed_generation_intact() {
+        let root = std::env::temp_dir().join(format!("l3i-namespace-errors-{}", std::process::id()));
+        std::fs::create_dir(&root).unwrap();
+        struct Cleanup(std::path::PathBuf);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let _cleanup = Cleanup(root.clone());
+        std::fs::write(root.join("old"), b"old").unwrap();
+        std::fs::write(root.join("new"), b"new").unwrap();
+        let policy = RuntimePolicy::new()
+            .compat_global("@dream/fs", "fs")
+            .capability(READ_CAPABILITY)
+            .capability(WRITE_CAPABILITY);
+        let plan = RuntimePlan::builder().policy(policy).extension(FsExtension).finalize().unwrap();
+        let runtime = crate::Runtime::from_plan(&plan).unwrap();
+        let path = format!("{:?}", root.to_string_lossy());
+        INJECT_RENAME_ERROR.with(|slot| slot.set(true));
+        runtime
+            .exec(&format!(
+                "local root = {path} local ok, msg = fs.replace(root .. '/new', root .. '/old') \
+             assert(ok == nil and msg:find('replace') and msg:find('os error 5')) \
+             assert(fs.readFileString(root .. '/old') == 'old' and fs.readFileString(root .. '/new') == 'new')"
+            ))
+            .unwrap();
+        runtime.exec(&format!("assert(fs.replace({path} .. '/new', {path} .. '/old'))")).unwrap();
+        INJECT_DIRECTORY_ERROR.with(|slot| slot.set(true));
+        runtime
+            .exec(&format!(
+                "local ok, msg = fs.syncDirectory({path}) \
+             assert(ok == nil and msg:find('syncDirectory') and msg:find('os error 5')) \
+             assert(fs.readFileString({path} .. '/old') == 'new')"
+            ))
+            .unwrap();
     }
 }
