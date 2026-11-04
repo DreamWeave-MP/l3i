@@ -16,7 +16,7 @@ deliberate change that re-audits the hand-declared C API and the flag list.
 
 ## Rust and dependencies
 
-- **Rust 1.99** or newer, declared as `rust-version` and checked in CI. Edition 2024.
+- **Rust 1.95** or newer, declared as `rust-version` and checked in CI. Edition 2024.
 - `unsafe` is used, at the FFI boundary and in the value-layout reads; every block states the invariant it relies on (see [Safety](@/docs/safety.md)).
 - Optional features, all off by default: `jit`, `analysis`, `soft-render`, `bytes` with `bytes-codecs`, `bytes-digests`, `bytes-text` and `bytes-regex`, `intern`, `intl`, `syntax`, `tcp`, `dns` and `tls` (see [Building](@/docs/building.md)).
 
@@ -60,7 +60,7 @@ Every push to `main`, every pull request and every tag runs
 [StroggForge](https://github.com/DreamWeave-MP/StroggForge)'s library workflow, whose
 `setup-llvm` step gives every job that compiles a clang and lld whose LLVM major matches the
 active rustc: the tests on Windows, Linux and macOS; `rustfmt`; Clippy; a check against Rust
-1.99 (`msrv: auto`); and a dry run of the crates.io publish. A bare version tag publishes that
+1.95 (`msrv: auto`); and a dry run of the crates.io publish. A bare version tag publishes that
 version to crates.io, runs the Criterion hot paths and attaches them to its GitHub release as
 `BENCHMARKS.md`.
 
@@ -470,9 +470,9 @@ Compile options always travel with the source rather than falling back to Luau's
 the same defaults: optimisation 2, debug 1, no type information, no coverage.
 
 Further: the flags are set by name through `luau_setfflag`, and a name the linked Luau does not
-have is a logic error at the first runtime, so a Luau bump cannot drop a flag quietly. Four
-flags are l3i's own: `LuauExperimentalIfLocalSyntax`, `DebugLuauWhileLocalSyntax`, `LuauGcTraceUdata`
-and `LuauBufferCage`.
+have is a logic error for required linked components. L3i also enables its own policy choices:
+`LuauExperimentalIfLocalSyntax`, `DebugLuauWhileLocalSyntax`, `LuauGcTraceUdata`,
+`LuauBufferCage`, `LuauCageSplitData`, and the Analysis and CodeGen fixes listed in `flags`.
 The options own their strings instead of borrowing pointers for the duration of a compile.
 
 ### Calls into Luau

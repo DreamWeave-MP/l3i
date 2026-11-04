@@ -151,7 +151,7 @@ fn exactly_representable_as_f64(magnitude: u64) -> bool {
     if magnitude == 0 {
         return true;
     }
-    let bits = magnitude.bit_width();
+    let bits = u64::BITS - magnitude.leading_zeros();
     bits <= f64::MANTISSA_DIGITS || magnitude.trailing_zeros() >= bits - f64::MANTISSA_DIGITS
 }
 
