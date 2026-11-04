@@ -90,6 +90,11 @@ pub const LUAU_FLAGS: &[&str] = &[
 /// `LuauCodegenLimitVersionsExtra`.
 pub const LUAU_CODEGEN_FLAGS: &[&str] = &[
     "LuauCodegenPropagateFallbackTags",
+    // Luau 0.745's fixes. A comparison can run `__eq`, but one whose result went unused was
+    // deleted with its metamethod; and a store removed from a register marked dead left the
+    // register dead at a VM exit that still read it.
+    "LuauCodegenCmpAnySideEffecting",
+    "LuauCodegenMarkUsed",
     "LuauCodegenA64ForgLoopArray",
     "LuauCodeGenFastpcall",
     "LuauCodegenInteger3",
