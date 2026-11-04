@@ -470,8 +470,9 @@ Compile options always travel with the source rather than falling back to Luau's
 the same defaults: optimisation 2, debug 1, no type information, no coverage.
 
 Further: the flags are set by name through `luau_setfflag`, and a name the linked Luau does not
-have is a logic error at the first runtime, so a Luau bump cannot drop a flag quietly. Three
-flags are l3i's own: `LuauExperimentalIfLocalSyntax`, `LuauGcTraceUdata` and `LuauBufferCage`.
+have is a logic error at the first runtime, so a Luau bump cannot drop a flag quietly. Four
+flags are l3i's own: `LuauExperimentalIfLocalSyntax`, `DebugLuauWhileLocalSyntax`, `LuauGcTraceUdata`
+and `LuauBufferCage`.
 The options own their strings instead of borrowing pointers for the duration of a compile.
 
 ### Calls into Luau

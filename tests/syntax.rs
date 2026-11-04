@@ -992,3 +992,19 @@ fn long_shadow_chains_do_not_recurse() {
         stack.load_source("=shadows", &surface, &runtime.compile_options()).unwrap();
     }
 }
+
+#[test]
+fn a_while_local_binding_is_a_local_its_body_uses() {
+    runtime()
+        .exec(
+            r#"
+            local result = luau.parse("while local line = nextLine() do print(line) end\nwhile true do end\n")
+            assert(#result.errors == 0, 'no errors')
+            local loop = result.root.body[1]
+            assert(loop.kind == 'StatWhile' and loop.conditionLocal.name == 'line', 'the binding')
+            assert(loop.body.body[1].expr.args[1]['local'] == loop.conditionLocal, 'a use is its declaration')
+            assert(result.root.body[2].conditionLocal == nil, 'a plain while has none')
+            "#,
+        )
+        .unwrap();
+}

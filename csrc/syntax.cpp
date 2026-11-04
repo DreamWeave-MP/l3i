@@ -626,6 +626,7 @@ public:
     }
     bool visit(AstStatWhile* n) override
     {
+        local(n->conditionLocal);
         walk(n->condition);
         ++loopDepth; walk(n->body); --loopDepth;
         return false;
@@ -1312,10 +1313,11 @@ public:
 
     bool visit(AstStatWhile* node) override
     {
-        stat(node, KStatWhile, 3);
+        stat(node, KStatWhile, 4);
         setNode(condition, node->condition);
         setNode(body, node->body);
         setBool(hasDo, node->hasDo);
+        setLocal(conditionLocal, node->conditionLocal);
         return false;
     }
 

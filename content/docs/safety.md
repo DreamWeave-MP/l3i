@@ -111,3 +111,5 @@ assert(not ok)
   T): missing argument`.
 - **`LuauExperimentalIfLocalSyntax` is on.** The C++ binder leaves it off; `if local x = f()
   then .. end` parses here.
+- **`DebugLuauWhileLocalSyntax` is on.** `while local x = f() do .. end` parses here, and so does
+  `while const`. Luau still calls the syntax experimental.

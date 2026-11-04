@@ -212,6 +212,9 @@ everything". Every flag on it is there for a stated reason, in the source next t
   measurements as an enormous allocation rate.
 - `LuauExperimentalIfLocalSyntax`, so `if local x = f() then .. end` parses. The C++ binder
   leaves it off.
+- `DebugLuauWhileLocalSyntax`, so `while local x = f() do .. end` parses, with `while const`, and,
+  under `analysis`, `DebugLuauWhileLocalAnalysis` (`flags::LUAU_ANALYSIS_FLAGS`) to type it. Luau
+  still calls this syntax experimental, so it can change with a Luau release.
 - `LuauGcTraceUdata` and `LuauBufferCage`, which gate the embedder GC and memory cage APIs the
   binder exposes; both are inert until a host installs the callback.
 - `LuauCoroutineFinally` is the one flag not on the list: the builder's `coroutine_finalizers`

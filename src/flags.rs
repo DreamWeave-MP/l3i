@@ -44,6 +44,9 @@ pub const LUAU_FLAGS: &[&str] = &[
     "LuauCompileReuseLowersLimit",
     // `if local x = f() then ... end` syntax. The C++ binder leaves this off.
     "LuauExperimentalIfLocalSyntax",
+    // Luau 0.745: `while local x = f() do ... end`, the condition re-evaluated and rebound every
+    // iteration. Luau gates it behind a debug flag while the syntax is experimental.
+    "DebugLuauWhileLocalSyntax",
     // Runtime side
     "LuauIntegerLibrary",
     "LuauOptimizeStringSplit",
@@ -108,6 +111,12 @@ pub const LUAU_CODEGEN_FLAGS: &[&str] = &[
     "LuauCodegenA64ReloadLargeConstOffset",
 ];
 
+/// The flags defined in Luau's Analysis component, which only the `analysis` feature compiles.
+/// `DebugLuauWhileLocalAnalysis` types the `while local` binding the parser flag lets through. The
+/// linker keeps the file that defines it only in a binary that uses the type checker, so a binary
+/// that doesn't has no such flag, and none of its checks to apply it to.
+pub const LUAU_ANALYSIS_FLAGS: &[&str] = &["DebugLuauWhileLocalAnalysis"];
+
 static INITIALIZED: OnceLock<std::result::Result<(), String>> = OnceLock::new();
 
 /// True for a CodeGen flag that belongs to a lowering backend other than this target's, whose
@@ -129,6 +138,11 @@ pub fn initialize() -> Result<()> {
                 if unsafe { ffi::luau_setfflag(name.as_ptr(), 1) } == 0 && !is_foreign_architecture_flag(flag) {
                     return Err(format!("Luau {} has no fast flag named {flag}", crate::LUAU_VERSION));
                 }
+            }
+            for flag in LUAU_ANALYSIS_FLAGS {
+                let name = CString::new(*flag).expect("flag names are literals");
+                // SAFETY: as above. Absent from a binary that does not use the type checker.
+                unsafe { ffi::luau_setfflag(name.as_ptr(), 1) };
             }
             Ok(())
         })

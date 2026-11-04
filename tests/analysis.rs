@@ -1694,3 +1694,19 @@ fn collectgarbage_is_declared_only_when_the_policy_grants_it() {
     let report = analysis.check("main", false);
     assert!(report.is_clean(), "{report:#?}\n---\n{definitions}");
 }
+
+#[test]
+fn while_local_types_its_binding_as_the_truthy_condition() {
+    let mut modules = HashMap::new();
+    modules.insert(
+        "good",
+        "--!strict\nlocal function nextLine(): string? return nil end\nwhile local line = nextLine() do\n    local text: string = line\n    print(text)\nend\n",
+    );
+    modules.insert(
+        "bad",
+        "--!strict\nlocal function nextLine(): string? return nil end\nwhile local line = nextLine() do\n    local count: number = line\n    print(count)\nend\n",
+    );
+    let analysis = Analysis::new(Sources { modules }, AnalysisOptions::default()).unwrap();
+    assert!(analysis.check("good", false).is_clean());
+    assert!(!analysis.check("bad", false).is_clean());
+}

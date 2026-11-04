@@ -545,10 +545,12 @@ anything else.
 
 {{ api_signature(value="const LUAU_CODEGEN_FLAGS: &[&str]") }}
 
+{{ api_signature(value="const LUAU_ANALYSIS_FLAGS: &[&str]") }}
+
 l3i's flag policy: the flags in the Ast, Bytecode, Compiler and VM components, which are always
 linked, including `LuauExperimentalIfLocalSyntax` and the two that gate APIs the binder exposes
-(`LuauGcTraceUdata`, `LuauBufferCage`); and the CodeGen flags, applied only with the `jit`
-feature. Each name carries its reason in the source. The X64 and A64 flags exist only on their
+(`LuauGcTraceUdata`, `LuauBufferCage`); the CodeGen flags, applied only with the `jit`
+feature; and the Analysis flags, applied only with the `analysis` feature. Each name carries its reason in the source. The X64 and A64 flags exist only on their
 own architecture, and `LuauCoroutineFinally` is raised separately by the builder.
 
 {{ api_signature(value="fn initialize() -> Result<()>") }}

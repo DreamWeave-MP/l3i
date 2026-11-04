@@ -339,7 +339,7 @@ pub const TYPES: &[(&str, &str)] = &[
     ),
     (
         "dream_luau_StatWhile",
-        "{ kind: \"StatWhile\", line: number, column: number, endLine: number, endColumn: number, hasSemicolon: boolean, condition: dream_luau_Expr, body: dream_luau_StatBlock, hasDo: boolean }",
+        "{ kind: \"StatWhile\", line: number, column: number, endLine: number, endColumn: number, hasSemicolon: boolean, condition: dream_luau_Expr, body: dream_luau_StatBlock, hasDo: boolean, conditionLocal: dream_luau_Local? }",
     ),
     (
         "dream_luau_StatRepeat",
