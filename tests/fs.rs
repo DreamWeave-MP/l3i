@@ -648,7 +648,7 @@ fn unsupported_windows_namespace_operations_leave_files_untouched() {
 
 // A deliberately small test protocol, not a database format. Its frames are length, sequence,
 // payload and CRC-32; recovery tolerates only an incomplete trailing frame.
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn fixture_crc(bytes: &[u8]) -> u32 {
     let mut crc = !0_u32;
     for byte in bytes {
@@ -660,7 +660,7 @@ fn fixture_crc(bytes: &[u8]) -> u32 {
     !crc
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn fixture_frame(sequence: u64, payload: &[u8]) -> Vec<u8> {
     let mut body = sequence.to_le_bytes().to_vec();
     body.extend_from_slice(payload);
@@ -670,7 +670,7 @@ fn fixture_frame(sequence: u64, payload: &[u8]) -> Vec<u8> {
     frame
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn fixture_recover(mut bytes: &[u8]) -> std::result::Result<(Vec<u64>, bool), &'static str> {
     let mut sequences = Vec::new();
     while !bytes.is_empty() {
@@ -780,4 +780,67 @@ fn framed_journal_fixture_handles_interrupted_truncation() {
         let recovered = fixture_recover(&std::fs::read(scratch.0.join("journal")).unwrap()).unwrap();
         assert_eq!(recovered, (vec![1, 2], phase == 0), "phase {phase}");
     }
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn apfs_checkpoint_directory_sync_is_exercised_on_native_ci() {
+    use std::ffi::{CStr, CString};
+    use std::os::unix::ffi::OsStrExt;
+    let scratch = Scratch::new("apfs-checkpoint");
+    let name = CString::new(scratch.0.as_os_str().as_bytes()).unwrap();
+    let mut stats = std::mem::MaybeUninit::<libc::statfs>::uninit();
+    // SAFETY: name is NUL-terminated, and stats points to writable storage for one statfs.
+    let result = unsafe { libc::statfs(name.as_ptr(), stats.as_mut_ptr()) };
+    assert_eq!(result, 0, "statfs: {}", std::io::Error::last_os_error());
+    // SAFETY: successful statfs initialized the entire output structure.
+    let stats = unsafe { stats.assume_init() };
+    // SAFETY: statfs defines f_fstypename as a NUL-terminated filesystem type name.
+    let filesystem = unsafe { CStr::from_ptr(stats.f_fstypename.as_ptr()) }.to_str().unwrap();
+    if std::env::var_os("GITHUB_ACTIONS").is_some() {
+        assert_eq!(filesystem, "apfs", "native CI must exercise APFS");
+    }
+    runtime()
+        .exec(&format!(
+            "local root = {} local path = root .. '/current' local temp = root .. '/next' \
+         local w = assert(fs.openWrite(path, {{ exclusive = true }})) assert(w:write('old') == 3) \
+         assert(w:syncAll()) assert(w:close()) assert(fs.syncDirectory(root)) \
+         w = assert(fs.openWrite(temp, {{ exclusive = true }})) assert(w:write('new') == 3) \
+         assert(w:syncAll()) assert(w:close()) assert(fs.replace(temp, path)) \
+         assert(fs.syncDirectory(root)) assert(fs.readFileString(path) == 'new')",
+            scratch.lua()
+        ))
+        .unwrap();
+}
+
+// This is an explicit failure model, not a claim about any particular filesystem. A successful
+// file barrier means the new image is complete; before the namespace barrier, recovery must
+// accept either the old or new name binding. Initial namespace persistence is an assumption.
+#[cfg(any(unix, windows))]
+#[test]
+fn checkpoint_failure_model_validates_complete_generations() {
+    let old = fixture_frame(1, b"old checkpoint");
+    let mut new = old.clone();
+    new.extend(fixture_frame(2, b"new checkpoint"));
+    let valid_checkpoint = |bytes: &[u8]| -> std::result::Result<Vec<u64>, &'static str> {
+        let (sequences, torn) = fixture_recover(bytes)?;
+        if torn {
+            return Err("incomplete checkpoint");
+        }
+        Ok(sequences)
+    };
+
+    // A failed or interrupted namespace barrier may leave either complete generation visible.
+    for (image, expected) in [(&old, vec![1]), (&new, vec![1, 2])] {
+        assert_eq!(valid_checkpoint(image), Ok(expected));
+    }
+    // If file data was not durably synchronized, a newly visible torn or damaged image must
+    // never be mistaken for a completed checkpoint, even if its older prefix is valid.
+    assert_eq!(valid_checkpoint(&new[..new.len() - 1]), Err("incomplete checkpoint"));
+    let mut corrupt = new.clone();
+    *corrupt.last_mut().unwrap() ^= 1;
+    assert_eq!(valid_checkpoint(&corrupt), Err("checksum"));
+
+    // The new image is acceptable only after it has been completely validated.
+    assert_eq!(valid_checkpoint(&new), Ok(vec![1, 2]));
 }
