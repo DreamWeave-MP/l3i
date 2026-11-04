@@ -575,6 +575,15 @@ impl VerifiedManifest {
     }
 }
 
+/// Zeroes a read's target when dropped, which only a read that fully verified prevents.
+struct Wipe<'a>(&'a mut [u8]);
+
+impl Drop for Wipe<'_> {
+    fn drop(&mut self) {
+        self.0.fill(0);
+    }
+}
+
 /// Random access to an object through a verified manifest. Reads may repeat in any order and on
 /// any part of the object; each pays only for the chunks it covers.
 #[derive(Debug)]
@@ -610,7 +619,11 @@ impl<S: RangeSource> AuthenticatedReader<S> {
         &self.manifest
     }
 
-    /// Exactly `length` bytes at `offset`, all verified, in a new buffer.
+    /// Exactly `length` bytes at `offset`, all verified, in a new buffer. The range is checked
+    /// against the object first, but the length is otherwise the caller's: a host serving
+    /// untrusted requests should bound it, or use [`AuthenticatedReader::read_into`] with windows
+    /// of its own. [`AuthError::OutOfMemory`] only reports what the allocator refuses up front; on
+    /// a system that overcommits, running out while the buffer is being filled is not recoverable.
     ///
     /// # Errors
     ///
@@ -633,11 +646,12 @@ impl<S: RangeSource> AuthenticatedReader<S> {
     /// shrunk, and [`AuthError::Io`] when it fails. An empty read inside the object succeeds
     /// without touching the source.
     pub fn read_into(&mut self, offset: u64, target: &mut [u8]) -> Result<(), AuthError> {
-        let result = self.fill(offset, target);
-        if result.is_err() {
-            target.fill(0);
-        }
-        result
+        // A guard rather than a check of the result: a source that panics after writing part of
+        // a chunk unwinds past any check, and a caller can catch that and look at the target.
+        let wipe = Wipe(target);
+        self.fill(offset, &mut *wipe.0)?;
+        std::mem::forget(wipe);
+        Ok(())
     }
 
     fn fill(&mut self, offset: u64, target: &mut [u8]) -> Result<(), AuthError> {

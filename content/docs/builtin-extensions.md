@@ -1650,7 +1650,12 @@ reader-owned chunk of scratch. The manifest is copied once, after it has matched
 object, which is 256 GiB at the default 16 KiB. A manifest is hashed before any part of it is
 believed, and one over 512 MiB is refused without hashing. Read a manifest from untrusted storage
 through `readAt` with a limit you choose (as above), since `readFile` allocates whatever the file's
-size says. A manifest takes 32 bytes per chunk plus 32.
+size says. A manifest takes 32 bytes per chunk plus 32. Verifying holds a second copy of the manifest
+once it has matched, so the largest one peaks at about 1 GiB with the caller's. A script's `readAt`
+allocates under the runtime's memory limit. From Rust, `read_at` allocates whatever length the caller
+asked for inside the object, so a host serving untrusted requests should bound that length or use
+`read_into` with windows of its own; on a system that overcommits, memory running out while the
+buffer fills is not an error anyone can catch.
 
 **Choosing a chunk size.** On a CPU without SHA extensions, reading 64 bytes of a 64 MiB object took
 about 290 ms by hashing all of it, and about 65 µs here at the default chunk size with a reader already

@@ -401,6 +401,33 @@ fn identical_chunks_at_different_positions_have_different_digests() {
 }
 
 #[test]
+fn a_source_that_panics_mid_read_leaves_no_trace_either() {
+    struct Panics<'a>(&'a [u8]);
+    impl RangeSource for Panics<'_> {
+        fn read_at(&self, offset: u64, dst: &mut [u8]) -> io::Result<usize> {
+            dst.fill(0xBB);
+            assert!(offset < 512, "this source fails after the first chunk");
+            self.0.read_at(offset, dst)
+        }
+        fn len(&self) -> io::Result<u64> {
+            RangeSource::len(self.0)
+        }
+    }
+    let chunk = CHUNK as usize;
+    let bytes = object(chunk * 3);
+    let (manifest, commitment) = published(&bytes, CHUNK);
+    let verified = VerifiedManifest::verify(&manifest, &commitment).unwrap();
+    let mut reader = AuthenticatedReader::open(Panics(&bytes), verified).unwrap();
+    // A whole first chunk verifies into the target, then a partial one panics while being read.
+    let mut target = vec![0xAA; chunk + 10];
+    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| reader.read_into(0, &mut target)));
+    assert!(caught.is_err());
+    assert!(target.iter().all(|byte| *byte == 0), "a panic left bytes behind");
+    // The panicked chunk is not treated as held, and the reader still answers correctly.
+    assert_eq!(reader.read_at(1, 3).unwrap(), bytes[1..4]);
+}
+
+#[test]
 fn a_failed_read_leaves_no_trace_in_its_target() {
     let chunk = CHUNK as usize;
     let bytes = object(chunk * 4);
