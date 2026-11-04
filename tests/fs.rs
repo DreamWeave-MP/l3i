@@ -627,3 +627,21 @@ fn failed_close_remains_failed_on_repeated_close() {
         )
         .unwrap();
 }
+
+#[cfg(windows)]
+#[test]
+fn unsupported_windows_namespace_operations_leave_files_untouched() {
+    let scratch = Scratch::new("windows-namespace-unsupported");
+    runtime()
+        .exec(&format!(
+            "local root = {} local source = root .. '/source' local target = root .. '/target' \
+         assert(fs.writeFile(source, 'new') == 3) assert(fs.writeFile(target, 'old') == 3) \
+         local ok, message, kind = fs.syncDirectory(root) \
+         assert(ok == nil and kind == 'unsupported' and message:find('syncDirectory')) \
+         ok, message, kind = fs.replace(source, target) \
+         assert(ok == nil and kind == 'unsupported' and message:find('replace')) \
+         assert(fs.readFileString(source) == 'new' and fs.readFileString(target) == 'old')",
+            scratch.lua()
+        ))
+        .unwrap();
+}

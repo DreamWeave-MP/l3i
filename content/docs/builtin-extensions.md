@@ -1408,15 +1408,21 @@ directory. `fs.syncDirectory(path)` opens and synchronizes a directory on Unix; 
 rejection is returned to the caller. Both operations return `unsupported` on non-Unix platforms.
 A successful rename is an atomic visibility guarantee, not a persistence guarantee.
 
+`fs.writeFile(path, data, { atomic = true })` writes and synchronizes a temporary file and
+renames it over the destination; it does **not** synchronize the parent directory. `fs.rename`
+moves a path without a file or directory synchronization barrier. Neither operation alone is a
+durable checkpoint. The explicit checkpoint protocol below synchronizes the completed file and
+then the directory after replacement, and requires every step to succeed.
+
 | Platform | File sync | Directory sync and replace | Qualification |
 | --- | --- | --- | --- |
 | Linux and other Unix | OS `sync_data` / `sync_all` | OS directory sync and rename; errors propagated | Filesystem and device must honor barriers; network and unusual filesystems may differ. |
 | macOS | `F_FULLFSYNC` for both methods | `F_FULLFSYNC` on a directory and rename, if accepted | Device and filesystem must honor requests; APFS rename persistence is not power-cut validated. |
 | Windows and other non-Unix | OS file synchronization | Explicitly unsupported | No durable replacement protocol is promised. |
 
-The automated file and directory synchronization and process-kill tests have been run on Linux;
-macOS, Windows, and other Unix configurations have not been validated here. No power-cut test has
-been performed. These tests do not prove that a filesystem or storage device honors barriers.
+Native CI exercises file synchronization and process-kill tests on Linux, macOS, and Windows,
+and directory synchronization and replacement where supported. No power-cut test has been
+performed. These tests do not prove that a filesystem or storage device honors barriers.
 
 
 For creation, sync the file then its parent directory. For a checkpoint, create an exclusive
