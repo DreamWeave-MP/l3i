@@ -83,6 +83,20 @@ fn collectgarbage_is_opt_in_and_runs_from_scripts() {
     without_plan.exec(COLLECTGARBAGE_SCRIPT).unwrap();
 }
 
+#[test]
+fn a_planned_runtime_takes_collectgarbage_only_from_its_policy() {
+    for enabled in [false, true] {
+        let policy = RuntimePolicy::new().collectgarbage(enabled);
+        let plan = RuntimePlan::builder().policy(policy).finalize().unwrap();
+        let runtime = Runtime::from_plan(&plan).unwrap();
+        let error = runtime.open_collectgarbage().unwrap_err().to_string();
+        assert!(error.contains("RuntimePolicy::collectgarbage"), "{error}");
+        let present: bool = runtime.eval("return collectgarbage ~= nil").unwrap();
+        assert_eq!(present, enabled);
+        assert_eq!(runtime.type_definitions().unwrap().contains("collectgarbage"), enabled);
+    }
+}
+
 thread_local! {
     static FINALIZED: RefCell<Vec<i64>> = const { RefCell::new(Vec::new()) };
     static FINALIZED_DURING_CALL: RefCell<Vec<i64>> = const { RefCell::new(Vec::new()) };

@@ -74,12 +74,24 @@ impl Runtime {
     /// Installs the `collectgarbage` global the Luau CLI gives its scripts, which the VM does not
     /// have: `collectgarbage()` or `collectgarbage("collect")` runs a full cycle and returns
     /// nothing, `collectgarbage("count")` returns the heap size in KB, and any other option raises.
-    /// Call it before [`Runtime::sandbox_globals`] and [`Runtime::sandbox`]; a plan does this with
-    /// [`crate::extension::RuntimePolicy::collectgarbage`].
+    /// Unlike the CLI's, which ignores them, this one raises on arguments after the first.
+    /// Call it before [`Runtime::sandbox_globals`] and [`Runtime::sandbox`]. This is for a runtime
+    /// without a plan: a plan decides with [`crate::extension::RuntimePolicy::collectgarbage`], so
+    /// its runtime and its type definitions agree.
     ///
     /// # Errors
-    /// Running out of memory, or globals that are already read-only.
+    /// A runtime made from a plan, running out of memory, or globals that are already read-only.
     pub fn open_collectgarbage(&self) -> Result<()> {
+        if self.plan().is_some() {
+            return Err(Error::logic(
+                "open_collectgarbage on a runtime made from a plan; set RuntimePolicy::collectgarbage instead",
+            ));
+        }
+        self.install_collectgarbage()
+    }
+
+    /// The installer behind [`Runtime::open_collectgarbage`] and the planner.
+    pub(crate) fn install_collectgarbage(&self) -> Result<()> {
         // `collectgarbage` alone is not a valid debug name; the root makes it one in every VM,
         // whichever roots the host configured.
         let function = crate::bind::function(&self.stack(), &["dream"], "dream.collectgarbage", collectgarbage)?;
