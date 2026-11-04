@@ -747,7 +747,7 @@ operation that produces output takes the storage from the caller, `into` for sel
 | `min`, `max` | span | number or nil | nil | a leading NaN stays; later NaNs never replace (Luau `<` and `>`) | n/a | bounds |
 | `argmin`, `argmax` | span | zero-based position or nil | nil | as `min` and `max` | n/a | bounds |
 | `countWhere`, `K:count<Cmp>` | span | how many satisfy `cmp` | `0` | every comparison false except `ne` (IEEE) | n/a | bounds, comparison name |
-| `any`, `all` | span | boolean; stops at the first deciding element | `false`, `true` | as `countWhere` | n/a | bounds, comparison name |
+| `any`, `all` | span | boolean; stops early once decided | `false`, `true` | as `countWhere` | n/a | bounds, comparison name |
 | `select`, `K:select<Cmp>` | span | selection of the positions satisfying `cmp`, into `into` (resized) or new | empty selection | as `countWhere` | `into` may be any selection | bounds |
 | `Selection:intersect/union/xor/difference` | two selections of one length | selection, into `into` or new | | | `into` may be either operand | lengths differ |
 | `Selection:complement` | selection | selection | | | `into` may be the source | |
@@ -756,8 +756,8 @@ operation that produces output takes the storage from the caller, `into` for sel
 | `gather` | source span, index vector | `destination[i] = source[idx[i]]`; count written | 0 | copied bit-exact | sequential, read then write per element, in index order | bounds, any index ≥ source count |
 | `scatter` | source span, index vector | `destination[idx[i]] = source[i]`; count written | 0 | copied bit-exact | sequential; a repeated index keeps the last write | bounds, any index ≥ destination count |
 | `fill` | | every element of the span | | writes zero for integer kinds | | bounds |
-| `add` | two spans | `out[i] = l[i] + r[i]` | | Luau `+` | `out` may be either input | bounds, all three spans |
-| `scale` | span | `out[i] = s[i] × factor` | | Luau `*` | `out` may be the source | bounds |
+| `add` | two spans | `out[i] = l[i] + r[i]` | | Luau `+`; of two different NaNs, either survives, quieted | `out` may be either input | bounds, all three spans |
+| `scale` | span | `out[i] = s[i] × factor` | | Luau `*`; a NaN element with a NaN factor gives a quiet NaN | `out` may be the source | bounds |
 | `clamp` | span | `out[i] = clamp(s[i], low, high)` | | passes through, as `math.clamp` | `out` may be the source | bounds, `low > high` or NaN bounds |
 | `argsort` | key span | u32 permutation into `out` from `outOffset`; count | 0 | NaN keys last, in original order | keys are copied before sorting, so `out` may overlap them | bounds |
 | `partition` | key span | u32 index vector, satisfying positions first then the rest, each in original order; the accepted count | 0 | as `countWhere` | as `argsort` | bounds, comparison name |
@@ -781,6 +781,17 @@ allocation, not latency, is the cost.
 Every module function is a bound Rust function invoked once per bulk operation: one host
 crossing amortized over the span, element loops in Rust over raw pointers after the single bounds
 check. That is the portable path and the correctness oracle for everything else.
+
+Contiguous spans get loops of their own, picked once per call after the spans are checked:
+ordinary Rust with the element kind constant, which LLVM vectorizes where it can, compiled for
+AVX2 behind a run-time check on x86-64 and for the baseline target everywhere, with no intrinsics
+and no JIT. Results match the generic loops bit for bit, overlaps included. Strided layouts run
+the generic loop.
+
+Which NaN comes out of arithmetic on two different NaNs is **unspecified**: `add`, `scale` and
+`sum` give a quiet copy of one of them, but which one depends on how the loop was compiled, and
+can differ between builds, targets and element kinds. One NaN with a number always gives that NaN,
+quieted. Comparisons are not affected, since every NaN compares alike.
 
 The reductions also exist as methods of **typed receivers**, one class per element kind,
 `dream_data_Kind_u8` through `dream_data_Kind_f64`, from `data.u8(stride?)` through
