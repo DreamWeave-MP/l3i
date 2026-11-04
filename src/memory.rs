@@ -7,6 +7,7 @@ use std::ffi::{CStr, CString, c_char, c_int, c_void};
 use std::path::Path;
 use std::rc::Weak;
 
+use crate::bind::{Call, Variadic};
 use crate::convert::{FromView, Push};
 use crate::error::{Error, Result};
 use crate::raw::ffi;
@@ -35,6 +36,21 @@ pub enum GcControl {
     IsPaused,
 }
 
+fn collectgarbage(call: &Call<'_>, option: Option<&str>) -> Result<Variadic<f64>> {
+    match option.unwrap_or("collect") {
+        "collect" => {
+            call.collect_garbage();
+            Ok(Variadic(Vec::new()))
+        }
+        "count" => {
+            // SAFETY: the state is live for the call; a count neither allocates nor collects.
+            let kilobytes = unsafe { ffi::lua_gc(Scope::state(call), ffi::LUA_GCCOUNT, 0) };
+            Ok(Variadic(vec![f64::from(kilobytes)]))
+        }
+        _ => Err(Error::runtime("collectgarbage must be called with 'count' or 'collect'")),
+    }
+}
+
 impl Runtime {
     /// Drives the collector (`lua_gc`) and returns its answer.
     pub fn gc(&self, control: GcControl) -> c_int {
@@ -53,6 +69,21 @@ impl Runtime {
         };
         // SAFETY: live state; lua_gc is always permitted from the host.
         unsafe { ffi::lua_gc(self.stack().state_ptr(), what, data) }
+    }
+
+    /// Installs the `collectgarbage` global the Luau CLI gives its scripts, which the VM does not
+    /// have: `collectgarbage()` or `collectgarbage("collect")` runs a full cycle and returns
+    /// nothing, `collectgarbage("count")` returns the heap size in KB, and any other option raises.
+    /// Call it before [`Runtime::sandbox_globals`] and [`Runtime::sandbox`]; a plan does this with
+    /// [`crate::extension::RuntimePolicy::collectgarbage`].
+    ///
+    /// # Errors
+    /// Running out of memory, or globals that are already read-only.
+    pub fn open_collectgarbage(&self) -> Result<()> {
+        // `collectgarbage` alone is not a valid debug name; the root makes it one in every VM,
+        // whichever roots the host configured.
+        let function = crate::bind::function(&self.stack(), &["dream"], "dream.collectgarbage", collectgarbage)?;
+        self.set_global("collectgarbage", &function)
     }
 
     /// Bytes allocated per second, as Luau estimates it (`lua_allocationrate`); `-1` until the

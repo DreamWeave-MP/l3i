@@ -6,6 +6,7 @@ use std::ffi::{c_int, c_void};
 use std::rc::Rc;
 
 use l3i::Runtime;
+use l3i::extension::{RuntimePlan, RuntimePolicy};
 use l3i::memory::{self, BufferCage, EmbedderGc, GcControl, LightUserdata, UserdataMark, WeakRef};
 use l3i::stack::Scope;
 use l3i::thread::Resume;
@@ -42,6 +43,61 @@ fn gc_controls_and_counters() {
     assert!(Runtime::clock() >= before);
     let pointer = 0x1000_usize;
     assert_ne!(runtime.encode_pointer(pointer), pointer, "pointer encoding is seeded by default");
+}
+
+const COLLECTGARBAGE_SCRIPT: &str = "\
+    local weak = setmetatable({}, { __mode = 'v' }) \
+    local function fill() weak[1] = {} end \
+    fill() \
+    assert(weak[1] ~= nil) \
+    assert(select('#', collectgarbage()) == 0) \
+    assert(weak[1] == nil, 'a default collectgarbage is a full cycle') \
+    fill() \
+    assert(select('#', collectgarbage('collect')) == 0) \
+    assert(weak[1] == nil, 'collect is a full cycle') \
+    local kilobytes = collectgarbage('count') \
+    assert(type(kilobytes) == 'number' and kilobytes > 0) \
+    local ok, err = pcall(collectgarbage, 'step') \
+    assert(not ok and err:find(\"must be called with 'count' or 'collect'\"), err) \
+    local co = coroutine.wrap(function() fill() collectgarbage() return weak[1] end) \
+    assert(co() == nil, 'a coroutine collects too')";
+
+#[test]
+fn collectgarbage_is_opt_in_and_runs_from_scripts() {
+    let default = Runtime::from_plan(&RuntimePlan::builder().finalize().unwrap()).unwrap();
+    default.exec("assert(collectgarbage == nil)").unwrap();
+    for sandbox in [false, true] {
+        let policy = RuntimePolicy::new().collectgarbage(true).sandbox(sandbox);
+        let plan = RuntimePlan::builder().policy(policy).finalize().unwrap();
+        Runtime::from_plan(&plan).unwrap().exec(COLLECTGARBAGE_SCRIPT).unwrap();
+    }
+    let without_plan = Runtime::new().unwrap();
+    without_plan.open_collectgarbage().unwrap();
+    without_plan.exec(COLLECTGARBAGE_SCRIPT).unwrap();
+}
+
+#[test]
+fn a_compat_global_may_not_take_the_name_collectgarbage() {
+    let policy = RuntimePolicy::new().collectgarbage(true).compat_global("@dream/quat", "collectgarbage");
+    let error = RuntimePlan::builder().policy(policy).extension(l3i::quat::QuatExtension).finalize().unwrap_err();
+    assert!(error.to_string().contains("collides"), "{error}");
+}
+
+#[test]
+fn a_native_function_collects_through_its_call() {
+    let runtime = Runtime::new().unwrap();
+    let collect =
+        runtime.bind_function("dreamweave.test.collect", |call: &l3i::bind::Call<'_>| call.collect_garbage()).unwrap();
+    runtime.set_global("collect", &collect).unwrap();
+    runtime
+        .exec(
+            "local weak = setmetatable({}, { __mode = 'v' }) \
+             local function fill() weak[1] = {} end \
+             fill() \
+             collect() \
+             assert(weak[1] == nil)",
+        )
+        .unwrap();
 }
 
 #[test]

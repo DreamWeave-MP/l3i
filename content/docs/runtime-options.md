@@ -147,9 +147,16 @@ to. `CallKind` says what the scope wraps:
 
 ## The collector
 
-Luau has no `collectgarbage`, so a host that wants collection at frame boundaries steps it
+Luau's VM has no `collectgarbage`, so a host that wants collection at frame boundaries steps it
 there. `Runtime::gc(control)` is `lua_gc`; `collect_garbage()` runs a full cycle, `gc_step(kb)`
 one incremental step and `gc_step_timed(kb)` the same with its wall time, for GC accounting.
+A native function can run a full cycle too, with `Call::collect_garbage()`.
+
+A host can hand the decision to scripts instead. `RuntimePolicy::collectgarbage(true)`, or
+`Runtime::open_collectgarbage()` before sandboxing on a runtime without a plan, installs the global
+the Luau CLI gives its scripts: `collectgarbage()` or `collectgarbage("collect")` runs a full cycle
+and returns nothing, `collectgarbage("count")` returns the heap size in KB, and any other option
+raises. It is off by default, because a full cycle runs to its end without a watchdog check.
 
 | `memory::GcControl` | Does |
 |---|---|

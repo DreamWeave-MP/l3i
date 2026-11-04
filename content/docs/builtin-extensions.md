@@ -376,8 +376,9 @@ Draws rasterize immediately in call order, as the crate does; a `Frame` is a tok
 stale on `finish()` or the next `beginFrame`. A mesh is a buffer of 20-byte vertices (`x, y, u, v`
 as f32 and `[r, g, b, a]`) and a buffer of `u32` indices, borrowed for one call and never kept,
 validated for stride and alignment here and for indices and finiteness by the crate. A `Texture`
-frees its storage on `free()` or when collected; Luau has no `collectgarbage`, so a host that
-wants textures back at frame boundaries drives the collector there (`runtime.gc(GcControl::Collect)`).
+frees its storage on `free()` or when collected; Luau's VM has no `collectgarbage`, so a host that
+wants textures back at frame boundaries drives the collector there (`runtime.gc(GcControl::Collect)`)
+or lets scripts do it with [`RuntimePolicy::collectgarbage`](@/docs/runtime-options.md#the-collector).
 
 ```luau
 local raster = require("@dream/raster")
