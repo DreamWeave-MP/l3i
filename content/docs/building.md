@@ -202,6 +202,19 @@ cross-language LTO, so one file's tests run with `cargo test <file>::`. The clea
 `cargo clippy --all-targets --all-features -- -W clippy::pedantic -D warnings` and
 `cargo fmt --check`.
 
+Two things keep that loop short. On Linux, `build.rs` gives the link a ThinLTO cache under the
+profile's target directory, capped at 2 GB, so a link only recompiles the modules an edit changed:
+a one-file change to a test relinks in about 4 seconds instead of about 24. `scripts/quick.sh`
+goes further, dropping LTO altogether in its own `target/quick`, at about a second:
+
+```sh
+scripts/quick.sh test --all-features --test integration data::
+```
+
+That build is not the verified toolchain. Use it to iterate; run the plain commands before a
+commit, and add `--release` where a change touches what LLVM optimizes, since a debug run never
+exercises it. `dream.data`'s loops are the clearest case: their tests only mean something optimized.
+
 {% callout(kind="note", title="Clippy runs the build script") %}
 `cargo clippy` compiles Luau, so it needs the same clang and lld as a build; CI's daily quality
 job sets them up before running it.

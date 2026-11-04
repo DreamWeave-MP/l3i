@@ -377,6 +377,7 @@ fn toolchain_policy(base: &mut cc::Build) {
         None => {
             // Bitcode objects, so the linker's LTO sees Luau and the Rust thunks as one module.
             base.flag("-flto=thin");
+            thinlto_cache();
         }
         Some(problem) if env::var_os("DOCS_RS").is_some() => {
             println!(
@@ -397,6 +398,20 @@ fn toolchain_policy(base: &mut cc::Build) {
              with a warning. https://DreamWeave-MP.github.io/l3i/docs/building/ has the rule and the\n\
              measurements behind it."
         ),
+    }
+}
+
+/// Keeps the native code each ThinLTO module compiles to, so a link only recompiles the modules an
+/// edit changed: about 24 seconds becomes about 4 for a one-file change to a test. The output is
+/// the same machine code. These link arguments reach only this package's own binaries, tests and
+/// benches. Linux only, where it has been measured; the cache sits with the profile's other output
+/// and is capped, since every changed build adds to it.
+fn thinlto_cache() {
+    if env::var("CARGO_CFG_TARGET_OS").is_ok_and(|os| os == "linux")
+        && let Some(profile) = env::var_os("OUT_DIR").as_deref().map(Path::new).and_then(|out| out.ancestors().nth(3))
+    {
+        println!("cargo:rustc-link-arg=-Wl,--thinlto-cache-dir={}", profile.join("thinlto-cache").display());
+        println!("cargo:rustc-link-arg=-Wl,--thinlto-cache-policy=cache_size_bytes=2g");
     }
 }
 
