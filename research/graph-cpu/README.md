@@ -7,7 +7,7 @@ verified Clang/LTO configuration applies:
 
 ```sh
 cargo test --locked --release --manifest-path research/graph-cpu/Cargo.toml
-cargo run --locked --release --manifest-path research/graph-cpu/Cargo.toml -- --bench
+cargo test --locked --release --features luau-jit --manifest-path research/graph-cpu/Cargo.toml
 ```
 
 ## From JSL
@@ -31,12 +31,14 @@ threads at once (`Program: Send + Sync`).
 | --- | --- |
 | Building and compiling a graph | JSL calling bound Rust: 4 to 7 us each from JSL, under 1 us from Rust. No code generation. |
 | Elementwise stage | Rust kernels compiled ahead of time, chosen once per run (AVX2 or baseline), dispatched **once per tile per 1,024-element chunk** |
-| Matrix multiply | One ahead-of-time Rust kernel: a 6x16 output block held in registers over packed rows, in ascending blocks of `k` |
+| Matrix multiply | One ahead-of-time Rust kernel: 6x16 and 1x16 output blocks held in registers over packed `a` and `b`, in ascending blocks of `k` |
 | `program:native()` | Generated `--!native` Luau, run by Luau's JIT: scalar, Luau buffers only. A comparator, not the execution path. |
 | `program:shader_source('integer-exact')` | Generated JSL for Jess's existing shader frontend, device and dispatch |
 | `program:runReference` | The first prototype's per-element interpreter: oracle and baseline only |
 
-Nothing generates machine code at run time, so there is no code cache to bound and no W^X policy.
+Nothing generates machine code at run time, so there is no code cache to bound and no W^X policy. No-JIT is the default
+configuration, and its test asserts no anonymous executable memory is mapped; `luau-jit` enables Luau's generator for the
+generated-Luau comparator only.
 Disassembly in [`../results/kernel-instructions.txt`](../results/kernel-instructions.txt) shows
 `vaddps`, `vmulps` and `vcmpnleps` on `ymm` registers, and no fused multiply-add.
 
@@ -95,7 +97,7 @@ tiles. Everything else on this page describes the strict default.
 ## Ownership and resources
 
 - Luau buffers are never retained. `runInto` borrows them for one call in which no Lua runs, and
-  rejects an output that is also an input. Inputs may alias each other.
+  rejects an output whose byte range overlaps any input's. Inputs may alias each other.
 - `Tensor::from_storage` retains an existing immutable owner without a copy; this is the seam for a
   Jess `SharedBuffer` adapter. Views keep the owner alive and cannot widen the parent's byte interval.
 - `Domain` bounds live nodes and plans, `Budget` bounds live native payload including temporaries and

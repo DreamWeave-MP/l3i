@@ -2,10 +2,10 @@
 
 ## Decision
 
-**Execute a small typed plan over ahead-of-time SIMD kernels: fused loops for every short step sequence, tiled by
-the planner, with one dispatch per tile per 1,024-element chunk. Do not adopt CubeCL. On long expressions over large
-arrays one generated loop would still use about 1.2x to 2x fewer instructions, so whether to generate code is the
-next decision.**
+**A CPU-only engine for x86-64 and AArch64: a small typed plan over precompiled SIMD kernels, growing by kernel family, with no
+executable memory required. Do not adopt CubeCL. Do not build a JIT now: on a transformer-style pass matmul is about 90% of the work
+and elementwise chains about 1%, and a generated loop gains at most about 1.35x in cycles on the elementwise work it can touch. See
+"Direction" below.**
 
 The first prototype's problem was granularity, not the absence of a compiler. It dispatched six
 instructions for each output element, which cost 10 ns per element and kept the compiler from
@@ -178,6 +178,90 @@ kernels or generated code of our own could offer the same. GPU and CubeK are unm
 remains on long expressions is a fusion problem, so partly a compiler one. Scheduling arrives with multi-threading,
 and that belongs to Jess.
 
+## Direction: a CPU-only engine, with JIT optional and never required
+
+Decided after the experiments below. L3i's numerical backend targets **x86-64 and AArch64 CPUs**, with GPU computation left to
+Jess. Every program must run with no executable memory, because consoles and other restricted platforms forbid it, and
+Luau's own native code is optional for the same reason. Precompiled kernels are the engine; anything generated at run time
+is an optional tier that must first earn its place.
+
+**The no-JIT configuration is now the default and is tested.** `luau-jit` is an opt-in feature used only by the generated-Luau
+comparator. Without it, the JSL test also asserts that no anonymous executable memory is mapped. AArch64 has not been measured or
+run: the baseline instantiation compiles only in principle here, and a dedicated NEON backend does not exist yet.
+
+### Counters, not clocks
+
+`cubecl-compare` counts retired instructions, cycles, L1 data misses and last-level misses in a disposable container, with no wall
+clock anywhere. Cycles expose the memory stalls instructions cannot, but they are sensitive to load: these runs had a load average
+up to 17 from other work, so cycle figures are the best of three passes and differences under about 1.2x are noise. Instruction
+counts repeat almost exactly. Cycles sum all threads, so CubeCL's include its threads' waiting and should not be read as its speed.
+
+### What a JIT could buy: the ceiling
+
+`cubecl-compare/src/jit.rs` is a research-only generator: any elementwise program from the validated plan becomes one AVX2 loop. It
+is 500 lines including a small VEX encoder, compiles in 7,000 to 29,000 instructions into 72 to 168 bytes, and matched the reference
+bitwise on all 393 random graphs it accepted (it refused 7 that needed more than sixteen registers). It is not on any production path.
+
+One thread, strict, tiles against one generated loop. Thousands of instructions, then thousands of cycles.
+
+| Workload | n | Tiles, instructions | Generated, instructions | Tiles, cycles | Generated, cycles |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `relu(a+b+2)` | 65,536 | 65 | 74 | 65 | 64 |
+| | 1,048,576 | 1,013 | 1,180 | 1,273 | 1,240 |
+| 16-operation chain | 65,536 | 360 | 221 | 152 | 197 |
+| | 1,048,576 | 5,718 | 3,539 | 2,891 | 3,379 |
+| Polynomial | 65,536 | 302 | 172 | 158 | 139 |
+| | 1,048,576 | 4,793 | 2,753 | 3,109 | 2,496 |
+| Residual DAG | 65,536 | 203 | 131 | 110 | 88 |
+| | 1,048,576 | 3,214 | 2,097 | 2,191 | 1,616 |
+
+**A generated loop retires up to 1.7x fewer instructions but takes at most about 1.35x fewer cycles, and on the 16-operation chain
+takes more.** Tiles have LLVM's unrolling and scheduling, and the prototype emits one unoptimized vector per iteration, so this
+understates what a mature generator could do. It still sets the scale: the prize is tens of percent on elementwise work.
+
+The compact vector interpreter proposed as a third option is rejected: 66 instructions per element on the chain against 5.5 for
+tiles, and about 10x the cycles.
+
+### Where a real workload spends its work
+
+`cubecl-compare/src/model.rs` runs a transformer-style forward pass (64 tokens, width 128, two blocks, one head, synthetic weights)
+with layer normalization, scaled dot-product attention, residuals and a feed-forward layer. Operations the plan cannot express yet
+are shared native loops, labelled below. Share of the fast mode's median pass:
+
+| Family | Instructions | Cycles |
+| --- | ---: | ---: |
+| **Matmul** | **94.2%** | **85.0%** |
+| Normalization (native) | 2.4% | 6.3% |
+| Softmax (native) | 1.3% | 3.8% |
+| Elementwise (plan) | 1.1% | 2.9% |
+| Transpose (native) | 1.0% | 1.9% |
+
+**Elementwise fusion is about 1% of this workload, so a JIT for elementwise chains could not move it.** It is the wrong problem for
+inference, though it still matters for simulation-style work, which should be measured on its own terms. Matmul is the right one.
+
+Against a packed BLAS-style baseline (`matrixmultiply`, FMA) in the same pass, this revision's kernel measures:
+
+| Matmul, total for one pass | Instructions | Best cycles | L1 misses |
+| --- | ---: | ---: | ---: |
+| Ours, strict | 6,218,000 | 2,593,000 | 264,700 |
+| Ours, fast | 4,371,000 | 1,741,000 | 271,500 |
+| `matrixmultiply` | 4,153,000 | 1,533,000 | 189,500 |
+
+Two changes got it this close, with strict results still bit-identical to the triple loop: packing `b` per block, and a one-row
+register kernel for rows left over from the six-row block, which took the fused pass from 5.36M to 4.37M instructions. The remaining
+gap is about 5% in instructions and about 14% in best cycles, with more L1 misses; packing `a` for all row groups, as BLAS does, is
+the obvious next step. Strict mode pays for separate rounding and cannot match an FMA kernel.
+
+This is one small synthetic model, on one Intel CPU, with quantization, large weight streaming and KV caches absent. It shows the
+split for this shape, not all inference.
+
+### Conclusions
+
+1. **Do not build a JIT now.** The measured ceiling is modest and does not touch the workload that matters most.
+2. **Grow kernel families, not combinations.** The three-step tile alphabet stays as it is; the generic combination count should not
+   grow with the operation set. New work goes into matmul, then normalization, softmax and reductions, then quantized forms.
+3. **Build a real AArch64 backend and test it on real hardware.** Nothing here says anything about ARM yet.
+
 ## CubeCL verdict: not adopted; matmul and short work won, long expressions on large arrays not
 
 `cubecl-compare/` runs both engines on the same inputs, in separate processes, inside a disposable container
@@ -221,11 +305,9 @@ cost CubeCL a little in the strict rows; we did not inspect its generated code, 
 | | 16,384 | 52 | 79 | ours, 1.5x |
 | | 65,536 | 203 | 173 | **CubeCL, 1.17x** |
 | | 1,048,576 | 3,214 | 2,036 | **CubeCL, 1.58x** |
-| Matmul | 48x48 | 52.8 | 114 | ours, 2.2x |
-| | 240x240 | 5,574 | 7,309 | ours, 1.31x |
-| | 384x384 | 22,605 | 29,361 | ours, 1.30x |
-| Two-layer network | 48 wide | 110 | 330 | ours, 3x |
-| | 240 wide | 11,190 | 17,974 | ours, 1.61x |
+| Matmul | 240x240 | 5,483 | 7,272 | ours, 1.33x |
+| | 384x384 | 22,137 | 29,354 | ours, 1.33x |
+| Two-layer network | 240 wide | 11,009 | 17,794 | ours, 1.62x |
 
 ### Our fast mode against CubeCL's default, one thread, kernel only (thousands of instructions)
 
@@ -239,11 +321,9 @@ cost CubeCL a little in the strict rows; we did not inspect its generated code, 
 | | 1,048,576 | 3,469 | 1,694 | **CubeCL, 2.05x** |
 | Residual-shaped DAG | 65,536 | 203 | 161 | **CubeCL, 1.26x** |
 | | 1,048,576 | 3,214 | 1,813 | **CubeCL, 1.77x** |
-| Matmul | 48x48 | 39.0 | 91.6 | ours, 2.4x |
-| | 240x240 | 3,847 | 4,414 | ours, 1.15x |
-| | 384x384 | 15,531 | 17,722 | ours, 1.14x |
-| Two-layer network | 48 wide | 82 | 263 | ours, 3.2x |
-| | 240 wide | 7,737 | 10,827 | ours, 1.40x |
+| Matmul | 240x240 | 3,753 | 4,418 | ours, 1.18x |
+| | 384x384 | 15,056 | 17,674 | ours, 1.17x |
+| Two-layer network | 240 wide | 7,550 | 10,765 | ours, 1.43x |
 
 Our fast mode does not fuse the residual DAG: its products are not adjacent to their adds in the plan.
 
@@ -288,7 +368,7 @@ That remaining gap is structural. A tile costs a load, a store and loop control 
 in six tiles pays those six times, while one generated loop pays them once. More compiled combinations narrow it but
 cannot close it: a useful alphabet at three steps is about 2,400 loops per instantiation, with the build time and
 binary size that implies, and it would still leave two tiles on the chain. Only generating one loop per expression
-removes it. Whether that is worth a code generator, executable memory and a code budget is the next decision.
+removes it, and the ceiling measurement above shows that buys less in cycles than in instructions.
 
 We do not adopt CubeCL because of its compile cost, bundled LLVM, unbounded compile limits, silent FMA and overlap
 with Jess's GPU ownership. Not measured: GPU execution, which is CubeCL's main purpose, and CubeK's matmul.
@@ -302,11 +382,13 @@ README:
   zero through overlapping through padded) compare the chunked kernels on both instantiations and four
   chunk sizes against an independent scalar evaluator and the reference, bitwise. 120 random matrix
   products do the same against an independent ordered triple loop.
-- **Injected bugs.** `results/mutations.txt`: 22 deliberate defects are all caught, and a comment-only control
+- **Injected bugs.** `results/mutations.txt`: 24 deliberate defects are all caught, and a comment-only control
   survives. Both rounds were needed: the first round on the original kernels had three survivors (reversed matmul
   order, FMA in matmul, folded `relu(-0)`, hidden because NaN and wild exponents swamp rounding), and the first round on
   tiled kernels had three more (untested fused forms, a multiply fused into a non-add, a strict matmul given the fusing
   instantiation). Each led to a new test.
+- **The `runInto` overlap check** is now a byte-range check, tested on sub-ranges with different starts. Start-address
+  equality relied on callers passing whole buffers.
 - **Generated shader.** `jess run generated-shader.jsl` passes against reference results across three input
   sets, on Jess's existing device, buffers, pipeline and readback. Only the `integer-exact` mode exists;
   `strict` is rejected. GPU throughput has not been benchmarked: this proves lowering and resource reuse.
@@ -331,7 +413,8 @@ collection, and a retained program survives collection and runs on new inputs.
   generated Luau remain unexplored. Bulk kernels make it matter less for numerical work; it is still open for scalar code.
 - **aarch64 and AVX-512 measurements.** The baseline instantiation compiles for aarch64 but has not been
   run there, and this hardware has no AVX-512.
-- **Generated loops for long expressions**, the decision the CubeCL section leaves open.
+- **An AArch64 backend**, tested on real hardware.
+- **Packing `a` for all row groups in matmul**, then normalization, softmax and reduction kernels.
 - **An opt-in FMA mode.** Worth about 10% on matmul and 20 to 30% on the chain here. It changes results, so it
   must be explicit.
 - **A packed matmul microkernel.** Both engines here are unpacked.

@@ -32,3 +32,8 @@
 [fused constant, constant does not fuse] caught: fast_mode_covers_every_fused_form_and_only_fuses_adds
 [fast mode fuses a multiply into anything] caught: fast_mode_covers_every_fused_form_and_only_fuses_adds
 [strict matmul runs fused on Isa::Fma] caught: strict_matmul_ignores_the_fusing_instantiation
+
+# Round three: the packed matmul path.
+[packed b rows reversed] caught: fast_mode_fuses_multiply_adds_and_nothing_else matmul_blocks_and_tails_match_the_ordered_triple_loop
+[packed b always column zero] caught: matmul_blocks_and_tails_match_the_ordered_triple_loop fast_mode_fuses_multiply_adds_and_nothing_else
+[control: harmless extra scratch element, must survive] SURVIVED
