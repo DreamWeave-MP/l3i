@@ -822,6 +822,13 @@ enough to push a function with a hundred sites past Luau's 32K-block limit, whic
 the whole function interpreted. Loop state lives in the receiver's scratch words, since Luau IR
 has no loop-carried values and the VM's registers are memory on the Lua stack anyway.
 
+IR loops are cheap to enter and cannot vectorize, so a long contiguous span leaves them for the
+bound method's loops, which cost more to reach and much less per element. `count`, `any`, `all`,
+`select` and an unfiltered `min` or `max` hand over at 128 elements, an unfiltered `sum` at 1,024;
+those are measured crossovers (`cargo bench -- data_receivers`). Strided spans and a filtered
+`sum`, `min` or `max` stay in IR at any length. The dialect's recognized pipelines go through the
+same sites, so they get the same hand-over, and the answer is the same on both sides of it.
+
 Three things the lowering needs from you: the receiver annotated as a local, a local buffer, and
 exactly one result. `return K:sum(..)` in tail position compiles with a multi-value result count,
 which the hook declines; assign the result first. The dialect's bridge always does.
