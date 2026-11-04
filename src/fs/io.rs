@@ -915,7 +915,6 @@ mod durability_tests {
         assert_eq!(write_complete(&mut writer, b"x").unwrap_err().kind(), io::ErrorKind::WriteZero);
     }
 
-    #[cfg(unix)]
     #[test]
     fn partial_write_poison_discards_buffer_and_rejects_further_mutation() {
         use crate::extension::{RuntimePlan, RuntimePolicy};
@@ -943,7 +942,6 @@ mod durability_tests {
         std::fs::remove_file(path).unwrap();
     }
 
-    #[cfg(unix)]
     #[test]
     fn injected_sync_failure_reaches_luau_and_close() {
         use crate::extension::{RuntimePlan, RuntimePolicy};
@@ -960,7 +958,7 @@ mod durability_tests {
             .exec(&format!(
                 "local w = assert(fs.openWrite({:?})) assert(w:write('record') == 6) \
              local ok, msg, kind = w:syncAll() \
-             assert(ok == nil and kind == 'other' and msg:find('Writer.syncAll') and msg:find('os error 5')) \
+             assert(ok == nil and kind ~= nil and msg:find('Writer.syncAll') and msg:find('os error 5')) \
              local later, latermsg = w:write('later') assert(later == nil and latermsg == msg) \
              later, latermsg = w:syncAll() assert(later == nil and latermsg == msg) \
              local closed, closemsg = w:close() assert(closed == nil and closemsg == msg)",

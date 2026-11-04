@@ -412,7 +412,7 @@ fn failed_sync_is_reported_again_by_close() {
 
 // Invoked in a separate test process by the parent below, which kills it after a named
 // boundary. The marker is deliberately outside the protocol under test.
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 #[test]
 fn durability_process_child() {
     let Ok(root) = std::env::var("L3I_DURABILITY_CHILD_DIR") else { return };
@@ -464,23 +464,28 @@ fn durability_process_child() {
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 #[test]
 fn killed_processes_leave_reopenable_files_and_release_locks() {
     use std::time::{Duration, Instant};
-    for boundary in [
-        "create",
-        "write",
-        "file_sync",
-        "dir_sync",
-        "append",
-        "append_sync",
-        "temp_write",
-        "temp_sync",
-        "replace",
-        "replace_sync",
-        "lock",
-    ] {
+    let boundaries: &[&str] = if cfg!(windows) {
+        &["create", "write", "file_sync", "append", "append_sync", "lock"]
+    } else {
+        &[
+            "create",
+            "write",
+            "file_sync",
+            "dir_sync",
+            "append",
+            "append_sync",
+            "temp_write",
+            "temp_sync",
+            "replace",
+            "replace_sync",
+            "lock",
+        ]
+    };
+    for &boundary in boundaries {
         let scratch = Scratch::new(&format!("crash-{boundary}"));
         let journal = scratch.0.join("journal");
         if matches!(boundary, "append" | "append_sync" | "temp_write" | "temp_sync" | "replace" | "replace_sync") {
@@ -587,6 +592,23 @@ fn injected_write_is_retried() {
             "local path = {path:?} local w = assert(fs.openWrite(path)) local data = string.rep('x', 16384) \
          assert(w:write(data) == #data) assert(w:syncAll()) assert(w:close()) \
          assert(fs.readFileString(path) == data)"
+        ))
+        .unwrap();
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_file_sync_append_and_truncate() {
+    let scratch = Scratch::new("windows-sync");
+    runtime()
+        .exec(&format!(
+            "local path = {} .. '/file' local w = assert(fs.openWrite(path, {{ exclusive = true }})) \
+         assert(w:write('one') == 3) assert(w:syncAll()) assert(w:close()) \
+         w = assert(fs.openWrite(path, {{ append = true }})) assert(w:write('two') == 3) \
+         assert(w:syncData()) assert(w:close()) assert(fs.readFileString(path) == 'onetwo') \
+         w = assert(fs.openWrite(path, {{ truncate = false }})) assert(w:truncate(3)) \
+         assert(w:syncAll()) assert(w:close()) assert(fs.readFileString(path) == 'one')",
+            scratch.lua()
         ))
         .unwrap();
 }
