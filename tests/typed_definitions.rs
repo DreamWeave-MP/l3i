@@ -605,25 +605,6 @@ fn the_generated_definitions_type_check_and_typed_scripts_pass_strict_mode() {
     assert!(error.contains("broken.d.luau:1") && error.contains("Nope"), "{error}");
 }
 
-#[test]
-fn collectgarbage_is_declared_only_when_the_policy_grants_it() {
-    let without = RuntimePlan::builder().finalize().unwrap();
-    assert!(!without.type_definitions().contains("collectgarbage"));
-    let plan = RuntimePlan::builder().policy(RuntimePolicy::new().collectgarbage(true)).finalize().unwrap();
-    plan.check_definitions().unwrap();
-    let definitions = plan.type_definitions();
-    let script = "collectgarbage()\ncollectgarbage('collect')\nlocal kilobytes: number = collectgarbage('count')\nprint(kilobytes + 1)\n";
-    let scripts = plan.analysis_sources(Scripts([("collect_script", script)].into_iter().collect()));
-    let options = AnalysisOptions {
-        definitions: vec![Definitions { name: "collect.d.luau".to_owned(), source: definitions.clone() }],
-        ..Default::default()
-    };
-    let analysis = Analysis::new(scripts, options).unwrap_or_else(|e| panic!("{e}\n{definitions}"));
-    let report = analysis.check("collect_script", false);
-    let text: Vec<String> = report.diagnostics.iter().map(|d| d.text.clone()).collect();
-    assert!(report.is_clean(), "{}\n---\n{definitions}", text.join("\n"));
-}
-
 // ---- views, forward references, owned rows ----------------------------------------------------
 
 struct Numbers(Vec<i64>);

@@ -10,7 +10,7 @@ use l3i::extension::{RuntimePlan, RuntimePolicy};
 use l3i::memory::{self, BufferCage, EmbedderGc, GcControl, LightUserdata, UserdataMark, WeakRef};
 use l3i::stack::Scope;
 use l3i::thread::Resume;
-use l3i::userdata::{Userdata, tagged};
+use l3i::userdata::{Owned, Userdata, tagged};
 use l3i::value::Table;
 
 #[test]
@@ -45,18 +45,25 @@ fn gc_controls_and_counters() {
     assert_ne!(runtime.encode_pointer(pointer), pointer, "pointer encoding is seeded by default");
 }
 
+// Each collection that checks the weak table is a plain statement: nested in an expression, the
+// call sits above registers that can still hold the table from `fill`'s frame, and the collector
+// marks everything below the top of the stack.
 const COLLECTGARBAGE_SCRIPT: &str = "\
     local weak = setmetatable({}, { __mode = 'v' }) \
     local function fill() weak[1] = {} end \
     fill() \
     assert(weak[1] ~= nil) \
-    assert(select('#', collectgarbage()) == 0) \
+    collectgarbage() \
     assert(weak[1] == nil, 'a default collectgarbage is a full cycle') \
     fill() \
-    assert(select('#', collectgarbage('collect')) == 0) \
+    collectgarbage('collect') \
     assert(weak[1] == nil, 'collect is a full cycle') \
+    assert(select('#', collectgarbage()) == 0) \
+    assert(select('#', collectgarbage('collect')) == 0) \
     local kilobytes = collectgarbage('count') \
     assert(type(kilobytes) == 'number' and kilobytes > 0) \
+    local extra_ok, extra_err = pcall(collectgarbage, 'count', 123) \
+    assert(not extra_ok and extra_err:find('expected at most 1, got 2'), extra_err) \
     local ok, err = pcall(collectgarbage, 'step') \
     assert(not ok and err:find(\"must be called with 'count' or 'collect'\"), err) \
     local co = coroutine.wrap(function() fill() collectgarbage() return weak[1] end) \
@@ -74,6 +81,50 @@ fn collectgarbage_is_opt_in_and_runs_from_scripts() {
     let without_plan = Runtime::new().unwrap();
     without_plan.open_collectgarbage().unwrap();
     without_plan.exec(COLLECTGARBAGE_SCRIPT).unwrap();
+}
+
+thread_local! {
+    static FINALIZED: RefCell<Vec<i64>> = const { RefCell::new(Vec::new()) };
+    static FINALIZED_DURING_CALL: RefCell<Vec<i64>> = const { RefCell::new(Vec::new()) };
+}
+
+struct Tracked(i64);
+
+impl Drop for Tracked {
+    fn drop(&mut self) {
+        FINALIZED.with(|finalized| finalized.borrow_mut().push(self.0));
+    }
+}
+
+// SAFETY: the name is unique among the types registered in this test's VM.
+unsafe impl Userdata for Tracked {
+    const NAME: &'static str = "dreamweave.test.Tracked";
+}
+
+#[test]
+fn a_collection_in_a_call_finalizes_garbage_once_and_keeps_the_calls_arguments() {
+    let runtime = Runtime::new().unwrap();
+    tagged::register::<Tracked>(&runtime, 7, |ty| ty.method("id", |tracked: &Tracked| tracked.0)).unwrap();
+    let make = runtime.bind_function("dreamweave.test.make", |id: i64| Owned(Tracked(id))).unwrap();
+    runtime.set_global("make", &make).unwrap();
+    let hold = runtime
+        .bind_function("dreamweave.test.hold", |call: &l3i::bind::Call<'_>, held: &Tracked| {
+            call.collect_garbage();
+            let finalized = FINALIZED.with(|finalized| finalized.borrow().clone());
+            FINALIZED_DURING_CALL.with(|during| *during.borrow_mut() = finalized);
+            held.0
+        })
+        .unwrap();
+    runtime.set_global("hold", &hold).unwrap();
+    // Two chunks, so that no register of the second can still hold the first's garbage. The only
+    // reference to the second userdata is the argument of the call that collects.
+    runtime.exec("make(1)").unwrap();
+    runtime.exec("assert(hold(make(2)) == 2)").unwrap();
+    assert_eq!(FINALIZED_DURING_CALL.with(|during| during.borrow().clone()), [1]);
+    runtime.collect_garbage();
+    assert_eq!(FINALIZED.with(|finalized| finalized.borrow().clone()), [1, 2]);
+    drop(runtime);
+    assert_eq!(FINALIZED.with(|finalized| finalized.borrow().clone()), [1, 2], "each exactly once");
 }
 
 #[test]
