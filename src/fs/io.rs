@@ -259,14 +259,93 @@ pub(crate) fn read_at(
     let offset = non_negative("readAt", "offset", offset)?;
     let length = non_negative("readAt", "length", length)?;
     let host = super::host_path("readAt", path)?;
-    let backing = done!(Outcome::of(Backing::open(&host), "readAt", path));
-    within_file("readAt", "offset", offset, backing.len())?;
-    let mut buffer = new_buffer(call, clamp(offset, length, backing.len()))?;
-    // SAFETY: the buffer was created by this call and no other view of it exists; the copy
-    // never calls into Lua. A failure's results go above the buffer, which the call drops.
-    let read = backing.read_at(offset, unsafe { buffer.bytes_mut_unchecked() });
-    done!(Outcome::of(read, "readAt", path));
+    let file = done!(Outcome::of(open_regular(&host), "readAt", path));
+    read_at_file(call, &file, path, offset, length, "readAt")
+}
+
+fn read_at_file(
+    call: &Call<'_>,
+    file: &File,
+    path: &[u8],
+    offset: u64,
+    length: u64,
+    what: &str,
+) -> Result<Outcome<StackResults>> {
+    let size = done!(Outcome::of(file.metadata().map(|metadata| metadata.len()), what, path));
+    within_file(what, "offset", offset, size)?;
+    let expected = clamp(offset, length, size);
+    let mut buffer = new_buffer(call, expected)?;
+    // SAFETY: the buffer was created by this call and no other view of it exists; the read never
+    // calls into Lua. A failure's results go above the buffer, which the call drops.
+    let count = done!(Outcome::of(read_file_at(file, offset, unsafe { buffer.bytes_mut_unchecked() }), what, path));
+    if count != expected {
+        let error = io::Error::new(io::ErrorKind::UnexpectedEof, "file changed during positional read");
+        return Ok(Outcome::Failed(super::Failure::new(what, path, &error)));
+    }
     Ok(Outcome::Done(StackResults))
+}
+
+/// A retained file handle for positional reads; unlike `Reader`, it is never memory mapped.
+#[derive(Debug)]
+pub(crate) struct PositionalReader {
+    file: RefCell<Option<File>>,
+    name: Box<[u8]>,
+}
+
+// SAFETY: the userdata owns only a file handle and bytes; dropping it makes no Lua API calls.
+unsafe impl Userdata for PositionalReader {
+    const NAME: &'static str = "dream.fs.PositionalReader";
+}
+
+impl PositionalReader {
+    pub(crate) fn open(path: &[u8]) -> Result<Outcome<Self>> {
+        let host = super::host_path("openPositional", path)?;
+        let file = done!(Outcome::of(open_regular(&host), "openPositional", path));
+        Ok(Outcome::Done(Self { file: RefCell::new(Some(file)), name: path.into() }))
+    }
+}
+
+fn positional_read_at(
+    reader: &PositionalReader,
+    call: &Call<'_>,
+    offset: Exact<i64>,
+    length: Exact<i64>,
+) -> Result<Outcome<StackResults>> {
+    let offset = non_negative("PositionalReader.readAt", "offset", offset)?;
+    let length = non_negative("PositionalReader.readAt", "length", length)?;
+    let guard = reader.file.borrow();
+    let file = guard.as_ref().ok_or_else(|| {
+        Error::runtime(format!("dream.fs.PositionalReader.readAt: the reader over {} is closed", display(&reader.name)))
+    })?;
+    read_at_file(call, file, &reader.name, offset, length, "PositionalReader.readAt")
+}
+
+fn positional_size(reader: &PositionalReader) -> Result<Outcome<f64>> {
+    let guard = reader.file.borrow();
+    let file = guard.as_ref().ok_or_else(|| {
+        Error::runtime(format!("dream.fs.PositionalReader.size: the reader over {} is closed", display(&reader.name)))
+    })?;
+    Ok(Outcome::of(file.metadata().map(|metadata| metadata.len() as f64), "PositionalReader.size", &reader.name))
+}
+
+pub(crate) fn describe_positional_reader(d: &mut ExtensionDescriptor) {
+    let mut reader = d.userdata::<PositionalReader>(PositionalReader::NAME);
+    reader.tag(TagPolicy::Never).doc("A retained, unmapped file handle for positional reads.");
+    reader
+        .method("readAt", positional_read_at)
+        .signature("(self, offset: number, length: number): (buffer?, string?, dream_fs_ErrorKind?)")
+        .doc("Reads from offset without changing a shared position; concurrent truncation may return an error.");
+    reader
+        .method("size", positional_size)
+        .signature("(self): (number?, string?, dream_fs_ErrorKind?)")
+        .doc("Returns the current size of the open file.");
+    reader
+        .method("close", |r: &PositionalReader| {
+            r.file.borrow_mut().take();
+        })
+        .signature("(self)")
+        .doc("Closes the handle; later operations raise. Closing twice does nothing.");
+    reader.metamethod("__tostring", |r: &PositionalReader| format!("dream.fs.PositionalReader({})", display(&r.name)));
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -466,11 +545,14 @@ pub(crate) struct OpenWrite {
     /// `None` is the default: truncate unless appending.
     truncate: Option<bool>,
     create: bool,
+    exclusive: bool,
+    write_through: bool,
 }
 
 impl OpenWrite {
     pub(crate) fn read(scope: &impl Scope, options: Option<ValueView<'_>>) -> Result<OpenWrite> {
-        let mut open = OpenWrite { append: false, truncate: None, create: true };
+        let mut open =
+            OpenWrite { append: false, truncate: None, create: true, exclusive: false, write_through: false };
         let Some(options) = options.filter(|view| !view.is_nil()) else {
             return Ok(open);
         };
@@ -478,18 +560,40 @@ impl OpenWrite {
             open.append = o.or("append", false)?;
             open.truncate = o.optional("truncate")?;
             open.create = o.or("create", true)?;
+            open.exclusive = o.or("exclusive", false)?;
+            open.write_through = o.or("writeThrough", false)?;
+            if open.exclusive && !open.create {
+                return Err(Error::runtime("dream.fs.openWrite: exclusive needs create"));
+            }
             Ok(open)
         })
     }
 
     fn open(self, path: &Path) -> io::Result<(File, u64)> {
         let truncate = self.truncate.unwrap_or(!self.append);
-        let file = OpenOptions::new()
+        let mut options = OpenOptions::new();
+        options
             .write(true)
-            .create(self.create)
+            .create(self.create && !self.exclusive)
+            .create_new(self.exclusive)
             .append(self.append)
-            .truncate(truncate && !self.append)
-            .open(path)?;
+            .truncate(truncate && !self.append);
+        if self.write_through {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                options.custom_flags(libc::O_SYNC);
+            }
+            #[cfg(windows)]
+            {
+                use std::os::windows::fs::OpenOptionsExt;
+                const FILE_FLAG_WRITE_THROUGH: u32 = 0x8000_0000;
+                options.custom_flags(FILE_FLAG_WRITE_THROUGH);
+            }
+            #[cfg(not(any(unix, windows)))]
+            return Err(io::Error::new(io::ErrorKind::Unsupported, "write-through is unsupported on this platform"));
+        }
+        let file = options.open(path)?;
         let position = if self.append { file.metadata()?.len() } else { 0 };
         Ok((file, position))
     }
@@ -569,7 +673,31 @@ impl WriteFile {
         let mut file = open.open(path)?;
         match self.offset {
             Some(offset) => write_all_at(&file, offset, data),
-            None => file.write_all(data),
+            None => write_complete(&mut file, data),
+        }
+    }
+}
+
+/// The directory holding `path`; a bare name's is the working directory.
+pub(super) fn parent_directory(path: &Path) -> &Path {
+    path.parent().filter(|parent| !parent.as_os_str().is_empty()).unwrap_or(Path::new("."))
+}
+
+/// A new hidden temporary beside `path`, on the same volume so it can be renamed over it.
+pub(super) fn create_sibling(path: &Path) -> io::Result<(std::path::PathBuf, File)> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let name = path.file_name().ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "no file name"))?;
+    let parent = parent_directory(path);
+    loop {
+        let mut candidate = std::ffi::OsString::from(".");
+        candidate.push(name);
+        candidate.push(format!(".{}.{}.tmp", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+        let candidate = parent.join(candidate);
+        match OpenOptions::new().write(true).create_new(true).open(&candidate) {
+            Ok(file) => return Ok((candidate, file)),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error),
         }
     }
 }
@@ -578,26 +706,12 @@ impl WriteFile {
 /// the old file or the new one and never part of either. An existing file's permissions carry
 /// over; a new one gets what creating it directly would have given it.
 fn write_atomic(path: &Path, data: &[u8]) -> io::Result<()> {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static NEXT: AtomicU64 = AtomicU64::new(0);
-    let name = path.file_name().ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "no file name"))?;
-    let parent = path.parent().filter(|parent| !parent.as_os_str().is_empty()).unwrap_or(Path::new("."));
     let permissions = match std::fs::metadata(path) {
         Ok(metadata) => Some(metadata.permissions()),
         Err(error) if error.kind() == io::ErrorKind::NotFound => None,
         Err(error) => return Err(error),
     };
-    let (temporary, mut file) = loop {
-        let mut candidate = std::ffi::OsString::from(".");
-        candidate.push(name);
-        candidate.push(format!(".{}.{}.tmp", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
-        let candidate = parent.join(candidate);
-        match OpenOptions::new().write(true).create_new(true).open(&candidate) {
-            Ok(file) => break (candidate, file),
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
-            Err(error) => return Err(error),
-        }
-    };
+    let (temporary, mut file) = create_sibling(path)?;
     let written = file
         .write_all(data)
         .and_then(|()| permissions.map_or(Ok(()), |permissions| file.set_permissions(permissions)))
@@ -608,6 +722,26 @@ fn write_atomic(path: &Path, data: &[u8]) -> io::Result<()> {
         let _ = std::fs::remove_file(&temporary);
     }
     result
+}
+
+// This shared path uses Write::write_all's interrupted and short-write handling.
+fn write_complete(writer: &mut impl Write, data: &[u8]) -> io::Result<()> {
+    writer.write_all(data)
+}
+
+#[cfg(test)]
+thread_local! {
+    static INJECT_SYNC_ERROR: Cell<Option<i32>> = const { Cell::new(None) };
+    static INJECT_PARTIAL_WRITE: Cell<bool> = const { Cell::new(false) };
+}
+
+fn sync_file(file: &File, data_only: bool) -> io::Result<()> {
+    #[cfg(test)]
+    if let Some(code) = INJECT_SYNC_ERROR.with(Cell::take) {
+        return Err(io::Error::from_raw_os_error(code));
+    }
+    // Rust's Apple implementation uses F_FULLFSYNC for both methods, with no fsync fallback.
+    if data_only { file.sync_data() } else { file.sync_all() }
 }
 
 /// `fs.writeFile(path, data, options?)`: the count written.
@@ -625,14 +759,49 @@ pub(crate) fn write_file(
     Ok(Outcome::of(write.write(&host, bytes).map(|()| bytes.len() as f64), "writeFile", path))
 }
 
+/// A directory handle to synchronize. `O_DIRECTORY` refuses anything else with `ENOTDIR`, where a
+/// plain open of a FIFO would block the thread until something opened its other end.
+#[cfg(unix)]
+pub(super) fn open_directory(path: &Path) -> io::Result<File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    OpenOptions::new().read(true).custom_flags(libc::O_DIRECTORY | libc::O_NONBLOCK).open(path)
+}
+
+/// Creates a new file, writes all bytes, synchronizes it and then its containing directory.
+/// An error after creation leaves the path in an uncertain state for the caller to recover.
+/// Windows publishes the name differently; see [`super::windows`].
+pub(crate) fn create_durable(path: &[u8], data: BytesView<'_>) -> Result<Outcome<f64>> {
+    let host = super::host_path("createDurable", path)?;
+    // SAFETY: the bytes are read only during this native call, without calling into Lua.
+    let bytes = unsafe { data.bytes_unchecked() };
+    #[cfg(unix)]
+    let result = (|| -> io::Result<()> {
+        let directory = open_directory(parent_directory(&host))?;
+        let mut file = OpenOptions::new().write(true).create_new(true).open(&host)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        directory.sync_all()
+    })();
+    #[cfg(windows)]
+    let result = super::windows::create_durable(&host, bytes);
+    #[cfg(not(any(unix, windows)))]
+    let result: io::Result<()> = {
+        let _ = &host;
+        Err(io::Error::new(io::ErrorKind::Unsupported, "durable file creation is unsupported on this platform"))
+    };
+    Ok(Outcome::of(result.map(|()| bytes.len() as f64), "createDurable", path))
+}
+
 /// A writer's open file: `None` once closed.
 #[derive(Debug)]
 pub(crate) struct WriterFile(RefCell<Option<BufWriter<File>>>);
 
 impl crate::runtime::shared::Resource for WriterFile {
     fn close_for_shutdown(&self) {
-        if let Some(mut file) = self.0.borrow_mut().take() {
-            let _ = file.flush();
+        if let Some(mut file) = self.0.borrow_mut().take()
+            && file.flush().is_err()
+        {
+            let _ = file.into_parts();
         }
     }
 }
@@ -644,6 +813,7 @@ pub struct Writer {
     position: Cell<u64>,
     append: bool,
     name: Box<[u8]>,
+    failure: RefCell<Option<super::Failure>>,
 }
 
 impl std::fmt::Debug for Writer {
@@ -671,6 +841,7 @@ impl Writer {
             position: Cell::new(position),
             append: options.append,
             name: path.into(),
+            failure: RefCell::new(None),
         }))
     }
 
@@ -683,18 +854,40 @@ impl Writer {
     /// Runs `body` on the open file: a closed writer is the script's mistake and raises; the OS
     /// refusing is an outcome.
     fn with_file<R>(&self, what: &str, body: impl FnOnce(&mut BufWriter<File>) -> io::Result<R>) -> Result<Outcome<R>> {
-        let mut file = self.file.0.borrow_mut();
-        let Some(file) = file.as_mut() else {
+        if let Some(failure) = self.failure.borrow().as_ref() {
+            return Ok(Outcome::Failed(failure.clone()));
+        }
+        let mut slot = self.file.0.borrow_mut();
+        let Some(file) = slot.as_mut() else {
             return Err(Error::runtime(format!(
                 "dream.fs.Writer.{what}: the writer over {} is closed",
                 display(&self.name)
             )));
         };
-        Ok(Outcome::of(body(file), &format!("Writer.{what}"), &self.name))
+        match body(file) {
+            Ok(value) => Ok(Outcome::Done(value)),
+            Err(error) => {
+                let failure = super::Failure::new(&format!("Writer.{what}"), &self.name, &error);
+                // Discard buffered bytes without another write: their outcome is uncertain.
+                if let Some(file) = slot.take() {
+                    let _ = file.into_parts();
+                }
+                *self.failure.borrow_mut() = Some(failure.clone());
+                Ok(Outcome::Failed(failure))
+            }
+        }
     }
 
     fn write(&self, data: &[u8]) -> Result<Outcome<f64>> {
-        done!(self.with_file("write", |file| file.write_all(data))?);
+        done!(self.with_file("write", |file| {
+            #[cfg(test)]
+            if INJECT_PARTIAL_WRITE.with(|slot| slot.replace(false)) {
+                write_complete(file, &data[..data.len().min(1)])?;
+                file.flush()?;
+                return Err(io::Error::from_raw_os_error(5));
+            }
+            write_complete(file, data)
+        })?);
         self.position.set(self.position.get() + data.len() as u64);
         Ok(Outcome::Done(data.len() as f64))
     }
@@ -732,12 +925,35 @@ impl Writer {
         Ok(Outcome::Done(true))
     }
 
-    /// Flushes and closes; closing a closed writer does nothing and answers true.
+    fn sync(&self, data_only: bool) -> Result<Outcome<bool>> {
+        let what = if data_only { "syncData" } else { "syncAll" };
+        let outcome = self.with_file(what, |file| {
+            file.flush()?;
+            sync_file(file.get_ref(), data_only)
+        })?;
+        Ok(match outcome {
+            Outcome::Done(()) => Outcome::Done(true),
+            Outcome::Failed(failure) => Outcome::Failed(failure),
+        })
+    }
+
+    /// Flushes and closes; an I/O failure remains observable on every close.
     fn close(&self) -> Outcome<bool> {
+        if let Some(failure) = self.failure.borrow().as_ref() {
+            return Outcome::Failed(failure.clone());
+        }
         let Some(mut file) = self.file.0.borrow_mut().take() else {
             return Outcome::Done(true);
         };
-        Outcome::of(file.flush().map(|()| true), "Writer.close", &self.name)
+        match file.flush() {
+            Ok(()) => Outcome::Done(true),
+            Err(error) => {
+                let _ = file.into_parts();
+                let failure = super::Failure::new("Writer.close", &self.name, &error);
+                *self.failure.borrow_mut() = Some(failure.clone());
+                Outcome::Failed(failure)
+            }
+        }
     }
 }
 
@@ -785,6 +1001,14 @@ pub(crate) fn describe_writer(d: &mut ExtensionDescriptor) {
         })
         .signature("(self): (boolean?, string?, dream_fs_ErrorKind?)");
     writer
+        .method("syncData", |w: &Writer| w.sync(true))
+        .signature("(self): (boolean?, string?, dream_fs_ErrorKind?)")
+        .doc("Flushes buffered bytes and synchronizes file data and retrieval metadata; propagates failures.");
+    writer
+        .method("syncAll", |w: &Writer| w.sync(false))
+        .signature("(self): (boolean?, string?, dream_fs_ErrorKind?)")
+        .doc("Flushes buffered bytes and synchronizes file data and metadata; propagates failures.");
+    writer
         .method("truncate", |w: &Writer, length: Exact<i64>| {
             w.truncate(non_negative("Writer.truncate", "length", length)?)
         })
@@ -793,6 +1017,111 @@ pub(crate) fn describe_writer(d: &mut ExtensionDescriptor) {
     writer
         .method("close", Writer::close)
         .signature("(self): (boolean?, string?, dream_fs_ErrorKind?)")
-        .doc("Flushes and closes; closing again does nothing.");
+        .doc("Flushes and closes; repeats any I/O failure on later closes.");
     writer.metamethod("__tostring", |w: &Writer| format!("dream.fs.Writer({})", display(&w.name)));
+}
+
+#[cfg(test)]
+mod durability_tests {
+    use super::*;
+
+    struct ShortWriter {
+        bytes: Vec<u8>,
+        calls: usize,
+        fail: bool,
+    }
+    impl Write for ShortWriter {
+        fn write(&mut self, data: &[u8]) -> io::Result<usize> {
+            self.calls += 1;
+            if self.calls == 1 {
+                return Err(io::Error::from(io::ErrorKind::Interrupted));
+            }
+            if self.fail {
+                return Ok(0);
+            }
+            let count = data.len().min(2);
+            self.bytes.extend_from_slice(&data[..count]);
+            Ok(count)
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn positional_read_handles_a_file_truncated_after_open() {
+        let path = std::env::temp_dir().join(format!("l3i-positional-truncate-{}", std::process::id()));
+        std::fs::write(&path, b"original").unwrap();
+        let reader = open_regular(&path).unwrap();
+        let mut buffer = [0_u8; 8];
+        assert_eq!(read_file_at(&reader, 0, &mut buffer).unwrap(), 8);
+        std::fs::OpenOptions::new().write(true).open(&path).unwrap().set_len(0).unwrap();
+        assert_eq!(read_file_at(&reader, 0, &mut buffer).unwrap(), 0);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn complete_writes_retry_interruptions_and_short_writes() {
+        let mut writer = ShortWriter { bytes: Vec::new(), calls: 0, fail: false };
+        write_complete(&mut writer, b"abcdef").unwrap();
+        assert_eq!(writer.bytes, b"abcdef");
+        assert_eq!(writer.calls, 4);
+        writer.fail = true;
+        assert_eq!(write_complete(&mut writer, b"x").unwrap_err().kind(), io::ErrorKind::WriteZero);
+    }
+
+    #[test]
+    fn partial_write_poison_discards_buffer_and_rejects_further_mutation() {
+        use crate::extension::{RuntimePlan, RuntimePolicy};
+        use crate::fs::{FsExtension, READ_CAPABILITY, WRITE_CAPABILITY};
+        let path = std::env::temp_dir().join(format!("l3i-partial-write-{}", std::process::id()));
+        let policy = RuntimePolicy::new()
+            .compat_global("@dream/fs", "fs")
+            .capability(READ_CAPABILITY)
+            .capability(WRITE_CAPABILITY);
+        let plan = RuntimePlan::builder().policy(policy).extension(FsExtension).finalize().unwrap();
+        let runtime = crate::Runtime::from_plan(&plan).unwrap();
+        INJECT_PARTIAL_WRITE.with(|slot| slot.set(true));
+        runtime
+            .exec(&format!(
+                "local w = assert(fs.openWrite({:?})) local ok, message = w:write('record') \
+             assert(ok == nil and message:find('Writer.write')) \
+             local later, reason = w:write('later') assert(later == nil and reason == message) \
+             later, reason = w:truncate(0) assert(later == nil and reason == message) \
+             later, reason = w:syncAll() assert(later == nil and reason == message) \
+             local closed, closemsg = w:close() assert(closed == nil and closemsg == message) \
+             closed, closemsg = w:close() assert(closed == nil and closemsg == message)",
+                path.to_string_lossy()
+            ))
+            .unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"r");
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn injected_sync_failure_reaches_luau_and_close() {
+        use crate::extension::{RuntimePlan, RuntimePolicy};
+        use crate::fs::{FsExtension, READ_CAPABILITY, WRITE_CAPABILITY};
+        let path = std::env::temp_dir().join(format!("l3i-sync-error-{}", std::process::id()));
+        let policy = RuntimePolicy::new()
+            .compat_global("@dream/fs", "fs")
+            .capability(READ_CAPABILITY)
+            .capability(WRITE_CAPABILITY);
+        let plan = RuntimePlan::builder().policy(policy).extension(FsExtension).finalize().unwrap();
+        let runtime = crate::Runtime::from_plan(&plan).unwrap();
+        INJECT_SYNC_ERROR.with(|slot| slot.set(Some(5)));
+        runtime
+            .exec(&format!(
+                "local w = assert(fs.openWrite({:?})) assert(w:write('record') == 6) \
+             local ok, msg, kind = w:syncAll() \
+             assert(ok == nil and kind ~= nil and msg:find('Writer.syncAll') and msg:find('os error 5')) \
+             local later, latermsg = w:write('later') assert(later == nil and latermsg == msg) \
+             later, latermsg = w:syncAll() assert(later == nil and latermsg == msg) \
+             local closed, closemsg = w:close() assert(closed == nil and closemsg == msg) \
+             closed, closemsg = w:close() assert(closed == nil and closemsg == msg)",
+                path.to_string_lossy()
+            ))
+            .unwrap();
+        std::fs::remove_file(path).unwrap();
+    }
 }

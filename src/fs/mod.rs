@@ -53,6 +53,8 @@ mod io;
 mod lock;
 mod path;
 mod walk;
+#[cfg(windows)]
+mod windows;
 
 use std::path::{Path, PathBuf};
 
@@ -300,6 +302,64 @@ fn same_file(a: &[u8], b: &[u8]) -> Result<Outcome<bool>> {
     })
 }
 
+#[cfg(all(test, unix))]
+thread_local! {
+    static INJECT_DIRECTORY_ERROR: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static INJECT_RENAME_ERROR: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+fn sync_directory(path: &[u8]) -> Result<Outcome<bool>> {
+    let host = host_path("syncDirectory", path)?;
+    #[cfg(unix)]
+    let result = io::open_directory(&host).and_then(|file| {
+        #[cfg(test)]
+        if INJECT_DIRECTORY_ERROR.with(|slot| slot.replace(false)) {
+            return Err(std::io::Error::from_raw_os_error(5));
+        }
+        file.sync_all()
+    });
+    #[cfg(windows)]
+    let result = windows::sync_directory(&host);
+    #[cfg(not(any(unix, windows)))]
+    let result: std::io::Result<()> = {
+        let _ = host;
+        Err(std::io::Error::new(std::io::ErrorKind::Unsupported, "directory synchronization is unsupported"))
+    };
+    Ok(Outcome::of(result.map(|()| true), "syncDirectory", path))
+}
+
+fn replace(source: &[u8], destination: &[u8]) -> Result<Outcome<bool>> {
+    let from = host_path("replace", source)?;
+    let to = host_path("replace", destination)?;
+    #[cfg(unix)]
+    let result = {
+        #[cfg(test)]
+        if INJECT_RENAME_ERROR.with(|slot| slot.replace(false)) {
+            Err(std::io::Error::from_raw_os_error(5))
+        } else {
+            std::fs::rename(from, to)
+        }
+        #[cfg(not(test))]
+        std::fs::rename(from, to)
+    };
+    #[cfg(windows)]
+    let result = windows::replace(&from, &to);
+    #[cfg(not(any(unix, windows)))]
+    let result: std::io::Result<()> = {
+        let _ = (from, to);
+        Err(std::io::Error::new(std::io::ErrorKind::Unsupported, "atomic replacement is unsupported"))
+    };
+    Ok(Outcome::of(result.map(|()| true), "replace", source))
+}
+
+/// A handle a script owns once the OS has given it one.
+fn owned<T: crate::userdata::Userdata>(outcome: Outcome<T>) -> Outcome<Owned<T>> {
+    match outcome {
+        Outcome::Done(handle) => Outcome::Done(Owned(handle)),
+        Outcome::Failed(failure) => Outcome::Failed(failure),
+    }
+}
+
 /// What a member needs: nothing (it only takes a path apart or joins one), or a capability.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Access {
@@ -348,6 +408,12 @@ const MEMBERS: &[Member] = &[
         "open",
         "(path: string) -> (dream_fs_Reader?, string?, dream_fs_ErrorKind?)",
         "A reader over a memory map of the file.",
+        false,
+    ),
+    member(
+        "openPositional",
+        "(path: string) -> (dream_fs_PositionalReader?, string?, dream_fs_ErrorKind?)",
+        "A retained, unmapped file handle for positional reads; its size reflects the open file.",
         false,
     ),
     member(
@@ -449,9 +515,27 @@ const MEMBERS: &[Member] = &[
         true,
     ),
     member(
+        "createDurable",
+        "(path: string, data: buffer | string) -> (number?, string?, dream_fs_ErrorKind?)",
+        "Exclusively creates and writes a file, then synchronizes the file and its parent directory. Windows moves a flushed temporary into place with write-through instead, and refuses a volume that isn't local NTFS or ReFS.",
+        true,
+    ),
+    member(
         "openWrite",
-        "(path: string, options: { append: boolean?, truncate: boolean?, create: boolean? }?) -> (dream_fs_Writer?, string?, dream_fs_ErrorKind?)",
-        "A writer over path, truncated unless append or truncate = false; created unless create = false.",
+        "(path: string, options: { append: boolean?, truncate: boolean?, create: boolean?, exclusive: boolean?, writeThrough: boolean? }?) -> (dream_fs_Writer?, string?, dream_fs_ErrorKind?)",
+        "A writer over path, truncated unless append or truncate = false; created unless create = false. exclusive = true refuses a file that exists; writeThrough = true asks the OS to write through its cache.",
+        true,
+    ),
+    member(
+        "syncDirectory",
+        "(path: string) -> (boolean?, string?, dream_fs_ErrorKind?)",
+        "Synchronizes a directory's entries; does not synchronize file contents. Windows refuses a volume that isn't local NTFS or ReFS.",
+        true,
+    ),
+    member(
+        "replace",
+        "(source: string, destination: string) -> (boolean?, string?, dream_fs_ErrorKind?)",
+        "Atomically renames source over destination on one filesystem; synchronize the file and directory separately for durability. Windows moves with write-through, refuses a volume that isn't local NTFS or ReFS, and may refuse a destination another handle holds open.",
         true,
     ),
     member(
@@ -521,6 +605,7 @@ impl Extension for FsExtension {
         d.type_alias("dream_fs_WalkOptions", WALK_OPTIONS_TYPE);
         d.type_alias("dream_fs_Walk", WALK_TYPE);
         io::describe_reader(d);
+        io::describe_positional_reader(d);
         io::describe_writer(d);
         lock::describe_lock(d);
         d.optional_capability(READ_CAPABILITY);
@@ -555,12 +640,8 @@ impl Extension for FsExtension {
             Ok(Outcome::of(io::read_regular(&host_path("readFileString", path)?), "readFileString", path))
         });
         bind!("readAt", io::read_at);
-        bind!("open", |path: &[u8]| -> Result<Outcome<Owned<Reader>>> {
-            Ok(match Reader::open(path)? {
-                Outcome::Done(reader) => Outcome::Done(Owned(reader)),
-                Outcome::Failed(failure) => Outcome::Failed(failure),
-            })
-        });
+        bind!("open", |path: &[u8]| Reader::open(path).map(owned));
+        bind!("openPositional", |path: &[u8]| io::PositionalReader::open(path).map(owned));
         bind!("stat", |call: &Call<'_>, path: &[u8]| stat(call, "stat", path, true));
         bind!("lstat", |call: &Call<'_>, path: &[u8]| stat(call, "lstat", path, false));
         bind!("exists", |path: &[u8]| -> Result<Outcome<bool>> {
@@ -591,6 +672,7 @@ impl Extension for FsExtension {
         bind!("fileName", path::file_name);
         bind!("extension", path::extension);
         bind!("isFileName", path::is_file_name);
+        bind!("createDurable", io::create_durable);
         bind!("writeFile", io::write_file);
         bind!("openWrite", |call: &Call<'_>,
                             path: &[u8],
@@ -605,6 +687,8 @@ impl Extension for FsExtension {
                 Outcome::Failed(failure) => Outcome::Failed(failure),
             })
         });
+        bind!("syncDirectory", sync_directory);
+        bind!("replace", replace);
         bind!("mkdir", mkdir);
         bind!("remove", remove);
         bind!("rename", |from: &[u8], to: &[u8]| -> Result<Outcome<bool>> {
@@ -631,5 +715,50 @@ impl Extension for FsExtension {
             })
         });
         Ok(())
+    }
+}
+
+#[cfg(all(test, unix))]
+mod durability_failure_tests {
+    use super::*;
+    use crate::extension::{RuntimePlan, RuntimePolicy};
+
+    #[test]
+    fn rename_and_directory_sync_failures_leave_the_observed_generation_intact() {
+        let root = std::env::temp_dir().join(format!("l3i-namespace-errors-{}", std::process::id()));
+        std::fs::create_dir(&root).unwrap();
+        struct Cleanup(std::path::PathBuf);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let _cleanup = Cleanup(root.clone());
+        std::fs::write(root.join("old"), b"old").unwrap();
+        std::fs::write(root.join("new"), b"new").unwrap();
+        let policy = RuntimePolicy::new()
+            .compat_global("@dream/fs", "fs")
+            .capability(READ_CAPABILITY)
+            .capability(WRITE_CAPABILITY);
+        let plan = RuntimePlan::builder().policy(policy).extension(FsExtension).finalize().unwrap();
+        let runtime = crate::Runtime::from_plan(&plan).unwrap();
+        let path = format!("{:?}", root.to_string_lossy());
+        INJECT_RENAME_ERROR.with(|slot| slot.set(true));
+        runtime
+            .exec(&format!(
+                "local root = {path} local ok, msg = fs.replace(root .. '/new', root .. '/old') \
+             assert(ok == nil and msg:find('replace') and msg:find('os error 5')) \
+             assert(fs.readFileString(root .. '/old') == 'old' and fs.readFileString(root .. '/new') == 'new')"
+            ))
+            .unwrap();
+        runtime.exec(&format!("assert(fs.replace({path} .. '/new', {path} .. '/old'))")).unwrap();
+        INJECT_DIRECTORY_ERROR.with(|slot| slot.set(true));
+        runtime
+            .exec(&format!(
+                "local ok, msg = fs.syncDirectory({path}) \
+             assert(ok == nil and msg:find('syncDirectory') and msg:find('os error 5')) \
+             assert(fs.readFileString({path} .. '/old') == 'new')"
+            ))
+            .unwrap();
     }
 }

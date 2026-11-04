@@ -1391,9 +1391,9 @@ MB for 119 KB) and would still have to be decoded in Luau before anything could 
 
 Feature `fs`; module `@dream/fs`, `l3i::fs::FsExtension`. The host filesystem, for tools that
 work on files on disk: whole and positional reads, readers over a memory map, writers with
-positions and truncation, metadata with and without following links, listings and a fast
-recursive walk, directories made and removed, renames, copies, hard and symbolic links,
-canonical paths, file identity, and the operating system's file locks.
+positions and truncation, stable-storage barriers, metadata with and without following links,
+listings and a fast recursive walk, directories made and removed, renames, copies, hard and
+symbolic links, canonical paths, file identity, and the operating system's file locks.
 
 ```luau
 local fs = require("@dream/fs")
@@ -1431,6 +1431,7 @@ handle.
 | `readFile(path)`, `readFileString(path)` | The whole file as a buffer or a string. A FIFO, socket or device is refused (`invalidInput`, `not a regular file`) rather than read: it would block the thread or never end |
 | `readAt(path, offset, length)` | `length` bytes from `offset` as a buffer, fewer at the end |
 | `open(path)` | A `dream_fs_Reader` over a memory map of the file; refuses what `readFile` refuses |
+| `openPositional(path)` | A `dream_fs_PositionalReader`: a retained, unmapped handle for a file that may change (below); refuses what `readFile` refuses |
 | `stat(path)`, `lstat(path)` | `{ kind, size, isFile, isDir, isSymlink, readonly, modified, modifiedSeconds, modifiedNanoseconds }`; `lstat` describes a link instead of following it |
 | `exists(path)` | Whether something is there, following links |
 | `isFile(path)`, `isDir(path)` | Whether a regular file or a directory is there, following links; `false` when nothing is, or it can't be read |
@@ -1439,7 +1440,9 @@ handle.
 | `canonicalize(path)`, `absolute(path)` | The path with every link resolved, or made absolute without touching the disk |
 | `readLink(path)`, `sameFile(a, b)`, `cwd()` | A link's target as written, whether two paths are one file, the working directory |
 | `writeFile(path, data, { offset?, append?, create?, exclusive?, atomic?, createParents? }?)` | The count written; truncates unless `offset` or `append`. `exclusive` refuses a file that exists (`alreadyExists`); `atomic` writes a temporary beside the file and renames it over, so a reader sees the old file or the new one, keeping the old one's permissions; `createParents` makes missing parent directories |
-| `openWrite(path, { append?, truncate?, create? }?)` | A buffered `dream_fs_Writer` |
+| `openWrite(path, { append?, truncate?, create?, exclusive?, writeThrough? }?)` | A buffered `dream_fs_Writer` |
+| `createDurable(path, data)` | The count written: a new file whose contents and name have been synchronized (below) |
+| `syncDirectory(path)`, `replace(source, destination)` | `true`: a directory's entries synchronized, or `source` atomically renamed over `destination` (below) |
 | `mkdir(path, { recursive? }?)`, `remove(path, { recursive? }?)` | `true`; `remove` never follows a link |
 | `rename(from, to)`, `copy(from, to)`, `hardLink(source, link)`, `symlink(target, link, { directory? }?)` | `true`, or the byte count for `copy` |
 | `lock(path, { shared?, createParents? }?)` | A `dream_fs_Lock`: the operating system's lock on the file, made if it isn't there; a lock held elsewhere is `wouldBlock` (below) |
@@ -1454,7 +1457,7 @@ walk's answer.
 
 A reader's `read`, `readInto`, `readAt` and `readAtInto` copy from the map; its position moves
 with `read`, `readInto`, `seek` and `skip`. A writer's `write`, `writeAt`, `seek`, `truncate`,
-`flush` and `close` answer the same way as the module's functions. A writer buffers: what a
+`flush`, `syncData`, `syncAll` and `close` answer the same way as the module's functions. A writer buffers: what a
 script never flushes or closes reaches the file when the writer is collected, when the runtime
 drops, or at `Runtime::shutdown()`, which a host that exits without dropping the runtime calls
 first.
@@ -1485,6 +1488,86 @@ if not owner then
     return if kind == "wouldBlock" then "already running" else error(message)
 end
 ```
+
+### Stable storage
+
+`flush()` and `close()` hand bytes to the operating system; neither says they survive a power
+cut. `writer:syncData()` flushes the writer and synchronizes the file's data, and
+`writer:syncAll()` synchronizes its metadata too. `openWrite`'s `writeThrough = true` asks the OS
+to write through its cache (`O_SYNC` on Unix, `FILE_FLAG_WRITE_THROUGH` on Windows), but the writer
+still buffers, so a commit still needs one of the two.
+
+Any I/O failure leaves a writer's outcome uncertain and poisons it. Later writes, seeks,
+truncations, flushes and syncs return the original failure, buffered bytes are discarded without
+another write, and every `close()` reports that failure too. Close it and recover before opening
+a new writer.
+
+A file's name is a separate thing to persist:
+
+- `createDurable(path, data)` exclusively creates a file with `data` and returns the count once
+  the file and its name are synchronized, as far as the platform can say (the table and Windows
+  notes below). On Unix a failure can leave a file at `path`, so treat the outcome as uncertain.
+  Don't rename or replace the parent directory while it runs.
+- `replace(source, destination)` atomically renames across one filesystem. On Unix that is
+  visibility, not persistence, until the directory is synchronized.
+- `syncDirectory(path)` synchronizes a directory's entries, not the files in it.
+- `writeFile(path, data, { atomic = true })` synchronizes its temporary but not the directory, and
+  `rename` synchronizes nothing. Neither alone is a durable checkpoint.
+
+For a checkpoint, create an exclusive sibling, write the complete image, `syncAll` and close it,
+`replace` the destination, then `syncDirectory` the parent. Every step must succeed before you
+acknowledge it. A failure after the replacement can leave either complete version, so it doesn't
+prove the replacement failed. Each checkpoint replaces the last, which is also what keeps the
+space a store uses bounded. Sync both parents if a rename moves between directories.
+
+A consumer that wants no renames after creation can keep one file: hold an exclusive lock and an
+append writer, write a complete transaction, and sync before acknowledging. Append a complete
+checkpoint, sync, append its commit marker, and sync again. The file only grows, and the consumer
+owns its framing, checksums, ordering and recovery. Keep lock files across closes, so competing
+processes don't lock different files.
+
+| Platform | Files | Names | Qualification |
+|---|---|---|---|
+| Linux and other Unix | `sync_data`, `sync_all` | Directory `fsync` after `rename` | The filesystem and device must honor barriers; network and unusual filesystems may differ |
+| macOS | `F_FULLFSYNC` for both methods | `F_FULLFSYNC` on the directory after `rename` | The filesystem and device must honor it |
+| Windows | `FlushFileBuffers` for both methods | `MoveFileExW` with `MOVEFILE_WRITE_THROUGH`, then `FlushFileBuffers` on the directory | Local NTFS or ReFS only; anything else is `unsupported` before anything changes |
+
+Windows has no documented way to synchronize a directory entry, so **success there is not the
+promise a Unix directory `fsync` makes**. `createDurable` writes and flushes a hidden temporary
+beside `path`, then moves it into place with write-through. Microsoft says that move doesn't return
+until it is on the disk, but its explicit flush guarantee describes a move done as copy and delete,
+not a rename on one volume. The directory flush that follows isn't among the operations documented
+for directory handles, so `createDurable` carries on if Windows refuses it outright, while
+`syncDirectory` reports the refusal.
+
+On Windows, write recovery that stays correct if the last name change is lost: keep the previous
+generation until the new one is confirmed on a later open, and validate whichever you find.
+
+Three more things differ from Unix there. A failure before the move leaves nothing at `path`, though a
+process killed mid-way can leave the temporary behind. `replace` can be refused while another
+handle holds the destination open, so close readers first. And a path over 260 characters can be
+refused unless the process is long-path aware.
+
+CI runs the synchronization, namespace and process-kill tests on Linux, macOS and Windows, and on
+Windows also without administrator rights, through relative paths and through a junction. ReFS and
+volume mount points aren't exercised. **Nothing here has been tested against a power cut**: killing a process doesn't exercise it, and
+no test proves a filesystem or device honors a barrier.
+
+### Files that change
+
+A mapped `Reader` must not be used while anything truncates its file: reading a page that is gone
+can terminate the process. `readAt` and `openPositional` read through the OS instead, so a file
+that shrinks during a read answers with a failure rather than a short buffer.
+
+`openPositional(path)` keeps one unmapped handle open. Its `readAt(offset, length)` doesn't reopen
+the path, `size()` asks the open file for its current size, and `close()` releases it (later calls
+raise, and closing twice does nothing). An offset past the current end raises like any other read,
+so check `size()` first when the file can shrink.
+
+Appending uses the OS's append flag, and writes retry interruptions and short writes. A record that
+takes more than one OS write can still interleave with another writer's, so serialize writers
+with a lock and keep one open. `tell()` is the writer's own accounting, not the file's end when
+other handles append.
 
 ### Paths
 
