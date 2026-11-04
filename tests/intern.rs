@@ -88,6 +88,26 @@ fn bad_input_names_the_call() {
         .unwrap();
 }
 
+/// The counters are for a test to compare before and after, and tests run in parallel: a binder call
+/// on another thread must not look like one of this test's own.
+#[cfg(feature = "jit")]
+#[test]
+fn the_lowering_counters_see_only_their_own_thread() {
+    use l3i::intern::lowering::binder_calls;
+    let calls = binder_calls();
+    std::thread::spawn(|| {
+        let policy = RuntimePolicy::new().compat_global("@dream/intern", "intern");
+        let plan = RuntimePlan::builder().policy(policy).extension(InternExtension).finalize().unwrap();
+        let runtime = Runtime::from_plan(&plan).unwrap();
+        let before = binder_calls();
+        runtime.exec("local ids = intern.new('ascii-nocase') ids:intern('key') ids:find('key')").unwrap();
+        assert_eq!(binder_calls() - before, 2, "the thread that made the calls counts them");
+    })
+    .join()
+    .unwrap();
+    assert_eq!(binder_calls(), calls, "another thread's binder calls are not this one's");
+}
+
 /// Lowered `pool:intern` and `pool:find` against the binder (`pool.intern(pool, ...)` is a call,
 /// not a namecall, so it is never lowered): every spelling, length and fallback gives the same
 /// answer both ways, and a loop over duplicates never reaches the binder.
