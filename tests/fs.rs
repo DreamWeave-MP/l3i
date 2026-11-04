@@ -387,7 +387,7 @@ fn files_are_written_exclusively_atomically_and_under_new_parents() {
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 #[test]
 fn durable_file_and_directory_operations() {
     let scratch = Scratch::new("durable");
@@ -481,9 +481,7 @@ fn durability_process_child() {
         }
         "lock" => format!("held = assert(fs.lock({root} .. '/lock'))"),
         "create" => format!("held = assert(fs.openWrite({root} .. '/journal', {{ exclusive = true }}))"),
-        "windows_bootstrap_probe" => format!(
-            "held = assert(fs.openWrite({root} .. '/journal', {{ exclusive = true, writeThrough = true }})) assert(held:write('header') == 6) assert(held:syncAll())"
-        ),
+        "durable_create" => format!("assert(fs.createDurable({root} .. '/journal', 'header') == 6)"),
         "write" => format!(
             "held = assert(fs.openWrite({root} .. '/journal', {{ exclusive = true }})) assert(held:write('old') == 3)"
         ),
@@ -526,24 +524,20 @@ fn durability_process_child() {
 #[test]
 fn killed_processes_leave_reopenable_files_and_release_locks() {
     use std::time::{Duration, Instant};
-    let boundaries: &[&str] = if cfg!(windows) {
-        &["create", "write", "file_sync", "append", "append_sync", "windows_bootstrap_probe", "lock"]
-    } else {
-        &[
-            "create",
-            "write",
-            "file_sync",
-            "dir_sync",
-            "append",
-            "append_sync",
-            "temp_write",
-            "temp_sync",
-            "replace",
-            "replace_sync",
-            "lock",
-        ]
-    };
-    for &boundary in boundaries {
+    for boundary in [
+        "create",
+        "write",
+        "file_sync",
+        "dir_sync",
+        "durable_create",
+        "append",
+        "append_sync",
+        "temp_write",
+        "temp_sync",
+        "replace",
+        "replace_sync",
+        "lock",
+    ] {
         let scratch = Scratch::new(&format!("crash-{boundary}"));
         let journal = scratch.0.join("journal");
         if matches!(boundary, "append" | "append_sync" | "temp_write" | "temp_sync" | "replace" | "replace_sync") {
@@ -583,7 +577,7 @@ fn killed_processes_leave_reopenable_files_and_release_locks() {
             match boundary {
                 "file_sync" | "dir_sync" | "temp_write" | "temp_sync" => assert_eq!(data, b"old"),
                 "append_sync" => assert_eq!(data, b"oldnew"),
-                "windows_bootstrap_probe" => assert_eq!(data, b"header"),
+                "durable_create" => assert_eq!(data, b"header"),
                 "replace" | "replace_sync" => assert_eq!(data, b"replacement"),
                 "create" | "write" => assert!(data.is_empty() || data == b"old"),
                 "append" => assert!(data == b"old" || data == b"oldnew"),
@@ -685,19 +679,31 @@ fn failed_close_remains_failed_on_repeated_close() {
         .unwrap();
 }
 
-#[cfg(windows)]
+#[cfg(any(unix, windows))]
 #[test]
-fn unsupported_windows_namespace_operations_leave_files_untouched() {
-    let scratch = Scratch::new("windows-namespace-unsupported");
+fn namespace_barriers_leave_nothing_behind_and_refuse_a_file() {
+    let scratch = Scratch::new("namespace-barriers");
     runtime()
         .exec(&format!(
             "local root = {} local source = root .. '/source' local target = root .. '/target' \
-         assert(fs.writeFile(source, 'new') == 3) assert(fs.writeFile(target, 'old') == 3) \
-         local ok, message, kind = fs.syncDirectory(root) \
-         assert(ok == nil and kind == 'unsupported' and message:find('syncDirectory')) \
-         ok, message, kind = fs.replace(source, target) \
-         assert(ok == nil and kind == 'unsupported' and message:find('replace')) \
-         assert(fs.readFileString(source) == 'new' and fs.readFileString(target) == 'old')",
+         assert(fs.createDurable(target, 'old') == 3) \
+         local names = assert(fs.list(root)) assert(#names == 1 and names[1] == 'target') \
+         local ok, message, kind = fs.createDurable(target, 'overwrite') \
+         assert(ok == nil and kind == 'alreadyExists' and fs.readFileString(target) == 'old') \
+         names = assert(fs.list(root)) assert(#names == 1, 'a refused creation left a temporary') \
+         ok, message, kind = fs.syncDirectory(target) \
+         assert(ok == nil and kind == 'notADirectory' and message:find('syncDirectory')) \
+         assert(fs.syncDirectory(root)) \
+         assert(fs.writeFile(source, 'new') == 3) \
+         local held = assert(fs.openPositional(target)) \
+         ok, message = fs.replace(source, target) \
+         if ok then \
+           assert(fs.readFileString(target) == 'new' and not fs.exists(source)) \
+         else \
+           assert(message:find('replace') and fs.readFileString(target) == 'old') \
+           held:close() assert(fs.replace(source, target)) assert(fs.readFileString(target) == 'new') \
+         end \
+         held:close() assert(fs.syncDirectory(root))",
             scratch.lua()
         ))
         .unwrap();
@@ -762,7 +768,7 @@ fn fixture_lua_bytes(bytes: &[u8]) -> String {
     format!("string.char({numbers})")
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 #[test]
 fn framed_checkpoint_fixture_handles_interrupted_operations() {
     let first = fixture_frame(1, b"first");
@@ -902,7 +908,7 @@ fn checkpoint_failure_model_validates_complete_generations() {
     assert_eq!(valid_checkpoint(&new), Ok(vec![1, 2]));
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 #[test]
 fn durable_create_is_exclusive_and_initializes_contents() {
     let scratch = Scratch::new("durable-create");
@@ -923,7 +929,7 @@ fn durable_create_is_exclusive_and_initializes_contents() {
         .unwrap();
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 #[test]
 fn durable_create_fails_before_creating_when_directory_sync_is_unsupported() {
     let scratch = Scratch::new("durable-create-unsupported");
@@ -964,16 +970,10 @@ fn retained_single_file_checkpoint_fixture() {
     for phase in 0..=4 {
         let scratch = Scratch::new(&format!("single-file-{phase}"));
         let path = scratch.0.join("stream");
-        if cfg!(windows) {
-            std::fs::write(&path, &records[0]).unwrap();
-            std::fs::OpenOptions::new().write(true).open(&path).unwrap().sync_all().unwrap();
-        }
-        let create =
-            if cfg!(windows) { String::new() } else { "assert(fs.createDurable(path, first) == #first)".to_owned() };
         let script = format!(
             "local root = {root} local path = root .. '/stream' local first = {first} \
              local tx = {tx} local checkpoint = {checkpoint} local marker = {marker} local last = {last} \
-             local lock = assert(fs.lock(root .. '/lock')) {create} \
+             local lock = assert(fs.lock(root .. '/lock')) assert(fs.createDurable(path, first) == #first) \
              local w = assert(fs.openWrite(path, {{ append = true, create = false, writeThrough = true }})) \
              if {phase} >= 1 then assert(w:write(tx) == #tx) assert(w:syncData()) end \
              if {phase} >= 2 then assert(w:write(checkpoint) == #checkpoint) assert(w:syncAll()) end \
@@ -1017,20 +1017,14 @@ fn retained_single_file_survives_process_kills_at_record_boundaries() {
     ] {
         let scratch = Scratch::new(&format!("stream-crash-{boundary}"));
         let first = fixture_frame(1, b"transaction one");
-        if cfg!(unix) {
-            runtime()
-                .exec(&format!(
-                    "assert(fs.createDurable({} .. '/stream', {}) == {})",
-                    scratch.lua(),
-                    fixture_lua_bytes(&first),
-                    first.len()
-                ))
-                .unwrap();
-        } else {
-            let path = scratch.0.join("stream");
-            std::fs::write(&path, &first).unwrap();
-            std::fs::OpenOptions::new().write(true).open(path).unwrap().sync_all().unwrap();
-        }
+        runtime()
+            .exec(&format!(
+                "assert(fs.createDurable({} .. '/stream', {}) == {})",
+                scratch.lua(),
+                fixture_lua_bytes(&first),
+                first.len()
+            ))
+            .unwrap();
         let mut child = std::process::Command::new(std::env::current_exe().unwrap())
             .args(["--exact", "fs::durability_process_child", "--nocapture"])
             .env("L3I_DURABILITY_CHILD_DIR", &scratch.0)

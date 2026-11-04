@@ -678,30 +678,40 @@ impl WriteFile {
     }
 }
 
-/// Replaces `path` with `data` through a sibling temporary renamed over it, so a reader sees
-/// the old file or the new one and never part of either. An existing file's permissions carry
-/// over; a new one gets what creating it directly would have given it.
-fn write_atomic(path: &Path, data: &[u8]) -> io::Result<()> {
+/// The directory holding `path`; a bare name's is the working directory.
+pub(super) fn parent_directory(path: &Path) -> &Path {
+    path.parent().filter(|parent| !parent.as_os_str().is_empty()).unwrap_or(Path::new("."))
+}
+
+/// A new hidden temporary beside `path`, on the same volume so it can be renamed over it.
+pub(super) fn create_sibling(path: &Path) -> io::Result<(std::path::PathBuf, File)> {
     use std::sync::atomic::{AtomicU64, Ordering};
     static NEXT: AtomicU64 = AtomicU64::new(0);
     let name = path.file_name().ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "no file name"))?;
-    let parent = path.parent().filter(|parent| !parent.as_os_str().is_empty()).unwrap_or(Path::new("."));
-    let permissions = match std::fs::metadata(path) {
-        Ok(metadata) => Some(metadata.permissions()),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
-        Err(error) => return Err(error),
-    };
-    let (temporary, mut file) = loop {
+    let parent = parent_directory(path);
+    loop {
         let mut candidate = std::ffi::OsString::from(".");
         candidate.push(name);
         candidate.push(format!(".{}.{}.tmp", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
         let candidate = parent.join(candidate);
         match OpenOptions::new().write(true).create_new(true).open(&candidate) {
-            Ok(file) => break (candidate, file),
+            Ok(file) => return Ok((candidate, file)),
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
             Err(error) => return Err(error),
         }
+    }
+}
+
+/// Replaces `path` with `data` through a sibling temporary renamed over it, so a reader sees
+/// the old file or the new one and never part of either. An existing file's permissions carry
+/// over; a new one gets what creating it directly would have given it.
+fn write_atomic(path: &Path, data: &[u8]) -> io::Result<()> {
+    let permissions = match std::fs::metadata(path) {
+        Ok(metadata) => Some(metadata.permissions()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error),
     };
+    let (temporary, mut file) = create_sibling(path)?;
     let written = file
         .write_all(data)
         .and_then(|()| permissions.map_or(Ok(()), |permissions| file.set_permissions(permissions)))
@@ -759,20 +769,22 @@ pub(super) fn open_directory(path: &Path) -> io::Result<File> {
 
 /// Creates a new file, writes all bytes, synchronizes it and then its containing directory.
 /// An error after creation leaves the path in an uncertain state for the caller to recover.
+/// Windows publishes the name differently; see [`super::windows`].
 pub(crate) fn create_durable(path: &[u8], data: BytesView<'_>) -> Result<Outcome<f64>> {
     let host = super::host_path("createDurable", path)?;
     // SAFETY: the bytes are read only during this native call, without calling into Lua.
     let bytes = unsafe { data.bytes_unchecked() };
     #[cfg(unix)]
     let result = (|| -> io::Result<()> {
-        let parent = host.parent().filter(|parent| !parent.as_os_str().is_empty()).unwrap_or(Path::new("."));
-        let directory = open_directory(parent)?;
+        let directory = open_directory(parent_directory(&host))?;
         let mut file = OpenOptions::new().write(true).create_new(true).open(&host)?;
         file.write_all(bytes)?;
         file.sync_all()?;
         directory.sync_all()
     })();
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    let result = super::windows::create_durable(&host, bytes);
+    #[cfg(not(any(unix, windows)))]
     let result: io::Result<()> = {
         let _ = &host;
         Err(io::Error::new(io::ErrorKind::Unsupported, "durable file creation is unsupported on this platform"))

@@ -53,6 +53,8 @@ mod io;
 mod lock;
 mod path;
 mod walk;
+#[cfg(windows)]
+mod windows;
 
 use std::path::{Path, PathBuf};
 
@@ -316,7 +318,9 @@ fn sync_directory(path: &[u8]) -> Result<Outcome<bool>> {
         }
         file.sync_all()
     });
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    let result = windows::sync_directory(&host);
+    #[cfg(not(any(unix, windows)))]
     let result: std::io::Result<()> = {
         let _ = host;
         Err(std::io::Error::new(std::io::ErrorKind::Unsupported, "directory synchronization is unsupported"))
@@ -338,7 +342,9 @@ fn replace(source: &[u8], destination: &[u8]) -> Result<Outcome<bool>> {
         #[cfg(not(test))]
         std::fs::rename(from, to)
     };
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    let result = windows::replace(&from, &to);
+    #[cfg(not(any(unix, windows)))]
     let result: std::io::Result<()> = {
         let _ = (from, to);
         Err(std::io::Error::new(std::io::ErrorKind::Unsupported, "atomic replacement is unsupported"))
@@ -511,25 +517,25 @@ const MEMBERS: &[Member] = &[
     member(
         "createDurable",
         "(path: string, data: buffer | string) -> (number?, string?, dream_fs_ErrorKind?)",
-        "Exclusively creates and writes a file, then synchronizes the file and its parent directory; unsupported where directory synchronization is unavailable.",
+        "Exclusively creates and writes a file, then synchronizes the file and its parent directory. Windows moves a flushed temporary into place with write-through instead, and refuses a volume that isn't local NTFS or ReFS.",
         true,
     ),
     member(
         "openWrite",
         "(path: string, options: { append: boolean?, truncate: boolean?, create: boolean?, exclusive: boolean?, writeThrough: boolean? }?) -> (dream_fs_Writer?, string?, dream_fs_ErrorKind?)",
-        "A writer over path, truncated unless append or truncate = false; created unless create = false.",
+        "A writer over path, truncated unless append or truncate = false; created unless create = false. exclusive = true refuses a file that exists; writeThrough = true asks the OS to write through its cache.",
         true,
     ),
     member(
         "syncDirectory",
         "(path: string) -> (boolean?, string?, dream_fs_ErrorKind?)",
-        "Synchronizes directory entries where supported; does not synchronize file contents.",
+        "Synchronizes a directory's entries; does not synchronize file contents. Windows refuses a volume that isn't local NTFS or ReFS.",
         true,
     ),
     member(
         "replace",
         "(source: string, destination: string) -> (boolean?, string?, dream_fs_ErrorKind?)",
-        "Atomically renames source over destination on supported same-filesystem platforms; synchronize the file and directory separately for durability.",
+        "Atomically renames source over destination on one filesystem; synchronize the file and directory separately for durability. Windows moves with write-through, refuses a volume that isn't local NTFS or ReFS, and may refuse a destination another handle holds open.",
         true,
     ),
     member(
