@@ -365,7 +365,7 @@ fn files_are_written_exclusively_atomically_and_under_new_parents() {
     }
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, not(target_os = "macos")))]
 #[test]
 fn durable_file_and_directory_operations() {
     let scratch = Scratch::new("durable");
@@ -404,4 +404,149 @@ fn failed_sync_is_reported_again_by_close() {
          assert(closed == nil and closeKind == kind and closeMessage == message)",
         )
         .unwrap();
+}
+
+// Invoked in a separate test process by the parent below, which kills it after a named
+// boundary. The marker is deliberately outside the protocol under test.
+#[cfg(all(unix, not(target_os = "macos")))]
+#[test]
+fn durability_process_child() {
+    let Ok(root) = std::env::var("L3I_DURABILITY_CHILD_DIR") else { return };
+    let boundary = std::env::var("L3I_DURABILITY_CHILD_BOUNDARY").unwrap();
+    let root = format!("{root:?}");
+    if boundary == "verify" {
+        let expected = std::env::var("L3I_DURABILITY_EXPECTED").unwrap();
+        runtime().exec(&format!("assert(fs.readFileString({root} .. '/journal') == {expected:?})")).unwrap();
+        return;
+    }
+    let script = match boundary.as_str() {
+        "lock" => format!("held = assert(fs.lock({root} .. '/lock'))"),
+        "create" => format!("held = assert(fs.openWrite({root} .. '/journal', {{ exclusive = true }}))"),
+        "write" => format!(
+            "held = assert(fs.openWrite({root} .. '/journal', {{ exclusive = true }})) assert(held:write('old') == 3)"
+        ),
+        "file_sync" => format!(
+            "held = assert(fs.openWrite({root} .. '/journal', {{ exclusive = true }})) assert(held:write('old') == 3) assert(held:syncAll())"
+        ),
+        "dir_sync" => format!(
+            "held = assert(fs.openWrite({root} .. '/journal', {{ exclusive = true }})) assert(held:write('old') == 3) assert(held:syncAll()) assert(fs.syncDirectory({root}))"
+        ),
+        "append" => format!(
+            "held = assert(fs.openWrite({root} .. '/journal', {{ append = true }})) assert(held:write('new') == 3)"
+        ),
+        "append_sync" => format!(
+            "held = assert(fs.openWrite({root} .. '/journal', {{ append = true }})) assert(held:write('new') == 3) assert(held:syncData())"
+        ),
+        "temp_write" => format!(
+            "held = assert(fs.openWrite({root} .. '/temp', {{ exclusive = true }})) assert(held:write('replacement') == 11)"
+        ),
+        "temp_sync" => format!(
+            "held = assert(fs.openWrite({root} .. '/temp', {{ exclusive = true }})) assert(held:write('replacement') == 11) assert(held:syncAll()) assert(held:close())"
+        ),
+        "replace" => format!(
+            "held = assert(fs.openWrite({root} .. '/temp', {{ exclusive = true }})) assert(held:write('replacement') == 11) assert(held:syncAll()) assert(held:close()) assert(fs.replace({root} .. '/temp', {root} .. '/journal'))"
+        ),
+        "replace_sync" => format!(
+            "held = assert(fs.openWrite({root} .. '/temp', {{ exclusive = true }})) assert(held:write('replacement') == 11) assert(held:syncAll()) assert(held:close()) assert(fs.replace({root} .. '/temp', {root} .. '/journal')) assert(fs.syncDirectory({root}))"
+        ),
+        _ => panic!("unknown boundary"),
+    };
+    let runtime = runtime();
+    runtime.exec(&script).unwrap();
+    std::fs::write(std::path::Path::new(&std::env::var("L3I_DURABILITY_CHILD_DIR").unwrap()).join("ready"), b"ready")
+        .unwrap();
+    loop {
+        std::thread::park();
+    }
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+#[test]
+fn killed_processes_leave_reopenable_files_and_release_locks() {
+    use std::time::{Duration, Instant};
+    for boundary in [
+        "create",
+        "write",
+        "file_sync",
+        "dir_sync",
+        "append",
+        "append_sync",
+        "temp_write",
+        "temp_sync",
+        "replace",
+        "replace_sync",
+        "lock",
+    ] {
+        let scratch = Scratch::new(boundary);
+        let journal = scratch.0.join("journal");
+        if matches!(boundary, "append" | "append_sync" | "temp_write" | "temp_sync" | "replace" | "replace_sync") {
+            std::fs::write(&journal, b"old").unwrap();
+        }
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "fs::durability_process_child", "--nocapture"])
+            .env("L3I_DURABILITY_CHILD_DIR", &scratch.0)
+            .env("L3I_DURABILITY_CHILD_BOUNDARY", boundary)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !scratch.0.join("ready").exists() {
+            assert!(child.try_wait().unwrap().is_none(), "child exited at {boundary}");
+            assert!(Instant::now() < deadline, "child timed out at {boundary}");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        if boundary == "lock" {
+            runtime()
+                .exec(&format!(
+                    "local lock, _, kind = fs.lock({} .. '/lock') assert(lock == nil and kind == 'wouldBlock')",
+                    scratch.lua()
+                ))
+                .unwrap();
+        }
+        child.kill().unwrap();
+        child.wait().unwrap();
+        if boundary == "lock" {
+            runtime()
+                .exec(&format!("local lock = assert(fs.lock({} .. '/lock')) assert(lock:unlock())", scratch.lua()))
+                .unwrap();
+            assert!(scratch.0.join("lock").exists());
+        } else {
+            let data = std::fs::read(&journal).unwrap();
+            match boundary {
+                "file_sync" | "dir_sync" | "temp_write" | "temp_sync" => assert_eq!(data, b"old"),
+                "append_sync" => assert_eq!(data, b"oldnew"),
+                "replace" | "replace_sync" => assert_eq!(data, b"replacement"),
+                "create" | "write" => assert!(data.is_empty() || data == b"old"),
+                "append" => assert!(data == b"old" || data == b"oldnew"),
+                _ => unreachable!(),
+            }
+            // Reopen in another fresh process, independent of the killed process and this runtime.
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "fs::durability_process_child", "--nocapture"])
+                .env("L3I_DURABILITY_CHILD_DIR", &scratch.0)
+                .env("L3I_DURABILITY_CHILD_BOUNDARY", "verify")
+                .env("L3I_DURABILITY_EXPECTED", std::str::from_utf8(&data).unwrap())
+                .stdout(std::process::Stdio::null())
+                .status()
+                .unwrap();
+            assert!(status.success(), "fresh process could not reopen after {boundary}");
+        }
+    }
+}
+
+#[test]
+#[ignore = "durability benchmark; writes hundreds of megabytes to the test scratch filesystem"]
+fn durability_benchmark() {
+    let scratch = Scratch::new("durability-bench");
+    let source = include_str!("../benches/durable-fs.jsl")
+        .replace("local root = assert((...), 'pass a scratch directory')", &format!("local root = {}", scratch.lua()));
+    runtime().exec(&source).unwrap();
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_file_sync_is_explicitly_unsupported() {
+    let scratch = Scratch::new("macos-sync");
+    runtime().exec(&format!("local w = assert(fs.openWrite({} .. '/file')) local ok, msg, kind = w:syncAll() assert(ok == nil and kind == 'unsupported' and msg:find('F_FULLFSYNC'))", scratch.lua())).unwrap();
 }

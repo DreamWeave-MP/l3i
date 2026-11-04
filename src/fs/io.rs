@@ -575,7 +575,7 @@ impl WriteFile {
         let mut file = open.open(path)?;
         match self.offset {
             Some(offset) => write_all_at(&file, offset, data),
-            None => file.write_all(data),
+            None => write_complete(&mut file, data),
         }
     }
 }
@@ -614,6 +614,32 @@ fn write_atomic(path: &Path, data: &[u8]) -> io::Result<()> {
         let _ = std::fs::remove_file(&temporary);
     }
     result
+}
+
+// This shared path uses Write::write_all's interrupted and short-write handling.
+fn write_complete(writer: &mut impl Write, data: &[u8]) -> io::Result<()> {
+    writer.write_all(data)
+}
+
+#[cfg(test)]
+thread_local! {
+    static INJECT_SYNC_ERROR: Cell<Option<i32>> = const { Cell::new(None) };
+}
+
+fn sync_file(file: &File, data_only: bool) -> io::Result<()> {
+    #[cfg(test)]
+    if let Some(code) = INJECT_SYNC_ERROR.with(Cell::take) {
+        return Err(io::Error::from_raw_os_error(code));
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let _ = (file, data_only);
+        Err(io::Error::new(io::ErrorKind::Unsupported, "durable file synchronization requires F_FULLFSYNC on macOS"))
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        if data_only { file.sync_data() } else { file.sync_all() }
+    }
 }
 
 /// `fs.writeFile(path, data, options?)`: the count written.
@@ -702,7 +728,7 @@ impl Writer {
     }
 
     fn write(&self, data: &[u8]) -> Result<Outcome<f64>> {
-        done!(self.with_file("write", |file| file.write_all(data))?);
+        done!(self.with_file("write", |file| write_complete(file, data))?);
         self.position.set(self.position.get() + data.len() as u64);
         Ok(Outcome::Done(data.len() as f64))
     }
@@ -744,7 +770,7 @@ impl Writer {
         let what = if data_only { "syncData" } else { "syncAll" };
         let outcome = self.with_file(what, |file| {
             file.flush()?;
-            if data_only { file.get_ref().sync_data() } else { file.get_ref().sync_all() }
+            sync_file(file.get_ref(), data_only)
         })?;
         match outcome {
             Outcome::Done(()) => Ok(Outcome::Done(true)),
@@ -830,4 +856,67 @@ pub(crate) fn describe_writer(d: &mut ExtensionDescriptor) {
         .signature("(self): (boolean?, string?, dream_fs_ErrorKind?)")
         .doc("Flushes and closes; closing again does nothing.");
     writer.metamethod("__tostring", |w: &Writer| format!("dream.fs.Writer({})", display(&w.name)));
+}
+
+#[cfg(test)]
+mod durability_tests {
+    use super::*;
+
+    struct ShortWriter {
+        bytes: Vec<u8>,
+        calls: usize,
+        fail: bool,
+    }
+    impl Write for ShortWriter {
+        fn write(&mut self, data: &[u8]) -> io::Result<usize> {
+            self.calls += 1;
+            if self.calls == 1 {
+                return Err(io::Error::from(io::ErrorKind::Interrupted));
+            }
+            if self.fail {
+                return Ok(0);
+            }
+            let count = data.len().min(2);
+            self.bytes.extend_from_slice(&data[..count]);
+            Ok(count)
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn complete_writes_retry_interruptions_and_short_writes() {
+        let mut writer = ShortWriter { bytes: Vec::new(), calls: 0, fail: false };
+        write_complete(&mut writer, b"abcdef").unwrap();
+        assert_eq!(writer.bytes, b"abcdef");
+        assert_eq!(writer.calls, 4);
+        writer.fail = true;
+        assert_eq!(write_complete(&mut writer, b"x").unwrap_err().kind(), io::ErrorKind::WriteZero);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn injected_sync_failure_reaches_luau_and_close() {
+        use crate::extension::{RuntimePlan, RuntimePolicy};
+        use crate::fs::{FsExtension, READ_CAPABILITY, WRITE_CAPABILITY};
+        let path = std::env::temp_dir().join(format!("l3i-sync-error-{}", std::process::id()));
+        let policy = RuntimePolicy::new()
+            .compat_global("@dream/fs", "fs")
+            .capability(READ_CAPABILITY)
+            .capability(WRITE_CAPABILITY);
+        let plan = RuntimePlan::builder().policy(policy).extension(FsExtension).finalize().unwrap();
+        let runtime = crate::Runtime::from_plan(&plan).unwrap();
+        INJECT_SYNC_ERROR.with(|slot| slot.set(Some(5)));
+        runtime
+            .exec(&format!(
+                "local w = assert(fs.openWrite({:?})) assert(w:write('record') == 6) \
+             local ok, msg, kind = w:syncAll() \
+             assert(ok == nil and kind == 'other' and msg:find('Writer.syncAll') and msg:find('os error 5')) \
+             local closed, closemsg = w:close() assert(closed == nil and closemsg == msg)",
+                path.to_string_lossy()
+            ))
+            .unwrap();
+        std::fs::remove_file(path).unwrap();
+    }
 }
