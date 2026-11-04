@@ -1033,3 +1033,86 @@ fn retained_single_file_survives_process_kills_at_record_boundaries() {
         assert!(status.success(), "recovery failed after {boundary}");
     }
 }
+
+// This tiny test protocol distinguishes physical frame validity from checkpoint commitment.
+// It deliberately belongs to the test suite rather than defining an application record format.
+#[cfg(any(unix, windows))]
+fn fixture_checkpoint_recover(bytes: &[u8]) -> std::result::Result<(Option<u64>, Vec<u64>, bool), &'static str> {
+    let (sequences, torn) = fixture_recover(bytes)?;
+    let mut cursor = 0;
+    let mut candidate = None;
+    let mut committed = None;
+    let mut replay = Vec::new();
+    for sequence in sequences {
+        let length = u32::from_le_bytes(bytes[cursor..cursor + 4].try_into().unwrap()) as usize;
+        let payload = &bytes[cursor + 12..cursor + 4 + length];
+        let Some((&kind, rest)) = payload.split_first() else { return Err("missing record type") };
+        match kind {
+            b'T' => {
+                candidate = None;
+                replay.push(sequence);
+            }
+            b'C' | b'M' => {
+                let generation = u64::from_le_bytes(rest.try_into().map_err(|_| "invalid generation")?);
+                if kind == b'C' {
+                    candidate = Some(generation);
+                } else if candidate == Some(generation) {
+                    committed = Some(generation);
+                    candidate = None;
+                    replay.clear();
+                } else {
+                    return Err("unmatched checkpoint marker");
+                }
+            }
+            _ => return Err("invalid record type"),
+        }
+        cursor += length + 8;
+    }
+    Ok((committed, replay, torn))
+}
+
+#[cfg(any(unix, windows))]
+#[test]
+fn checkpoint_recovery_requires_a_valid_commit_marker() {
+    let tx = fixture_frame(1, b"Tfirst transaction");
+    let checkpoint = fixture_frame(2, &[b'C', 7, 0, 0, 0, 0, 0, 0, 0]);
+    let marker = fixture_frame(3, &[b'M', 7, 0, 0, 0, 0, 0, 0, 0]);
+    let next_tx = fixture_frame(4, b"Tnext transaction");
+    let mut image = tx.clone();
+    let mut images = vec![image.clone()];
+    image.extend_from_slice(&checkpoint);
+    images.push(image.clone());
+    let mut partial_marker = image.clone();
+    partial_marker.extend_from_slice(&marker[..marker.len() - 1]);
+    images.push(partial_marker);
+    image.extend_from_slice(&marker);
+    images.push(image.clone());
+    image.extend_from_slice(&next_tx);
+    images.push(image);
+    let expected = [
+        (None, vec![1], false),
+        (None, vec![1], false),
+        (None, vec![1], true),
+        (Some(7), vec![], false),
+        (Some(7), vec![4], false),
+    ];
+    for (phase, (image, expected)) in images.iter().zip(expected).enumerate() {
+        let scratch = Scratch::new(&format!("checkpoint-semantics-{phase}"));
+        let script = format!(
+            "local path = {} .. '/stream' local w = assert(fs.openWrite(path, {{ exclusive = true }})) \
+             local image = {} assert(w:write(image) == #image) assert(w:syncAll()) assert(w:close())",
+            scratch.lua(),
+            fixture_lua_bytes(image),
+        );
+        runtime().exec(&script).unwrap();
+        let reopened = std::fs::read(scratch.0.join("stream")).unwrap();
+        assert_eq!(fixture_checkpoint_recover(&reopened), Ok(expected), "phase {phase}");
+    }
+    let mut wrong_marker = tx.clone();
+    wrong_marker.extend_from_slice(&checkpoint);
+    wrong_marker.extend(fixture_frame(3, &[b'M', 8, 0, 0, 0, 0, 0, 0, 0]));
+    assert_eq!(fixture_checkpoint_recover(&wrong_marker), Err("unmatched checkpoint marker"));
+    let mut damaged = images[3].clone();
+    *damaged.last_mut().unwrap() ^= 1;
+    assert_eq!(fixture_checkpoint_recover(&damaged), Err("checksum"));
+}
