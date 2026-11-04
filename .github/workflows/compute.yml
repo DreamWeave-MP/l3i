@@ -1,0 +1,45 @@
+name: CPU compute research
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches: [feat/jsl-compute-rd]
+
+permissions:
+  contents: read
+
+jobs:
+  correctness:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    env:
+      CARGO_BUILD_JOBS: 2
+      G: research/graph-cpu/Cargo.toml
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: true
+      - uses: dtolnay/rust-toolchain@1.99.1
+        with:
+          components: rustfmt, clippy
+      - uses: DreamWeave-MP/StroggForge/.github/actions/setup-llvm@v55
+      - name: Record compiler and CPU
+        run: |
+          rustc -vV
+          clang --version
+          lscpu
+      - name: Formatting
+        run: cargo fmt --manifest-path "$G" --check
+      - name: Debug no-JIT correctness
+        run: cargo test --locked --manifest-path "$G"
+      - name: Release no-JIT numerical correctness
+        run: cargo test --locked --release --manifest-path "$G"
+      - name: Release optional Luau JIT correctness
+        run: cargo test --locked --release --features luau-jit --manifest-path "$G"
+      - name: Pedantic Clippy
+        run: cargo clippy --locked --manifest-path "$G" --all-targets --all-features -- -W clippy::pedantic -D warnings

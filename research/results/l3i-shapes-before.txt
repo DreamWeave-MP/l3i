@@ -1,4 +1,4 @@
-# isa=Avx2 chunk=1024 samples=31 sample_ms=3 
+# isa=Avx2 chunk=1024 samples=31 sample_ms=3
 
 # Attribution ladder: relu(a+b+2), n=65536, preallocated output unless stated
 rust_fused_f32_baseline                        n=65536    median_us=14.658       min_us=14.223       p90_us=15.431       ns_per_element=0.224
