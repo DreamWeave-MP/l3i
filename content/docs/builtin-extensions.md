@@ -1505,8 +1505,9 @@ a new writer.
 A file's name is a separate thing to persist:
 
 - `createDurable(path, data)` exclusively creates a file with `data` and returns the count once
-  the file and its name are synchronized. On Unix a failure can leave a file at `path`, so treat
-  the outcome as uncertain. Don't rename or replace the parent directory while it runs.
+  the file and its name are synchronized, as far as the platform can say (the table and Windows
+  notes below). On Unix a failure can leave a file at `path`, so treat the outcome as uncertain.
+  Don't rename or replace the parent directory while it runs.
 - `replace(source, destination)` atomically renames across one filesystem. On Unix that is
   visibility, not persistence, until the directory is synchronized.
 - `syncDirectory(path)` synchronizes a directory's entries, not the files in it.
@@ -1531,17 +1532,25 @@ processes don't lock different files.
 | macOS | `F_FULLFSYNC` for both methods | `F_FULLFSYNC` on the directory after `rename` | The filesystem and device must honor it |
 | Windows | `FlushFileBuffers` for both methods | `MoveFileExW` with `MOVEFILE_WRITE_THROUGH`, then `FlushFileBuffers` on the directory | Local NTFS or ReFS only; anything else is `unsupported` before anything changes |
 
-Windows has no documented way to synchronize a directory entry, so its guarantee rests on weaker
-ground than the others. `createDurable` writes and flushes a hidden temporary beside `path`, then
-moves it into place with write-through, which Microsoft documents as not returning until the move
-is on the disk. Windows permits the directory flush that follows without saying what it covers.
-Three things differ from Unix there. A failure before the move leaves nothing at `path`, though a
+Windows has no documented way to synchronize a directory entry, so **success there is not the
+promise a Unix directory `fsync` makes**. `createDurable` writes and flushes a hidden temporary
+beside `path`, then moves it into place with write-through. Microsoft says that move doesn't return
+until it is on the disk, but its explicit flush guarantee describes a move done as copy and delete,
+not a rename on one volume. The directory flush that follows isn't among the operations documented
+for directory handles, so `createDurable` carries on if Windows refuses it outright, while
+`syncDirectory` reports the refusal.
+
+On Windows, write recovery that stays correct if the last name change is lost: keep the previous
+generation until the new one is confirmed on a later open, and validate whichever you find.
+
+Three more things differ from Unix there. A failure before the move leaves nothing at `path`, though a
 process killed mid-way can leave the temporary behind. `replace` can be refused while another
 handle holds the destination open, so close readers first. And a path over 260 characters can be
 refused unless the process is long-path aware.
 
-CI runs the synchronization, namespace and process-kill tests on Linux, macOS and Windows.
-**Nothing here has been tested against a power cut**: killing a process doesn't exercise it, and
+CI runs the synchronization, namespace and process-kill tests on Linux, macOS and Windows, and on
+Windows also without administrator rights, through relative paths and through a junction. ReFS and
+volume mount points aren't exercised. **Nothing here has been tested against a power cut**: killing a process doesn't exercise it, and
 no test proves a filesystem or device honors a barrier.
 
 ### Files that change
