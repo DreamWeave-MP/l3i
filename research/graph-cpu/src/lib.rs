@@ -27,3 +27,6 @@ pub(crate) const MAX_ELEMENTS: usize = 1_048_576;
 pub(crate) fn error(message: &str) -> l3i::Error {
     l3i::Error::runtime(message)
 }
+
+/// Experimental allocation-free row reduction kernels.
+pub mod reduction;

@@ -548,6 +548,26 @@ fn matrix() {
 
 pub fn native() {
     println!("# isa={:?} chunk={CHUNK} samples={SAMPLES} sample_ms={} ", Isa::detect(), SAMPLE_TIME.as_millis());
+    reductions();
     attribution();
     matrix();
+}
+
+fn reductions() {
+    use l3i_graph_cpu_research::reduction::{normalize, softmax, sum};
+    println!("\n# Row kernels: preallocated, accurate normalization, ordered f32 sum");
+    for n in [1, 16, 1024, 65_536, 1_048_576] {
+        let values: Vec<f32> = (0..n).map(|i| (i % 127) as f32 * 0.125 - 8.0).collect();
+        let mut out = vec![0.0; n];
+        row("ordered_sum_kernel", n, || {
+            black_box(sum(black_box(&values)));
+        });
+        row("accurate_softmax_kernel", n, || softmax(black_box(&values), black_box(&mut out)));
+        let total: f64 = out.iter().map(|v| f64::from(*v)).sum();
+        assert!((total - 1.0).abs() < 1e-6);
+        row("accurate_rms_norm_kernel", n, || normalize(black_box(&values), black_box(&mut out), 1e-5, false).unwrap());
+        row("accurate_layer_norm_kernel", n, || {
+            normalize(black_box(&values), black_box(&mut out), 1e-5, true).unwrap();
+        });
+    }
 }
