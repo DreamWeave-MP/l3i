@@ -65,7 +65,7 @@ include = [
 # Pinned exactly: the transport's wire behaviour is part of what a runtime promises.
 dream-net = "=1.1.0"
 # The CPU rasterizer is a domain extension, behind the `soft-render` feature.
-dream-soft-render = { version = "=1.0.0", optional = true }
+dream-soft-render = { version = "=2.0.0", optional = true }
 
 # `@dream/bytes` (feature `bytes`): searching through memchr's SIMD finders.
 memchr = { version = "2", optional = true }
