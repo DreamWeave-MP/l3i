@@ -186,7 +186,7 @@ binder.
 | Toolchain | clang++, lld, cross-language thin LTO, clang and rustc on the same LLVM major; enforced by `build.rs` |
 | Apple targets | clang and lld without `-Clinker-plugin-lto` (ld64.lld rejects it); macOS forfeits the cross-language inlining |
 | MSVC targets | `clang-cl` compiles, rustc links with `lld-link` |
-| Rust | 1.92 or newer, edition 2024 |
+| Rust | 1.99 or newer, edition 2024 |
 | Network at build time | none |
 
 The value layout the binder reads is pinned by `static_assert`s in `csrc/extra.cpp` and proven

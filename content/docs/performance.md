@@ -16,7 +16,7 @@ deliberate change that re-audits the hand-declared C API and the flag list.
 
 ## Rust and dependencies
 
-- **Rust 1.92** or newer, declared as `rust-version` and checked in CI. Edition 2024. The optional `dream-soft-render` dependency declares the same.
+- **Rust 1.99** or newer, declared as `rust-version` and checked in CI. Edition 2024.
 - `unsafe` is used, at the FFI boundary and in the value-layout reads; every block states the invariant it relies on (see [Safety](@/docs/safety.md)).
 - Optional features, all off by default: `jit`, `analysis`, `soft-render`, `bytes` with `bytes-codecs`, `bytes-digests`, `bytes-text` and `bytes-regex`, `intern`, `intl`, `syntax`, `tcp`, `dns` and `tls` (see [Building](@/docs/building.md)).
 
@@ -60,7 +60,7 @@ Every push to `main`, every pull request and every tag runs
 [StroggForge](https://github.com/DreamWeave-MP/StroggForge)'s library workflow, whose
 `setup-llvm` step gives every job that compiles a clang and lld whose LLVM major matches the
 active rustc: the tests on Windows, Linux and macOS; `rustfmt`; Clippy; a check against Rust
-1.92 (`msrv: auto`); and a dry run of the crates.io publish. A bare version tag publishes that
+1.99 (`msrv: auto`); and a dry run of the crates.io publish. A bare version tag publishes that
 version to crates.io, runs the Criterion hot paths and attaches them to its GitHub release as
 `BENCHMARKS.md`.
 
