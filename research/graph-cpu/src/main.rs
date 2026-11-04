@@ -1,19 +1,20 @@
+use l3i::source::LoadScope;
 use l3i::{
     Result, Runtime,
     convert::{BufferView, Exact, NewBuffer},
     module::{LuauModule, ModuleBuilder},
     userdata::{Owned, Userdata},
 };
-use l3i_graph_cpu_research::{Budget, Executable, Expr, Shape, Tensor};
-use std::sync::{Arc, OnceLock};
-// All VMs using this host share one accounting domain; recreating a VM does not reset it.
-fn budget() -> &'static Arc<Budget> {
-    static BUDGET: OnceLock<Arc<Budget>> = OnceLock::new();
-    BUDGET.get_or_init(|| Budget::new(64 * 1024 * 1024))
-}
+use l3i_graph_cpu_research::{Bindings, Budget, Domain, Executable, Expr, Shape, Tensor};
+use std::cell::RefCell;
 struct TensorValue(Tensor);
 struct Expression(Expr);
 struct Program(Executable);
+struct Bound(RefCell<Bindings>);
+// SAFETY: bindings retain native immutable owners only; no Lua access in destruction.
+unsafe impl Userdata for Bound {
+    const NAME: &'static str = "dream.research.Bindings";
+}
 // SAFETY: these payloads own native immutable storage and never access Lua in destructors.
 unsafe impl Userdata for TensorValue {
     const NAME: &'static str = "dream.research.Tensor";
@@ -30,8 +31,13 @@ struct Research;
 impl LuauModule for Research {
     const NAME: &'static str = "dream.research.compute";
     fn register(_runtime: &Runtime, module: &mut ModuleBuilder<'_>) -> Result<()> {
+        let service_budget = Budget::new(64 * 1024 * 1024);
+        let service_domain = Domain::new(1024, 32);
         module.userdata::<TensorValue>(None, |ty| {
-            ty.method("expression", |t: &TensorValue| Expr::input(t.0.clone()).map(|e| Owned(Expression(e))))?;
+            let domain = service_domain.clone();
+            ty.method("expression", move |t: &TensorValue| {
+                Expr::input_in(t.0.clone(), domain.clone()).map(|e| Owned(Expression(e)))
+            })?;
             ty.method("read", |t: &TensorValue| t.0.readback().map(NewBuffer))?;
             ty.method("shares", |a: &TensorValue, b: &TensorValue| a.0.shares_storage(&b.0))?;
             ty.method(
@@ -53,16 +59,49 @@ impl LuauModule for Research {
             ty.method("matmul", |a: &Expression, b: &Expression| a.0.matmul(&b.0).map(|e| Owned(Expression(e))))?;
             ty.method("compile", |a: &Expression| a.0.compile().map(|e| Owned(Program(e))))
         })?;
+        module.userdata::<Bound>(None, |ty| {
+            ty.method("set", |b: &Bound, slot: Exact<usize>, t: &TensorValue| b.0.borrow_mut().set(slot.0, t.0.clone()))
+        })?;
+        module.function("bindings", || Owned(Bound(RefCell::new(Bindings::default()))))?;
+        let domain = service_domain.clone();
+        module.function("slot", move |slot: Exact<usize>, rows: Exact<usize>, cols: Exact<usize>| {
+            Expr::slot_in(slot.0, Shape::Matrix(rows.0, cols.0), domain.clone()).map(|e| Owned(Expression(e)))
+        })?;
         module.userdata::<Program>(None, |ty| {
-            ty.method("run", |p: &Program| p.0.run(budget()).map(|t| Owned(TensorValue(t))))?;
+            let budget = service_budget.clone();
+            ty.method("run_bound", move |p: &Program, b: &Bound| {
+                p.0.run_bound(&b.0.borrow(), &budget).map(|t| Owned(TensorValue(t)))
+            })?;
+            ty.method("native_source", |p: &Program| p.0.native_source())?;
+            ty.method("shader_source", |p: &Program, mode: String| p.0.shader_source(&mode))?;
+            ty.method("native", |p: &Program, call: &l3i::bind::Call<'_>| -> Result<l3i::value::Function> {
+                let generator = l3i::native_code::NativeCodeGen::for_scope(call)
+                    .ok_or_else(|| l3i::Error::runtime("native backend unavailable"))?;
+                if !generator.is_available() {
+                    return Err(l3i::Error::runtime("native backend unavailable"));
+                }
+                let chunk = call.load_source(
+                    "=tensor-native",
+                    &p.0.native_source()?,
+                    &l3i::source::CompileOptions { type_info_level: 1, ..Default::default() },
+                )?;
+                chunk.invoke::<l3i::value::Function, _>(call, ())
+            })?;
+
+            let budget = service_budget.clone();
+            ty.method("run", move |p: &Program| p.0.run(&budget).map(|t| Owned(TensorValue(t))))?;
             ty.method("ir", |p: &Program| p.0.dump())
         })?;
-        module.function("f32", |bytes: BufferView, r: Exact<usize>, c: Exact<usize>| {
-            Tensor::import_view(&bytes, Shape::Matrix(r.0, c.0), budget()).map(|t| Owned(TensorValue(t)))
+        let budget = service_budget.clone();
+        module.function("f32", move |bytes: BufferView, r: Exact<usize>, c: Exact<usize>| {
+            Tensor::import_view(&bytes, Shape::Matrix(r.0, c.0), &budget).map(|t| Owned(TensorValue(t)))
         })?;
-        module.function("constant", |v: f32| Expr::constant(v).map(|e| Owned(Expression(e))))?;
-        module.function("used", || budget().used())?;
-        module.function("allocations", || budget().allocations())?;
+        module.function("constant", move |v: f32| {
+            Expr::constant_in(v, service_domain.clone()).map(|e| Owned(Expression(e)))
+        })?;
+        let budget = service_budget.clone();
+        module.function("used", move || budget.used())?;
+        module.function("allocations", move || service_budget.allocations())?;
         module.function("noop", || ())?;
 
         let start = std::time::Instant::now();
@@ -72,23 +111,36 @@ impl LuauModule for Research {
 }
 fn run() -> Result<()> {
     let plan = l3i::extension::RuntimePlan::builder()
-        .policy(l3i::extension::RuntimePolicy::new().compat_global("@dream/data", "data"))
+        .policy(
+            l3i::extension::RuntimePolicy::new()
+                .compat_global("@dream/data", "data")
+                .native_code(l3i::extension::NativeCodePolicy { record_counters: cfg!(test), ..Default::default() }),
+        )
         .extension(l3i::data::DataExtension)
         .finalize()?;
     let runtime = Runtime::from_plan(&plan)?;
     let module = runtime.register_module::<Research>()?;
     runtime.set_global("compute", &module)?;
     runtime.exec(include_str!("../example.jsl"))?;
+    runtime.exec(include_str!("../slots.jsl"))?;
+    if cfg!(test) {
+        assert!(runtime.native_code().unwrap().execution_stats(&runtime.stack()).regular_blocks_executed > 0);
+    }
     runtime.collect_garbage();
     runtime.exec("local b = retained:run():read(); assert(buffer.readf32(b, 20) == 26); retained = nil")?;
     runtime.collect_garbage();
-    assert_eq!(budget().used(), 0);
+    runtime.exec("assert(compute.used()==0)")?;
 
     if std::env::args().any(|arg| arg == "--bench") {
         runtime.exec(include_str!("../bench.jsl"))?;
         runtime.collect_garbage();
-        assert_eq!(budget().used(), 0);
+        runtime.exec("assert(compute.used()==0)")?;
         native_benchmark();
+        runtime.exec(include_str!("../native-bench.jsl"))?;
+    }
+    if let Some(path) = std::env::args().skip_while(|arg| arg != "--emit-shader").nth(1) {
+        let source: String = runtime.eval("return shader_artifact")?;
+        std::fs::write(path, source).map_err(|e| l3i::Error::runtime(e.to_string()))?;
     }
     Ok(())
 }
@@ -124,8 +176,6 @@ mod tests {
     #[test]
     fn jsl_graph_and_teardown() {
         super::run().unwrap();
-        assert_eq!(super::budget().used(), 0);
         super::run().unwrap();
-        assert_eq!(super::budget().used(), 0);
     }
 }

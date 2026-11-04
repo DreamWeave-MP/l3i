@@ -6,4 +6,4 @@ rust-version = "1.99.1"
 publish = false
 [workspace]
 [dependencies]
-l3i = { path = "../..", default-features = false, features = ["data"] }
+l3i = { path = "../..", default-features = false, features = ["data", "jit"] }

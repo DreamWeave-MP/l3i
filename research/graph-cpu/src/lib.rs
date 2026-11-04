@@ -1,5 +1,6 @@
 //! Isolated typed graph and synchronous CPU executor. No production extension.
 #![allow(clippy::missing_errors_doc, clippy::missing_panics_doc)]
+pub mod lowering;
 use l3i::{Error, Result};
 use std::fmt::Write;
 use std::sync::{
@@ -9,19 +10,52 @@ use std::sync::{
 const MAX_NODES: usize = 64;
 static LIVE_NODES: AtomicUsize = AtomicUsize::new(0);
 static LIVE_PLANS: AtomicUsize = AtomicUsize::new(0);
+/// Host-owned accounting domain; process limits remain an additional safeguard.
 #[derive(Debug)]
-struct Lease(&'static AtomicUsize);
+pub struct Domain {
+    nodes: AtomicUsize,
+    plans: AtomicUsize,
+    node_limit: usize,
+    plan_limit: usize,
+}
+impl Domain {
+    #[must_use]
+    pub fn new(node_limit: usize, plan_limit: usize) -> Arc<Self> {
+        Arc::new(Self { nodes: AtomicUsize::new(0), plans: AtomicUsize::new(0), node_limit, plan_limit })
+    }
+}
+fn default_domain() -> Arc<Domain> {
+    static DOMAIN: std::sync::OnceLock<Arc<Domain>> = std::sync::OnceLock::new();
+    DOMAIN.get_or_init(|| Domain::new(4096, 128)).clone()
+}
+#[derive(Debug)]
+struct Lease {
+    global: &'static AtomicUsize,
+    domain: Arc<Domain>,
+    plan: bool,
+}
 impl Lease {
-    fn acquire(counter: &'static AtomicUsize, limit: usize) -> Result<Self> {
-        counter
+    fn acquire(domain: Arc<Domain>, plan: bool) -> Result<Self> {
+        let (global, limit, local, local_limit) = if plan {
+            (&LIVE_PLANS, 128, &domain.plans, domain.plan_limit)
+        } else {
+            (&LIVE_NODES, 4096, &domain.nodes, domain.node_limit)
+        };
+        global
             .try_update(Ordering::Relaxed, Ordering::Relaxed, |n| (n < limit).then_some(n + 1))
-            .map_err(|_| error("live graph metadata budget exceeded"))?;
-        Ok(Self(counter))
+            .map_err(|_| error("process graph safeguard exhausted"))?;
+        if local.try_update(Ordering::Relaxed, Ordering::Relaxed, |n| (n < local_limit).then_some(n + 1)).is_err() {
+            global.fetch_sub(1, Ordering::Relaxed);
+            return Err(error("domain graph budget exhausted"));
+        }
+        Ok(Self { global, domain, plan })
     }
 }
 impl Drop for Lease {
     fn drop(&mut self) {
-        self.0.fetch_sub(1, Ordering::Relaxed);
+        self.global.fetch_sub(1, Ordering::Relaxed);
+        let local = if self.plan { &self.domain.plans } else { &self.domain.nodes };
+        local.fetch_sub(1, Ordering::Relaxed);
     }
 }
 
@@ -99,7 +133,8 @@ impl Shape {
         }
         rows.checked_mul(cols).filter(|n| *n <= MAX_ELEMENTS).ok_or_else(|| error("element budget exceeded"))
     }
-    fn dims(self) -> (usize, usize) {
+    #[must_use]
+    pub fn dims(self) -> (usize, usize) {
         match self {
             Self::Scalar => (1, 1),
             Self::Matrix(r, c) => (r, c),
@@ -211,6 +246,7 @@ impl Tensor {
 
 #[derive(Clone, Debug)]
 enum Op {
+    Slot(usize),
     Input(Tensor),
     Constant(f32),
     Add(Expr, Expr),
@@ -220,7 +256,7 @@ enum Op {
 }
 #[derive(Debug)]
 struct Node {
-    _lease: Lease,
+    lease: Lease,
     shape: Shape,
     op: Op,
     depth: usize,
@@ -228,37 +264,64 @@ struct Node {
 #[derive(Clone, Debug)]
 pub struct Expr(Arc<Node>);
 impl Expr {
-    fn new(shape: Shape, op: Op, depth: usize) -> Result<Self> {
+    fn new_in(shape: Shape, op: Op, depth: usize, domain: Arc<Domain>) -> Result<Self> {
         shape.elements()?;
         if depth > MAX_NODES {
             return Err(error("graph depth budget exceeded"));
         }
-        Ok(Self(Arc::new(Node { shape, op, depth, _lease: Lease::acquire(&LIVE_NODES, 4096)? })))
+        Ok(Self(Arc::new(Node { shape, op, depth, lease: Lease::acquire(domain, false)? })))
+    }
+    pub fn slot(id: usize, shape: Shape) -> Result<Self> {
+        Self::slot_in(id, shape, default_domain())
+    }
+    pub fn slot_in(id: usize, shape: Shape, domain: Arc<Domain>) -> Result<Self> {
+        if id >= MAX_NODES {
+            return Err(error("slot id budget exceeded"));
+        }
+        Self::new_in(shape, Op::Slot(id), 1, domain)
     }
     pub fn input(tensor: Tensor) -> Result<Self> {
-        Self::new(tensor.shape, Op::Input(tensor), 1)
+        Self::input_in(tensor, default_domain())
+    }
+    pub fn input_in(tensor: Tensor, domain: Arc<Domain>) -> Result<Self> {
+        Self::new_in(tensor.shape, Op::Input(tensor), 1, domain)
     }
     pub fn constant(value: f32) -> Result<Self> {
-        Self::new(Shape::Scalar, Op::Constant(value), 1)
+        Self::constant_in(value, default_domain())
+    }
+    pub fn constant_in(value: f32, domain: Arc<Domain>) -> Result<Self> {
+        Self::new_in(Shape::Scalar, Op::Constant(value), 1, domain)
+    }
+    fn same_domain(&self, rhs: &Self) -> Result<()> {
+        if Arc::ptr_eq(&self.0.lease.domain, &rhs.0.lease.domain) {
+            Ok(())
+        } else {
+            Err(error("cross-domain graph composition denied"))
+        }
     }
     pub fn add(&self, rhs: &Self) -> Result<Self> {
-        Self::new(
+        self.same_domain(rhs)?;
+        Self::new_in(
             self.0.shape.broadcast(rhs.0.shape)?,
             Op::Add(self.clone(), rhs.clone()),
             1 + self.0.depth.max(rhs.0.depth),
+            self.0.lease.domain.clone(),
         )
     }
     pub fn mul(&self, rhs: &Self) -> Result<Self> {
-        Self::new(
+        self.same_domain(rhs)?;
+        Self::new_in(
             self.0.shape.broadcast(rhs.0.shape)?,
             Op::Mul(self.clone(), rhs.clone()),
             1 + self.0.depth.max(rhs.0.depth),
+            self.0.lease.domain.clone(),
         )
     }
     pub fn relu(&self) -> Result<Self> {
-        Self::new(self.0.shape, Op::Relu(self.clone()), 1 + self.0.depth)
+        Self::new_in(self.0.shape, Op::Relu(self.clone()), 1 + self.0.depth, self.0.lease.domain.clone())
     }
     pub fn matmul(&self, rhs: &Self) -> Result<Self> {
+        self.same_domain(rhs)?;
         let (Shape::Matrix(m, k), Shape::Matrix(k2, n)) = (self.0.shape, rhs.0.shape) else {
             return Err(error("matmul requires rank two"));
         };
@@ -271,7 +334,12 @@ impl Expr {
             .checked_mul(k)
             .filter(|n| *n <= MAX_WORK)
             .ok_or_else(|| error("matmul work budget exceeded"))?;
-        Self::new(shape, Op::MatMul(self.clone(), rhs.clone()), 1 + self.0.depth.max(rhs.0.depth))
+        Self::new_in(
+            shape,
+            Op::MatMul(self.clone(), rhs.clone()),
+            1 + self.0.depth.max(rhs.0.depth),
+            self.0.lease.domain.clone(),
+        )
     }
     pub fn compile(&self) -> Result<Executable> {
         fn visit(expr: &Expr, nodes: &mut Vec<Expr>) -> Result<usize> {
@@ -302,6 +370,7 @@ impl Expr {
             .map(|node| Step {
                 shape: node.0.shape,
                 op: match &node.0.op {
+                    Op::Slot(id) => Instruction::Slot(*id),
                     Op::Input(t) => Instruction::Input(t.clone()),
                     Op::Constant(v) => Instruction::Constant(*v),
                     Op::Add(a, b) => Instruction::Add(id(a), id(b)),
@@ -311,6 +380,14 @@ impl Expr {
                 },
             })
             .collect();
+        let mut slots = std::collections::BTreeMap::new();
+        for step in &steps {
+            if let Instruction::Slot(id) = step.op
+                && slots.insert(id, step.shape).is_some_and(|shape| shape != step.shape)
+            {
+                return Err(error("conflicting slot types"));
+            }
+        }
         let fused = !steps.iter().any(|step| matches!(step.op, Instruction::MatMul(..)));
         let mut work = 0usize;
         for step in &steps {
@@ -322,12 +399,13 @@ impl Expr {
                 .filter(|n| *n <= MAX_WORK)
                 .ok_or_else(|| error("graph work budget exceeded"))?;
         }
-        Ok(Executable { steps, fused, _lease: Lease::acquire(&LIVE_PLANS, 128)? })
+        Ok(Executable { steps, slots, fused, _lease: Lease::acquire(self.0.lease.domain.clone(), true)? })
     }
 }
 #[derive(Debug)]
 /// Validated f32 operations, independent of a kernel language or execution backend.
 pub enum Instruction {
+    Slot(usize),
     Input(Tensor),
     Constant(f32),
     Add(usize, usize),
@@ -345,12 +423,36 @@ pub struct Step {
 pub struct Executable {
     _lease: Lease,
     steps: Vec<Step>,
+    slots: std::collections::BTreeMap<usize, Shape>,
     fused: bool,
+}
+/// Execution-owned bindings. Cloning retains immutable owners, never payload copies.
+#[derive(Clone, Debug, Default)]
+pub struct Bindings(std::collections::BTreeMap<usize, Tensor>);
+impl Bindings {
+    pub fn set(&mut self, slot: usize, tensor: Tensor) -> Result<()> {
+        if slot >= MAX_NODES {
+            return Err(error("slot id budget exceeded"));
+        }
+        self.0.insert(slot, tensor);
+        Ok(())
+    }
 }
 fn relu(value: f32) -> f32 {
     if value <= 0.0 { 0.0 } else { value }
 }
 impl Executable {
+    pub fn validate_bindings(&self, bindings: &Bindings) -> Result<()> {
+        if bindings.0.len() != self.slots.len() {
+            return Err(error("input slot set mismatch"));
+        }
+        for (slot, shape) in &self.slots {
+            if bindings.0.get(slot).is_none_or(|tensor| tensor.shape != *shape) {
+                return Err(error("input slot type/shape mismatch"));
+            }
+        }
+        Ok(())
+    }
     /// Read-only adapter boundary. Plans can only be created by validation.
     #[must_use]
     pub fn steps(&self) -> &[Step] {
@@ -369,6 +471,11 @@ impl Executable {
         text
     }
     pub fn run(&self, budget: &Arc<Budget>) -> Result<Tensor> {
+        self.run_bound(&Bindings::default(), budget)
+    }
+    pub fn run_bound(&self, bindings: &Bindings, budget: &Arc<Budget>) -> Result<Tensor> {
+        self.validate_bindings(bindings)?;
+
         let shape = self.steps.last().expect("nonempty compiled graph").shape;
         if self.fused {
             let mut output = budget.allocate(shape.elements()? * 4)?;
@@ -378,6 +485,7 @@ impl Executable {
                 for col in 0..cols {
                     for (i, step) in self.steps.iter().enumerate() {
                         registers[i] = match &step.op {
+                            Instruction::Slot(id) => bindings.0[id].at(row, col),
                             Instruction::Input(t) => t.at(row, col),
                             Instruction::Constant(v) => *v,
                             Instruction::Add(a, b) => registers[*a] + registers[*b],
@@ -396,6 +504,10 @@ impl Executable {
         // are charged to the same host budget and released on failure or return.
         let mut values: Vec<Tensor> = Vec::with_capacity(self.steps.len());
         for step in &self.steps {
+            if let Instruction::Slot(id) = step.op {
+                values.push(bindings.0[&id].clone());
+                continue;
+            }
             if let Instruction::Input(t) = &step.op {
                 values.push(t.clone());
                 continue;
@@ -417,7 +529,7 @@ impl Executable {
                             }
                             sum
                         }
-                        Instruction::Input(_) => unreachable!("input already retained"),
+                        Instruction::Slot(_) | Instruction::Input(_) => unreachable!("input already retained"),
                     };
                     let offset = (row * cols + col) * 4;
                     output.bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
@@ -589,5 +701,112 @@ mod tests {
         }
         assert!(level[0].compile().is_err());
         assert!(Expr::constant(1.).unwrap().compile().is_ok());
+    }
+    #[test]
+    fn rebindable_program_domains_and_concurrent_owners() {
+        let _guard = TEST_GATE.lock().unwrap();
+        let domain = Domain::new(8, 1);
+        let other = Domain::new(8, 1);
+        let x = Expr::slot_in(0, Shape::Matrix(1, 3), domain.clone()).unwrap();
+        let y = Expr::constant_in(2., domain.clone()).unwrap();
+        assert!(x.add(&Expr::constant_in(1., other.clone()).unwrap()).is_err());
+        let graph = x.add(&y).unwrap().relu().unwrap();
+        let plan = Arc::new(graph.compile().unwrap());
+        assert!(graph.compile().is_err());
+        assert!(Expr::constant_in(1., other).unwrap().compile().is_ok());
+        drop(graph);
+        drop(x);
+        drop(y);
+        let budget = Budget::new(1024);
+        let mut threads = Vec::new();
+        for seed in 0..8 {
+            let plan = plan.clone();
+            let budget = budget.clone();
+            threads.push(std::thread::spawn(move || {
+                let t = tensor(&[seed as f32, -3., 1.], Shape::Matrix(1, 3), &budget);
+                let weak = Arc::downgrade(&t.owner);
+                let mut bound = Bindings::default();
+                bound.set(0, t).unwrap();
+                let result = plan.run_bound(&bound, &budget).unwrap();
+                assert_eq!(floats(&result), [seed as f32 + 2., 0., 3.]);
+                drop(bound);
+                assert!(weak.upgrade().is_none()); // plan never captured this input
+            }));
+        }
+        for thread in threads {
+            thread.join().unwrap();
+        }
+        assert_eq!(budget.used(), 0);
+        assert!(plan.run_bound(&Bindings::default(), &budget).is_err());
+        let mut bad = Bindings::default();
+        bad.set(0, tensor(&[1.], Shape::Scalar, &budget)).unwrap();
+        assert!(plan.run_bound(&bad, &budget).is_err());
+        let a = Expr::slot(0, Shape::Matrix(1, 3)).unwrap();
+        let b = Expr::slot(0, Shape::Matrix(1, 1)).unwrap();
+        assert!(a.add(&b).unwrap().compile().is_err());
+        drop(plan);
+        assert!(Expr::constant_in(0., domain).unwrap().compile().is_ok());
+    }
+    #[test]
+    #[allow(clippy::items_after_statements)]
+    fn randomized_strides_broadcast_and_empty_dimensions() {
+        let _guard = TEST_GATE.lock().unwrap();
+        let budget = Budget::new(65536);
+        let mut state = 17u32;
+        let mut random = || {
+            state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            state
+        };
+        for _ in 0..256 {
+            let rows = (random() % 7) as usize;
+            let cols = (random() % 7) as usize;
+            let shape = Shape::Matrix(rows, cols);
+            let stride = (random() % 5) as usize * 4;
+            let offset = (random() % 4) as usize; // deliberately unaligned
+            let row_stride = cols * stride + 8;
+            let size = offset + rows * row_stride + cols * stride + 4;
+            let mut bytes = vec![0u8; size];
+            // Values are a function of byte position, so alias/zero-stride expectations are
+            // independently evaluated from the actual final storage, never from Tensor::at.
+            for r in 0..rows {
+                for c in 0..cols {
+                    let at = offset + r * row_stride + c * stride;
+                    bytes[at..at + 4].copy_from_slice(&((at % 29) as f32 - 14.).to_le_bytes());
+                }
+            }
+            let base =
+                Tensor::import(&vec![0u8; size.next_multiple_of(4)], Shape::Matrix(1, size.div_ceil(4)), &budget)
+                    .unwrap();
+            // Use a bounded host owner holding precisely the delegated byte interval.
+            #[derive(Debug)]
+            struct Bytes(Vec<u8>);
+            impl Storage for Bytes {
+                fn bytes(&self) -> &[u8] {
+                    &self.0
+                }
+            }
+            let t = Tensor::from_storage(Arc::new(Bytes(bytes.clone())), shape, offset, [row_stride, stride]).unwrap();
+            let column = tensor(&vec![2.; rows], Shape::Matrix(rows, 1), &budget);
+            let plan = Expr::slot(0, shape)
+                .unwrap()
+                .add(&Expr::slot(1, Shape::Matrix(rows, 1)).unwrap())
+                .unwrap()
+                .compile()
+                .unwrap();
+            let mut bound = Bindings::default();
+            bound.set(0, t).unwrap();
+            bound.set(1, column).unwrap();
+            let actual = floats(&plan.run_bound(&bound, &budget).unwrap());
+            let mut expected = Vec::new();
+            for r in 0..rows {
+                for c in 0..cols {
+                    let at = offset + r * row_stride + c * stride;
+                    expected.push(f32::from_le_bytes(bytes[at..at + 4].try_into().unwrap()) + 2.);
+                }
+            }
+            assert_eq!(actual, expected);
+            assert!(base.view(Shape::Matrix(1, 2), size.next_multiple_of(4), [0, 4]).is_err());
+        }
+        assert_eq!(budget.used(), 0);
     }
 }
