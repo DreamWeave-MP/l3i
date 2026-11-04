@@ -726,7 +726,7 @@ fn fast_mode_fuses_multiply_adds_and_nothing_else() {
         .collect();
     assert_same(&read(&twice.run(&[&ta, &tb], &budget).unwrap()), &want, "shared product");
     // Matmul: each element fuses its products, still in increasing k.
-    for (m, k, c) in [(9, 70, 37), (4, 16, 16), (3, 5, 2), (1, 257, 17)] {
+    for (m, k, c) in [(9, 70, 37), (4, 16, 16), (3, 5, 2), (1, 257, 17), (31, 257, 1), (31, 257, 17)] {
         let (p, q): (Vec<f32>, Vec<f32>) =
             ((0..m * k).map(|_| random.moderate()).collect(), (0..k * c).map(|_| random.moderate()).collect());
         let mut want = vec![0.0f32; m * c];
@@ -761,6 +761,9 @@ fn matmul_blocks_and_tails_match_the_ordered_triple_loop() {
     let mut random = Random(0x5eed_5eed_5eed_5eed);
     for (m, k, n) in [
         (4, 64, 16),
+        (31, 257, 1),
+        (31, 257, 17),
+        (31, 257, 15),
         (5, 65, 17),
         (3, 64, 15),
         (8, 128, 32),
@@ -1017,4 +1020,30 @@ fn normalization_stages_match_reference_and_compose() {
     let x = Expr::slot(0, input.shape(), domain).unwrap();
     let p = x.normalize(3.0, true).unwrap().relu().unwrap().sum_rows().unwrap().compile().unwrap();
     assert_same(&read(&p.run(&[&input], &budget).unwrap()), &[0.5], "normalized composition");
+}
+
+#[test]
+fn column_microkernel_preserves_special_values_and_row_remainders() {
+    let budget = Budget::new(1 << 20);
+    let domain = domain();
+    let special = [0.0, -0.0, f32::from_bits(1), 1.0, -1.0, f32::INFINITY, f32::NEG_INFINITY, f32::NAN];
+    for m in [2, 3, 4, 5, 7, 8, 9] {
+        let k = 17;
+        let a: Vec<f32> = (0..m * k).map(|i| special[i % special.len()]).collect();
+        let b: Vec<f32> = (0..k).map(|i| special[(i * 3 + 1) % special.len()]).collect();
+        let ta = tensor(&a, Shape::Matrix(m, k), &budget);
+        let tb = tensor(&b, Shape::Matrix(k, 1), &budget);
+        let p = Expr::slot(0, ta.shape(), domain.clone())
+            .unwrap()
+            .matmul(&Expr::slot(1, tb.shape(), domain.clone()).unwrap())
+            .unwrap()
+            .compile()
+            .unwrap();
+        let expected = reference_matmul(&a, &b, m, k, 1);
+        for isa in isas() {
+            let mut out = vec![0x55; m * 4];
+            p.run_with(&[ta.borrow(), tb.borrow()], &mut out, &budget, isa, CHUNK).unwrap();
+            assert_same(&floats(&out), &expected, "column special values");
+        }
+    }
 }

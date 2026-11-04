@@ -672,6 +672,33 @@ fn matmul_body<const FUSED: bool>(
         }
         return;
     }
+    if n == 1 {
+        const ROWS: usize = 4;
+        let whole = m / ROWS * ROWS;
+        for i in (0..whole).step_by(ROWS) {
+            let mut sums = [0.0f32; ROWS];
+            for p in 0..k {
+                let weight = read(b[p]);
+                for (r, sum) in sums.iter_mut().enumerate() {
+                    let value = read(a[(i + r) * k + p]);
+                    *sum = if FUSED { value.mul_add(weight, *sum) } else { *sum + value * weight };
+                }
+            }
+            for (r, sum) in sums.iter().enumerate() {
+                out[i + r] = sum.to_le_bytes();
+            }
+        }
+        for i in whole..m {
+            let mut sum = 0.0f32;
+            for p in 0..k {
+                let value = read(a[i * k + p]);
+                let weight = read(b[p]);
+                sum = if FUSED { value.mul_add(weight, sum) } else { sum + value * weight };
+            }
+            out[i] = sum.to_le_bytes();
+        }
+        return;
+    }
     let (whole_rows, whole_columns) = (m / MR * MR, n / NR * NR);
     let column_blocks = n / NR;
     let (pack, _) = scratch.as_chunks_mut::<NR>();
@@ -708,14 +735,17 @@ fn matmul_body<const FUSED: bool>(
             }
         }
         if whole_columns < n {
-            let tail = n - whole_columns;
+            // Keep each tail output in a scalar register across k, rather than dispatching
+            // a tiny slice loop and reloading/storing the output for every product.
             for i in 0..m {
-                for p in start..end {
-                    accumulate1::<FUSED>(
-                        &mut out[i * n + whole_columns..][..tail],
-                        read(a[i * k + p]),
-                        &b[p * n + whole_columns..][..tail],
-                    );
+                for j in whole_columns..n {
+                    let mut value = read(out[i * n + j]);
+                    for p in start..end {
+                        let left = read(a[i * k + p]);
+                        let right = read(b[p * n + j]);
+                        value = if FUSED { left.mul_add(right, value) } else { value + left * right };
+                    }
+                    out[i * n + j] = value.to_le_bytes();
                 }
             }
         }
