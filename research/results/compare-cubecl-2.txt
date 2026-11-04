@@ -1,654 +1,681 @@
-# base commit 2eeb871 plus research/cubecl-compare, cubecl, run 2 of 3, fresh process
+# base commit ea21685 plus uncommitted tiling, compare-cubecl run 2 of 3, disposable fedora:44 container, user-space retired instructions
 Model name:                              Intel(R) Core(TM) i7-10870H CPU @ 2.20GHz
 rustc 1.99.1 (58cf8f9c3 2026-10-13)
- 01:45:26 up 4 days, 22:25,  1 user,  load average: 7.30, 7.13, 5.74
-# side=cubecl version=0.11.3 samples=31
-cubecl_client_init us=977.374
-cubecl_workload_first_launch lanes=1 threads=1 n=16 us=28146.106
-cubecl_workload_lanes1_threads1                      n=16        median_us=6.769        min_us=6.359        p90_us=8.075        ns_per_element=423.0782
-cubecl_workload_strict lanes=1 threads=1 n=16 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_workload_first_launch lanes=1 threads=8 n=16 us=20438.742
-cubecl_workload_lanes1_threads8                      n=16        median_us=12.551       min_us=10.696       p90_us=15.456       ns_per_element=784.4342
-cubecl_workload_strict lanes=1 threads=8 n=16 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_workload_first_launch lanes=1 threads=16 n=16 us=19417.798
-cubecl_workload_lanes1_threads16                     n=16        median_us=12.434       min_us=11.418       p90_us=12.782       ns_per_element=777.1523
-cubecl_workload_strict lanes=1 threads=16 n=16 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_workload_first_launch lanes=8 threads=1 n=16 us=14750.253
-cubecl_workload_lanes8_threads1                      n=16        median_us=9.577        min_us=7.112        p90_us=10.519       ns_per_element=598.5591
-cubecl_workload_strict lanes=8 threads=1 n=16 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_workload_first_launch lanes=8 threads=8 n=16 us=13796.302
-cubecl_workload_lanes8_threads8                      n=16        median_us=12.218       min_us=10.372       p90_us=13.379       ns_per_element=763.6196
-cubecl_workload_strict lanes=8 threads=8 n=16 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_workload_first_launch lanes=8 threads=16 n=16 us=13507.685
-cubecl_workload_lanes8_threads16                     n=16        median_us=13.509       min_us=12.116       p90_us=14.500       ns_per_element=844.2841
-cubecl_workload_strict lanes=8 threads=16 n=16 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_workload_first_launch lanes=16 threads=1 n=16 us=12527.028
-cubecl_workload_lanes16_threads1                     n=16        median_us=8.731        min_us=7.283        p90_us=9.229        ns_per_element=545.7073
-cubecl_workload_strict lanes=16 threads=1 n=16 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_workload_first_launch lanes=16 threads=8 n=16 us=13160.334
-cubecl_workload_lanes16_threads8                     n=16        median_us=12.238       min_us=11.288       p90_us=14.434       ns_per_element=764.9021
-cubecl_workload_strict lanes=16 threads=8 n=16 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_workload_first_launch lanes=16 threads=16 n=16 us=12555.813
-cubecl_workload_lanes16_threads16                    n=16        median_us=13.118       min_us=11.321       p90_us=14.087       ns_per_element=819.8933
-cubecl_workload_strict lanes=16 threads=16 n=16 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_workload_fastmath_first_launch lanes=1 threads=1 n=16 us=19266.615
-cubecl_workload_fastmath_lanes1_threads1             n=16        median_us=6.776        min_us=6.607        p90_us=7.386        ns_per_element=423.5224
-cubecl_workload_fastmath_strict lanes=1 threads=1 n=16 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_workload_fastmath_first_launch lanes=1 threads=8 n=16 us=19241.224
-cubecl_workload_fastmath_lanes1_threads8             n=16        median_us=10.131       min_us=9.397        p90_us=12.955       ns_per_element=633.2017
-cubecl_workload_fastmath_strict lanes=1 threads=8 n=16 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_workload_fastmath_first_launch lanes=1 threads=16 n=16 us=20503.955
-cubecl_workload_fastmath_lanes1_threads16            n=16        median_us=13.018       min_us=12.590       p90_us=14.834       ns_per_element=813.6242
-cubecl_workload_fastmath_strict lanes=1 threads=16 n=16 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_workload_fastmath_first_launch lanes=8 threads=1 n=16 us=14233.285
-cubecl_workload_fastmath_lanes8_threads1             n=16        median_us=9.016        min_us=7.085        p90_us=9.406        ns_per_element=563.4964
-cubecl_workload_fastmath_strict lanes=8 threads=1 n=16 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_workload_fastmath_first_launch lanes=8 threads=8 n=16 us=17128.329
-cubecl_workload_fastmath_lanes8_threads8             n=16        median_us=12.506       min_us=11.481       p90_us=13.144       ns_per_element=781.6084
-cubecl_workload_fastmath_strict lanes=8 threads=8 n=16 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_workload_fastmath_first_launch lanes=8 threads=16 n=16 us=13409.642
-cubecl_workload_fastmath_lanes8_threads16            n=16        median_us=12.881       min_us=11.350       p90_us=13.503       ns_per_element=805.0386
-cubecl_workload_fastmath_strict lanes=8 threads=16 n=16 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_workload_fastmath_first_launch lanes=16 threads=1 n=16 us=12272.997
-cubecl_workload_fastmath_lanes16_threads1            n=16        median_us=6.754        min_us=6.559        p90_us=6.974        ns_per_element=422.1415
-cubecl_workload_fastmath_strict lanes=16 threads=1 n=16 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_workload_fastmath_first_launch lanes=16 threads=8 n=16 us=13270.683
-cubecl_workload_fastmath_lanes16_threads8            n=16        median_us=10.711       min_us=9.278        p90_us=11.135       ns_per_element=669.4504
-cubecl_workload_fastmath_strict lanes=16 threads=8 n=16 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_workload_fastmath_first_launch lanes=16 threads=16 n=16 us=12425.615
-cubecl_workload_fastmath_lanes16_threads16           n=16        median_us=13.449       min_us=11.827       p90_us=16.652       ns_per_element=840.5629
-cubecl_workload_fastmath_strict lanes=16 threads=16 n=16 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_chain16_first_launch lanes=1 threads=1 n=16 us=17867.627
-cubecl_chain16_lanes1_threads1                       n=16        median_us=6.845        min_us=6.285        p90_us=7.178        ns_per_element=427.8186
-cubecl_chain16_strict lanes=1 threads=1 n=16 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_chain16_first_launch lanes=1 threads=8 n=16 us=16340.556
-cubecl_chain16_lanes1_threads8                       n=16        median_us=10.329       min_us=9.541        p90_us=12.560       ns_per_element=645.5317
-cubecl_chain16_strict lanes=1 threads=8 n=16 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_chain16_first_launch lanes=1 threads=16 n=16 us=16467.532
-cubecl_chain16_lanes1_threads16                      n=16        median_us=13.192       min_us=11.275       p90_us=14.917       ns_per_element=824.4976
-cubecl_chain16_strict lanes=1 threads=16 n=16 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_chain16_first_launch lanes=8 threads=1 n=16 us=15012.966
-cubecl_chain16_lanes8_threads1                       n=16        median_us=7.094        min_us=6.566        p90_us=7.535        ns_per_element=443.4029
-cubecl_chain16_strict lanes=8 threads=1 n=16 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_chain16_first_launch lanes=8 threads=8 n=16 us=13934.480
-cubecl_chain16_lanes8_threads8                       n=16        median_us=10.170       min_us=9.325        p90_us=10.742       ns_per_element=635.5985
-cubecl_chain16_strict lanes=8 threads=8 n=16 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_chain16_first_launch lanes=8 threads=16 n=16 us=15214.329
-cubecl_chain16_lanes8_threads16                      n=16        median_us=13.391       min_us=12.678       p90_us=14.428       ns_per_element=836.9115
-cubecl_chain16_strict lanes=8 threads=16 n=16 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_chain16_first_launch lanes=16 threads=1 n=16 us=12039.405
-cubecl_chain16_lanes16_threads1                      n=16        median_us=6.905        min_us=6.380        p90_us=8.042        ns_per_element=431.5636
-cubecl_chain16_strict lanes=16 threads=1 n=16 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_chain16_first_launch lanes=16 threads=8 n=16 us=13864.413
-cubecl_chain16_lanes16_threads8                      n=16        median_us=10.325       min_us=9.671        p90_us=10.767       ns_per_element=645.3009
-cubecl_chain16_strict lanes=16 threads=8 n=16 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_chain16_first_launch lanes=16 threads=16 n=16 us=13262.344
-cubecl_chain16_lanes16_threads16                     n=16        median_us=12.854       min_us=10.172       p90_us=15.831       ns_per_element=803.3750
-cubecl_chain16_strict lanes=16 threads=16 n=16 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_chain16_nofma_lanes8_threads1                 n=16        median_us=7.398        min_us=6.424        p90_us=10.040       ns_per_element=462.3750
-cubecl_chain16_nofma_strict n=16 threads=1 differences=0
-cubecl_chain16_nofma_lanes8_threads8                 n=16        median_us=10.346       min_us=8.352        p90_us=14.177       ns_per_element=646.6250
-cubecl_chain16_nofma_strict n=16 threads=8 differences=0
-cubecl_chain16_nofma_lanes8_threads16                n=16        median_us=11.729       min_us=10.159       p90_us=15.712       ns_per_element=733.0625
-cubecl_chain16_nofma_strict n=16 threads=16 differences=0
-cubecl_workload_write_dispatch_read_persistent_lanes8 n=16        median_us=11.422       min_us=9.519        p90_us=12.920       ns_per_element=713.8447
-cubecl_workload_copy_in_dispatch_readback_lanes8     n=16        median_us=13.331       min_us=12.310       p90_us=14.202       ns_per_element=833.2082
-cubecl_workload_first_launch lanes=1 threads=1 n=1024 us=16.605
-cubecl_workload_lanes1_threads1                      n=1024      median_us=7.057        min_us=6.700        p90_us=7.726        ns_per_element=6.8918
-cubecl_workload_strict lanes=1 threads=1 n=1024 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_workload_first_launch lanes=1 threads=8 n=1024 us=121.940
-cubecl_workload_lanes1_threads8                      n=1024      median_us=11.388       min_us=10.324       p90_us=12.239       ns_per_element=11.1210
-cubecl_workload_strict lanes=1 threads=8 n=1024 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_workload_first_launch lanes=1 threads=16 n=1024 us=13.360
-cubecl_workload_lanes1_threads16                     n=1024      median_us=16.107       min_us=13.628       p90_us=22.319       ns_per_element=15.7299
-cubecl_workload_strict lanes=1 threads=16 n=1024 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_workload_first_launch lanes=8 threads=1 n=1024 us=12.073
-cubecl_workload_lanes8_threads1                      n=1024      median_us=8.571        min_us=7.310        p90_us=10.598       ns_per_element=8.3698
-cubecl_workload_strict lanes=8 threads=1 n=1024 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_workload_first_launch lanes=8 threads=8 n=1024 us=56.686
-cubecl_workload_lanes8_threads8                      n=1024      median_us=13.583       min_us=11.147       p90_us=17.167       ns_per_element=13.2648
-cubecl_workload_strict lanes=8 threads=8 n=1024 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_workload_first_launch lanes=8 threads=16 n=1024 us=16.048
-cubecl_workload_lanes8_threads16                     n=1024      median_us=14.717       min_us=12.836       p90_us=17.098       ns_per_element=14.3723
-cubecl_workload_strict lanes=8 threads=16 n=1024 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_workload_first_launch lanes=16 threads=1 n=1024 us=10.306
-cubecl_workload_lanes16_threads1                     n=1024      median_us=9.348        min_us=7.393        p90_us=9.728        ns_per_element=9.1293
-cubecl_workload_strict lanes=16 threads=1 n=1024 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_workload_first_launch lanes=16 threads=8 n=1024 us=73.949
-cubecl_workload_lanes16_threads8                     n=1024      median_us=14.048       min_us=11.033       p90_us=15.789       ns_per_element=13.7189
-cubecl_workload_strict lanes=16 threads=8 n=1024 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_workload_first_launch lanes=16 threads=16 n=1024 us=12.173
-cubecl_workload_lanes16_threads16                    n=1024      median_us=14.403       min_us=12.917       p90_us=16.368       ns_per_element=14.0652
-cubecl_workload_strict lanes=16 threads=16 n=1024 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_workload_fastmath_first_launch lanes=1 threads=1 n=1024 us=26.212
-cubecl_workload_fastmath_lanes1_threads1             n=1024      median_us=7.555        min_us=6.650        p90_us=8.292        ns_per_element=7.3777
-cubecl_workload_fastmath_strict lanes=1 threads=1 n=1024 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_workload_fastmath_first_launch lanes=1 threads=8 n=1024 us=87.255
-cubecl_workload_fastmath_lanes1_threads8             n=1024      median_us=12.224       min_us=9.594        p90_us=13.401       ns_per_element=11.9376
-cubecl_workload_fastmath_strict lanes=1 threads=8 n=1024 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_workload_fastmath_first_launch lanes=1 threads=16 n=1024 us=76.697
-cubecl_workload_fastmath_lanes1_threads16            n=1024      median_us=12.514       min_us=11.386       p90_us=14.149       ns_per_element=12.2203
-cubecl_workload_fastmath_strict lanes=1 threads=16 n=1024 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_workload_fastmath_first_launch lanes=8 threads=1 n=1024 us=11.616
-cubecl_workload_fastmath_lanes8_threads1             n=1024      median_us=8.162        min_us=7.300        p90_us=9.873        ns_per_element=7.9705
-cubecl_workload_fastmath_strict lanes=8 threads=1 n=1024 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_workload_fastmath_first_launch lanes=8 threads=8 n=1024 us=91.934
-cubecl_workload_fastmath_lanes8_threads8             n=1024      median_us=10.837       min_us=9.503        p90_us=12.482       ns_per_element=10.5828
-cubecl_workload_fastmath_strict lanes=8 threads=8 n=1024 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_workload_fastmath_first_launch lanes=8 threads=16 n=1024 us=11.911
-cubecl_workload_fastmath_lanes8_threads16            n=1024      median_us=13.440       min_us=11.357       p90_us=14.388       ns_per_element=13.1246
-cubecl_workload_fastmath_strict lanes=8 threads=16 n=1024 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_workload_fastmath_first_launch lanes=16 threads=1 n=1024 us=12.405
-cubecl_workload_fastmath_lanes16_threads1            n=1024      median_us=9.031        min_us=8.788        p90_us=9.516        ns_per_element=8.8197
-cubecl_workload_fastmath_strict lanes=16 threads=1 n=1024 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_workload_fastmath_first_launch lanes=16 threads=8 n=1024 us=73.987
-cubecl_workload_fastmath_lanes16_threads8            n=1024      median_us=12.077       min_us=9.737        p90_us=13.726       ns_per_element=11.7943
-cubecl_workload_fastmath_strict lanes=16 threads=8 n=1024 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_workload_fastmath_first_launch lanes=16 threads=16 n=1024 us=22.847
-cubecl_workload_fastmath_lanes16_threads16           n=1024      median_us=13.175       min_us=11.440       p90_us=15.945       ns_per_element=12.8662
-cubecl_workload_fastmath_strict lanes=16 threads=16 n=1024 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_chain16_first_launch lanes=1 threads=1 n=1024 us=21.474
-cubecl_chain16_lanes1_threads1                       n=1024      median_us=7.809        min_us=6.883        p90_us=8.269        ns_per_element=7.6263
-cubecl_chain16_strict lanes=1 threads=1 n=1024 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_chain16_first_launch lanes=1 threads=8 n=1024 us=85.215
-cubecl_chain16_lanes1_threads8                       n=1024      median_us=11.972       min_us=10.963       p90_us=12.787       ns_per_element=11.6913
-cubecl_chain16_strict lanes=1 threads=8 n=1024 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_chain16_first_launch lanes=1 threads=16 n=1024 us=15.319
-cubecl_chain16_lanes1_threads16                      n=1024      median_us=12.585       min_us=11.432       p90_us=14.221       ns_per_element=12.2899
-cubecl_chain16_strict lanes=1 threads=16 n=1024 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_chain16_first_launch lanes=8 threads=1 n=1024 us=13.302
-cubecl_chain16_lanes8_threads1                       n=1024      median_us=8.165        min_us=7.347        p90_us=8.872        ns_per_element=7.9734
-cubecl_chain16_strict lanes=8 threads=1 n=1024 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_chain16_first_launch lanes=8 threads=8 n=1024 us=81.719
-cubecl_chain16_lanes8_threads8                       n=1024      median_us=11.772       min_us=10.036       p90_us=12.709       ns_per_element=11.4957
-cubecl_chain16_strict lanes=8 threads=8 n=1024 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_chain16_first_launch lanes=8 threads=16 n=1024 us=13.002
-cubecl_chain16_lanes8_threads16                      n=1024      median_us=13.483       min_us=11.796       p90_us=15.562       ns_per_element=13.1666
-cubecl_chain16_strict lanes=8 threads=16 n=1024 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_chain16_first_launch lanes=16 threads=1 n=1024 us=11.145
-cubecl_chain16_lanes16_threads1                      n=1024      median_us=7.809        min_us=7.090        p90_us=8.311        ns_per_element=7.6265
-cubecl_chain16_strict lanes=16 threads=1 n=1024 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_chain16_first_launch lanes=16 threads=8 n=1024 us=83.768
-cubecl_chain16_lanes16_threads8                      n=1024      median_us=11.156       min_us=9.625        p90_us=12.049       ns_per_element=10.8941
-cubecl_chain16_strict lanes=16 threads=8 n=1024 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_chain16_first_launch lanes=16 threads=16 n=1024 us=11.268
-cubecl_chain16_lanes16_threads16                     n=1024      median_us=13.190       min_us=11.950       p90_us=15.019       ns_per_element=12.8805
-cubecl_chain16_strict lanes=16 threads=16 n=1024 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_chain16_nofma_lanes8_threads1                 n=1024      median_us=8.610        min_us=8.206        p90_us=9.445        ns_per_element=8.4084
-cubecl_chain16_nofma_strict n=1024 threads=1 differences=0
-cubecl_chain16_nofma_lanes8_threads8                 n=1024      median_us=11.474       min_us=10.890       p90_us=13.706       ns_per_element=11.2047
-cubecl_chain16_nofma_strict n=1024 threads=8 differences=0
-cubecl_chain16_nofma_lanes8_threads16                n=1024      median_us=13.742       min_us=12.337       p90_us=14.833       ns_per_element=13.4195
-cubecl_chain16_nofma_strict n=1024 threads=16 differences=0
-cubecl_workload_write_dispatch_read_persistent_lanes8 n=1024      median_us=11.387       min_us=10.720       p90_us=12.626       ns_per_element=11.1197
-cubecl_workload_copy_in_dispatch_readback_lanes8     n=1024      median_us=15.430       min_us=13.638       p90_us=17.281       ns_per_element=15.0680
-cubecl_workload_first_launch lanes=1 threads=1 n=16384 us=56.448
-cubecl_workload_lanes1_threads1                      n=16384     median_us=11.296       min_us=9.908        p90_us=12.225       ns_per_element=0.6894
-cubecl_workload_strict lanes=1 threads=1 n=16384 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_workload_first_launch lanes=1 threads=8 n=16384 us=116.933
-cubecl_workload_lanes1_threads8                      n=16384     median_us=13.843       min_us=11.305       p90_us=15.761       ns_per_element=0.8449
-cubecl_workload_strict lanes=1 threads=8 n=16384 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_workload_first_launch lanes=1 threads=16 n=16384 us=16.162
-cubecl_workload_lanes1_threads16                     n=16384     median_us=16.002       min_us=12.897       p90_us=18.176       ns_per_element=0.9767
-cubecl_workload_strict lanes=1 threads=16 n=16384 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_workload_first_launch lanes=8 threads=1 n=16384 us=19.793
-cubecl_workload_lanes8_threads1                      n=16384     median_us=10.252       min_us=8.898        p90_us=12.287       ns_per_element=0.6257
-cubecl_workload_strict lanes=8 threads=1 n=16384 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_workload_first_launch lanes=8 threads=8 n=16384 us=81.669
-cubecl_workload_lanes8_threads8                      n=16384     median_us=13.131       min_us=11.482       p90_us=14.147       ns_per_element=0.8015
-cubecl_workload_strict lanes=8 threads=8 n=16384 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_workload_first_launch lanes=8 threads=16 n=16384 us=23.874
-cubecl_workload_lanes8_threads16                     n=16384     median_us=14.589       min_us=12.958       p90_us=16.643       ns_per_element=0.8904
-cubecl_workload_strict lanes=8 threads=16 n=16384 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_workload_first_launch lanes=16 threads=1 n=16384 us=17.389
-cubecl_workload_lanes16_threads1                     n=16384     median_us=9.837        min_us=9.185        p90_us=13.471       ns_per_element=0.6004
-cubecl_workload_strict lanes=16 threads=1 n=16384 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_workload_first_launch lanes=16 threads=8 n=16384 us=353.965
-cubecl_workload_lanes16_threads8                     n=16384     median_us=14.919       min_us=12.249       p90_us=669.310      ns_per_element=0.9106
-cubecl_workload_strict lanes=16 threads=8 n=16384 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_workload_first_launch lanes=16 threads=16 n=16384 us=17.674
-cubecl_workload_lanes16_threads16                    n=16384     median_us=17.691       min_us=13.801       p90_us=24.148       ns_per_element=1.0798
-cubecl_workload_strict lanes=16 threads=16 n=16384 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_workload_fastmath_first_launch lanes=1 threads=1 n=16384 us=67.671
-cubecl_workload_fastmath_lanes1_threads1             n=16384     median_us=10.552       min_us=9.707        p90_us=11.246       ns_per_element=0.6440
-cubecl_workload_fastmath_strict lanes=1 threads=1 n=16384 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_workload_fastmath_first_launch lanes=1 threads=8 n=16384 us=88.080
-cubecl_workload_fastmath_lanes1_threads8             n=16384     median_us=13.852       min_us=11.892       p90_us=18.103       ns_per_element=0.8454
-cubecl_workload_fastmath_strict lanes=1 threads=8 n=16384 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_workload_fastmath_first_launch lanes=1 threads=16 n=16384 us=17.083
-cubecl_workload_fastmath_lanes1_threads16            n=16384     median_us=16.729       min_us=14.690       p90_us=32.372       ns_per_element=1.0210
-cubecl_workload_fastmath_strict lanes=1 threads=16 n=16384 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_workload_fastmath_first_launch lanes=8 threads=1 n=16384 us=20.270
-cubecl_workload_fastmath_lanes8_threads1             n=16384     median_us=10.721       min_us=9.598        p90_us=12.353       ns_per_element=0.6543
-cubecl_workload_fastmath_strict lanes=8 threads=1 n=16384 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_workload_fastmath_first_launch lanes=8 threads=8 n=16384 us=50.349
-cubecl_workload_fastmath_lanes8_threads8             n=16384     median_us=14.236       min_us=12.861       p90_us=21.523       ns_per_element=0.8689
-cubecl_workload_fastmath_strict lanes=8 threads=8 n=16384 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_workload_fastmath_first_launch lanes=8 threads=16 n=16384 us=16.513
-cubecl_workload_fastmath_lanes8_threads16            n=16384     median_us=15.653       min_us=13.678       p90_us=22.973       ns_per_element=0.9554
-cubecl_workload_fastmath_strict lanes=8 threads=16 n=16384 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_workload_fastmath_first_launch lanes=16 threads=1 n=16384 us=19.643
-cubecl_workload_fastmath_lanes16_threads1            n=16384     median_us=10.381       min_us=9.651        p90_us=10.996       ns_per_element=0.6336
-cubecl_workload_fastmath_strict lanes=16 threads=1 n=16384 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_workload_fastmath_first_launch lanes=16 threads=8 n=16384 us=54.986
-cubecl_workload_fastmath_lanes16_threads8            n=16384     median_us=16.025       min_us=13.188       p90_us=38.795       ns_per_element=0.9781
-cubecl_workload_fastmath_strict lanes=16 threads=8 n=16384 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_workload_fastmath_first_launch lanes=16 threads=16 n=16384 us=16.563
-cubecl_workload_fastmath_lanes16_threads16           n=16384     median_us=14.326       min_us=12.233       p90_us=16.387       ns_per_element=0.8744
-cubecl_workload_fastmath_strict lanes=16 threads=16 n=16384 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_chain16_first_launch lanes=1 threads=1 n=16384 us=67.394
-cubecl_chain16_lanes1_threads1                       n=16384     median_us=14.422       min_us=13.550       p90_us=17.030       ns_per_element=0.8802
-cubecl_chain16_strict lanes=1 threads=1 n=16384 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_chain16_first_launch lanes=1 threads=8 n=16384 us=100.177
-cubecl_chain16_lanes1_threads8                       n=16384     median_us=12.986       min_us=12.656       p90_us=14.902       ns_per_element=0.7926
-cubecl_chain16_strict lanes=1 threads=8 n=16384 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_chain16_first_launch lanes=1 threads=16 n=16384 us=19.284
-cubecl_chain16_lanes1_threads16                      n=16384     median_us=16.948       min_us=14.198       p90_us=20.301       ns_per_element=1.0344
-cubecl_chain16_strict lanes=1 threads=16 n=16384 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_chain16_first_launch lanes=8 threads=1 n=16384 us=97.589
-cubecl_chain16_lanes8_threads1                       n=16384     median_us=15.485       min_us=14.086       p90_us=16.223       ns_per_element=0.9452
-cubecl_chain16_strict lanes=8 threads=1 n=16384 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_chain16_first_launch lanes=8 threads=8 n=16384 us=87.326
-cubecl_chain16_lanes8_threads8                       n=16384     median_us=14.570       min_us=13.489       p90_us=17.612       ns_per_element=0.8893
-cubecl_chain16_strict lanes=8 threads=8 n=16384 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_chain16_first_launch lanes=8 threads=16 n=16384 us=16.112
-cubecl_chain16_lanes8_threads16                      n=16384     median_us=16.673       min_us=14.568       p90_us=18.514       ns_per_element=1.0177
-cubecl_chain16_strict lanes=8 threads=16 n=16384 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_chain16_first_launch lanes=16 threads=1 n=16384 us=38.518
-cubecl_chain16_lanes16_threads1                      n=16384     median_us=14.481       min_us=13.873       p90_us=15.345       ns_per_element=0.8839
-cubecl_chain16_strict lanes=16 threads=1 n=16384 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_chain16_first_launch lanes=16 threads=8 n=16384 us=89.983
-cubecl_chain16_lanes16_threads8                      n=16384     median_us=15.518       min_us=13.833       p90_us=18.094       ns_per_element=0.9471
-cubecl_chain16_strict lanes=16 threads=8 n=16384 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_chain16_first_launch lanes=16 threads=16 n=16384 us=30.053
-cubecl_chain16_lanes16_threads16                     n=16384     median_us=18.019       min_us=15.608       p90_us=24.224       ns_per_element=1.0998
-cubecl_chain16_strict lanes=16 threads=16 n=16384 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_chain16_nofma_lanes8_threads1                 n=16384     median_us=18.023       min_us=16.812       p90_us=19.101       ns_per_element=1.1001
-cubecl_chain16_nofma_strict n=16384 threads=1 differences=0
-cubecl_chain16_nofma_lanes8_threads8                 n=16384     median_us=14.499       min_us=13.696       p90_us=18.265       ns_per_element=0.8850
-cubecl_chain16_nofma_strict n=16384 threads=8 differences=0
-cubecl_chain16_nofma_lanes8_threads16                n=16384     median_us=17.754       min_us=14.944       p90_us=25.151       ns_per_element=1.0836
-cubecl_chain16_nofma_strict n=16384 threads=16 differences=0
-cubecl_workload_write_dispatch_read_persistent_lanes8 n=16384     median_us=29.408       min_us=26.761       p90_us=34.142       ns_per_element=1.7949
-cubecl_workload_copy_in_dispatch_readback_lanes8     n=16384     median_us=40.311       min_us=37.376       p90_us=42.348       ns_per_element=2.4604
-cubecl_workload_first_launch lanes=1 threads=1 n=65536 us=935.423
-cubecl_workload_lanes1_threads1                      n=65536     median_us=23.369       min_us=21.345       p90_us=25.149       ns_per_element=0.3566
-cubecl_workload_strict lanes=1 threads=1 n=65536 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_workload_first_launch lanes=1 threads=8 n=65536 us=110.943
-cubecl_workload_lanes1_threads8                      n=65536     median_us=14.653       min_us=13.321       p90_us=15.385       ns_per_element=0.2236
-cubecl_workload_strict lanes=1 threads=8 n=65536 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_workload_first_launch lanes=1 threads=16 n=65536 us=24.559
-cubecl_workload_lanes1_threads16                     n=65536     median_us=17.687       min_us=15.729       p90_us=99.491       ns_per_element=0.2699
-cubecl_workload_strict lanes=1 threads=16 n=65536 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_workload_first_launch lanes=8 threads=1 n=65536 us=68.442
-cubecl_workload_lanes8_threads1                      n=65536     median_us=23.759       min_us=22.255       p90_us=24.984       ns_per_element=0.3625
-cubecl_workload_strict lanes=8 threads=1 n=65536 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_workload_first_launch lanes=8 threads=8 n=65536 us=428.802
-cubecl_workload_lanes8_threads8                      n=65536     median_us=17.484       min_us=15.275       p90_us=23.385       ns_per_element=0.2668
-cubecl_workload_strict lanes=8 threads=8 n=65536 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_workload_first_launch lanes=8 threads=16 n=65536 us=36.322
-cubecl_workload_lanes8_threads16                     n=65536     median_us=19.223       min_us=16.304       p90_us=42.326       ns_per_element=0.2933
-cubecl_workload_strict lanes=8 threads=16 n=65536 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_workload_first_launch lanes=16 threads=1 n=65536 us=85.833
-cubecl_workload_lanes16_threads1                     n=65536     median_us=24.084       min_us=21.897       p90_us=25.336       ns_per_element=0.3675
-cubecl_workload_strict lanes=16 threads=1 n=65536 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_workload_first_launch lanes=16 threads=8 n=65536 us=120.827
-cubecl_workload_lanes16_threads8                     n=65536     median_us=15.803       min_us=14.191       p90_us=17.230       ns_per_element=0.2411
-cubecl_workload_strict lanes=16 threads=8 n=65536 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_workload_first_launch lanes=16 threads=16 n=65536 us=67.362
-cubecl_workload_lanes16_threads16                    n=65536     median_us=18.988       min_us=17.122       p90_us=20.726       ns_per_element=0.2897
-cubecl_workload_strict lanes=16 threads=16 n=65536 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_workload_fastmath_first_launch lanes=1 threads=1 n=65536 us=278.351
-cubecl_workload_fastmath_lanes1_threads1             n=65536     median_us=22.822       min_us=21.274       p90_us=24.541       ns_per_element=0.3482
-cubecl_workload_fastmath_strict lanes=1 threads=1 n=65536 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_workload_fastmath_first_launch lanes=1 threads=8 n=65536 us=98.286
-cubecl_workload_fastmath_lanes1_threads8             n=65536     median_us=14.522       min_us=13.814       p90_us=15.695       ns_per_element=0.2216
-cubecl_workload_fastmath_strict lanes=1 threads=8 n=65536 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_workload_fastmath_first_launch lanes=1 threads=16 n=65536 us=25.653
-cubecl_workload_fastmath_lanes1_threads16            n=65536     median_us=17.057       min_us=15.493       p90_us=18.042       ns_per_element=0.2603
-cubecl_workload_fastmath_strict lanes=1 threads=16 n=65536 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_workload_fastmath_first_launch lanes=8 threads=1 n=65536 us=40.833
-cubecl_workload_fastmath_lanes8_threads1             n=65536     median_us=23.149       min_us=21.309       p90_us=25.028       ns_per_element=0.3532
-cubecl_workload_fastmath_strict lanes=8 threads=1 n=65536 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_workload_fastmath_first_launch lanes=8 threads=8 n=65536 us=149.689
-cubecl_workload_fastmath_lanes8_threads8             n=65536     median_us=17.389       min_us=14.425       p90_us=19.516       ns_per_element=0.2653
-cubecl_workload_fastmath_strict lanes=8 threads=8 n=65536 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_workload_fastmath_first_launch lanes=8 threads=16 n=65536 us=28.547
-cubecl_workload_fastmath_lanes8_threads16            n=65536     median_us=23.414       min_us=17.516       p90_us=44.949       ns_per_element=0.3573
-cubecl_workload_fastmath_strict lanes=8 threads=16 n=65536 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_workload_fastmath_first_launch lanes=16 threads=1 n=65536 us=45.367
-cubecl_workload_fastmath_lanes16_threads1            n=65536     median_us=24.365       min_us=22.409       p90_us=25.563       ns_per_element=0.3718
-cubecl_workload_fastmath_strict lanes=16 threads=1 n=65536 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_workload_fastmath_first_launch lanes=16 threads=8 n=65536 us=129.873
-cubecl_workload_fastmath_lanes16_threads8            n=65536     median_us=18.058       min_us=14.097       p90_us=19.785       ns_per_element=0.2755
-cubecl_workload_fastmath_strict lanes=16 threads=8 n=65536 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_workload_fastmath_first_launch lanes=16 threads=16 n=65536 us=70.885
-cubecl_workload_fastmath_lanes16_threads16           n=65536     median_us=21.032       min_us=15.991       p90_us=29.951       ns_per_element=0.3209
-cubecl_workload_fastmath_strict lanes=16 threads=16 n=65536 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_chain16_first_launch lanes=1 threads=1 n=65536 us=344.172
-cubecl_chain16_lanes1_threads1                       n=65536     median_us=35.815       min_us=33.002       p90_us=39.314       ns_per_element=0.5465
-cubecl_chain16_strict lanes=1 threads=1 n=65536 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_chain16_first_launch lanes=1 threads=8 n=65536 us=87.249
-cubecl_chain16_lanes1_threads8                       n=65536     median_us=17.688       min_us=15.930       p90_us=21.521       ns_per_element=0.2699
-cubecl_chain16_strict lanes=1 threads=8 n=65536 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_chain16_first_launch lanes=1 threads=16 n=65536 us=172.532
-cubecl_chain16_lanes1_threads16                      n=65536     median_us=63.970       min_us=58.400       p90_us=68.990       ns_per_element=0.9761
-cubecl_chain16_strict lanes=1 threads=16 n=65536 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_chain16_first_launch lanes=8 threads=1 n=65536 us=125.446
-cubecl_chain16_lanes8_threads1                       n=65536     median_us=32.603       min_us=31.808       p90_us=36.138       ns_per_element=0.4975
-cubecl_chain16_strict lanes=8 threads=1 n=65536 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_chain16_first_launch lanes=8 threads=8 n=65536 us=119.753
-cubecl_chain16_lanes8_threads8                       n=65536     median_us=23.240       min_us=16.448       p90_us=25.439       ns_per_element=0.3546
-cubecl_chain16_strict lanes=8 threads=8 n=65536 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_chain16_first_launch lanes=8 threads=16 n=65536 us=1399.723
-cubecl_chain16_lanes8_threads16                      n=65536     median_us=86.445       min_us=58.963       p90_us=203.535      ns_per_element=1.3190
-cubecl_chain16_strict lanes=8 threads=16 n=65536 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_chain16_first_launch lanes=16 threads=1 n=65536 us=90.418
-cubecl_chain16_lanes16_threads1                      n=65536     median_us=34.083       min_us=31.157       p90_us=35.721       ns_per_element=0.5201
-cubecl_chain16_strict lanes=16 threads=1 n=65536 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_chain16_first_launch lanes=16 threads=8 n=65536 us=104.717
-cubecl_chain16_lanes16_threads8                      n=65536     median_us=16.419       min_us=16.156       p90_us=20.190       ns_per_element=0.2505
-cubecl_chain16_strict lanes=16 threads=8 n=65536 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_chain16_first_launch lanes=16 threads=16 n=65536 us=253.760
-cubecl_chain16_lanes16_threads16                     n=65536     median_us=72.784       min_us=58.720       p90_us=1761.825     ns_per_element=1.1106
-cubecl_chain16_strict lanes=16 threads=16 n=65536 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_chain16_nofma_lanes8_threads1                 n=65536     median_us=45.777       min_us=42.851       p90_us=49.916       ns_per_element=0.6985
-cubecl_chain16_nofma_strict n=65536 threads=1 differences=0
-cubecl_chain16_nofma_lanes8_threads8                 n=65536     median_us=19.236       min_us=18.436       p90_us=20.968       ns_per_element=0.2935
-cubecl_chain16_nofma_strict n=65536 threads=8 differences=0
-cubecl_chain16_nofma_lanes8_threads16                n=65536     median_us=1900.094     min_us=60.904       p90_us=2161.684     ns_per_element=28.9931
-cubecl_chain16_nofma_strict n=65536 threads=16 differences=0
-cubecl_workload_write_dispatch_read_persistent_lanes8 n=65536     median_us=83.384       min_us=80.136       p90_us=91.400       ns_per_element=1.2723
-cubecl_workload_copy_in_dispatch_readback_lanes8     n=65536     median_us=434.072      min_us=379.498      p90_us=468.373      ns_per_element=6.6234
-cubecl_workload_first_launch lanes=1 threads=1 n=1048576 us=14587.496
-cubecl_workload_lanes1_threads1                      n=1048576   median_us=300.389      min_us=258.691      p90_us=370.904      ns_per_element=0.2865
-cubecl_workload_strict lanes=1 threads=1 n=1048576 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_workload_first_launch lanes=1 threads=8 n=1048576 us=710.436
-cubecl_workload_lanes1_threads8                      n=1048576   median_us=103.143      min_us=71.168       p90_us=216.281      ns_per_element=0.0984
-cubecl_workload_strict lanes=1 threads=8 n=1048576 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_workload_first_launch lanes=1 threads=16 n=1048576 us=598.866
-cubecl_workload_lanes1_threads16                     n=1048576   median_us=76.957       min_us=75.256       p90_us=122.087      ns_per_element=0.0734
-cubecl_workload_strict lanes=1 threads=16 n=1048576 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_workload_first_launch lanes=8 threads=1 n=1048576 us=471.820
-cubecl_workload_lanes8_threads1                      n=1048576   median_us=301.079      min_us=265.743      p90_us=358.639      ns_per_element=0.2871
-cubecl_workload_strict lanes=8 threads=1 n=1048576 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_workload_first_launch lanes=8 threads=8 n=1048576 us=418.090
-cubecl_workload_lanes8_threads8                      n=1048576   median_us=69.910       min_us=65.422       p90_us=78.300       ns_per_element=0.0667
-cubecl_workload_strict lanes=8 threads=8 n=1048576 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_workload_first_launch lanes=8 threads=16 n=1048576 us=693.838
-cubecl_workload_lanes8_threads16                     n=1048576   median_us=77.792       min_us=74.951       p90_us=2076.641     ns_per_element=0.0742
-cubecl_workload_strict lanes=8 threads=16 n=1048576 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_workload_first_launch lanes=16 threads=1 n=1048576 us=465.422
-cubecl_workload_lanes16_threads1                     n=1048576   median_us=319.848      min_us=263.795      p90_us=387.621      ns_per_element=0.3050
-cubecl_workload_strict lanes=16 threads=1 n=1048576 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_workload_first_launch lanes=16 threads=8 n=1048576 us=327.116
-cubecl_workload_lanes16_threads8                     n=1048576   median_us=68.465       min_us=66.199       p90_us=73.059       ns_per_element=0.0653
-cubecl_workload_strict lanes=16 threads=8 n=1048576 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_workload_first_launch lanes=16 threads=16 n=1048576 us=728.650
-cubecl_workload_lanes16_threads16                    n=1048576   median_us=84.873       min_us=74.730       p90_us=1586.995     ns_per_element=0.0809
-cubecl_workload_strict lanes=16 threads=16 n=1048576 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_workload_fastmath_first_launch lanes=1 threads=1 n=1048576 us=4348.947
-cubecl_workload_fastmath_lanes1_threads1             n=1048576   median_us=434.264      min_us=277.743      p90_us=663.840      ns_per_element=0.4141
-cubecl_workload_fastmath_strict lanes=1 threads=1 n=1048576 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_workload_fastmath_first_launch lanes=1 threads=8 n=1048576 us=1191.295
-cubecl_workload_fastmath_lanes1_threads8             n=1048576   median_us=69.398       min_us=66.202       p90_us=81.342       ns_per_element=0.0662
-cubecl_workload_fastmath_strict lanes=1 threads=8 n=1048576 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_workload_fastmath_first_launch lanes=1 threads=16 n=1048576 us=443.272
-cubecl_workload_fastmath_lanes1_threads16            n=1048576   median_us=75.837       min_us=74.699       p90_us=133.088      ns_per_element=0.0723
-cubecl_workload_fastmath_strict lanes=1 threads=16 n=1048576 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_workload_fastmath_first_launch lanes=8 threads=1 n=1048576 us=507.846
-cubecl_workload_fastmath_lanes8_threads1             n=1048576   median_us=296.356      min_us=275.640      p90_us=363.029      ns_per_element=0.2826
-cubecl_workload_fastmath_strict lanes=8 threads=1 n=1048576 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_workload_fastmath_first_launch lanes=8 threads=8 n=1048576 us=596.178
-cubecl_workload_fastmath_lanes8_threads8             n=1048576   median_us=68.752       min_us=66.090       p90_us=76.760       ns_per_element=0.0656
-cubecl_workload_fastmath_strict lanes=8 threads=8 n=1048576 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_workload_fastmath_first_launch lanes=8 threads=16 n=1048576 us=375.781
-cubecl_workload_fastmath_lanes8_threads16            n=1048576   median_us=80.177       min_us=75.470       p90_us=271.902      ns_per_element=0.0765
-cubecl_workload_fastmath_strict lanes=8 threads=16 n=1048576 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_workload_fastmath_first_launch lanes=16 threads=1 n=1048576 us=465.351
-cubecl_workload_fastmath_lanes16_threads1            n=1048576   median_us=286.655      min_us=254.992      p90_us=337.917      ns_per_element=0.2734
-cubecl_workload_fastmath_strict lanes=16 threads=1 n=1048576 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_workload_fastmath_first_launch lanes=16 threads=8 n=1048576 us=338.885
-cubecl_workload_fastmath_lanes16_threads8            n=1048576   median_us=67.669       min_us=64.966       p90_us=75.671       ns_per_element=0.0645
-cubecl_workload_fastmath_strict lanes=16 threads=8 n=1048576 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_workload_fastmath_first_launch lanes=16 threads=16 n=1048576 us=393.924
-cubecl_workload_fastmath_lanes16_threads16           n=1048576   median_us=80.870       min_us=75.694       p90_us=185.897      ns_per_element=0.0771
-cubecl_workload_fastmath_strict lanes=16 threads=16 n=1048576 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_chain16_first_launch lanes=1 threads=1 n=1048576 us=4353.250
-cubecl_chain16_lanes1_threads1                       n=1048576   median_us=638.510      min_us=594.325      p90_us=670.168      ns_per_element=0.6089
-cubecl_chain16_strict lanes=1 threads=1 n=1048576 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_chain16_first_launch lanes=1 threads=8 n=1048576 us=378.709
-cubecl_chain16_lanes1_threads8                       n=1048576   median_us=88.929       min_us=81.618       p90_us=108.251      ns_per_element=0.0848
-cubecl_chain16_strict lanes=1 threads=8 n=1048576 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_chain16_first_launch lanes=1 threads=16 n=1048576 us=658.898
-cubecl_chain16_lanes1_threads16                      n=1048576   median_us=100.777      min_us=93.632       p90_us=138.376      ns_per_element=0.0961
-cubecl_chain16_strict lanes=1 threads=16 n=1048576 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_chain16_first_launch lanes=8 threads=1 n=1048576 us=667.887
-cubecl_chain16_lanes8_threads1                       n=1048576   median_us=498.760      min_us=445.175      p90_us=558.622      ns_per_element=0.4757
-cubecl_chain16_strict lanes=8 threads=1 n=1048576 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_chain16_first_launch lanes=8 threads=8 n=1048576 us=431.200
-cubecl_chain16_lanes8_threads8                       n=1048576   median_us=87.209       min_us=82.269       p90_us=106.090      ns_per_element=0.0832
-cubecl_chain16_strict lanes=8 threads=8 n=1048576 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_chain16_first_launch lanes=8 threads=16 n=1048576 us=454.773
-cubecl_chain16_lanes8_threads16                      n=1048576   median_us=101.341      min_us=93.688       p90_us=117.305      ns_per_element=0.0966
-cubecl_chain16_strict lanes=8 threads=16 n=1048576 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_chain16_first_launch lanes=16 threads=1 n=1048576 us=646.767
-cubecl_chain16_lanes16_threads1                      n=1048576   median_us=605.237      min_us=410.931      p90_us=912.301      ns_per_element=0.5772
-cubecl_chain16_strict lanes=16 threads=1 n=1048576 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_chain16_first_launch lanes=16 threads=8 n=1048576 us=1791.300
-cubecl_chain16_lanes16_threads8                      n=1048576   median_us=149.670      min_us=114.926      p90_us=165.358      ns_per_element=0.1427
-cubecl_chain16_strict lanes=16 threads=8 n=1048576 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_chain16_first_launch lanes=16 threads=16 n=1048576 us=775.086
-cubecl_chain16_lanes16_threads16                     n=1048576   median_us=277.654      min_us=90.441       p90_us=2890.347     ns_per_element=0.2648
-cubecl_chain16_strict lanes=16 threads=16 n=1048576 plain_differences=0 rounding_differences=0 edge_differences=0
-cubecl_chain16_nofma_lanes8_threads1                 n=1048576   median_us=626.379      min_us=593.159      p90_us=697.084      ns_per_element=0.5974
-cubecl_chain16_nofma_strict n=1048576 threads=1 differences=0
-cubecl_chain16_nofma_lanes8_threads8                 n=1048576   median_us=118.784      min_us=110.218      p90_us=131.204      ns_per_element=0.1133
-cubecl_chain16_nofma_strict n=1048576 threads=8 differences=0
-cubecl_chain16_nofma_lanes8_threads16                n=1048576   median_us=116.420      min_us=108.896      p90_us=145.082      ns_per_element=0.1110
-cubecl_chain16_nofma_strict n=1048576 threads=16 differences=0
-cubecl_workload_write_dispatch_read_persistent_lanes8 n=1048576   median_us=4117.870     min_us=3927.679     p90_us=4717.035     ns_per_element=3.9271
-cubecl_workload_copy_in_dispatch_readback_lanes8     n=1048576   median_us=7481.029     min_us=7226.623     p90_us=8774.077     ns_per_element=7.1345
-cubecl_matmul_tuned_nofma_lanes8_threads1            n=262144    median_us=18.969       min_us=17.688       p90_us=20.138       ns_per_element=0.0724
-cubecl_matmul_nofma_strict side=64 threads=1 differences=0
-cubecl_matmul_tuned_nofma_lanes8_threads8            n=262144    median_us=53.662       min_us=53.039       p90_us=60.425       ns_per_element=0.2047
-cubecl_matmul_nofma_strict side=64 threads=8 differences=0
-cubecl_matmul_tuned_nofma_lanes8_threads16           n=262144    median_us=100.280      min_us=54.840       p90_us=2968.879     ns_per_element=0.3825
-cubecl_matmul_nofma_strict side=64 threads=16 differences=0
-cubecl_matmul_simple_first_launch side=64 lanes=1 threads=1 us=29373.126
-cubecl_matmul_simple_lanes1_threads1                 n=262144    median_us=23.910       min_us=22.574       p90_us=25.482       ns_per_element=0.0912
-cubecl_matmul_simple_strict side=64 lanes=1 threads=1 differences=3056
-cubecl_matmul_simple_first_launch side=64 lanes=1 threads=8 us=29173.249
-cubecl_matmul_simple_lanes1_threads8                 n=262144    median_us=15.423       min_us=14.349       p90_us=17.957       ns_per_element=0.0588
-cubecl_matmul_simple_strict side=64 lanes=1 threads=8 differences=3056
-cubecl_matmul_simple_first_launch side=64 lanes=1 threads=16 us=32915.901
-cubecl_matmul_simple_lanes1_threads16                n=262144    median_us=51.643       min_us=42.980       p90_us=83.338       ns_per_element=0.1970
-cubecl_matmul_simple_strict side=64 lanes=1 threads=16 differences=3056
-cubecl_matmul_tuned_first_launch side=64 lanes=1 threads=1 us=38013.474
-cubecl_matmul_tuned_lanes1_threads1                  n=262144    median_us=17.090       min_us=15.905       p90_us=18.382       ns_per_element=0.0652
-cubecl_matmul_tuned_strict side=64 lanes=1 threads=1 differences=3056
-cubecl_matmul_tuned_first_launch side=64 lanes=1 threads=8 us=38300.320
-cubecl_matmul_tuned_lanes1_threads8                  n=262144    median_us=13.017       min_us=12.911       p90_us=13.858       ns_per_element=0.0497
-cubecl_matmul_tuned_strict side=64 lanes=1 threads=8 differences=3056
-cubecl_matmul_tuned_first_launch side=64 lanes=1 threads=16 us=39743.335
-cubecl_matmul_tuned_lanes1_threads16                 n=262144    median_us=17.019       min_us=14.724       p90_us=44.654       ns_per_element=0.0649
-cubecl_matmul_tuned_strict side=64 lanes=1 threads=16 differences=3056
-cubecl_matmul_simple_first_launch side=64 lanes=8 threads=1 us=23365.121
-cubecl_matmul_simple_lanes8_threads1                 n=262144    median_us=22.868       min_us=21.748       p90_us=24.093       ns_per_element=0.0872
-cubecl_matmul_simple_strict side=64 lanes=8 threads=1 differences=3056
-cubecl_matmul_simple_first_launch side=64 lanes=8 threads=8 us=20163.473
-cubecl_matmul_simple_lanes8_threads8                 n=262144    median_us=14.457       min_us=14.163       p90_us=15.321       ns_per_element=0.0551
-cubecl_matmul_simple_strict side=64 lanes=8 threads=8 differences=3056
-cubecl_matmul_simple_first_launch side=64 lanes=8 threads=16 us=19179.649
-cubecl_matmul_simple_lanes8_threads16                n=262144    median_us=64.749       min_us=34.448       p90_us=203.186      ns_per_element=0.2470
-cubecl_matmul_simple_strict side=64 lanes=8 threads=16 differences=3056
-cubecl_matmul_tuned_first_launch side=64 lanes=8 threads=1 us=23821.682
-cubecl_matmul_tuned_lanes8_threads1                  n=262144    median_us=16.551       min_us=15.708       p90_us=17.343       ns_per_element=0.0631
-cubecl_matmul_tuned_strict side=64 lanes=8 threads=1 differences=3056
-cubecl_matmul_tuned_first_launch side=64 lanes=8 threads=8 us=24167.359
-cubecl_matmul_tuned_lanes8_threads8                  n=262144    median_us=13.176       min_us=12.858       p90_us=13.709       ns_per_element=0.0503
-cubecl_matmul_tuned_strict side=64 lanes=8 threads=8 differences=3056
-cubecl_matmul_tuned_first_launch side=64 lanes=8 threads=16 us=25413.435
-cubecl_matmul_tuned_lanes8_threads16                 n=262144    median_us=55.598       min_us=41.290       p90_us=74.852       ns_per_element=0.2121
-cubecl_matmul_tuned_strict side=64 lanes=8 threads=16 differences=3056
-cubecl_matmul_simple_first_launch side=64 lanes=16 threads=1 us=20504.490
-cubecl_matmul_simple_lanes16_threads1                n=262144    median_us=22.884       min_us=22.405       p90_us=23.370       ns_per_element=0.0873
-cubecl_matmul_simple_strict side=64 lanes=16 threads=1 differences=3056
-cubecl_matmul_simple_first_launch side=64 lanes=16 threads=8 us=18112.839
-cubecl_matmul_simple_lanes16_threads8                n=262144    median_us=15.649       min_us=14.162       p90_us=16.452       ns_per_element=0.0597
-cubecl_matmul_simple_strict side=64 lanes=16 threads=8 differences=3056
-cubecl_matmul_simple_first_launch side=64 lanes=16 threads=16 us=21113.871
-cubecl_matmul_simple_lanes16_threads16               n=262144    median_us=58.243       min_us=55.289       p90_us=150.139      ns_per_element=0.2222
-cubecl_matmul_simple_strict side=64 lanes=16 threads=16 differences=3056
-cubecl_matmul_tuned_first_launch side=64 lanes=16 threads=1 us=22343.992
-cubecl_matmul_tuned_lanes16_threads1                 n=262144    median_us=15.462       min_us=14.479       p90_us=16.365       ns_per_element=0.0590
-cubecl_matmul_tuned_strict side=64 lanes=16 threads=1 differences=3056
-cubecl_matmul_tuned_first_launch side=64 lanes=16 threads=8 us=22227.293
-cubecl_matmul_tuned_lanes16_threads8                 n=262144    median_us=13.312       min_us=13.152       p90_us=14.318       ns_per_element=0.0508
-cubecl_matmul_tuned_strict side=64 lanes=16 threads=8 differences=3056
-cubecl_matmul_tuned_first_launch side=64 lanes=16 threads=16 us=21627.433
-cubecl_matmul_tuned_lanes16_threads16                n=262144    median_us=15.676       min_us=14.546       p90_us=21.028       ns_per_element=0.0598
-cubecl_matmul_tuned_strict side=64 lanes=16 threads=16 differences=3056
-cubecl_matmul_tuned_nofma_lanes8_threads1            n=16777216  median_us=796.681      min_us=751.336      p90_us=805.162      ns_per_element=0.0475
-cubecl_matmul_nofma_strict side=256 threads=1 differences=0
-cubecl_matmul_tuned_nofma_lanes8_threads8            n=16777216  median_us=177.094      min_us=158.370      p90_us=201.951      ns_per_element=0.0106
-cubecl_matmul_nofma_strict side=256 threads=8 differences=0
-cubecl_matmul_tuned_nofma_lanes8_threads16           n=16777216  median_us=153.593      min_us=139.675      p90_us=199.675      ns_per_element=0.0092
-cubecl_matmul_nofma_strict side=256 threads=16 differences=0
-cubecl_matmul_simple_first_launch side=256 lanes=1 threads=1 us=1363.930
-cubecl_matmul_simple_lanes1_threads1                 n=16777216  median_us=1334.031     min_us=1155.713     p90_us=1885.594     ns_per_element=0.0795
-cubecl_matmul_simple_strict side=256 lanes=1 threads=1 differences=49815
-cubecl_matmul_simple_first_launch side=256 lanes=1 threads=8 us=464.981
-cubecl_matmul_simple_lanes1_threads8                 n=16777216  median_us=259.483      min_us=228.191      p90_us=290.803      ns_per_element=0.0155
-cubecl_matmul_simple_strict side=256 lanes=1 threads=8 differences=49815
-cubecl_matmul_simple_first_launch side=256 lanes=1 threads=16 us=240.050
-cubecl_matmul_simple_lanes1_threads16                n=16777216  median_us=192.817      min_us=176.042      p90_us=272.700      ns_per_element=0.0115
-cubecl_matmul_simple_strict side=256 lanes=1 threads=16 differences=49815
-cubecl_matmul_tuned_first_launch side=256 lanes=1 threads=1 us=824.799
-cubecl_matmul_tuned_lanes1_threads1                  n=16777216  median_us=764.202      min_us=727.831      p90_us=934.470      ns_per_element=0.0455
-cubecl_matmul_tuned_strict side=256 lanes=1 threads=1 differences=49815
-cubecl_matmul_tuned_first_launch side=256 lanes=1 threads=8 us=1013.364
-cubecl_matmul_tuned_lanes1_threads8                  n=16777216  median_us=157.233      min_us=144.625      p90_us=1336.548     ns_per_element=0.0094
-cubecl_matmul_tuned_strict side=256 lanes=1 threads=8 differences=49815
-cubecl_matmul_tuned_first_launch side=256 lanes=1 threads=16 us=1679.371
-cubecl_matmul_tuned_lanes1_threads16                 n=16777216  median_us=152.872      min_us=127.126      p90_us=2317.664     ns_per_element=0.0091
-cubecl_matmul_tuned_strict side=256 lanes=1 threads=16 differences=49815
-cubecl_matmul_simple_first_launch side=256 lanes=8 threads=1 us=1276.509
-cubecl_matmul_simple_lanes8_threads1                 n=16777216  median_us=1211.662     min_us=1193.554     p90_us=1250.466     ns_per_element=0.0722
-cubecl_matmul_simple_strict side=256 lanes=8 threads=1 differences=49815
-cubecl_matmul_simple_first_launch side=256 lanes=8 threads=8 us=316.934
-cubecl_matmul_simple_lanes8_threads8                 n=16777216  median_us=271.644      min_us=235.335      p90_us=289.825      ns_per_element=0.0162
-cubecl_matmul_simple_strict side=256 lanes=8 threads=8 differences=49815
-cubecl_matmul_simple_first_launch side=256 lanes=8 threads=16 us=303.860
-cubecl_matmul_simple_lanes8_threads16                n=16777216  median_us=195.777      min_us=169.977      p90_us=265.137      ns_per_element=0.0117
-cubecl_matmul_simple_strict side=256 lanes=8 threads=16 differences=49815
-cubecl_matmul_tuned_first_launch side=256 lanes=8 threads=1 us=819.473
-cubecl_matmul_tuned_lanes8_threads1                  n=16777216  median_us=733.312      min_us=720.277      p90_us=830.551      ns_per_element=0.0437
-cubecl_matmul_tuned_strict side=256 lanes=8 threads=1 differences=49815
-cubecl_matmul_tuned_first_launch side=256 lanes=8 threads=8 us=179.859
-cubecl_matmul_tuned_lanes8_threads8                  n=16777216  median_us=138.049      min_us=132.073      p90_us=140.317      ns_per_element=0.0082
-cubecl_matmul_tuned_strict side=256 lanes=8 threads=8 differences=49815
-cubecl_matmul_tuned_first_launch side=256 lanes=8 threads=16 us=196.859
-cubecl_matmul_tuned_lanes8_threads16                 n=16777216  median_us=142.087      min_us=128.816      p90_us=155.265      ns_per_element=0.0085
-cubecl_matmul_tuned_strict side=256 lanes=8 threads=16 differences=49815
-cubecl_matmul_simple_first_launch side=256 lanes=16 threads=1 us=1861.161
-cubecl_matmul_simple_lanes16_threads1                n=16777216  median_us=1222.776     min_us=1200.051     p90_us=1813.494     ns_per_element=0.0729
-cubecl_matmul_simple_strict side=256 lanes=16 threads=1 differences=49815
-cubecl_matmul_simple_first_launch side=256 lanes=16 threads=8 us=289.636
-cubecl_matmul_simple_lanes16_threads8                n=16777216  median_us=242.125      min_us=229.380      p90_us=255.597      ns_per_element=0.0144
-cubecl_matmul_simple_strict side=256 lanes=16 threads=8 differences=49815
-cubecl_matmul_simple_first_launch side=256 lanes=16 threads=16 us=225.973
-cubecl_matmul_simple_lanes16_threads16               n=16777216  median_us=191.717      min_us=168.548      p90_us=710.864      ns_per_element=0.0114
-cubecl_matmul_simple_strict side=256 lanes=16 threads=16 differences=49815
-cubecl_matmul_tuned_first_launch side=256 lanes=16 threads=1 us=734.207
-cubecl_matmul_tuned_lanes16_threads1                 n=16777216  median_us=709.019      min_us=690.935      p90_us=712.040      ns_per_element=0.0423
-cubecl_matmul_tuned_strict side=256 lanes=16 threads=1 differences=49815
-cubecl_matmul_tuned_first_launch side=256 lanes=16 threads=8 us=310.240
-cubecl_matmul_tuned_lanes16_threads8                 n=16777216  median_us=145.652      min_us=130.167      p90_us=151.277      ns_per_element=0.0087
-cubecl_matmul_tuned_strict side=256 lanes=16 threads=8 differences=49815
-cubecl_matmul_tuned_first_launch side=256 lanes=16 threads=16 us=1087.208
-cubecl_matmul_tuned_lanes16_threads16                n=16777216  median_us=161.295      min_us=121.346      p90_us=415.766      ns_per_element=0.0096
-cubecl_matmul_tuned_strict side=256 lanes=16 threads=16 differences=49815
-cubecl_matmul_tuned_nofma_lanes8_threads1            n=64000000  median_us=2884.010     min_us=2604.943     p90_us=2900.864     ns_per_element=0.0451
-cubecl_matmul_nofma_strict side=400 threads=1 differences=0
-cubecl_matmul_tuned_nofma_lanes8_threads8            n=64000000  median_us=609.785      min_us=601.834      p90_us=761.672      ns_per_element=0.0095
-cubecl_matmul_nofma_strict side=400 threads=8 differences=0
-cubecl_matmul_tuned_nofma_lanes8_threads16           n=64000000  median_us=505.832      min_us=454.014      p90_us=1424.033     ns_per_element=0.0079
-cubecl_matmul_nofma_strict side=400 threads=16 differences=0
-cubecl_matmul_simple_first_launch side=400 lanes=1 threads=1 us=6121.145
-cubecl_matmul_simple_lanes1_threads1                 n=64000000  median_us=5614.163     min_us=5534.235     p90_us=5747.299     ns_per_element=0.0877
-cubecl_matmul_simple_strict side=400 lanes=1 threads=1 differences=143042
-cubecl_matmul_simple_first_launch side=400 lanes=1 threads=8 us=1207.461
-cubecl_matmul_simple_lanes1_threads8                 n=64000000  median_us=1214.973     min_us=1156.672     p90_us=1262.728     ns_per_element=0.0190
-cubecl_matmul_simple_strict side=400 lanes=1 threads=8 differences=143042
-cubecl_matmul_simple_first_launch side=400 lanes=1 threads=16 us=817.522
-cubecl_matmul_simple_lanes1_threads16                n=64000000  median_us=1674.941     min_us=633.966      p90_us=3194.858     ns_per_element=0.0262
-cubecl_matmul_simple_strict side=400 lanes=1 threads=16 differences=143042
-cubecl_matmul_tuned_first_launch side=400 lanes=1 threads=1 us=2876.655
-cubecl_matmul_tuned_lanes1_threads1                  n=64000000  median_us=2779.126     min_us=2692.046     p90_us=2817.528     ns_per_element=0.0434
-cubecl_matmul_tuned_strict side=400 lanes=1 threads=1 differences=143042
-cubecl_matmul_tuned_first_launch side=400 lanes=1 threads=8 us=512.910
-cubecl_matmul_tuned_lanes1_threads8                  n=64000000  median_us=574.261      min_us=557.357      p90_us=636.896      ns_per_element=0.0090
-cubecl_matmul_tuned_strict side=400 lanes=1 threads=8 differences=143042
-cubecl_matmul_tuned_first_launch side=400 lanes=1 threads=16 us=566.113
-cubecl_matmul_tuned_lanes1_threads16                 n=64000000  median_us=453.354      min_us=395.979      p90_us=602.300      ns_per_element=0.0071
-cubecl_matmul_tuned_strict side=400 lanes=1 threads=16 differences=143042
-cubecl_matmul_simple_first_launch side=400 lanes=8 threads=1 us=5712.976
-cubecl_matmul_simple_lanes8_threads1                 n=64000000  median_us=5675.895     min_us=5523.767     p90_us=5824.479     ns_per_element=0.0887
-cubecl_matmul_simple_strict side=400 lanes=8 threads=1 differences=143042
-cubecl_matmul_simple_first_launch side=400 lanes=8 threads=8 us=1160.007
-cubecl_matmul_simple_lanes8_threads8                 n=64000000  median_us=1214.578     min_us=1105.361     p90_us=1245.294     ns_per_element=0.0190
-cubecl_matmul_simple_strict side=400 lanes=8 threads=8 differences=143042
-cubecl_matmul_simple_first_launch side=400 lanes=8 threads=16 us=1203.465
-cubecl_matmul_simple_lanes8_threads16                n=64000000  median_us=693.543      min_us=634.229      p90_us=1923.250     ns_per_element=0.0108
-cubecl_matmul_simple_strict side=400 lanes=8 threads=16 differences=143042
-cubecl_matmul_tuned_first_launch side=400 lanes=8 threads=1 us=2837.531
-cubecl_matmul_tuned_lanes8_threads1                  n=64000000  median_us=2696.833     min_us=2624.229     p90_us=2724.258     ns_per_element=0.0421
-cubecl_matmul_tuned_strict side=400 lanes=8 threads=1 differences=143042
-cubecl_matmul_tuned_first_launch side=400 lanes=8 threads=8 us=418.271
-cubecl_matmul_tuned_lanes8_threads8                  n=64000000  median_us=504.756      min_us=483.833      p90_us=541.424      ns_per_element=0.0079
-cubecl_matmul_tuned_strict side=400 lanes=8 threads=8 differences=143042
-cubecl_matmul_tuned_first_launch side=400 lanes=8 threads=16 us=391.787
-cubecl_matmul_tuned_lanes8_threads16                 n=64000000  median_us=459.764      min_us=408.698      p90_us=1249.595     ns_per_element=0.0072
-cubecl_matmul_tuned_strict side=400 lanes=8 threads=16 differences=143042
-cubecl_matmul_simple_first_launch side=400 lanes=16 threads=1 us=5817.508
-cubecl_matmul_simple_lanes16_threads1                n=64000000  median_us=5554.409     min_us=5369.460     p90_us=5667.560     ns_per_element=0.0868
-cubecl_matmul_simple_strict side=400 lanes=16 threads=1 differences=143042
-cubecl_matmul_simple_first_launch side=400 lanes=16 threads=8 us=1011.467
-cubecl_matmul_simple_lanes16_threads8                n=64000000  median_us=1093.962     min_us=1051.971     p90_us=1223.585     ns_per_element=0.0171
-cubecl_matmul_simple_strict side=400 lanes=16 threads=8 differences=143042
-cubecl_matmul_simple_first_launch side=400 lanes=16 threads=16 us=3238.300
-cubecl_matmul_simple_lanes16_threads16               n=64000000  median_us=685.957      min_us=643.653      p90_us=1663.714     ns_per_element=0.0107
-cubecl_matmul_simple_strict side=400 lanes=16 threads=16 differences=143042
-cubecl_matmul_tuned_first_launch side=400 lanes=16 threads=1 us=2938.625
-cubecl_matmul_tuned_lanes16_threads1                 n=64000000  median_us=2746.174     min_us=2668.056     p90_us=2773.914     ns_per_element=0.0429
-cubecl_matmul_tuned_strict side=400 lanes=16 threads=1 differences=143042
-cubecl_matmul_tuned_first_launch side=400 lanes=16 threads=8 us=547.107
-cubecl_matmul_tuned_lanes16_threads8                 n=64000000  median_us=497.613      min_us=484.487      p90_us=544.128      ns_per_element=0.0078
-cubecl_matmul_tuned_strict side=400 lanes=16 threads=8 differences=143042
-cubecl_matmul_tuned_first_launch side=400 lanes=16 threads=16 us=362.056
-cubecl_matmul_tuned_lanes16_threads16                n=64000000  median_us=660.839      min_us=440.468      p90_us=2441.759     ns_per_element=0.0103
-cubecl_matmul_tuned_strict side=400 lanes=16 threads=16 differences=143042
-	Command being timed: "timeout 280 target/cubecl-compare/release/l3i-cubecl-compare cubecl"
-	User time (seconds): 157.44
-	System time (seconds): 123.78
-	Percent of CPU this job got: 574%
-	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:48.97
-	Average shared text size (kbytes): 0
-	Average unshared data size (kbytes): 0
-	Average stack size (kbytes): 0
-	Average total size (kbytes): 0
-	Maximum resident set size (kbytes): 193328
-	Average resident set size (kbytes): 0
-	Major (requiring I/O) page faults: 0
-	Minor (reclaiming a frame) page faults: 439702
-	Voluntary context switches: 2220318
-	Involuntary context switches: 955666
-	Swaps: 0
-	File system inputs: 0
-	File system outputs: 0
-	Socket messages sent: 0
-	Socket messages received: 0
-	Signals delivered: 0
-	Page size (bytes): 4096
-	Exit status: 0
+# side=cubecl version=0.11.3 metric=user_instructions_all_threads samples=15
+cubecl_client_init instructions=538537
+cubecl_workload_first_launch lanes=1 threads=1 n=16 instructions=104811127
+cubecl_workload_lanes1_threads1                n=16        median=50888        min=49932        max=57795        per_element=3180.500
+cubecl_workload_check lanes=1 threads=1 n=16 differences=0 edge_differences=0
+cubecl_workload_first_launch lanes=1 threads=8 n=16 instructions=93474624
+cubecl_workload_lanes1_threads8                n=16        median=197048       min=178690       max=273170       per_element=12315.500
+cubecl_workload_check lanes=1 threads=8 n=16 differences=0 edge_differences=0
+cubecl_workload_first_launch lanes=8 threads=1 n=16 instructions=65634557
+cubecl_workload_lanes8_threads1                n=16        median=61578        min=55311        max=73027        per_element=3848.625
+cubecl_workload_check lanes=8 threads=1 n=16 differences=0 edge_differences=0
+cubecl_workload_first_launch lanes=8 threads=8 n=16 instructions=62272904
+cubecl_workload_lanes8_threads8                n=16        median=149443       min=143823       max=285911       per_element=9340.188
+cubecl_workload_check lanes=8 threads=8 n=16 differences=0 edge_differences=0
+cubecl_workload_first_launch lanes=16 threads=1 n=16 instructions=56584301
+cubecl_workload_lanes16_threads1               n=16        median=56960        min=54945        max=63855        per_element=3560.000
+cubecl_workload_check lanes=16 threads=1 n=16 differences=0 edge_differences=0
+cubecl_workload_first_launch lanes=16 threads=8 n=16 instructions=56869124
+cubecl_workload_lanes16_threads8               n=16        median=201394       min=170524       max=263317       per_element=12587.125
+cubecl_workload_check lanes=16 threads=8 n=16 differences=0 edge_differences=0
+cubecl_chain16_first_launch lanes=1 threads=1 n=16 instructions=82133461
+cubecl_chain16_lanes1_threads1                 n=16        median=53720        min=51915        max=56325        per_element=3357.500
+cubecl_chain16_check lanes=1 threads=1 n=16 differences=0 edge_differences=0
+cubecl_chain16_first_launch lanes=1 threads=8 n=16 instructions=82468818
+cubecl_chain16_lanes1_threads8                 n=16        median=189572       min=127875       max=248706       per_element=11848.250
+cubecl_chain16_check lanes=1 threads=8 n=16 differences=0 edge_differences=0
+cubecl_chain16_first_launch lanes=8 threads=1 n=16 instructions=67632641
+cubecl_chain16_lanes8_threads1                 n=16        median=57265        min=48782        max=64812        per_element=3579.062
+cubecl_chain16_check lanes=8 threads=1 n=16 differences=0 edge_differences=0
+cubecl_chain16_first_launch lanes=8 threads=8 n=16 instructions=68221079
+cubecl_chain16_lanes8_threads8                 n=16        median=176715       min=145714       max=334404       per_element=11044.688
+cubecl_chain16_check lanes=8 threads=8 n=16 differences=0 edge_differences=0
+cubecl_chain16_first_launch lanes=16 threads=1 n=16 instructions=58701260
+cubecl_chain16_lanes16_threads1                n=16        median=53984        min=52400        max=59934        per_element=3374.000
+cubecl_chain16_check lanes=16 threads=1 n=16 differences=0 edge_differences=0
+cubecl_chain16_first_launch lanes=16 threads=8 n=16 instructions=60045077
+cubecl_chain16_lanes16_threads8                n=16        median=194417       min=183775       max=437232       per_element=12151.062
+cubecl_chain16_check lanes=16 threads=8 n=16 differences=0 edge_differences=0
+cubecl_chain16_nofma_first_launch lanes=1 threads=1 n=16 instructions=82944566
+cubecl_chain16_nofma_lanes1_threads1           n=16        median=53912        min=52564        max=61599        per_element=3369.500
+cubecl_chain16_nofma_check lanes=1 threads=1 n=16 differences=0 edge_differences=0
+cubecl_chain16_nofma_first_launch lanes=1 threads=8 n=16 instructions=83574385
+cubecl_chain16_nofma_lanes1_threads8           n=16        median=183901       min=147953       max=338250       per_element=11493.812
+cubecl_chain16_nofma_check lanes=1 threads=8 n=16 differences=0 edge_differences=0
+cubecl_chain16_nofma_first_launch lanes=8 threads=1 n=16 instructions=56942491
+cubecl_chain16_nofma_lanes8_threads1           n=16        median=54968        min=53055        max=61298        per_element=3435.500
+cubecl_chain16_nofma_check lanes=8 threads=1 n=16 differences=0 edge_differences=0
+cubecl_chain16_nofma_first_launch lanes=8 threads=8 n=16 instructions=57501948
+cubecl_chain16_nofma_lanes8_threads8           n=16        median=176834       min=152009       max=330661       per_element=11052.125
+cubecl_chain16_nofma_check lanes=8 threads=8 n=16 differences=0 edge_differences=0
+cubecl_chain16_nofma_first_launch lanes=16 threads=1 n=16 instructions=60975879
+cubecl_chain16_nofma_lanes16_threads1          n=16        median=53623        min=51683        max=58457        per_element=3351.438
+cubecl_chain16_nofma_check lanes=16 threads=1 n=16 differences=0 edge_differences=0
+cubecl_chain16_nofma_first_launch lanes=16 threads=8 n=16 instructions=61315658
+cubecl_chain16_nofma_lanes16_threads8          n=16        median=201425       min=117404       max=935950       per_element=12589.062
+cubecl_chain16_nofma_check lanes=16 threads=8 n=16 differences=0 edge_differences=0
+cubecl_horner_first_launch lanes=1 threads=1 n=16 instructions=104192847
+cubecl_horner_lanes1_threads1                  n=16        median=52553        min=50057        max=99827        per_element=3284.562
+cubecl_horner_check lanes=1 threads=1 n=16 differences=0 edge_differences=0
+cubecl_horner_first_launch lanes=1 threads=8 n=16 instructions=105463586
+cubecl_horner_lanes1_threads8                  n=16        median=180018       min=148616       max=354944       per_element=11251.125
+cubecl_horner_check lanes=1 threads=8 n=16 differences=0 edge_differences=0
+cubecl_horner_first_launch lanes=8 threads=1 n=16 instructions=61815445
+cubecl_horner_lanes8_threads1                  n=16        median=55223        min=52838        max=63020        per_element=3451.438
+cubecl_horner_check lanes=8 threads=1 n=16 differences=0 edge_differences=0
+cubecl_horner_first_launch lanes=8 threads=8 n=16 instructions=62270551
+cubecl_horner_lanes8_threads8                  n=16        median=186555       min=146334       max=374723       per_element=11659.688
+cubecl_horner_check lanes=8 threads=8 n=16 differences=0 edge_differences=0
+cubecl_horner_first_launch lanes=16 threads=1 n=16 instructions=55043484
+cubecl_horner_lanes16_threads1                 n=16        median=53938        min=52924        max=59487        per_element=3371.125
+cubecl_horner_check lanes=16 threads=1 n=16 differences=0 edge_differences=0
+cubecl_horner_first_launch lanes=16 threads=8 n=16 instructions=55657606
+cubecl_horner_lanes16_threads8                 n=16        median=187279       min=150883       max=358742       per_element=11704.938
+cubecl_horner_check lanes=16 threads=8 n=16 differences=0 edge_differences=0
+cubecl_horner_nofma_first_launch lanes=1 threads=1 n=16 instructions=91423487
+cubecl_horner_nofma_lanes1_threads1            n=16        median=52509        min=49817        max=59408        per_element=3281.812
+cubecl_horner_nofma_check lanes=1 threads=1 n=16 differences=0 edge_differences=0
+cubecl_horner_nofma_first_launch lanes=1 threads=8 n=16 instructions=92088543
+cubecl_horner_nofma_lanes1_threads8            n=16        median=195051       min=180742       max=234475       per_element=12190.688
+cubecl_horner_nofma_check lanes=1 threads=8 n=16 differences=0 edge_differences=0
+cubecl_horner_nofma_first_launch lanes=8 threads=1 n=16 instructions=75625495
+cubecl_horner_nofma_lanes8_threads1            n=16        median=54015        min=52289        max=57084        per_element=3375.938
+cubecl_horner_nofma_check lanes=8 threads=1 n=16 differences=0 edge_differences=0
+cubecl_horner_nofma_first_launch lanes=8 threads=8 n=16 instructions=77181867
+cubecl_horner_nofma_lanes8_threads8            n=16        median=192925       min=170443       max=234149       per_element=12057.812
+cubecl_horner_nofma_check lanes=8 threads=8 n=16 differences=0 edge_differences=0
+cubecl_horner_nofma_first_launch lanes=16 threads=1 n=16 instructions=60603872
+cubecl_horner_nofma_lanes16_threads1           n=16        median=54812        min=52754        max=61006        per_element=3425.750
+cubecl_horner_nofma_check lanes=16 threads=1 n=16 differences=0 edge_differences=0
+cubecl_horner_nofma_first_launch lanes=16 threads=8 n=16 instructions=60913982
+cubecl_horner_nofma_lanes16_threads8           n=16        median=188795       min=152001       max=334933       per_element=11799.688
+cubecl_horner_nofma_check lanes=16 threads=8 n=16 differences=0 edge_differences=0
+cubecl_residual_first_launch lanes=1 threads=1 n=16 instructions=95831480
+cubecl_residual_lanes1_threads1                n=16        median=50918        min=50015        max=59914        per_element=3182.375
+cubecl_residual_first_launch lanes=1 threads=8 n=16 instructions=97005867
+cubecl_residual_lanes1_threads8                n=16        median=178307       min=142050       max=243175       per_element=11144.188
+cubecl_residual_first_launch lanes=8 threads=1 n=16 instructions=57010213
+cubecl_residual_lanes8_threads1                n=16        median=53919        min=52042        max=60841        per_element=3369.938
+cubecl_residual_first_launch lanes=8 threads=8 n=16 instructions=57738898
+cubecl_residual_lanes8_threads8                n=16        median=188351       min=146891       max=395804       per_element=11771.938
+cubecl_residual_first_launch lanes=16 threads=1 n=16 instructions=50857661
+cubecl_residual_lanes16_threads1               n=16        median=56340        min=48759        max=61954        per_element=3521.250
+cubecl_residual_first_launch lanes=16 threads=8 n=16 instructions=51256543
+cubecl_residual_lanes16_threads8               n=16        median=181905       min=147543       max=297872       per_element=11369.062
+cubecl_residual_nofma_first_launch lanes=1 threads=1 n=16 instructions=116894228
+cubecl_residual_nofma_lanes1_threads1          n=16        median=54585        min=53779        max=69892        per_element=3411.562
+cubecl_residual_nofma_check lanes=1 threads=1 n=16 differences=0 edge_differences=0
+cubecl_residual_nofma_first_launch lanes=1 threads=8 n=16 instructions=118270211
+cubecl_residual_nofma_lanes1_threads8          n=16        median=175514       min=141091       max=348132       per_element=10969.625
+cubecl_residual_nofma_check lanes=1 threads=8 n=16 differences=0 edge_differences=0
+cubecl_residual_nofma_first_launch lanes=8 threads=1 n=16 instructions=76439271
+cubecl_residual_nofma_lanes8_threads1          n=16        median=56599        min=54424        max=63883        per_element=3537.438
+cubecl_residual_nofma_check lanes=8 threads=1 n=16 differences=0 edge_differences=0
+cubecl_residual_nofma_first_launch lanes=8 threads=8 n=16 instructions=77123839
+cubecl_residual_nofma_lanes8_threads8          n=16        median=176991       min=148856       max=337410       per_element=11061.938
+cubecl_residual_nofma_check lanes=8 threads=8 n=16 differences=0 edge_differences=0
+cubecl_residual_nofma_first_launch lanes=16 threads=1 n=16 instructions=53826765
+cubecl_residual_nofma_lanes16_threads1         n=16        median=55815        min=50716        max=63607        per_element=3488.438
+cubecl_residual_nofma_check lanes=16 threads=1 n=16 differences=0 edge_differences=0
+cubecl_residual_nofma_first_launch lanes=16 threads=8 n=16 instructions=54113972
+cubecl_residual_nofma_lanes16_threads8         n=16        median=179727       min=151019       max=376630       per_element=11232.938
+cubecl_residual_nofma_check lanes=16 threads=8 n=16 differences=0 edge_differences=0
+cubecl_workload_write_dispatch_read_persistent n=16        median=63481        min=53716        max=68862        per_element=3967.562
+cubecl_workload_copy_in_dispatch_readback_fresh n=16        median=81405        min=79958        max=83174        per_element=5087.812
+cubecl_workload_first_launch lanes=1 threads=1 n=1024 instructions=84183
+cubecl_workload_lanes1_threads1                n=1024      median=51614        min=50286        max=55565        per_element=50.404
+cubecl_workload_check lanes=1 threads=1 n=1024 differences=0 edge_differences=0
+cubecl_workload_first_launch lanes=1 threads=8 n=1024 instructions=121980
+cubecl_workload_lanes1_threads8                n=1024      median=175980       min=140689       max=321682       per_element=171.855
+cubecl_workload_check lanes=1 threads=8 n=1024 differences=0 edge_differences=0
+cubecl_workload_first_launch lanes=8 threads=1 n=1024 instructions=168622
+cubecl_workload_lanes8_threads1                n=1024      median=54444        min=52490        max=58413        per_element=53.168
+cubecl_workload_check lanes=8 threads=1 n=1024 differences=0 edge_differences=0
+cubecl_workload_first_launch lanes=8 threads=8 n=1024 instructions=130704
+cubecl_workload_lanes8_threads8                n=1024      median=181582       min=144590       max=270430       per_element=177.326
+cubecl_workload_check lanes=8 threads=8 n=1024 differences=0 edge_differences=0
+cubecl_workload_first_launch lanes=16 threads=1 n=1024 instructions=176966
+cubecl_workload_lanes16_threads1               n=1024      median=52824        min=50541        max=55698        per_element=51.586
+cubecl_workload_check lanes=16 threads=1 n=1024 differences=0 edge_differences=0
+cubecl_workload_first_launch lanes=16 threads=8 n=1024 instructions=132266
+cubecl_workload_lanes16_threads8               n=1024      median=183949       min=153398       max=327978       per_element=179.638
+cubecl_workload_check lanes=16 threads=8 n=1024 differences=0 edge_differences=0
+cubecl_chain16_first_launch lanes=1 threads=1 n=1024 instructions=196141
+cubecl_chain16_lanes1_threads1                 n=1024      median=52085        min=50416        max=56566        per_element=50.864
+cubecl_chain16_check lanes=1 threads=1 n=1024 differences=0 edge_differences=0
+cubecl_chain16_first_launch lanes=1 threads=8 n=1024 instructions=131934
+cubecl_chain16_lanes1_threads8                 n=1024      median=201409       min=175387       max=727744       per_element=196.688
+cubecl_chain16_check lanes=1 threads=8 n=1024 differences=0 edge_differences=0
+cubecl_chain16_first_launch lanes=8 threads=1 n=1024 instructions=234675
+cubecl_chain16_lanes8_threads1                 n=1024      median=53729        min=52479        max=55584        per_element=52.470
+cubecl_chain16_check lanes=8 threads=1 n=1024 differences=0 edge_differences=0
+cubecl_chain16_first_launch lanes=8 threads=8 n=1024 instructions=134103
+cubecl_chain16_lanes8_threads8                 n=1024      median=187474       min=182722       max=366737       per_element=183.080
+cubecl_chain16_check lanes=8 threads=8 n=1024 differences=0 edge_differences=0
+cubecl_chain16_first_launch lanes=16 threads=1 n=1024 instructions=238565
+cubecl_chain16_lanes16_threads1                n=1024      median=54777        min=52782        max=56962        per_element=53.493
+cubecl_chain16_check lanes=16 threads=1 n=1024 differences=0 edge_differences=0
+cubecl_chain16_first_launch lanes=16 threads=8 n=1024 instructions=123062
+cubecl_chain16_lanes16_threads8                n=1024      median=187777       min=166601       max=316383       per_element=183.376
+cubecl_chain16_check lanes=16 threads=8 n=1024 differences=0 edge_differences=0
+cubecl_chain16_nofma_first_launch lanes=1 threads=1 n=1024 instructions=333509
+cubecl_chain16_nofma_lanes1_threads1           n=1024      median=53115        min=51714        max=55726        per_element=51.870
+cubecl_chain16_nofma_check lanes=1 threads=1 n=1024 differences=0 edge_differences=0
+cubecl_chain16_nofma_first_launch lanes=1 threads=8 n=1024 instructions=132940
+cubecl_chain16_nofma_lanes1_threads8           n=1024      median=218043       min=182438       max=273706       per_element=212.933
+cubecl_chain16_nofma_check lanes=1 threads=8 n=1024 differences=0 edge_differences=0
+cubecl_chain16_nofma_first_launch lanes=8 threads=1 n=1024 instructions=253505
+cubecl_chain16_nofma_lanes8_threads1           n=1024      median=55250        min=53964        max=57391        per_element=53.955
+cubecl_chain16_nofma_check lanes=8 threads=1 n=1024 differences=0 edge_differences=0
+cubecl_chain16_nofma_first_launch lanes=8 threads=8 n=1024 instructions=128916
+cubecl_chain16_nofma_lanes8_threads8           n=1024      median=186709       min=183544       max=277131       per_element=182.333
+cubecl_chain16_nofma_check lanes=8 threads=8 n=1024 differences=0 edge_differences=0
+cubecl_chain16_nofma_first_launch lanes=16 threads=1 n=1024 instructions=232330
+cubecl_chain16_nofma_lanes16_threads1          n=1024      median=54993        min=53274        max=56994        per_element=53.704
+cubecl_chain16_nofma_check lanes=16 threads=1 n=1024 differences=0 edge_differences=0
+cubecl_chain16_nofma_first_launch lanes=16 threads=8 n=1024 instructions=134012
+cubecl_chain16_nofma_lanes16_threads8          n=1024      median=215052       min=182593       max=323655       per_element=210.012
+cubecl_chain16_nofma_check lanes=16 threads=8 n=1024 differences=0 edge_differences=0
+cubecl_horner_first_launch lanes=1 threads=1 n=1024 instructions=355307
+cubecl_horner_lanes1_threads1                  n=1024      median=49797        min=47946        max=53438        per_element=48.630
+cubecl_horner_check lanes=1 threads=1 n=1024 differences=0 edge_differences=0
+cubecl_horner_first_launch lanes=1 threads=8 n=1024 instructions=127010
+cubecl_horner_lanes1_threads8                  n=1024      median=182663       min=175787       max=274689       per_element=178.382
+cubecl_horner_check lanes=1 threads=8 n=1024 differences=0 edge_differences=0
+cubecl_horner_first_launch lanes=8 threads=1 n=1024 instructions=223156
+cubecl_horner_lanes8_threads1                  n=1024      median=53039        min=50921        max=55236        per_element=51.796
+cubecl_horner_check lanes=8 threads=1 n=1024 differences=0 edge_differences=0
+cubecl_horner_first_launch lanes=8 threads=8 n=1024 instructions=121862
+cubecl_horner_lanes8_threads8                  n=1024      median=186615       min=181294       max=274249       per_element=182.241
+cubecl_horner_check lanes=8 threads=8 n=1024 differences=0 edge_differences=0
+cubecl_horner_first_launch lanes=16 threads=1 n=1024 instructions=225541
+cubecl_horner_lanes16_threads1                 n=1024      median=52341        min=51226        max=55699        per_element=51.114
+cubecl_horner_check lanes=16 threads=1 n=1024 differences=0 edge_differences=0
+cubecl_horner_first_launch lanes=16 threads=8 n=1024 instructions=128356
+cubecl_horner_lanes16_threads8                 n=1024      median=183161       min=179407       max=335631       per_element=178.868
+cubecl_horner_check lanes=16 threads=8 n=1024 differences=0 edge_differences=0
+cubecl_horner_nofma_first_launch lanes=1 threads=1 n=1024 instructions=311224
+cubecl_horner_nofma_lanes1_threads1            n=1024      median=52647        min=51484        max=54837        per_element=51.413
+cubecl_horner_nofma_check lanes=1 threads=1 n=1024 differences=0 edge_differences=0
+cubecl_horner_nofma_first_launch lanes=1 threads=8 n=1024 instructions=127289
+cubecl_horner_nofma_lanes1_threads8            n=1024      median=215867       min=147635       max=273728       per_element=210.808
+cubecl_horner_nofma_check lanes=1 threads=8 n=1024 differences=0 edge_differences=0
+cubecl_horner_nofma_first_launch lanes=8 threads=1 n=1024 instructions=219482
+cubecl_horner_nofma_lanes8_threads1            n=1024      median=53865        min=52308        max=54755        per_element=52.603
+cubecl_horner_nofma_check lanes=8 threads=1 n=1024 differences=0 edge_differences=0
+cubecl_horner_nofma_first_launch lanes=8 threads=8 n=1024 instructions=121940
+cubecl_horner_nofma_lanes8_threads8            n=1024      median=187486       min=181663       max=278007       per_element=183.092
+cubecl_horner_nofma_check lanes=8 threads=8 n=1024 differences=0 edge_differences=0
+cubecl_horner_nofma_first_launch lanes=16 threads=1 n=1024 instructions=225205
+cubecl_horner_nofma_lanes16_threads1           n=1024      median=54003        min=49718        max=58459        per_element=52.737
+cubecl_horner_nofma_check lanes=16 threads=1 n=1024 differences=0 edge_differences=0
+cubecl_horner_nofma_first_launch lanes=16 threads=8 n=1024 instructions=127460
+cubecl_horner_nofma_lanes16_threads8           n=1024      median=189676       min=180568       max=285970       per_element=185.230
+cubecl_horner_nofma_check lanes=16 threads=8 n=1024 differences=0 edge_differences=0
+cubecl_residual_first_launch lanes=1 threads=1 n=1024 instructions=313532
+cubecl_residual_lanes1_threads1                n=1024      median=49841        min=48994        max=53016        per_element=48.673
+cubecl_residual_first_launch lanes=1 threads=8 n=1024 instructions=124671
+cubecl_residual_lanes1_threads8                n=1024      median=199789       min=147131       max=271072       per_element=195.106
+cubecl_residual_first_launch lanes=8 threads=1 n=1024 instructions=182231
+cubecl_residual_lanes8_threads1                n=1024      median=51920        min=51012        max=53001        per_element=50.703
+cubecl_residual_first_launch lanes=8 threads=8 n=1024 instructions=120768
+cubecl_residual_lanes8_threads8                n=1024      median=187036       min=179115       max=269735       per_element=182.652
+cubecl_residual_first_launch lanes=16 threads=1 n=1024 instructions=176267
+cubecl_residual_lanes16_threads1               n=1024      median=52461        min=51436        max=53843        per_element=51.231
+cubecl_residual_first_launch lanes=16 threads=8 n=1024 instructions=126802
+cubecl_residual_lanes16_threads8               n=1024      median=185012       min=149958       max=271188       per_element=180.676
+cubecl_residual_nofma_first_launch lanes=1 threads=1 n=1024 instructions=299836
+cubecl_residual_nofma_lanes1_threads1          n=1024      median=51832        min=50683        max=56803        per_element=50.617
+cubecl_residual_nofma_check lanes=1 threads=1 n=1024 differences=0 edge_differences=0
+cubecl_residual_nofma_first_launch lanes=1 threads=8 n=1024 instructions=128985
+cubecl_residual_nofma_lanes1_threads8          n=1024      median=187430       min=163696       max=270244       per_element=183.037
+cubecl_residual_nofma_check lanes=1 threads=8 n=1024 differences=0 edge_differences=0
+cubecl_residual_nofma_first_launch lanes=8 threads=1 n=1024 instructions=186588
+cubecl_residual_nofma_lanes8_threads1          n=1024      median=53887        min=46794        max=56277        per_element=52.624
+cubecl_residual_nofma_check lanes=8 threads=1 n=1024 differences=0 edge_differences=0
+cubecl_residual_nofma_first_launch lanes=8 threads=8 n=1024 instructions=126952
+cubecl_residual_nofma_lanes8_threads8          n=1024      median=186168       min=152623       max=333686       per_element=181.805
+cubecl_residual_nofma_check lanes=8 threads=8 n=1024 differences=0 edge_differences=0
+cubecl_residual_nofma_first_launch lanes=16 threads=1 n=1024 instructions=185457
+cubecl_residual_nofma_lanes16_threads1         n=1024      median=53857        min=52352        max=56101        per_element=52.595
+cubecl_residual_nofma_check lanes=16 threads=1 n=1024 differences=0 edge_differences=0
+cubecl_residual_nofma_first_launch lanes=16 threads=8 n=1024 instructions=124013
+cubecl_residual_nofma_lanes16_threads8         n=1024      median=187391       min=182952       max=276452       per_element=182.999
+cubecl_residual_nofma_check lanes=16 threads=8 n=1024 differences=0 edge_differences=0
+cubecl_workload_write_dispatch_read_persistent n=1024      median=68812        min=67663        max=72324        per_element=67.199
+cubecl_workload_copy_in_dispatch_readback_fresh n=1024      median=90213        min=88387        max=92012        per_element=88.099
+cubecl_workload_first_launch lanes=1 threads=1 n=16384 instructions=73729
+cubecl_workload_lanes1_threads1                n=16384     median=63505        min=62458        max=66277        per_element=3.876
+cubecl_workload_check lanes=1 threads=1 n=16384 differences=0 edge_differences=0
+cubecl_workload_first_launch lanes=1 threads=8 n=16384 instructions=266902
+cubecl_workload_lanes1_threads8                n=16384     median=272821       min=231653       max=351295       per_element=16.652
+cubecl_workload_check lanes=1 threads=8 n=16384 differences=0 edge_differences=0
+cubecl_workload_first_launch lanes=8 threads=1 n=16384 instructions=300778
+cubecl_workload_lanes8_threads1                n=16384     median=65983        min=64913        max=68056        per_element=4.027
+cubecl_workload_check lanes=8 threads=1 n=16384 differences=0 edge_differences=0
+cubecl_workload_first_launch lanes=8 threads=8 n=16384 instructions=157268
+cubecl_workload_lanes8_threads8                n=16384     median=279910       min=247991       max=325558       per_element=17.084
+cubecl_workload_check lanes=8 threads=8 n=16384 differences=0 edge_differences=0
+cubecl_workload_first_launch lanes=16 threads=1 n=16384 instructions=332656
+cubecl_workload_lanes16_threads1               n=16384     median=66891        min=65315        max=88618        per_element=4.083
+cubecl_workload_check lanes=16 threads=1 n=16384 differences=0 edge_differences=0
+cubecl_workload_first_launch lanes=16 threads=8 n=16384 instructions=138343
+cubecl_workload_lanes16_threads8               n=16384     median=272244       min=233485       max=293909       per_element=16.616
+cubecl_workload_check lanes=16 threads=8 n=16384 differences=0 edge_differences=0
+cubecl_chain16_first_launch lanes=1 threads=1 n=16384 instructions=107292
+cubecl_chain16_lanes1_threads1                 n=16384     median=92202        min=89255        max=209346       per_element=5.628
+cubecl_chain16_check lanes=1 threads=1 n=16384 differences=0 edge_differences=0
+cubecl_chain16_first_launch lanes=1 threads=8 n=16384 instructions=354850
+cubecl_chain16_lanes1_threads8                 n=16384     median=324764       min=312909       max=351225       per_element=19.822
+cubecl_chain16_check lanes=1 threads=8 n=16384 differences=0 edge_differences=0
+cubecl_chain16_first_launch lanes=8 threads=1 n=16384 instructions=84217
+cubecl_chain16_lanes8_threads1                 n=16384     median=91079        min=87931        max=96628        per_element=5.559
+cubecl_chain16_check lanes=8 threads=1 n=16384 differences=0 edge_differences=0
+cubecl_chain16_first_launch lanes=8 threads=8 n=16384 instructions=214413
+cubecl_chain16_lanes8_threads8                 n=16384     median=340258       min=332569       max=359648       per_element=20.768
+cubecl_chain16_check lanes=8 threads=8 n=16384 differences=0 edge_differences=0
+cubecl_chain16_first_launch lanes=16 threads=1 n=16384 instructions=84522
+cubecl_chain16_lanes16_threads1                n=16384     median=94699        min=93546        max=98815        per_element=5.780
+cubecl_chain16_check lanes=16 threads=1 n=16384 differences=0 edge_differences=0
+cubecl_chain16_first_launch lanes=16 threads=8 n=16384 instructions=216642
+cubecl_chain16_lanes16_threads8                n=16384     median=339918       min=329057       max=418527       per_element=20.747
+cubecl_chain16_check lanes=16 threads=8 n=16384 differences=0 edge_differences=0
+cubecl_chain16_nofma_first_launch lanes=1 threads=1 n=16384 instructions=114582
+cubecl_chain16_nofma_lanes1_threads1           n=16384     median=110612       min=110173       max=111847       per_element=6.751
+cubecl_chain16_nofma_check lanes=1 threads=1 n=16384 differences=0 edge_differences=0
+cubecl_chain16_nofma_first_launch lanes=1 threads=8 n=16384 instructions=227055
+cubecl_chain16_nofma_lanes1_threads8           n=16384     median=349443       min=343237       max=365748       per_element=21.328
+cubecl_chain16_nofma_check lanes=1 threads=8 n=16384 differences=0 edge_differences=0
+cubecl_chain16_nofma_first_launch lanes=8 threads=1 n=16384 instructions=100622
+cubecl_chain16_nofma_lanes8_threads1           n=16384     median=112816       min=111914       max=115224       per_element=6.886
+cubecl_chain16_nofma_check lanes=8 threads=1 n=16384 differences=0 edge_differences=0
+cubecl_chain16_nofma_first_launch lanes=8 threads=8 n=16384 instructions=229171
+cubecl_chain16_nofma_lanes8_threads8           n=16384     median=359068       min=345997       max=377614       per_element=21.916
+cubecl_chain16_nofma_check lanes=8 threads=8 n=16384 differences=0 edge_differences=0
+cubecl_chain16_nofma_first_launch lanes=16 threads=1 n=16384 instructions=95074
+cubecl_chain16_nofma_lanes16_threads1          n=16384     median=108034       min=107020       max=110264       per_element=6.594
+cubecl_chain16_nofma_check lanes=16 threads=1 n=16384 differences=0 edge_differences=0
+cubecl_chain16_nofma_first_launch lanes=16 threads=8 n=16384 instructions=228457
+cubecl_chain16_nofma_lanes16_threads8          n=16384     median=351712       min=343861       max=364957       per_element=21.467
+cubecl_chain16_nofma_check lanes=16 threads=8 n=16384 differences=0 edge_differences=0
+cubecl_horner_first_launch lanes=1 threads=1 n=16384 instructions=82172
+cubecl_horner_lanes1_threads1                  n=16384     median=78299        min=77578        max=79462        per_element=4.779
+cubecl_horner_check lanes=1 threads=1 n=16384 differences=0 edge_differences=0
+cubecl_horner_first_launch lanes=1 threads=8 n=16384 instructions=193086
+cubecl_horner_lanes1_threads8                  n=16384     median=311696       min=279775       max=335126       per_element=19.024
+cubecl_horner_check lanes=1 threads=8 n=16384 differences=0 edge_differences=0
+cubecl_horner_first_launch lanes=8 threads=1 n=16384 instructions=63737
+cubecl_horner_lanes8_threads1                  n=16384     median=76798        min=75769        max=77766        per_element=4.687
+cubecl_horner_check lanes=8 threads=1 n=16384 differences=0 edge_differences=0
+cubecl_horner_first_launch lanes=8 threads=8 n=16384 instructions=194591
+cubecl_horner_lanes8_threads8                  n=16384     median=320955       min=284082       max=337112       per_element=19.590
+cubecl_horner_check lanes=8 threads=8 n=16384 differences=0 edge_differences=0
+cubecl_horner_first_launch lanes=16 threads=1 n=16384 instructions=62823
+cubecl_horner_lanes16_threads1                 n=16384     median=76807        min=75812        max=77647        per_element=4.688
+cubecl_horner_check lanes=16 threads=1 n=16384 differences=0 edge_differences=0
+cubecl_horner_first_launch lanes=16 threads=8 n=16384 instructions=175022
+cubecl_horner_lanes16_threads8                 n=16384     median=310321       min=281893       max=346138       per_element=18.940
+cubecl_horner_check lanes=16 threads=8 n=16384 differences=0 edge_differences=0
+cubecl_horner_nofma_first_launch lanes=1 threads=1 n=16384 instructions=104731
+cubecl_horner_nofma_lanes1_threads1            n=16384     median=95990        min=95282        max=98858        per_element=5.859
+cubecl_horner_nofma_check lanes=1 threads=1 n=16384 differences=0 edge_differences=0
+cubecl_horner_nofma_first_launch lanes=1 threads=8 n=16384 instructions=212600
+cubecl_horner_nofma_lanes1_threads8            n=16384     median=337385       min=331590       max=349424       per_element=20.592
+cubecl_horner_nofma_check lanes=1 threads=8 n=16384 differences=0 edge_differences=0
+cubecl_horner_nofma_first_launch lanes=8 threads=1 n=16384 instructions=80401
+cubecl_horner_nofma_lanes8_threads1            n=16384     median=92031        min=91131        max=94276        per_element=5.617
+cubecl_horner_nofma_check lanes=8 threads=1 n=16384 differences=0 edge_differences=0
+cubecl_horner_nofma_first_launch lanes=8 threads=8 n=16384 instructions=211581
+cubecl_horner_nofma_lanes8_threads8            n=16384     median=333304       min=328329       max=351113       per_element=20.343
+cubecl_horner_nofma_check lanes=8 threads=8 n=16384 differences=0 edge_differences=0
+cubecl_horner_nofma_first_launch lanes=16 threads=1 n=16384 instructions=91699
+cubecl_horner_nofma_lanes16_threads1           n=16384     median=103660       min=97367        max=107833       per_element=6.327
+cubecl_horner_nofma_check lanes=16 threads=1 n=16384 differences=0 edge_differences=0
+cubecl_horner_nofma_first_launch lanes=16 threads=8 n=16384 instructions=222527
+cubecl_horner_nofma_lanes16_threads8           n=16384     median=348154       min=341431       max=365442       per_element=21.250
+cubecl_horner_nofma_check lanes=16 threads=8 n=16384 differences=0 edge_differences=0
+cubecl_residual_first_launch lanes=1 threads=1 n=16384 instructions=84547
+cubecl_residual_lanes1_threads1                n=16384     median=75493        min=72464        max=77586        per_element=4.608
+cubecl_residual_first_launch lanes=1 threads=8 n=16384 instructions=169719
+cubecl_residual_lanes1_threads8                n=16384     median=280924       min=274149       max=298712       per_element=17.146
+cubecl_residual_first_launch lanes=8 threads=1 n=16384 instructions=291129
+cubecl_residual_lanes8_threads1                n=16384     median=78188        min=70741        max=79891        per_element=4.772
+cubecl_residual_first_launch lanes=8 threads=8 n=16384 instructions=152566
+cubecl_residual_lanes8_threads8                n=16384     median=322625       min=280395       max=351358       per_element=19.691
+cubecl_residual_first_launch lanes=16 threads=1 n=16384 instructions=342841
+cubecl_residual_lanes16_threads1               n=16384     median=78747        min=77683        max=80386        per_element=4.806
+cubecl_residual_first_launch lanes=16 threads=8 n=16384 instructions=171229
+cubecl_residual_lanes16_threads8               n=16384     median=315270       min=279883       max=354125       per_element=19.243
+cubecl_residual_nofma_first_launch lanes=1 threads=1 n=16384 instructions=89927
+cubecl_residual_nofma_lanes1_threads1          n=16384     median=79417        min=78191        max=81812        per_element=4.847
+cubecl_residual_nofma_check lanes=1 threads=1 n=16384 differences=0 edge_differences=0
+cubecl_residual_nofma_first_launch lanes=1 threads=8 n=16384 instructions=151803
+cubecl_residual_nofma_lanes1_threads8          n=16384     median=287771       min=280010       max=335889       per_element=17.564
+cubecl_residual_nofma_check lanes=1 threads=8 n=16384 differences=0 edge_differences=0
+cubecl_residual_nofma_first_launch lanes=8 threads=1 n=16384 instructions=360486
+cubecl_residual_nofma_lanes8_threads1          n=16384     median=79065        min=75259        max=85283        per_element=4.826
+cubecl_residual_nofma_check lanes=8 threads=1 n=16384 differences=0 edge_differences=0
+cubecl_residual_nofma_first_launch lanes=8 threads=8 n=16384 instructions=192714
+cubecl_residual_nofma_lanes8_threads8          n=16384     median=299601       min=287541       max=387778       per_element=18.286
+cubecl_residual_nofma_check lanes=8 threads=8 n=16384 differences=0 edge_differences=0
+cubecl_residual_nofma_first_launch lanes=16 threads=1 n=16384 instructions=399950
+cubecl_residual_nofma_lanes16_threads1         n=16384     median=84342        min=83181        max=243893       per_element=5.148
+cubecl_residual_nofma_check lanes=16 threads=1 n=16384 differences=0 edge_differences=0
+cubecl_residual_nofma_first_launch lanes=16 threads=8 n=16384 instructions=398154
+cubecl_residual_nofma_lanes16_threads8         n=16384     median=332276       min=287511       max=869798       per_element=20.281
+cubecl_residual_nofma_check lanes=16 threads=8 n=16384 differences=0 edge_differences=0
+cubecl_workload_write_dispatch_read_persistent n=16384     median=101810       min=100148       max=106716       per_element=6.214
+cubecl_workload_copy_in_dispatch_readback_fresh n=16384     median=127615       min=112772       max=181709       per_element=7.789
+cubecl_workload_first_launch lanes=1 threads=1 n=65536 instructions=160412
+cubecl_workload_lanes1_threads1                n=65536     median=111813       min=110736       max=114784       per_element=1.706
+cubecl_workload_check lanes=1 threads=1 n=65536 differences=0 edge_differences=0
+cubecl_workload_first_launch lanes=1 threads=8 n=65536 instructions=240267
+cubecl_workload_lanes1_threads8                n=65536     median=361328       min=343587       max=383157       per_element=5.513
+cubecl_workload_check lanes=1 threads=8 n=65536 differences=0 edge_differences=0
+cubecl_workload_first_launch lanes=8 threads=1 n=65536 instructions=97572
+cubecl_workload_lanes8_threads1                n=65536     median=109510       min=108662       max=112715       per_element=1.671
+cubecl_workload_check lanes=8 threads=1 n=65536 differences=0 edge_differences=0
+cubecl_workload_first_launch lanes=8 threads=8 n=65536 instructions=232655
+cubecl_workload_lanes8_threads8                n=65536     median=360307       min=356607       max=391695       per_element=5.498
+cubecl_workload_check lanes=8 threads=8 n=65536 differences=0 edge_differences=0
+cubecl_workload_first_launch lanes=16 threads=1 n=65536 instructions=98011
+cubecl_workload_lanes16_threads1               n=65536     median=109186       min=108520       max=110980       per_element=1.666
+cubecl_workload_check lanes=16 threads=1 n=65536 differences=0 edge_differences=0
+cubecl_workload_first_launch lanes=16 threads=8 n=65536 instructions=233996
+cubecl_workload_lanes16_threads8               n=65536     median=360157       min=348614       max=370449       per_element=5.496
+cubecl_workload_check lanes=16 threads=8 n=65536 differences=0 edge_differences=0
+cubecl_chain16_first_launch lanes=1 threads=1 n=65536 instructions=280060
+cubecl_chain16_lanes1_threads1                 n=65536     median=238079       min=237034       max=241998       per_element=3.633
+cubecl_chain16_check lanes=1 threads=1 n=65536 differences=0 edge_differences=0
+cubecl_chain16_first_launch lanes=1 threads=8 n=65536 instructions=613960
+cubecl_chain16_lanes1_threads8                 n=65536     median=487527       min=478845       max=539966       per_element=7.439
+cubecl_chain16_check lanes=1 threads=8 n=65536 differences=0 edge_differences=0
+cubecl_chain16_first_launch lanes=8 threads=1 n=65536 instructions=211660
+cubecl_chain16_lanes8_threads1                 n=65536     median=223102       min=222085       max=225145       per_element=3.404
+cubecl_chain16_check lanes=8 threads=1 n=65536 differences=0 edge_differences=0
+cubecl_chain16_first_launch lanes=8 threads=8 n=65536 instructions=490368
+cubecl_chain16_lanes8_threads8                 n=65536     median=481097       min=468766       max=501783       per_element=7.341
+cubecl_chain16_check lanes=8 threads=8 n=65536 differences=0 edge_differences=0
+cubecl_chain16_first_launch lanes=16 threads=1 n=65536 instructions=224066
+cubecl_chain16_lanes16_threads1                n=65536     median=227910       min=227230       max=229726       per_element=3.478
+cubecl_chain16_check lanes=16 threads=1 n=65536 differences=0 edge_differences=0
+cubecl_chain16_first_launch lanes=16 threads=8 n=65536 instructions=400641
+cubecl_chain16_lanes16_threads8                n=65536     median=473397       min=460425       max=495310       per_element=7.223
+cubecl_chain16_check lanes=16 threads=8 n=65536 differences=0 edge_differences=0
+cubecl_chain16_nofma_first_launch lanes=1 threads=1 n=65536 instructions=318756
+cubecl_chain16_nofma_lanes1_threads1           n=65536     median=281020       min=274491       max=304027       per_element=4.288
+cubecl_chain16_nofma_check lanes=1 threads=1 n=65536 differences=0 edge_differences=0
+cubecl_chain16_nofma_first_launch lanes=1 threads=8 n=65536 instructions=447911
+cubecl_chain16_nofma_lanes1_threads8           n=65536     median=526817       min=517873       max=600461       per_element=8.039
+cubecl_chain16_nofma_check lanes=1 threads=8 n=65536 differences=0 edge_differences=0
+cubecl_chain16_nofma_first_launch lanes=8 threads=1 n=65536 instructions=313354
+cubecl_chain16_nofma_lanes8_threads1           n=65536     median=300876       min=297248       max=337656       per_element=4.591
+cubecl_chain16_nofma_check lanes=8 threads=1 n=65536 differences=0 edge_differences=0
+cubecl_chain16_nofma_first_launch lanes=8 threads=8 n=65536 instructions=536076
+cubecl_chain16_nofma_lanes8_threads8           n=65536     median=550320       min=542935       max=644235       per_element=8.397
+cubecl_chain16_nofma_check lanes=8 threads=8 n=65536 differences=0 edge_differences=0
+cubecl_chain16_nofma_first_launch lanes=16 threads=1 n=65536 instructions=262063
+cubecl_chain16_nofma_lanes16_threads1          n=65536     median=280711       min=275885       max=310053       per_element=4.283
+cubecl_chain16_nofma_check lanes=16 threads=1 n=65536 differences=0 edge_differences=0
+cubecl_chain16_nofma_first_launch lanes=16 threads=8 n=65536 instructions=495406
+cubecl_chain16_nofma_lanes16_threads8          n=65536     median=527671       min=522271       max=572790       per_element=8.052
+cubecl_chain16_nofma_check lanes=16 threads=8 n=65536 differences=0 edge_differences=0
+cubecl_horner_first_launch lanes=1 threads=1 n=65536 instructions=227967
+cubecl_horner_lanes1_threads1                  n=65536     median=152615       min=151477       max=155156       per_element=2.329
+cubecl_horner_check lanes=1 threads=1 n=65536 differences=0 edge_differences=0
+cubecl_horner_first_launch lanes=1 threads=8 n=65536 instructions=427858
+cubecl_horner_lanes1_threads8                  n=65536     median=402881       min=392753       max=444812       per_element=6.147
+cubecl_horner_check lanes=1 threads=8 n=65536 differences=0 edge_differences=0
+cubecl_horner_first_launch lanes=8 threads=1 n=65536 instructions=153752
+cubecl_horner_lanes8_threads1                  n=65536     median=156364       min=155636       max=158743       per_element=2.386
+cubecl_horner_check lanes=8 threads=1 n=65536 differences=0 edge_differences=0
+cubecl_horner_first_launch lanes=8 threads=8 n=65536 instructions=542297
+cubecl_horner_lanes8_threads8                  n=65536     median=411905       min=401588       max=466294       per_element=6.285
+cubecl_horner_check lanes=8 threads=8 n=65536 differences=0 edge_differences=0
+cubecl_horner_first_launch lanes=16 threads=1 n=65536 instructions=146854
+cubecl_horner_lanes16_threads1                 n=65536     median=156435       min=155521       max=157866       per_element=2.387
+cubecl_horner_check lanes=16 threads=1 n=65536 differences=0 edge_differences=0
+cubecl_horner_first_launch lanes=16 threads=8 n=65536 instructions=354034
+cubecl_horner_lanes16_threads8                 n=65536     median=407372       min=401829       max=435655       per_element=6.216
+cubecl_horner_check lanes=16 threads=8 n=65536 differences=0 edge_differences=0
+cubecl_horner_nofma_first_launch lanes=1 threads=1 n=65536 instructions=258517
+cubecl_horner_nofma_lanes1_threads1            n=65536     median=239475       min=238537       max=240418       per_element=3.654
+cubecl_horner_nofma_check lanes=1 threads=1 n=65536 differences=0 edge_differences=0
+cubecl_horner_nofma_first_launch lanes=1 threads=8 n=65536 instructions=416071
+cubecl_horner_nofma_lanes1_threads8            n=65536     median=488718       min=483961       max=518339       per_element=7.457
+cubecl_horner_nofma_check lanes=1 threads=8 n=65536 differences=0 edge_differences=0
+cubecl_horner_nofma_first_launch lanes=8 threads=1 n=65536 instructions=206818
+cubecl_horner_nofma_lanes8_threads1            n=65536     median=219293       min=200651       max=461342       per_element=3.346
+cubecl_horner_nofma_check lanes=8 threads=1 n=65536 differences=0 edge_differences=0
+cubecl_horner_nofma_first_launch lanes=8 threads=8 n=65536 instructions=500319
+cubecl_horner_nofma_lanes8_threads8            n=65536     median=478763       min=463909       max=525578       per_element=7.305
+cubecl_horner_nofma_check lanes=8 threads=8 n=65536 differences=0 edge_differences=0
+cubecl_horner_nofma_first_launch lanes=16 threads=1 n=65536 instructions=256775
+cubecl_horner_nofma_lanes16_threads1           n=65536     median=265505       min=264722       max=292801       per_element=4.051
+cubecl_horner_nofma_check lanes=16 threads=1 n=65536 differences=0 edge_differences=0
+cubecl_horner_nofma_first_launch lanes=16 threads=8 n=65536 instructions=547218
+cubecl_horner_nofma_lanes16_threads8           n=65536     median=517528       min=513139       max=544826       per_element=7.897
+cubecl_horner_nofma_check lanes=16 threads=8 n=65536 differences=0 edge_differences=0
+cubecl_residual_first_launch lanes=1 threads=1 n=65536 instructions=303699
+cubecl_residual_lanes1_threads1                n=65536     median=161225       min=159447       max=162584       per_element=2.460
+cubecl_residual_first_launch lanes=1 threads=8 n=65536 instructions=267036
+cubecl_residual_lanes1_threads8                n=65536     median=406025       min=399866       max=513481       per_element=6.195
+cubecl_residual_first_launch lanes=8 threads=1 n=65536 instructions=529804
+cubecl_residual_lanes8_threads1                n=65536     median=164182       min=163051       max=165749       per_element=2.505
+cubecl_residual_first_launch lanes=8 threads=8 n=65536 instructions=300607
+cubecl_residual_lanes8_threads8                n=65536     median=414477       min=409925       max=436602       per_element=6.324
+cubecl_residual_first_launch lanes=16 threads=1 n=65536 instructions=541359
+cubecl_residual_lanes16_threads1               n=65536     median=164701       min=163510       max=172091       per_element=2.513
+cubecl_residual_first_launch lanes=16 threads=8 n=65536 instructions=275951
+cubecl_residual_lanes16_threads8               n=65536     median=412848       min=403267       max=438238       per_element=6.300
+cubecl_residual_nofma_first_launch lanes=1 threads=1 n=65536 instructions=184485
+cubecl_residual_nofma_lanes1_threads1          n=65536     median=169332       min=168366       max=170737       per_element=2.584
+cubecl_residual_nofma_check lanes=1 threads=1 n=65536 differences=0 edge_differences=0
+cubecl_residual_nofma_first_launch lanes=1 threads=8 n=65536 instructions=301455
+cubecl_residual_nofma_lanes1_threads8          n=65536     median=422304       min=413840       max=437711       per_element=6.444
+cubecl_residual_nofma_check lanes=1 threads=8 n=65536 differences=0 edge_differences=0
+cubecl_residual_nofma_first_launch lanes=8 threads=1 n=65536 instructions=159141
+cubecl_residual_nofma_lanes8_threads1          n=65536     median=173598       min=172482       max=174729       per_element=2.649
+cubecl_residual_nofma_check lanes=8 threads=1 n=65536 differences=0 edge_differences=0
+cubecl_residual_nofma_first_launch lanes=8 threads=8 n=65536 instructions=292354
+cubecl_residual_nofma_lanes8_threads8          n=65536     median=427946       min=416702       max=450777       per_element=6.530
+cubecl_residual_nofma_check lanes=8 threads=8 n=65536 differences=0 edge_differences=0
+cubecl_residual_nofma_first_launch lanes=16 threads=1 n=65536 instructions=170720
+cubecl_residual_nofma_lanes16_threads1         n=65536     median=182166       min=180635       max=184625       per_element=2.780
+cubecl_residual_nofma_check lanes=16 threads=1 n=65536 differences=0 edge_differences=0
+cubecl_residual_nofma_first_launch lanes=16 threads=8 n=65536 instructions=300052
+cubecl_residual_nofma_lanes16_threads8         n=65536     median=433942       min=426971       max=454862       per_element=6.621
+cubecl_residual_nofma_check lanes=16 threads=8 n=65536 differences=0 edge_differences=0
+cubecl_workload_write_dispatch_read_persistent n=65536     median=198072       min=135475       max=249279       per_element=3.022
+cubecl_workload_copy_in_dispatch_readback_fresh n=65536     median=201873       min=151043       max=459260       per_element=3.080
+cubecl_workload_first_launch lanes=1 threads=1 n=1048576 instructions=1158566
+cubecl_workload_lanes1_threads1                n=1048576   median=1039720      min=975282       max=1090741      per_element=0.992
+cubecl_workload_check lanes=1 threads=1 n=1048576 differences=0 edge_differences=0
+cubecl_workload_first_launch lanes=1 threads=8 n=1048576 instructions=1263975
+cubecl_workload_lanes1_threads8                n=1048576   median=1303456      min=1265257      max=1362452      per_element=1.243
+cubecl_workload_check lanes=1 threads=8 n=1048576 differences=0 edge_differences=0
+cubecl_workload_first_launch lanes=8 threads=1 n=1048576 instructions=1042233
+cubecl_workload_lanes8_threads1                n=1048576   median=1001218      min=955637       max=1092252      per_element=0.955
+cubecl_workload_check lanes=8 threads=1 n=1048576 differences=0 edge_differences=0
+cubecl_workload_first_launch lanes=8 threads=8 n=1048576 instructions=1279958
+cubecl_workload_lanes8_threads8                n=1048576   median=1262897      min=1236429      max=1411559      per_element=1.204
+cubecl_workload_check lanes=8 threads=8 n=1048576 differences=0 edge_differences=0
+cubecl_workload_first_launch lanes=16 threads=1 n=1048576 instructions=1052582
+cubecl_workload_lanes16_threads1               n=1048576   median=1082099      min=966163       max=1134295      per_element=1.032
+cubecl_workload_check lanes=16 threads=1 n=1048576 differences=0 edge_differences=0
+cubecl_workload_first_launch lanes=16 threads=8 n=1048576 instructions=1324151
+cubecl_workload_lanes16_threads8               n=1048576   median=1277297      min=1244702      max=1528067      per_element=1.218
+cubecl_workload_check lanes=16 threads=8 n=1048576 differences=0 edge_differences=0
+cubecl_chain16_first_launch lanes=1 threads=1 n=1048576 instructions=3155151
+cubecl_chain16_lanes1_threads1                 n=1048576   median=3057590      min=2990283      max=3208123      per_element=2.916
+cubecl_chain16_check lanes=1 threads=1 n=1048576 differences=0 edge_differences=0
+cubecl_chain16_first_launch lanes=1 threads=8 n=1048576 instructions=3225959
+cubecl_chain16_lanes1_threads8                 n=1048576   median=3306390      min=3273055      max=3460297      per_element=3.153
+cubecl_chain16_check lanes=1 threads=8 n=1048576 differences=0 edge_differences=0
+cubecl_chain16_first_launch lanes=8 threads=1 n=1048576 instructions=2863483
+cubecl_chain16_lanes8_threads1                 n=1048576   median=2891752      min=2831531      max=2913133      per_element=2.758
+cubecl_chain16_check lanes=8 threads=1 n=1048576 differences=0 edge_differences=0
+cubecl_chain16_first_launch lanes=8 threads=8 n=1048576 instructions=3116579
+cubecl_chain16_lanes8_threads8                 n=1048576   median=3196073      min=3045659      max=4330285      per_element=3.048
+cubecl_chain16_check lanes=8 threads=8 n=1048576 differences=0 edge_differences=0
+cubecl_chain16_first_launch lanes=16 threads=1 n=1048576 instructions=2895878
+cubecl_chain16_lanes16_threads1                n=1048576   median=2900701      min=2859240      max=2922665      per_element=2.766
+cubecl_chain16_check lanes=16 threads=1 n=1048576 differences=0 edge_differences=0
+cubecl_chain16_first_launch lanes=16 threads=8 n=1048576 instructions=3139950
+cubecl_chain16_lanes16_threads8                n=1048576   median=3118523      min=3055919      max=3192540      per_element=2.974
+cubecl_chain16_check lanes=16 threads=8 n=1048576 differences=0 edge_differences=0
+cubecl_chain16_nofma_first_launch lanes=1 threads=1 n=1048576 instructions=3790188
+cubecl_chain16_nofma_lanes1_threads1           n=1048576   median=3734083      min=3665482      max=3791876      per_element=3.561
+cubecl_chain16_nofma_check lanes=1 threads=1 n=1048576 differences=0 edge_differences=0
+cubecl_chain16_nofma_first_launch lanes=1 threads=8 n=1048576 instructions=4200289
+cubecl_chain16_nofma_lanes1_threads8           n=1048576   median=4023535      min=3996119      max=4068180      per_element=3.837
+cubecl_chain16_nofma_check lanes=1 threads=8 n=1048576 differences=0 edge_differences=0
+cubecl_chain16_nofma_first_launch lanes=8 threads=1 n=1048576 instructions=3989666
+cubecl_chain16_nofma_lanes8_threads1           n=1048576   median=4002864      min=3965433      max=4135057      per_element=3.817
+cubecl_chain16_nofma_check lanes=8 threads=1 n=1048576 differences=0 edge_differences=0
+cubecl_chain16_nofma_first_launch lanes=8 threads=8 n=1048576 instructions=4529375
+cubecl_chain16_nofma_lanes8_threads8           n=1048576   median=4308588      min=4254518      max=4410309      per_element=4.109
+cubecl_chain16_nofma_check lanes=8 threads=8 n=1048576 differences=0 edge_differences=0
+cubecl_chain16_nofma_first_launch lanes=16 threads=1 n=1048576 instructions=3640660
+cubecl_chain16_nofma_lanes16_threads1          n=1048576   median=3677244      min=3628890      max=3763870      per_element=3.507
+cubecl_chain16_nofma_check lanes=16 threads=1 n=1048576 differences=0 edge_differences=0
+cubecl_chain16_nofma_first_launch lanes=16 threads=8 n=1048576 instructions=3884438
+cubecl_chain16_nofma_lanes16_threads8          n=1048576   median=3912711      min=3875747      max=4141197      per_element=3.731
+cubecl_chain16_nofma_check lanes=16 threads=8 n=1048576 differences=0 edge_differences=0
+cubecl_horner_first_launch lanes=1 threads=1 n=1048576 instructions=1788704
+cubecl_horner_lanes1_threads1                  n=1048576   median=1693531      min=1628108      max=1896979      per_element=1.615
+cubecl_horner_check lanes=1 threads=1 n=1048576 differences=0 edge_differences=0
+cubecl_horner_first_launch lanes=1 threads=8 n=1048576 instructions=2105173
+cubecl_horner_lanes1_threads8                  n=1048576   median=1910015      min=1891425      max=2010226      per_element=1.822
+cubecl_horner_check lanes=1 threads=8 n=1048576 differences=0 edge_differences=0
+cubecl_horner_first_launch lanes=8 threads=1 n=1048576 instructions=1767949
+cubecl_horner_lanes8_threads1                  n=1048576   median=1793631      min=1749577      max=1876478      per_element=1.711
+cubecl_horner_check lanes=8 threads=1 n=1048576 differences=0 edge_differences=0
+cubecl_horner_first_launch lanes=8 threads=8 n=1048576 instructions=2142233
+cubecl_horner_lanes8_threads8                  n=1048576   median=2018871      min=1949410      max=3398197      per_element=1.925
+cubecl_horner_check lanes=8 threads=8 n=1048576 differences=0 edge_differences=0
+cubecl_horner_first_launch lanes=16 threads=1 n=1048576 instructions=1829778
+cubecl_horner_lanes16_threads1                 n=1048576   median=1809555      min=1733301      max=1858756      per_element=1.726
+cubecl_horner_check lanes=16 threads=1 n=1048576 differences=0 edge_differences=0
+cubecl_horner_first_launch lanes=16 threads=8 n=1048576 instructions=2140005
+cubecl_horner_lanes16_threads8                 n=1048576   median=2028555      min=2013042      max=2147528      per_element=1.935
+cubecl_horner_check lanes=16 threads=8 n=1048576 differences=0 edge_differences=0
+cubecl_horner_nofma_first_launch lanes=1 threads=1 n=1048576 instructions=3157972
+cubecl_horner_nofma_lanes1_threads1            n=1048576   median=3098082      min=2992840      max=3124210      per_element=2.955
+cubecl_horner_nofma_check lanes=1 threads=1 n=1048576 differences=0 edge_differences=0
+cubecl_horner_nofma_first_launch lanes=1 threads=8 n=1048576 instructions=3410365
+cubecl_horner_nofma_lanes1_threads8            n=1048576   median=3346710      min=3297419      max=3439191      per_element=3.192
+cubecl_horner_nofma_check lanes=1 threads=8 n=1048576 differences=0 edge_differences=0
+cubecl_horner_nofma_first_launch lanes=8 threads=1 n=1048576 instructions=2700895
+cubecl_horner_nofma_lanes8_threads1            n=1048576   median=2777303      min=2654089      max=2808560      per_element=2.649
+cubecl_horner_nofma_check lanes=8 threads=1 n=1048576 differences=0 edge_differences=0
+cubecl_horner_nofma_first_launch lanes=8 threads=8 n=1048576 instructions=3362462
+cubecl_horner_nofma_lanes8_threads8            n=1048576   median=2993453      min=2953880      max=3205303      per_element=2.855
+cubecl_horner_nofma_check lanes=8 threads=8 n=1048576 differences=0 edge_differences=0
+cubecl_horner_nofma_first_launch lanes=16 threads=1 n=1048576 instructions=3608197
+cubecl_horner_nofma_lanes16_threads1           n=1048576   median=3585973      min=3435774      max=3645882      per_element=3.420
+cubecl_horner_nofma_check lanes=16 threads=1 n=1048576 differences=0 edge_differences=0
+cubecl_horner_nofma_first_launch lanes=16 threads=8 n=1048576 instructions=4436631
+cubecl_horner_nofma_lanes16_threads8           n=1048576   median=3811522      min=3764593      max=4049509      per_element=3.635
+cubecl_horner_nofma_check lanes=16 threads=8 n=1048576 differences=0 edge_differences=0
+cubecl_residual_first_launch lanes=1 threads=1 n=1048576 instructions=1931973
+cubecl_residual_lanes1_threads1                n=1048576   median=1893059      min=1811775      max=1926988      per_element=1.805
+cubecl_residual_first_launch lanes=1 threads=8 n=1048576 instructions=2030138
+cubecl_residual_lanes1_threads8                n=1048576   median=2065347      min=2038281      max=2151190      per_element=1.970
+cubecl_residual_first_launch lanes=8 threads=1 n=1048576 instructions=2766530
+cubecl_residual_lanes8_threads1                n=1048576   median=1961913      min=1865376      max=2031481      per_element=1.871
+cubecl_residual_first_launch lanes=8 threads=8 n=1048576 instructions=2168707
+cubecl_residual_lanes8_threads8                n=1048576   median=2159055      min=2135167      max=2272731      per_element=2.059
+cubecl_residual_first_launch lanes=16 threads=1 n=1048576 instructions=2889758
+cubecl_residual_lanes16_threads1               n=1048576   median=1955826      min=1863594      max=2016687      per_element=1.865
+cubecl_residual_first_launch lanes=16 threads=8 n=1048576 instructions=2233858
+cubecl_residual_lanes16_threads8               n=1048576   median=2157510      min=2140309      max=2218338      per_element=2.058
+cubecl_residual_nofma_first_launch lanes=1 threads=1 n=1048576 instructions=2150694
+cubecl_residual_nofma_lanes1_threads1          n=1048576   median=2043918      min=2024510      max=2139789      per_element=1.949
+cubecl_residual_nofma_check lanes=1 threads=1 n=1048576 differences=0 edge_differences=0
+cubecl_residual_nofma_first_launch lanes=1 threads=8 n=1048576 instructions=2407934
+cubecl_residual_nofma_lanes1_threads8          n=1048576   median=2316013      min=2232504      max=2429280      per_element=2.209
+cubecl_residual_nofma_check lanes=1 threads=8 n=1048576 differences=0 edge_differences=0
+cubecl_residual_nofma_first_launch lanes=8 threads=1 n=1048576 instructions=2100697
+cubecl_residual_nofma_lanes8_threads1          n=1048576   median=2104047      min=1988797      max=2206903      per_element=2.007
+cubecl_residual_nofma_check lanes=8 threads=1 n=1048576 differences=0 edge_differences=0
+cubecl_residual_nofma_first_launch lanes=8 threads=8 n=1048576 instructions=2389474
+cubecl_residual_nofma_lanes8_threads8          n=1048576   median=2272188      min=2260067      max=2405915      per_element=2.167
+cubecl_residual_nofma_check lanes=8 threads=8 n=1048576 differences=0 edge_differences=0
+cubecl_residual_nofma_first_launch lanes=16 threads=1 n=1048576 instructions=2173859
+cubecl_residual_nofma_lanes16_threads1         n=1048576   median=2198751      min=2117421      max=2277931      per_element=2.097
+cubecl_residual_nofma_check lanes=16 threads=1 n=1048576 differences=0 edge_differences=0
+cubecl_residual_nofma_first_launch lanes=16 threads=8 n=1048576 instructions=2606617
+cubecl_residual_nofma_lanes16_threads8         n=1048576   median=2411794      min=2403656      max=2485978      per_element=2.300
+cubecl_residual_nofma_check lanes=16 threads=8 n=1048576 differences=0 edge_differences=0
+cubecl_workload_write_dispatch_read_persistent n=1048576   median=1158686      min=1033953      max=1309473      per_element=1.105
+cubecl_workload_copy_in_dispatch_readback_fresh n=1048576   median=1186265      min=1146840      max=1318811      per_element=1.131
+cubecl_matmul_nofma_first_launch side=48 threads=1 instructions=146865013
+cubecl_matmul6_nofma_threads1                  n=110592    median=129201       min=128218       max=282885       per_element=1.168
+cubecl_matmul6_nofma_check side=48 threads=1 differences=0
+cubecl_matmul_nofma_threads1                   n=110592    median=113628       min=112805       max=118011       per_element=1.027
+cubecl_matmul_nofma_check side=48 threads=1 differences=0
+cubecl_matmul_nofma_first_launch side=48 threads=8 instructions=148114969
+cubecl_matmul6_nofma_threads8                  n=110592    median=371482       min=366062       max=575788       per_element=3.359
+cubecl_matmul6_nofma_check side=48 threads=8 differences=0
+cubecl_matmul_nofma_threads8                   n=110592    median=356459       min=350371       max=391007       per_element=3.223
+cubecl_matmul_nofma_check side=48 threads=8 differences=0
+cubecl_matmul_default_first_launch side=48 threads=1 instructions=142542569
+cubecl_matmul6_default_threads1                n=110592    median=93400        min=85042        max=257984       per_element=0.845
+cubecl_matmul6_default_check side=48 threads=1 differences=0
+cubecl_matmul_default_threads1                 n=110592    median=92034        min=90687        max=93892        per_element=0.832
+cubecl_matmul_default_check side=48 threads=1 differences=0
+cubecl_matmul_default_first_launch side=48 threads=8 instructions=143885098
+cubecl_matmul6_default_threads8                n=110592    median=308133       min=281774       max=651089       per_element=2.786
+cubecl_matmul6_default_check side=48 threads=8 differences=0
+cubecl_matmul_default_threads8                 n=110592    median=320788       min=290243       max=907772       per_element=2.901
+cubecl_matmul_default_check side=48 threads=8 differences=0
+cubecl_matmul_nofma_first_launch side=240 threads=1 instructions=7200355
+cubecl_matmul6_nofma_threads1                  n=13824000  median=9101693      min=8987731      max=9252207      per_element=0.658
+cubecl_matmul6_nofma_check side=240 threads=1 differences=0
+cubecl_matmul_nofma_threads1                   n=13824000  median=7323025      min=7213510      max=7364052      per_element=0.530
+cubecl_matmul_nofma_check side=240 threads=1 differences=0
+cubecl_matmul_nofma_first_launch side=240 threads=8 instructions=7531450
+cubecl_matmul6_nofma_threads8                  n=13824000  median=9509408      min=9431362      max=9608860      per_element=0.688
+cubecl_matmul6_nofma_check side=240 threads=8 differences=0
+cubecl_matmul_nofma_threads8                   n=13824000  median=7691440      min=7670626      max=7736812      per_element=0.556
+cubecl_matmul_nofma_check side=240 threads=8 differences=0
+cubecl_matmul_default_first_launch side=240 threads=1 instructions=4694166
+cubecl_matmul6_default_threads1                n=13824000  median=4414397      min=4343168      max=4563669      per_element=0.319
+cubecl_matmul6_default_check side=240 threads=1 differences=0
+cubecl_matmul_default_threads1                 n=13824000  median=4699610      min=4565837      max=4784726      per_element=0.340
+cubecl_matmul_default_check side=240 threads=1 differences=0
+cubecl_matmul_default_first_launch side=240 threads=8 instructions=4832780
+cubecl_matmul6_default_threads8                n=13824000  median=4701690      min=4693524      max=4787531      per_element=0.340
+cubecl_matmul6_default_check side=240 threads=8 differences=0
+cubecl_matmul_default_threads8                 n=13824000  median=4977928      min=4965026      max=5084736      per_element=0.360
+cubecl_matmul_default_check side=240 threads=8 differences=0
+cubecl_matmul_nofma_first_launch side=384 threads=1 instructions=29369784
+cubecl_matmul6_nofma_threads1                  n=56623104  median=36748235     min=36678081     max=36847305     per_element=0.649
+cubecl_matmul6_nofma_check side=384 threads=1 differences=0
+cubecl_matmul_nofma_threads1                   n=56623104  median=29391778     min=29307729     max=29589111     per_element=0.519
+cubecl_matmul_nofma_check side=384 threads=1 differences=0
+cubecl_matmul_nofma_first_launch side=384 threads=8 instructions=29855483
+cubecl_matmul6_nofma_threads8                  n=56623104  median=37934574     min=37776023     max=38014681     per_element=0.670
+cubecl_matmul6_nofma_check side=384 threads=8 differences=0
+cubecl_matmul_nofma_threads8                   n=56623104  median=30402798     min=30301727     max=30438417     per_element=0.537
+cubecl_matmul_nofma_check side=384 threads=8 differences=0
+cubecl_matmul_default_first_launch side=384 threads=1 instructions=18544539
+cubecl_matmul6_default_threads1                n=56623104  median=17722091     min=17639804     max=17762078     per_element=0.313
+cubecl_matmul6_default_check side=384 threads=1 differences=0
+cubecl_matmul_default_threads1                 n=56623104  median=18617854     min=18529995     max=18646975     per_element=0.329
+cubecl_matmul_default_check side=384 threads=1 differences=0
+cubecl_matmul_default_first_launch side=384 threads=8 instructions=19468131
+cubecl_matmul6_default_threads8                n=56623104  median=18756096     min=18645471     max=18813488     per_element=0.331
+cubecl_matmul6_default_check side=384 threads=8 differences=0
+cubecl_matmul_default_threads8                 n=56623104  median=19649737     min=19624406     max=19718121     per_element=0.347
+cubecl_matmul_default_check side=384 threads=8 differences=0
+cubecl_mlp2_nofma_threads1                     n=221184    median=337614       min=253366       max=754753       per_element=1.526
+cubecl_mlp2_check side=48 differences=0
+cubecl_mlp2_default_threads1                   n=221184    median=275674       min=271346       max=281588       per_element=1.246
+cubecl_mlp2_nofma_threads1                     n=27648000  median=17968992     min=17711191     max=19596958     per_element=0.650
+cubecl_mlp2_check side=240 differences=0
+cubecl_mlp2_default_threads1                   n=27648000  median=10781740     min=10715747     max=10860050     per_element=0.390

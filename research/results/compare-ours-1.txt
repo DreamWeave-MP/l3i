@@ -1,109 +1,219 @@
-# base commit 2eeb871 plus research/cubecl-compare, ours, run 1 of 3, fresh process
+# base commit ea21685 plus uncommitted tiling, compare-ours run 1 of 3, disposable fedora:44 container, user-space retired instructions
 Model name:                              Intel(R) Core(TM) i7-10870H CPU @ 2.20GHz
 rustc 1.99.1 (58cf8f9c3 2026-10-13)
- 01:44:17 up 4 days, 22:24,  1 user,  load average: 6.46, 7.22, 5.67
-# side=ours isa=Avx2 chunk=1024 samples=31
-ours_workload_threads1                               n=16        median_us=0.112        min_us=0.108        p90_us=0.115        ns_per_element=7.0101
-ours_workload_threads8                               n=16        median_us=5.912        min_us=5.637        p90_us=6.171        ns_per_element=369.4845
-ours_workload_threads16                              n=16        median_us=9.535        min_us=8.931        p90_us=11.297       ns_per_element=595.9282
-ours_workload_compile n=16 us=5.880
-ours_chain16_threads1                                n=16        median_us=0.256        min_us=0.249        p90_us=0.265        ns_per_element=16.0053
-ours_chain16_threads8                                n=16        median_us=5.800        min_us=5.644        p90_us=6.060        ns_per_element=362.5090
-ours_chain16_threads16                               n=16        median_us=9.299        min_us=8.960        p90_us=11.518       ns_per_element=581.1814
-ours_chain16_compile n=16 us=12.472
-rust_fused_chain16_strict_threads1                   n=16        median_us=0.011        min_us=0.010        p90_us=0.013        ns_per_element=0.6755
-rust_fused_chain16_fma_threads1                      n=16        median_us=0.008        min_us=0.008        p90_us=0.009        ns_per_element=0.4842
-ours_strict n=16 edges=false workload_differences=0 chain_differences=0
-ours_strict n=16 edges=true workload_differences=0 chain_differences=0
-ours_workload_threads1                               n=1024      median_us=0.248        min_us=0.235        p90_us=0.289        ns_per_element=0.2422
-ours_workload_threads8                               n=1024      median_us=5.954        min_us=5.790        p90_us=6.191        ns_per_element=5.8149
-ours_workload_threads16                              n=1024      median_us=9.197        min_us=8.769        p90_us=15.579       ns_per_element=8.9810
-ours_workload_compile n=1024 us=6.698
-ours_chain16_threads1                                n=1024      median_us=1.093        min_us=1.050        p90_us=1.361        ns_per_element=1.0671
-ours_chain16_threads8                                n=1024      median_us=5.763        min_us=5.626        p90_us=6.049        ns_per_element=5.6284
-ours_chain16_threads16                               n=1024      median_us=9.692        min_us=9.120        p90_us=13.095       ns_per_element=9.4650
-ours_chain16_compile n=1024 us=11.984
-rust_fused_chain16_strict_threads1                   n=1024      median_us=0.722        min_us=0.676        p90_us=0.792        ns_per_element=0.7048
-rust_fused_chain16_fma_threads1                      n=1024      median_us=0.506        min_us=0.462        p90_us=0.521        ns_per_element=0.4941
-ours_strict n=1024 edges=false workload_differences=0 chain_differences=0
-ours_strict n=1024 edges=true workload_differences=0 chain_differences=0
-ours_workload_threads1                               n=16384     median_us=4.004        min_us=3.872        p90_us=4.129        ns_per_element=0.2444
-ours_workload_threads8                               n=16384     median_us=6.559        min_us=6.318        p90_us=6.833        ns_per_element=0.4003
-ours_workload_threads16                              n=16384     median_us=10.249       min_us=9.642        p90_us=10.611       ns_per_element=0.6256
-ours_workload_compile n=16384 us=6.166
-ours_chain16_threads1                                n=16384     median_us=17.277       min_us=16.657       p90_us=19.498       ns_per_element=1.0545
-ours_chain16_threads8                                n=16384     median_us=8.413        min_us=7.912        p90_us=9.087        ns_per_element=0.5135
-ours_chain16_threads16                               n=16384     median_us=11.542       min_us=10.590       p90_us=12.489       ns_per_element=0.7044
-ours_chain16_compile n=16384 us=14.255
-rust_fused_chain16_strict_threads1                   n=16384     median_us=9.901        min_us=9.438        p90_us=11.281       ns_per_element=0.6043
-rust_fused_chain16_fma_threads1                      n=16384     median_us=6.884        min_us=6.432        p90_us=8.015        ns_per_element=0.4202
-ours_strict n=16384 edges=false workload_differences=0 chain_differences=0
-ours_strict n=16384 edges=true workload_differences=0 chain_differences=0
-ours_workload_threads1                               n=65536     median_us=20.447       min_us=19.475       p90_us=22.833       ns_per_element=0.3120
-ours_workload_threads8                               n=65536     median_us=9.155        min_us=8.871        p90_us=9.874        ns_per_element=0.1397
-ours_workload_threads16                              n=65536     median_us=12.573       min_us=11.600       p90_us=13.726       ns_per_element=0.1918
-ours_workload_compile n=65536 us=6.318
-ours_chain16_threads1                                n=65536     median_us=76.292       min_us=73.591       p90_us=78.212       ns_per_element=1.1641
-ours_chain16_threads8                                n=65536     median_us=17.034       min_us=16.807       p90_us=18.978       ns_per_element=0.2599
-ours_chain16_threads16                               n=65536     median_us=27.376       min_us=22.613       p90_us=42.767       ns_per_element=0.4177
-ours_chain16_compile n=65536 us=11.594
-rust_fused_chain16_strict_threads1                   n=65536     median_us=37.880       min_us=35.672       p90_us=39.812       ns_per_element=0.5780
-rust_fused_chain16_fma_threads1                      n=65536     median_us=27.177       min_us=25.703       p90_us=28.977       ns_per_element=0.4147
-ours_strict n=65536 edges=false workload_differences=0 chain_differences=0
-ours_strict n=65536 edges=true workload_differences=0 chain_differences=0
-ours_workload_threads1                               n=1048576   median_us=627.245      min_us=456.255      p90_us=772.096      ns_per_element=0.5982
-ours_workload_threads8                               n=1048576   median_us=102.587      min_us=92.186       p90_us=142.689      ns_per_element=0.0978
-ours_workload_threads16                              n=1048576   median_us=104.856      min_us=99.423       p90_us=170.700      ns_per_element=0.1000
-ours_workload_compile n=1048576 us=7.622
-ours_chain16_threads1                                n=1048576   median_us=1659.180     min_us=1415.619     p90_us=1804.761     ns_per_element=1.5823
-ours_chain16_threads8                                n=1048576   median_us=273.680      min_us=249.316      p90_us=337.899      ns_per_element=0.2610
-ours_chain16_threads16                               n=1048576   median_us=338.173      min_us=265.496      p90_us=730.976      ns_per_element=0.3225
-ours_chain16_compile n=1048576 us=13.102
-rust_fused_chain16_strict_threads1                   n=1048576   median_us=981.458      min_us=836.332      p90_us=1236.001     ns_per_element=0.9360
-rust_fused_chain16_fma_threads1                      n=1048576   median_us=677.717      min_us=424.561      p90_us=753.813      ns_per_element=0.6463
-ours_strict n=1048576 edges=false workload_differences=0 chain_differences=0
-ours_strict n=1048576 edges=true workload_differences=0 chain_differences=0
-rust_matmul_fma_threads1                             n=262144    median_us=10.860       min_us=10.608       p90_us=10.998       ns_per_element=0.0414
-ours_matmul_threads1                                 n=262144    median_us=13.690       min_us=13.618       p90_us=14.059       ns_per_element=0.0522
-ours_matmul_strict side=64 threads=1 differences=0
-ours_matmul_threads8                                 n=262144    median_us=7.457        min_us=7.119        p90_us=7.687        ns_per_element=0.0284
-ours_matmul_strict side=64 threads=8 differences=0
-ours_matmul_threads16                                n=262144    median_us=10.533       min_us=9.559        p90_us=11.787       ns_per_element=0.0402
-ours_matmul_strict side=64 threads=16 differences=0
-rust_matmul_fma_threads1                             n=16777216  median_us=687.589      min_us=664.738      p90_us=745.764      ns_per_element=0.0410
-ours_matmul_threads1                                 n=16777216  median_us=800.738      min_us=784.722      p90_us=984.460      ns_per_element=0.0477
-ours_matmul_strict side=256 threads=1 differences=0
-ours_matmul_threads8                                 n=16777216  median_us=199.469      min_us=179.263      p90_us=254.144      ns_per_element=0.0119
-ours_matmul_strict side=256 threads=8 differences=0
-ours_matmul_threads16                                n=16777216  median_us=217.859      min_us=102.992      p90_us=443.210      ns_per_element=0.0130
-ours_matmul_strict side=256 threads=16 differences=0
-rust_matmul_fma_threads1                             n=64000000  median_us=2575.642     min_us=2503.664     p90_us=2792.899     ns_per_element=0.0402
-ours_matmul_threads1                                 n=64000000  median_us=2896.168     min_us=2868.388     p90_us=3149.178     ns_per_element=0.0453
-ours_matmul_strict side=400 threads=1 differences=0
-ours_matmul_threads8                                 n=64000000  median_us=429.149      min_us=373.126      p90_us=506.925      ns_per_element=0.0067
-ours_matmul_strict side=400 threads=8 differences=0
-ours_matmul_threads16                                n=64000000  median_us=406.989      min_us=364.872      p90_us=533.648      ns_per_element=0.0064
-ours_matmul_strict side=400 threads=16 differences=0
-	Command being timed: "timeout 280 target/cubecl-compare/release/l3i-cubecl-compare ours"
-	User time (seconds): 46.20
-	System time (seconds): 14.34
-	Percent of CPU this job got: 537%
-	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:11.26
-	Average shared text size (kbytes): 0
-	Average unshared data size (kbytes): 0
-	Average stack size (kbytes): 0
-	Average total size (kbytes): 0
-	Maximum resident set size (kbytes): 80944
-	Average resident set size (kbytes): 0
-	Major (requiring I/O) page faults: 0
-	Minor (reclaiming a frame) page faults: 25620
-	Voluntary context switches: 528876
-	Involuntary context switches: 415568
-	Swaps: 0
-	File system inputs: 0
-	File system outputs: 0
-	Socket messages sent: 0
-	Socket messages received: 0
-	Signals delivered: 0
-	Page size (bytes): 4096
-	Exit status: 0
+# side=ours isa=Avx2 fast=Fma metric=user_instructions_all_threads samples=15
+ours_workload_threads1                         n=16        median=1583         min=1583         max=1583         per_element=98.938
+ours_workload_check threads=1 n=16 differences=0
+ours_workload_threads8                         n=16        median=195506       min=156636       max=248240       per_element=12219.125
+ours_workload_check threads=8 n=16 differences=0
+ours_workload_compile n=16 instructions=17865
+ours_workload_edges n=16 differences=0
+ours_chain16_threads1                          n=16        median=3676         min=3676         max=3676         per_element=229.750
+ours_chain16_check threads=1 n=16 differences=0
+ours_chain16_threads8                          n=16        median=232450       min=216000       max=295437       per_element=14528.125
+ours_chain16_check threads=8 n=16 differences=0
+ours_chain16_compile n=16 instructions=55439
+ours_chain16_edges n=16 differences=0
+ours_chain16_fast_threads1                     n=16        median=3804         min=3804         max=3804         per_element=237.750
+ours_chain16_fast_check threads=1 n=16 differences=0
+ours_chain16_fast_threads8                     n=16        median=257774       min=211012       max=275817       per_element=16110.875
+ours_chain16_fast_check threads=8 n=16 differences=0
+ours_chain16_fast_compile n=16 instructions=75064
+ours_horner_threads1                           n=16        median=3959         min=3959         max=3959         per_element=247.438
+ours_horner_check threads=1 n=16 differences=0
+ours_horner_threads8                           n=16        median=258408       min=254656       max=269843       per_element=16150.500
+ours_horner_check threads=8 n=16 differences=0
+ours_horner_compile n=16 instructions=67523
+ours_horner_edges n=16 differences=0
+ours_horner_fast_threads1                      n=16        median=2901         min=2901         max=2901         per_element=181.312
+ours_horner_fast_check threads=1 n=16 differences=0
+ours_horner_fast_threads8                      n=16        median=250091       min=236278       max=257884       per_element=15630.688
+ours_horner_fast_check threads=8 n=16 differences=0
+ours_horner_fast_compile n=16 instructions=62759
+ours_residual_threads1                         n=16        median=2684         min=2684         max=2684         per_element=167.750
+ours_residual_check threads=1 n=16 differences=0
+ours_residual_threads8                         n=16        median=247673       min=226373       max=255193       per_element=15479.562
+ours_residual_check threads=8 n=16 differences=0
+ours_residual_compile n=16 instructions=39326
+ours_residual_edges n=16 differences=0
+ours_residual_fast_threads1                    n=16        median=2683         min=2683         max=2683         per_element=167.688
+ours_residual_fast_threads8                    n=16        median=247140       min=243857       max=277722       per_element=15446.250
+ours_residual_fast_compile n=16 instructions=52893
+ours_workload_threads1                         n=1024      median=2425         min=2425         max=2425         per_element=2.368
+ours_workload_check threads=1 n=1024 differences=0
+ours_workload_threads8                         n=1024      median=242013       min=205319       max=297441       per_element=236.341
+ours_workload_check threads=8 n=1024 differences=0
+ours_workload_compile n=1024 instructions=25800
+ours_workload_edges n=1024 differences=0
+ours_chain16_threads1                          n=1024      median=8685         min=8685         max=8685         per_element=8.481
+ours_chain16_check threads=1 n=1024 differences=0
+ours_chain16_threads8                          n=1024      median=263910       min=258288       max=273195       per_element=257.725
+ours_chain16_check threads=8 n=1024 differences=0
+ours_chain16_compile n=1024 instructions=64108
+ours_chain16_edges n=1024 differences=0
+ours_chain16_fast_threads1                     n=1024      median=8015         min=8015         max=8015         per_element=7.827
+ours_chain16_fast_check threads=1 n=1024 differences=0
+ours_chain16_fast_threads8                     n=1024      median=260298       min=223128       max=273641       per_element=254.197
+ours_chain16_fast_check threads=8 n=1024 differences=0
+ours_chain16_fast_compile n=1024 instructions=67713
+ours_horner_threads1                           n=1024      median=7866         min=7866         max=7866         per_element=7.682
+ours_horner_check threads=1 n=1024 differences=0
+ours_horner_threads8                           n=1024      median=262829       min=258505       max=289108       per_element=256.669
+ours_horner_check threads=8 n=1024 differences=0
+ours_horner_compile n=1024 instructions=66409
+ours_horner_edges n=1024 differences=0
+ours_horner_fast_threads1                      n=1024      median=5673         min=5673         max=5673         per_element=5.540
+ours_horner_fast_check threads=1 n=1024 differences=0
+ours_horner_fast_threads8                      n=1024      median=252635       min=212487       max=265189       per_element=246.714
+ours_horner_fast_check threads=8 n=1024 differences=0
+ours_horner_fast_compile n=1024 instructions=87112
+ours_residual_threads1                         n=1024      median=5275         min=5275         max=5275         per_element=5.151
+ours_residual_check threads=1 n=1024 differences=0
+ours_residual_threads8                         n=1024      median=251077       min=249698       max=270190       per_element=245.192
+ours_residual_check threads=8 n=1024 differences=0
+ours_residual_compile n=1024 instructions=40511
+ours_residual_edges n=1024 differences=0
+ours_residual_fast_threads1                    n=1024      median=5274         min=5274         max=5274         per_element=5.150
+ours_residual_fast_threads8                    n=1024      median=250438       min=243016       max=255154       per_element=244.568
+ours_residual_fast_compile n=1024 instructions=53298
+ours_workload_threads1                         n=16384     median=17245        min=17245        max=17245        per_element=1.053
+ours_workload_check threads=1 n=16384 differences=0
+ours_workload_threads8                         n=16384     median=259878       min=251879       max=405835       per_element=15.862
+ours_workload_check threads=8 n=16384 differences=0
+ours_workload_compile n=16384 instructions=30143
+ours_workload_edges n=16384 differences=0
+ours_chain16_threads1                          n=16384     median=92168        min=92168        max=92168        per_element=5.625
+ours_chain16_check threads=1 n=16384 differences=0
+ours_chain16_threads8                          n=16384     median=355873       min=306062       max=369182       per_element=21.721
+ours_chain16_check threads=8 n=16384 differences=0
+ours_chain16_compile n=16384 instructions=55719
+ours_chain16_edges n=16384 differences=0
+ours_chain16_fast_threads1                     n=16384     median=82045        min=82045        max=82045        per_element=5.008
+ours_chain16_fast_check threads=1 n=16384 differences=0
+ours_chain16_fast_threads8                     n=16384     median=342692       min=331221       max=350567       per_element=20.916
+ours_chain16_fast_check threads=8 n=16384 differences=0
+ours_chain16_fast_compile n=16384 instructions=75802
+ours_horner_threads1                           n=16384     median=77785        min=77785        max=77785        per_element=4.748
+ours_horner_check threads=1 n=16384 differences=0
+ours_horner_threads8                           n=16384     median=339951       min=303407       max=351597       per_element=20.749
+ours_horner_check threads=8 n=16384 differences=0
+ours_horner_compile n=16384 instructions=70735
+ours_horner_edges n=16384 differences=0
+ours_horner_fast_threads1                      n=16384     median=56448        min=56448        max=56449        per_element=3.445
+ours_horner_fast_check threads=1 n=16384 differences=0
+ours_horner_fast_threads8                      n=16384     median=307174       min=239301       max=312137       per_element=18.748
+ours_horner_fast_check threads=8 n=16384 differences=0
+ours_horner_fast_compile n=16384 instructions=77406
+ours_residual_threads1                         n=16384     median=52330        min=52330        max=52330        per_element=3.194
+ours_residual_check threads=1 n=16384 differences=0
+ours_residual_threads8                         n=16384     median=301189       min=275514       max=311550       per_element=18.383
+ours_residual_check threads=8 n=16384 differences=0
+ours_residual_compile n=16384 instructions=36929
+ours_residual_edges n=16384 differences=0
+ours_residual_fast_threads1                    n=16384     median=52329        min=52329        max=52330        per_element=3.194
+ours_residual_fast_threads8                    n=16384     median=300042       min=297668       max=317490       per_element=18.313
+ours_residual_fast_compile n=16384 instructions=50514
+ours_workload_threads1                         n=65536     median=64669        min=64669        max=64670        per_element=0.987
+ours_workload_check threads=1 n=65536 differences=0
+ours_workload_threads8                         n=65536     median=316108       min=280072       max=330027       per_element=4.823
+ours_workload_check threads=8 n=65536 differences=0
+ours_workload_compile n=65536 instructions=34504
+ours_workload_edges n=65536 differences=0
+ours_chain16_threads1                          n=65536     median=360218       min=360218       max=360219       per_element=5.496
+ours_chain16_check threads=1 n=65536 differences=0
+ours_chain16_threads8                          n=65536     median=605126       min=595460       max=681400       per_element=9.233
+ours_chain16_check threads=8 n=65536 differences=0
+ours_chain16_compile n=65536 instructions=56389
+ours_chain16_edges n=65536 differences=0
+ours_chain16_fast_threads1                     n=65536     median=319405       min=319405       max=319406       per_element=4.874
+ours_chain16_fast_check threads=1 n=65536 differences=0
+ours_chain16_fast_threads8                     n=65536     median=599779       min=593535       max=612652       per_element=9.152
+ours_chain16_fast_check threads=8 n=65536 differences=0
+ours_chain16_fast_compile n=65536 instructions=73752
+ours_horner_threads1                           n=65536     median=302329       min=302329       max=302329       per_element=4.613
+ours_horner_check threads=1 n=65536 differences=0
+ours_horner_threads8                           n=65536     median=581881       min=572777       max=588606       per_element=8.879
+ours_horner_check threads=8 n=65536 differences=0
+ours_horner_compile n=65536 instructions=69244
+ours_horner_edges n=65536 differences=0
+ours_horner_fast_threads1                      n=65536     median=218928       min=218928       max=218929       per_element=3.341
+ours_horner_fast_check threads=1 n=65536 differences=0
+ours_horner_fast_threads8                      n=65536     median=490900       min=465153       max=498101       per_element=7.491
+ours_horner_fast_check threads=8 n=65536 differences=0
+ours_horner_fast_compile n=65536 instructions=71589
+ours_residual_threads1                         n=65536     median=202906       min=202906       max=202907       per_element=3.096
+ours_residual_check threads=1 n=65536 differences=0
+ours_residual_threads8                         n=65536     median=474196       min=430494       max=495991       per_element=7.236
+ours_residual_check threads=8 n=65536 differences=0
+ours_residual_compile n=65536 instructions=44289
+ours_residual_edges n=65536 differences=0
+ours_residual_fast_threads1                    n=65536     median=202905       min=202905       max=202906       per_element=3.096
+ours_residual_fast_threads8                    n=65536     median=475332       min=462565       max=494813       per_element=7.253
+ours_residual_fast_compile n=65536 instructions=48074
+ours_workload_threads1                         n=1048576   median=1013149      min=1013149      max=1013150      per_element=0.966
+ours_workload_check threads=1 n=1048576 differences=0
+ours_workload_threads8                         n=1048576   median=1325415      min=1301940      max=1455823      per_element=1.264
+ours_workload_check threads=8 n=1048576 differences=0
+ours_workload_compile n=1048576 instructions=23839
+ours_workload_edges n=1048576 differences=0
+ours_chain16_threads1                          n=1048576   median=5718006      min=5718005      max=5718006      per_element=5.453
+ours_chain16_check threads=1 n=1048576 differences=0
+ours_chain16_threads8                          n=1048576   median=6011590      min=5965625      max=6292186      per_element=5.733
+ours_chain16_check threads=8 n=1048576 differences=0
+ours_chain16_compile n=1048576 instructions=63498
+ours_chain16_edges n=1048576 differences=0
+ours_chain16_fast_threads1                     n=1048576   median=5066606      min=5066605      max=5066607      per_element=4.832
+ours_chain16_fast_check threads=1 n=1048576 differences=0
+ours_chain16_fast_threads8                     n=1048576   median=5382824      min=5347711      max=5637484      per_element=5.133
+ours_chain16_fast_check threads=8 n=1048576 differences=0
+ours_chain16_fast_compile n=1048576 instructions=64543
+ours_horner_threads1                           n=1048576   median=4793311      min=4793310      max=4793312      per_element=4.571
+ours_horner_check threads=1 n=1048576 differences=0
+ours_horner_threads8                           n=1048576   median=5087075      min=5071893      max=5394328      per_element=4.851
+ours_horner_check threads=8 n=1048576 differences=0
+ours_horner_compile n=1048576 instructions=69389
+ours_horner_edges n=1048576 differences=0
+ours_horner_fast_threads1                      n=1048576   median=3468529      min=3468528      max=3468529      per_element=3.308
+ours_horner_fast_check threads=1 n=1048576 differences=0
+ours_horner_fast_threads8                      n=1048576   median=3911000      min=3779346      max=4069732      per_element=3.730
+ours_horner_fast_check threads=8 n=1048576 differences=0
+ours_horner_fast_compile n=1048576 instructions=74406
+ours_residual_threads1                         n=1048576   median=3214427      min=3214426      max=3214427      per_element=3.066
+ours_residual_check threads=1 n=1048576 differences=0
+ours_residual_threads8                         n=1048576   median=3623456      min=3570743      max=3847771      per_element=3.456
+ours_residual_check threads=8 n=1048576 differences=0
+ours_residual_compile n=1048576 instructions=40268
+ours_residual_edges n=1048576 differences=0
+ours_residual_fast_threads1                    n=1048576   median=3214426      min=3214425      max=3214426      per_element=3.066
+ours_residual_fast_threads8                    n=1048576   median=3628025      min=3502688      max=3772251      per_element=3.460
+ours_residual_fast_compile n=1048576 instructions=41369
+ours_matmul_threads1                           n=110592    median=52766        min=52766        max=52767        per_element=0.477
+ours_matmul_check side=48 threads=1 differences=0
+ours_matmul_threads8                           n=110592    median=291466       min=282882       max=315141       per_element=2.636
+ours_matmul_check side=48 threads=8 differences=0
+ours_matmul_fast_threads1                      n=110592    median=38975        min=38975        max=38975        per_element=0.352
+ours_matmul_fast_check side=48 threads=1 differences=0
+ours_matmul_fast_threads8                      n=110592    median=273250       min=268296       max=288359       per_element=2.471
+ours_matmul_fast_check side=48 threads=8 differences=0
+ours_matmul_threads1                           n=13824000  median=5573822      min=5573821      max=5590339      per_element=0.403
+ours_matmul_check side=240 threads=1 differences=0
+ours_matmul_threads8                           n=13824000  median=5845003      min=5835206      max=6181077      per_element=0.423
+ours_matmul_check side=240 threads=8 differences=0
+ours_matmul_fast_threads1                      n=13824000  median=3847028      min=3847028      max=3863263      per_element=0.278
+ours_matmul_fast_check side=240 threads=1 differences=0
+ours_matmul_fast_threads8                      n=13824000  median=4107275      min=4097987      max=4300863      per_element=0.297
+ours_matmul_fast_check side=240 threads=8 differences=0
+ours_matmul_threads1                           n=56623104  median=22604526     min=22604526     max=22604528     per_element=0.399
+ours_matmul_check side=384 threads=1 differences=0
+ours_matmul_threads8                           n=56623104  median=23025282     min=23000315     max=23121852     per_element=0.407
+ours_matmul_check side=384 threads=8 differences=0
+ours_matmul_fast_threads1                      n=56623104  median=15531251     min=15531250     max=15531253     per_element=0.274
+ours_matmul_fast_check side=384 threads=1 differences=0
+ours_matmul_fast_threads8                      n=56623104  median=16028954     min=15808553     max=16160250     per_element=0.283
+ours_matmul_fast_check side=384 threads=8 differences=0
+ours_mlp2_threads1                             n=221184    median=109616       min=109616       max=109616       per_element=0.496
+ours_mlp2_check side=48 differences=0
+ours_mlp2_fast_threads1                        n=221184    median=82026        min=82026        max=82026        per_element=0.371
+ours_mlp2_threads1                             n=27648000  median=11190214     min=11190214     max=11190214     per_element=0.405
+ours_mlp2_check side=240 differences=0
+ours_mlp2_fast_threads1                        n=27648000  median=7736620      min=7736619      max=7736620      per_element=0.280
