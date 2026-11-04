@@ -159,6 +159,21 @@ pub fn initialize() -> Result<()> {
         .map_err(Error::Logic)
 }
 
+/// Verify Analysis flags when the frontend is actually linked and used. Merely enabling the
+/// feature does not keep its object files in a binary that never invokes Analysis.
+#[cfg(feature = "analysis")]
+pub(crate) fn validate_analysis() -> Result<()> {
+    for flag in LUAU_ANALYSIS_FLAGS {
+        if crate::memory::fast_flag(flag) != Some(true) {
+            return Err(Error::logic(format!(
+                "Luau {} Analysis fast flag {flag} is missing or disabled",
+                crate::LUAU_VERSION
+            )));
+        }
+    }
+    Ok(())
+}
+
 static COROUTINE_FINALIZERS: OnceLock<std::result::Result<bool, String>> = OnceLock::new();
 
 /// Decides, once per process, whether Luau's coroutine finalizers are on, and returns the
