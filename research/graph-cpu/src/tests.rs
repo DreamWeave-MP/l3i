@@ -52,6 +52,15 @@ impl Random {
     fn below(&mut self, n: usize) -> usize {
         usize::try_from(self.next() % n as u64).unwrap()
     }
+    /// Same-magnitude finite values. Every add and product here rounds, so results are sensitive
+    /// to reassociation, contraction and reordering, which edge values hide: a NaN poisons a whole
+    /// sum, and wild exponents let one term dominate it.
+    fn moderate(&mut self) -> f32 {
+        let mantissa = u32::try_from(self.next() & 0x7f_ffff).unwrap();
+        let sign = u32::try_from(self.next() & 1).unwrap() << 31;
+        // Exponents 2^-1 and 2^0.
+        f32::from_bits(sign | ((126 + u32::try_from(self.next() & 1).unwrap()) << 23) | mantissa)
+    }
     /// Values that exercise every numerical edge the contract names.
     fn value(&mut self) -> f32 {
         match self.below(16) {
@@ -116,6 +125,7 @@ fn randomized_graphs_views_and_broadcasts_match_both_oracles() {
     let domain = domain();
     for case in 0..400 {
         let large = case % 25 == 0;
+        let moderate = case % 2 == 1;
         let rows = if large { 1 + random.below(40) } else { random.below(6) };
         let cols = if large { 700 + random.below(1400) } else { random.below(7) };
         // Inputs: full shape, row broadcast, column broadcast or single element; laid out with
@@ -141,7 +151,8 @@ fn randomized_graphs_views_and_broadcasts_match_both_oracles() {
             for r in 0..shape_rows {
                 for c in 0..shape_cols {
                     let at = offset + r * row_stride + c * col_stride;
-                    bytes[at..at + 4].copy_from_slice(&random.value().to_le_bytes());
+                    let value = if moderate { random.moderate() } else { random.value() };
+                    bytes[at..at + 4].copy_from_slice(&value.to_le_bytes());
                 }
             }
             // Layouts can overlap, so expectations come from the storage's final bytes.
@@ -165,7 +176,7 @@ fn randomized_graphs_views_and_broadcasts_match_both_oracles() {
             let (a, b) = (random.below(exprs.len()), random.below(exprs.len()));
             let (node, expr) = match random.below(5) {
                 0 => {
-                    let v = random.value();
+                    let v = if moderate { random.moderate() } else { random.value() };
                     (Model::Constant(v), Expr::constant(v, domain.clone()).unwrap())
                 }
                 1 | 2 => (Model::Add(a, b), exprs[a].add(&exprs[b]).unwrap()),
@@ -248,8 +259,11 @@ fn randomized_matmul_matches_the_ordered_triple_loop() {
         } else {
             (random.below(6), random.below(9), random.below(6))
         };
-        let a: Vec<f32> = (0..m * k).map(|_| random.value()).collect();
-        let b: Vec<f32> = (0..k * n).map(|_| random.value()).collect();
+        // Half the cases round on every operation, which exposes any change of addition order.
+        let moderate = case % 2 == 1 || wide;
+        let mut element = |_| if moderate { random.moderate() } else { random.value() };
+        let a: Vec<f32> = (0..m * k).map(&mut element).collect();
+        let b: Vec<f32> = (0..k * n).map(&mut element).collect();
         let expected = reference_matmul(&a, &b, m, k, n);
         let (ta, tb) = (tensor(&a, Shape::Matrix(m, k), &budget), tensor(&b, Shape::Matrix(k, n), &budget));
         let program = Expr::slot(0, Shape::Matrix(m, k), domain.clone())
@@ -581,6 +595,11 @@ fn strict_f32_edges_are_exact_on_every_instantiation() {
         .compile()
         .unwrap();
     assert_eq!(read(&folded.run(&[], &budget).unwrap())[0].to_bits(), 0);
+    // Folded ReLU has the kernel's semantics on the same edges.
+    for (input, expected) in [(-0.0f32, 0.0f32), (0.0, 0.0), (f32::NAN, f32::NAN), (-1.0, 0.0), (2.0, 2.0)] {
+        let program = Expr::constant(input, domain.clone()).unwrap().relu().unwrap().compile().unwrap();
+        assert_same(&read(&program.run(&[], &budget).unwrap()), &[expected], "folded relu");
+    }
 }
 
 #[test]
