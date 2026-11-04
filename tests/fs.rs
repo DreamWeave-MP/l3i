@@ -405,6 +405,8 @@ fn failed_sync_is_reported_again_by_close() {
              function() return w:flush() end, function() return w:syncData() end, function() return w:syncAll() end} do \
              local value, why, category = action() assert(value == nil and why == message and category == kind) end \
          local closed, closeMessage, closeKind = w:close() \
+         assert(closed == nil and closeKind == kind and closeMessage == message) \
+         closed, closeMessage, closeKind = w:close() \
          assert(closed == nil and closeKind == kind and closeMessage == message)",
         )
         .unwrap();
@@ -610,5 +612,18 @@ fn windows_file_sync_append_and_truncate() {
          assert(w:syncAll()) assert(w:close()) assert(fs.readFileString(path) == 'one')",
             scratch.lua()
         ))
+        .unwrap();
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn failed_close_remains_failed_on_repeated_close() {
+    runtime()
+        .exec(
+            "local w = assert(fs.openWrite('/dev/full', { truncate = false })) assert(w:write('x') == 1) \
+         local ok, message, kind = w:close() assert(ok == nil and kind == 'storageFull') \
+         local again, againMessage, againKind = w:close() \
+         assert(again == nil and againMessage == message and againKind == kind)",
+        )
         .unwrap();
 }

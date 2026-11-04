@@ -796,10 +796,10 @@ impl Writer {
         })
     }
 
-    /// Flushes and closes; closing a closed writer does nothing and answers true.
+    /// Flushes and closes; an I/O failure remains observable on every close.
     fn close(&self) -> Outcome<bool> {
-        if let Some(failure) = self.failure.borrow_mut().take() {
-            return Outcome::Failed(failure);
+        if let Some(failure) = self.failure.borrow().as_ref() {
+            return Outcome::Failed(failure.clone());
         }
         let Some(mut file) = self.file.0.borrow_mut().take() else {
             return Outcome::Done(true);
@@ -808,7 +808,9 @@ impl Writer {
             Ok(()) => Outcome::Done(true),
             Err(error) => {
                 let _ = file.into_parts();
-                Outcome::Failed(super::Failure::new("Writer.close", &self.name, &error))
+                let failure = super::Failure::new("Writer.close", &self.name, &error);
+                *self.failure.borrow_mut() = Some(failure.clone());
+                Outcome::Failed(failure)
             }
         }
     }
@@ -874,7 +876,7 @@ pub(crate) fn describe_writer(d: &mut ExtensionDescriptor) {
     writer
         .method("close", Writer::close)
         .signature("(self): (boolean?, string?, dream_fs_ErrorKind?)")
-        .doc("Flushes and closes; closing again does nothing.");
+        .doc("Flushes and closes; repeats any I/O failure on later closes.");
     writer.metamethod("__tostring", |w: &Writer| format!("dream.fs.Writer({})", display(&w.name)));
 }
 
@@ -934,7 +936,8 @@ mod durability_tests {
              local later, reason = w:write('later') assert(later == nil and reason == message) \
              later, reason = w:truncate(0) assert(later == nil and reason == message) \
              later, reason = w:syncAll() assert(later == nil and reason == message) \
-             local closed, closemsg = w:close() assert(closed == nil and closemsg == message)",
+             local closed, closemsg = w:close() assert(closed == nil and closemsg == message) \
+             closed, closemsg = w:close() assert(closed == nil and closemsg == message)",
                 path.to_string_lossy()
             ))
             .unwrap();
@@ -961,7 +964,8 @@ mod durability_tests {
              assert(ok == nil and kind ~= nil and msg:find('Writer.syncAll') and msg:find('os error 5')) \
              local later, latermsg = w:write('later') assert(later == nil and latermsg == msg) \
              later, latermsg = w:syncAll() assert(later == nil and latermsg == msg) \
-             local closed, closemsg = w:close() assert(closed == nil and closemsg == msg)",
+             local closed, closemsg = w:close() assert(closed == nil and closemsg == msg) \
+             closed, closemsg = w:close() assert(closed == nil and closemsg == msg)",
                 path.to_string_lossy()
             ))
             .unwrap();

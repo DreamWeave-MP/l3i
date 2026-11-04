@@ -1397,7 +1397,7 @@ synchronization operation; `Writer:syncAll()` flushes and synchronizes file data
 Both return true or nil, an OS error message (including the OS code when available), and an error
 kind. Any writer I/O failure leaves its outcome uncertain and poisons the handle: later writes,
 seeks, truncations, flushes and syncs return the original failure. Buffered bytes are discarded
-without another write; close reports the original failure. Close the handle and recover before
+without another write; every close reports the original failure, including a failure during close. Close the handle and recover before
 opening a new writer.
 `flush()` and `close()` alone are not stable-storage barriers. `openWrite` accepts
 `exclusive = true` to create a new file without opening an existing one.
