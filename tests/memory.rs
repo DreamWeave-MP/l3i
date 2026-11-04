@@ -660,3 +660,28 @@ fn scalar_and_pinned_pushes_past_the_stack_limit_fail_instead_of_aborting() {
 fn luau_checks_its_assertions_exactly_when_rust_debug_assertions_are_on() {
     assert_eq!(l3i::flags::luau_assertions(), cfg!(debug_assertions));
 }
+
+thread_local!(static CAGE_SIZES: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) });
+
+#[test]
+fn the_buffer_cage_holds_buffer_data_without_the_page_headers() {
+    struct Recording(CountingCage);
+    impl BufferCage for Recording {
+        fn allocate(&self, ptr: *mut c_void, old_size: usize, new_size: usize, kind: c_int) -> *mut c_void {
+            if ptr.is_null() {
+                CAGE_SIZES.with(|sizes| sizes.borrow_mut().push(new_size));
+            }
+            self.0.allocate(ptr, old_size, new_size, kind)
+        }
+    }
+    let runtime = Runtime::builder()
+        .buffer_cage(Recording(CountingCage { allocations: Cell::new(0), frees: Cell::new(0) }))
+        .build()
+        .unwrap();
+    runtime.exec("local b = buffer.create(60) buffer.writeu32(b, 0, 7) assert(buffer.readu32(b, 0) == 7)").unwrap();
+    let sizes = CAGE_SIZES.with(|sizes| sizes.borrow().clone());
+    // A whole page, header included, is 16 KiB less what Luau leaves for an allocator's metadata.
+    let largest = sizes.iter().max().expect("buffer.create went through the cage");
+    assert!(*largest < 16 * 1024 - 24, "{sizes:?}");
+    drop(runtime);
+}

@@ -73,6 +73,10 @@ pub const LUAU_FLAGS: &[&str] = &[
     // callback.
     "LuauGcTraceUdata",
     "LuauBufferCage",
+    // Luau 0.745: a caged buffer page keeps its header in ordinary memory and only its data in
+    // the cage, so memory corruption inside the cage cannot reach the allocator's bookkeeping.
+    // Inert until a host installs a cage.
+    "LuauCageSplitData",
     // Luau 0.741's fix for GC pacing, which read a heap that shrank between measurements as an
     // enormous allocation rate. A dynamic flag, off upstream by default.
     "LuauGcHeapShrinkFix",
