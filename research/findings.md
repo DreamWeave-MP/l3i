@@ -186,8 +186,8 @@ Luau's own native code is optional for the same reason. Precompiled kernels are 
 is an optional tier that must first earn its place.
 
 **The no-JIT configuration is now the default and is tested.** `luau-jit` is an opt-in feature used only by the generated-Luau
-comparator. Without it, the JSL test also asserts that no anonymous executable memory is mapped. AArch64 has not been measured or
-run: the baseline instantiation compiles only in principle here, and a dedicated NEON backend does not exist yet.
+comparator. Without it, the JSL test also asserts that no anonymous executable memory is mapped. AArch64 has not been compiled, run or
+measured for this crate, and a dedicated NEON backend does not exist yet.
 
 ### Counters, not clocks
 
@@ -199,7 +199,7 @@ counts repeat almost exactly. Cycles sum all threads, so CubeCL's include its th
 ### What a JIT could buy: the ceiling
 
 `cubecl-compare/src/jit.rs` is a research-only generator: any elementwise program from the validated plan becomes one AVX2 loop. It
-is 500 lines including a small VEX encoder, compiles in 7,000 to 29,000 instructions into 72 to 168 bytes, and matched the reference
+is under 400 lines including a small VEX encoder, compiles in 7,000 to 29,000 instructions into 72 to 168 bytes, and matched the reference
 bitwise on all 393 random graphs it accepted (it refused 7 that needed more than sixteen registers). It is not on any production path.
 
 One thread, strict, tiles against one generated loop. Thousands of instructions, then thousands of cycles.
