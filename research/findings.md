@@ -237,7 +237,7 @@ threading of its own yet.
 | --- | ---: | ---: |
 | Copy path from Luau-owned or external buffers, n=65,536, one thread | 20 us (zero copy) | 80 us (persistent handles); 429 us (fresh) |
 | Same, n=1,048,576 | 380 us | 4,069 us; 7,402 us |
-| Compile a computation | 6 to 12 us | 5 ms on average, up to 38 ms, per kernel and width |
+| Compile a computation | 6 to 14 us | 5 ms on average, up to 40 ms, per kernel and width |
 | Runtime initialization | none | about 1 ms |
 | Peak RSS, this benchmark | 81 MB | 193 MB |
 | Dependencies | L3i | Bundled LLVM, alpha compiler APIs |
