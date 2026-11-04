@@ -477,7 +477,7 @@ fn killed_processes_leave_reopenable_files_and_release_locks() {
         "replace_sync",
         "lock",
     ] {
-        let scratch = Scratch::new(boundary);
+        let scratch = Scratch::new(&format!("crash-{boundary}"));
         let journal = scratch.0.join("journal");
         if matches!(boundary, "append" | "append_sync" | "temp_write" | "temp_sync" | "replace" | "replace_sync") {
             std::fs::write(&journal, b"old").unwrap();
@@ -549,4 +549,33 @@ fn durability_benchmark() {
 fn macos_file_sync_is_explicitly_unsupported() {
     let scratch = Scratch::new("macos-sync");
     runtime().exec(&format!("local w = assert(fs.openWrite({} .. '/file')) local ok, msg, kind = w:syncAll() assert(ok == nil and kind == 'unsupported' and msg:find('F_FULLFSYNC'))", scratch.lua())).unwrap();
+}
+
+/// Run under `strace -e inject=fdatasync:error=EIO:when=1`; this tests the real syscall path.
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "requires external fdatasync fault injection"]
+fn syscall_sync_failure_reaches_script() {
+    let scratch = Scratch::new("syscall-injected-sync");
+    runtime().exec(&format!(
+        "local w = assert(fs.openWrite({} .. '/journal')) assert(w:write('record') == 6) \
+         local ok, message, kind = w:syncData() \
+         assert(ok == nil and kind == 'other' and message:find('Writer.syncData') and message:find('os error 5'), message) \
+         local closed, closeMessage = w:close() assert(closed == nil and closeMessage == message)", scratch.lua()
+    )).unwrap();
+}
+
+/// Run with EINTR or a short write injected for `L3I_DURABILITY_FAULT_PATH`.
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "requires external write syscall fault injection"]
+fn injected_write_is_retried() {
+    let path = std::env::var("L3I_DURABILITY_FAULT_PATH").unwrap();
+    runtime()
+        .exec(&format!(
+            "local path = {path:?} local w = assert(fs.openWrite(path)) local data = string.rep('x', 16384) \
+         assert(w:write(data) == #data) assert(w:syncAll()) assert(w:close()) \
+         assert(fs.readFileString(path) == data)"
+        ))
+        .unwrap();
 }
