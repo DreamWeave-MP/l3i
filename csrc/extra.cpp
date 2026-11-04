@@ -148,6 +148,11 @@ int l3i_read_scalar(lua_State* L, int idx, double* number, int64_t* integer)
 
 // One call for tagged userdata checks: the payload pointer and the tag, or null for anything
 // that is not a full userdata.
+size_t l3i_userdata_payload_offset()
+{
+    return offsetof(Udata, data);
+}
+
 void* l3i_touserdata_tag(lua_State* L, int idx, int* tag)
 {
     const TValue* o = luaA_toobject(L, idx);
@@ -187,6 +192,7 @@ static_assert(offsetof(TValue, extra) == 8, "l3i mirrors extra at offset 8");
 static_assert(offsetof(TValue, tt) == 12, "l3i mirrors the tag at offset 12");
 static_assert(LUA_VECTOR_SIZE == 3, "l3i mirrors three-component vectors");
 static_assert(offsetof(Udata, tag) == 3, "l3i mirrors the userdata tag at offset 3");
+// `native_code::USERDATA_PAYLOAD_OFFSET` publishes this one, and a test holds them together.
 static_assert(offsetof(Udata, data) == 16, "l3i mirrors the userdata payload at offset 16");
 static_assert(offsetof(TString, len) == 20, "l3i mirrors the string length at offset 20");
 static_assert(offsetof(TString, data) == 24, "l3i mirrors the string bytes at offset 24");

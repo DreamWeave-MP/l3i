@@ -599,6 +599,8 @@ unsafe extern "C" {
     pub fn luarequire_createplaceholder(L: *mut lua_State);
 
     // l3i csrc/extra.cpp
+    #[cfg(test)]
+    pub fn l3i_userdata_payload_offset() -> usize;
     pub fn luau_setfflag(name: *const c_char, value: c_int) -> c_int;
     pub fn luau_getfflag(name: *const c_char) -> c_int;
     pub fn luau_setfint(name: *const c_char, value: c_int) -> c_int;

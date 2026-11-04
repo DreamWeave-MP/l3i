@@ -58,7 +58,7 @@ const UNROLL: usize = 8;
 /// `offsetof(Buffer, data)`; the length is the high half of the word at 0.
 const BUFFER_LENGTH_WORD: i64 = 0;
 /// `offsetof(Udata, data)`: what a `BUFFER_READ*` under the userdata tag adds.
-const UDATA_DATA: i64 = 16;
+const UDATA_DATA: i64 = crate::native_code::USERDATA_PAYLOAD_OFFSET;
 
 /// A lowered member: a reduction, or a comparison into a selection.
 #[derive(Clone, Copy, PartialEq, Eq)]
