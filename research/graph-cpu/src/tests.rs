@@ -788,3 +788,85 @@ fn matmul_blocks_and_tails_match_the_ordered_triple_loop() {
     }
     assert_eq!(budget.used(), 0);
 }
+
+/// Every multiply-add operand form fuses, and a multiply followed by anything else does not.
+#[test]
+fn fast_mode_covers_every_fused_form_and_only_fuses_adds() {
+    if !Isa::Fma.available() {
+        return;
+    }
+    let budget = Budget::new(1 << 24);
+    let domain = domain();
+    let mut random = Random(0xabad_1dea_0ddb_a11);
+    let n = 2500;
+    let shape = Shape::Matrix(1, n);
+    let values = |random: &mut Random| -> Vec<f32> { (0..n).map(|_| random.moderate()).collect() };
+    let (a, b, c) = (values(&mut random), values(&mut random), values(&mut random));
+    let tensors = [tensor(&a, shape, &budget), tensor(&b, shape, &budget), tensor(&c, shape, &budget)];
+    let x = Expr::slot(0, shape, domain.clone()).unwrap();
+    let y = Expr::slot(1, shape, domain.clone()).unwrap();
+    let z = Expr::slot(2, shape, domain.clone()).unwrap();
+    let k = Expr::constant(0.3, domain.clone()).unwrap();
+    let l = Expr::constant(0.7, domain.clone()).unwrap();
+    // Ties every slot in after the expression under test, through an add the fusion cannot reach.
+    let refs = [&tensors[0], &tensors[1], &tensors[2]];
+    let check = |graph: Expr, expected: &dyn Fn(usize) -> f32, context: &str| {
+        let tied = graph.relu().unwrap().add(&x.mul(&Expr::constant(0.0, domain.clone()).unwrap()).unwrap()).unwrap();
+        let tied = tied.add(&y.mul(&Expr::constant(0.0, domain.clone()).unwrap()).unwrap()).unwrap();
+        let tied = tied.add(&z.mul(&Expr::constant(0.0, domain.clone()).unwrap()).unwrap()).unwrap();
+        let actual = read(&tied.compile_with(Numeric::Fast).unwrap().run(&refs, &budget).unwrap());
+        let want: Vec<f32> = (0..n)
+            .map(|i| {
+                let v = expected(i);
+                let v = if v <= 0.0 { 0.0 } else { v };
+                // The tie-in's own products fuse too: 0 * s + running value.
+                let v = a[i].mul_add(0.0, v);
+                let v = b[i].mul_add(0.0, v);
+                c[i].mul_add(0.0, v)
+            })
+            .collect();
+        assert_same(&actual, &want, context);
+    };
+    // The four fused forms: multiplier and addend each a slice or a constant.
+    check(x.mul(&y).unwrap().add(&z).unwrap(), &|i| a[i].mul_add(b[i], c[i]), "slice, slice");
+    check(x.mul(&y).unwrap().add(&k).unwrap(), &|i| a[i].mul_add(b[i], 0.3), "slice, constant");
+    check(x.mul(&k).unwrap().add(&z).unwrap(), &|i| a[i].mul_add(0.3, c[i]), "constant, slice");
+    check(x.mul(&k).unwrap().add(&l).unwrap(), &|i| a[i].mul_add(0.3, 0.7), "constant, constant");
+    // A multiply not followed by an add stays a multiply, whatever follows it.
+    check(x.mul(&y).unwrap().mul(&z).unwrap(), &|i| a[i] * b[i] * c[i], "multiply then multiply");
+    let relu_after = x.mul(&y).unwrap().relu().unwrap();
+    check(
+        relu_after,
+        &|i| {
+            let v = a[i] * b[i];
+            if v <= 0.0 { 0.0 } else { v }
+        },
+        "multiply then relu",
+    );
+    // An add then a multiply: the multiply's product is not the add's operand.
+    check(x.add(&y).unwrap().mul(&z).unwrap(), &|i| (a[i] + b[i]) * c[i], "add then multiply");
+}
+
+/// A strict matmul stays strict when handed the fusing instantiation.
+#[test]
+fn strict_matmul_ignores_the_fusing_instantiation() {
+    if !Isa::Fma.available() {
+        return;
+    }
+    let budget = Budget::new(1 << 24);
+    let domain = domain();
+    let mut random = Random(0x0123_4567_89ab_cdef);
+    let (m, k, n) = (12, 70, 32);
+    let a: Vec<f32> = (0..m * k).map(|_| random.moderate()).collect();
+    let b: Vec<f32> = (0..k * n).map(|_| random.moderate()).collect();
+    let (ta, tb) = (tensor(&a, Shape::Matrix(m, k), &budget), tensor(&b, Shape::Matrix(k, n), &budget));
+    let program = Expr::slot(0, Shape::Matrix(m, k), domain.clone())
+        .unwrap()
+        .matmul(&Expr::slot(1, Shape::Matrix(k, n), domain.clone()).unwrap())
+        .unwrap()
+        .compile()
+        .unwrap();
+    let mut out = vec![0x55u8; m * n * 4];
+    program.run_with(&[ta.borrow(), tb.borrow()], &mut out, &budget, Isa::Fma, CHUNK).unwrap();
+    assert_same(&floats(&out), &reference_matmul(&a, &b, m, k, n), "strict matmul on Isa::Fma");
+}
