@@ -1649,6 +1649,17 @@ into the file, because a view of the file could change after verification. Whole
 straight into the result, so a large read is copied once and holds nothing; a partial chunk goes
 through memory the reader owns. The manifest is copied once, after it has matched.
 
+**Native memory limit.** Authenticated operations share a 128 MiB reservation budget per runtime,
+separate from Luau's heap limit. Opening a reader reserves its potential cache capacity, manifest
+copy and bookkeeping before allocation; opening raises if the budget is exhausted. The reservation
+is conservative: it can reject a reader before its cache is actually populated. Closing releases the
+cache reservation; the manifest and its reservation remain until the reader is collected because
+its metadata methods still work after close. Manifest construction reserves the remaining budget and
+checks its output and scratch size before allocation. The budget bounds accounted payload and
+bookkeeping, not allocator overhead, process RSS, ordinary filesystem operations, or host Rust
+allocations. Each runtime has its own budget. Rust readers cap `hold_bytes` at 64 MiB, with at least
+one chunk, and hosts must still limit reader counts, manifests and output buffers themselves.
+
 **Held chunks.** A reader keeps up to 256 KiB of the chunks it verified for partial reads, least
 recently used going first, and takes that memory only as it reads. `heldBytes` changes the budget, up
 to 64 MiB; it always holds at least one chunk, and at most 1024. Reads that cluster, or that turn

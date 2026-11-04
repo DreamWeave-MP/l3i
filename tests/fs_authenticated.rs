@@ -983,6 +983,63 @@ mod through_luau {
     }
 
     #[test]
+    fn authenticated_native_budget_is_shared_and_released() {
+        let scratch = Scratch::new("luau-native-budget");
+        let file = std::fs::File::create(scratch.0.join("object")).unwrap();
+        file.set_len(16 * 1024 * 1024).unwrap();
+        let vm = runtime();
+        let setup = format!(
+            "path = {} .. '/object' manifest, commitment = assert(fs.authManifest(path, {{ chunkSize = 16777216 }})) readers = {{}}",
+            scratch.lua()
+        );
+        vm.exec(&setup).unwrap();
+        vm.exec(
+            "for i = 1, 7 do readers[i] = assert(fs.openAuthenticated(path, manifest, commitment, { heldBytes = 0 })) \
+             assert(buffer.readu8(assert(readers[i]:readAt(1, 1)), 0) == 0) end \
+             local ok, err = pcall(fs.openAuthenticated, path, manifest, commitment, { heldBytes = 0 }) \
+             assert(not ok and tostring(err):find('native memory budget'), tostring(err)) \
+             local built, message = fs.authManifest(path, { chunkSize = 16777216 }) \
+             assert(built == nil and message, 'publisher must respect remaining budget') \
+             readers[1]:close() \
+             readers[1] = assert(fs.openAuthenticated(path, manifest, commitment, { heldBytes = 0 })) \
+             readers[2]:close() \
+             for i = 1, 20 do local value, _, kind = fs.openAuthenticated(path .. '.missing', manifest, commitment, { heldBytes = 0 }) \
+                 assert(value == nil and kind == 'notFound') end \
+             readers[2] = assert(fs.openAuthenticated(path, manifest, commitment, { heldBytes = 0 })) \
+             readers = nil"
+        ).unwrap();
+        vm.collect_garbage();
+        vm.exec(
+            "local readers = {} for i = 1, 7 do readers[i] = assert(fs.openAuthenticated(path, manifest, commitment, { heldBytes = 0 })) end"
+        ).unwrap();
+        // A different runtime has its own independent budget.
+        let other = runtime();
+        other.exec(&setup).unwrap();
+        other.exec("assert(fs.openAuthenticated(path, manifest, commitment, { heldBytes = 0 }))").unwrap();
+    }
+
+    #[test]
+    fn tiny_chunks_cannot_bypass_the_runtime_budget() {
+        let scratch = Scratch::new("luau-native-tiny");
+        let file = std::fs::File::create(scratch.0.join("object")).unwrap();
+        file.set_len(512 * 1024).unwrap();
+        runtime().exec(&format!(
+            "local path = {} .. '/object' \
+             local manifest, commitment = assert(fs.authManifest(path, {{ chunkSize = 512 }})) \
+             local readers = {{}} local count = 0 \
+             for i = 1, 400 do \
+                 local ok, reader = pcall(fs.openAuthenticated, path, manifest, commitment, {{ heldBytes = 67108864 }}) \
+                 if not ok then assert(tostring(reader):find('native memory budget')) break end \
+                 assert(reader) count += 1 readers[i] = reader \
+             end \
+             assert(count >= 100 and count < 400, count) \
+             readers[1]:close() \
+             assert(fs.openAuthenticated(path, manifest, commitment, {{ heldBytes = 67108864 }}))",
+            scratch.lua()
+        )).unwrap();
+    }
+
+    #[test]
     fn a_script_publishes_opens_and_reads() {
         let scratch = Scratch::new("luau-read");
         let script = prologue(&scratch, &object(CHUNK as usize * 3 + 5));

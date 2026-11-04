@@ -102,7 +102,7 @@ use std::sync::Arc;
 
 use sha2::{Digest as _, Sha256};
 
-pub(crate) use script::{auth_manifest, describe_authenticated_reader, open_authenticated};
+pub(crate) use script::{Budget, auth_manifest, describe_authenticated_reader, open_authenticated};
 
 /// The manifest format this build reads and writes.
 pub const FORMAT_VERSION: u16 = 1;
@@ -121,6 +121,8 @@ pub const DEFAULT_HELD_BYTES: u64 = 256 << 10;
 /// The most a script may ask a reader to hold, in bytes. Held chunks are not on the Luau heap, so
 /// the runtime's memory limit does not see them.
 pub const MAX_SCRIPT_HELD_BYTES: u64 = 64 << 20;
+/// Maximum verified cache payload requested by a Rust reader.
+pub const MAX_HELD_BYTES: u64 = 64 << 20;
 /// The most chunks a reader holds, whatever its budget: each partial read searches them in turn.
 const MAX_HELD_CHUNKS: u64 = 1024;
 /// The most chunks a manifest may declare, which bounds the hash a manifest can ask for.
@@ -381,6 +383,14 @@ pub struct PublishedManifest {
 /// [`AuthError::ShortChunk`] and [`AuthError::LengthMismatch`] for a source whose size changed,
 /// [`AuthError::Io`] for a read that failed, and [`AuthError::OutOfMemory`].
 pub fn build_manifest<S: RangeSource + ?Sized>(source: &S, chunk_size: u32) -> Result<PublishedManifest, AuthError> {
+    build_manifest_limited(source, chunk_size, u64::MAX)
+}
+
+fn build_manifest_limited<S: RangeSource + ?Sized>(
+    source: &S,
+    chunk_size: u32,
+    limit: u64,
+) -> Result<PublishedManifest, AuthError> {
     if !valid_chunk_size(u64::from(chunk_size)) {
         return Err(AuthError::InvalidChunkSize(u64::from(chunk_size)));
     }
@@ -391,6 +401,10 @@ pub fn build_manifest<S: RangeSource + ?Sized>(source: &S, chunk_size: u32) -> R
     }
     // Lossless: `count` is at most MAX_CHUNKS and MAX_MANIFEST_LEN fits a usize.
     let manifest_len = HEADER_LEN + DIGEST_LEN * count as usize;
+    let needed = (manifest_len as u64).saturating_add(u64::from(chunk_size).min(length));
+    if needed > limit {
+        return Err(AuthError::OutOfMemory { length: needed });
+    }
     let mut bytes = Vec::new();
     bytes.try_reserve_exact(manifest_len).map_err(|_| AuthError::OutOfMemory { length: manifest_len as u64 })?;
     bytes.extend_from_slice(&MAGIC);
@@ -634,12 +648,13 @@ impl<S: RangeSource> AuthenticatedReader<S> {
 
     /// Keeps verified chunks for partial reads up to about `bytes` in total, least recently used
     /// going first; [`DEFAULT_HELD_BYTES`] until this is called. A read of part of a chunk always
-    /// needs one, so the least this holds is one chunk, and the most is 1024. Memory is taken only
+    /// needs one, so the least this holds is one chunk; the budget is capped at [`MAX_HELD_BYTES`]
+    /// and the most slots is 1024. Memory is taken only
     /// as chunks are read. A larger budget also means more chunks that are served without looking
     /// at the source again; what they return is still exactly the committed bytes.
     #[must_use]
     pub fn hold_bytes(mut self, bytes: u64) -> Self {
-        let count = (bytes / u64::from(self.manifest.chunk_size)).clamp(1, MAX_HELD_CHUNKS);
+        let count = (bytes.min(MAX_HELD_BYTES) / u64::from(self.manifest.chunk_size)).clamp(1, MAX_HELD_CHUNKS);
         // Lossless: at most MAX_HELD_CHUNKS.
         self.max_held = count as usize;
         self.held.truncate(self.max_held);
@@ -774,6 +789,7 @@ impl<S: RangeSource> AuthenticatedReader<S> {
             Some(slot) => slot,
             None if self.held.len() < self.max_held => {
                 let size = u64::from(self.manifest.chunk_size).min(self.manifest.object_length);
+                self.held.try_reserve(1).map_err(|_| AuthError::OutOfMemory { length: size })?;
                 self.held.push(Held { chunk: None, used: 0, bytes: zeroed(size)? });
                 self.held.len() - 1
             }
@@ -790,5 +806,39 @@ impl<S: RangeSource> AuthenticatedReader<S> {
         self.manifest.check_chunk(index, chunk)?;
         held.chunk = Some(index);
         Ok(slot)
+    }
+}
+
+#[cfg(test)]
+mod cache_limit_tests {
+    use super::*;
+
+    struct Length(u64);
+    impl RangeSource for Length {
+        fn len(&self) -> io::Result<u64> {
+            Ok(self.0)
+        }
+        fn read_at(&self, _: u64, _: &mut [u8]) -> io::Result<usize> {
+            unreachable!()
+        }
+    }
+
+    #[test]
+    fn extreme_host_budget_is_capped_even_for_maximum_chunks() {
+        let chunk = u64::from(MAX_CHUNK_SIZE);
+        let count = 1024_u64;
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&MAGIC);
+        bytes.extend_from_slice(&FORMAT_VERSION.to_le_bytes());
+        bytes.push(ALGORITHM_SHA256);
+        bytes.push(DIGEST_LEN as u8);
+        bytes.extend_from_slice(&MAX_CHUNK_SIZE.to_le_bytes());
+        bytes.extend_from_slice(&(chunk * count).to_le_bytes());
+        bytes.extend_from_slice(&count.to_le_bytes());
+        bytes.resize(HEADER_LEN + DIGEST_LEN * count as usize, 0);
+        let manifest = VerifiedManifest::verify(&bytes, &Commitment::of(&bytes)).unwrap();
+        let reader = AuthenticatedReader::open(Length(chunk * count), manifest).unwrap().hold_bytes(u64::MAX);
+        assert_eq!(reader.max_held, 4);
+        assert_eq!(reader.hold_bytes(0).max_held, 1);
     }
 }

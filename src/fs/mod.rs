@@ -429,7 +429,7 @@ const MEMBERS: &[Member] = &[
     member(
         "openAuthenticated",
         "(path: string, manifest: buffer | string, commitment: string, options: { heldBytes: number? }?) -> (dream_fs_AuthenticatedReader?, string?, dream_fs_AuthErrorKind?)",
-        "A reader whose every returned byte is verified against commitment, 64 hex digits from a trusted source: the manifest must hash to it, and the file must be the committed length. heldBytes bounds the verified chunks it keeps for partial reads (default 256 KiB, at most 64 MiB, at least one chunk).",
+        "A reader whose every returned byte is verified against commitment, 64 hex digits from a trusted source: the manifest must hash to it, and the file must be the committed length. heldBytes bounds the verified chunks it keeps for partial reads (default 256 KiB, at most 64 MiB, at least one chunk). All authenticated readers share a per-runtime native memory budget; opening reserves capacity and may raise if exhausted.",
         false,
     ),
     member(
@@ -640,6 +640,7 @@ impl Extension for FsExtension {
 
     /// Every function depends on the runtime's capabilities, so each binds here: the real one
     /// when the policy grants what it needs, otherwise one that raises a permission error.
+    #[allow(clippy::too_many_lines)] // The filesystem capability table is installed together.
     fn install(&self, cx: &mut InstallContext<'_>) -> Result<()> {
         let read = cx.has_capability(READ_CAPABILITY)?;
         let write = cx.has_capability(WRITE_CAPABILITY)?;
@@ -661,9 +662,20 @@ impl Extension for FsExtension {
         bind!("open", |path: &[u8]| Reader::open(path).map(owned));
         bind!("openPositional", |path: &[u8]| io::PositionalReader::open(path).map(owned));
         #[cfg(feature = "fs-authenticated")]
-        bind!("authManifest", authenticated::auth_manifest);
-        #[cfg(feature = "fs-authenticated")]
-        bind!("openAuthenticated", authenticated::open_authenticated);
+        {
+            let budget = authenticated::Budget::default();
+            let build_budget = budget.clone();
+            bind!("authManifest", move |call: &Call<'_>, path: &[u8], options: Option<ValueView<'_>>| {
+                authenticated::auth_manifest(call, path, options, &build_budget)
+            });
+            bind!("openAuthenticated", move |call: &Call<'_>,
+                                             path: &[u8],
+                                             manifest: crate::convert::BytesView<'_>,
+                                             commitment: &[u8],
+                                             options: Option<ValueView<'_>>| {
+                authenticated::open_authenticated(call, path, manifest, commitment, options, &budget)
+            });
+        }
         bind!("stat", |call: &Call<'_>, path: &[u8]| stat(call, "stat", path, true));
         bind!("lstat", |call: &Call<'_>, path: &[u8]| stat(call, "lstat", path, false));
         bind!("exists", |path: &[u8]| -> Result<Outcome<bool>> {
