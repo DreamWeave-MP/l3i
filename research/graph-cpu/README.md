@@ -30,8 +30,8 @@ threads at once (`Program: Send + Sync`).
 | Layer | Runs as |
 | --- | --- |
 | Building and compiling a graph | JSL calling bound Rust: 4 to 7 us each from JSL, under 1 us from Rust. No code generation. |
-| Elementwise stage | Rust kernels compiled ahead of time, chosen once per run (AVX2 or baseline), dispatched **once per operation per 1,024-element chunk** |
-| Matrix multiply | One ahead-of-time Rust kernel, row by row, in ascending blocks of `k` |
+| Elementwise stage | Rust kernels compiled ahead of time, chosen once per run (AVX2 or baseline), dispatched **once per tile per 1,024-element chunk** |
+| Matrix multiply | One ahead-of-time Rust kernel: a 6x16 output block held in registers over packed rows, in ascending blocks of `k` |
 | `program:native()` | Generated `--!native` Luau, run by Luau's JIT: scalar, Luau buffers only. A comparator, not the execution path. |
 | `program:shader_source('integer-exact')` | Generated JSL for Jess's existing shader frontend, device and dispatch |
 | `program:runReference` | The first prototype's per-element interpreter: oracle and baseline only |
@@ -44,13 +44,12 @@ Disassembly in [`../results/kernel-instructions.txt`](../results/kernel-instruct
 
 `Expr::compile` validates the DAG (shared nodes stay shared; a 200-level doubling chain is 201
 steps, not 2^200) and splits it at matrix multiplications. Each elementwise run becomes a list of
-kernels `dst = op(a, b)`, where an operand is a constant, a register or an input:
+tiles, each one compiled loop that holds a running value in a SIMD register across up to three steps, where an
+operand is a constant, a register or an input. A value with one reader merges into its reader's tile:
 
 ```text
 relu(a + b + 2):
-  Add  r0     <- input0, input1
-  Add  r1     <- r0, 2
-  Relu output <- r1
+  output <- input0, Add input1, Add 2, Relu
 ```
 
 Constants fold using the operation the kernel would perform. Registers are reused once their last
@@ -66,7 +65,8 @@ Each input resolves at bind time to one of three forms, against the output's sha
 
 Elements are `[u8; 4]`, so inputs may sit at any byte offset and the same safe code reads registers,
 Luau buffers and host storage. LLVM vectorizes through the byte conversion: it costs nothing
-measurable. The only `unsafe` in the kernels is calling the AVX2 instantiation after detecting it.
+measurable. The `unsafe` in the kernels is calling a SIMD instantiation after detecting it, and one unchecked index in the fused
+loops, whose slices are asserted to the output's length, because a checked index forces a scalar tail on every chunk.
 The host adds its `Userdata` declarations, the one-call Luau buffer borrow, and `lua_gc`.
 
 ## Numerical contract
@@ -87,6 +87,10 @@ multiply rounded to f32 equals the f32 operation, because f64 has more than `2p 
 double rounding is innocuous. The WGSL path does not
 claim strictness: `integer-exact` proves by interval arithmetic that every value stays an exact f32
 integer, checks every input at run time, and rejects everything else.
+
+`Numeric::Fast`, chosen explicitly at compile time (`compileFast` from JSL), fuses a multiply into its add where the
+host has FMA. Results then depend on the host and on the plan's tiling, and a fast program without FMA runs its strict
+tiles. Everything else on this page describes the strict default.
 
 ## Ownership and resources
 

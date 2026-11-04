@@ -1,18 +1,34 @@
-# Injected bugs, one at a time, against the research test suite (release).
-# 'control' changes only a comment and must survive; everything else must be caught.
-1 [relu keeps -0] caught: tests::strict_f32_edges_are_exact_on_every_instantiation tests::randomized_graphs_views_and_broadcasts_match_both_oracles 
-2 [relu erases NaN] caught: tests::strict_f32_edges_are_exact_on_every_instantiation tests::randomized_graphs_views_and_broadcasts_match_both_oracles 
-3 [matmul order] caught: tests::randomized_matmul_matches_the_ordered_triple_loop 
-4 [matmul FMA] caught: tests::randomized_matmul_matches_the_ordered_triple_loop 
-5 [walk restarts at column 0] caught: tests::randomized_graphs_views_and_broadcasts_match_both_oracles 
-6 [padded rows read as contiguous] caught: tests::randomized_matmul_matches_the_ordered_triple_loop tests::randomized_graphs_views_and_broadcasts_match_both_oracles 
-7 [column broadcast stride] caught: tests::randomized_graphs_views_and_broadcasts_match_both_oracles 
-8 [matmul skips zeros] caught: tests::strict_f32_edges_are_exact_on_every_instantiation tests::randomized_matmul_matches_the_ordered_triple_loop 
-9 [matmul trusts output zeros] caught: tests::randomized_matmul_matches_the_ordered_triple_loop 
-10 [control: comment only, must survive] SURVIVED
-11 [registers retire early] caught: tests::randomized_graphs_views_and_broadcasts_match_both_oracles 
-12 [constant fold keeps -0] caught: tests::strict_f32_edges_are_exact_on_every_instantiation 
-13 [input shape check removed] caught: tests::input_mismatches_are_rejected_before_any_work 
-14 [views can widen] caught: tests::views_cannot_widen_and_share_their_owner 
-15 [payload never released] caught: tests::empty_shapes_and_budget_exhaustion_recover tests::mixed_stages_release_temporaries_and_share_subexpressions tests::views_cannot_widen_and_share_their_owner tests::one_program_runs_different_inputs_concurrently_and_captures_nothing tests::randomized_matmul_matches_the_ordered_triple_loop tests::randomized_graphs_views_and_broadcasts_match_both_oracles 
-16 [output alias allowed] caught: tests::jsl_programs_and_teardown 
+# Injected bugs, one at a time, against the research library's tests (release).
+# The control changes only a comment and must survive; every other bug must be caught.
+# Round one, on the tiled kernels, had three survivors, marked below. Their tests were added in
+# 'fast_mode_covers_every_fused_form_and_only_fuses_adds' and 'strict_matmul_ignores_the_fusing_instantiation'.
+
+1 [control: comment only, must survive] SURVIVED
+2 [relu keeps -0] caught: strict_f32_edges_are_exact_on_every_instantiation randomized_graphs_views_and_broadcasts_match_both_oracles 
+3 [relu erases NaN] caught: strict_f32_edges_are_exact_on_every_instantiation randomized_graphs_views_and_broadcasts_match_both_oracles 
+4 [strict matmul microkernel fuses] caught: matmul_blocks_and_tails_match_the_ordered_triple_loop randomized_matmul_matches_the_ordered_triple_loop 
+5 [strict matmul tail fuses] caught: matmul_blocks_and_tails_match_the_ordered_triple_loop randomized_matmul_matches_the_ordered_triple_loop 
+6 [matmul adds in reverse k] caught: fast_mode_fuses_multiply_adds_and_nothing_else matmul_blocks_and_tails_match_the_ordered_triple_loop randomized_matmul_matches_the_ordered_triple_loop 
+7 [packing reads one row] caught: fast_mode_fuses_multiply_adds_and_nothing_else matmul_blocks_and_tails_match_the_ordered_triple_loop randomized_matmul_matches_the_ordered_triple_loop 
+8 [matmul trusts output zeros] caught: matmul_blocks_and_tails_match_the_ordered_triple_loop randomized_matmul_matches_the_ordered_triple_loop 
+9 [walk restarts at column 0] caught: randomized_graphs_views_and_broadcasts_match_both_oracles 
+10 [padded rows read as contiguous] caught: randomized_matmul_matches_the_ordered_triple_loop randomized_graphs_views_and_broadcasts_match_both_oracles 
+11 [column broadcast stride] caught: randomized_graphs_views_and_broadcasts_match_both_oracles 
+12 [fast tile does not fuse] SURVIVED
+13 [a value read twice merges away] caught: randomized_graphs_views_and_broadcasts_match_both_oracles 
+14 [fast mode fuses a multiply into anything] SURVIVED
+15 [strict tiles fuse] caught: chains_tile_into_fewer_loops_and_stay_strict fast_mode_fuses_multiply_adds_and_nothing_else strict_f32_edges_are_exact_on_every_instantiation randomized_graphs_views_and_broadcasts_match_both_oracles 
+16 [registers retire early] caught: randomized_graphs_views_and_broadcasts_match_both_oracles 
+17 [strict matmul runs fused on Isa::Fma] SURVIVED
+18 [input shape check removed] caught: input_mismatches_are_rejected_before_any_work 
+19 [views can widen] caught: views_cannot_widen_and_share_their_owner 
+20 [payload never released] caught: empty_shapes_and_budget_exhaustion_recover views_cannot_widen_and_share_their_owner matmul_blocks_and_tails_match_the_ordered_triple_loop mixed_stages_release_temporaries_and_share_subexpressions one_program_runs_different_inputs_concurrently_and_captures_nothing randomized_matmul_matches_the_ordered_triple_loop randomized_graphs_views_and_broadcasts_match_both_oracles 
+
+# Round two: the survivors and the remaining fused forms, against the added tests.
+[control: comment only, must survive] SURVIVED
+[fast tile does not fuse] caught: fast_mode_covers_every_fused_form_and_only_fuses_adds
+[fused slice, slice does not fuse] caught: fast_mode_covers_every_fused_form_and_only_fuses_adds
+[fused slice, constant does not fuse] caught: fast_mode_fuses_multiply_adds_and_nothing_else fast_mode_covers_every_fused_form_and_only_fuses_adds
+[fused constant, constant does not fuse] caught: fast_mode_covers_every_fused_form_and_only_fuses_adds
+[fast mode fuses a multiply into anything] caught: fast_mode_covers_every_fused_form_and_only_fuses_adds
+[strict matmul runs fused on Isa::Fma] caught: strict_matmul_ignores_the_fusing_instantiation
