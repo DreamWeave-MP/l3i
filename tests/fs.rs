@@ -645,3 +645,139 @@ fn unsupported_windows_namespace_operations_leave_files_untouched() {
         ))
         .unwrap();
 }
+
+// A deliberately small test protocol, not a database format. Its frames are length, sequence,
+// payload and CRC-32; recovery tolerates only an incomplete trailing frame.
+#[cfg(unix)]
+fn fixture_crc(bytes: &[u8]) -> u32 {
+    let mut crc = !0_u32;
+    for byte in bytes {
+        crc ^= u32::from(*byte);
+        for _ in 0..8 {
+            crc = (crc >> 1) ^ (0xedb8_8320 & 0_u32.wrapping_sub(crc & 1));
+        }
+    }
+    !crc
+}
+
+#[cfg(unix)]
+fn fixture_frame(sequence: u64, payload: &[u8]) -> Vec<u8> {
+    let mut body = sequence.to_le_bytes().to_vec();
+    body.extend_from_slice(payload);
+    let mut frame = u32::try_from(body.len()).unwrap().to_le_bytes().to_vec();
+    frame.extend_from_slice(&body);
+    frame.extend_from_slice(&fixture_crc(&body).to_le_bytes());
+    frame
+}
+
+#[cfg(unix)]
+fn fixture_recover(mut bytes: &[u8]) -> std::result::Result<(Vec<u64>, bool), &'static str> {
+    let mut sequences = Vec::new();
+    while !bytes.is_empty() {
+        if bytes.len() < 4 {
+            return Ok((sequences, true));
+        }
+        let length = u32::from_le_bytes(bytes[..4].try_into().unwrap()) as usize;
+        if !(8..=4096).contains(&length) {
+            return Err("invalid length");
+        }
+        if bytes.len() < length + 8 {
+            return Ok((sequences, true));
+        }
+        let body = &bytes[4..4 + length];
+        let expected_crc = u32::from_le_bytes(bytes[4 + length..8 + length].try_into().unwrap());
+        if fixture_crc(body) != expected_crc {
+            return Err("checksum");
+        }
+        let sequence = u64::from_le_bytes(body[..8].try_into().unwrap());
+        if sequence != u64::try_from(sequences.len()).unwrap() + 1 {
+            return Err("sequence");
+        }
+        sequences.push(sequence);
+        bytes = &bytes[8 + length..];
+    }
+    Ok((sequences, false))
+}
+
+#[cfg(unix)]
+fn fixture_lua_bytes(bytes: &[u8]) -> String {
+    let numbers = bytes.iter().map(u8::to_string).collect::<Vec<_>>().join(",");
+    format!("string.char({numbers})")
+}
+
+#[cfg(unix)]
+#[test]
+fn framed_checkpoint_fixture_handles_interrupted_operations() {
+    let first = fixture_frame(1, b"first");
+    let mut second = first.clone();
+    second.extend(fixture_frame(2, b"second"));
+    let mut third = second.clone();
+    third.extend(fixture_frame(3, b"third"));
+    assert_eq!(fixture_recover(&third), Ok((vec![1, 2, 3], false)));
+    assert_eq!(fixture_recover(&third[..third.len() - 1]), Ok((vec![1, 2], true)));
+    let mut corrupt = third.clone();
+    *corrupt.last_mut().unwrap() ^= 1;
+    assert_eq!(fixture_recover(&corrupt), Err("checksum"));
+    let mut gap = first.clone();
+    gap.extend(fixture_frame(3, b"out of order"));
+    assert_eq!(fixture_recover(&gap), Err("sequence"));
+
+    // Stop after each operation of a second checkpoint. The first checkpoint already replaced
+    // the original and was synchronized, so this covers two consecutive generations.
+    for phase in 0..=5 {
+        let scratch = Scratch::new(&format!("framed-checkpoint-{phase}"));
+        let script = format!(
+            "local root = {root} local path = root .. '/journal' local temp = root .. '/temp' \
+             local first, second, third = {first}, {second}, {third} \
+             local w = assert(fs.openWrite(path, {{ exclusive = true }})) \
+             assert(w:write(first) == #first) assert(w:syncAll()) assert(w:close()) assert(fs.syncDirectory(root)) \
+             w = assert(fs.openWrite(temp, {{ exclusive = true }})) assert(w:write(second) == #second) \
+             assert(w:syncAll()) assert(w:close()) assert(fs.replace(temp, path)) assert(fs.syncDirectory(root)) \
+             w = assert(fs.openWrite(temp, {{ exclusive = true }})) if {phase} == 0 then return end \
+             local half = math.floor(#third / 2) assert(w:write(third, 0, half) == half) assert(w:flush()) \
+             if {phase} == 1 then return end \
+             assert(w:write(third, half) == #third - half) assert(w:syncAll()) if {phase} == 2 then return end \
+             assert(w:close()) if {phase} == 3 then return end \
+             local failed, _, kind = fs.replace(temp, root .. '/missing/destination') \
+             assert(failed == nil and kind == 'notFound') assert(fs.readFileString(path) == second) \
+             assert(fs.replace(temp, path)) if {phase} == 4 then \
+                 local ok = fs.syncDirectory(root .. '/missing') assert(ok == nil) return end \
+             assert(fs.syncDirectory(root))",
+            root = scratch.lua(),
+            first = fixture_lua_bytes(&first),
+            second = fixture_lua_bytes(&second),
+            third = fixture_lua_bytes(&third),
+        );
+        runtime().exec(&script).unwrap();
+        let recovered = fixture_recover(&std::fs::read(scratch.0.join("journal")).unwrap()).unwrap();
+        let expected = if phase < 4 { vec![1, 2] } else { vec![1, 2, 3] };
+        assert_eq!(recovered, (expected, false), "phase {phase}");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn framed_journal_fixture_handles_interrupted_truncation() {
+    let mut complete = fixture_frame(1, b"first");
+    complete.extend(fixture_frame(2, b"second"));
+    let mut torn = fixture_frame(3, b"third");
+    torn.pop();
+    for phase in 0..=2 {
+        let scratch = Scratch::new(&format!("framed-truncation-{phase}"));
+        let script = format!(
+            "local path = {root} .. '/journal' local complete, torn = {complete}, {torn} \
+             local w = assert(fs.openWrite(path, {{ exclusive = true }})) assert(w:write(complete) == #complete) \
+             assert(w:syncAll()) assert(w:close()) \
+             w = assert(fs.openWrite(path, {{ append = true }})) assert(w:write(torn) == #torn) \
+             assert(w:syncData()) assert(w:close()) if {phase} == 0 then return end \
+             w = assert(fs.openWrite(path, {{ truncate = false }})) assert(w:truncate(#complete)) \
+             if {phase} == 2 then assert(w:syncAll()) end assert(w:close())",
+            root = scratch.lua(),
+            complete = fixture_lua_bytes(&complete),
+            torn = fixture_lua_bytes(&torn),
+        );
+        runtime().exec(&script).unwrap();
+        let recovered = fixture_recover(&std::fs::read(scratch.0.join("journal")).unwrap()).unwrap();
+        assert_eq!(recovered, (vec![1, 2], phase == 0), "phase {phase}");
+    }
+}
