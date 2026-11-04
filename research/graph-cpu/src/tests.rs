@@ -797,7 +797,7 @@ fn fast_mode_covers_every_fused_form_and_only_fuses_adds() {
     }
     let budget = Budget::new(1 << 24);
     let domain = domain();
-    let mut random = Random(0xabad_1dea_0ddb_a11);
+    let mut random = Random(0xabad_1dea_0ddb_a110);
     let n = 2500;
     let shape = Shape::Matrix(1, n);
     let values = |random: &mut Random| -> Vec<f32> { (0..n).map(|_| random.moderate()).collect() };
