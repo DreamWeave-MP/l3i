@@ -124,7 +124,7 @@ impl Backing {
 }
 
 /// Fills `dst` from `offset` of `file` with positional reads, stopping at the end.
-fn read_file_at(file: &File, offset: u64, dst: &mut [u8]) -> io::Result<usize> {
+pub(crate) fn read_file_at(file: &File, offset: u64, dst: &mut [u8]) -> io::Result<usize> {
     let mut filled = 0;
     while filled < dst.len() {
         let position = offset + filled as u64;

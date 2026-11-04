@@ -79,6 +79,8 @@ mod dns;
 mod extension;
 #[cfg(feature = "fs")]
 mod fs;
+#[cfg(feature = "fs-authenticated")]
+mod fs_authenticated;
 #[cfg(all(feature = "dns", feature = "tls"))]
 mod https;
 #[cfg(feature = "intern")]

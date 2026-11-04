@@ -187,6 +187,9 @@ syntax = []
 # The `@dream/fs` extension (`fs`): the host filesystem over byte paths, gated by the
 # `filesystem.read` and `filesystem.write` capabilities.
 fs = ["dep:memmap2", "dep:walkdir", "dep:same-file", "dep:libc"]
+# `fs.authManifest` and `fs.openAuthenticated`: ranged reads of an immutable file, every byte
+# checked by SHA-256 against a commitment the caller already trusts.
+fs-authenticated = ["fs", "dep:sha2"]
 # The `@dream/process` extension (`process`): run a child process and wait for its exit code,
 # gated by the `process.spawn` capability.
 process = ["dep:libc"]

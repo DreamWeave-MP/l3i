@@ -1392,7 +1392,8 @@ MB for 119 KB) and would still have to be decoded in Luau before anything could 
 
 Feature `fs`; module `@dream/fs`, `l3i::fs::FsExtension`. The host filesystem, for tools that
 work on files on disk: whole and positional reads, readers over a memory map, writers with
-positions and truncation, stable-storage barriers, metadata with and without following links,
+positions and truncation, stable-storage barriers, ranged reads authenticated against a trusted
+commitment (`fs-authenticated`), metadata with and without following links,
 listings and a fast recursive walk, directories made and removed, renames, copies, hard and
 symbolic links, canonical paths, file identity, and the operating system's file locks.
 
@@ -1569,6 +1570,145 @@ Appending uses the OS's append flag, and writes retry interruptions and short wr
 takes more than one OS write can still interleave with another writer's, so serialize writers
 with a lock and keep one open. `tell()` is the writer's own accounting, not the file's end when
 other handles append.
+
+### Authenticated reads
+
+Feature `fs-authenticated`, which adds `sha2`; the Rust API is `l3i::fs::authenticated`. `readAt`
+returns whatever is on the disk. These return exactly the bytes of the object you already trust, or
+nothing, without reading or hashing the rest of it.
+
+```luau
+local fs = require("@dream/fs")
+
+-- Publishing: once, by whoever makes the object.
+local manifest, commitment = assert(fs.authManifest("assets.pak"))
+assert(fs.writeFile("assets.pak.manifest", manifest))
+-- Store `commitment` somewhere the file's storage cannot write: a signed record, your program's
+-- own constants, a catalog you already authenticated. This is the step that makes it all mean something.
+
+-- Reading: the manifest can come from anywhere, the commitment cannot.
+local reader, message, kind = fs.openAuthenticated(
+    "assets.pak",
+    assert(fs.readAt("assets.pak.manifest", 0, 4 * 1024 * 1024)),
+    commitment
+)
+assert(reader, message)
+local bytes = assert(reader:readAt(1048576, 4096))
+
+-- Damage is an answer, like anything else the disk does.
+assert(fs.writeFile("assets.pak", "x", { offset = 0 }))
+local nothing, reason, failure = reader:readAt(0, 16)
+assert(nothing == nil and failure == "integrityFailed", reason)
+```
+
+| Call | What it does |
+|---|---|
+| `authManifest(path, { chunkSize? })` | Reads the whole file; returns the manifest as a buffer and the commitment as 64 hex digits |
+| `openAuthenticated(path, manifest, commitment, { heldBytes? })` | Checks the manifest against the commitment, then opens the file, which must be the committed length; `heldBytes` bounds the verified chunks it keeps |
+| `reader:readAt(position, length)` | Exactly `length` verified bytes as a new buffer |
+| `reader:readAtInto(target, position, length, bufferOffset?)` | The same into `target`; returns the count |
+| `reader:size()`, `chunkSize()`, `commitment()` | What was committed to, not what the file says now; these work after `close` |
+| `reader:close()` | Releases the handle; later reads raise, and closing twice does nothing |
+
+**What a successful read proves.** The bytes are the ones at that position of the object whose
+manifest hashes to your commitment. The manifest commits to the object's length, the chunk size and
+every chunk's digest in order, and each digest also covers its chunk's index and length, so nothing
+can be moved, cut, extended or swapped.
+
+**What it does not prove.** The commitment is the whole foundation: compute one from the bytes you
+are about to check and you have proven nothing, which is why `authManifest` can't open a reader. It
+says nothing about freshness: an old revision stays valid against its old commitment, replaying it
+is possible, and whether a commitment is current is your question. It says nothing about the chunks
+a read didn't touch, which have not been looked at; damage there surfaces when something asks for
+them. And it has nothing to do with durability: use the [stable storage](#stable-storage) calls for
+that. Signing and key management are not here either. Authenticated reads do not encrypt the object.
+
+**Failures.** Verification failing answers `nil`, the message and a kind, never partial data:
+`integrityFailed` when bytes, the manifest or the file's length don't match, `invalidManifest` when
+bytes match their commitment but aren't a manifest, `unsupported` for a version or algorithm this
+build doesn't know, and the usual `dream_fs_ErrorKind` when the OS refuses. Mistakes raise: a
+commitment that isn't 64 hex digits, a bad `chunkSize`, a closed reader, or a range outside the
+object. Unlike `readAt`, an authenticated read never comes back short, so asking past the end raises.
+An empty read anywhere up to the end succeeds and touches nothing. If `readAtInto` begins a read
+and verification or I/O fails, its target window is zeroed; it holds neither unverified bytes nor a
+verified prefix. Argument errors, including an invalid window or range and a closed reader, raise
+before the read begins and leave the target unchanged. A successful read fills the window with
+verified bytes.
+
+**Files that change underneath.** Truncation, replacement and writes in place are all safe, in the
+sense that a read fails rather than returns the wrong bytes. A reader never maps its file, because
+a truncated map can kill the process and a mapped page can change after it was hashed: each chunk is
+copied into memory nothing else can reach, hashed there, and only then shown. A write that lands
+between two chunks of one read fails that read. On Unix a file renamed over the path doesn't affect
+an open reader, whose handle keeps the old revision. Windows may refuse that rename while the reader
+holds the file. A reader keeps chunks it verified for partial reads, so a repeat of a held chunk
+returns the committed bytes without noticing damage done since; those bytes are still correct, and
+the damage surfaces once the chunk is evicted. What was never verified is never kept.
+
+**Memory.** The returned buffer is yours and nothing else refers to it. There is no zero-copy view
+into the file, because a view of the file could change after verification. Whole chunks are read
+straight into the result, so a large read is copied once and holds nothing; a partial chunk goes
+through memory the reader owns. The manifest is copied once, after it has matched.
+
+**Native memory limit.** Authenticated operations share a 128 MiB reservation budget per runtime,
+separate from Luau's heap limit. Opening a reader reserves its potential cache capacity, manifest
+copy and bookkeeping before allocation; opening raises if the budget is exhausted. The reservation
+is conservative: it can reject a reader before its cache is actually populated. Closing releases the
+cache reservation; the manifest and its reservation remain until the reader is collected because
+its metadata methods still work after close. Manifest construction reserves the remaining budget and
+checks its output and scratch size before allocation. The budget bounds accounted payload and
+bookkeeping, not allocator overhead, process RSS, ordinary filesystem operations, or host Rust
+allocations. Each runtime has its own budget. Rust readers cap `hold_bytes` at 64 MiB, with at least
+one chunk, and hosts must still limit reader counts, manifests and output buffers themselves.
+
+**Held chunks.** A reader keeps up to 256 KiB of the chunks it verified for partial reads, least
+recently used going first, and takes that memory only as it reads. `heldBytes` changes the budget, up
+to 64 MiB; it always holds at least one chunk, and at most 1024. Reads that cluster, or that turn
+between a table and its records, gain most: 65 µs down to 17 and 33 µs per read at 16 KiB chunks, on a
+CPU without SHA extensions. Uniform random reads gain nothing and lose nothing. A binary search or a
+skewed load only starts gaining at about 1 MiB, so ask for that if you know you have one.
+
+**Bounds.** Chunk sizes are powers of two from 512 bytes to 16 MiB, at most 16,777,216 chunks to an
+object, which is 256 GiB at the default 16 KiB. A manifest is hashed before any part of it is
+believed, and one over 512 MiB is refused without hashing. Read a manifest from untrusted storage
+through `readAt` with a limit you choose (as above), since `readFile` allocates whatever the file's
+size says. A manifest takes 32 bytes per chunk plus 32. Verifying holds a second copy of the manifest
+once it has matched, so the largest one peaks at about 1 GiB with the caller's. A script's `readAt`
+allocates under the runtime's memory limit, but a reader's copy of its manifest and its held chunks
+live outside the Luau heap, where that limit does not see them. From Rust, `read_at` allocates whatever length the caller
+asked for inside the object, so a host serving untrusted requests should bound that length or use
+`read_into` with windows of its own; on a system that overcommits, memory running out while the
+buffer fills is not an error anyone can catch.
+
+**Choosing a chunk size.** On a CPU without SHA extensions, reading 64 bytes of a 64 MiB object took
+about 290 ms by hashing all of it, and about 65 µs here at the default chunk size with a reader already
+open, or 625 µs opening one first. The cost of a read is one chunk's hash, so smaller chunks read
+faster and larger ones open faster. 16 KiB is the default for that reason; choose 64 KiB if you open
+often and read little, 4 KiB if you hold a reader and read tiny records. A read of most of the object
+costs about what verifying the object does, and an object of about one chunk gains nothing. The
+measurements, with their caveats, are in `benches/fs-authenticated-results.md`.
+
+**The format.** Little-endian, fixed widths, one encoding per object and chunk size, so the commitment
+is the same on every platform. A commitment is the plain SHA-256 of the manifest's bytes, so
+`sha256sum` agrees with it.
+
+| Offset | Size | Field |
+|---:|---:|---|
+| 0 | 8 | Magic, `L3IAUTH\n` |
+| 8 | 2 | Format version, 1 |
+| 10 | 1 | Algorithm, 1 for SHA-256 |
+| 11 | 1 | Digest length, 32 |
+| 12 | 4 | Chunk size |
+| 16 | 8 | Object length |
+| 24 | 8 | Chunk count |
+| 32 | 32 each | Chunk digests in order: SHA-256 of `l3i.fs.authenticated.chunk.v1\0`, the index and the length as `u64`s, then the chunk |
+
+A flat list of digests was chosen over a Merkle tree because the whole manifest is small next to the
+chunks it describes and is read once per reader, so a proof per read would add code and bytes to save
+a cost that barely registers. A format version is there for the day that changes.
+
+Linux is what this has been tested on. Windows and macOS share the code path through the existing
+positional read, but have not run it.
 
 ### Paths
 
