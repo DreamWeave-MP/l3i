@@ -259,13 +259,18 @@ pub(crate) fn read_at(
     let offset = non_negative("readAt", "offset", offset)?;
     let length = non_negative("readAt", "length", length)?;
     let host = super::host_path("readAt", path)?;
-    let backing = done!(Outcome::of(Backing::open(&host), "readAt", path));
-    within_file("readAt", "offset", offset, backing.len())?;
-    let mut buffer = new_buffer(call, clamp(offset, length, backing.len()))?;
-    // SAFETY: the buffer was created by this call and no other view of it exists; the copy
-    // never calls into Lua. A failure's results go above the buffer, which the call drops.
-    let read = backing.read_at(offset, unsafe { buffer.bytes_mut_unchecked() });
-    done!(Outcome::of(read, "readAt", path));
+    let file = done!(Outcome::of(open_regular(&host), "readAt", path));
+    let size = done!(Outcome::of(file.metadata().map(|metadata| metadata.len()), "readAt", path));
+    within_file("readAt", "offset", offset, size)?;
+    let expected = clamp(offset, length, size);
+    let mut buffer = new_buffer(call, expected)?;
+    // SAFETY: the buffer belongs to this call and no other view of its bytes exists.
+    let count =
+        done!(Outcome::of(read_file_at(&file, offset, unsafe { buffer.bytes_mut_unchecked() }), "readAt", path));
+    if count != expected {
+        let error = io::Error::new(io::ErrorKind::UnexpectedEof, "file changed during positional read");
+        return Ok(Outcome::Failed(super::Failure::new("readAt", path, &error)));
+    }
     Ok(Outcome::Done(StackResults))
 }
 
@@ -905,6 +910,18 @@ mod durability_tests {
         fn flush(&mut self) -> io::Result<()> {
             Ok(())
         }
+    }
+
+    #[test]
+    fn positional_read_handles_a_file_truncated_after_open() {
+        let path = std::env::temp_dir().join(format!("l3i-positional-truncate-{}", std::process::id()));
+        std::fs::write(&path, b"original").unwrap();
+        let reader = open_regular(&path).unwrap();
+        let mut buffer = [0_u8; 8];
+        assert_eq!(read_file_at(&reader, 0, &mut buffer).unwrap(), 8);
+        std::fs::OpenOptions::new().write(true).open(&path).unwrap().set_len(0).unwrap();
+        assert_eq!(read_file_at(&reader, 0, &mut buffer).unwrap(), 0);
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]
