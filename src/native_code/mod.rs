@@ -22,6 +22,14 @@ use crate::stack::Scope;
 use hooks::HookChain;
 pub use hooks::NativeCodeHooks;
 
+/// `offsetof(Udata, data)` in the Luau this crate builds: what `BUFFER_READ*` and `BUFFER_WRITE*`
+/// add to their base under the userdata tag.
+///
+/// A lowering hook reads a tagged payload at this offset from the receiver, and reads through an
+/// address the payload holds by passing that address less this offset as the base. The build
+/// fails if Luau moves the field, so a hook that takes the offset from here can't go stale.
+pub const USERDATA_PAYLOAD_OFFSET: i64 = 16;
+
 /// Which functions are compiled natively.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NativeCodeMode {
@@ -606,4 +614,16 @@ fn fmix64(mut k: u64) -> u64 {
     k = k.wrapping_mul(0xc4ce_b9fe_1a85_ec53);
     k ^= k >> 33;
     k
+}
+
+#[cfg(test)]
+mod layout_tests {
+    use super::USERDATA_PAYLOAD_OFFSET;
+
+    #[test]
+    fn the_published_payload_offset_is_luaus() {
+        // SAFETY: a pure function returning a constant.
+        let offset = unsafe { crate::raw::ffi::l3i_userdata_payload_offset() };
+        assert_eq!(USERDATA_PAYLOAD_OFFSET, i64::try_from(offset).unwrap());
+    }
 }

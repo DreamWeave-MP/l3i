@@ -76,7 +76,7 @@ pub(super) fn count_binder_call() {
 pub struct InternLowering;
 
 /// `offsetof(Udata, data)`: what `BUFFER_READI64` adds under the userdata tag.
-const UDATA_DATA: i64 = 16;
+const UDATA_DATA: i64 = crate::native_code::USERDATA_PAYLOAD_OFFSET;
 /// `offsetof(TString, data)`; the length is the high half of the word at 16.
 const STRING_DATA: i64 = 24;
 const STRING_LENGTH_WORD: i64 = 16;
