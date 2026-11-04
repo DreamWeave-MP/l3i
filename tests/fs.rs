@@ -419,13 +419,44 @@ fn failed_sync_is_reported_again_by_close() {
 fn durability_process_child() {
     let Ok(root) = std::env::var("L3I_DURABILITY_CHILD_DIR") else { return };
     let boundary = std::env::var("L3I_DURABILITY_CHILD_BOUNDARY").unwrap();
+    if boundary == "verify_framed" {
+        let path = std::path::Path::new(&root).join("stream");
+        let recovered = fixture_recover(&std::fs::read(path).unwrap()).unwrap();
+        let count: u64 = std::env::var("L3I_DURABILITY_COUNT").unwrap().parse().unwrap();
+        let torn = std::env::var("L3I_DURABILITY_TORN").unwrap() == "true";
+        assert_eq!(recovered, ((1..=count).collect(), torn));
+        return;
+    }
     let root = format!("{root:?}");
     if boundary == "verify" {
         let expected = std::env::var("L3I_DURABILITY_EXPECTED").unwrap();
         runtime().exec(&format!("assert(fs.readFileString({root} .. '/journal') == {expected:?})")).unwrap();
         return;
     }
+    let tx = fixture_lua_bytes(&fixture_frame(2, b"transaction two"));
+    let checkpoint = fixture_lua_bytes(&fixture_frame(3, b"checkpoint"));
+    let marker = fixture_lua_bytes(&fixture_frame(4, b"checkpoint commit"));
+    let next = fixture_lua_bytes(&fixture_frame(5, b"transaction three"));
     let script = match boundary.as_str() {
+        "single_tx" | "single_checkpoint" | "single_marker" | "single_torn" => {
+            let suffix = match boundary.as_str() {
+                "single_tx" => "",
+                "single_checkpoint" => "assert(held:write(checkpoint) == #checkpoint) assert(held:syncAll())",
+                "single_marker" => {
+                    "assert(held:write(checkpoint) == #checkpoint) assert(held:syncAll()) assert(held:write(marker) == #marker) assert(held:syncData())"
+                }
+                "single_torn" => {
+                    "assert(held:write(checkpoint) == #checkpoint) assert(held:syncAll()) assert(held:write(marker) == #marker) assert(held:syncData()) assert(held:write(next, 0, #next - 1) == #next - 1) assert(held:flush())"
+                }
+                _ => unreachable!(),
+            };
+            format!(
+                "local tx, checkpoint, marker, next = {tx}, {checkpoint}, {marker}, {next} \
+                held_lock = assert(fs.lock({root} .. '/lock')) \
+                held = assert(fs.openWrite({root} .. '/stream', {{ append = true, create = false, writeThrough = true }})) \
+                assert(held:write(tx) == #tx) assert(held:syncData()) {suffix}"
+            )
+        }
         "lock" => format!("held = assert(fs.lock({root} .. '/lock'))"),
         "create" => format!("held = assert(fs.openWrite({root} .. '/journal', {{ exclusive = true }}))"),
         "write" => format!(
@@ -944,5 +975,61 @@ fn retained_single_file_checkpoint_fixture() {
                 scratch.lua()
             ))
             .unwrap();
+    }
+}
+
+// Process termination exercises record boundaries without treating a process kill as power loss.
+#[cfg(any(unix, windows))]
+#[test]
+fn retained_single_file_survives_process_kills_at_record_boundaries() {
+    use std::time::{Duration, Instant};
+    for (boundary, count, torn) in [
+        ("single_tx", 2, false),
+        ("single_checkpoint", 3, false),
+        ("single_marker", 4, false),
+        ("single_torn", 4, true),
+    ] {
+        let scratch = Scratch::new(&format!("stream-crash-{boundary}"));
+        let first = fixture_frame(1, b"transaction one");
+        if cfg!(unix) {
+            runtime()
+                .exec(&format!(
+                    "assert(fs.createDurable({} .. '/stream', {}) == {})",
+                    scratch.lua(),
+                    fixture_lua_bytes(&first),
+                    first.len()
+                ))
+                .unwrap();
+        } else {
+            let path = scratch.0.join("stream");
+            std::fs::write(&path, &first).unwrap();
+            std::fs::OpenOptions::new().write(true).open(path).unwrap().sync_all().unwrap();
+        }
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "fs::durability_process_child", "--nocapture"])
+            .env("L3I_DURABILITY_CHILD_DIR", &scratch.0)
+            .env("L3I_DURABILITY_CHILD_BOUNDARY", boundary)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !scratch.0.join("ready").exists() {
+            assert!(child.try_wait().unwrap().is_none(), "child exited at {boundary}");
+            assert!(Instant::now() < deadline, "child timed out at {boundary}");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        child.kill().unwrap();
+        child.wait().unwrap();
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "fs::durability_process_child", "--nocapture"])
+            .env("L3I_DURABILITY_CHILD_DIR", &scratch.0)
+            .env("L3I_DURABILITY_CHILD_BOUNDARY", "verify_framed")
+            .env("L3I_DURABILITY_COUNT", count.to_string())
+            .env("L3I_DURABILITY_TORN", torn.to_string())
+            .stdout(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        assert!(status.success(), "recovery failed after {boundary}");
     }
 }
