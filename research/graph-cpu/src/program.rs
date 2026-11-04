@@ -598,7 +598,11 @@ impl Program {
                     let (a, b) = (view_of(*a), view_of(*b));
                     let (a_elements, b_elements) = (contiguous(a, budget)?, contiguous(b, budget)?);
                     let (k, n) = (a.shape.dims().1, b.shape.dims().1);
-                    kernels::matmul(a_elements.elements(), b_elements.elements(), k, n, target, isa);
+                    let needed = kernels::matmul_scratch(k, n);
+                    let _charge = budget.charge(needed)?;
+                    kernels::with_scratch(needed, |scratch| {
+                        kernels::matmul(a_elements.elements(), b_elements.elements(), k, n, target, scratch, isa);
+                    })?;
                 }
             }
             if let Some(allocation) = allocation {

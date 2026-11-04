@@ -601,25 +601,28 @@ pub(crate) fn elementwise(
 const MR: usize = 6;
 const NR: usize = 16;
 
-type Scales = [f32; MR];
-
-/// Accumulates one `MR x NR` output block over ascending rows of `b`, with the block held in SIMD
-/// registers throughout. `a` is packed, one `[f32; MR]` per row of `b`. Every element still adds its
+/// Accumulates one `ROWS x NR` output block over ascending rows of `b`, with the block held in SIMD
+/// registers throughout. `a` is packed, one `[f32; ROWS]` per row of `b`. Every element still adds its
 /// products in increasing `k`, starting from what the previous block left, so strict results are
 /// bit-identical to the triple loop. With `FUSED`, each product and add round once instead, which
 /// only `Numeric::Fast` asks for.
 #[inline(always)]
-fn micro<const FUSED: bool>(a: &[Scales], b: &[Element], n: usize, j: usize, out: &mut [Element], i: usize) {
-    let mut block = [[0.0f32; NR]; MR];
+fn micro<const FUSED: bool, const ROWS: usize>(
+    a: &[[f32; ROWS]],
+    b: &[[Element; NR]],
+    n: usize,
+    j: usize,
+    out: &mut [Element],
+    i: usize,
+) {
+    let mut block = [[0.0f32; NR]; ROWS];
     for (r, row) in block.iter_mut().enumerate() {
         let source: &[Element; NR] = out[(i + r) * n + j..][..NR].try_into().expect("in bounds");
         for (value, element) in row.iter_mut().zip(source) {
             *value = read(*element);
         }
     }
-    assert!(j + NR <= n);
-    for (scales, b_row) in a.iter().zip(b.chunks_exact(n)) {
-        let b_row: &[Element; NR] = b_row[j..][..NR].try_into().expect("in bounds");
+    for (scales, b_row) in a.iter().zip(b) {
         let factor: [f32; NR] = std::array::from_fn(|c| read(b_row[c]));
         for (row, scale) in block.iter_mut().zip(scales) {
             for (value, f) in row.iter_mut().zip(&factor) {
@@ -643,31 +646,56 @@ fn accumulate1<const FUSED: bool>(out: &mut [Element], a: f32, b: &[Element]) {
     }
 }
 
+/// Bytes of scratch `matmul` needs: one `K_BLOCK` of `b`, packed by column block.
+pub(crate) fn matmul_scratch(k: usize, n: usize) -> usize {
+    k.min(K_BLOCK) * (n / NR) * NR * 4
+}
+
 /// The row-major `a @ b` kernel. `k` advances in ascending blocks, so each output element sees its
-/// products in increasing `k` whichever order its neighbours are computed in.
+/// products in increasing `k` whichever order its neighbours are computed in. Each block of `b` is
+/// packed once, so column blocks read contiguous memory however wide `b`'s rows are.
 #[inline(always)]
-fn matmul_body<const FUSED: bool>(a: &[Element], b: &[Element], k: usize, n: usize, out: &mut [Element]) {
+fn matmul_body<const FUSED: bool>(
+    a: &[Element],
+    b: &[Element],
+    k: usize,
+    n: usize,
+    out: &mut [Element],
+    scratch: &mut [Element],
+) {
     let m = out.len() / n;
     let (whole_rows, whole_columns) = (m / MR * MR, n / NR * NR);
+    let column_blocks = n / NR;
+    let (pack, _) = scratch.as_chunks_mut::<NR>();
     let mut packed = [[0.0f32; MR]; K_BLOCK];
     for start in (0..k).step_by(K_BLOCK) {
         let end = (start + K_BLOCK).min(k);
-        let b_block = &b[start * n..end * n];
-        for i in (0..whole_rows).step_by(MR) {
-            // Packed once per row group, then read by every column block of that group.
-            for (p, scales) in (start..end).zip(&mut packed) {
-                for (r, scale) in scales.iter_mut().enumerate() {
-                    *scale = read(a[(i + r) * k + p]);
+        let rows = end - start;
+        if column_blocks > 0 {
+            for (block, column) in pack[..column_blocks * rows].chunks_exact_mut(rows).enumerate() {
+                for (p, target) in column.iter_mut().enumerate() {
+                    target.copy_from_slice(&b[(start + p) * n + block * NR..][..NR]);
                 }
             }
-            for j in (0..whole_columns).step_by(NR) {
-                micro::<FUSED>(&packed[..end - start], b_block, n, j, out, i);
+            for i in (0..whole_rows).step_by(MR) {
+                // Packed once per row group, then read by every column block of that group.
+                for (p, scales) in (start..end).zip(&mut packed) {
+                    for (r, scale) in scales.iter_mut().enumerate() {
+                        *scale = read(a[(i + r) * k + p]);
+                    }
+                }
+                for (block, column) in pack[..column_blocks * rows].chunks_exact(rows).enumerate() {
+                    micro::<FUSED, MR>(&packed[..rows], column, n, block * NR, out, i);
+                }
             }
-        }
-        for i in whole_rows..m {
-            for j in (0..whole_columns).step_by(NR) {
-                for p in start..end {
-                    accumulate1::<FUSED>(&mut out[i * n + j..][..NR], read(a[i * k + p]), &b[p * n + j..][..NR]);
+            // Leftover rows keep the same packed columns, one row in registers at a time.
+            let mut single = [[0.0f32; 1]; K_BLOCK];
+            for i in whole_rows..m {
+                for (p, scale) in (start..end).zip(&mut single) {
+                    scale[0] = read(a[i * k + p]);
+                }
+                for (block, column) in pack[..column_blocks * rows].chunks_exact(rows).enumerate() {
+                    micro::<FUSED, 1>(&single[..rows], column, n, block * NR, out, i);
                 }
             }
         }
@@ -687,36 +715,37 @@ fn matmul_body<const FUSED: bool>(a: &[Element], b: &[Element], k: usize, n: usi
 }
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
-fn matmul_avx2(a: &[Element], b: &[Element], k: usize, n: usize, out: &mut [Element]) {
-    matmul_body::<false>(a, b, k, n, out);
+fn matmul_avx2(a: &[Element], b: &[Element], k: usize, n: usize, out: &mut [Element], scratch: &mut [Element]) {
+    matmul_body::<false>(a, b, k, n, out, scratch);
 }
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2,fma")]
-fn matmul_fma(a: &[Element], b: &[Element], k: usize, n: usize, out: &mut [Element]) {
-    matmul_body::<true>(a, b, k, n, out);
+fn matmul_fma(a: &[Element], b: &[Element], k: usize, n: usize, out: &mut [Element], scratch: &mut [Element]) {
+    matmul_body::<true>(a, b, k, n, out, scratch);
 }
 #[inline(never)]
-fn matmul_baseline(a: &[Element], b: &[Element], k: usize, n: usize, out: &mut [Element]) {
-    matmul_body::<false>(a, b, k, n, out);
+fn matmul_baseline(a: &[Element], b: &[Element], k: usize, n: usize, out: &mut [Element], scratch: &mut [Element]) {
+    matmul_body::<false>(a, b, k, n, out, scratch);
 }
 
 /// `a @ b` into row-major `out`. Operands are contiguous elements (`packed` by the caller when
 /// their views are not); `+0` starts every element, and no zero is skipped: `0 * inf` is NaN.
 /// `Isa::Fma` fuses, so `execute` only passes it for a `Numeric::Fast` program.
-pub(crate) fn matmul(a: &[Element], b: &[Element], k: usize, n: usize, out: &mut [u8], isa: Isa) {
+pub(crate) fn matmul(a: &[Element], b: &[Element], k: usize, n: usize, out: &mut [u8], scratch: &mut [u8], isa: Isa) {
     out.fill(0);
     if out.is_empty() || k == 0 {
         return;
     }
     let (out, _) = out.as_chunks_mut::<4>();
+    let (scratch, _) = scratch.as_chunks_mut::<4>();
     assert!(isa.available(), "{isa:?} is not available on this host");
     match isa {
         #[cfg(target_arch = "x86_64")]
         // SAFETY: availability was just asserted.
-        Isa::Avx2 => unsafe { matmul_avx2(a, b, k, n, out) },
+        Isa::Avx2 => unsafe { matmul_avx2(a, b, k, n, out, scratch) },
         #[cfg(target_arch = "x86_64")]
         // SAFETY: availability was just asserted.
-        Isa::Fma => unsafe { matmul_fma(a, b, k, n, out) },
-        _ => matmul_baseline(a, b, k, n, out),
+        Isa::Fma => unsafe { matmul_fma(a, b, k, n, out, scratch) },
+        _ => matmul_baseline(a, b, k, n, out, scratch),
     }
 }
