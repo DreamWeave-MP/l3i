@@ -939,6 +939,8 @@ fn f32_clamp_matches_the_sequential_loop_for_bounds_between_f32_values() {
             {1 + 2 ^ -30, 1 + 2 ^ -29}, {1 - 2 ^ -30, 1 + 2 ^ -30}, {1 + 2 ^ -24, 1 + 2 ^ -24},
             -- Beyond f32 range: rounds to infinity or zero only when written.
             {1e39, 1e40}, {-1e40, -1e39}, {-1e-50, 1e-50}, {1e-50, 1e-49},
+            -- A large finite high bound is not an absent one: infinity and values above it clamp.
+            {-1, 3.4028234663852886e38}, {-1, 1e35}, {-1, 1e39}, {0, math.huge}, {-math.huge, 0},
         }
         for _, n in lengths do
             local size = 256 + (n + 40) * 4
@@ -1163,6 +1165,86 @@ fn neighbours_of_contiguous_f32_keep_their_results() {
             data.add(actual, name, 0, actual, 8, actual, size, 16)
             for i = 0, 15 do write(expected, size + i * size, read(expected, i * size) + read(expected, 8 + i * size)) end
             same(actual, expected, 'overlapping add ' .. name)
+        end
+    ",
+    );
+}
+
+/// Every other contiguous kind against handwritten `buffer` loops, overlaps included. Values stay
+/// well inside each kind's conversion range, where the `buffer` library defines its writes; the
+/// unit tests in `src/data` reach the saturating edges against the generic loop.
+#[test]
+fn other_contiguous_kinds_match_the_sequential_loop() {
+    f32_script(
+        r"
+        local kinds = {{'u8', 1}, {'i8', 1}, {'u16', 2}, {'i16', 2}, {'u32', 4}, {'i32', 4}, {'f64', 8}}
+        local thresholds = {0, 1, 1.5, -1, -1.5, 100, 1e300, -1e300, math.huge, -math.huge, 0 / 0}
+        local tests = {
+            eq = function(a, b) return a == b end, ne = function(a, b) return a ~= b end,
+            lt = function(a, b) return a < b end, le = function(a, b) return a <= b end,
+            gt = function(a, b) return a > b end, ge = function(a, b) return a >= b end,
+        }
+        for _, entry in kinds do
+            local name, width = entry[1], entry[2]
+            local read, write = buffer['read' .. name], buffer['write' .. name]
+            for _, n in {0, 1, 3, 8, 9, 33, 63, 64, 65, 129} do
+                local size = 64 + (n + 16) * width
+                local base = buffer.create(size)
+                for i = 0, size // width - 1 do
+                    local value = word() % 201 - 100
+                    if string.sub(name, 1, 1) == 'u' then value = math.abs(value) end
+                    write(base, i * width, if name == 'f64' then value / 8 else value)
+                end
+                local at = 32
+                for _, shift in {-2 * width, -width, 0, width, 2 * width, 16 * width} do
+                    local where = `{name} n={n} shift={shift}`
+                    local actual, expected = copy(base), copy(base)
+                    data.add(actual, name, at, actual, at + width, actual, at + shift, n)
+                    for i = 0, n - 1 do
+                        write(expected, at + shift + i * width, read(expected, at + i * width) + read(expected, at + width + i * width))
+                    end
+                    same(actual, expected, 'add ' .. where)
+                    actual, expected = copy(base), copy(base)
+                    data.scale(actual, name, at, n, 0.5, actual, at + shift)
+                    for i = 0, n - 1 do write(expected, at + shift + i * width, read(expected, at + i * width) * 0.5) end
+                    same(actual, expected, 'scale ' .. where)
+                    actual, expected = copy(base), copy(base)
+                    data.clamp(actual, name, at, n, 2.5, 50.5, actual, at + shift)
+                    for i = 0, n - 1 do
+                        write(expected, at + shift + i * width, math.clamp(read(expected, at + i * width), 2.5, 50.5))
+                    end
+                    same(actual, expected, 'clamp ' .. where)
+                end
+                local actual, expected = copy(base), copy(base)
+                data.fill(actual, name, at, n, 77.5)
+                for i = 0, n - 1 do write(expected, at + i * width, 77.5) end
+                same(actual, expected, `fill {name} n={n}`)
+                local total, low, high, lowAt, highAt = 0, nil, nil, nil, nil
+                for i = 0, n - 1 do
+                    local value = read(base, at + i * width)
+                    total += value
+                    if low == nil or value < low then low, lowAt = value, i end
+                    if high == nil or value > high then high, highAt = value, i end
+                end
+                assert(data.sum(base, name, at, n) == total, `sum {name} n={n}`)
+                assert(data.min(base, name, at, n) == low and data.max(base, name, at, n) == high, `extremes {name} n={n}`)
+                assert(data.argmin(base, name, at, n) == lowAt and data.argmax(base, name, at, n) == highAt, `arg extremes {name} n={n}`)
+                for comparison, test in tests do
+                    for _, threshold in thresholds do
+                        local count = 0
+                        local selected = data.select(base, name, at, n, comparison, threshold)
+                        for i = 0, n - 1 do
+                            local hit = test(read(base, at + i * width), threshold)
+                            assert(selected:get(i) == hit, `select {name} {comparison} {threshold} at {i}`)
+                            if hit then count += 1 end
+                        end
+                        local where = `{name} {comparison} {threshold} n={n}`
+                        assert(data.countWhere(base, name, at, n, comparison, threshold) == count, 'count ' .. where)
+                        assert(data.any(base, name, at, n, comparison, threshold) == (count > 0), 'any ' .. where)
+                        assert(data.all(base, name, at, n, comparison, threshold) == (count == n), 'all ' .. where)
+                    end
+                end
+            end
         end
     ",
     );

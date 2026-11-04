@@ -12,6 +12,7 @@
     clippy::cast_possible_truncation,
     clippy::too_many_lines,
     clippy::items_after_statements,
+    clippy::inline_always,
     clippy::needless_pass_by_value
 )]
 
@@ -334,6 +335,38 @@ mod reference {
         out.fill(write(value));
     }
 
+    #[inline(always)]
+    fn relu_passes(left: &[[u8; 4]], right: &[[u8; 4]], twos: &[[u8; 4]], out: &mut [[u8; 4]]) {
+        for ((out, left), right) in out.iter_mut().zip(left).zip(right) {
+            *out = write(read(*left) + read(*right));
+        }
+        for (out, two) in out.iter_mut().zip(twos) {
+            *out = write(read(*out) + read(*two));
+        }
+        for out in out.iter_mut() {
+            let value = f32::from_ne_bytes(*out);
+            *out = (if value < 0.0 { 0.0 } else { value }).to_ne_bytes();
+        }
+    }
+
+    /// The ceiling for three separate passes on this memory system: AVX2, no binder, no overlap.
+    #[inline(never)]
+    pub fn relu(left: &[[u8; 4]], right: &[[u8; 4]], twos: &[[u8; 4]], out: &mut [[u8; 4]]) {
+        #[cfg(target_arch = "x86_64")]
+        {
+            #[target_feature(enable = "avx2")]
+            fn avx2(left: &[[u8; 4]], right: &[[u8; 4]], twos: &[[u8; 4]], out: &mut [[u8; 4]]) {
+                relu_passes(left, right, twos, out);
+            }
+            if std::arch::is_x86_feature_detected!("avx2") {
+                // SAFETY: the CPU was just found to have the one feature `avx2` requires.
+                unsafe { avx2(left, right, twos, out) };
+                return;
+            }
+        }
+        relu_passes(left, right, twos, out);
+    }
+
     #[inline(never)]
     pub fn sum(source: &[[u8; 4]]) -> f64 {
         source.iter().fold(0.0, |total, value| total + read(*value))
@@ -361,28 +394,32 @@ fn smoke() -> bool {
     std::env::args().any(|arg| arg == "--test")
 }
 
-/// One raw row per case on stderr, for scripts: per-call instructions, cycles and nanoseconds, each
-/// the min, median and max of nine rounds. User-space counts only. Instruction counts repeat to
+/// One raw row per case on stderr, for scripts: per-call instructions, cycles, nanoseconds and
+/// branch misses, each the min, median and max of nine rounds. User-space counts only. Instruction counts repeat to
 /// within a few parts per thousand on a busy machine; the cycle and nanosecond spreads say how far
 /// to trust a row.
 fn f32_row(op: &str, n: usize, variant: &str, invoke: &mut dyn FnMut()) {
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
     {
-        use counter::{Counter, PERF_COUNT_HW_CPU_CYCLES, PERF_COUNT_HW_INSTRUCTIONS, PERF_TYPE_HARDWARE, measure_all};
+        use counter::{
+            Counter, PERF_COUNT_HW_BRANCH_MISSES, PERF_COUNT_HW_CPU_CYCLES, PERF_COUNT_HW_INSTRUCTIONS,
+            PERF_TYPE_HARDWARE, measure_all,
+        };
         if smoke() {
             return;
         }
-        let (Some(instructions), Some(cycles)) = (
+        let (Some(instructions), Some(cycles), Some(misses)) = (
             Counter::open(PERF_TYPE_HARDWARE, PERF_COUNT_HW_INSTRUCTIONS),
             Counter::open(PERF_TYPE_HARDWARE, PERF_COUNT_HW_CPU_CYCLES),
+            Counter::open(PERF_TYPE_HARDWARE, PERF_COUNT_HW_BRANCH_MISSES),
         ) else {
             eprintln!("f32row|{op}|{n}|{variant}|hardware counters unavailable");
             return;
         };
-        let counters = [instructions, cycles];
+        let counters = [instructions, cycles, misses];
         // Roughly two million elements a round, so large and small spans get comparable samples.
         let calls = (2_000_000 / n.max(1)).clamp(1, 2048);
-        let mut rows = [[0u64; 3]; 9];
+        let mut rows = [[0u64; 4]; 9];
         invoke();
         for row in &mut rows {
             let begin = std::time::Instant::now();
@@ -392,14 +429,15 @@ fn f32_row(op: &str, n: usize, variant: &str, invoke: &mut dyn FnMut()) {
                 }
             });
             let nanos = begin.elapsed().as_nanos() as u64;
-            *row = [counted[0] / calls as u64, counted[1] / calls as u64, nanos / calls as u64];
+            *row =
+                [counted[0] / calls as u64, counted[1] / calls as u64, nanos / calls as u64, counted[2] / calls as u64];
         }
         let spread = |column: usize| {
             let mut values = rows.map(|row| row[column]);
             values.sort_unstable();
             format!("{}|{}|{}", values[0], values[4], values[8])
         };
-        eprintln!("f32row|{op}|{n}|{variant}|{}|{}|{}", spread(0), spread(1), spread(2));
+        eprintln!("f32row|{op}|{n}|{variant}|{}|{}|{}|{}", spread(0), spread(1), spread(2), spread(3));
     }
     #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
     {
@@ -414,9 +452,9 @@ fn f32_setup(n: usize) -> String {
          ia, ib, iout = buffer.create(n * 4), buffer.create(n * 4), buffer.create(n * 4)
          da, db, dout = buffer.create(n * 8), buffer.create(n * 8), buffer.create(n * 8)
          sa, sout = buffer.create(n * 8 + 8), buffer.create(n * 8 + 8)
-         fall = buffer.create(n * 4)
+         fall, twos = buffer.create(n * 4), buffer.create(n * 4)
          for i = 0, n - 1 do
-             buffer.writef32(fall, i * 4, -i)
+             buffer.writef32(fall, i * 4, -i) buffer.writef32(twos, i * 4, 2)
              local x, y = ((i * 37) % 251) / 7 - 15, ((i * 53) % 241) / 3 - 40
              buffer.writef32(a, i * 4, x) buffer.writef32(b, i * 4, y)
              buffer.writei32(ia, i * 4, x * 7) buffer.writei32(ib, i * 4, y * 3)
@@ -429,7 +467,7 @@ fn f32_setup(n: usize) -> String {
 
 /// `(operation, the dream.data call, the handwritten Luau loop)`, contiguous, disjoint spans. A
 /// scale factor of 1/3 is not an f32; 0.5 is. `any` and `all` never decide early here: full scans.
-const F32_OPS: [(&str, &str, &str); 13] = [
+const F32_OPS: [(&str, &str, &str); 14] = [
     (
         "add",
         "data.add(a, 'f32', 0, b, 0, out, 0, n) return n",
@@ -494,6 +532,13 @@ const F32_OPS: [(&str, &str, &str); 13] = [
         "select",
         "data.select(a, 'f32', 0, n, 'gt', 0, sel) return n",
         "local x, c = a, 0 for i = 0, n - 1 do if buffer.readf32(x, i * 4) > 0 then c += 1 end end return n",
+    ),
+    // The compute research's `relu(a + b + 2)` as three passes, the figure this work chases: a
+    // fused loop is a different contract, so there is no such row here.
+    (
+        "relu three passes",
+        "data.add(a, 'f32', 0, b, 0, out, 0, n) data.add(out, 'f32', 0, twos, 0, out, 0, n) data.clamp(out, 'f32', 0, n, 0, math.huge, out, 0) return n",
+        "local x, y, o = a, b, out for i = 0, n - 1 do buffer.writef32(o, i * 4, math.max(buffer.readf32(x, i * 4) + buffer.readf32(y, i * 4) + 2, 0)) end return n",
     ),
 ];
 
@@ -572,7 +617,12 @@ fn f32_bulk(c: &mut Criterion) {
         let right: Vec<[u8; 4]> = (0..n).map(|i| word(((((i * 53) % 241) as f64) / 3.0 - 40.0) as f32)).collect();
         let mut sink = vec![[0u8; 4]; n];
         type Kernel<'a> = Box<dyn FnMut(&mut [[u8; 4]]) + 'a>;
-        let mut kernels: [(&str, Kernel<'_>); 7] = [
+        let twos = vec![word(2.0); n];
+        let mut kernels: [(&str, Kernel<'_>); 8] = [
+            (
+                "relu three passes",
+                Box::new(|out| reference::relu(black_box(&left), black_box(&right), black_box(&twos), out)),
+            ),
             ("add", Box::new(|out| reference::add(black_box(&left), black_box(&right), out))),
             ("scale_inexact", Box::new(|out| reference::scale(black_box(&left), black_box(1.0 / 3.0), out))),
             ("clamp", Box::new(|out| reference::clamp(black_box(&left), black_box(-5.0), black_box(5.0), out))),
