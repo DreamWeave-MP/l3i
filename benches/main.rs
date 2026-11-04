@@ -9,10 +9,10 @@
 #[cfg(target_os = "linux")]
 #[path = "instructions/counter.rs"]
 mod counter;
-#[cfg(any(feature = "intl", feature = "tcp", feature = "tls"))]
+#[cfg(any(feature = "intl", feature = "tcp", feature = "tls", feature = "fs-authenticated"))]
 mod counting_alloc;
 
-#[cfg(any(feature = "intl", feature = "tcp", feature = "tls"))]
+#[cfg(any(feature = "intl", feature = "tcp", feature = "tls", feature = "fs-authenticated"))]
 #[global_allocator]
 static GLOBAL: counting_alloc::Counting = counting_alloc::Counting;
 
@@ -30,6 +30,8 @@ mod bytes;
 mod data;
 #[cfg(all(feature = "dns", feature = "tls"))]
 mod dns_tls;
+#[cfg(feature = "fs-authenticated")]
+mod fs_authenticated;
 #[cfg(feature = "intern")]
 mod intern;
 #[cfg(feature = "intl")]
@@ -63,6 +65,10 @@ fn main() {
 
     if wanted("instructions") {
         instructions::main();
+    }
+    #[cfg(feature = "fs-authenticated")]
+    if wanted("fs_authenticated") {
+        fs_authenticated::main();
     }
     #[cfg(feature = "intern")]
     if wanted("intern") {
