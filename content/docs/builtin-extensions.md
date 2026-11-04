@@ -1389,7 +1389,43 @@ MB for 119 KB) and would still have to be decoded in Luau before anything could 
 
 ## dream.fs
 
-Feature `fs`; module `@dream/fs`, `l3i::fs::FsExtension`. The host filesystem, for tools that
+Feature `fs`; module `@dream/fs`, `l3i::fs::FsExtension`.
+### Stable storage and atomic replacement
+
+`Writer:syncData()` flushes the writer's buffer and calls the operating system's file data
+synchronization operation; `Writer:syncAll()` flushes and synchronizes file data and metadata.
+Both return true or nil, an OS error message (including the OS code when available), and an error
+kind. A failed synchronization leaves its outcome uncertain; close reports the failure as well.
+`flush()` and `close()` alone are not stable-storage barriers. `openWrite` accepts
+`exclusive = true` to create a new file without opening an existing one.
+
+`fs.replace(source, destination)` atomically renames on Unix when the filesystem supports it;
+source and destination must be on the same filesystem. It does not synchronize either file or
+directory. `fs.syncDirectory(path)` opens and synchronizes a directory on Unix; filesystem
+rejection is returned to the caller. Both operations return `unsupported` on non-Unix platforms.
+A successful rename is an atomic visibility guarantee, not a persistence guarantee.
+
+| Platform | File sync | Directory sync and replace | Qualification |
+| --- | --- | --- | --- |
+| Linux and other Unix | OS `sync_data` / `sync_all` | OS directory sync and rename; errors propagated | Filesystem and device must honor barriers; network and unusual filesystems may differ. |
+| macOS | OS fsync semantics | OS directory sync and rename, if accepted | No `F_FULLFSYNC` is requested; do not claim power-loss durability. |
+| Windows and other non-Unix | OS file synchronization | Explicitly unsupported | No durable replacement protocol is promised. |
+
+For creation, sync the file then its parent directory. For a checkpoint, create an exclusive
+sibling, write the complete image, syncAll and close it, replace the destination, then sync the
+parent directory. A failure after replacement can leave either complete version after recovery;
+it does not prove the replacement failed. Sync both parent directories if a rename moves between
+directories. File synchronization cannot compensate for hardware or filesystems that misreport
+persistence. Process-kill testing does not establish power-loss durability. Retain advisory lock
+files across closes so competing processes do not lock different inodes.
+Append opens use the OS append flag and writes use `write_all`, which retries interruptions and
+short writes. Multiple writers can still interleave a logical record when it requires multiple OS
+writes; serialize journal writers with a lock and keep one writer open. `tell()` is the writer's
+local accounting, not a reliable global end position when other handles append. After any write or
+sync error, treat the record outcome as uncertain and reopen before continuing.
+
+
+ The host filesystem, for tools that
 work on files on disk: whole and positional reads, readers over a memory map, writers with
 positions and truncation, metadata with and without following links, listings and a fast
 recursive walk, directories made and removed, renames, copies, hard and symbolic links,

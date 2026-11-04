@@ -1,0 +1,32 @@
+-- Run with a Jess built against this branch, on the filesystem being measured:
+-- jess run --trusted benches/durable-fs.jsl /path/to/scratch-directory
+-- Use strace -c -e fsync,fdatasync,write on Linux to count syscalls.
+local fs = require('@dream/fs')
+local root = assert((...), 'pass a scratch directory')
+local path = fs.join(root, 'l3i-durability-benchmark.tmp')
+local sizes = {4096, 65536, 1048576}
+for _, size in sizes do
+    for _, batch in {1, 16} do
+        local samples = {}
+        local writer = assert(fs.openWrite(path, { exclusive = true }))
+        local data = buffer.create(size)
+        local started = os.clock()
+        for i = 1, 64 do
+            assert(writer:write(data) == size)
+            if i % batch == 0 then
+                local before = os.clock()
+                assert(writer:syncData())
+                table.insert(samples, os.clock() - before)
+            end
+        end
+        local elapsed = os.clock() - started
+        assert(writer:close())
+        table.sort(samples)
+        local function percentile(p)
+            return samples[math.max(1, math.ceil(#samples * p))] * 1000
+        end
+        print(string.format('bytes=%d batch=%d commits/s=%.2f sync_ms p50=%.3f p95=%.3f p99=%.3f',
+            size, batch, 64 / elapsed, percentile(0.50), percentile(0.95), percentile(0.99)))
+        assert(fs.remove(path))
+    end
+end

@@ -364,3 +364,44 @@ fn files_are_written_exclusively_atomically_and_under_new_parents() {
         assert_eq!(std::fs::read(&path).unwrap(), b"new");
     }
 }
+
+#[cfg(unix)]
+#[test]
+fn durable_file_and_directory_operations() {
+    let scratch = Scratch::new("durable");
+    runtime().exec(&format!(
+        "local root = {root} local path = root .. '/journal' \
+         local w = assert(fs.openWrite(path, {{ exclusive = true }})) \
+         assert(w:write('first') == 5) assert(w:syncAll()) assert(w:write('!') == 1) assert(w:syncData()) assert(w:close()) \
+         assert(fs.syncDirectory(root)) assert(fs.readFileString(path) == 'first!') \
+         local duplicate, message, kind = fs.openWrite(path, {{ exclusive = true }}) \
+         assert(duplicate == nil and kind == 'alreadyExists' and message:find('openWrite')) \
+         w = assert(fs.openWrite(path, {{ append = true }})) assert(w:write('more') == 4) assert(w:syncData()) assert(w:close()) \
+         assert(fs.readFileString(path) == 'first!more') \
+         w = assert(fs.openWrite(path, {{ truncate = false }})) assert(w:truncate(3)) assert(w:syncAll()) assert(w:close()) \
+         assert(fs.readFileString(path) == 'fir') \
+         local tmp = root .. '/temp' w = assert(fs.openWrite(tmp, {{ exclusive = true }})) \
+         assert(w:write('replacement') == 11) assert(w:syncAll()) assert(w:close()) \
+         assert(fs.replace(tmp, path)) assert(fs.syncDirectory(root)) assert(fs.readFileString(path) == 'replacement') \
+         local ok, err = pcall(w.syncAll, w) assert(not ok and err:find('closed')) \
+         local failed, msg, code = fs.replace(tmp, path) assert(failed == nil and code == 'notFound' and msg:find('replace')) \
+         assert(fs.readFileString(path) == 'replacement') \
+         failed, msg, code = fs.syncDirectory(root .. '/missing') assert(failed == nil and code == 'notFound' and msg:find('syncDirectory'))",
+        root = scratch.lua()
+    )).unwrap();
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn failed_sync_is_reported_again_by_close() {
+    runtime()
+        .exec(
+            "local w = assert(fs.openWrite('/dev/full', { truncate = false })) \
+         assert(w:write('x') == 1) \
+         local ok, message, kind = w:syncAll() \
+         assert(ok == nil and kind == 'storageFull' and message:find('Writer.syncAll') and message:find('os error')) \
+         local closed, closeMessage, closeKind = w:close() \
+         assert(closed == nil and closeKind == kind and closeMessage == message)",
+        )
+        .unwrap();
+}

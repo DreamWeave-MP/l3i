@@ -466,11 +466,12 @@ pub(crate) struct OpenWrite {
     /// `None` is the default: truncate unless appending.
     truncate: Option<bool>,
     create: bool,
+    exclusive: bool,
 }
 
 impl OpenWrite {
     pub(crate) fn read(scope: &impl Scope, options: Option<ValueView<'_>>) -> Result<OpenWrite> {
-        let mut open = OpenWrite { append: false, truncate: None, create: true };
+        let mut open = OpenWrite { append: false, truncate: None, create: true, exclusive: false };
         let Some(options) = options.filter(|view| !view.is_nil()) else {
             return Ok(open);
         };
@@ -478,6 +479,10 @@ impl OpenWrite {
             open.append = o.or("append", false)?;
             open.truncate = o.optional("truncate")?;
             open.create = o.or("create", true)?;
+            open.exclusive = o.or("exclusive", false)?;
+            if open.exclusive && !open.create {
+                return Err(Error::runtime("dream.fs.openWrite: exclusive needs create"));
+            }
             Ok(open)
         })
     }
@@ -486,7 +491,8 @@ impl OpenWrite {
         let truncate = self.truncate.unwrap_or(!self.append);
         let file = OpenOptions::new()
             .write(true)
-            .create(self.create)
+            .create(self.create && !self.exclusive)
+            .create_new(self.exclusive)
             .append(self.append)
             .truncate(truncate && !self.append)
             .open(path)?;
@@ -644,6 +650,7 @@ pub struct Writer {
     position: Cell<u64>,
     append: bool,
     name: Box<[u8]>,
+    sync_failure: RefCell<Option<super::Failure>>,
 }
 
 impl std::fmt::Debug for Writer {
@@ -671,6 +678,7 @@ impl Writer {
             position: Cell::new(position),
             append: options.append,
             name: path.into(),
+            sync_failure: RefCell::new(None),
         }))
     }
 
@@ -732,12 +740,31 @@ impl Writer {
         Ok(Outcome::Done(true))
     }
 
+    fn sync(&self, data_only: bool) -> Result<Outcome<bool>> {
+        let what = if data_only { "syncData" } else { "syncAll" };
+        let outcome = self.with_file(what, |file| {
+            file.flush()?;
+            if data_only { file.get_ref().sync_data() } else { file.get_ref().sync_all() }
+        })?;
+        match outcome {
+            Outcome::Done(()) => Ok(Outcome::Done(true)),
+            Outcome::Failed(failure) => {
+                *self.sync_failure.borrow_mut() = Some(failure.clone());
+                Ok(Outcome::Failed(failure))
+            }
+        }
+    }
+
     /// Flushes and closes; closing a closed writer does nothing and answers true.
     fn close(&self) -> Outcome<bool> {
         let Some(mut file) = self.file.0.borrow_mut().take() else {
             return Outcome::Done(true);
         };
-        Outcome::of(file.flush().map(|()| true), "Writer.close", &self.name)
+        let result = Outcome::of(file.flush().map(|()| true), "Writer.close", &self.name);
+        match self.sync_failure.borrow_mut().take() {
+            Some(failure) => Outcome::Failed(failure),
+            None => result,
+        }
     }
 }
 
@@ -784,6 +811,14 @@ pub(crate) fn describe_writer(d: &mut ExtensionDescriptor) {
             })
         })
         .signature("(self): (boolean?, string?, dream_fs_ErrorKind?)");
+    writer
+        .method("syncData", |w: &Writer| w.sync(true))
+        .signature("(self): (boolean?, string?, dream_fs_ErrorKind?)")
+        .doc("Flushes buffered bytes and synchronizes file data and retrieval metadata; propagates failures.");
+    writer
+        .method("syncAll", |w: &Writer| w.sync(false))
+        .signature("(self): (boolean?, string?, dream_fs_ErrorKind?)")
+        .doc("Flushes buffered bytes and synchronizes file data and metadata; propagates failures.");
     writer
         .method("truncate", |w: &Writer, length: Exact<i64>| {
             w.truncate(non_negative("Writer.truncate", "length", length)?)

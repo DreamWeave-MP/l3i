@@ -300,6 +300,36 @@ fn same_file(a: &[u8], b: &[u8]) -> Result<Outcome<bool>> {
     })
 }
 
+fn sync_directory(path: &[u8]) -> Result<Outcome<bool>> {
+    let host = host_path("syncDirectory", path)?;
+    #[cfg(unix)]
+    let result = std::fs::File::open(host).and_then(|file| {
+        if !file.metadata()?.is_dir() {
+            return Err(std::io::Error::new(std::io::ErrorKind::NotADirectory, "not a directory"));
+        }
+        file.sync_all()
+    });
+    #[cfg(not(unix))]
+    let result: std::io::Result<()> = {
+        let _ = host;
+        Err(std::io::Error::new(std::io::ErrorKind::Unsupported, "directory synchronization is unsupported"))
+    };
+    Ok(Outcome::of(result.map(|()| true), "syncDirectory", path))
+}
+
+fn replace(source: &[u8], destination: &[u8]) -> Result<Outcome<bool>> {
+    let from = host_path("replace", source)?;
+    let to = host_path("replace", destination)?;
+    #[cfg(unix)]
+    let result = std::fs::rename(from, to);
+    #[cfg(not(unix))]
+    let result: std::io::Result<()> = {
+        let _ = (from, to);
+        Err(std::io::Error::new(std::io::ErrorKind::Unsupported, "atomic replacement is unsupported"))
+    };
+    Ok(Outcome::of(result.map(|()| true), "replace", source))
+}
+
 /// What a member needs: nothing (it only takes a path apart or joins one), or a capability.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Access {
@@ -450,8 +480,20 @@ const MEMBERS: &[Member] = &[
     ),
     member(
         "openWrite",
-        "(path: string, options: { append: boolean?, truncate: boolean?, create: boolean? }?) -> (dream_fs_Writer?, string?, dream_fs_ErrorKind?)",
+        "(path: string, options: { append: boolean?, truncate: boolean?, create: boolean?, exclusive: boolean? }?) -> (dream_fs_Writer?, string?, dream_fs_ErrorKind?)",
         "A writer over path, truncated unless append or truncate = false; created unless create = false.",
+        true,
+    ),
+    member(
+        "syncDirectory",
+        "(path: string) -> (boolean?, string?, dream_fs_ErrorKind?)",
+        "Synchronizes directory entries where supported; does not synchronize file contents.",
+        true,
+    ),
+    member(
+        "replace",
+        "(source: string, destination: string) -> (boolean?, string?, dream_fs_ErrorKind?)",
+        "Atomically renames source over destination on supported same-filesystem platforms; synchronize the file and directory separately for durability.",
         true,
     ),
     member(
@@ -605,6 +647,8 @@ impl Extension for FsExtension {
                 Outcome::Failed(failure) => Outcome::Failed(failure),
             })
         });
+        bind!("syncDirectory", sync_directory);
+        bind!("replace", replace);
         bind!("mkdir", mkdir);
         bind!("remove", remove);
         bind!("rename", |from: &[u8], to: &[u8]| -> Result<Outcome<bool>> {
