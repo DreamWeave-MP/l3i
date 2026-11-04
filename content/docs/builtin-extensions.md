@@ -1620,7 +1620,7 @@ says nothing about freshness: an old revision stays valid against its old commit
 is possible, and whether a commitment is current is your question. It says nothing about the chunks
 a read didn't touch, which have not been looked at; damage there surfaces when something asks for
 them. And it has nothing to do with durability: use the [stable storage](#stable-storage) calls for
-that. Signing and key management are not here either.
+that. Signing and key management are not here either. Authenticated reads do not encrypt the object.
 
 **Failures.** Verification failing answers `nil`, the message and a kind, never partial data:
 `integrityFailed` when bytes, the manifest or the file's length don't match, `invalidManifest` when
@@ -1628,8 +1628,11 @@ bytes match their commitment but aren't a manifest, `unsupported` for a version 
 build doesn't know, and the usual `dream_fs_ErrorKind` when the OS refuses. Mistakes raise: a
 commitment that isn't 64 hex digits, a bad `chunkSize`, a closed reader, or a range outside the
 object. Unlike `readAt`, an authenticated read never comes back short, so asking past the end raises.
-An empty read anywhere up to the end succeeds and touches nothing. After a failed `readAtInto`, that
-window of `target` is zeroed; it holds neither unverified bytes nor the part that had verified.
+An empty read anywhere up to the end succeeds and touches nothing. If `readAtInto` begins a read
+and verification or I/O fails, its target window is zeroed; it holds neither unverified bytes nor a
+verified prefix. Argument errors, including an invalid window or range and a closed reader, raise
+before the read begins and leave the target unchanged. A successful read fills the window with
+verified bytes.
 
 **Files that change underneath.** Truncation, replacement and writes in place are all safe, in the
 sense that a read fails rather than returns the wrong bytes. A reader never maps its file, because

@@ -1164,9 +1164,11 @@ mod through_luau {
                  refuses('negative', reader.readAt, reader, -1, 1) \
                  refuses('negative', reader.readAt, reader, 0, -1) \
                  local target = buffer.create(10) \
+                 buffer.fill(target, 0, 0xAA) \
                  refuses('does not fit', reader.readAtInto, reader, target, 0, 11) \
                  refuses('past the end', reader.readAtInto, reader, target, 0, 1, 11) \
                  refuses('outside the object', reader.readAtInto, reader, target, 1000, 1) \
+                 for i = 0, 9 do assert(buffer.readu8(target, i) == 0xAA) end \
                  refuses('power of two', fs.authManifest, path, {{ chunkSize = 100 }}) \
                  refuses('power of two', fs.authManifest, path, {{ chunkSize = -512 }}) \
                  refuses('power of two', fs.authManifest, path .. '.missing', {{ chunkSize = 0 }}) \

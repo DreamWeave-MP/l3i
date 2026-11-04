@@ -212,7 +212,7 @@ pub(crate) fn describe_authenticated_reader(d: &mut ExtensionDescriptor) {
     reader
         .method("readAtInto", read_at_into)
         .signature("(self, target: buffer, position: number, length: number, bufferOffset: number?): (number?, string?, dream_fs_AuthErrorKind?)")
-        .doc("Copies exactly length verified bytes from position into target at bufferOffset; returns the count. On failure that window of target is zeroed.");
+        .doc("Copies exactly length verified bytes from position into target at bufferOffset; returns the count. If the read begins and fails, that window is zeroed. Argument errors raise before the window is changed.");
     reader
         .method("size", |h: &AuthenticatedHandle| h.manifest.object_length() as f64)
         .signature("(self): number")
