@@ -400,6 +400,10 @@ fn failed_sync_is_reported_again_by_close() {
          assert(w:write('x') == 1) \
          local ok, message, kind = w:syncAll() \
          assert(ok == nil and kind == 'storageFull' and message:find('Writer.syncAll') and message:find('os error')) \
+         for _, action in {function() return w:write('later') end, function() return w:writeAt(0, 'later') end, \
+             function() return w:seek(0) end, function() return w:truncate(0) end, \
+             function() return w:flush() end, function() return w:syncData() end, function() return w:syncAll() end} do \
+             local value, why, category = action() assert(value == nil and why == message and category == kind) end \
          local closed, closeMessage, closeKind = w:close() \
          assert(closed == nil and closeKind == kind and closeMessage == message)",
         )

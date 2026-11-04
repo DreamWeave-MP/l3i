@@ -1395,7 +1395,10 @@ Feature `fs`; module `@dream/fs`, `l3i::fs::FsExtension`.
 `Writer:syncData()` flushes the writer's buffer and calls the operating system's file data
 synchronization operation; `Writer:syncAll()` flushes and synchronizes file data and metadata.
 Both return true or nil, an OS error message (including the OS code when available), and an error
-kind. A failed synchronization leaves its outcome uncertain; close reports the failure as well.
+kind. Any writer I/O failure leaves its outcome uncertain and poisons the handle: later writes,
+seeks, truncations, flushes and syncs return the original failure. Buffered bytes are discarded
+without another write; close reports the original failure. Close the handle and recover before
+opening a new writer.
 `flush()` and `close()` alone are not stable-storage barriers. `openWrite` accepts
 `exclusive = true` to create a new file without opening an existing one.
 
@@ -1423,6 +1426,10 @@ it does not prove the replacement failed. Sync both parent directories if a rena
 directories. File synchronization cannot compensate for hardware or filesystems that misreport
 persistence. Process-kill testing does not establish power-loss durability. Retain advisory lock
 files across closes so competing processes do not lock different inodes.
+Mapped readers must not be used while another handle truncates the same underlying file; reading
+an invalidated mapping can terminate the process. Use positional reads for actively mutated files,
+or replace a complete file through a new inode while readers retain the old one.
+
 Append opens use the OS append flag and writes use `write_all`, which retries interruptions and
 short writes. Multiple writers can still interleave a logical record when it requires multiple OS
 writes; serialize journal writers with a lock and keep one writer open. `tell()` is the writer's

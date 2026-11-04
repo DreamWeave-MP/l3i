@@ -624,6 +624,7 @@ fn write_complete(writer: &mut impl Write, data: &[u8]) -> io::Result<()> {
 #[cfg(test)]
 thread_local! {
     static INJECT_SYNC_ERROR: Cell<Option<i32>> = const { Cell::new(None) };
+    static INJECT_PARTIAL_WRITE: Cell<bool> = const { Cell::new(false) };
 }
 
 fn sync_file(file: &File, data_only: bool) -> io::Result<()> {
@@ -663,8 +664,10 @@ pub(crate) struct WriterFile(RefCell<Option<BufWriter<File>>>);
 
 impl crate::runtime::shared::Resource for WriterFile {
     fn close_for_shutdown(&self) {
-        if let Some(mut file) = self.0.borrow_mut().take() {
-            let _ = file.flush();
+        if let Some(mut file) = self.0.borrow_mut().take()
+            && file.flush().is_err()
+        {
+            let _ = file.into_parts();
         }
     }
 }
@@ -676,7 +679,7 @@ pub struct Writer {
     position: Cell<u64>,
     append: bool,
     name: Box<[u8]>,
-    sync_failure: RefCell<Option<super::Failure>>,
+    failure: RefCell<Option<super::Failure>>,
 }
 
 impl std::fmt::Debug for Writer {
@@ -704,7 +707,7 @@ impl Writer {
             position: Cell::new(position),
             append: options.append,
             name: path.into(),
-            sync_failure: RefCell::new(None),
+            failure: RefCell::new(None),
         }))
     }
 
@@ -717,18 +720,40 @@ impl Writer {
     /// Runs `body` on the open file: a closed writer is the script's mistake and raises; the OS
     /// refusing is an outcome.
     fn with_file<R>(&self, what: &str, body: impl FnOnce(&mut BufWriter<File>) -> io::Result<R>) -> Result<Outcome<R>> {
-        let mut file = self.file.0.borrow_mut();
-        let Some(file) = file.as_mut() else {
+        if let Some(failure) = self.failure.borrow().as_ref() {
+            return Ok(Outcome::Failed(failure.clone()));
+        }
+        let mut slot = self.file.0.borrow_mut();
+        let Some(file) = slot.as_mut() else {
             return Err(Error::runtime(format!(
                 "dream.fs.Writer.{what}: the writer over {} is closed",
                 display(&self.name)
             )));
         };
-        Ok(Outcome::of(body(file), &format!("Writer.{what}"), &self.name))
+        match body(file) {
+            Ok(value) => Ok(Outcome::Done(value)),
+            Err(error) => {
+                let failure = super::Failure::new(&format!("Writer.{what}"), &self.name, &error);
+                // Discard buffered bytes without another write: their outcome is uncertain.
+                if let Some(file) = slot.take() {
+                    let _ = file.into_parts();
+                }
+                *self.failure.borrow_mut() = Some(failure.clone());
+                Ok(Outcome::Failed(failure))
+            }
+        }
     }
 
     fn write(&self, data: &[u8]) -> Result<Outcome<f64>> {
-        done!(self.with_file("write", |file| write_complete(file, data))?);
+        done!(self.with_file("write", |file| {
+            #[cfg(test)]
+            if INJECT_PARTIAL_WRITE.with(|slot| slot.replace(false)) {
+                write_complete(file, &data[..data.len().min(1)])?;
+                file.flush()?;
+                return Err(io::Error::from_raw_os_error(5));
+            }
+            write_complete(file, data)
+        })?);
         self.position.set(self.position.get() + data.len() as u64);
         Ok(Outcome::Done(data.len() as f64))
     }
@@ -772,24 +797,26 @@ impl Writer {
             file.flush()?;
             sync_file(file.get_ref(), data_only)
         })?;
-        match outcome {
-            Outcome::Done(()) => Ok(Outcome::Done(true)),
-            Outcome::Failed(failure) => {
-                *self.sync_failure.borrow_mut() = Some(failure.clone());
-                Ok(Outcome::Failed(failure))
-            }
-        }
+        Ok(match outcome {
+            Outcome::Done(()) => Outcome::Done(true),
+            Outcome::Failed(failure) => Outcome::Failed(failure),
+        })
     }
 
     /// Flushes and closes; closing a closed writer does nothing and answers true.
     fn close(&self) -> Outcome<bool> {
+        if let Some(failure) = self.failure.borrow_mut().take() {
+            return Outcome::Failed(failure);
+        }
         let Some(mut file) = self.file.0.borrow_mut().take() else {
             return Outcome::Done(true);
         };
-        let result = Outcome::of(file.flush().map(|()| true), "Writer.close", &self.name);
-        match self.sync_failure.borrow_mut().take() {
-            Some(failure) => Outcome::Failed(failure),
-            None => result,
+        match file.flush() {
+            Ok(()) => Outcome::Done(true),
+            Err(error) => {
+                let _ = file.into_parts();
+                Outcome::Failed(super::Failure::new("Writer.close", &self.name, &error))
+            }
         }
     }
 }
@@ -897,6 +924,34 @@ mod durability_tests {
 
     #[cfg(unix)]
     #[test]
+    fn partial_write_poison_discards_buffer_and_rejects_further_mutation() {
+        use crate::extension::{RuntimePlan, RuntimePolicy};
+        use crate::fs::{FsExtension, READ_CAPABILITY, WRITE_CAPABILITY};
+        let path = std::env::temp_dir().join(format!("l3i-partial-write-{}", std::process::id()));
+        let policy = RuntimePolicy::new()
+            .compat_global("@dream/fs", "fs")
+            .capability(READ_CAPABILITY)
+            .capability(WRITE_CAPABILITY);
+        let plan = RuntimePlan::builder().policy(policy).extension(FsExtension).finalize().unwrap();
+        let runtime = crate::Runtime::from_plan(&plan).unwrap();
+        INJECT_PARTIAL_WRITE.with(|slot| slot.set(true));
+        runtime
+            .exec(&format!(
+                "local w = assert(fs.openWrite({:?})) local ok, message = w:write('record') \
+             assert(ok == nil and message:find('Writer.write')) \
+             local later, reason = w:write('later') assert(later == nil and reason == message) \
+             later, reason = w:truncate(0) assert(later == nil and reason == message) \
+             later, reason = w:syncAll() assert(later == nil and reason == message) \
+             local closed, closemsg = w:close() assert(closed == nil and closemsg == message)",
+                path.to_string_lossy()
+            ))
+            .unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"r");
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn injected_sync_failure_reaches_luau_and_close() {
         use crate::extension::{RuntimePlan, RuntimePolicy};
         use crate::fs::{FsExtension, READ_CAPABILITY, WRITE_CAPABILITY};
@@ -913,6 +968,8 @@ mod durability_tests {
                 "local w = assert(fs.openWrite({:?})) assert(w:write('record') == 6) \
              local ok, msg, kind = w:syncAll() \
              assert(ok == nil and kind == 'other' and msg:find('Writer.syncAll') and msg:find('os error 5')) \
+             local later, latermsg = w:write('later') assert(later == nil and latermsg == msg) \
+             later, latermsg = w:syncAll() assert(later == nil and latermsg == msg) \
              local closed, closemsg = w:close() assert(closed == nil and closemsg == msg)",
                 path.to_string_lossy()
             ))
