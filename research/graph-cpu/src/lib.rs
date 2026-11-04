@@ -19,7 +19,7 @@ mod tests;
 
 pub use graph::{Domain, Expr, Instruction, Step};
 pub use kernels::{CHUNK, Isa};
-pub use program::Program;
+pub use program::{Numeric, Program};
 pub use storage::{Budget, Shape, Storage, Tensor, View};
 
 pub(crate) const MAX_ELEMENTS: usize = 1_048_576;

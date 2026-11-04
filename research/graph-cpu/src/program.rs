@@ -38,13 +38,46 @@ pub(crate) struct Kernel {
     pub(crate) a: Operand,
     pub(crate) b: Operand,
 }
+/// Steps one compiled loop can hold.
+pub(crate) const TILE_STEPS: usize = 3;
+/// A `Numeric::Fast` tile's limit. Fused loops are compiled for two steps, a multiply-add counting
+/// as one, which keeps the number of compiled combinations in proportion.
+const FAST_TILE_STEPS: usize = 2;
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Op {
+    None,
+    Add,
+    Mul,
+    Relu,
+    /// `value * x + y`, fused. Only in `Numeric::Fast` tiles.
+    MulAdd,
+}
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct TileStep {
+    pub(crate) op: Op,
+    pub(crate) x: Operand,
+    pub(crate) y: Operand,
+}
+const NO_STEP: TileStep = TileStep { op: Op::None, x: Operand::Constant(0.0), y: Operand::Constant(0.0) };
+/// One compiled loop: `dst = start`, then each step applied to the running value, which stays in
+/// a SIMD register. `dst` is never one of the tile's own operands.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Tile {
+    pub(crate) dst: Dst,
+    pub(crate) start: Operand,
+    pub(crate) steps: [TileStep; TILE_STEPS],
+}
 /// A fused elementwise computation of one materialized value.
 #[derive(Debug)]
 pub(crate) struct Elementwise {
     pub(crate) shape: Shape,
     pub(crate) sources: Vec<Value>,
-    pub(crate) code: Vec<Kernel>,
+    pub(crate) tiles: Vec<Tile>,
+    /// Empty unless the program is `Numeric::Fast`.
+    pub(crate) fast: Vec<Tile>,
     pub(crate) registers: usize,
+    /// Operations before tiling: what the work bound charges per element.
+    pub(crate) operations: usize,
 }
 /// A materialized value: a caller's input, or an earlier stage's result.
 #[derive(Clone, Copy, Debug)]
@@ -71,6 +104,18 @@ pub struct Program {
     pub(crate) steps: Vec<Step>,
     pub(crate) slots: Vec<Shape>,
     stages: Vec<Stage>,
+    numeric: Numeric,
+}
+
+/// What a program promises numerically. Chosen at compile time, never implied.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Numeric {
+    /// Every add and multiply rounds to f32 separately: the same bits on every instantiation.
+    #[default]
+    Strict,
+    /// `a * b + c` may round once, where the host has FMA. More accurate per step and faster, but
+    /// results then depend on the host and on how the plan was tiled.
+    Fast,
 }
 
 /// One node as an elementwise stage sees it.
@@ -81,21 +126,144 @@ enum Planned {
     Source(Value),
 }
 
+/// Whether `operand` reads register `r`.
+fn reads(operand: Operand, r: u16) -> bool {
+    matches!(operand, Operand::Register(other) if other == r)
+}
+
+/// Merges single-operation kernels into tiles wherever one kernel's only reader is the next one.
+/// Add and multiply commute, except for NaN payload bits, which are not promised.
+fn tile(code: &[Kernel], numeric: Numeric) -> Vec<Tile> {
+    let limit = if numeric == Numeric::Fast { FAST_TILE_STEPS } else { TILE_STEPS };
+    let binary = |kernel: &Kernel| matches!(kernel.kind, Kind::Add | Kind::Mul);
+    let op = |kernel: &Kernel| match kernel.kind {
+        Kind::Add => Op::Add,
+        Kind::Mul => Op::Mul,
+        Kind::Relu => Op::Relu,
+        Kind::Copy => Op::None,
+    };
+    // Each value is one virtual register here, so its reader count decides whether it can merge.
+    let mut uses = vec![0usize; code.len()];
+    for kernel in code {
+        for operand in [Some(kernel.a), binary(kernel).then_some(kernel.b)].into_iter().flatten() {
+            if let Operand::Register(r) = operand {
+                uses[r as usize] += 1;
+            }
+        }
+    }
+    let mut tiles = Vec::with_capacity(code.len());
+    let mut index = 0;
+    while index < code.len() {
+        let first = code[index];
+        let mut dst = first.dst;
+        let mut steps: Vec<TileStep> = Vec::with_capacity(TILE_STEPS);
+        if first.kind != Kind::Copy {
+            steps.push(TileStep {
+                op: op(&first),
+                x: if binary(&first) { first.b } else { Operand::Constant(0.0) },
+                y: Operand::Constant(0.0),
+            });
+        }
+        while let (Dst::Register(r), Some(next)) = (dst, code.get(index + 1)) {
+            if next.kind == Kind::Copy {
+                break;
+            }
+            // The next kernel must read the running value exactly once, and nothing after it may
+            // read that value before the register is written again.
+            let other = match (reads(next.a, r), binary(next) && reads(next.b, r)) {
+                (true, false) => next.b,
+                (false, true) => next.a,
+                _ => break,
+            };
+            if uses[r as usize] != 1 {
+                break;
+            }
+            // A multiply followed by its add fuses, only when asked for.
+            let fuses = numeric == Numeric::Fast
+                && next.kind == Kind::Add
+                && steps.last().is_some_and(|step| step.op == Op::Mul);
+            if !fuses && steps.len() == limit {
+                break;
+            }
+            if fuses {
+                let last = steps.last_mut().expect("checked above");
+                *last = TileStep { op: Op::MulAdd, x: last.x, y: other };
+            } else {
+                steps.push(TileStep {
+                    op: op(next),
+                    x: if binary(next) { other } else { Operand::Constant(0.0) },
+                    y: Operand::Constant(0.0),
+                });
+            }
+            dst = next.dst;
+            index += 1;
+        }
+        let mut array = [NO_STEP; TILE_STEPS];
+        array[..steps.len()].copy_from_slice(&steps);
+        tiles.push(Tile { dst, start: first.a, steps: array });
+        index += 1;
+    }
+    tiles
+}
+
+/// Assigns physical registers to tiled virtual ones, reusing each after its last reader. A
+/// destination is chosen before its operands retire, so it is never one of them.
+fn allocate(tiles: &mut [Tile]) -> usize {
+    let mut last_read = std::collections::HashMap::new();
+    for (index, tile) in tiles.iter().enumerate() {
+        for operand in operands(tile) {
+            if let Operand::Register(r) = operand {
+                last_read.insert(r, index);
+            }
+        }
+    }
+    let mut physical = std::collections::HashMap::new();
+    let mut free: Vec<u16> = Vec::new();
+    let mut count = 0usize;
+    let rename = |operand: &mut Operand, physical: &std::collections::HashMap<u16, u16>| {
+        if let Operand::Register(r) = operand {
+            *r = physical[r];
+        }
+    };
+    for (index, tile) in tiles.iter_mut().enumerate() {
+        let retiring: Vec<u16> =
+            operands(tile).filter_map(|o| if let Operand::Register(r) = o { Some(r) } else { None }).collect();
+        rename(&mut tile.start, &physical);
+        for step in &mut tile.steps {
+            rename(&mut step.x, &physical);
+            rename(&mut step.y, &physical);
+        }
+        if let Dst::Register(virtual_register) = tile.dst {
+            let chosen = free.pop().unwrap_or_else(|| {
+                count += 1;
+                u16::try_from(count - 1).expect("bounded by MAX_NODES")
+            });
+            physical.insert(virtual_register, chosen);
+            tile.dst = Dst::Register(chosen);
+        }
+        for r in retiring {
+            if last_read[&r] == index && !free.contains(&physical[&r]) {
+                free.push(physical[&r]);
+            }
+        }
+    }
+    count
+}
+fn operands(tile: &Tile) -> impl Iterator<Item = Operand> + '_ {
+    std::iter::once(tile.start).chain(tile.steps.iter().flat_map(|step| [step.x, step.y]))
+}
+
 /// Plans one materialized elementwise root over the steps it needs.
 #[allow(clippy::too_many_lines)] // One linear pass over the nodes; splitting it hides the invariants.
-fn plan_elementwise(steps: &[Step], root: usize, boundary: &[Option<Value>]) -> Elementwise {
+fn plan_elementwise(steps: &[Step], root: usize, boundary: &[Option<Value>], numeric: Numeric) -> Elementwise {
     // Which nodes this stage computes, and each one's last reader, in topological order.
     let mut needed = vec![false; root + 1];
     needed[root] = true;
-    let mut last_use = vec![0usize; root + 1];
     for id in (0..=root).rev() {
         if !needed[id] || (id != root && boundary[id].is_some()) {
             continue;
         }
-        let mut read = |operand: usize| {
-            needed[operand] = true;
-            last_use[operand] = last_use[operand].max(id);
-        };
+        let mut read = |operand: usize| needed[operand] = true;
         match steps[id].op {
             Instruction::Add(a, b) | Instruction::Mul(a, b) => {
                 read(a);
@@ -108,8 +276,7 @@ fn plan_elementwise(steps: &[Step], root: usize, boundary: &[Option<Value>]) -> 
     let mut planned: Vec<Option<Planned>> = vec![None; root + 1];
     let mut sources: Vec<Value> = Vec::new();
     let mut code = Vec::new();
-    let mut free: Vec<u16> = Vec::new();
-    let mut registers = 0usize;
+    let mut virtual_registers = 0u16;
     for id in 0..=root {
         if !needed[id] {
             continue;
@@ -169,14 +336,11 @@ fn plan_elementwise(steps: &[Step], root: usize, boundary: &[Option<Value>]) -> 
         };
         let a_operand = operand(a);
         let b_operand = b.map_or(Operand::Constant(0.0), &mut operand);
-        // The destination is chosen before operands retire, so it never overlaps them.
         let dst = if id == root {
             Dst::Output
         } else {
-            Dst::Register(free.pop().unwrap_or_else(|| {
-                registers += 1;
-                u16::try_from(registers - 1).expect("bounded by MAX_NODES")
-            }))
+            virtual_registers += 1;
+            Dst::Register(virtual_registers - 1)
         };
         let kind = match steps[id].op {
             Instruction::Add(..) => Kind::Add,
@@ -186,15 +350,6 @@ fn plan_elementwise(steps: &[Step], root: usize, boundary: &[Option<Value>]) -> 
         code.push(Kernel { kind, dst, a: a_operand, b: b_operand });
         if let Dst::Register(r) = dst {
             planned[id] = Some(Planned::Register(r));
-        }
-        let (first, second) = (operands.0, operands.1);
-        for operand in [Some(first), second].into_iter().flatten() {
-            if last_use[operand] == id
-                && let Some(Planned::Register(r)) = planned[operand]
-                && !free.contains(&r)
-            {
-                free.push(r);
-            }
         }
     }
     // A root that is itself a constant, a folded expression or an input still fills the output.
@@ -209,11 +364,15 @@ fn plan_elementwise(steps: &[Step], root: usize, boundary: &[Option<Value>]) -> 
         };
         code.push(Kernel { kind: Kind::Copy, dst: Dst::Output, a, b: Operand::Constant(0.0) });
     }
-    Elementwise { shape: steps[root].shape, sources, code, registers }
+    let mut tiles = tile(&code, Numeric::Strict);
+    let mut registers = allocate(&mut tiles);
+    let mut fast = if numeric == Numeric::Fast { tile(&code, Numeric::Fast) } else { Vec::new() };
+    registers = registers.max(allocate(&mut fast));
+    Elementwise { shape: steps[root].shape, sources, tiles, fast, registers, operations: code.len() }
 }
 
 impl Program {
-    pub(crate) fn plan(steps: Vec<Step>, lease: Lease) -> Result<Self> {
+    pub(crate) fn plan(steps: Vec<Step>, lease: Lease, numeric: Numeric) -> Result<Self> {
         let root = steps.len() - 1;
         // The signature: dense slot ids, one shape each.
         let mut slots: Vec<Option<Shape>> = Vec::new();
@@ -264,7 +423,7 @@ impl Program {
                     inner: steps[a].shape.dims().1,
                 }
             } else {
-                Work::Elementwise(plan_elementwise(&steps, id, &boundary))
+                Work::Elementwise(plan_elementwise(&steps, id, &boundary, numeric))
             };
             boundary[id] = Some(Value::Temp(temps));
             temps += 1;
@@ -274,7 +433,7 @@ impl Program {
         let mut total = 0usize;
         for stage in &stages {
             let (shape, factor) = match &stage.work {
-                Work::Elementwise(e) => (e.shape, e.code.len()),
+                Work::Elementwise(e) => (e.shape, e.operations),
                 Work::MatMul { shape, inner, .. } => (*shape, *inner),
             };
             total = shape
@@ -305,9 +464,16 @@ impl Program {
                 stages[reader].release.push(u16::try_from(temp).expect("bounded by MAX_NODES"));
             }
         }
-        Ok(Self { _lease: lease, steps, slots, stages })
+        Ok(Self { _lease: lease, steps, slots, stages, numeric })
     }
 
+    /// The instantiation this program executes with on this host.
+    fn isa(&self) -> Isa {
+        match self.numeric {
+            Numeric::Strict => Isa::detect(),
+            Numeric::Fast => Isa::detect_fast(),
+        }
+    }
     /// Read-only adapter boundary. Plans can only be created by validation.
     #[must_use]
     pub fn steps(&self) -> &[Step] {
@@ -329,9 +495,14 @@ impl Program {
             match &stage.work {
                 Work::Elementwise(e) => {
                     writeln!(text, "stage {index}: elementwise {:?} registers={}", e.shape, e.registers).unwrap();
-                    for kernel in &e.code {
-                        writeln!(text, "  {:?} {:?} <- {:?}, {:?}", kernel.kind, kernel.dst, kernel.a, kernel.b)
-                            .unwrap();
+                    for (name, tiles) in [("strict", &e.tiles), ("fast", &e.fast)] {
+                        for tile in tiles {
+                            write!(text, "  {name} {:?} <- {:?}", tile.dst, tile.start).unwrap();
+                            for step in tile.steps.iter().take_while(|step| step.op != Op::None) {
+                                write!(text, ", {:?} {:?} {:?}", step.op, step.x, step.y).unwrap();
+                            }
+                            writeln!(text).unwrap();
+                        }
                     }
                 }
                 Work::MatMul { a, b, shape, .. } => {
@@ -358,7 +529,7 @@ impl Program {
         self.check(&views)?;
         let shape = self.output_shape();
         let mut output = budget.allocate(shape.elements()? * 4)?;
-        self.execute(&views, &mut output.bytes, budget, Isa::detect(), CHUNK)?;
+        self.execute(&views, &mut output.bytes, budget, self.isa(), CHUNK)?;
         Tensor::contiguous(output, shape)
     }
 
@@ -369,7 +540,7 @@ impl Program {
         if out.len() != self.output_shape().elements()? * 4 {
             return Err(error("output byte size mismatch"));
         }
-        self.execute(inputs, out, budget, Isa::detect(), CHUNK)
+        self.execute(inputs, out, budget, self.isa(), CHUNK)
     }
 
     /// `run_into` with the kernel instantiation and chunk chosen: tests and sweeps only.
@@ -390,6 +561,8 @@ impl Program {
     }
 
     fn execute(&self, inputs: &[View<'_>], out: &mut [u8], budget: &Arc<Budget>, isa: Isa, chunk: usize) -> Result<()> {
+        // A strict program never fuses, whatever it is asked to run with.
+        let isa = if isa == Isa::Fma && self.numeric == Numeric::Strict { Isa::Avx2 } else { isa };
         // Only a multi-stage program has temporaries; a single stage performs no heap work here.
         let last = self.stages.len() - 1;
         let mut temps: Vec<Option<Tensor>> = Vec::new();

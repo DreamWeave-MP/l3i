@@ -1,5 +1,5 @@
 //! Typed expression nodes: structure and shapes only. Nodes never hold input data.
-use crate::program::Program;
+use crate::program::{Numeric, Program};
 use crate::{Shape, error};
 use l3i::Result;
 use std::collections::HashMap;
@@ -132,6 +132,10 @@ impl Expr {
     }
     /// Validates the DAG into a [`Program`]. The result retains no node and no input data.
     pub fn compile(&self) -> Result<Program> {
+        self.compile_with(Numeric::Strict)
+    }
+    /// [`Self::compile`] under an explicit numerical mode.
+    pub fn compile_with(&self, numeric: Numeric) -> Result<Program> {
         type Ids = HashMap<*const Node, usize>;
         fn visit(expr: &Expr, ids: &mut Ids, steps: &mut Vec<Step>) -> Result<usize> {
             let key = Arc::as_ptr(&expr.0);
@@ -155,7 +159,7 @@ impl Expr {
         }
         let mut steps = Vec::new();
         visit(self, &mut Ids::new(), &mut steps)?;
-        Program::plan(steps, Lease::acquire(self.0.lease.domain.clone(), true)?)
+        Program::plan(steps, Lease::acquire(self.0.lease.domain.clone(), true)?, numeric)
     }
 }
 

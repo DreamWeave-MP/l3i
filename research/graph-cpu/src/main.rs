@@ -10,7 +10,7 @@ use l3i::{
     stack::Scope,
     userdata::{Owned, Userdata},
 };
-use l3i_graph_cpu_research::{Budget, Domain, Expr, Program, Shape, Tensor, View};
+use l3i_graph_cpu_research::{Budget, Domain, Expr, Numeric, Program, Shape, Tensor, View};
 
 struct TensorValue(Tensor);
 struct Expression(Expr);
@@ -107,7 +107,10 @@ impl LuauModule for Research {
             ty.method("mul", |a: &Expression, b: &Expression| a.0.mul(&b.0).map(|e| Owned(Expression(e))))?;
             ty.method("relu", |a: &Expression| a.0.relu().map(|e| Owned(Expression(e))))?;
             ty.method("matmul", |a: &Expression, b: &Expression| a.0.matmul(&b.0).map(|e| Owned(Expression(e))))?;
-            ty.method("compile", |a: &Expression| a.0.compile().map(|e| Owned(CompiledProgram(e))))
+            ty.method("compile", |a: &Expression| a.0.compile().map(|e| Owned(CompiledProgram(e))))?;
+            ty.method("compileFast", |a: &Expression| {
+                a.0.compile_with(Numeric::Fast).map(|e| Owned(CompiledProgram(e)))
+            })
         })?;
         module.userdata::<CompiledProgram>(None, |ty| {
             let budget = service_budget.clone();

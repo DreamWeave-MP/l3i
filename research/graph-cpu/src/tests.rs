@@ -614,3 +614,177 @@ fn external_owner_is_read_in_place_and_released_with_the_last_view() {
     drop(t);
     assert!(weak.upgrade().is_none());
 }
+
+/// Tiling must not change a strict result, and must actually merge what it can.
+#[test]
+fn chains_tile_into_fewer_loops_and_stay_strict() {
+    let budget = Budget::new(1 << 24);
+    let domain = domain();
+    let mut random = Random(0x0dd0_f00d_cafe_f00d);
+    let n = 2500;
+    let shape = Shape::Matrix(1, n);
+    let (a, b): (Vec<f32>, Vec<f32>) =
+        ((0..n).map(|_| random.moderate()).collect(), (0..n).map(|_| random.moderate()).collect());
+    let (ta, tb) = (tensor(&a, shape, &budget), tensor(&b, shape, &budget));
+    let x = Expr::slot(0, shape, domain.clone()).unwrap();
+    let y = Expr::slot(1, shape, domain.clone()).unwrap();
+    let scale = Expr::constant(0.3, domain.clone()).unwrap();
+    let mut v = x.add(&y).unwrap();
+    let mut expected: Vec<f32> = a.iter().zip(&b).map(|(p, q)| p + q).collect();
+    for round in 0..5 {
+        let operand = if round % 2 == 0 { &x } else { &y };
+        v = v.mul(&scale).unwrap().add(operand).unwrap().relu().unwrap();
+        let values = if round % 2 == 0 { &a } else { &b };
+        for (value, o) in expected.iter_mut().zip(values) {
+            let w = *value * 0.3 + o;
+            *value = if w <= 0.0 { 0.0 } else { w };
+        }
+    }
+    let program = v.compile().unwrap();
+    let tiles = program.dump().lines().filter(|line| line.trim_start().starts_with("strict")).count();
+    assert_eq!(tiles, 6, "16 operations in three-step loops:\n{}", program.dump());
+    let views = [ta.borrow(), tb.borrow()];
+    for isa in isas() {
+        let mut out = vec![0x55u8; n * 4];
+        program.run_with(&views, &mut out, &budget, isa, CHUNK).unwrap();
+        assert_same(&floats(&out), &expected, "tiled chain");
+    }
+    // A strict program stays strict even when handed the fusing instantiation.
+    if Isa::Fma.available() {
+        let mut out = vec![0x55u8; n * 4];
+        program.run_with(&views, &mut out, &budget, Isa::Fma, CHUNK).unwrap();
+        assert_same(&floats(&out), &expected, "strict program on Isa::Fma");
+    }
+    // A value read twice must not be merged away: y = x + 1, then y * y + y.
+    let one = Expr::constant(1.0, domain.clone()).unwrap();
+    let shared = x.add(&one).unwrap();
+    let dag = shared.mul(&shared).unwrap().add(&shared).unwrap().add(&y).unwrap().compile().unwrap();
+    let want: Vec<f32> = a
+        .iter()
+        .zip(&b)
+        .map(|(p, q)| {
+            let s = p + 1.0;
+            s * s + s + q
+        })
+        .collect();
+    assert_same(&read(&dag.run(&[&ta, &tb], &budget).unwrap()), &want, "shared value");
+}
+
+/// Fast mode fuses exactly the multiply-adds of the plan, and only those.
+#[test]
+fn fast_mode_fuses_multiply_adds_and_nothing_else() {
+    if !Isa::Fma.available() {
+        return;
+    }
+    let budget = Budget::new(1 << 24);
+    let domain = domain();
+    let mut random = Random(0xfeed_face_0bad_f00d);
+    let n = 2500;
+    let shape = Shape::Matrix(1, n);
+    let (a, b): (Vec<f32>, Vec<f32>) =
+        ((0..n).map(|_| random.moderate()).collect(), (0..n).map(|_| random.moderate()).collect());
+    let (ta, tb) = (tensor(&a, shape, &budget), tensor(&b, shape, &budget));
+    let x = Expr::slot(0, shape, domain.clone()).unwrap();
+    let y = Expr::slot(1, shape, domain.clone()).unwrap();
+    let c = Expr::constant(0.3, domain.clone()).unwrap();
+    // x*y + 0.3, then relu.
+    let graph = x.mul(&y).unwrap().add(&c).unwrap().relu().unwrap();
+    let fused: Vec<f32> = a
+        .iter()
+        .zip(&b)
+        .map(|(p, q)| {
+            let w = p.mul_add(*q, 0.3);
+            if w <= 0.0 { 0.0 } else { w }
+        })
+        .collect();
+    let strict: Vec<f32> = a
+        .iter()
+        .zip(&b)
+        .map(|(p, q)| {
+            let w = p * q + 0.3;
+            if w <= 0.0 { 0.0 } else { w }
+        })
+        .collect();
+    assert_ne!(differences_for_test(&fused, &strict), 0, "the fixture must distinguish fusion");
+    let fast = graph.compile_with(Numeric::Fast).unwrap();
+    assert_same(&read(&fast.run(&[&ta, &tb], &budget).unwrap()), &fused, "fast");
+    assert_same(&read(&graph.compile().unwrap().run(&[&ta, &tb], &budget).unwrap()), &strict, "strict");
+    // On an instantiation without FMA, a fast program runs its strict tiles.
+    let mut out = vec![0u8; n * 4];
+    fast.run_with(&[ta.borrow(), tb.borrow()], &mut out, &budget, Isa::Avx2, CHUNK).unwrap();
+    assert_same(&floats(&out), &strict, "fast program on AVX2");
+    // A product read twice is not fused: p = x*y; p + p.
+    let product = x.mul(&y).unwrap();
+    let twice = product.add(&product).unwrap().compile_with(Numeric::Fast).unwrap();
+    let want: Vec<f32> = a
+        .iter()
+        .zip(&b)
+        .map(|(p, q)| {
+            let w = p * q;
+            w + w
+        })
+        .collect();
+    assert_same(&read(&twice.run(&[&ta, &tb], &budget).unwrap()), &want, "shared product");
+    // Matmul: each element fuses its products, still in increasing k.
+    for (m, k, c) in [(9, 70, 37), (4, 16, 16), (3, 5, 2)] {
+        let (p, q): (Vec<f32>, Vec<f32>) =
+            ((0..m * k).map(|_| random.moderate()).collect(), (0..k * c).map(|_| random.moderate()).collect());
+        let mut want = vec![0.0f32; m * c];
+        for i in 0..m {
+            for j in 0..c {
+                let mut sum = 0.0f32;
+                for s in 0..k {
+                    sum = p[i * k + s].mul_add(q[s * c + j], sum);
+                }
+                want[i * c + j] = sum;
+            }
+        }
+        let (tp, tq) = (tensor(&p, Shape::Matrix(m, k), &budget), tensor(&q, Shape::Matrix(k, c), &budget));
+        let product = Expr::slot(0, Shape::Matrix(m, k), domain.clone())
+            .unwrap()
+            .matmul(&Expr::slot(1, Shape::Matrix(k, c), domain.clone()).unwrap())
+            .unwrap();
+        let fast = product.compile_with(Numeric::Fast).unwrap();
+        assert_same(&read(&fast.run(&[&tp, &tq], &budget).unwrap()), &want, "fused matmul");
+    }
+}
+
+fn differences_for_test(a: &[f32], b: &[f32]) -> usize {
+    a.iter().zip(b).filter(|(x, y)| !same(**x, **y)).count()
+}
+
+/// Output blocks and their row and column tails all keep strict order, around each block size.
+#[test]
+fn matmul_blocks_and_tails_match_the_ordered_triple_loop() {
+    let budget = Budget::new(1 << 26);
+    let domain = domain();
+    let mut random = Random(0x5eed_5eed_5eed_5eed);
+    for (m, k, n) in [
+        (4, 64, 16),
+        (5, 65, 17),
+        (3, 64, 15),
+        (8, 128, 32),
+        (7, 63, 33),
+        (1, 1, 1),
+        (16, 200, 48),
+        (4, 1, 16),
+        (9, 3, 16),
+    ] {
+        let (a, b): (Vec<f32>, Vec<f32>) =
+            ((0..m * k).map(|_| random.moderate()).collect(), (0..k * n).map(|_| random.moderate()).collect());
+        let expected = reference_matmul(&a, &b, m, k, n);
+        let (ta, tb) = (tensor(&a, Shape::Matrix(m, k), &budget), tensor(&b, Shape::Matrix(k, n), &budget));
+        let program = Expr::slot(0, Shape::Matrix(m, k), domain.clone())
+            .unwrap()
+            .matmul(&Expr::slot(1, Shape::Matrix(k, n), domain.clone()).unwrap())
+            .unwrap()
+            .compile()
+            .unwrap();
+        for isa in isas() {
+            let mut out = vec![0x55u8; m * n * 4];
+            program.run_with(&[ta.borrow(), tb.borrow()], &mut out, &budget, isa, CHUNK).unwrap();
+            assert_same(&floats(&out), &expected, &format!("{m}x{k}x{n} {isa:?}"));
+        }
+    }
+    assert_eq!(budget.used(), 0);
+}
