@@ -309,10 +309,7 @@ thread_local! {
 fn sync_directory(path: &[u8]) -> Result<Outcome<bool>> {
     let host = host_path("syncDirectory", path)?;
     #[cfg(unix)]
-    let result = std::fs::File::open(host).and_then(|file| {
-        if !file.metadata()?.is_dir() {
-            return Err(std::io::Error::new(std::io::ErrorKind::NotADirectory, "not a directory"));
-        }
+    let result = io::open_directory(&host).and_then(|file| {
         #[cfg(test)]
         if INJECT_DIRECTORY_ERROR.with(|slot| slot.replace(false)) {
             return Err(std::io::Error::from_raw_os_error(5));

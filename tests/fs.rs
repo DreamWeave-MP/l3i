@@ -258,6 +258,26 @@ fn fifos_and_devices_are_refused_instead_of_blocking_or_never_ending() {
         .unwrap();
 }
 
+#[cfg(unix)]
+#[test]
+fn directory_barriers_refuse_a_fifo_instead_of_blocking() {
+    let scratch = Scratch::new("fifo-directory");
+    let fifo = scratch.0.join("pipe");
+    let name = std::ffi::CString::new(fifo.display().to_string()).unwrap();
+    // SAFETY: a NUL-terminated path in a folder this test owns.
+    assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+    runtime()
+        .exec(&format!(
+            "local root = {} \
+             local value, message, kind = fs.syncDirectory(root .. '/pipe') \
+             assert(value == nil and kind == 'notADirectory' and message:find('syncDirectory'), message) \
+             value, message, kind = fs.createDurable(root .. '/pipe/file', 'data') \
+             assert(value == nil and kind == 'notADirectory' and message:find('createDurable'), message)",
+            scratch.lua()
+        ))
+        .unwrap();
+}
+
 #[test]
 fn locks_are_the_operating_systems_and_end_with_their_holder() {
     let scratch = Scratch::new("lock");

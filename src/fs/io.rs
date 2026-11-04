@@ -749,6 +749,14 @@ pub(crate) fn write_file(
     Ok(Outcome::of(write.write(&host, bytes).map(|()| bytes.len() as f64), "writeFile", path))
 }
 
+/// A directory handle to synchronize. `O_DIRECTORY` refuses anything else with `ENOTDIR`, where a
+/// plain open of a FIFO would block the thread until something opened its other end.
+#[cfg(unix)]
+pub(super) fn open_directory(path: &Path) -> io::Result<File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    OpenOptions::new().read(true).custom_flags(libc::O_DIRECTORY | libc::O_NONBLOCK).open(path)
+}
+
 /// Creates a new file, writes all bytes, synchronizes it and then its containing directory.
 /// An error after creation leaves the path in an uncertain state for the caller to recover.
 pub(crate) fn create_durable(path: &[u8], data: BytesView<'_>) -> Result<Outcome<f64>> {
@@ -758,10 +766,7 @@ pub(crate) fn create_durable(path: &[u8], data: BytesView<'_>) -> Result<Outcome
     #[cfg(unix)]
     let result = (|| -> io::Result<()> {
         let parent = host.parent().filter(|parent| !parent.as_os_str().is_empty()).unwrap_or(Path::new("."));
-        let directory = File::open(parent)?;
-        if !directory.metadata()?.is_dir() {
-            return Err(io::Error::new(io::ErrorKind::NotADirectory, "parent is not a directory"));
-        }
+        let directory = open_directory(parent)?;
         let mut file = OpenOptions::new().write(true).create_new(true).open(&host)?;
         file.write_all(bytes)?;
         file.sync_all()?;
