@@ -1,0 +1,131 @@
+# base commit 8094916 plus packed matmul, ceiling run 3 of 3, disposable fedora:44 container, user-space counters, no wall clock
+Model name:                              Intel(R) Core(TM) i7-10870H CPU @ 2.20GHz
+rustc 1.99.1 (58cf8f9c3 2026-10-13)
+# ceiling: generated loops (research only) and a vector interpreter against compiled tiles
+tiles_workload_strict                          n=16        median=1437         min=1437         max=1437         per_element=89.812 cycles=2484 l1d_misses=48 llc_misses=0
+generated_workload_strict                      n=16        median=203          min=203          max=203          per_element=12.688 cycles=619 l1d_misses=1 llc_misses=0
+generated_workload_strict_check n=16 differences=0 edge_differences=0 code_bytes=72 compile_instructions=7897
+tiles_workload_fast                            n=16        median=1746         min=1746         max=1746         per_element=109.125 cycles=1768 l1d_misses=10 llc_misses=0
+generated_workload_fast                        n=16        median=203          min=203          max=203          per_element=12.688 cycles=837 l1d_misses=1 llc_misses=0
+generated_workload_fast_check n=16 differences=0 edge_differences=0 code_bytes=72 compile_instructions=7394
+tiles_workload_strict                          n=1024      median=2279         min=2279         max=2279         per_element=2.226 cycles=2077 l1d_misses=56 llc_misses=0
+generated_workload_strict                      n=1024      median=1337         min=1337         max=1337         per_element=1.306 cycles=1254 l1d_misses=31 llc_misses=0
+generated_workload_strict_check n=1024 differences=0 edge_differences=0 code_bytes=72 compile_instructions=7394
+tiles_workload_fast                            n=1024      median=2928         min=2928         max=2928         per_element=2.859 cycles=2466 l1d_misses=122 llc_misses=0
+generated_workload_fast                        n=1024      median=1337         min=1337         max=1337         per_element=1.306 cycles=1252 l1d_misses=34 llc_misses=0
+generated_workload_fast_check n=1024 differences=0 edge_differences=0 code_bytes=72 compile_instructions=7587
+tiles_workload_strict                          n=16384     median=17099        min=17099        max=17099        per_element=1.044 cycles=13110 l1d_misses=3166 llc_misses=0
+generated_workload_strict                      n=16384     median=18617        min=18617        max=18617        per_element=1.136 cycles=12790 l1d_misses=3115 llc_misses=0
+generated_workload_strict_check n=16384 differences=0 edge_differences=0 code_bytes=72 compile_instructions=7394
+tiles_workload_fast                            n=16384     median=24363        min=24363        max=24363        per_element=1.487 cycles=16994 l1d_misses=3206 llc_misses=0
+generated_workload_fast                        n=16384     median=18617        min=18617        max=18618        per_element=1.136 cycles=12802 l1d_misses=3115 llc_misses=0
+generated_workload_fast_check n=16384 differences=0 edge_differences=0 code_bytes=72 compile_instructions=7394
+tiles_workload_strict                          n=65536     median=64523        min=64523        max=64524        per_element=0.985 cycles=66528 l1d_misses=12424 llc_misses=5
+generated_workload_strict                      n=65536     median=73913        min=73913        max=73913        per_element=1.128 cycles=64230 l1d_misses=12385 llc_misses=0
+generated_workload_strict_check n=65536 differences=0 edge_differences=0 code_bytes=72 compile_instructions=7537
+tiles_workload_fast                            n=65536     median=92955        min=92955        max=92955        per_element=1.418 cycles=77784 l1d_misses=12476 llc_misses=0
+generated_workload_fast                        n=65536     median=73913        min=73913        max=73913        per_element=1.128 cycles=64280 l1d_misses=12388 llc_misses=0
+generated_workload_fast_check n=65536 differences=0 edge_differences=0 code_bytes=72 compile_instructions=7394
+tiles_workload_strict                          n=1048576   median=1013003      min=1013003      max=1013004      per_element=0.966 cycles=1272750 l1d_misses=198059 llc_misses=4944
+generated_workload_strict                      n=1048576   median=1179833      min=1179833      max=1179834      per_element=1.125 cycles=1240081 l1d_misses=198150 llc_misses=4112
+generated_workload_strict_check n=1048576 differences=0 edge_differences=0 code_bytes=72 compile_instructions=7394
+tiles_workload_fast                            n=1048576   median=1464795      min=1464795      max=1464796      per_element=1.397 cycles=1606608 l1d_misses=198824 llc_misses=4274
+generated_workload_fast                        n=1048576   median=1179833      min=1179833      max=1179834      per_element=1.125 cycles=1226470 l1d_misses=198167 llc_misses=3695
+generated_workload_fast_check n=1048576 differences=0 edge_differences=0 code_bytes=72 compile_instructions=7484
+tiles_chain16_strict                           n=16        median=3763         min=3763         max=3763         per_element=235.188 cycles=2687 l1d_misses=13 llc_misses=0
+generated_chain16_strict                       n=16        median=239          min=239          max=239          per_element=14.938 cycles=707 l1d_misses=1 llc_misses=0
+generated_chain16_strict_check n=16 differences=0 edge_differences=0 code_bytes=166 compile_instructions=23229
+tiles_chain16_fast                             n=16        median=3690         min=3690         max=3690         per_element=230.625 cycles=2533 l1d_misses=18 llc_misses=0
+generated_chain16_fast                         n=16        median=229          min=229          max=229          per_element=14.312 cycles=685 l1d_misses=1 llc_misses=0
+generated_chain16_fast_check n=16 differences=0 edge_differences=0 code_bytes=141 compile_instructions=22747
+tiles_chain16_strict                           n=1024      median=8481         min=8481         max=8481         per_element=8.282 cycles=4305 l1d_misses=282 llc_misses=0
+generated_chain16_strict                       n=1024      median=3641         min=3641         max=3641         per_element=3.556 cycles=3561 l1d_misses=34 llc_misses=0
+generated_chain16_strict_check n=1024 differences=0 edge_differences=0 code_bytes=166 compile_instructions=23200
+tiles_chain16_fast                             n=1024      median=7801         min=7801         max=7801         per_element=7.618 cycles=4026 l1d_misses=281 llc_misses=0
+generated_chain16_fast                         n=1024      median=3001         min=3001         max=3001         per_element=2.931 cycles=2680 l1d_misses=34 llc_misses=0
+generated_chain16_fast_check n=1024 differences=0 edge_differences=0 code_bytes=141 compile_instructions=22844
+tiles_chain16_strict                           n=16384     median=92251        min=92251        max=92252        per_element=5.631 cycles=37018 l1d_misses=3651 llc_misses=0
+generated_chain16_strict                       n=16384     median=55481        min=55481        max=55481        per_element=3.386 cycles=48202 l1d_misses=3110 llc_misses=0
+generated_chain16_strict_check n=16384 differences=0 edge_differences=0 code_bytes=166 compile_instructions=23103
+tiles_chain16_fast                             n=16384     median=82012        min=82012        max=82012        per_element=5.006 cycles=34504 l1d_misses=3621 llc_misses=0
+generated_chain16_fast                         n=16384     median=45241        min=45241        max=45241        per_element=2.761 cycles=34311 l1d_misses=3119 llc_misses=0
+generated_chain16_fast_check n=16384 differences=0 edge_differences=0 code_bytes=141 compile_instructions=22881
+tiles_chain16_strict                           n=65536     median=360134       min=360134       max=360135       per_element=5.495 cycles=155355 l1d_misses=14297 llc_misses=0
+generated_chain16_strict                       n=65536     median=221369       min=221369       max=221370       per_element=3.378 cycles=199991 l1d_misses=12335 llc_misses=0
+generated_chain16_strict_check n=65536 differences=0 edge_differences=0 code_bytes=166 compile_instructions=23171
+tiles_chain16_fast                             n=65536     median=319372       min=319372       max=319373       per_element=4.873 cycles=146791 l1d_misses=13995 llc_misses=0
+generated_chain16_fast                         n=65536     median=180409       min=180409       max=180410       per_element=2.753 cycles=142701 l1d_misses=12382 llc_misses=0
+generated_chain16_fast_check n=65536 differences=0 edge_differences=0 code_bytes=141 compile_instructions=22881
+tiles_chain16_strict                           n=1048576   median=5717895      min=5717894      max=5717896      per_element=5.453 cycles=2891059 l1d_misses=227904 llc_misses=9554
+generated_chain16_strict                       n=1048576   median=3539130      min=3539129      max=3539131      per_element=3.375 cycles=3379470 l1d_misses=197344 llc_misses=1310
+generated_chain16_strict_check n=1048576 differences=0 edge_differences=0 code_bytes=166 compile_instructions=23171
+tiles_chain16_fast                             n=1048576   median=5066573      min=5066572      max=5066573      per_element=4.832 cycles=2817596 l1d_misses=225834 llc_misses=10662
+generated_chain16_fast                         n=1048576   median=2883770      min=2883769      max=2883770      per_element=2.750 cycles=2488643 l1d_misses=198012 llc_misses=1610
+generated_chain16_fast_check n=1048576 differences=0 edge_differences=0 code_bytes=141 compile_instructions=22881
+tiles_horner_strict                            n=16        median=3828         min=3828         max=3828         per_element=239.250 cycles=2493 l1d_misses=12 llc_misses=0
+generated_horner_strict                        n=16        median=233          min=233          max=233          per_element=14.562 cycles=717 l1d_misses=1 llc_misses=0
+generated_horner_strict_check n=16 differences=0 edge_differences=0 code_bytes=168 compile_instructions=28636
+tiles_horner_fast                              n=16        median=2755         min=2755         max=2755         per_element=172.188 cycles=1910 l1d_misses=13 llc_misses=0
+generated_horner_fast                          n=16        median=233          min=233          max=233          per_element=14.562 cycles=717 l1d_misses=1 llc_misses=0
+generated_horner_fast_check n=16 differences=8 edge_differences=0 code_bytes=168 compile_instructions=28660
+tiles_horner_strict                            n=1024      median=7612         min=7612         max=7613         per_element=7.434 cycles=4194 l1d_misses=276 llc_misses=0
+generated_horner_strict                        n=1024      median=2879         min=2879         max=2879         per_element=2.812 cycles=2719 l1d_misses=33 llc_misses=0
+generated_horner_strict_check n=1024 differences=0 edge_differences=0 code_bytes=168 compile_instructions=28631
+tiles_horner_fast                              n=1024      median=5527         min=5527         max=5527         per_element=5.397 cycles=3210 l1d_misses=234 llc_misses=0
+generated_horner_fast                          n=1024      median=2879         min=2879         max=2879         per_element=2.812 cycles=2698 l1d_misses=32 llc_misses=0
+generated_horner_fast_check n=1024 differences=629 edge_differences=0 code_bytes=168 compile_instructions=28662
+tiles_horner_strict                            n=16384     median=77772        min=77772        max=77772        per_element=4.747 cycles=37777 l1d_misses=3368 llc_misses=0
+generated_horner_strict                        n=16384     median=43199        min=43199        max=43199        per_element=2.637 cycles=33643 l1d_misses=3125 llc_misses=0
+generated_horner_strict_check n=16384 differences=0 edge_differences=0 code_bytes=168 compile_instructions=28631
+tiles_horner_fast                              n=16384     median=56302        min=56302        max=56302        per_element=3.436 cycles=34231 l1d_misses=3582 llc_misses=0
+generated_horner_fast                          n=16384     median=43199        min=43199        max=43199        per_element=2.637 cycles=33707 l1d_misses=3127 llc_misses=0
+generated_horner_fast_check n=16384 differences=9648 edge_differences=0 code_bytes=168 compile_instructions=28662
+tiles_horner_strict                            n=65536     median=302397       min=302397       max=302397       per_element=4.614 cycles=159231 l1d_misses=12897 llc_misses=0
+generated_horner_strict                        n=65536     median=172223       min=172223       max=172223       per_element=2.628 cycles=141230 l1d_misses=12394 llc_misses=0
+generated_horner_strict_check n=65536 differences=0 edge_differences=0 code_bytes=168 compile_instructions=28636
+tiles_horner_fast                              n=65536     median=218782       min=218782       max=218782       per_element=3.338 cycles=143288 l1d_misses=13870 llc_misses=0
+generated_horner_fast                          n=65536     median=172223       min=172223       max=172224       per_element=2.628 cycles=141209 l1d_misses=12391 llc_misses=0
+generated_horner_fast_check n=65536 differences=38496 edge_differences=0 code_bytes=168 compile_instructions=28662
+tiles_horner_strict                            n=1048576   median=4793278      min=4793277      max=4793278      per_element=4.571 cycles=3108874 l1d_misses=206898 llc_misses=12004
+generated_horner_strict                        n=1048576   median=2752704      min=2752703      max=2752705      per_element=2.625 cycles=2495665 l1d_misses=198251 llc_misses=2083
+generated_horner_strict_check n=1048576 differences=0 edge_differences=0 code_bytes=168 compile_instructions=28636
+tiles_horner_fast                              n=1048576   median=3468383      min=3468382      max=3468384      per_element=3.308 cycles=2633906 l1d_misses=222796 llc_misses=8792
+generated_horner_fast                          n=1048576   median=2752704      min=2752703      max=2752704      per_element=2.625 cycles=2491086 l1d_misses=198226 llc_misses=1792
+generated_horner_fast_check n=1048576 differences=616657 edge_differences=0 code_bytes=168 compile_instructions=28662
+tiles_residual_strict                          n=16        median=2538         min=2538         max=2538         per_element=158.625 cycles=2227 l1d_misses=12 llc_misses=0
+generated_residual_strict                      n=16        median=217          min=217          max=217          per_element=13.562 cycles=645 l1d_misses=2 llc_misses=0
+generated_residual_strict_check n=16 differences=0 edge_differences=0 code_bytes=108 compile_instructions=13335
+tiles_residual_fast                            n=16        median=2537         min=2537         max=2537         per_element=158.562 cycles=2044 l1d_misses=8 llc_misses=0
+generated_residual_fast                        n=16        median=217          min=217          max=217          per_element=13.562 cycles=646 l1d_misses=3 llc_misses=0
+generated_residual_fast_check n=16 differences=0 edge_differences=0 code_bytes=108 compile_instructions=13346
+tiles_residual_strict                          n=1024      median=5129         min=5129         max=5129         per_element=5.009 cycles=3473 l1d_misses=384 llc_misses=0
+generated_residual_strict                      n=1024      median=2233         min=2233         max=2233         per_element=2.181 cycles=1713 l1d_misses=32 llc_misses=0
+generated_residual_strict_check n=1024 differences=0 edge_differences=0 code_bytes=108 compile_instructions=13324
+tiles_residual_fast                            n=1024      median=5128         min=5128         max=5128         per_element=5.008 cycles=3575 l1d_misses=388 llc_misses=0
+generated_residual_fast                        n=1024      median=2233         min=2233         max=2233         per_element=2.181 cycles=1643 l1d_misses=33 llc_misses=0
+generated_residual_fast_check n=1024 differences=62 edge_differences=0 code_bytes=108 compile_instructions=13346
+tiles_residual_strict                          n=16384     median=52184        min=52184        max=52184        per_element=3.185 cycles=26847 l1d_misses=3623 llc_misses=0
+generated_residual_strict                      n=16384     median=32953        min=32953        max=32953        per_element=2.011 cycles=19346 l1d_misses=3164 llc_misses=0
+generated_residual_strict_check n=16384 differences=0 edge_differences=0 code_bytes=108 compile_instructions=13236
+tiles_residual_fast                            n=16384     median=52183        min=52183        max=52183        per_element=3.185 cycles=25908 l1d_misses=3638 llc_misses=0
+generated_residual_fast                        n=16384     median=32953        min=32953        max=32953        per_element=2.011 cycles=18060 l1d_misses=3170 llc_misses=0
+generated_residual_fast_check n=16384 differences=1064 edge_differences=0 code_bytes=108 compile_instructions=13258
+tiles_residual_strict                          n=65536     median=202760       min=202760       max=202760       per_element=3.094 cycles=110789 l1d_misses=13548 llc_misses=0
+generated_residual_strict                      n=65536     median=131257       min=131257       max=131258       per_element=2.003 cycles=88027 l1d_misses=12470 llc_misses=0
+generated_residual_strict_check n=65536 differences=0 edge_differences=0 code_bytes=108 compile_instructions=13236
+tiles_residual_fast                            n=65536     median=202759       min=202759       max=202759       per_element=3.094 cycles=108585 l1d_misses=13521 llc_misses=0
+generated_residual_fast                        n=65536     median=131257       min=131257       max=131257       per_element=2.003 cycles=84240 l1d_misses=12485 llc_misses=0
+generated_residual_fast_check n=65536 differences=4367 edge_differences=0 code_bytes=108 compile_instructions=13258
+tiles_residual_strict                          n=1048576   median=3214281      min=3214280      max=3214282      per_element=3.065 cycles=2230592 l1d_misses=214316 llc_misses=4513
+generated_residual_strict                      n=1048576   median=2097338      min=2097337      max=2097338      per_element=2.000 cycles=1912900 l1d_misses=199194 llc_misses=3855
+generated_residual_strict_check n=1048576 differences=0 edge_differences=0 code_bytes=108 compile_instructions=13236
+tiles_residual_fast                            n=1048576   median=3214280      min=3214279      max=3214280      per_element=3.065 cycles=2515770 l1d_misses=214093 llc_misses=8063
+generated_residual_fast                        n=1048576   median=2097337      min=2097337      max=2097338      per_element=2.000 cycles=1629710 l1d_misses=199401 llc_misses=2400
+generated_residual_fast_check n=1048576 differences=70624 edge_differences=0 code_bytes=108 compile_instructions=13258
+generated_random_dags compared=393 refused=7 wrong=0
+interpreter_chain16_strict                     n=1024      median=68018        min=68018        max=68018        per_element=66.424 cycles=27813 l1d_misses=40 llc_misses=0
+interpreter_chain16_check n=1024 differences=0
+interpreter_chain16_strict                     n=65536     median=4350003      min=4350002      max=4350003      per_element=66.376 cycles=1734485 l1d_misses=12338 llc_misses=0
+interpreter_chain16_check n=65536 differences=0
+interpreter_chain16_strict                     n=1048576   median=69599289     min=69599288     max=69599293     per_element=66.375 cycles=27989320 l1d_misses=197665 llc_misses=2220
+interpreter_chain16_check n=1048576 differences=0

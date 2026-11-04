@@ -19,3 +19,7 @@ for pass in $(seq 1 "$runs"); do
     done
 done
 run diagnose > "$reports/compare-diagnosis.txt"
+for pass in $(seq 1 "$runs"); do
+    run ceiling > "$reports/ceiling-$pass.txt"
+    run model > "$reports/model-$pass.txt"
+done

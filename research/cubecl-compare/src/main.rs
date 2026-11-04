@@ -24,8 +24,13 @@
     clippy::doc_markdown,
     clippy::cast_sign_loss,
     clippy::type_complexity,
-    clippy::semicolon_if_nothing_returned
+    clippy::semicolon_if_nothing_returned,
+    clippy::match_same_arms,
+    clippy::needless_for_each,
 )]
+mod jit;
+mod model;
+
 use cubecl::bytes::Bytes;
 use cubecl::cpu::{CpuDevice, CpuRuntime};
 use cubecl::prelude::*;
@@ -46,7 +51,8 @@ const MLP_SIDES: [usize; 2] = [48, 240];
 const COEFFICIENTS: [f32; 7] = [0.3, -0.7, 0.11, 0.5, -0.25, 0.9, 0.13];
 
 // ---------------------------------------------------------------------------------------------
-// The counter: `perf_event_open`, one hardware counter inherited by every later thread.
+// The counters: `perf_event_open`, each inherited by every later thread. No wall clock anywhere:
+// cycles and cache misses are what show the memory stalls instructions cannot.
 // ---------------------------------------------------------------------------------------------
 #[repr(C)]
 struct PerfEventAttr {
@@ -57,12 +63,12 @@ struct PerfEventAttr {
 }
 struct Counter(i32);
 impl Counter {
-    fn open() -> Self {
+    fn open(kind: u32, config: u64) -> Self {
         // `disabled | inherit | exclude_kernel | exclude_hv`.
         let flags = 1u64 | (1 << 1) | (1 << 5) | (1 << 6);
         let mut rest = [0u64; 13];
         rest[3] = flags; // sample_period, sample_type, read_format, then the flag word.
-        let mut attr = PerfEventAttr { kind: 0, size: std::mem::size_of::<PerfEventAttr>() as u32, config: 1, rest };
+        let mut attr = PerfEventAttr { kind, size: std::mem::size_of::<PerfEventAttr>() as u32, config, rest };
         // SAFETY: a well-formed attribute block, for this process on any CPU.
         let fd = unsafe { libc::syscall(libc::SYS_perf_event_open, &raw mut attr, 0, -1, -1, 0u64) };
         assert!(fd >= 0, "perf_event_open failed: {}", std::io::Error::last_os_error());
@@ -79,36 +85,63 @@ impl Counter {
         value
     }
 }
-static COUNTER: OnceLock<Counter> = OnceLock::new();
+/// Instructions, cycles, L1 data read misses and last-level read misses, in that order.
+static COUNTERS: OnceLock<[Counter; 4]> = OnceLock::new();
 const ENABLE: libc::c_ulong = 0x2400;
 const DISABLE: libc::c_ulong = 0x2401;
-/// The instructions `body` retires across every thread.
-fn count(body: impl FnOnce()) -> u64 {
-    // A difference, because an exited thread's count folds into a total RESET does not clear.
-    let counter = COUNTER.get().expect("opened first thing in main");
-    let before = counter.read();
-    counter.control(ENABLE);
+
+#[derive(Clone, Copy, Default)]
+pub(crate) struct Counts {
+    pub(crate) instructions: u64,
+    pub(crate) cycles: u64,
+    pub(crate) l1d_misses: u64,
+    pub(crate) llc_misses: u64,
+}
+impl Counts {
+    pub(crate) fn plus(self, other: Self) -> Self {
+        Self {
+            instructions: self.instructions + other.instructions,
+            cycles: self.cycles + other.cycles,
+            l1d_misses: self.l1d_misses + other.l1d_misses,
+            llc_misses: self.llc_misses + other.llc_misses,
+        }
+    }
+}
+/// Everything `body` does across every thread. Differences, because an exited thread's count folds
+/// into a total that RESET does not clear.
+pub(crate) fn count_all(body: &mut dyn FnMut()) -> Counts {
+    let counters = COUNTERS.get().expect("opened first thing in main");
+    let before = [counters[0].read(), counters[1].read(), counters[2].read(), counters[3].read()];
+    counters.iter().for_each(|c| c.control(ENABLE));
     body();
-    counter.control(DISABLE);
-    counter.read() - before
+    counters.iter().for_each(|c| c.control(DISABLE));
+    Counts {
+        instructions: counters[0].read() - before[0],
+        cycles: counters[1].read() - before[1],
+        l1d_misses: counters[2].read() - before[2],
+        llc_misses: counters[3].read() - before[3],
+    }
+}
+fn count(mut body: impl FnMut()) -> u64 {
+    count_all(&mut body).instructions
 }
 fn row(label: &str, n: usize, mut body: impl FnMut()) {
-    let empty = {
-        let mut samples: Vec<u64> = (0..SAMPLES).map(|_| count(|| {})).collect();
-        samples.sort_unstable();
-        samples[SAMPLES / 2]
+    let median = |mut values: Vec<u64>| {
+        values.sort_unstable();
+        (values[values.len() / 2], values[0], values[values.len() - 1])
     };
+    let empty = median((0..SAMPLES).map(|_| count(|| {})).collect()).0;
     for _ in 0..WARMUP {
         body();
     }
-    let mut samples: Vec<u64> = (0..SAMPLES).map(|_| count(&mut body).saturating_sub(empty)).collect();
-    samples.sort_unstable();
+    let samples: Vec<Counts> = (0..SAMPLES).map(|_| count_all(&mut body)).collect();
+    let (instructions, least, most) = median(samples.iter().map(|s| s.instructions.saturating_sub(empty)).collect());
+    let (cycles, ..) = median(samples.iter().map(|s| s.cycles).collect());
+    let (l1d, ..) = median(samples.iter().map(|s| s.l1d_misses).collect());
+    let (llc, ..) = median(samples.iter().map(|s| s.llc_misses).collect());
     println!(
-        "{label:<46} n={n:<9} median={:<12} min={:<12} max={:<12} per_element={:.3}",
-        samples[SAMPLES / 2],
-        samples[0],
-        samples[SAMPLES - 1],
-        samples[SAMPLES / 2] as f64 / n as f64
+        "{label:<46} n={n:<9} median={instructions:<12} min={least:<12} max={most:<12} per_element={:.3} cycles={cycles} l1d_misses={l1d} llc_misses={llc}",
+        instructions as f64 / n as f64,
     );
 }
 
@@ -618,7 +651,7 @@ fn bytes_of(values: &[f32]) -> Vec<u8> {
     values.iter().flat_map(|v| v.to_le_bytes()).collect()
 }
 /// Same-magnitude values that round on every operation, with edge values mixed in where `edges`.
-fn hard_fixture(n: usize, seed: u32, edges: bool) -> Vec<f32> {
+pub(crate) fn hard_fixture(n: usize, seed: u32, edges: bool) -> Vec<f32> {
     let mut state = seed;
     (0..n)
         .map(|i| {
@@ -1169,6 +1202,186 @@ fn cubecl_side() {
     }
 }
 
+/// A compact interpreter that runs one vector at a time through a small register file, so several
+/// operations share registers with no generated code. The alternative to tiles the review proposed.
+#[derive(Clone, Copy)]
+enum Micro {
+    Load(u8, u8),
+    Add(u8, u8, u8),
+    Mul(u8, u8, u8),
+    Relu(u8, u8),
+    Constant(u8, f32),
+}
+#[target_feature(enable = "avx2")]
+fn interpret(code: &[Micro], inputs: [&[[u8; 4]]; 2], out: &mut [[u8; 4]]) {
+    let mut registers = [[0.0f32; 8]; 8];
+    for (index, target) in out.as_chunks_mut::<8>().0.iter_mut().enumerate() {
+        for op in code {
+            match *op {
+                Micro::Load(r, s) => {
+                    let from = &inputs[s as usize][index * 8..][..8];
+                    for (slot, e) in registers[r as usize].iter_mut().zip(from) {
+                        *slot = f32::from_le_bytes(*e);
+                    }
+                }
+                Micro::Add(d, a, b) => {
+                    let (x, y) = (registers[a as usize], registers[b as usize]);
+                    registers[d as usize] = std::array::from_fn(|i| x[i] + y[i]);
+                }
+                Micro::Mul(d, a, b) => {
+                    let (x, y) = (registers[a as usize], registers[b as usize]);
+                    registers[d as usize] = std::array::from_fn(|i| x[i] * y[i]);
+                }
+                Micro::Relu(d, a) => {
+                    let x = registers[a as usize];
+                    registers[d as usize] = std::array::from_fn(|i| relu(x[i]));
+                }
+                Micro::Constant(d, v) => registers[d as usize] = [v; 8],
+            }
+        }
+        for (slot, value) in target.iter_mut().zip(registers[0]) {
+            *slot = value.to_le_bytes();
+        }
+    }
+}
+
+/// What one generated loop could buy: the generator against the tiles, by the same counters, and
+/// the compact interpreter, on one thread. Answers the ceiling question and nothing more.
+fn ceiling() {
+    pin_current(0);
+    println!("# ceiling: generated loops (research only) and a vector interpreter against compiled tiles");
+    let graphs: [(&str, Graph, Oracle); 4] = [
+        ("workload", graph_workload, oracle_workload),
+        ("chain16", graph_chain, oracle_chain),
+        ("horner", graph_horner, oracle_horner),
+        ("residual", graph_residual, oracle_residual_strict),
+    ];
+    let domain = Domain::new(1 << 16, 1 << 12);
+    let budget = Budget::new(1 << 30);
+    for (name, graph, oracle) in graphs {
+        for n in ELEMENTS {
+            let shape = Shape::Matrix(1, n);
+            let (a, b) = (hard_fixture(n, 1, false), hard_fixture(n, 2, false));
+            let (ea, eb) = (hard_fixture(n, 1, true), hard_fixture(n, 2, true));
+            let (ab, bb) = (bytes_of(&a), bytes_of(&b));
+            let (eab, ebb) = (bytes_of(&ea), bytes_of(&eb));
+            let mut out = vec![0u8; n * 4];
+            for (mode, numeric, step) in [
+                ("strict", Numeric::Strict, strict_step as fn(f32, f32, f32) -> f32),
+                ("fast", Numeric::Fast, fused_step),
+            ] {
+                let program = graph(shape, &domain).compile_with(numeric).unwrap();
+                let views = [View::contiguous(&ab, shape).unwrap(), View::contiguous(&bb, shape).unwrap()];
+                row(&format!("tiles_{name}_{mode}"), n, || {
+                    program.run_into(black_box(&views), black_box(&mut out), &budget).unwrap();
+                });
+                let mut compiled = None;
+                let compile = count(|| compiled = Some(jit::compile(&program, numeric)));
+                let compiled = match compiled.expect("set above") {
+                    Ok(compiled) => compiled,
+                    Err(reason) => {
+                        println!("generated_{name}_{mode} n={n} refused: {reason}");
+                        continue;
+                    }
+                };
+                row(&format!("generated_{name}_{mode}"), n, || {
+                    compiled.run(&[black_box(&ab), black_box(&bb)], black_box(&mut out));
+                });
+                let plain = differences(&floats(&out), &apply(oracle, &a, &b, step));
+                let edge = if mode == "strict" {
+                    compiled.run(&[&eab, &ebb], &mut out);
+                    differences(&floats(&out), &apply(oracle, &ea, &eb, step))
+                } else {
+                    0
+                };
+                println!(
+                    "generated_{name}_{mode}_check n={n} differences={plain} edge_differences={edge} code_bytes={} compile_instructions={compile}",
+                    compiled.code_bytes
+                );
+            }
+        }
+    }
+    // The generated strict loop against the plan on random DAGs: the check a prototype most needs.
+    let mut state = 0x2545_f491u32;
+    let mut next = move |limit: usize| {
+        state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        (state >> 8) as usize % limit
+    };
+    let (mut compared, mut refused, mut wrong) = (0, 0, 0);
+    for case in 0..400u32 {
+        let n = 64;
+        let shape = Shape::Matrix(1, n);
+        let (x, y) = slots(shape, &domain);
+        let mut values = vec![x, y];
+        for _ in 0..(2 + next(14)) {
+            let (p, q) = (next(values.len()), next(values.len()));
+            let node = match next(4) {
+                0 => values[p].add(&values[q]).unwrap(),
+                1 => values[p].mul(&values[q]).unwrap(),
+                2 => values[p].relu().unwrap(),
+                _ => values[p].mul(&Expr::constant(0.3, domain.clone()).unwrap()).unwrap().add(&values[q]).unwrap(),
+            };
+            values.push(node);
+        }
+        let root = values.iter().skip(1).fold(values[0].clone(), |sum, v| sum.add(v).unwrap());
+        let edges = case % 2 == 0;
+        let (a, b) = (hard_fixture(n, case + 1, edges), hard_fixture(n, case + 1000, edges));
+        let (ab, bb) = (bytes_of(&a), bytes_of(&b));
+        let program = root.compile().unwrap();
+        let views = [View::contiguous(&ab, shape).unwrap(), View::contiguous(&bb, shape).unwrap()];
+        let mut expected = vec![0u8; n * 4];
+        program.reference_into(&views, &mut expected);
+        match jit::compile(&program, Numeric::Strict) {
+            Ok(compiled) => {
+                let mut out = vec![0u8; n * 4];
+                compiled.run(&[&ab, &bb], &mut out);
+                compared += 1;
+                if differences(&floats(&out), &floats(&expected)) != 0 {
+                    wrong += 1;
+                }
+            }
+            Err(_) => refused += 1,
+        }
+    }
+    println!("generated_random_dags compared={compared} refused={refused} wrong={wrong}");
+    // The interpreter on the chain, the shape it was proposed for.
+    let chain: Vec<Micro> = vec![
+        Micro::Constant(7, 0.3),
+        Micro::Load(1, 0),
+        Micro::Load(2, 1),
+        Micro::Add(0, 1, 2),
+        Micro::Mul(0, 0, 7),
+        Micro::Add(0, 0, 1),
+        Micro::Relu(0, 0),
+        Micro::Mul(0, 0, 7),
+        Micro::Add(0, 0, 2),
+        Micro::Relu(0, 0),
+        Micro::Mul(0, 0, 7),
+        Micro::Add(0, 0, 1),
+        Micro::Relu(0, 0),
+        Micro::Mul(0, 0, 7),
+        Micro::Add(0, 0, 2),
+        Micro::Relu(0, 0),
+        Micro::Mul(0, 0, 7),
+        Micro::Add(0, 0, 1),
+        Micro::Relu(0, 0),
+    ];
+    for n in [1024usize, 65536, 1 << 20] {
+        let (a, b) = (hard_fixture(n, 1, false), hard_fixture(n, 2, false));
+        let (ab, bb) = (bytes_of(&a), bytes_of(&b));
+        let mut out = vec![[0u8; 4]; n];
+        row("interpreter_chain16_strict", n, || {
+            // SAFETY: the host check in `compile`-free form: this benchmark requires AVX2.
+            unsafe { interpret(&chain, [ab.as_chunks::<4>().0, bb.as_chunks::<4>().0], &mut out) };
+        });
+        let result: Vec<f32> = out.iter().map(|e| f32::from_le_bytes(*e)).collect();
+        println!(
+            "interpreter_chain16_check n={n} differences={}",
+            differences(&result, &apply(oracle_chain, &a, &b, strict_step))
+        );
+    }
+}
+
 /// Identifies what semantics CubeCL's default output has, by comparing against candidates.
 fn diagnose() {
     let client = CpuRuntime::client(&CpuDevice);
@@ -1228,13 +1441,24 @@ fn diagnose() {
 
 fn main() {
     // Before any thread exists, so every thread inherits the counter.
-    assert!(COUNTER.set(Counter::open()).is_ok());
+    let opened = [
+        Counter::open(0, 1),             // PERF_COUNT_HW_INSTRUCTIONS
+        Counter::open(0, 0),             // PERF_COUNT_HW_CPU_CYCLES
+        Counter::open(3, 1 << 16),       // L1D, read, miss
+        Counter::open(3, 2 | (1 << 16)), // LL, read, miss
+    ];
+    assert!(COUNTERS.set(opened).is_ok());
     match std::env::args().nth(1).as_deref() {
         Some("diagnose") => diagnose(),
+        Some("ceiling") => ceiling(),
+        Some("model") => {
+            pin_current(0);
+            model::run();
+        }
         Some("ours") => ours(),
         Some("cubecl") => cubecl_side(),
         _ => {
-            eprintln!("usage: l3i-cubecl-compare ours|cubecl|diagnose");
+            eprintln!("usage: l3i-cubecl-compare ours|cubecl|diagnose|ceiling|model");
             std::process::exit(2);
         }
     }

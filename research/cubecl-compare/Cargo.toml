@@ -12,4 +12,5 @@ cubecl = { version = "=0.11.3", default-features = false, features = ["std", "cp
 cubecl-runtime = { version = "=0.11.3", default-features = false }
 l3i-graph-cpu-research = { path = "../graph-cpu" }
 libc = "0.2"
+matrixmultiply = "=0.3.11"
 rayon = "1"
