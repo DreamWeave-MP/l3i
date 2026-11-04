@@ -65,6 +65,11 @@
 //! Whole chunks are read straight into the caller's target and hashed there, because the `&mut`
 //! makes that memory private until the call returns. On any failure [`AuthenticatedReader::read_into`]
 //! zeroes the whole target first, so neither unverified bytes nor a verified prefix survive.
+//!
+//! A reader keeps the last chunk it verified for a partial read, so small reads in order do not
+//! hash one chunk per read. A repeat of that chunk is served from the private copy and does not
+//! touch the source, so damage done to the file since goes unnoticed until the chunk leaves the
+//! slot. What the read returns is still exactly the committed bytes, which is the promise.
 
 mod script;
 
@@ -85,8 +90,9 @@ pub const DIGEST_LEN: usize = 32;
 pub const MIN_CHUNK_SIZE: u32 = 512;
 /// The largest chunk size a manifest may declare: the most a read of one byte can cost.
 pub const MAX_CHUNK_SIZE: u32 = 16 << 20;
-/// The chunk size [`build_manifest`]'s callers get when they have no reason to choose.
-pub const DEFAULT_CHUNK_SIZE: u32 = 64 << 10;
+/// The chunk size for callers with no reason to choose, from `benches/fs-authenticated-results.md`:
+/// a sparse read costs a quarter of what it does at 64 KiB, and the manifest a quarter of 4 KiB's.
+pub const DEFAULT_CHUNK_SIZE: u32 = 16 << 10;
 /// The most chunks a manifest may declare, which bounds the hash a manifest can ask for.
 pub const MAX_CHUNKS: u64 = 1 << 24;
 /// The longest manifest [`VerifiedManifest::verify`] looks at.
@@ -557,6 +563,9 @@ pub struct AuthenticatedReader<S> {
     /// One chunk for reads that cover only part of one. Private, and never shown to anyone
     /// before its digest has matched.
     scratch: Vec<u8>,
+    /// Which chunk `scratch` holds, set only once its digest has matched and cleared before
+    /// anything overwrites it. Small reads in order would otherwise hash one chunk per read.
+    verified: Option<u64>,
 }
 
 impl<S: RangeSource> AuthenticatedReader<S> {
@@ -571,7 +580,7 @@ impl<S: RangeSource> AuthenticatedReader<S> {
         if actual != manifest.object_length {
             return Err(AuthError::LengthMismatch { expected: manifest.object_length, actual });
         }
-        Ok(AuthenticatedReader { source, manifest, scratch: Vec::new() })
+        Ok(AuthenticatedReader { source, manifest, scratch: Vec::new(), verified: None })
     }
 
     /// The manifest this reader checks against.
@@ -670,21 +679,27 @@ impl<S: RangeSource> AuthenticatedReader<S> {
         Ok(())
     }
 
-    /// Verifies chunk `index` in the scratch buffer, then copies what `target` wants of it from
-    /// `offset`; returns the count copied.
+    /// Makes chunk `index` the verified one in the scratch buffer, unless it already is, then
+    /// copies what `target` wants of it from `offset`; returns the count copied.
     fn copy_part(&mut self, index: u64, offset: u64, target: &mut [u8]) -> Result<usize, AuthError> {
         let (start, end) = self.manifest.chunk_bounds(index);
         // Lossless: a chunk's length is at most MAX_CHUNK_SIZE.
         let length = (end - start) as usize;
-        if self.scratch.len() < length {
-            self.scratch = zeroed(u64::from(self.manifest.chunk_size).min(self.manifest.object_length))?;
+        if self.verified != Some(index) {
+            // Cleared first: from here until the digest matches, the scratch is unverified.
+            self.verified = None;
+            if self.scratch.len() < length {
+                self.scratch = zeroed(u64::from(self.manifest.chunk_size).min(self.manifest.object_length))?;
+            }
+            let chunk = &mut self.scratch[..length];
+            let actual = fill_from(&self.source, start, chunk).map_err(AuthError::Io)?;
+            if actual != length {
+                return Err(AuthError::ShortChunk { index, expected: length as u64, actual: actual as u64 });
+            }
+            self.manifest.check_chunk(index, chunk)?;
+            self.verified = Some(index);
         }
-        let chunk = &mut self.scratch[..length];
-        let actual = fill_from(&self.source, start, chunk).map_err(AuthError::Io)?;
-        if actual != length {
-            return Err(AuthError::ShortChunk { index, expected: length as u64, actual: actual as u64 });
-        }
-        self.manifest.check_chunk(index, chunk)?;
+        let chunk = &self.scratch[..length];
         // Lossless: `offset` is inside this chunk.
         let within = (offset - start) as usize;
         let count = target.len().min(length - within);

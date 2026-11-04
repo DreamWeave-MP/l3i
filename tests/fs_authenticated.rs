@@ -510,9 +510,9 @@ fn a_read_costs_only_the_chunks_it_covers() {
     assert_eq!((source.calls.get(), source.read_bytes.get()), (1, chunk));
     source.calls.set(0);
     source.read_bytes.set(0);
-    // Across one boundary: two partial chunks, two reads.
+    // Across one boundary, the first chunk of it still held: one more read, not two.
     assert_eq!(reader.read_at(11 * chunk - 1, 2).unwrap(), bytes[5631..5633]);
-    assert_eq!((source.calls.get(), source.read_bytes.get()), (2, 2 * chunk));
+    assert_eq!((source.calls.get(), source.read_bytes.get()), (1, chunk));
     source.calls.set(0);
     source.read_bytes.set(0);
     // Whole chunks in the middle read as one run: a partial, the run, a partial.
@@ -523,6 +523,49 @@ fn a_read_costs_only_the_chunks_it_covers() {
     // Whole chunks exactly: one read, nothing more than asked.
     assert_eq!(reader.read_at(30 * chunk, 5 * CHUNK as usize).unwrap(), bytes[15360..17920]);
     assert_eq!((source.calls.get(), source.read_bytes.get()), (1, 5 * chunk));
+}
+
+#[test]
+fn small_reads_in_order_verify_each_chunk_once() {
+    let chunk = CHUNK as usize;
+    let bytes = object(chunk * 3);
+    let (source, mut reader) = scripted(&bytes, CHUNK);
+    for offset in (0..bytes.len() - 8).step_by(8) {
+        assert_eq!(reader.read_at(offset as u64, 8).unwrap(), bytes[offset..offset + 8]);
+    }
+    assert_eq!((source.calls.get(), source.read_bytes.get()), (3, bytes.len() as u64));
+}
+
+#[test]
+fn the_held_chunk_returns_committed_bytes_after_the_file_changes() {
+    let chunk = CHUNK as usize;
+    let bytes = object(chunk * 2);
+    let (source, mut reader) = scripted(&bytes, CHUNK);
+    assert_eq!(reader.read_at(5, 1).unwrap(), [bytes[5]]);
+    source.bytes.borrow_mut()[5] ^= 1;
+    // Served from the verified copy: the right bytes, whatever the file says now.
+    assert_eq!(reader.read_at(5, 1).unwrap(), [bytes[5]]);
+    // Once the slot moves on, the damage is met like any other.
+    assert_eq!(reader.read_at(chunk as u64, 1).unwrap(), [bytes[chunk]]);
+    assert!(matches!(reader.read_at(5, 1), Err(AuthError::ChunkMismatch { index: 0 })));
+}
+
+#[test]
+fn a_chunk_that_failed_is_never_treated_as_held() {
+    let chunk = CHUNK as usize;
+    let bytes = object(chunk * 2);
+    let (source, mut reader) = scripted(&bytes, CHUNK);
+    assert_eq!(reader.read_at(chunk as u64, 1).unwrap(), [bytes[chunk]]);
+    source.bytes.borrow_mut()[5] ^= 1;
+    // The failure overwrote the scratch that held chunk 1, and it must not count as either.
+    assert!(matches!(reader.read_at(5, 1), Err(AuthError::ChunkMismatch { index: 0 })));
+    assert!(matches!(reader.read_at(5, 1), Err(AuthError::ChunkMismatch { index: 0 })));
+    assert_eq!(reader.read_at(chunk as u64, 1).unwrap(), [bytes[chunk]]);
+    // Short and failed reads clear it too, and a repaired source verifies again.
+    source.bytes.borrow_mut()[5] ^= 1;
+    source.failures.borrow_mut().push((source.calls.get(), io::ErrorKind::PermissionDenied));
+    assert!(matches!(reader.read_at(5, 1), Err(AuthError::Io(_))));
+    assert_eq!(reader.read_at(5, 1).unwrap(), [bytes[5]]);
 }
 
 #[test]
@@ -721,7 +764,7 @@ fn a_file_truncated_under_an_open_reader_fails_instead_of_faulting() {
     let path = scratch.0.join("object");
     let bytes = object(CHUNK as usize * 4);
     let mut reader = file_reader(&path, &bytes);
-    assert_eq!(reader.read_at(1000, 10).unwrap(), bytes[1000..1010]);
+    assert_eq!(reader.read_at(1100, 10).unwrap(), bytes[1100..1110]);
     std::fs::OpenOptions::new().write(true).open(&path).unwrap().set_len(600).unwrap();
     assert_eq!(reader.read_at(0, 512).unwrap(), bytes[..512]);
     assert!(matches!(reader.read_at(600, 1), Err(AuthError::ShortChunk { index: 1, expected: 512, actual: 88 })));
@@ -735,7 +778,7 @@ fn a_file_changed_in_place_under_an_open_reader_fails_the_chunk() {
     let path = scratch.0.join("object");
     let bytes = object(CHUNK as usize * 4);
     let mut reader = file_reader(&path, &bytes);
-    assert_eq!(reader.read_at(600, 1).unwrap(), [bytes[600]]);
+    assert_eq!(reader.read_at(1200, 1).unwrap(), [bytes[1200]]);
     let mut writer = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
     writer.seek(SeekFrom::Start(600)).unwrap();
     writer.write_all(&[bytes[600] ^ 1]).unwrap();
