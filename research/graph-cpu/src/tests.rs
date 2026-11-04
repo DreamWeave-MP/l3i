@@ -901,3 +901,24 @@ fn streaming_matvec_preserves_special_values_without_packing_budget() {
         }
     }
 }
+
+#[test]
+fn row_sum_composes_with_fusion_and_preserves_empty_rows() {
+    let budget = Budget::new(1 << 20);
+    let domain = domain();
+    for columns in [0, 1, 7, 17, 257] {
+        let values: Vec<f32> = (0..3 * columns).map(|i| [16_777_216.0, 1.0, -16_777_216.0, -0.0][i % 4]).collect();
+        let input = tensor(&values, Shape::Matrix(3, columns), &budget);
+        let x = Expr::slot(0, Shape::Matrix(3, columns), domain.clone()).unwrap();
+        let program = x.sum_rows().unwrap().relu().unwrap().compile().unwrap();
+        let expected: Vec<f32> = (0..3)
+            .map(|r| {
+                let sum = values[r * columns..(r + 1) * columns].iter().fold(0.0f32, |a, b| a + b);
+                if sum <= 0.0 { 0.0 } else { sum }
+            })
+            .collect();
+        assert_same(&read(&program.run(&[&input], &budget).unwrap()), &expected, "row sum");
+        assert_same(&read(&program.run_reference(&[input.borrow()], &budget).unwrap()), &expected, "reference row sum");
+        assert!(program.native_source().is_err());
+    }
+}

@@ -553,12 +553,22 @@ pub fn native() {
     matrix();
 }
 
-fn reductions() {
+pub fn reductions() {
     use l3i_graph_cpu_research::reduction::{normalize, softmax, sum};
     println!("\n# Row kernels: preallocated, accurate normalization, ordered f32 sum");
     for n in [1, 16, 1024, 65_536, 1_048_576] {
         let values: Vec<f32> = (0..n).map(|i| (i % 127) as f32 * 0.125 - 8.0).collect();
         let mut out = vec![0.0; n];
+        let budget = Budget::new(1 << 26);
+        let domain = Domain::new(1024, 1024);
+        let input: Vec<u8> = values.iter().flat_map(|v| v.to_le_bytes()).collect();
+        let tensor = Tensor::import(&input, Shape::Matrix(1, n), &budget).unwrap();
+        let program = Expr::slot(0, Shape::Matrix(1, n), domain).unwrap().sum_rows().unwrap().compile().unwrap();
+        let mut result = [0u8; 4];
+        row("ordered_sum_program", n, || {
+            program.run_into(black_box(&[tensor.borrow()]), black_box(&mut result), &budget).unwrap();
+        });
+        assert_eq!(f32::from_le_bytes(result).to_bits(), sum(&values).to_bits());
         row("ordered_sum_kernel", n, || {
             black_box(sum(black_box(&values)));
         });

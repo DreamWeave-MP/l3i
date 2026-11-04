@@ -11,3 +11,9 @@ Tests cover analytic normalization, independent unshifted softmax probabilities,
 Kernel-only baseline: results/l3i-row-baseline.txt and l3i-row-rss.txt in the parent research directory. Preallocated outputs, single thread, standard repository release/LTO configuration; 31 timed samples per row on the same i7-10870H host. At n=1024: ordered sum 0.997 us, softmax 14.176 us, RMS norm 1.767 us, layer norm 2.714 us. These are initial observations under variable load, not improvements or end-to-end claims. Later portions of the mixed report overlap verification compilation; use the initial row-kernel section for these observations.
 
 Softmax currently recomputes exponentials to avoid scratch and intermediate f32 rounding. Compare a charged f64 workspace before changing this accuracy/storage tradeoff. Normalization deliberately uses two-pass centered variance rather than subtracting nearly equal second moments.
+
+## Ordered sum graph integration
+
+`Expr::sum_rows()` / JSL `expression:sumRows()` is now a materialized typed stage. It produces `(rows, 1)`, starts each sum at +0 and visits columns in order in both numerical modes. Empty rows produce +0. Input views remain borrowed, including strided views; stages participate in existing work bounds and temporary lifetime accounting. The reference interpreter evaluates its own ordered loop. GPU and generated-Luau lowering reject this new stage explicitly.
+
+`--bench-rows` measures ordered sums at kernel, program and actual JSL borrowed-buffer levels. The initial full-invocation JSL medians were 1.271 us at 1,024 elements, 71.858 us at 65,536, and 1,149.856 us at 1,048,576. Raw results: ../results/l3i-sum-levels*.txt. Normalization and softmax remain standalone primitives pending stage integration; the introductory limitation applies to those operations.

@@ -16,7 +16,7 @@ impl Program {
     pub fn run_reference(&self, inputs: &[View<'_>], budget: &Arc<Budget>) -> Result<Tensor> {
         self.check(inputs)?;
         let shape = self.output_shape();
-        let fused = !self.steps.iter().any(|step| matches!(step.op, Instruction::MatMul(..)));
+        let fused = !self.steps.iter().any(|step| matches!(step.op, Instruction::MatMul(..) | Instruction::SumRows(_)));
         if fused {
             let mut output = budget.allocate(shape.elements()? * 4)?;
             self.reference_into(inputs, &mut output.bytes);
@@ -48,6 +48,10 @@ impl Program {
                         Instruction::Add(a, b) => value(a).at(row, col) + value(b).at(row, col),
                         Instruction::Mul(a, b) => value(a).at(row, col) * value(b).at(row, col),
                         Instruction::Relu(a) => relu(value(a).at(row, col)),
+                        Instruction::SumRows(a) => {
+                            let input = value(a);
+                            (0..input.shape.dims().1).fold(0.0f32, |acc, c| acc + input.at(row, c))
+                        }
                         Instruction::MatMul(a, b) => {
                             let (a, b) = (value(a), value(b));
                             let mut sum = 0.0f32;
@@ -81,7 +85,9 @@ impl Program {
                         Instruction::Add(a, b) => registers[a] + registers[b],
                         Instruction::Mul(a, b) => registers[a] * registers[b],
                         Instruction::Relu(a) => relu(registers[a]),
-                        Instruction::MatMul(..) => unreachable!("fused graphs have no matmul"),
+                        Instruction::MatMul(..) | Instruction::SumRows(_) => {
+                            unreachable!("fused graphs have no matmul")
+                        }
                     };
                 }
                 let at = (row * cols + col) * 4;

@@ -114,6 +114,7 @@ impl LuauModule for Research {
             ty.method("add", |a: &Expression, b: &Expression| a.0.add(&b.0).map(|e| Owned(Expression(e))))?;
             ty.method("mul", |a: &Expression, b: &Expression| a.0.mul(&b.0).map(|e| Owned(Expression(e))))?;
             ty.method("relu", |a: &Expression| a.0.relu().map(|e| Owned(Expression(e))))?;
+            ty.method("sumRows", |a: &Expression| a.0.sum_rows().map(|e| Owned(Expression(e))))?;
             ty.method("matmul", |a: &Expression, b: &Expression| a.0.matmul(&b.0).map(|e| Owned(Expression(e))))?;
             ty.method("compile", |a: &Expression| a.0.compile().map(|e| Owned(CompiledProgram(e))))?;
             ty.method("compileFast", |a: &Expression| {
@@ -235,6 +236,10 @@ fn run() -> Result<()> {
     runtime.exec("assert(compute.used()==0)")?;
 
     let arguments: Vec<String> = std::env::args().collect();
+    if arguments.iter().any(|arg| arg == "--bench-rows") {
+        bench::reductions();
+        runtime.exec(include_str!("../bench-rows.jsl"))?;
+    }
     if arguments.iter().any(|arg| arg == "--bench") {
         bench::native();
         runtime.exec(include_str!("../bench.jsl"))?;

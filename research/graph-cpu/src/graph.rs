@@ -65,6 +65,7 @@ enum Op {
     Add(Expr, Expr),
     Mul(Expr, Expr),
     Relu(Expr),
+    SumRows(Expr),
     MatMul(Expr, Expr),
 }
 #[derive(Debug)]
@@ -115,6 +116,11 @@ impl Expr {
     pub fn relu(&self) -> Result<Self> {
         Self::new(self.0.shape, Op::Relu(self.clone()), 1 + self.0.depth, self.0.lease.domain.clone())
     }
+    /// Ordered f32 sum across columns, retaining one column per row.
+    pub fn sum_rows(&self) -> Result<Self> {
+        let (rows, _) = self.0.shape.dims();
+        Self::new(Shape::Matrix(rows, 1), Op::SumRows(self.clone()), 1 + self.0.depth, self.0.lease.domain.clone())
+    }
     pub fn matmul(&self, rhs: &Self) -> Result<Self> {
         let (Shape::Matrix(m, k), Shape::Matrix(k2, n)) = (self.0.shape, rhs.0.shape) else {
             return Err(error("matmul requires rank two"));
@@ -148,6 +154,7 @@ impl Expr {
                 Op::Add(a, b) => Instruction::Add(visit(a, ids, steps)?, visit(b, ids, steps)?),
                 Op::Mul(a, b) => Instruction::Mul(visit(a, ids, steps)?, visit(b, ids, steps)?),
                 Op::MatMul(a, b) => Instruction::MatMul(visit(a, ids, steps)?, visit(b, ids, steps)?),
+                Op::SumRows(a) => Instruction::SumRows(visit(a, ids, steps)?),
                 Op::Relu(a) => Instruction::Relu(visit(a, ids, steps)?),
             };
             if steps.len() >= MAX_NODES {
@@ -171,6 +178,7 @@ pub enum Instruction {
     Add(usize, usize),
     Mul(usize, usize),
     Relu(usize),
+    SumRows(usize),
     MatMul(usize, usize),
 }
 /// One typed value in the validated topological plan.

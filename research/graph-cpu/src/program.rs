@@ -88,6 +88,7 @@ pub(crate) enum Value {
 #[derive(Debug)]
 enum Work {
     Elementwise(Elementwise),
+    SumRows { source: Value, shape: Shape, columns: usize },
     MatMul { a: Value, b: Value, shape: Shape, inner: usize },
 }
 #[derive(Debug)]
@@ -270,7 +271,7 @@ fn plan_elementwise(steps: &[Step], root: usize, boundary: &[Option<Value>], num
                 read(b);
             }
             Instruction::Relu(a) => read(a),
-            Instruction::Slot(_) | Instruction::Constant(_) | Instruction::MatMul(..) => (),
+            Instruction::Slot(_) | Instruction::Constant(_) | Instruction::SumRows(_) | Instruction::MatMul(..) => (),
         }
     }
     let mut planned: Vec<Option<Planned>> = vec![None; root + 1];
@@ -292,7 +293,7 @@ fn plan_elementwise(steps: &[Step], root: usize, boundary: &[Option<Value>], num
                 planned[id] = Some(Planned::Constant(v));
                 continue;
             }
-            Instruction::Slot(_) | Instruction::MatMul(..) => {
+            Instruction::Slot(_) | Instruction::SumRows(_) | Instruction::MatMul(..) => {
                 let value = boundary[id].expect("slots and matmuls are materialized");
                 planned[id] = Some(Planned::Source(value));
                 continue;
@@ -393,13 +394,16 @@ impl Program {
         let mut materialized = vec![false; steps.len()];
         materialized[root] = true;
         for step in &steps {
+            if let Instruction::SumRows(a) = step.op {
+                materialized[a] = true;
+            }
             if let Instruction::MatMul(a, b) = step.op {
                 materialized[a] = true;
                 materialized[b] = true;
             }
         }
         for (id, step) in steps.iter().enumerate() {
-            if matches!(step.op, Instruction::MatMul(..)) {
+            if matches!(step.op, Instruction::MatMul(..) | Instruction::SumRows(_)) {
                 materialized[id] = true;
             }
         }
@@ -415,7 +419,13 @@ impl Program {
             } else if !materialized[id] {
                 continue;
             }
-            let work = if let Instruction::MatMul(a, b) = steps[id].op {
+            let work = if let Instruction::SumRows(a) = steps[id].op {
+                Work::SumRows {
+                    source: boundary[a].expect("operand materialized"),
+                    shape: steps[id].shape,
+                    columns: steps[a].shape.dims().1,
+                }
+            } else if let Instruction::MatMul(a, b) = steps[id].op {
                 Work::MatMul {
                     a: boundary[a].expect("operand materialized first"),
                     b: boundary[b].expect("operand materialized first"),
@@ -434,6 +444,7 @@ impl Program {
         for stage in &stages {
             let (shape, factor) = match &stage.work {
                 Work::Elementwise(e) => (e.shape, e.operations),
+                Work::SumRows { shape, columns, .. } => (*shape, *columns),
                 Work::MatMul { shape, inner, .. } => (*shape, *inner),
             };
             total = shape
@@ -453,6 +464,7 @@ impl Program {
             };
             match &stage.work {
                 Work::Elementwise(e) => e.sources.iter().copied().for_each(&mut read),
+                Work::SumRows { source, .. } => read(*source),
                 Work::MatMul { a, b, .. } => {
                     read(*a);
                     read(*b);
@@ -504,6 +516,9 @@ impl Program {
                             writeln!(text).unwrap();
                         }
                     }
+                }
+                Work::SumRows { source, shape, .. } => {
+                    writeln!(text, "stage {index}: sum_rows {shape:?} {source:?}").unwrap();
                 }
                 Work::MatMul { a, b, shape, .. } => {
                     writeln!(text, "stage {index}: matmul {shape:?} {a:?} {b:?}").unwrap();
@@ -572,7 +587,7 @@ impl Program {
             let mut allocation = None;
             let shape = match &stage.work {
                 Work::Elementwise(e) => e.shape,
-                Work::MatMul { shape, .. } => *shape,
+                Work::SumRows { shape, .. } | Work::MatMul { shape, .. } => *shape,
             };
             if index != last {
                 allocation = Some(budget.allocate(shape.elements()? * 4)?);
@@ -593,6 +608,16 @@ impl Program {
                     kernels::with_scratch(needed, |scratch| {
                         kernels::elementwise(e, &sources, scratch, target, isa, chunk);
                     })?;
+                }
+                Work::SumRows { source, shape, columns } => {
+                    let input = view_of(*source);
+                    for row in 0..shape.dims().0 {
+                        let mut sum = 0.0f32;
+                        for col in 0..*columns {
+                            sum += input.at(row, col);
+                        }
+                        target[row * 4..][..4].copy_from_slice(&sum.to_le_bytes());
+                    }
                 }
                 Work::MatMul { a, b, .. } => {
                     let (a, b) = (view_of(*a), view_of(*b));
