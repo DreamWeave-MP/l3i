@@ -3,7 +3,8 @@
 ## Decision
 
 **Execute a small typed plan over ahead-of-time SIMD kernels, one dispatch per operation per
-1,024-element chunk. Generate no machine code. Reject CubeCL.**
+1,024-element chunk. Do not adopt CubeCL. Generate no machine code for now, but measure fusion next: on long
+expressions over large arrays it is worth up to about 2x.**
 
 The first prototype's problem was granularity, not the absence of a compiler. It dispatched six
 instructions for each output element, which cost 10 ns per element and kept the compiler from
@@ -149,10 +150,11 @@ reuse, and one description for CPU and GPU. Anything larger is not justified by 
 
 **6. Is fusion necessary, and at what level?** Chunk-level fusion is worth having but is not the main
 effect. It saves about 25% against whole-array passes at 65,536 (17.7 vs 23.5) and removes
-array-sized temporaries. Element-level fusion, the only thing generated code could add, would buy at
-most 1.3 to 1.4x on arrays beyond L1. A 16-operation chain measured the same: 55 us chunked, 41 us
-fused. It would buy up to 3.9x inside L1, which is at most 0.18 us per call at n=1,024. That does not
-justify per-architecture code generators, executable memory and a code budget.
+array-sized temporaries. Element-level fusion, the only thing generated code could add, buys about 1.4x on a short expression beyond L1,
+and about 1.5 to 2.6x on a 16-operation chain beyond L1 (see the CubeCL section; an earlier version of this answer
+said 1.4x and was too low). Inside L1 it buys up to 3.9x, at most 0.18 us per call at n=1,024. Whether that justifies
+per-architecture code generators, executable memory and a code budget is open. A cheaper candidate to measure first
+is a set of fused kernels for common shapes such as `relu(a*b+c)`, which remove stores without generating code.
 
 **7. Should elementwise work use `dream.data`?** Its explicit calls should stay: they are eager, cover eight
 element kinds and define ordered overlap, which this design rejects. But they could be far faster
@@ -164,27 +166,104 @@ and has not been made here.
 checked views), `Budget` and `Domain` (host-owned accounting). They carried over with minimal change,
 and removing captured inputs made them simpler. `View` is the one thing kernels read.
 
-**9. Would CubeCL provide something unavailable?** No. See below.
+**9. Would CubeCL provide something unavailable?** On CPU, faster long expressions over large arrays, but fused
+kernels or generated code of our own could offer the same. GPU and CubeK are unmeasured. See below.
 
-**10. Compiler, scheduling, or both?** Neither, so far: it was an execution-granularity problem and a
-kernel-quality problem. Scheduling arrives with multi-threading, and that belongs to Jess.
+**10. Compiler, scheduling, or both?** First an execution-granularity problem, which took most of the gain. What
+remains on long expressions is a fusion problem, so partly a compiler one. Scheduling arrives with multi-threading,
+and that belongs to Jess.
 
-## CubeCL verdict: rejected
+## CubeCL verdict: not adopted, on cost and fit rather than speed
 
-| | CubeCL 0.10 CPU, earlier release runs | This design |
+An earlier revision of this document said "rejected" and quoted CubeCL as 26x slower. **That figure compared
+the old bridge with our kernels, not the two engines, and it was misleading.** That bridge paid for copies and
+fresh allocation on every call, and used a `CubeDim` of 256 where 0.11 reports a maximum of 16 on this host.
+`cubecl-compare/` now measures both on the same inputs, in separate processes, with CubeCL configured at its
+best: `Vector` kernels at several widths, `UNIT_POS` partitioning, a matmul with the native kernel's blocking
+and unrolling, and workers pinned the same way. Reports are in `results/compare-*`.
+
+### CubeCL's CPU backend is not strict by default
+
+Its optimizer fuses every `a * b + c` whose product has no other use into an FMA, unconditionally, and no
+option turns that off (`cubecl-opt`'s `InstCombine`). Its output matches an FMA oracle exactly and differs from
+separately rounded f32 on 76% of 64x64 matmul elements, by up to 2,090 ULPs in the sum
+(`results/compare-fma-diagnosis.txt`). This is not necessarily a defect, since FMA is more accurate per step, but
+it is a different contract. So the "nofma" rows give each product a second use that is never taken, which makes
+CubeCL strict: all of them match the strict oracle bitwise. Elementwise without a multiply is strict either way,
+including NaN and signed-zero handling.
+
+### Strict against strict, one thread, kernel only (preallocated, microseconds)
+
+The middle of three process medians. Noise is real here: across this session our 16-operation chain measured
+between 55 and 73 us at n=65,536, so ratios within about 1.3x should be read as ties.
+
+| Workload | n | Chunked kernels | CubeCL | Winner | Handwritten fused Rust |
+| --- | ---: | ---: | ---: | --- | ---: |
+| `relu(a+b+2)` | 16 | 0.112 | 7.06 | ours, 63x | |
+| | 1,024 | 0.248 | 7.31 | ours, 29x | |
+| | 16,384 | 4.00 | 10.3 | ours, 2.6x | |
+| | 65,536 | 20.2 | 22.1 | tie | |
+| | 1,048,576 | 380 | 301 | tie (CubeCL, 1.3x) | |
+| 16-operation chain | 16 | 0.258 | 7.49 | ours, 29x | 0.010 |
+| | 1,024 | 1.09 | 8.79 | ours, 8x | 0.54 |
+| | 16,384 | 16.8 | 17.0 | tie | 9.9 |
+| | 65,536 | 73.5 | 45.8 | **CubeCL, 1.6x** | 36.7 |
+| | 1,048,576 | 1,659 | 626 | **CubeCL, 2.6x** (2.1x on minimums) | 653 |
+| Matmul, 64x64 | 262,144 ops | 13.8 | 19.0 | ours, 1.4x | |
+| Matmul, 256x256 | 16,777,216 ops | 858 | 795 | tie | |
+| Matmul, 400x400 | 64,000,000 ops | 3,044 | 2,945 | tie | |
+
+Below about 16,384 elements CubeCL's roughly 7 us dispatch dominates. That is the cost of its queue and worker
+pool, not of generated code as such: the handwritten fused column has no such floor.
+
+### Eight threads, kernel only
+
+| Workload | n | Ours (rayon, pinned) | CubeCL strict | CubeCL default (FMA) |
+| --- | ---: | ---: | ---: | ---: |
+| `relu(a+b+2)` | 65,536 | 9.2 | 14.0 | 14.0 |
+| | 1,048,576 | 72 | 67 | 67 |
+| 16-operation chain | 65,536 | 17.0 | 17.8 | 17.1 |
+| | 1,048,576 | 259 (min 166) | 114 | 87 |
+| Matmul, 256x256 | | 135 | 177 | 138 |
+| Matmul, 400x400 | | 472 | 608 | 510 |
+
+Threading both needs a pool, whose wakeup costs about 5.6 us with rayon and 11 us with CubeCL's, so neither
+should thread small inputs. The threaded numbers use the public API plus a benchmark-only rayon pool; L3i has no
+threading of its own yet.
+
+### What else differs
+
+| | Chunked kernels | CubeCL 0.11.3 CPU |
 | --- | ---: | ---: |
-| `relu(a+b+2)`, n=1,024, first call | 26,000 us (kernel compile, init, transfers) | 4 us (first `runInto`, no compile) |
-| n=1,024, warm | 490 to 530 us | 0.45 us preallocated; 0.94 us fresh output |
-| n=65,536, warm | 920 to 1,100 us | 19 us preallocated; 36 us fresh output |
-| Dependencies | Bundled LLVM (20 for 0.10, 23 for 0.11), worker pool, alpha compiler APIs | L3i only |
-| Failure and time limits | No hard LLVM time or memory limit; needs process isolation for hostile input | Bounded at compile time; no compiler to contain |
+| Copy path from Luau-owned or external buffers, n=65,536, one thread | 20 us (zero copy) | 80 us (persistent handles); 429 us (fresh) |
+| Same, n=1,048,576 | 380 us | 4,069 us; 7,402 us |
+| Compile a computation | 6 to 12 us | 5 ms on average, up to 38 ms, per kernel and width |
+| Runtime initialization | none | about 1 ms |
+| Peak RSS, this benchmark | 81 MB | 193 MB |
+| Dependencies | L3i | Bundled LLVM, alpha compiler APIs |
+| Compile limits | Bounded by the planner | No hard LLVM time or memory limit |
 
-The contracts are not equal: CubeCL's numbers include input copies, dispatch, synchronization and
-readback, which is its bridge's actual path, and the runs come from an earlier point on the branch. The
-gap (26x on the fairest row) is too large for those differences to close. Its GPU story duplicates Jess's
-device, buffer and scheduling ownership, and strict f32 was never established on its targets. Its IR is
-a capable general compiler, and the numbers do not call for one. `9e70c0f` retains the experiments if a
-future workload (real tensor kernels on GPU, say) changes this.
+The copies only happen at the boundary: a computation that keeps its tensors inside CubeCL pays them once, not
+on every step. Both sides of the copy row include one input clone per call on CubeCL's side, as a host taking a
+Luau buffer would need.
+
+### What this establishes
+
+Neither engine dominates on speed. Ours is far ahead at small and medium sizes and on any path that crosses a
+boundary per call. CubeCL's generated code is ahead by about 1.5 to 2.6x on long expressions over large arrays,
+and at those sizes threading widens rather than closes that gap. Matmul is a tie on this hardware, with FMA worth
+about 10%.
+
+The chain result is **fusion, not CubeCL**: handwritten fused Rust matches or beats CubeCL's strict code at every
+size. Our kernels pay a load and store per operation that a fused loop keeps in registers, which fits a store-port
+limit, though that explanation has not been measured directly. This means the earlier conclusion that generated
+code cannot justify itself was too strong: on long expressions it is worth up to about 2x.
+
+We do not adopt CubeCL because that gain is available without it, and because of its bundled LLVM, unbounded
+compile cost and overlap with Jess's GPU ownership. **This is a judgement about cost and fit, not a speed win.**
+
+Not measured: GPU execution, which is CubeCL's main purpose, and CubeK's matmul routines, currently pre-release
+(0.4.0-pre.1). A packed, BLAS-style microkernel on either side would probably beat both matmul columns.
 
 ## Correctness
 
@@ -224,5 +303,11 @@ collection, and a retained program survives collection and runs on new inputs.
   generated Luau remain unexplored. Bulk kernels make it matter less for numerical work; it is still open for scalar code.
 - **aarch64 and AVX-512 measurements.** The baseline instantiation compiles for aarch64 but has not been
   run there, and this hardware has no AVX-512.
-- **The MSRV.** `d2a7a19` raised it to 1.99.1 alongside the CubeCL experiments, which needed at least 1.95.
-  This work leaves it unchanged. With CubeCL rejected, whether L3i keeps 1.99.1 is worth a separate decision.
+- **Fusion.** Fused kernels for common expression shapes, measured on realistic graphs, then generated code only
+  if those fall short.
+- **An opt-in FMA mode.** Worth about 10% on matmul and 25 to 30% on the chain here. It changes results, so it
+  must be explicit.
+- **A packed matmul microkernel.** Both engines here are unpacked.
+- **CubeCL on GPU and CubeK**, if a workload makes them relevant.
+
+The MSRV stays at 1.99.1, by decision, independent of CubeCL.

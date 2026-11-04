@@ -18,3 +18,5 @@ cargo clippy --locked --manifest-path "$G" --all-targets -- -W clippy::pedantic 
 cargo run --locked --release --manifest-path "$G" -- --emit-shader research/graph-cpu/generated-shader.jsl
 git diff --exit-code research/graph-cpu/generated-shader.jsl
 if command -v jess >/dev/null; then jess run research/graph-cpu/generated-shader.jsl; fi
+# The CubeCL comparison builds a bundled LLVM's worth of dependencies; keep it in the ignored target directory.
+CARGO_TARGET_DIR=target/cubecl-compare cargo clippy --locked --manifest-path research/cubecl-compare/Cargo.toml --all-targets -- -W clippy::pedantic -D warnings
