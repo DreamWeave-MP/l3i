@@ -6,12 +6,15 @@
 #include "surface_syntax.h"
 
 #include "Luau/Ast.h"
+#include "Luau/Common.h"
 #include "Luau/Parser.h"
 
 #include <cassert>
 #include <iostream>
 #include <string>
 #include <vector>
+
+LUAU_FASTFLAG(DebugLuauWhileLocalSyntax)
 
 namespace
 {
@@ -33,6 +36,7 @@ struct Collect final : Luau::AstVisitor
         if (auto* n = node->as<Luau::AstExprIndexName>()) seen.push_back(n->indexLocation);
         if (auto* n = node->as<Luau::AstStatLocal>())
             for (auto* v : n->vars) local(v);
+        if (auto* n = node->as<Luau::AstStatWhile>()) local(n->conditionLocal);
         if (auto* n = node->as<Luau::AstStatFor>()) local(n->var);
         if (auto* n = node->as<Luau::AstStatForIn>())
             for (auto* v : n->vars) local(v);
@@ -66,6 +70,7 @@ std::vector<Luau::Location> remapped(const std::string& source, bool skip)
 
 int main()
 {
+    FFlag::DebugLuauWhileLocalSyntax.value = true;
     const std::vector<std::string> sources = {
         "local values = {1, 2}\nreturn [for x in values if x > 1 => x * 2]\n",
         "@native\nfunction f(a) return a end\nreturn [for x in xs => f(x)]\n",
@@ -82,6 +87,7 @@ int main()
         "-- é🦀 comment\nlocal s = 'é🦀' return [for c in cs => s .. c], function<T>(v: T): T return v end\n",
         "local rows = [for r in rs =>\n  [for c in r.cells if c.ok =>\n    c.value]]\nlocal after = rows[1]\nreturn after\n",
         "local xs = values[2:3]\nlocal f = function(a, ...) return a, ... end\nreturn f(xs)\n",
+        "local xs = [for x in ys => x]\nwhile local item = next(xs) do local item = item end\n",
         "return [for x in xs => x.\n",
         "local {x\nlocal y = 1\nreturn [for z in zs =>]\n",
     };
