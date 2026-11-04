@@ -34,6 +34,14 @@
 //! (`out` equal to the input span) are the ordinary case. Out-of-range indices in `gather` and
 //! `scatter` raise before anything is written.
 //!
+//! Every loop is written once, over [`Span`]'s `get` and `set`. A contiguous `f32` span runs a
+//! second instantiation of it with the kind and stride as constants, chosen once per operation
+//! after the spans are checked: the dispatch folds away and LLVM vectorizes what remains, keeping
+//! the sequential result under overlap with its own run-time check. The results are the same, bit
+//! for bit, with one exception nothing ever promised: given two different NaN operands, which
+//! payload survives an addition is the optimizer's operand order, here as in the generic loop,
+//! which already answers differently in debug and release.
+//!
 //! ```lua
 //! local data = require('@dream/data')
 //! local total = data.sum(samples, 'f32', 0, n)
@@ -302,6 +310,26 @@ impl Span {
         // SAFETY: as `get`; buffers are writable storage.
         unsafe { self.kind.write(self.base.add(index * self.stride), value) }
     }
+
+    /// Contiguous `f32`, the layout worth a loop of its own; see [`Span::contiguous_f32`].
+    #[inline(always)]
+    fn is_contiguous_f32(&self) -> bool {
+        self.kind == Kind::F32 && self.stride == Kind::F32.size()
+    }
+
+    /// The same span with its kind and stride as constants. Every loop in this module is written
+    /// once over `get` and `set`; inlined with these constants, the per-element dispatch in
+    /// `Kind::read` and `Kind::write` folds away and LLVM can vectorize what is left. The call
+    /// site still picks one instantiation per operation, after every span has been checked.
+    ///
+    /// The loop stays a loop over raw pointers: no reference to the storage exists, so overlap
+    /// is not undefined behavior, and LLVM may only vectorize where it can keep the sequential
+    /// result, which it does with a run-time overlap check that falls back to its scalar loop.
+    #[inline(always)]
+    fn contiguous_f32(self) -> Span {
+        debug_assert!(self.is_contiguous_f32());
+        Span { kind: Kind::F32, stride: Kind::F32.size(), ..self }
+    }
 }
 
 /// A `u32` index vector: zero-based element positions in a buffer, `count` of them from
@@ -348,6 +376,39 @@ impl Indices {
         // SAFETY: as `get`.
         unsafe { self.base.add(index * 4).cast::<u32>().write_unaligned(value as u32) }
     }
+}
+
+/// `$body` once per comparison, with `$comparison` rebound to a constant, so a loop in the body
+/// has no dispatch left to do.
+macro_rules! constant_comparison {
+    ($comparison:ident => $body:expr) => {
+        match $comparison {
+            Comparison::Eq => {
+                let $comparison = Comparison::Eq;
+                $body
+            }
+            Comparison::Ne => {
+                let $comparison = Comparison::Ne;
+                $body
+            }
+            Comparison::Lt => {
+                let $comparison = Comparison::Lt;
+                $body
+            }
+            Comparison::Le => {
+                let $comparison = Comparison::Le;
+                $body
+            }
+            Comparison::Gt => {
+                let $comparison = Comparison::Gt;
+                $body
+            }
+            Comparison::Ge => {
+                let $comparison = Comparison::Ge;
+                $body
+            }
+        }
+    };
 }
 
 /// A comparison, as a script names it.
@@ -598,6 +659,78 @@ fn all(
 /// The index of the first least (or greatest) element by Luau `<` (`>`): a NaN that arrives
 /// first stays, later NaNs never replace. None for an empty span.
 fn extreme(span: &Span, greatest: bool) -> Option<usize> {
+    if span.is_contiguous_f32() { extreme_f32(span, greatest) } else { extreme_any(span, greatest) }
+}
+
+fn extreme_any(span: &Span, greatest: bool) -> Option<usize> {
+    extreme_elements(span, greatest)
+}
+
+#[inline(never)]
+fn extreme_f32(span: &Span, greatest: bool) -> Option<usize> {
+    let span = span.contiguous_f32();
+    if greatest {
+        extreme_blocks(&span, |candidate, value| candidate > value)
+    } else {
+        extreme_blocks(&span, |candidate, value| candidate < value)
+    }
+}
+
+/// Elements a block-wise scan tests before it looks at the answer. Long enough that the test is
+/// nearly all vector code; short enough that a hit costs little.
+const SCAN_BLOCK: usize = 64;
+
+/// [`extreme_elements`] with a block test in front: a branch on every element is what keeps that
+/// loop scalar and mispredicting, and almost no block holds an improvement. A block that does is
+/// rescanned by the same replace-when-strictly-better rule, in order, so a tie keeps the first
+/// and a NaN (which nothing betters, and which betters nothing) behaves as it does there.
+#[inline(always)]
+fn extreme_blocks(span: &Span, better: impl Fn(f64, f64) -> bool) -> Option<usize> {
+    if span.count == 0 {
+        return None;
+    }
+    let (mut best, mut value, mut begin) = (0, span.get(0), 1);
+    while begin < span.count {
+        let end = (begin + SCAN_BLOCK).min(span.count);
+        let mut improves = false;
+        for i in begin..end {
+            improves |= better(span.get(i), value);
+        }
+        if improves {
+            for i in begin..end {
+                let candidate = span.get(i);
+                if better(candidate, value) {
+                    best = i;
+                    value = candidate;
+                }
+            }
+        }
+        begin = end;
+    }
+    Some(best)
+}
+
+/// Whether any element passes `test`, a block at a time. Stopping at the first deciding block
+/// instead of the first deciding element is not observable: the test reads and nothing else.
+#[inline(always)]
+fn any_blocks(span: &Span, test: impl Fn(f64) -> bool) -> bool {
+    let mut begin = 0;
+    while begin < span.count {
+        let end = (begin + SCAN_BLOCK).min(span.count);
+        let mut found = false;
+        for i in begin..end {
+            found |= test(span.get(i));
+        }
+        if found {
+            return true;
+        }
+        begin = end;
+    }
+    false
+}
+
+#[inline(always)]
+fn extreme_elements(span: &Span, greatest: bool) -> Option<usize> {
     if span.count == 0 {
         return None;
     }
@@ -660,11 +793,31 @@ fn count(
 ) -> Result<f64> {
     let span = Span::new("data.countWhere", &buffer, Layout::parse("data.countWhere", kind)?, offset, count)?;
     let comparison = Comparison::parse("data.countWhere", comparison)?;
+    let selected = if span.is_contiguous_f32() {
+        count_f32(span, comparison, threshold)
+    } else {
+        count_any(span, comparison, threshold)
+    };
+    Ok(selected as f64)
+}
+
+#[inline(always)]
+fn count_elements(span: Span, comparison: Comparison, threshold: f64) -> usize {
     let mut selected = 0usize;
     for i in 0..span.count {
         selected += usize::from(comparison.test(span.get(i), threshold));
     }
-    Ok(selected as f64)
+    selected
+}
+
+fn count_any(span: Span, comparison: Comparison, threshold: f64) -> usize {
+    count_elements(span, comparison, threshold)
+}
+
+#[inline(never)]
+fn count_f32(span: Span, comparison: Comparison, threshold: f64) -> usize {
+    let span = span.contiguous_f32();
+    constant_comparison!(comparison => count_elements(span, comparison, threshold))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -685,18 +838,38 @@ fn compare(
     let span = Span::new("data.select", &buffer, Layout::parse("data.select", kind)?, offset, count)?;
     let comparison = Comparison::parse("data.select", comparison)?;
     let target = Target::prepare(into, span.count);
-    {
-        let selection = target.selection();
-        let mut bits = selection.bits.borrow_mut();
-        for (word, chunk) in bits.iter_mut().zip((0..span.count).step_by(64)) {
-            let mut mask = 0u64;
-            for bit in 0..64.min(span.count - chunk) {
-                mask |= u64::from(comparison.test(span.get(chunk + bit), threshold)) << bit;
-            }
-            *word = mask;
-        }
-    }
+    select_words(&span, comparison, threshold, &mut target.selection().bits.borrow_mut());
     target.finish(call, 7)
+}
+
+/// Writes the comparison's result for each element into `words`, which hold one bit per element.
+fn select_words(span: &Span, comparison: Comparison, threshold: f64, words: &mut [u64]) {
+    if span.is_contiguous_f32() {
+        select_f32(span, comparison, threshold, words);
+    } else {
+        select_any(span, comparison, threshold, words);
+    }
+}
+
+#[inline(always)]
+fn select_elements(span: &Span, comparison: Comparison, threshold: f64, words: &mut [u64]) {
+    for (word, chunk) in words.iter_mut().zip((0..span.count).step_by(64)) {
+        let mut mask = 0u64;
+        for bit in 0..64.min(span.count - chunk) {
+            mask |= u64::from(comparison.test(span.get(chunk + bit), threshold)) << bit;
+        }
+        *word = mask;
+    }
+}
+
+fn select_any(span: &Span, comparison: Comparison, threshold: f64, words: &mut [u64]) {
+    select_elements(span, comparison, threshold, words);
+}
+
+#[inline(never)]
+fn select_f32(span: &Span, comparison: Comparison, threshold: f64, words: &mut [u64]) {
+    let span = span.contiguous_f32();
+    constant_comparison!(comparison => select_elements(&span, comparison, threshold, words));
 }
 
 fn selection(len: Exact<i64>) -> Result<Owned<Selection>> {
@@ -894,10 +1067,28 @@ fn scatter(
 
 fn fill(buffer: BufferView<'_>, kind: &str, offset: Exact<i64>, count: Exact<i64>, value: f64) -> Result<()> {
     let span = Span::new("data.fill", &buffer, Layout::parse("data.fill", kind)?, offset, count)?;
+    if span.is_contiguous_f32() {
+        fill_f32(span, value);
+    } else {
+        fill_any(span, value);
+    }
+    Ok(())
+}
+
+#[inline(always)]
+fn fill_elements(span: Span, value: f64) {
     for i in 0..span.count {
         span.set(i, value);
     }
-    Ok(())
+}
+
+fn fill_any(span: Span, value: f64) {
+    fill_elements(span, value);
+}
+
+#[inline(never)]
+fn fill_f32(span: Span, value: f64) {
+    fill_elements(span.contiguous_f32(), value);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -915,10 +1106,37 @@ fn add(
     let left = Span::new("data.add", &left, kind, left_offset, count)?;
     let right = Span::new("data.add", &right, kind, right_offset, count)?;
     let out = Span::new("data.add", &out, kind, out_offset, count)?;
+    if out.is_contiguous_f32() {
+        add_f32(left, right, out);
+    } else {
+        add_any(left, right, out);
+    }
+    Ok(())
+}
+
+#[inline(always)]
+fn add_elements(left: Span, right: Span, out: Span) {
     for i in 0..out.count {
         out.set(i, left.get(i) + right.get(i));
     }
-    Ok(())
+}
+
+fn add_any(left: Span, right: Span, out: Span) {
+    add_elements(left, right, out);
+}
+
+#[inline(never)]
+fn add_f32(left: Span, right: Span, out: Span) {
+    let (left, right, out) = (left.contiguous_f32(), right.contiguous_f32(), out.contiguous_f32());
+    // In place is the ordinary case and an overlap check would refuse it. Reading and writing
+    // through one pointer tells LLVM the distance is zero, so that loop vectorizes too.
+    if left.base == out.base {
+        add_elements(out, right, out);
+    } else if right.base == out.base {
+        add_elements(left, out, out);
+    } else {
+        add_elements(left, right, out);
+    }
 }
 
 fn scale(
@@ -933,10 +1151,34 @@ fn scale(
     let kind = Layout::parse("data.scale", kind)?;
     let source = Span::new("data.scale", &source, kind, offset, count)?;
     let out = Span::new("data.scale", &out, kind, out_offset, count)?;
+    if out.is_contiguous_f32() {
+        scale_f32(source, factor, out);
+    } else {
+        scale_any(source, factor, out);
+    }
+    Ok(())
+}
+
+#[inline(always)]
+fn scale_elements(source: Span, factor: f64, out: Span) {
     for i in 0..out.count {
         out.set(i, source.get(i) * factor);
     }
-    Ok(())
+}
+
+fn scale_any(source: Span, factor: f64, out: Span) {
+    scale_elements(source, factor, out);
+}
+
+#[inline(never)]
+fn scale_f32(source: Span, factor: f64, out: Span) {
+    let (source, out) = (source.contiguous_f32(), out.contiguous_f32());
+    // As `add_f32`: one pointer for in place.
+    if source.base == out.base {
+        scale_elements(out, factor, out);
+    } else {
+        scale_elements(source, factor, out);
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -956,6 +1198,16 @@ fn clamp(
     }
     let source = Span::new("data.clamp", &source, kind, offset, count)?;
     let out = Span::new("data.clamp", &out, kind, out_offset, count)?;
+    if out.is_contiguous_f32() {
+        clamp_f32(source, low, high, out);
+    } else {
+        clamp_any(source, low, high, out);
+    }
+    Ok(())
+}
+
+#[inline(always)]
+fn clamp_elements(source: Span, low: f64, high: f64, out: Span) {
     for i in 0..out.count {
         // As math.clamp: NaN passes through, since neither bound compares.
         let value = source.get(i);
@@ -970,7 +1222,21 @@ fn clamp(
             },
         );
     }
-    Ok(())
+}
+
+fn clamp_any(source: Span, low: f64, high: f64, out: Span) {
+    clamp_elements(source, low, high, out);
+}
+
+#[inline(never)]
+fn clamp_f32(source: Span, low: f64, high: f64, out: Span) {
+    let (source, out) = (source.contiguous_f32(), out.contiguous_f32());
+    // As `add_f32`: one pointer for in place.
+    if source.base == out.base {
+        clamp_elements(out, low, high, out);
+    } else {
+        clamp_elements(source, low, high, out);
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1244,16 +1510,7 @@ fn describe_select<const K: u8>(receiver: &mut crate::extension::UserdataBuilder
                       -> Result<StackResults> {
                     let span = receiver.span(&what, &buffer, offset, count)?;
                     selection.reset(span.count);
-                    {
-                        let mut bits = selection.bits.borrow_mut();
-                        for (word, chunk) in bits.iter_mut().zip((0..span.count).step_by(64)) {
-                            let mut mask = 0u64;
-                            for bit in 0..64.min(span.count - chunk) {
-                                mask |= u64::from(comparison.test(span.get(chunk + bit), threshold)) << bit;
-                            }
-                            *word = mask;
-                        }
-                    }
+                    select_words(&span, comparison, threshold, &mut selection.bits.borrow_mut());
                     Push::push_only(&call.arg(6), call)?;
                     Ok(StackResults)
                 },
@@ -1474,6 +1731,35 @@ impl Reduction {
 
     /// The bound semantics, element by element in order: the oracle for the native loops.
     fn run(self, span: &Span, threshold: f64) -> Answer {
+        if span.is_contiguous_f32() { self.run_f32(span, threshold) } else { self.run_any(span, threshold) }
+    }
+
+    fn run_any(self, span: &Span, threshold: f64) -> Answer {
+        self.run_elements(span, threshold)
+    }
+
+    #[inline(never)]
+    fn run_f32(self, span: &Span, threshold: f64) -> Answer {
+        let span = span.contiguous_f32();
+        match (self.op, self.filter) {
+            (ReductionOp::Min | ReductionOp::Max, None) => {
+                extreme_f32(&span, self.op == ReductionOp::Max).map_or(Answer::Nil, |i| Answer::Number(span.get(i)))
+            }
+            (ReductionOp::Count, Some(comparison)) => Answer::Number(count_f32(span, comparison, threshold) as f64),
+            (ReductionOp::Any, Some(comparison)) => Answer::Bool(
+                constant_comparison!(comparison => any_blocks(&span, |value| comparison.test(value, threshold))),
+            ),
+            (ReductionOp::All, Some(comparison)) => Answer::Bool(
+                !constant_comparison!(comparison => any_blocks(&span, |value| !comparison.test(value, threshold))),
+            ),
+            // A running sum in order is a chain of additions no vector can shorten, and a filtered
+            // minimum or maximum has two conditions per element: the constant kind is all they get.
+            _ => self.run_elements(&span, threshold),
+        }
+    }
+
+    #[inline(always)]
+    fn run_elements(self, span: &Span, threshold: f64) -> Answer {
         let accept = |value: f64| self.filter.is_none_or(|comparison| comparison.test(value, threshold));
         match self.op {
             ReductionOp::Sum => {
@@ -1489,7 +1775,7 @@ impl Reduction {
             ReductionOp::Count => Answer::Number((0..span.count).filter(|&i| accept(span.get(i))).count() as f64),
             ReductionOp::Min | ReductionOp::Max if self.filter.is_none() => {
                 // The specialized scan: half the instructions of the generic path below.
-                extreme(span, self.op == ReductionOp::Max).map_or(Answer::Nil, |i| Answer::Number(span.get(i)))
+                extreme_elements(span, self.op == ReductionOp::Max).map_or(Answer::Nil, |i| Answer::Number(span.get(i)))
             }
             ReductionOp::Min | ReductionOp::Max => {
                 let mut best: Option<f64> = None;
@@ -1620,5 +1906,302 @@ impl Extension for DataExtension {
             table.push_into(frame)?;
             frame.set_global(LOWERING_GLOBAL)
         })
+    }
+}
+
+/// The two instantiations of each loop held to each other, byte for byte. The integration tests
+/// compare the public functions with handwritten Luau; these compare what LLVM made of one source
+/// under a constant kind with what it made of it under a run-time kind, including which NaN
+/// payload survives. They only test anything optimized: run them with `--release` as well.
+#[cfg(test)]
+mod f32_paths {
+    use super::{
+        Answer, Comparison, Kind, Reduction, ReductionOp, Span, add_any, add_f32, clamp_any, clamp_f32, count_any,
+        count_f32, extreme_any, extreme_f32, fill_any, fill_f32, scale_any, scale_f32, select_any, select_f32,
+    };
+
+    const PATTERNS: [u32; 26] = [
+        0x0000_0000,
+        0x8000_0000,
+        0x7f80_0000,
+        0xff80_0000,
+        0x7fc0_0000,
+        0xffc0_0000,
+        0x7fc1_2345,
+        0xffc5_4321,
+        0x7f80_0001,
+        0xff81_2345,
+        0x0000_0001,
+        0x8000_0001,
+        0x007f_ffff,
+        0x807f_ffff,
+        0x0080_0000,
+        0x7f7f_ffff,
+        0xff7f_ffff,
+        0x7f00_0000,
+        0x3f80_0000,
+        0x3f80_0001,
+        0x3f7f_ffff,
+        0xbf80_0000,
+        0x3380_0000,
+        0x3300_0000,
+        0x4b80_0000,
+        0x4b80_0001,
+    ];
+    const LENGTHS: [usize; 16] = [0, 1, 2, 3, 4, 5, 7, 8, 9, 15, 16, 17, 33, 64, 65, 257];
+    /// Output placement relative to an input, in bytes: identical, overlapping either way by
+    /// whole or split elements, and beyond any vector width.
+    const SHIFTS: [isize; 17] = [-132, -68, -64, -9, -8, -5, -4, -2, -1, 0, 1, 2, 4, 5, 8, 64, 132];
+    const MIDDLE: usize = 136;
+
+    struct Words(u32);
+
+    impl Words {
+        /// The numerical recipes LCG: deterministic, and the words go straight into buffers.
+        fn next(&mut self) -> u32 {
+            self.0 = self.0.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            self.0
+        }
+
+        fn corpus(&mut self, words: usize) -> Vec<u8> {
+            (0..words)
+                .flat_map(|_| {
+                    let pick = self.next() as usize % (PATTERNS.len() * 2);
+                    let word = if pick < PATTERNS.len() { PATTERNS[pick] } else { self.next() };
+                    word.to_ne_bytes()
+                })
+                .collect()
+        }
+    }
+
+    fn span(bytes: &mut [u8], at: usize, count: usize) -> Span {
+        assert!(at + count * 4 <= bytes.len());
+        // SAFETY: inside the slice, checked above; the slice outlives the loop that uses the span
+        // and no reference to it is used while the loop runs.
+        Span { base: unsafe { bytes.as_mut_ptr().add(at) }, kind: Kind::F32, stride: 4, count }
+    }
+
+    /// Makes `count` words from `at` finite. With two different NaNs the surviving payload is
+    /// whichever operand the optimizer put first, and the two paths may differ (the generic one
+    /// differs from itself between debug and release); the integration tests hold that case to
+    /// "a quieted copy of one of them". A finite operand leaves one NaN at most, which determines
+    /// every result, even where an overlapping write splits the words of the other operand.
+    fn finite(bytes: &mut [u8], at: usize, count: usize) {
+        for word in bytes[at..at + count * 4].as_chunks_mut::<4>().0 {
+            let bits = u32::from_ne_bytes(*word);
+            if bits & 0x7f80_0000 == 0x7f80_0000 {
+                *word = (bits & 0xbfff_ffff).to_ne_bytes();
+            }
+        }
+    }
+
+    fn first_difference(a: &[u8], b: &[u8]) -> Option<usize> {
+        a.iter().zip(b).position(|(a, b)| a != b)
+    }
+
+    /// Runs `operation` on two copies of `base`, one through each path, and compares every byte.
+    fn agree(what: &str, base: &[u8], operation: impl Fn(&mut [u8], bool)) {
+        let (mut fast, mut generic) = (base.to_vec(), base.to_vec());
+        operation(&mut fast, true);
+        operation(&mut generic, false);
+        if let Some(at) = first_difference(&fast, &generic) {
+            let word = at & !3;
+            let read = |bytes: &[u8]| u32::from_ne_bytes(bytes[word..word + 4].try_into().unwrap());
+            panic!("{what}: byte {at}: f32 path {:#010x}, generic path {:#010x}", read(&fast), read(&generic));
+        }
+    }
+
+    fn size(count: usize) -> usize {
+        MIDDLE * 2 + (count + 40) * 4
+    }
+
+    #[test]
+    fn add_agrees_at_every_placement() {
+        let mut words = Words(0x2545_f491);
+        for count in LENGTHS {
+            // Past anything the output can reach, the other operand when only one overlaps.
+            let size = (size(count) + count * 4) / 4 * 4;
+            let mut base = words.corpus(size / 4);
+            let far = size - (count + 1) * 4;
+            finite(&mut base, far, count);
+            for shift in SHIFTS {
+                let out = MIDDLE.wrapping_add_signed(shift);
+                for (place, left, right) in [("left", MIDDLE, far), ("right", far, MIDDLE), ("both", MIDDLE, MIDDLE)] {
+                    agree(&format!("add count={count} shift={shift} {place}"), &base, |bytes, fast| {
+                        let (l, r, o) = (span(bytes, left, count), span(bytes, right, count), span(bytes, out, count));
+                        if fast { add_f32(l, r, o) } else { add_any(l, r, o) }
+                    });
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn scale_agrees_at_every_placement_and_factor() {
+        let mut words = Words(0x1234_5678);
+        for count in LENGTHS {
+            let size = size(count) / 4 * 4;
+            let base = words.corpus(size / 4);
+            for factor in [1.0 / 3.0, 0.5, -1.0, 0.0, -0.0, 1e300, 1e-320, 1e39, f64::INFINITY] {
+                for shift in SHIFTS {
+                    let out = MIDDLE.wrapping_add_signed(shift);
+                    agree(&format!("scale count={count} factor={factor} shift={shift}"), &base, |bytes, fast| {
+                        let (s, o) = (span(bytes, MIDDLE, count), span(bytes, out, count));
+                        if fast { scale_f32(s, factor, o) } else { scale_any(s, factor, o) }
+                    });
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn clamp_agrees_at_every_placement_and_bound() {
+        let mut words = Words(0x0bad_cafe);
+        let bounds = [
+            (-5.0, 5.0),
+            (0.0, 0.0),
+            (-0.0, 0.0),
+            (0.0, -0.0),
+            (0.1, 0.2),
+            (f64::NEG_INFINITY, f64::INFINITY),
+            (1.0 + 2f64.powi(-30), 1.0 + 2f64.powi(-29)),
+            (1.0 + 2f64.powi(-24), 1.0 + 2f64.powi(-24)),
+            (1e39, 1e40),
+            (-1e-50, 1e-50),
+        ];
+        for count in LENGTHS {
+            let size = size(count) / 4 * 4;
+            let base = words.corpus(size / 4);
+            for (low, high) in bounds {
+                for shift in SHIFTS {
+                    let out = MIDDLE.wrapping_add_signed(shift);
+                    agree(&format!("clamp count={count} [{low}, {high}] shift={shift}"), &base, |bytes, fast| {
+                        let (s, o) = (span(bytes, MIDDLE, count), span(bytes, out, count));
+                        if fast { clamp_f32(s, low, high, o) } else { clamp_any(s, low, high, o) }
+                    });
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn fill_agrees_for_every_value() {
+        for count in LENGTHS {
+            let base = vec![0xa5; size(count)];
+            for at in [0, 1, 2, 3, 4] {
+                for value in [1.5, 0.1, -0.0, f64::NAN, -f64::NAN, f64::INFINITY, 1e39, -1e-46, 1.0 + 2f64.powi(-24)] {
+                    agree(&format!("fill count={count} at={at} value={value}"), &base, |bytes, fast| {
+                        let s = span(bytes, at, count);
+                        if fast { fill_f32(s, value) } else { fill_any(s, value) }
+                    });
+                }
+            }
+        }
+    }
+
+    /// An answer as bits, so that which NaN and which zero came back counts.
+    fn answer(answer: &Answer) -> (u8, u64) {
+        match answer {
+            Answer::Number(value) => (0, value.to_bits()),
+            Answer::Nil => (1, 0),
+            Answer::Bool(value) => (2, u64::from(*value)),
+        }
+    }
+
+    const THRESHOLDS: [f64; 10] = [0.0, -0.0, 1.0, 0.1, -1.0, 1e39, -1e39, 1e-46, f64::INFINITY, f64::NAN];
+    /// Block boundaries and their neighbours, for the scans that work a block at a time.
+    const SCAN_LENGTHS: [usize; 15] = [0, 1, 2, 63, 64, 65, 66, 127, 128, 129, 130, 191, 192, 193, 257];
+
+    /// Every reduction member, comparison and threshold through both paths, on `bytes`.
+    fn reductions_agree(what: &str, bytes: &mut [u8], at: usize, count: usize) {
+        let s = span(bytes, at, count);
+        assert_eq!(extreme_f32(&s, false), extreme_any(&s, false), "argmin {what}");
+        assert_eq!(extreme_f32(&s, true), extreme_any(&s, true), "argmax {what}");
+        let ops = [
+            ReductionOp::Sum,
+            ReductionOp::Min,
+            ReductionOp::Max,
+            ReductionOp::Count,
+            ReductionOp::Any,
+            ReductionOp::All,
+        ];
+        for op in [ReductionOp::Sum, ReductionOp::Min, ReductionOp::Max] {
+            let reduction = Reduction::new(op, None);
+            assert_eq!(answer(&reduction.run_f32(&s, 0.0)), answer(&reduction.run_any(&s, 0.0)), "{op:?} {what}");
+        }
+        for comparison in Comparison::ALL {
+            for threshold in THRESHOLDS {
+                let label = format!("{comparison:?} {threshold} {what}");
+                for op in ops {
+                    let reduction = Reduction::new(op, Some(comparison));
+                    let (fast, generic) = (reduction.run_f32(&s, threshold), reduction.run_any(&s, threshold));
+                    assert_eq!(answer(&fast), answer(&generic), "{op:?} {label}");
+                }
+                assert_eq!(count_f32(s, comparison, threshold), count_any(s, comparison, threshold), "count {label}");
+                let mut fast = vec![u64::MAX; count.div_ceil(64)];
+                let mut generic = vec![0; count.div_ceil(64)];
+                select_f32(&s, comparison, threshold, &mut fast);
+                select_any(&s, comparison, threshold, &mut generic);
+                assert_eq!(fast, generic, "select {label}");
+            }
+        }
+    }
+
+    #[test]
+    fn reductions_agree_on_the_corpus() {
+        let mut words = Words(0x0dea_df00);
+        for count in LENGTHS.into_iter().chain(SCAN_LENGTHS) {
+            for at in [0, 1, 2, 3] {
+                let mut bytes = vec![0; at];
+                bytes.extend(words.corpus(count));
+                reductions_agree(&format!("count={count} at={at}"), &mut bytes, at, count);
+            }
+        }
+    }
+
+    /// One deciding element at every position around the blocks, over a constant background: the
+    /// improvement a block test must not miss, the tie it must not take, the NaN it must ignore.
+    #[test]
+    fn reductions_agree_with_one_deciding_element_anywhere() {
+        let backgrounds = [1.0f32, 0.0, -0.0, f32::NAN];
+        let deciders = [-2.0f32, 2.0, 1.0, 0.0, -0.0, f32::NAN, f32::INFINITY, f32::NEG_INFINITY, f32::from_bits(1)];
+        for count in [64usize, 65, 129, 130] {
+            for position in 0..count {
+                for background in backgrounds {
+                    for decider in deciders {
+                        let mut bytes: Vec<u8> = (0..count)
+                            .flat_map(|i| (if i == position { decider } else { background }).to_ne_bytes())
+                            .collect();
+                        let what = format!("count={count} position={position} {background} then {decider}");
+                        reductions_agree(&what, &mut bytes, 0, count);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Strictly improving and strictly worsening runs: the block scan's worst case and best case.
+    #[test]
+    fn extremes_agree_on_monotonic_runs() {
+        for count in SCAN_LENGTHS {
+            let mut rising: Vec<u8> = (0..count).flat_map(|i| (i as f32).to_ne_bytes()).collect();
+            let mut falling: Vec<u8> = (0..count).flat_map(|i| (-(i as f32)).to_ne_bytes()).collect();
+            reductions_agree(&format!("rising {count}"), &mut rising, 0, count);
+            reductions_agree(&format!("falling {count}"), &mut falling, 0, count);
+        }
+    }
+
+    #[test]
+    fn eligibility_is_exactly_contiguous_f32() {
+        let mut bytes = vec![0u8; 64];
+        let base = span(&mut bytes, 0, 2);
+        assert!(base.is_contiguous_f32());
+        for kind in [Kind::U8, Kind::I8, Kind::U16, Kind::I16, Kind::U32, Kind::I32, Kind::F64] {
+            assert!(!Span { kind, ..base }.is_contiguous_f32(), "{kind:?}");
+            assert!(!Span { kind, stride: 4, ..base }.is_contiguous_f32(), "{kind:?} at the same stride");
+        }
+        for stride in [5, 8, 16] {
+            assert!(!Span { stride, ..base }.is_contiguous_f32(), "stride {stride}");
+        }
     }
 }
