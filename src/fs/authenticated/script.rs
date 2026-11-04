@@ -12,10 +12,11 @@ use crate::extension::{ExtensionDescriptor, TagPolicy};
 use crate::options::Options;
 use crate::outcome::{Failure, Outcome, done, kind_of};
 use crate::stack::ValueView;
-use crate::userdata::Userdata;
+use crate::userdata::{Owned, Userdata};
 
 use super::{
-    AuthError, AuthenticatedReader, Commitment, DEFAULT_CHUNK_SIZE, VerifiedManifest, build_manifest, valid_chunk_size,
+    AuthError, AuthenticatedReader, Commitment, DEFAULT_CHUNK_SIZE, DEFAULT_HELD_BYTES, MAX_SCRIPT_HELD_BYTES,
+    VerifiedManifest, build_manifest, valid_chunk_size,
 };
 use crate::fs::display;
 use crate::fs::io::{non_negative, open_regular, window};
@@ -87,11 +88,14 @@ unsafe impl Userdata for AuthenticatedHandle {
 /// `fs.openAuthenticated(path, manifest, commitment)`. The manifest is authenticated before the
 /// path is touched, and copied only once it has matched.
 pub(crate) fn open_authenticated(
+    call: &Call<'_>,
     path: &[u8],
     manifest: BytesView<'_>,
     commitment: &[u8],
-) -> Result<Outcome<AuthenticatedHandle>> {
+    options: Option<ValueView<'_>>,
+) -> Result<Outcome<Owned<AuthenticatedHandle>>> {
     const WHAT: &str = "openAuthenticated";
+    let held = held_bytes(call, options)?;
     let trusted = Commitment::from_hex(commitment).map_err(|error| mistake(WHAT, &error))?;
     // SAFETY: the bytes are hashed and copied with no call into Lua while the slice lives, through
     // this call's only view of them.
@@ -103,13 +107,33 @@ pub(crate) fn open_authenticated(
     let host = crate::fs::host_path(WHAT, path)?;
     let file = done!(Outcome::of(open_regular(&host), WHAT, path));
     match AuthenticatedReader::open(file, verified.clone()) {
-        Ok(reader) => Ok(Outcome::Done(AuthenticatedHandle {
-            reader: RefCell::new(Some(reader)),
+        Ok(reader) => Ok(Outcome::Done(Owned(AuthenticatedHandle {
+            reader: RefCell::new(Some(reader.hold_bytes(held))),
             manifest: verified,
             name: path.into(),
-        })),
+        }))),
         Err(error) => Ok(Outcome::Failed(failure(WHAT, path, &error))),
     }
+}
+
+/// `{ heldBytes? }`: non-negative and at most [`MAX_SCRIPT_HELD_BYTES`], since a script's memory
+/// limit does not see what a reader holds.
+fn held_bytes(call: &Call<'_>, options: Option<ValueView<'_>>) -> Result<u64> {
+    const WHAT: &str = "openAuthenticated";
+    let Some(options) = options.filter(|view| !view.is_nil()) else {
+        return Ok(DEFAULT_HELD_BYTES);
+    };
+    let held = Options::read(call, options, "dream.fs.openAuthenticated", |o| o.optional::<Exact<i64>>("heldBytes"))?;
+    let Some(held) = held else {
+        return Ok(DEFAULT_HELD_BYTES);
+    };
+    let held = non_negative(WHAT, "heldBytes", held)?;
+    if held > MAX_SCRIPT_HELD_BYTES {
+        return Err(Error::runtime(format!(
+            "dream.fs.{WHAT}: heldBytes {held} is over the limit of {MAX_SCRIPT_HELD_BYTES}"
+        )));
+    }
+    Ok(held)
 }
 
 impl AuthenticatedHandle {

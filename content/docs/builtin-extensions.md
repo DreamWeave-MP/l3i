@@ -1603,7 +1603,7 @@ assert(nothing == nil and failure == "integrityFailed", reason)
 | Call | What it does |
 |---|---|
 | `authManifest(path, { chunkSize? })` | Reads the whole file; returns the manifest as a buffer and the commitment as 64 hex digits |
-| `openAuthenticated(path, manifest, commitment)` | Checks the manifest against the commitment, then opens the file, which must be the committed length |
+| `openAuthenticated(path, manifest, commitment, { heldBytes? })` | Checks the manifest against the commitment, then opens the file, which must be the committed length; `heldBytes` bounds the verified chunks it keeps |
 | `reader:readAt(position, length)` | Exactly `length` verified bytes as a new buffer |
 | `reader:readAtInto(target, position, length, bufferOffset?)` | The same into `target`; returns the count |
 | `reader:size()`, `chunkSize()`, `commitment()` | What was committed to, not what the file says now; these work after `close` |
@@ -1637,14 +1637,21 @@ a truncated map can kill the process and a mapped page can change after it was h
 copied into memory nothing else can reach, hashed there, and only then shown. A write that lands
 between two chunks of one read fails that read. On Unix a file renamed over the path doesn't affect
 an open reader, whose handle keeps the old revision. Windows may refuse that rename while the reader
-holds the file. A reader keeps the last chunk it verified for a partial read, so a repeat of that
-chunk returns the committed bytes without noticing damage done since; those bytes are still correct.
-What was never verified is never kept.
+holds the file. A reader keeps chunks it verified for partial reads, so a repeat of a held chunk
+returns the committed bytes without noticing damage done since; those bytes are still correct, and
+the damage surfaces once the chunk is evicted. What was never verified is never kept.
 
 **Memory.** The returned buffer is yours and nothing else refers to it. There is no zero-copy view
 into the file, because a view of the file could change after verification. Whole chunks are read
-straight into the result, so a large read is copied once; a partial chunk goes through one
-reader-owned chunk of scratch. The manifest is copied once, after it has matched.
+straight into the result, so a large read is copied once and holds nothing; a partial chunk goes
+through memory the reader owns. The manifest is copied once, after it has matched.
+
+**Held chunks.** A reader keeps up to 256 KiB of the chunks it verified for partial reads, least
+recently used going first, and takes that memory only as it reads. `heldBytes` changes the budget, up
+to 64 MiB; it always holds at least one chunk, and at most 1024. Reads that cluster, or that turn
+between a table and its records, gain most: 65 µs down to 17 and 33 µs per read at 16 KiB chunks, on a
+CPU without SHA extensions. Uniform random reads gain nothing and lose nothing. A binary search or a
+skewed load only starts gaining at about 1 MiB, so ask for that if you know you have one.
 
 **Bounds.** Chunk sizes are powers of two from 512 bytes to 16 MiB, at most 16,777,216 chunks to an
 object, which is 256 GiB at the default 16 KiB. A manifest is hashed before any part of it is
@@ -1652,7 +1659,8 @@ believed, and one over 512 MiB is refused without hashing. Read a manifest from 
 through `readAt` with a limit you choose (as above), since `readFile` allocates whatever the file's
 size says. A manifest takes 32 bytes per chunk plus 32. Verifying holds a second copy of the manifest
 once it has matched, so the largest one peaks at about 1 GiB with the caller's. A script's `readAt`
-allocates under the runtime's memory limit. From Rust, `read_at` allocates whatever length the caller
+allocates under the runtime's memory limit, but a reader's copy of its manifest and its held chunks
+live outside the Luau heap, where that limit does not see them. From Rust, `read_at` allocates whatever length the caller
 asked for inside the object, so a host serving untrusted requests should bound that length or use
 `read_into` with windows of its own; on a system that overcommits, memory running out while the
 buffer fills is not an error anyone can catch.

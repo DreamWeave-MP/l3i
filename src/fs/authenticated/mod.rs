@@ -87,10 +87,11 @@
 //! makes that memory private until the call returns. On any failure [`AuthenticatedReader::read_into`]
 //! zeroes the whole target first, so neither unverified bytes nor a verified prefix survive.
 //!
-//! A reader keeps the last chunk it verified for a partial read, so small reads in order do not
-//! hash one chunk per read. A repeat of that chunk is served from the private copy and does not
-//! touch the source, so damage done to the file since goes unnoticed until the chunk leaves the
-//! slot. What the read returns is still exactly the committed bytes, which is the promise.
+//! A reader keeps the chunks it verified for partial reads, up to [`DEFAULT_HELD_BYTES`] unless told
+//! otherwise, so small reads that cluster do not hash a chunk per read. A repeat of a held chunk is
+//! served from the private copy and does not touch the source, so damage done to the file since goes
+//! unnoticed until the chunk is evicted. What the read returns is still exactly the committed bytes,
+//! which is the promise.
 
 mod script;
 
@@ -114,6 +115,14 @@ pub const MAX_CHUNK_SIZE: u32 = 16 << 20;
 /// The chunk size for callers with no reason to choose, from `benches/fs-authenticated-results.md`:
 /// a sparse read costs a quarter of what it does at 64 KiB, and the manifest a quarter of 4 KiB's.
 pub const DEFAULT_CHUNK_SIZE: u32 = 16 << 10;
+/// The verified chunks a reader keeps for partial reads unless told otherwise, in bytes: enough at
+/// the default chunk size to absorb reads that cluster (`benches/fs-authenticated-results.md`).
+pub const DEFAULT_HELD_BYTES: u64 = 256 << 10;
+/// The most a script may ask a reader to hold, in bytes. Held chunks are not on the Luau heap, so
+/// the runtime's memory limit does not see them.
+pub const MAX_SCRIPT_HELD_BYTES: u64 = 64 << 20;
+/// The most chunks a reader holds, whatever its budget: each partial read searches them in turn.
+const MAX_HELD_CHUNKS: u64 = 1024;
 /// The most chunks a manifest may declare, which bounds the hash a manifest can ask for.
 pub const MAX_CHUNKS: u64 = 1 << 24;
 /// The longest manifest [`VerifiedManifest::verify`] looks at.
@@ -590,12 +599,21 @@ impl Drop for Wipe<'_> {
 pub struct AuthenticatedReader<S> {
     source: S,
     manifest: Arc<VerifiedManifest>,
-    /// One chunk for reads that cover only part of one. Private, and never shown to anyone
-    /// before its digest has matched.
-    scratch: Vec<u8>,
-    /// Which chunk `scratch` holds, set only once its digest has matched and cleared before
-    /// anything overwrites it. Small reads in order would otherwise hash one chunk per read.
-    verified: Option<u64>,
+    /// Chunks for reads that cover only part of one, at most `max_held` of them, made as needed.
+    held: Vec<Held>,
+    max_held: usize,
+    /// Counts partial reads, to find the least recently used slot.
+    clock: u64,
+}
+
+/// One private chunk buffer. Never shown to anyone before its digest has matched.
+#[derive(Debug)]
+struct Held {
+    /// Which chunk `bytes` holds, set only once its digest has matched and cleared before anything
+    /// overwrites it. Small reads in order would otherwise hash one chunk per read.
+    chunk: Option<u64>,
+    used: u64,
+    bytes: Vec<u8>,
 }
 
 impl<S: RangeSource> AuthenticatedReader<S> {
@@ -610,7 +628,22 @@ impl<S: RangeSource> AuthenticatedReader<S> {
         if actual != manifest.object_length {
             return Err(AuthError::LengthMismatch { expected: manifest.object_length, actual });
         }
-        Ok(AuthenticatedReader { source, manifest, scratch: Vec::new(), verified: None })
+        Ok(AuthenticatedReader { source, manifest, held: Vec::new(), max_held: 1, clock: 0 }
+            .hold_bytes(DEFAULT_HELD_BYTES))
+    }
+
+    /// Keeps verified chunks for partial reads up to about `bytes` in total, least recently used
+    /// going first; [`DEFAULT_HELD_BYTES`] until this is called. A read of part of a chunk always
+    /// needs one, so the least this holds is one chunk, and the most is 1024. Memory is taken only
+    /// as chunks are read. A larger budget also means more chunks that are served without looking
+    /// at the source again; what they return is still exactly the committed bytes.
+    #[must_use]
+    pub fn hold_bytes(mut self, bytes: u64) -> Self {
+        let count = (bytes / u64::from(self.manifest.chunk_size)).clamp(1, MAX_HELD_CHUNKS);
+        // Lossless: at most MAX_HELD_CHUNKS.
+        self.max_held = count as usize;
+        self.held.truncate(self.max_held);
+        self
     }
 
     /// The manifest this reader checks against.
@@ -714,31 +747,48 @@ impl<S: RangeSource> AuthenticatedReader<S> {
         Ok(())
     }
 
-    /// Makes chunk `index` the verified one in the scratch buffer, unless it already is, then
-    /// copies what `target` wants of it from `offset`; returns the count copied.
+    /// Makes sure a slot holds chunk `index` verified, then copies what `target` wants of it from
+    /// `offset`; returns the count copied.
     fn copy_part(&mut self, index: u64, offset: u64, target: &mut [u8]) -> Result<usize, AuthError> {
         let (start, end) = self.manifest.chunk_bounds(index);
         // Lossless: a chunk's length is at most MAX_CHUNK_SIZE.
         let length = (end - start) as usize;
-        if self.verified != Some(index) {
-            // Cleared first: from here until the digest matches, the scratch is unverified.
-            self.verified = None;
-            if self.scratch.len() < length {
-                self.scratch = zeroed(u64::from(self.manifest.chunk_size).min(self.manifest.object_length))?;
-            }
-            let chunk = &mut self.scratch[..length];
-            let actual = fill_from(&self.source, start, chunk).map_err(AuthError::Io)?;
-            if actual != length {
-                return Err(AuthError::ShortChunk { index, expected: length as u64, actual: actual as u64 });
-            }
-            self.manifest.check_chunk(index, chunk)?;
-            self.verified = Some(index);
-        }
-        let chunk = &self.scratch[..length];
+        let slot = match self.held.iter().position(|held| held.chunk == Some(index)) {
+            Some(slot) => slot,
+            None => self.load(index, start, length)?,
+        };
+        self.clock += 1;
+        self.held[slot].used = self.clock;
+        let chunk = &self.held[slot].bytes[..length];
         // Lossless: `offset` is inside this chunk.
         let within = (offset - start) as usize;
         let count = target.len().min(length - within);
         target[..count].copy_from_slice(&chunk[within..within + count]);
         Ok(count)
+    }
+
+    /// Reads and verifies chunk `index` into a free slot, a new one, or the least recently used.
+    fn load(&mut self, index: u64, start: u64, length: usize) -> Result<usize, AuthError> {
+        let free = self.held.iter().position(|held| held.chunk.is_none());
+        let slot = match free {
+            Some(slot) => slot,
+            None if self.held.len() < self.max_held => {
+                let size = u64::from(self.manifest.chunk_size).min(self.manifest.object_length);
+                self.held.push(Held { chunk: None, used: 0, bytes: zeroed(size)? });
+                self.held.len() - 1
+            }
+            None => (0..self.held.len()).min_by_key(|slot| self.held[*slot].used).unwrap_or(0),
+        };
+        let held = &mut self.held[slot];
+        // Cleared first: from here until the digest matches, these bytes are unverified.
+        held.chunk = None;
+        let chunk = &mut held.bytes[..length];
+        let actual = fill_from(&self.source, start, chunk).map_err(AuthError::Io)?;
+        if actual != length {
+            return Err(AuthError::ShortChunk { index, expected: length as u64, actual: actual as u64 });
+        }
+        self.manifest.check_chunk(index, chunk)?;
+        held.chunk = Some(index);
+        Ok(slot)
     }
 }

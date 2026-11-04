@@ -567,7 +567,8 @@ fn small_reads_in_order_verify_each_chunk_once() {
 fn the_held_chunk_returns_committed_bytes_after_the_file_changes() {
     let chunk = CHUNK as usize;
     let bytes = object(chunk * 2);
-    let (source, mut reader) = scripted(&bytes, CHUNK);
+    let (source, reader) = scripted(&bytes, CHUNK);
+    let mut reader = reader.hold_bytes(0);
     assert_eq!(reader.read_at(5, 1).unwrap(), [bytes[5]]);
     source.bytes.borrow_mut()[5] ^= 1;
     // Served from the verified copy: the right bytes, whatever the file says now.
@@ -578,13 +579,75 @@ fn the_held_chunk_returns_committed_bytes_after_the_file_changes() {
 }
 
 #[test]
+fn the_budget_bounds_what_is_held_and_the_oldest_goes_first() {
+    let chunk = u64::from(CHUNK);
+    let bytes = object(CHUNK as usize * 6);
+    let (source, reader) = scripted(&bytes, CHUNK);
+    let mut reader = reader.hold_bytes(2 * chunk);
+    let read = |reader: &mut AuthenticatedReader<&'static Scripted>, index: u64| {
+        let at = index * chunk + 1;
+        assert_eq!(reader.read_at(at, 1).unwrap(), [bytes[at as usize]]);
+    };
+    read(&mut reader, 0);
+    read(&mut reader, 1);
+    assert_eq!(source.calls.get(), 2);
+    // Both held, in either order, and using the older makes the other the older.
+    read(&mut reader, 0);
+    read(&mut reader, 1);
+    read(&mut reader, 0);
+    assert_eq!(source.calls.get(), 2);
+    read(&mut reader, 2);
+    assert_eq!(source.calls.get(), 3, "chunk 1 went, chunk 0 stayed");
+    read(&mut reader, 0);
+    assert_eq!(source.calls.get(), 3);
+    read(&mut reader, 1);
+    assert_eq!(source.calls.get(), 4, "chunk 1 had gone");
+    // A budget under one chunk still holds one, since a partial read needs somewhere to verify.
+    let (source, reader) = scripted(&bytes, CHUNK);
+    let mut reader = reader.hold_bytes(1);
+    read(&mut reader, 0);
+    read(&mut reader, 0);
+    read(&mut reader, 1);
+    read(&mut reader, 0);
+    assert_eq!(source.calls.get(), 3);
+}
+
+#[test]
+fn the_default_budget_absorbs_reads_that_turn_about() {
+    let chunk = u64::from(CHUNK);
+    let bytes = object(CHUNK as usize * 6);
+    let (source, mut reader) = scripted(&bytes, CHUNK);
+    for _ in 0..50 {
+        assert_eq!(reader.read_at(1, 1).unwrap(), [bytes[1]]);
+        assert_eq!(reader.read_at(4 * chunk + 1, 1).unwrap(), [bytes[4 * CHUNK as usize + 1]]);
+    }
+    assert_eq!(source.calls.get(), 2);
+}
+
+#[test]
+fn damage_to_one_held_chunk_never_changes_another() {
+    let chunk = CHUNK as usize;
+    let bytes = object(chunk * 4);
+    let (source, mut reader) = scripted(&bytes, CHUNK);
+    assert_eq!(reader.read_at(1, 1).unwrap(), [bytes[1]]);
+    source.bytes.borrow_mut()[chunk * 2 + 1] ^= 1;
+    // A load that fails keeps what was held and holds nothing new, however often it is asked.
+    for _ in 0..3 {
+        assert!(matches!(reader.read_at(chunk as u64 * 2 + 1, 1), Err(AuthError::ChunkMismatch { index: 2 })));
+    }
+    assert_eq!(reader.read_at(1, 1).unwrap(), [bytes[1]]);
+    assert_eq!(source.calls.get(), 4, "one good load and three failed ones");
+}
+
+#[test]
 fn a_chunk_that_failed_is_never_treated_as_held() {
     let chunk = CHUNK as usize;
     let bytes = object(chunk * 2);
-    let (source, mut reader) = scripted(&bytes, CHUNK);
+    let (source, reader) = scripted(&bytes, CHUNK);
+    let mut reader = reader.hold_bytes(0);
     assert_eq!(reader.read_at(chunk as u64, 1).unwrap(), [bytes[chunk]]);
     source.bytes.borrow_mut()[5] ^= 1;
-    // The failure overwrote the scratch that held chunk 1, and it must not count as either.
+    // The failure overwrote the slot that held chunk 1, and it must not count as either.
     assert!(matches!(reader.read_at(5, 1), Err(AuthError::ChunkMismatch { index: 0 })));
     assert!(matches!(reader.read_at(5, 1), Err(AuthError::ChunkMismatch { index: 0 })));
     assert_eq!(reader.read_at(chunk as u64, 1).unwrap(), [bytes[chunk]]);
@@ -968,6 +1031,30 @@ mod through_luau {
     }
 
     #[test]
+    fn a_script_can_choose_what_a_reader_holds() {
+        let scratch = Scratch::new("luau-held");
+        let script = prologue(&scratch, &object(CHUNK as usize * 3));
+        runtime()
+            .exec(&format!(
+                "{script} \
+                 local function read(options) \
+                    local reader = assert(fs.openAuthenticated(path, manifest, commitment, options)) \
+                    assert(buffer.len(assert(reader:readAt(1, 1))) == 1, 'held chunk 0') \
+                    assert(buffer.len(assert(reader:readAt(513, 1))) == 1, 'held chunk 1') \
+                    return reader \
+                 end \
+                 local one, plenty = read({{ heldBytes = 0 }}), read({{ heldBytes = 1048576 }}) \
+                 local default = read(nil) \
+                 assert(fs.writeFile(path, 'x', {{ offset = 1 }})) \
+                 local got, _, kind = one:readAt(1, 1) \
+                 assert(got == nil and kind == 'integrityFailed', 'chunk 0 had been evicted') \
+                 assert(buffer.readu8(assert(plenty:readAt(1, 1)), 0) == 1, 'chunk 0 is still held, committed bytes') \
+                 assert(buffer.readu8(assert(default:readAt(1, 1)), 0) == 1, 'by default too')"
+            ))
+            .unwrap();
+    }
+
+    #[test]
     fn the_default_chunk_size_is_published() {
         let scratch = Scratch::new("luau-default");
         std::fs::write(scratch.0.join("object"), object(10)).unwrap();
@@ -1084,7 +1171,10 @@ mod through_luau {
                  refuses('power of two', fs.authManifest, path, {{ chunkSize = -512 }}) \
                  refuses('power of two', fs.authManifest, path .. '.missing', {{ chunkSize = 0 }}) \
                  refuses('power of two', fs.authManifest, path, {{ chunkSize = 2^40 }}) \
-                 refuses('nope', fs.authManifest, path, {{ nope = true }})"
+                 refuses('nope', fs.authManifest, path, {{ nope = true }}) \
+                 refuses('negative', fs.openAuthenticated, path, manifest, commitment, {{ heldBytes = -1 }}) \
+                 refuses('over the limit', fs.openAuthenticated, path, manifest, commitment, {{ heldBytes = 2^40 }}) \
+                 refuses('nope', fs.openAuthenticated, path, manifest, commitment, {{ nope = 1 }})"
             ))
             .unwrap();
     }

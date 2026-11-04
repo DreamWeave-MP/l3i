@@ -264,7 +264,7 @@ const FS_AUTHENTICATED_SCRIPT: (&str, &str) = (
      local fs = require('@dream/fs')\n\
      local manifest, commitment = fs.authManifest('x', { chunkSize = 65536 })\n\
      if manifest and commitment then\n\
-       local verified: dream_fs_AuthenticatedReader?, why: string?, failure: dream_fs_AuthErrorKind? = fs.openAuthenticated('x', manifest, commitment)\n\
+       local verified: dream_fs_AuthenticatedReader?, why: string?, failure: dream_fs_AuthErrorKind? = fs.openAuthenticated('x', manifest, commitment, { heldBytes = 1048576 })\n\
        if verified then\n\
          local range = verified:readAt(0, 4)\n\
          local copied: number = verified:readAtInto(buffer.create(4), 0, 4, 0) or 0\n\

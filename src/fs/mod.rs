@@ -428,8 +428,8 @@ const MEMBERS: &[Member] = &[
     #[cfg(feature = "fs-authenticated")]
     member(
         "openAuthenticated",
-        "(path: string, manifest: buffer | string, commitment: string) -> (dream_fs_AuthenticatedReader?, string?, dream_fs_AuthErrorKind?)",
-        "A reader whose every returned byte is verified against commitment, 64 hex digits from a trusted source: the manifest must hash to it, and the file must be the committed length.",
+        "(path: string, manifest: buffer | string, commitment: string, options: { heldBytes: number? }?) -> (dream_fs_AuthenticatedReader?, string?, dream_fs_AuthErrorKind?)",
+        "A reader whose every returned byte is verified against commitment, 64 hex digits from a trusted source: the manifest must hash to it, and the file must be the committed length. heldBytes bounds the verified chunks it keeps for partial reads (default 256 KiB, at most 64 MiB, at least one chunk).",
         false,
     ),
     member(
@@ -663,9 +663,7 @@ impl Extension for FsExtension {
         #[cfg(feature = "fs-authenticated")]
         bind!("authManifest", authenticated::auth_manifest);
         #[cfg(feature = "fs-authenticated")]
-        bind!("openAuthenticated", |path: &[u8], manifest: crate::convert::BytesView<'_>, commitment: &[u8]| {
-            authenticated::open_authenticated(path, manifest, commitment).map(owned)
-        });
+        bind!("openAuthenticated", authenticated::open_authenticated);
         bind!("stat", |call: &Call<'_>, path: &[u8]| stat(call, "stat", path, true));
         bind!("lstat", |call: &Call<'_>, path: &[u8]| stat(call, "lstat", path, false));
         bind!("exists", |path: &[u8]| -> Result<Outcome<bool>> {

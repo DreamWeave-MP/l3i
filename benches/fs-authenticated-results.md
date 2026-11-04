@@ -3,7 +3,9 @@
 Reproduce with `cargo bench --features fs-authenticated -- fs_authenticated`, which prints CSV.
 The default is two object sizes (2 MiB, 64 MiB) and takes a few minutes.
 `L3I_AUTH_BENCH_FULL=1` adds 256 KiB, 16 MiB and 128 MiB with a longer budget; **that table has not
-been run**, so nothing below speaks for those sizes.
+been run**, so nothing below speaks for those sizes. These tables hold one chunk (`hold_bytes(0)`), so
+they measure the hash and not the cache. The filter `fs_authenticated_cache` runs only the comparison
+under "Holding more chunks", about three minutes on this machine.
 
 ## What this is and isn't
 
@@ -103,9 +105,44 @@ Afterwards that scan is close to plain reads (1165 and 1126 µs), since 256 KiB 
 the 4096 small reads are what remains. Reading a 64 MiB object 16 KiB at a time through 64 KiB chunks
 went from about 1154 ms to 285 and 272 ms for the same reason.
 
+## Holding more chunks
+
+One held chunk thrashes as soon as reads turn between two places. Same 64 MiB object, reads of 64
+bytes, on a reader warmed by one unmeasured pass, two runs, median microseconds per read. In brackets
+is the bytes hashed per read, which is the same in both runs because the seeds are fixed, and is the
+better number: other work on the machine moved the times, by nearly half in a few 64 KiB rows.
+
+16 KiB chunks:
+
+| Workload | 1 chunk (16 KiB) | 4 (64 KiB) | 16 (256 KiB, the default) | 64 (1 MiB) | 256 (4 MiB) |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Uniform random | 63, 68 (16,458) | 64, 67 (16,438) | 64, 66 (16,384) | 63, 67 (16,187) | 61, 64 (15,399) |
+| Skewed, popularity 1/rank | 62, 65 (16,115) | 59, 62 (15,434) | 52, 55 (13,504) | 39, 40 (9,898) | 20, 21 (4,932) |
+| Binary search | 80, 79 (19,579) | 75, 76 (18,352) | 73, 72 (17,965) | 53, 52 (12,761) | 38, 37 (8,793) |
+| Bursts within 256 KiB | 65, 62 (15,506) | 53, 50 (12,626) | 17, 17 (4,216) | 17, 17 (4,123) | 17, 17 (3,926) |
+| A table, then a record, in turn | 68, 67 (16,443) | 44, 43 (10,250) | 57, 33 (8,208) | 36, 33 (8,130) | 36, 31 (7,666) |
+
+64 KiB chunks:
+
+| Workload | 1 chunk (64 KiB) | 4 (256 KiB, the default) | 16 (1 MiB) | 64 (4 MiB) |
+| --- | ---: | ---: | ---: | ---: |
+| Uniform random | 339, 261 (65,449) | 294, 259 (65,186) | 288, 266 (64,662) | 263, 256 (61,822) |
+| Skewed, popularity 1/rank | 274, 261 (64,750) | 401, 245 (61,997) | 229, 214 (53,434) | 149, 142 (35,826) |
+| Binary search | 269, 262 (65,055) | 250, 245 (59,813) | 241, 235 (57,978) | 142, 140 (35,608) |
+| Bursts within 256 KiB | 200, 200 (49,963) | 45, 40 (9,941) | 23, 21 (5,035) | 30, 20 (5,035) |
+| A table, then a record, in turn | 401, 261 (65,623) | 137, 132 (32,593) | 135, 130 (32,156) | 129, 125 (31,020) |
+
+Holding more never measurably cost anything on the load it cannot help: uniform random reads stayed
+at the hash's price up to 256 slots, whose search is small next to one chunk's hash. The default is a
+budget in bytes, 256 KiB, because a count would mean 128 MiB at the largest chunk size. It takes the
+two loads with locality from about 65 µs down to 17 and 33 µs at 16 KiB chunks, and takes memory only
+as chunks are read. Binary search and skewed loads need far more: their gains start around 1 MiB, and
+a host that knows it has such a load should say so with `heldBytes`. These are synthetic loads, so
+they show what each shape gains, not what any real program's mix will.
+
 ## What remains expensive
 
 Hashing. A read of most of the object costs about what full verification does (90%: 270 to 286 ms
 against 310 to 314), so it stays competitive but saves little, and it is roughly ten times a plain
-read on this CPU. A read that happens to straddle a boundary pays for two chunks. Random small reads
-never hit the held chunk.
+read on this CPU. A read that happens to straddle a boundary pays for two chunks. Uniform random small
+reads almost never hit a held chunk, whatever the budget.

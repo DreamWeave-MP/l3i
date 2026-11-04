@@ -10,7 +10,7 @@
 //! reads the manifest from its file, verifies it, opens the object and only then reads, per sample.
 //! A `pagecold` pattern evicts the object's pages first, where the OS allows it without root.
 
-#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss, clippy::cast_sign_loss)]
 
 use std::cell::Cell;
 use std::fs::File;
@@ -272,7 +272,7 @@ fn cold_sample(path: &Path, manifest_path: &Path, commitment: &Commitment, range
     let manifest = std::fs::read(manifest_path).unwrap();
     let verified = VerifiedManifest::verify(&manifest, commitment).unwrap();
     let source = Counted::new(File::open(path).unwrap());
-    let mut reader = AuthenticatedReader::open(&source, verified).unwrap();
+    let mut reader = AuthenticatedReader::open(&source, verified).unwrap().hold_bytes(0);
     for (offset, length) in ranges {
         black_box(reader.read_at(*offset, *length).unwrap());
     }
@@ -364,6 +364,114 @@ fn publication(object: &ObjectFile, size: u64, chunk: u32, budget: &Budget) -> (
     (built.bytes, built.commitment)
 }
 
+/// A workload for the held-chunk comparison: the offsets of one sample's small reads.
+fn workload(name: &str, size: u64, count: usize, random: &mut Random) -> Vec<u64> {
+    const READ: u64 = 64;
+    let last = size - READ;
+    let mut offsets = Vec::with_capacity(count + 32);
+    match name {
+        "uniform" => offsets.extend((0..count).map(|_| random.next() % last)),
+        // Popularity falling as 1/rank over 4096 records scattered across the object, an 80/20
+        // shaped load; ranks come from inverting the harmonic sum.
+        "skewed" => {
+            let records = 4096.0_f64;
+            for _ in 0..count {
+                let unit = (random.next() >> 11) as f64 / (1_u64 << 53) as f64;
+                let rank = records.powf(unit).floor() as u64;
+                let scattered = rank.wrapping_mul(0x9E37_79B9_7F4A_7C15) % last;
+                offsets.push(scattered);
+            }
+        }
+        // Binary search of sorted fixed records: every search walks the same top levels.
+        "binary_search" => {
+            while offsets.len() < count {
+                let key = random.next() % last;
+                let (mut low, mut high) = (0, last);
+                while high - low > READ {
+                    let middle = low + (high - low) / 2;
+                    offsets.push(middle);
+                    if key < middle {
+                        high = middle;
+                    } else {
+                        low = middle;
+                    }
+                }
+            }
+        }
+        // A burst of reads in one small area, then somewhere else.
+        "clustered" => {
+            while offsets.len() < count {
+                let area = random.next() % (last - 256 * KIB);
+                offsets.extend((0..64).map(|_| area + random.next() % (256 * KIB)));
+            }
+        }
+        // A table near the start, then the record it names: one read each, turn about.
+        "table_then_record" => {
+            while offsets.len() < count {
+                offsets.push(random.next() % (32 * KIB));
+                offsets.push(64 * KIB + random.next() % (last - 64 * KIB));
+            }
+        }
+        _ => unreachable!(),
+    }
+    offsets
+}
+
+/// One chunk held against several, under loads where holding more could matter. Each row's reader
+/// is warmed by a first sample that is not measured. Bytes hashed per read is what to compare; a count
+/// of source calls would mislead, since a read that straddles two chunks makes two.
+pub fn cache_main() {
+    let quick = std::env::args().any(|arg| arg == "--test");
+    let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("auth-cache-bench-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let size = if quick { 2 * MIB } else { 64 * MIB };
+    let object = ObjectFile::new(&directory, size);
+    let cases: &[(u32, &[usize], usize, usize)] = if quick {
+        &[(16 << 10, &[1, 8], 64, 1)]
+    } else {
+        &[(16 << 10, &[1, 2, 4, 8, 16, 64, 256], 2000, 5), (64 << 10, &[1, 2, 4, 16, 64], 500, 3)]
+    };
+    println!("fs_authenticated_cache,chunk,workload,slots,held_bytes,median_us_per_read,bytes_hashed_per_read");
+    for &(chunk, slots, reads, samples) in cases {
+        let file = File::open(&object.path).unwrap();
+        let built = build_manifest(&file, chunk).unwrap();
+        let verified = std::sync::Arc::new(VerifiedManifest::verify(&built.bytes, &built.commitment).unwrap());
+        for name in ["uniform", "skewed", "binary_search", "clustered", "table_then_record"] {
+            for &count in slots {
+                let source = Counted::new(File::open(&object.path).unwrap());
+                let budget = count as u64 * u64::from(chunk);
+                let mut reader = AuthenticatedReader::open(&source, verified.clone()).unwrap().hold_bytes(budget);
+                let mut random = Random(0x5EED_CAC4);
+                for offset in workload(name, size, reads, &mut random) {
+                    black_box(reader.read_at(offset, 64).unwrap());
+                }
+                let mut times = Vec::new();
+                let (mut total, mut hashed) = (0, 0);
+                for _ in 0..samples {
+                    let offsets = workload(name, size, reads, &mut random);
+                    source.calls.set(0);
+                    source.bytes.set(0);
+                    let before = Instant::now();
+                    for offset in &offsets {
+                        black_box(reader.read_at(*offset, 64).unwrap());
+                    }
+                    times.push(before.elapsed().as_secs_f64() * 1e6 / offsets.len() as f64);
+                    total += offsets.len();
+                    hashed += source.bytes.get();
+                }
+                times.sort_unstable_by(f64::total_cmp);
+                println!(
+                    "fs_authenticated_cache,{chunk},{name},{count},{budget},{median:.1},{per:.0}",
+                    median = times[times.len() / 2],
+                    per = hashed as f64 / total as f64,
+                );
+            }
+        }
+    }
+    drop(object);
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
 pub fn main() {
     let quick = std::env::args().any(|arg| arg == "--test");
     let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("auth-bench-{}", std::process::id()));
@@ -421,7 +529,8 @@ pub fn main() {
             for pattern in patterns(quick) {
                 let cold_pages = matches!(pattern, Pattern::PageCold(_));
                 let source = Counted::new(File::open(&object.path).unwrap());
-                let mut reader = AuthenticatedReader::open(&source, verified.clone()).unwrap();
+                // One chunk held, so these rows measure the hash; `cache_main` measures holding more.
+                let mut reader = AuthenticatedReader::open(&source, verified.clone()).unwrap().hold_bytes(0);
                 let case = Case { size, chunk: Some(u64::from(chunk)), mode: "warm", pattern, budget: &budget };
                 measure(&case, |random| {
                     let ranges = pattern.ranges(size, random);

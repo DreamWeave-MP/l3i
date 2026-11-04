@@ -70,6 +70,10 @@ fn main() {
     if wanted("fs_authenticated") {
         fs_authenticated::main();
     }
+    #[cfg(feature = "fs-authenticated")]
+    if wanted("fs_authenticated_cache") {
+        fs_authenticated::cache_main();
+    }
     #[cfg(feature = "intern")]
     if wanted("intern") {
         intern::main();
