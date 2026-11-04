@@ -230,6 +230,12 @@ of `steps` kilobytes (0 is one basic step), true when a cycle finished; the same
 time. `Runtime::gc(GcControl)` and the rest of the collector controls are on
 [Direct access and the VM](@/docs/api/direct.md).
 
+{{ api_signature(value="fn open_collectgarbage(&self) -> Result<()>") }}
+
+Installs [the `collectgarbage` global](@/docs/runtime-options.md#the-collector) on a runtime
+without a plan, before it is sandboxed. A runtime made from a plan refuses: there
+`RuntimePolicy::collectgarbage` decides, so the runtime and its type definitions agree.
+
 ### The stack
 
 {{ api_signature(value="fn stack(&self) -> Stack<'_>") }}
