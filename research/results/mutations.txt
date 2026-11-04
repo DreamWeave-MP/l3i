@@ -1,0 +1,18 @@
+# Injected bugs, one at a time, against the research test suite (release).
+# 'control' changes only a comment and must survive; everything else must be caught.
+1 [relu keeps -0] caught: tests::strict_f32_edges_are_exact_on_every_instantiation tests::randomized_graphs_views_and_broadcasts_match_both_oracles 
+2 [relu erases NaN] caught: tests::strict_f32_edges_are_exact_on_every_instantiation tests::randomized_graphs_views_and_broadcasts_match_both_oracles 
+3 [matmul order] caught: tests::randomized_matmul_matches_the_ordered_triple_loop 
+4 [matmul FMA] caught: tests::randomized_matmul_matches_the_ordered_triple_loop 
+5 [walk restarts at column 0] caught: tests::randomized_graphs_views_and_broadcasts_match_both_oracles 
+6 [padded rows read as contiguous] caught: tests::randomized_matmul_matches_the_ordered_triple_loop tests::randomized_graphs_views_and_broadcasts_match_both_oracles 
+7 [column broadcast stride] caught: tests::randomized_graphs_views_and_broadcasts_match_both_oracles 
+8 [matmul skips zeros] caught: tests::strict_f32_edges_are_exact_on_every_instantiation tests::randomized_matmul_matches_the_ordered_triple_loop 
+9 [matmul trusts output zeros] caught: tests::randomized_matmul_matches_the_ordered_triple_loop 
+10 [control: comment only, must survive] SURVIVED
+11 [registers retire early] caught: tests::randomized_graphs_views_and_broadcasts_match_both_oracles 
+12 [constant fold keeps -0] caught: tests::strict_f32_edges_are_exact_on_every_instantiation 
+13 [input shape check removed] caught: tests::input_mismatches_are_rejected_before_any_work 
+14 [views can widen] caught: tests::views_cannot_widen_and_share_their_owner 
+15 [payload never released] caught: tests::empty_shapes_and_budget_exhaustion_recover tests::mixed_stages_release_temporaries_and_share_subexpressions tests::views_cannot_widen_and_share_their_owner tests::one_program_runs_different_inputs_concurrently_and_captures_nothing tests::randomized_matmul_matches_the_ordered_triple_loop tests::randomized_graphs_views_and_broadcasts_match_both_oracles 
+16 [output alias allowed] caught: tests::jsl_programs_and_teardown 

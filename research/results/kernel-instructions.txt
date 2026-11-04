@@ -1,0 +1,37 @@
+# Instruction histograms of the kernel instantiations (objdump, commit b3f1b1a, rustc 1.99.1). No fused multiply-add appears.
+
+== elementwise_avx2
+     52 vmovups
+     16 vmulss
+     16 vaddss
+     13 vmulps
+     13 vaddps
+      5 vcmpnleps
+      5 vcmpless
+      5 vandps
+      5 vandnps
+
+== matmul_avx2
+     22 vmulps
+     22 vaddps
+     13 vmovups
+      6 vmulss
+      6 vaddss
+
+== elementwise_baseline
+     36 movups
+     16 mulss
+     16 addss
+      6 mulps
+      6 addps
+      3 cmpless
+      3 andnps
+      2 cmpnleps
+      2 andps
+
+== matmul_baseline
+     18 movups
+      8 mulps
+      8 addps
+      6 mulss
+      6 addss
