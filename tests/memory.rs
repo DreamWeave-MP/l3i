@@ -260,6 +260,62 @@ unsafe impl Userdata for Native {
     const NAME: &'static str = "dreamweave.tests.Native";
 }
 
+thread_local!(static REVEALED: Cell<bool> = const { Cell::new(false) });
+
+/// Reaches `second` only once the collector has marked the userdata behind `first`.
+struct Chain {
+    first: Rc<WeakRef>,
+    second: Rc<WeakRef>,
+}
+
+impl EmbedderGc for Chain {
+    fn reset(&self) {
+        REVEALED.with(|revealed| revealed.set(false));
+    }
+    fn mark_reachable(&self, mark: &mut dyn FnMut(&WeakRef)) {
+        // Read before marking: the mark callback runs inside `mark`, and an embedder that learns
+        // of a reference while marking only reaches it on the next pass.
+        let revealed = REVEALED.with(Cell::get);
+        mark(&self.first);
+        if revealed {
+            mark(&self.second);
+        }
+    }
+}
+
+struct RevealOnMark;
+
+impl UserdataMark<Native> for RevealOnMark {
+    fn mark(_: &Native) {
+        REVEALED.with(|revealed| revealed.set(true));
+    }
+}
+
+#[test]
+fn the_embedder_gc_repeats_until_a_pass_marks_nothing_new() {
+    let runtime = Runtime::new().unwrap();
+    tagged::register::<Native>(&runtime, 34, |_| Ok(())).unwrap();
+    memory::set_userdata_mark::<Native, RevealOnMark>(&runtime).unwrap();
+    let (first, second) = runtime
+        .stack()
+        .with_frame(|frame| {
+            let first = runtime.weak_ref(tagged::push(frame, Native { id: 1 })?)?;
+            let table = Table::new(frame, 0, 0)?;
+            let second = runtime.weak_ref(table.push_to(frame)?.value())?;
+            Ok((Rc::new(first), Rc::new(second)))
+        })
+        .unwrap();
+    runtime.set_embedder_gc(Chain { first: first.clone(), second: second.clone() });
+    runtime.collect_garbage();
+    runtime.collect_garbage();
+    // A marked userdata leaves nothing for the collector to propagate, so only the report of
+    // progress brings the second pass that marks what the userdata revealed.
+    let alive = |weak: &WeakRef| runtime.stack().with_frame(|frame| Ok(weak.get(frame).is_some())).unwrap();
+    assert!(alive(&first), "the first pass marks the userdata");
+    assert!(alive(&second), "the second pass marks what the userdata revealed");
+    runtime.clear_embedder_gc();
+}
+
 thread_local!(static MARKED: RefCell<Vec<u32>> = const { RefCell::new(Vec::new()) });
 
 struct RecordMark;

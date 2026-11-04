@@ -333,8 +333,9 @@ it. The `lua_Alloc` contract: `new_size == 0` frees `ptr` and returns null; `ptr
 
 The embedder side of cross-heap marking (`lua_setembeddergc`): each cycle Luau first asks the
 embedder to reset its bookkeeping, then, once it has marked userdata through `UserdataMark`
-callbacks, asks it to mark every weak reference reachable from marked native objects. No Lua API
-may be used from these methods.
+callbacks, asks it to mark every weak reference reachable from marked native objects, again until
+a pass marks nothing new. Marking a reference twice is harmless. No Lua API may be used from these
+methods.
 
 {{ api_signature(value="trait UserdataMark<T: Userdata>: 'static { fn mark(value: &T); }") }}
 

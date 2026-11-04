@@ -7,6 +7,7 @@
 #include "lgc.h"
 #include "lobject.h"
 #include "lstate.h"
+#include "ltable.h"
 
 #include "Luau/Common.h"
 
@@ -251,6 +252,17 @@ int l3i_luau_assertions(void)
 #else
     return 0;
 #endif
+}
+
+// Whether marking this weak reference would mark anything: the test `embeddermarkref` makes. The
+// collector repeats an embedder's mark pass until it reports no progress, and a pass that marks a
+// reference already marked has made none.
+int l3i_weakref_unmarked(lua_State* L, int ref)
+{
+    if (ref <= LUA_REFNIL)
+        return 0;
+    const TValue* slot = luaH_getnum(hvalue(&L->global->weakregistry), ref);
+    return iscollectable(slot) && iswhite(gcvalue(slot));
 }
 
 } // extern "C"

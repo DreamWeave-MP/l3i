@@ -226,22 +226,37 @@ pub(crate) unsafe extern "C" fn cage_callback(
 /// The embedder side of cross-heap marking (`lua_setembeddergc`): each GC cycle Luau first
 /// asks the embedder to reset its bookkeeping, then, once it has marked userdata through
 /// [`UserdataMark`] callbacks, asks it to mark every weak reference reachable from marked
-/// native objects. No Lua API may be used from these methods.
+/// native objects, and asks again until a pass marks nothing new, so what one pass marks can
+/// make more reachable for the next. Marking a reference twice is harmless. No Lua API may be
+/// used from these methods.
 pub trait EmbedderGc: 'static {
     fn reset(&self);
     fn mark_reachable(&self, mark: &mut dyn FnMut(&WeakRef));
 }
 
-unsafe extern "C" fn embedder_gc_callback(state: *mut ffi::lua_State, markref: Option<ffi::lua_EmbedderMark>) {
+unsafe extern "C" fn embedder_gc_callback(state: *mut ffi::lua_State, markref: Option<ffi::lua_EmbedderMark>) -> c_int {
     let _guard = crate::raw::trampoline::AbortOnPanic::new();
     // SAFETY: called by the collector on a live VM; Shared outlives it.
-    let Some(shared) = (unsafe { crate::runtime::shared_for(state) }) else { return };
-    let Ok(slot) = shared.embedder_gc().try_borrow() else { return };
-    let Some(gc) = slot.as_ref() else { return };
-    match markref {
-        None => gc.reset(),
-        Some(mark) => gc.mark_reachable(&mut |weak: &WeakRef| unsafe { mark(state, weak.id) }),
-    }
+    let Some(shared) = (unsafe { crate::runtime::shared_for(state) }) else { return 0 };
+    let Ok(slot) = shared.embedder_gc().try_borrow() else { return 0 };
+    let Some(gc) = slot.as_ref() else { return 0 };
+    let Some(mark) = markref else {
+        gc.reset();
+        return 0;
+    };
+    // Luau repeats this callback while it returns nonzero and an embedder marks everything it can
+    // reach on every pass, so progress is a reference not marked already. Objects only go from
+    // unmarked to marked within a cycle, so the passes end.
+    let mut progress = false;
+    gc.mark_reachable(&mut |weak: &WeakRef| {
+        // SAFETY: inside the collector's atomic step on this VM; the check only reads the weak
+        // registry and `mark` is the collector's own.
+        unsafe {
+            progress |= ffi::l3i_weakref_unmarked(state, weak.id) != 0;
+            mark(state, weak.id);
+        }
+    });
+    c_int::from(progress)
 }
 
 /// A userdata mark callback for `T` (`lua_setuserdatamark`): the collector calls

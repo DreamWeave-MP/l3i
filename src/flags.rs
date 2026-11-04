@@ -81,33 +81,22 @@ pub const LUAU_FLAGS: &[&str] = &[
 /// architecture, so each of those exists at run time on its own architecture only.
 /// Luau 0.742 removed `AddReturnExectargetCheck` together with
 /// `disableNativeExecutionForFunction`, the one function that needed it; 0.743 and 0.744
-/// graduated `LuauCodegenNoLinearFastpcall` and `LuauCodegenLimitVersions`.
+/// graduated `LuauCodegenNoLinearFastpcall` and `LuauCodegenLimitVersions`; 0.745 graduated
+/// `LuauCodegenX64IntSpillRestore`, `LuauCodegenExitSyncUpdate`,
+/// `LuauCodegenScopedSpillKeepLazy`, `LuauCodegenNoZeroScale` and
+/// `LuauCodegenLimitVersionsExtra`.
 pub const LUAU_CODEGEN_FLAGS: &[&str] = &[
     "LuauCodegenPropagateFallbackTags",
-    "LuauCodegenX64IntSpillRestore",
     "LuauCodegenA64ForgLoopArray",
     "LuauCodeGenFastpcall",
     "LuauCodegenInteger3",
     "LuauCodegenIntegerCompare",
     "LuauCodegenBufferInteger",
-    // Luau 0.742's register allocator fixes: restores a VM exit would clobber are made before
-    // the exit's own stores, running out of registers fails the compilation instead of
-    // asserting, and a conditional spill no longer marks a lazy restore location materialized.
-    // Both are defined in the A64 allocator and read by the X64 one, so they exist on either.
-    "LuauCodegenExitSyncUpdate",
-    "LuauCodegenScopedSpillKeepLazy",
-    // Luau 0.742: a buffer offset multiplied by a constant zero keeps its scale.
-    "LuauCodegenNoZeroScale",
-    // Constant propagation packs a register's version into twenty bits of an operand and, since
-    // 0.744 graduated the first half of the fix, stops propagating along a block chain before a
-    // version outgrows them. This flag (0.742) makes stopping sound, applying pending
-    // substitutions and discarding the fallback entry tags recorded before the stop.
-    "LuauCodegenLimitVersionsExtra",
     // Luau 0.744's fixes. Dead store elimination kept a tag store whose load had been
     // overwritten; `INVOKE_FASTPCALL` can replace the environment, so it now invalidates the
     // safe-environment assumption; a VM exit's register restores are planned per exit (a crash
-    // Luau's fuzzer found, superseding the 0.742 fix above); and code with a libunwind unwinder
-    // registers each FDE where it used to register the whole frame, which Intel macOS needs.
+    // Luau's fuzzer found); and code with a libunwind unwinder registers each FDE where it used
+    // to register the whole frame, which Intel macOS needs.
     "LuauCodegenDseTrackTagInvalidation",
     "LuauCodegenUpdateSafeEnvList",
     "LuauCodegenImprovedExitSync",
