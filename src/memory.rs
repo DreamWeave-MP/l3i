@@ -229,8 +229,11 @@ pub(crate) unsafe extern "C" fn cage_callback(
 /// asks the embedder to reset its bookkeeping, then, once it has marked userdata through
 /// [`UserdataMark`] callbacks, asks it to mark every weak reference reachable from marked
 /// native objects, and asks again until a pass marks nothing new, so what one pass marks can
-/// make more reachable for the next. Marking a reference twice is harmless. No Lua API may be
-/// used from these methods.
+/// make more reachable for the next. Each call to `mark_reachable` must traverse the complete
+/// transitive closure of currently reachable native objects before returning. Discovering only a
+/// native object does not schedule another pass; another pass is guaranteed only when a Lua
+/// reference was newly marked. Marking a reference twice is harmless. No Lua API may be used
+/// from these methods.
 pub trait EmbedderGc: 'static {
     fn reset(&self);
     fn mark_reachable(&self, mark: &mut dyn FnMut(&WeakRef));

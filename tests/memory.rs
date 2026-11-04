@@ -316,6 +316,49 @@ fn the_embedder_gc_repeats_until_a_pass_marks_nothing_new() {
     runtime.clear_embedder_gc();
 }
 
+// A Lua-rooted userdata reaches native node 0, which reaches node 1, which holds
+// a weak reference back into Lua. The callback must finish the native closure itself.
+#[test]
+fn embedder_traverses_native_edges_before_returning() {
+    struct NativeGraph(Rc<WeakRef>);
+    impl EmbedderGc for NativeGraph {
+        fn reset(&self) {
+            REVEALED.with(|r| r.set(false));
+        }
+        fn mark_reachable(&self, mark: &mut dyn FnMut(&WeakRef)) {
+            let mut pending = if REVEALED.with(Cell::get) { vec![0] } else { vec![] };
+            while let Some(node) = pending.pop() {
+                match node {
+                    0 => pending.push(1),
+                    1 => mark(&self.0),
+                    _ => unreachable!(),
+                }
+            }
+        }
+    }
+    let runtime = Runtime::new().unwrap();
+    tagged::register::<Native>(&runtime, 34, |_| Ok(())).unwrap();
+    memory::set_userdata_mark::<Native, RevealOnMark>(&runtime).unwrap();
+    let weak = runtime
+        .stack()
+        .with_frame(|frame| {
+            let table = Table::new(frame, 0, 0)?;
+            let weak = Rc::new(runtime.weak_ref(table.push_to(frame)?.value())?);
+            tagged::push(frame, Native { id: 1 })?;
+            frame.set_global("gc_native_root")?;
+            Ok(weak)
+        })
+        .unwrap();
+    runtime.set_embedder_gc(NativeGraph(weak.clone()));
+    runtime.collect_garbage();
+    assert!(runtime.stack().with_frame(|frame| Ok(weak.get(frame).is_some())).unwrap());
+    runtime.exec("gc_native_root = nil").unwrap();
+    runtime.collect_garbage();
+    runtime.collect_garbage();
+    assert!(runtime.stack().with_frame(|frame| Ok(weak.get(frame).is_none())).unwrap());
+    runtime.clear_embedder_gc();
+}
+
 thread_local!(static MARKED: RefCell<Vec<u32>> = const { RefCell::new(Vec::new()) });
 
 struct RecordMark;
@@ -408,6 +451,46 @@ fn the_buffer_cage_sees_every_buffer_allocation() {
     runtime.collect_garbage();
     assert!(CAGE_STATS.with(Cell::get).1 >= 1, "the collected buffer was freed through the cage");
     drop(runtime);
+}
+
+#[test]
+fn buffer_cage_reclaims_pages_across_allocation_cycles() {
+    struct Reporting(CountingCage);
+    impl BufferCage for Reporting {
+        fn allocate(&self, ptr: *mut c_void, old_size: usize, new_size: usize, kind: c_int) -> *mut c_void {
+            let result = self.0.allocate(ptr, old_size, new_size, kind);
+            CAGE_STATS.with(|stats| stats.set((self.0.allocations.get(), self.0.frees.get())));
+            result
+        }
+    }
+    CAGE_STATS.with(|stats| stats.set((0, 0)));
+    let runtime = Runtime::builder()
+        .buffer_cage(Reporting(CountingCage { allocations: Cell::new(0), frees: Cell::new(0) }))
+        .build()
+        .unwrap();
+    for _ in 0..3 {
+        runtime
+            .exec(
+                r"
+            local values = {}
+            for _, size in {1, 60, 127, 128, 255, 256, 511, 512, 1024, 4096, 16384} do
+                for i = 1, 40 do
+                    local value = buffer.create(size)
+                    buffer.writeu8(value, 0, i)
+                    table.insert(values, value)
+                end
+            end
+            for i, value in values do assert(buffer.readu8(value, 0) == (i - 1) % 40 + 1) end
+        ",
+            )
+            .unwrap();
+        runtime.collect_garbage();
+        runtime.collect_garbage();
+    }
+    drop(runtime);
+    let (allocations, frees) = CAGE_STATS.with(Cell::get);
+    assert!(allocations > 1);
+    assert_eq!(allocations, frees, "all cage allocations must be freed when the VM closes");
 }
 
 /// The first runtime of a process decides whether it has coroutine finalizers, and this binary's
