@@ -467,10 +467,9 @@ fn run_native(runtime: &Runtime, chunk: &str) -> u64 {
 #[test]
 fn kind_receiver_reductions_lower_to_native_loops_with_the_bound_semantics() {
     let Some((runtime, before)) = native_runtime() else { return };
-    let chunk = per_kind_chunk(
-        r"
+    let body = r"
         local name, size = '{name}', {size}
-        local n = 1000
+        local n = {n}
         local buf = buffer.create(n * size + 5)
         local write = buffer['write' .. name]
         for i = 0, n - 1 do
@@ -487,7 +486,7 @@ fn kind_receiver_reductions_lower_to_native_loops_with_the_bound_semantics() {
         assert(S:countGt(buf, 5, n // 2, 3) == data.countWhere(buf, name .. '@' .. (size * 2), 5, n // 2, 'gt', 3), name .. ' strided count')
         assert(S:min(buf, 5, n // 2) == data.min(buf, name .. '@' .. (size * 2), 5, n // 2), name .. ' strided min')
         if name == 'f32' or name == 'f64' then
-            write(buf, 5 + 400 * size, nan)
+            write(buf, 5 + (n * 2 // 5) * size, nan)
             local total = K:sum(buf, 5, n)
             assert(total ~= total and data.sum(buf, name, 5, n) ~= total, name .. ' NaN sum')
         end
@@ -496,8 +495,8 @@ fn kind_receiver_reductions_lower_to_native_loops_with_the_bound_semantics() {
         assert(K:min(buf, 5, 0) == nil and K:max(buf, 5, 0) == nil, name .. ' empty extrema')
         if name == 'f32' or name == 'f64' then
             -- A leading NaN stays in min/max on both paths; a later one never replaces.
-            assert(K:min(buf, 5 + 400 * size, 10) ~= K:min(buf, 5 + 400 * size, 10), name .. ' leading NaN')
-            assert(K:min(buf, 5, 500) == data.min(buf, name, 5, 500), name .. ' later NaN')
+            assert(K:min(buf, 5 + (n * 2 // 5) * size, 10) ~= K:min(buf, 5 + (n * 2 // 5) * size, 10), name .. ' leading NaN')
+            assert(K:min(buf, 5, n // 2) == data.min(buf, name, 5, n // 2), name .. ' later NaN')
         end
         -- Misuse leaves native code for the binder, whose errors are the contract.
         local ok, message = pcall(function() return K:sum(buf, 5, n + 1) end)
@@ -508,9 +507,10 @@ fn kind_receiver_reductions_lower_to_native_loops_with_the_bound_semantics() {
         assert(not ok, name .. ' not a buffer')
         ok, message = pcall(function() return K:sum(buf, -1, 1) end)
         assert(not ok and string.find(message, 'negative offset', 1, true), name .. ': ' .. tostring(message))
-        ",
-    );
-    let blocks = run_native(&runtime, &chunk);
+        ";
+    // Short spans run the IR loops; long ones leave for the bound loops. Both answer the same.
+    let blocks: u64 =
+        ["100", "1000"].iter().map(|n| run_native(&runtime, &per_kind_chunk(&body.replace("{n}", n)))).sum();
     assert!(l3i::data::lowering::lowered_sites() > before, "the annotated receivers' calls were lowered");
     // Eight kinds, each thousands of loop iterations in native blocks (an interpreted run
     // records a few dozen); the slow paths exit to the binder.
@@ -576,7 +576,9 @@ fn strided_layouts_read_one_field_of_packed_records() {
 fn every_receiver_member_lowers_and_agrees_with_the_module_functions() {
     let Some((runtime, _)) = native_runtime() else { return };
     let mut total_blocks = 0;
-    for op in ["sum", "min", "max", "count", "any", "all"] {
+    // Either side of each length where a lowered call leaves for the bound method.
+    let ops = ["sum", "min", "max", "count", "any", "all"];
+    for (n, op) in [127, 1024].into_iter().flat_map(|n| ops.map(|op| (n, op))) {
         // The module spells the filtered count countWhere, apart from bytes.count.
         let module = if op == "count" { "countWhere" } else { op };
         let mut checks = String::new();
@@ -595,7 +597,7 @@ fn every_receiver_member_lowers_and_agrees_with_the_module_functions() {
         }
         let chunk = per_kind_chunk(&format!(
             "local name, size = '{{name}}', {{size}}\n\
-             local n = 777\n\
+             local n = {n}\n\
              local buf = buffer.create(n * size + 5)\n\
              local write = buffer['write' .. name]\n\
              for i = 0, n - 1 do\n\
@@ -603,7 +605,7 @@ fn every_receiver_member_lowers_and_agrees_with_the_module_functions() {
                  if name == 'f32' or name == 'f64' then v = v / 3 end\n\
                  write(buf, 5 + i * size, v)\n\
              end\n\
-             if name == 'f64' then write(buf, 5 + 401 * size, nan) end\n\
+             if name == 'f64' then write(buf, 5 + (n // 2) * size, nan) end\n\
              local K: dream_data_Kind_{{name}} = {{ctor}}()\n\
              {checks}\
              local S: dream_data_Kind_{{name}} = {{ctor}}(size * 2)\n\
@@ -641,10 +643,9 @@ fn receiver_selections_match_select_for_every_kind() {
 #[test]
 fn receiver_selections_lower_to_native_loops() {
     let Some((runtime, before)) = native_runtime() else { return };
-    let chunk = per_kind_chunk(
-        r"
+    let body = r"
         local name, size = '{name}', {size}
-        local n = 1500
+        local n = {n}
         local buf = buffer.create(n * size + 3)
         for i = 0, n - 1 do buffer['write' .. name](buf, 3 + i * size, (i * 37) % 13 - (string.sub(name, 1, 1) == 'u' and 0 or 6)) end
         local K: dream_data_Kind_{name} = {ctor}()
@@ -661,9 +662,9 @@ fn receiver_selections_lower_to_native_loops() {
         S:selectNe(buf, 3, n // 2, 1, half)
         data.select(buf, name .. '@' .. (size * 2), 3, n // 2, 'ne', 1, theirs)
         assert(half:len() == n // 2 and half:xor(theirs):count() == 0, name .. ' strided select')
-        ",
-    );
-    let blocks = run_native(&runtime, &chunk);
+        ";
+    let blocks: u64 =
+        ["100", "1500"].iter().map(|n| run_native(&runtime, &per_kind_chunk(&body.replace("{n}", n)))).sum();
     assert!(l3i::data::lowering::lowered_sites() > before, "the select calls were lowered");
     assert!(blocks > 5_000, "native blocks executed: {blocks}");
 }

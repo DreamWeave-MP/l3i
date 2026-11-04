@@ -21,7 +21,9 @@
 //!
 //! A contiguous span (the common case, and the only one the JSL bridge emits) gets loops with
 //! compile-time steps, unrolled eight elements per pass with one cursor round trip; a strided
-//! span gets the simple loop whose step is the payload's stride.
+//! span gets the simple loop whose step is the payload's stride. Past a measured length a
+//! contiguous span leaves for the bound method instead, whose vectorized loops win once the span
+//! pays for the call ([`longest_inline_span`]).
 
 use std::ffi::c_int;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -92,6 +94,21 @@ fn reduction_of(name: &str) -> Option<Reduction> {
     match (op, filter) {
         (ReductionOp::Count | ReductionOp::Any | ReductionOp::All, None) => None,
         _ => Some(Reduction { op, filter }),
+    }
+}
+
+/// The contiguous span length from which a lowered call hands over to the bound method, or `None`
+/// to stay in this IR at any length. A bound call costs about 300 cycles more to reach, then runs
+/// the vectorized loops in `super::contiguous`, which these IR loops cannot be. The lengths are
+/// measured crossovers across kinds (`cargo bench -- data_receivers`). Filtered `sum`, `min` and
+/// `max` stay: bound, their loops are still scalar and the gain is not reliably there.
+fn longest_inline_span(member: Member) -> Option<i64> {
+    match member {
+        Member::Select(_) => Some(128),
+        Member::Reduce(Reduction { op: ReductionOp::Sum, filter: None }) => Some(1024),
+        Member::Reduce(Reduction { op: ReductionOp::Min | ReductionOp::Max, filter: None }) => Some(128),
+        Member::Reduce(Reduction { op: ReductionOp::Count | ReductionOp::Any | ReductionOp::All, .. }) => Some(128),
+        Member::Reduce(Reduction { op: ReductionOp::Sum | ReductionOp::Min | ReductionOp::Max, .. }) => None,
     }
 }
 
@@ -619,6 +636,12 @@ impl NativeCodeHooks for KindLowering {
 
         for (variant, step) in [(contiguous, Some(size)), (strided, None)] {
             emit.b.begin_block(variant);
+            if let (Some(_), Some(longest)) = (step, longest_inline_span(member)) {
+                let count = emit.int64_of(count_reg);
+                let limit = emit.b.const_int64(longest);
+                let shorter = emit.b.cond(IrCondition::Less);
+                emit.b.inst(IrCmd::CHECK_CMP_INT64, &[count, limit, shorter, slow]);
+            }
             match member {
                 Member::Reduce(reduction) => emit.reduction_loop(reduction, kind, step, count_reg),
                 Member::Select(comparison) => emit.select_loop(comparison, kind, step, count_reg, selection_reg),
@@ -829,5 +852,63 @@ impl Emit<'_, '_> {
         let address = self.b.inst(IrCmd::ADD_INT64, &[words, bytes]);
         let adjust = self.b.const_int64(-UDATA_DATA);
         self.b.inst(IrCmd::ADD_INT64, &[address, adjust])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::Runtime;
+    use crate::data::{BOUND_RECEIVER_CALLS, DataExtension};
+    use crate::extension::{NativeCodePolicy, RuntimePlan, RuntimePolicy};
+    use crate::native_code::NativeCodeMode;
+    use crate::source::LoadScope;
+
+    /// How many times one lowered call reached the bound method: none means its IR loop ran.
+    fn bound_calls(runtime: &Runtime, kind: &str, stride: usize, call: &str, n: usize) -> usize {
+        let chunk = format!(
+            "--!native\nreturn function() local buf = buffer.create({n} * {stride}) local sel = data.selection({n}) \
+             local K: dream_data_Kind_{kind} = data.{kind}({stride}) local got = K:{call} return 0 end",
+        )
+        .replace("{n}", &n.to_string());
+        let stack = runtime.stack();
+        let chunk = stack.load_source("=native", &chunk, &runtime.compile_options()).unwrap();
+        let function = chunk.invoke::<crate::value::Function, _>(&stack, ()).unwrap();
+        let before = BOUND_RECEIVER_CALLS.get();
+        function.invoke::<f64, _>(&stack, ()).unwrap();
+        BOUND_RECEIVER_CALLS.get() - before
+    }
+
+    /// Past its length a contiguous span leaves for the bound loops. Below it, on a strided span,
+    /// and for a member with no length, the IR loop runs.
+    #[test]
+    fn calls_leave_the_ir_only_on_long_contiguous_spans() {
+        let policy = RuntimePolicy::new()
+            .compat_global("@dream/data", "data")
+            .native_code(NativeCodePolicy { mode: NativeCodeMode::Eager, ..NativeCodePolicy::default() });
+        let plan = RuntimePlan::builder().policy(policy).extension(DataExtension).finalize().unwrap();
+        let runtime = Runtime::from_plan(&plan).unwrap();
+        if !runtime.native_code().expect("built with native code").is_available() {
+            return;
+        }
+        runtime.sandbox_globals().unwrap();
+        let guarded = [
+            ("countGt(buf, 0, {n}, 1)", 128),
+            ("anyGt(buf, 0, {n}, 1)", 128),
+            ("allLt(buf, 0, {n}, 1)", 128),
+            ("min(buf, 0, {n})", 128),
+            ("max(buf, 0, {n})", 128),
+            ("selectGt(buf, 0, {n}, 1, sel)", 128),
+            ("sum(buf, 0, {n})", 1024),
+        ];
+        for (kind, size) in [("u8", 1), ("i16", 2), ("i32", 4), ("f32", 4), ("f64", 8)] {
+            for (call, length) in guarded {
+                assert_eq!(bound_calls(&runtime, kind, size, call, length - 1), 0, "{kind} {call} below {length}");
+                assert_eq!(bound_calls(&runtime, kind, size, call, length), 1, "{kind} {call} at {length}");
+                assert_eq!(bound_calls(&runtime, kind, size * 2, call, 4096), 0, "{kind} {call} strided");
+            }
+            for call in ["sumGt(buf, 0, {n}, 1)", "minGt(buf, 0, {n}, -1)", "maxLt(buf, 0, {n}, 1)"] {
+                assert_eq!(bound_calls(&runtime, kind, size, call, 4096), 0, "{kind} {call}");
+            }
+        }
     }
 }

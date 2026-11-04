@@ -1319,6 +1319,13 @@ pub(crate) mod layout {
     };
 }
 
+#[cfg(test)]
+thread_local! {
+    /// How many receiver calls reached a bound method on this thread, so that `lowering`'s tests
+    /// can tell a hand-over from a native loop.
+    pub(crate) static BOUND_RECEIVER_CALLS: Cell<usize> = const { Cell::new(0) };
+}
+
 fn describe_typed<const K: u8>(d: &mut ExtensionDescriptor) {
     let mut receiver = d.userdata::<Typed<K>>(KIND_TYPE_NAMES[K as usize]);
     receiver.tag(TagPolicy::Preferred).compiler_type(CompilerTypePolicy::Preferred).doc(format!(
@@ -1339,6 +1346,8 @@ fn describe_typed<const K: u8>(d: &mut ExtensionDescriptor) {
                       count: Exact<i64>,
                       threshold: Option<f64>|
                       -> Result<StackResults> {
+                    #[cfg(test)]
+                    BOUND_RECEIVER_CALLS.set(BOUND_RECEIVER_CALLS.get() + 1);
                     let span = receiver.span(&what, &buffer, offset, count)?;
                     let threshold = match (filter, threshold) {
                         (Some(_), Some(threshold)) => threshold,
@@ -1378,6 +1387,8 @@ fn describe_select<const K: u8>(receiver: &mut crate::extension::UserdataBuilder
                       threshold: f64,
                       selection: &Selection|
                       -> Result<StackResults> {
+                    #[cfg(test)]
+                    BOUND_RECEIVER_CALLS.set(BOUND_RECEIVER_CALLS.get() + 1);
                     let span = receiver.span(&what, &buffer, offset, count)?;
                     selection.reset(span.count);
                     select_words(&span, comparison, threshold, &mut selection.bits.borrow_mut());
