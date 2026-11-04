@@ -224,6 +224,12 @@ const FS_SCRIPT: (&str, &str) = (
      local count: number = (reader:readInto(buffer.create(4)) or 0) + (reader:readAtInto(head, 0) or 0) + reader:size() + reader:tell()\n\
      reader:seek(0)\n\
      reader:close()\n\
+     local positional: dream_fs_PositionalReader? = fs.openPositional('x')\n\
+     if positional then\n\
+       local tail = positional:readAt(0, 4)\n\
+       local length: number = positional:size() or 0\n\
+       positional:close()\n\
+     end\n\
      local stat: dream_fs_Stat? = fs.lstat('x')\n\
      local kind: dream_fs_FileKind = if stat then stat.kind else 'other'\n\
      local walk = fs.walk('.', { followLinks = true, include = 'files', metadata = true, sort = true, maxDepth = 3 })\n\
@@ -235,7 +241,12 @@ const FS_SCRIPT: (&str, &str) = (
      local writer, refused = fs.openWrite('y', { append = true })\n\
      if not writer then error(refused) end\n\
      local written: number = (writer:write('abc') or 0) + (fs.writeFile('z', buffer.create(1), { offset = 0 }) or 0)\n\
+     local synced: boolean? = (writer:syncData() and writer:syncAll())\n\
      local closed: boolean? = writer:close()\n\
+     local durable: number? = fs.createDurable('n', 'data')\n\
+     local exclusive = fs.openWrite('e', { exclusive = true, writeThrough = true })\n\
+     local replaced: boolean? = fs.replace('e', 'n')\n\
+     local settled: boolean? = fs.syncDirectory('.')\n\
      local made: boolean? = fs.mkdir('d', { recursive = true })\n\
      fs.hardLink('x', 'h')\n\
      fs.symlink('x', 's', { directory = false })\n\

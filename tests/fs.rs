@@ -219,13 +219,15 @@ fn every_function_needs_its_capability() {
          assert(not ok and err:find(\"dream.fs.readFile: needs the 'filesystem.read' capability\"), err) \
          ok, err = pcall(fs.writeFile, {path} .. '/y', 'y') \
          assert(not ok and err:find(\"needs the 'filesystem.write' capability\"), err) \
-         assert(not pcall(fs.walk, {path}) and not pcall(fs.stat, {path}))"
+         assert(not pcall(fs.walk, {path}) and not pcall(fs.stat, {path})) \
+         assert(not pcall(fs.openPositional, {path} .. '/x'))"
     ))
     .unwrap();
     let read_only = runtime_with(&[READ_CAPABILITY]);
     read_only
         .exec(&format!(
             "assert(fs.readFileString({path} .. '/x') == 'x') \
+             assert(buffer.tostring(assert(fs.openPositional({path} .. '/x')):readAt(0, 1)) == 'x') \
              local ok, err = pcall(fs.remove, {path} .. '/x') assert(not ok and err:find('filesystem.write'), err) \
              assert(not pcall(fs.hardLink, {path} .. '/x', {path} .. '/y') and not pcall(fs.openWrite, {path} .. '/y')) \
              assert(not pcall(fs.lock, {path} .. '/y'))"
@@ -245,7 +247,7 @@ fn fifos_and_devices_are_refused_instead_of_blocking_or_never_ending() {
     runtime()
         .exec(&format!(
             "local root = {} \
-             for _, read in {{ fs.readFile, fs.readFileString, fs.open }} do \
+             for _, read in {{ fs.readFile, fs.readFileString, fs.open, fs.openPositional }} do \
                local value, message, kind = read(root .. '/pipe') \
                assert(value == nil and kind == 'invalidInput' and message:find('not a regular file'), message) \
              end \
@@ -1119,4 +1121,27 @@ fn checkpoint_recovery_requires_a_valid_commit_marker() {
     let mut damaged = images[3].clone();
     *damaged.last_mut().unwrap() ^= 1;
     assert_eq!(fixture_checkpoint_recover(&damaged), Err("checksum"));
+}
+
+#[test]
+fn positional_reader_tracks_file_changes_without_mapping() {
+    let scratch = Scratch::new("positional-reader");
+    runtime()
+        .exec(&format!(
+            "local path = {} .. '/data' assert(fs.writeFile(path, 'abc') == 3) \
+         local missing, refused, kind = fs.openPositional(path .. '.missing') \
+         assert(missing == nil and kind == 'notFound' and refused:find('openPositional')) \
+         local r = assert(fs.openPositional(path)) assert(r:size() == 3) \
+         assert(tostring(r):find('dream.fs.PositionalReader', 1, true)) \
+         assert(buffer.tostring(r:readAt(1, 2)) == 'bc') \
+         local w = assert(fs.openWrite(path, {{ append = true }})) \
+         assert(w:write('def') == 3) assert(w:flush()) assert(r:size() == 6) \
+         assert(buffer.tostring(r:readAt(2, 4)) == 'cdef') assert(w:close()) \
+         w = assert(fs.openWrite(path, {{ truncate = false }})) assert(w:truncate(2)) assert(w:close()) \
+         assert(r:size() == 2 and buffer.tostring(r:readAt(0, 9)) == 'ab') \
+         local ok = pcall(r.readAt, r, 3, 1) assert(not ok) r:close() r:close() \
+         ok = pcall(r.readAt, r, 0, 1) assert(not ok) ok = pcall(r.size, r) assert(not ok)",
+            scratch.lua()
+        ))
+        .unwrap();
 }

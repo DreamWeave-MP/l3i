@@ -1450,6 +1450,10 @@ checksums, ordering, and recovery rules. A failed operation has an uncertain out
 recovery before further writes. On Windows, opening an existing file and syncing it does not prove
 that the file's name was durably created; `createDurable` deliberately refuses initialization.
 
+`fs.openPositional(path)` retains an unmapped read handle. Its `readAt(offset, length)` reads
+positionally and `size()` queries the open file's current size; `close()` releases the handle.
+This avoids reopening the path for each read and is suitable for an actively mutated file.
+
 `fs.readAt` uses positional file reads instead of a memory map. If the file becomes shorter while
 a read is in progress, it reports an error rather than returning an incorrectly sized buffer.
 

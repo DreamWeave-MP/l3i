@@ -349,6 +349,14 @@ fn replace(source: &[u8], destination: &[u8]) -> Result<Outcome<bool>> {
     Ok(Outcome::of(result.map(|()| true), "replace", source))
 }
 
+/// A handle a script owns once the OS has given it one.
+fn owned<T: crate::userdata::Userdata>(outcome: Outcome<T>) -> Outcome<Owned<T>> {
+    match outcome {
+        Outcome::Done(handle) => Outcome::Done(Owned(handle)),
+        Outcome::Failed(failure) => Outcome::Failed(failure),
+    }
+}
+
 /// What a member needs: nothing (it only takes a path apart or joins one), or a capability.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Access {
@@ -397,6 +405,12 @@ const MEMBERS: &[Member] = &[
         "open",
         "(path: string) -> (dream_fs_Reader?, string?, dream_fs_ErrorKind?)",
         "A reader over a memory map of the file.",
+        false,
+    ),
+    member(
+        "openPositional",
+        "(path: string) -> (dream_fs_PositionalReader?, string?, dream_fs_ErrorKind?)",
+        "A retained, unmapped file handle for positional reads; its size reflects the open file.",
         false,
     ),
     member(
@@ -588,6 +602,7 @@ impl Extension for FsExtension {
         d.type_alias("dream_fs_WalkOptions", WALK_OPTIONS_TYPE);
         d.type_alias("dream_fs_Walk", WALK_TYPE);
         io::describe_reader(d);
+        io::describe_positional_reader(d);
         io::describe_writer(d);
         lock::describe_lock(d);
         d.optional_capability(READ_CAPABILITY);
@@ -622,12 +637,8 @@ impl Extension for FsExtension {
             Ok(Outcome::of(io::read_regular(&host_path("readFileString", path)?), "readFileString", path))
         });
         bind!("readAt", io::read_at);
-        bind!("open", |path: &[u8]| -> Result<Outcome<Owned<Reader>>> {
-            Ok(match Reader::open(path)? {
-                Outcome::Done(reader) => Outcome::Done(Owned(reader)),
-                Outcome::Failed(failure) => Outcome::Failed(failure),
-            })
-        });
+        bind!("open", |path: &[u8]| Reader::open(path).map(owned));
+        bind!("openPositional", |path: &[u8]| io::PositionalReader::open(path).map(owned));
         bind!("stat", |call: &Call<'_>, path: &[u8]| stat(call, "stat", path, true));
         bind!("lstat", |call: &Call<'_>, path: &[u8]| stat(call, "lstat", path, false));
         bind!("exists", |path: &[u8]| -> Result<Outcome<bool>> {

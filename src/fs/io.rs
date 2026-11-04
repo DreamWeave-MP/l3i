@@ -260,18 +260,92 @@ pub(crate) fn read_at(
     let length = non_negative("readAt", "length", length)?;
     let host = super::host_path("readAt", path)?;
     let file = done!(Outcome::of(open_regular(&host), "readAt", path));
-    let size = done!(Outcome::of(file.metadata().map(|metadata| metadata.len()), "readAt", path));
-    within_file("readAt", "offset", offset, size)?;
+    read_at_file(call, &file, path, offset, length, "readAt")
+}
+
+fn read_at_file(
+    call: &Call<'_>,
+    file: &File,
+    path: &[u8],
+    offset: u64,
+    length: u64,
+    what: &str,
+) -> Result<Outcome<StackResults>> {
+    let size = done!(Outcome::of(file.metadata().map(|metadata| metadata.len()), what, path));
+    within_file(what, "offset", offset, size)?;
     let expected = clamp(offset, length, size);
     let mut buffer = new_buffer(call, expected)?;
-    // SAFETY: the buffer belongs to this call and no other view of its bytes exists.
-    let count =
-        done!(Outcome::of(read_file_at(&file, offset, unsafe { buffer.bytes_mut_unchecked() }), "readAt", path));
+    // SAFETY: the buffer was created by this call and no other view of it exists; the read never
+    // calls into Lua. A failure's results go above the buffer, which the call drops.
+    let count = done!(Outcome::of(read_file_at(file, offset, unsafe { buffer.bytes_mut_unchecked() }), what, path));
     if count != expected {
         let error = io::Error::new(io::ErrorKind::UnexpectedEof, "file changed during positional read");
-        return Ok(Outcome::Failed(super::Failure::new("readAt", path, &error)));
+        return Ok(Outcome::Failed(super::Failure::new(what, path, &error)));
     }
     Ok(Outcome::Done(StackResults))
+}
+
+/// A retained file handle for positional reads; unlike `Reader`, it is never memory mapped.
+#[derive(Debug)]
+pub(crate) struct PositionalReader {
+    file: RefCell<Option<File>>,
+    name: Box<[u8]>,
+}
+
+// SAFETY: the userdata owns only a file handle and bytes; dropping it makes no Lua API calls.
+unsafe impl Userdata for PositionalReader {
+    const NAME: &'static str = "dream.fs.PositionalReader";
+}
+
+impl PositionalReader {
+    pub(crate) fn open(path: &[u8]) -> Result<Outcome<Self>> {
+        let host = super::host_path("openPositional", path)?;
+        let file = done!(Outcome::of(open_regular(&host), "openPositional", path));
+        Ok(Outcome::Done(Self { file: RefCell::new(Some(file)), name: path.into() }))
+    }
+}
+
+fn positional_read_at(
+    reader: &PositionalReader,
+    call: &Call<'_>,
+    offset: Exact<i64>,
+    length: Exact<i64>,
+) -> Result<Outcome<StackResults>> {
+    let offset = non_negative("PositionalReader.readAt", "offset", offset)?;
+    let length = non_negative("PositionalReader.readAt", "length", length)?;
+    let guard = reader.file.borrow();
+    let file = guard.as_ref().ok_or_else(|| {
+        Error::runtime(format!("dream.fs.PositionalReader.readAt: the reader over {} is closed", display(&reader.name)))
+    })?;
+    read_at_file(call, file, &reader.name, offset, length, "PositionalReader.readAt")
+}
+
+fn positional_size(reader: &PositionalReader) -> Result<Outcome<f64>> {
+    let guard = reader.file.borrow();
+    let file = guard.as_ref().ok_or_else(|| {
+        Error::runtime(format!("dream.fs.PositionalReader.size: the reader over {} is closed", display(&reader.name)))
+    })?;
+    Ok(Outcome::of(file.metadata().map(|metadata| metadata.len() as f64), "PositionalReader.size", &reader.name))
+}
+
+pub(crate) fn describe_positional_reader(d: &mut ExtensionDescriptor) {
+    let mut reader = d.userdata::<PositionalReader>(PositionalReader::NAME);
+    reader.tag(TagPolicy::Never).doc("A retained, unmapped file handle for positional reads.");
+    reader
+        .method("readAt", positional_read_at)
+        .signature("(self, offset: number, length: number): (buffer?, string?, dream_fs_ErrorKind?)")
+        .doc("Reads from offset without changing a shared position; concurrent truncation may return an error.");
+    reader
+        .method("size", positional_size)
+        .signature("(self): (number?, string?, dream_fs_ErrorKind?)")
+        .doc("Returns the current size of the open file.");
+    reader
+        .method("close", |r: &PositionalReader| {
+            r.file.borrow_mut().take();
+        })
+        .signature("(self)")
+        .doc("Closes the handle; later operations raise. Closing twice does nothing.");
+    reader.metamethod("__tostring", |r: &PositionalReader| format!("dream.fs.PositionalReader({})", display(&r.name)));
 }
 
 // ---------------------------------------------------------------------------------------------
