@@ -455,6 +455,37 @@ fn durability_process_child() {
         runtime().exec(&format!("assert(fs.readFileString({root} .. '/journal') == {expected:?})")).unwrap();
         return;
     }
+    if boundary == "relative_paths" {
+        runtime()
+            .exec(
+                "assert(fs.mkdir('data')) assert(fs.createDurable('data/matrix.db', 'nested') == 6) \
+                 assert(fs.createDurable('bare', 'bare') == 4) assert(fs.syncDirectory('.')) \
+                 assert(fs.syncDirectory('data')) assert(fs.replace('bare', 'data/matrix.db')) \
+                 assert(fs.syncDirectory('data')) assert(fs.readFileString('data/matrix.db') == 'bare') \
+                 assert(not fs.exists('bare'))",
+            )
+            .unwrap();
+        std::fs::write("done", b"done").unwrap();
+        return;
+    }
+    #[cfg(windows)]
+    if boundary == "ordinary_user" {
+        let probe = std::path::Path::new(r"C:\Windows\l3i-restricted-token-probe");
+        assert!(std::fs::write(probe, b"probe").is_err(), "the child still has administrator rights");
+        runtime()
+            .exec(&format!(
+                "local root = {root} local journal = root .. '/journal' local temp = root .. '/temp' \
+                 assert(fs.createDurable(journal, 'header') == 6) assert(fs.syncDirectory(root)) \
+                 local w = assert(fs.openWrite(temp, {{ exclusive = true }})) \
+                 assert(w:write('replacement') == 11) assert(w:syncAll()) assert(w:close()) \
+                 assert(fs.replace(temp, journal)) assert(fs.syncDirectory(root)) \
+                 assert(fs.readFileString(journal) == 'replacement')"
+            ))
+            .unwrap();
+        let done = std::path::Path::new(&std::env::var("L3I_DURABILITY_CHILD_DIR").unwrap()).join("done");
+        std::fs::write(done, b"done").unwrap();
+        return;
+    }
     let tx = fixture_lua_bytes(&fixture_frame(2, b"transaction two"));
     let checkpoint = fixture_lua_bytes(&fixture_frame(3, b"checkpoint"));
     let marker = fixture_lua_bytes(&fixture_frame(4, b"checkpoint commit"));
@@ -677,6 +708,79 @@ fn failed_close_remains_failed_on_repeated_close() {
          assert(again == nil and againMessage == message and againKind == kind)",
         )
         .unwrap();
+}
+
+// A child, because the working directory belongs to the whole process and tests run in parallel.
+#[cfg(any(unix, windows))]
+#[test]
+fn namespace_barriers_accept_relative_paths() {
+    let scratch = Scratch::new("namespace-relative");
+    let status = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "fs::durability_process_child", "--nocapture"])
+        .current_dir(&scratch.0)
+        .env("L3I_DURABILITY_CHILD_DIR", &scratch.0)
+        .env("L3I_DURABILITY_CHILD_BOUNDARY", "relative_paths")
+        .status()
+        .unwrap();
+    assert!(status.success(), "{status}");
+    // A filter that matched no test would also exit successfully.
+    assert!(scratch.0.join("done").exists());
+    assert_eq!(std::fs::read(scratch.0.join("data/matrix.db")).unwrap(), b"bare");
+}
+
+/// Through a junction on Windows, whose volume checks must describe where the handle landed.
+#[cfg(any(unix, windows))]
+#[test]
+fn namespace_barriers_work_through_a_directory_link() {
+    let scratch = Scratch::new("namespace-link");
+    let (real, link) = (scratch.0.join("real"), scratch.0.join("link"));
+    std::fs::create_dir(&real).unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    #[cfg(windows)]
+    {
+        let made = std::process::Command::new("cmd")
+            .arg("/C")
+            .arg("mklink")
+            .arg("/J")
+            .arg(&link)
+            .arg(&real)
+            .stdout(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        assert!(made.success(), "{made}");
+    }
+    runtime()
+        .exec(&format!(
+            "local link = {} .. '/link' assert(fs.createDurable(link .. '/file', 'one') == 3) \
+             assert(fs.syncDirectory(link)) assert(fs.writeFile(link .. '/next', 'two') == 3) \
+             assert(fs.replace(link .. '/next', link .. '/file')) assert(fs.syncDirectory(link))",
+            scratch.lua()
+        ))
+        .unwrap();
+    assert_eq!(std::fs::read(real.join("file")).unwrap(), b"two");
+    assert!(!real.join("next").exists());
+}
+
+#[cfg(windows)]
+#[path = "support/windows_restricted.rs"]
+mod windows_restricted;
+
+#[cfg(windows)]
+#[test]
+fn namespace_barriers_work_without_administrator_rights() {
+    let scratch = Scratch::new("namespace-ordinary-user");
+    let code = windows_restricted::run_test(
+        "fs::durability_process_child",
+        &scratch.0,
+        &[
+            ("L3I_DURABILITY_CHILD_DIR", scratch.0.as_os_str()),
+            ("L3I_DURABILITY_CHILD_BOUNDARY", std::ffi::OsStr::new("ordinary_user")),
+        ],
+    );
+    assert_eq!(code, 0);
+    assert!(scratch.0.join("done").exists());
+    assert_eq!(std::fs::read(scratch.0.join("journal")).unwrap(), b"replacement");
 }
 
 #[cfg(any(unix, windows))]
