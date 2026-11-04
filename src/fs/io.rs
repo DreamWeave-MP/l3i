@@ -472,11 +472,13 @@ pub(crate) struct OpenWrite {
     truncate: Option<bool>,
     create: bool,
     exclusive: bool,
+    write_through: bool,
 }
 
 impl OpenWrite {
     pub(crate) fn read(scope: &impl Scope, options: Option<ValueView<'_>>) -> Result<OpenWrite> {
-        let mut open = OpenWrite { append: false, truncate: None, create: true, exclusive: false };
+        let mut open =
+            OpenWrite { append: false, truncate: None, create: true, exclusive: false, write_through: false };
         let Some(options) = options.filter(|view| !view.is_nil()) else {
             return Ok(open);
         };
@@ -485,6 +487,7 @@ impl OpenWrite {
             open.truncate = o.optional("truncate")?;
             open.create = o.or("create", true)?;
             open.exclusive = o.or("exclusive", false)?;
+            open.write_through = o.or("writeThrough", false)?;
             if open.exclusive && !open.create {
                 return Err(Error::runtime("dream.fs.openWrite: exclusive needs create"));
             }
@@ -494,13 +497,29 @@ impl OpenWrite {
 
     fn open(self, path: &Path) -> io::Result<(File, u64)> {
         let truncate = self.truncate.unwrap_or(!self.append);
-        let file = OpenOptions::new()
+        let mut options = OpenOptions::new();
+        options
             .write(true)
             .create(self.create && !self.exclusive)
             .create_new(self.exclusive)
             .append(self.append)
-            .truncate(truncate && !self.append)
-            .open(path)?;
+            .truncate(truncate && !self.append);
+        if self.write_through {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                options.custom_flags(libc::O_SYNC);
+            }
+            #[cfg(windows)]
+            {
+                use std::os::windows::fs::OpenOptionsExt;
+                const FILE_FLAG_WRITE_THROUGH: u32 = 0x8000_0000;
+                options.custom_flags(FILE_FLAG_WRITE_THROUGH);
+            }
+            #[cfg(not(any(unix, windows)))]
+            return Err(io::Error::new(io::ErrorKind::Unsupported, "write-through is unsupported on this platform"));
+        }
+        let file = options.open(path)?;
         let position = if self.append { file.metadata()?.len() } else { 0 };
         Ok((file, position))
     }

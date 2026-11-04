@@ -1400,7 +1400,11 @@ seeks, truncations, flushes and syncs return the original failure. Buffered byte
 without another write; every close reports the original failure, including a failure during close. Close the handle and recover before
 opening a new writer.
 `flush()` and `close()` alone are not stable-storage barriers. `openWrite` accepts
-`exclusive = true` to create a new file without opening an existing one.
+`exclusive = true` to create a new file without opening an existing one. `writeThrough = true` requests
+OS write-through (`O_SYNC` on Unix, `FILE_FLAG_WRITE_THROUGH` on Windows). The writer still
+buffers in user space, and callers must invoke `syncData` or `syncAll` for a commit barrier;
+write-through does not establish durable creation of a directory entry.
+
 
 `fs.replace(source, destination)` atomically renames on Unix when the filesystem supports it;
 source and destination must be on the same filesystem. It does not synchronize either file or
@@ -1438,6 +1442,17 @@ it does not prove the replacement failed. Sync both parent directories if a rena
 directories. File synchronization cannot compensate for hardware or filesystems that misreport
 persistence. Process-kill testing does not establish power-loss durability. Retain advisory lock
 files across closes so competing processes do not lock different inodes.
+A single-file consumer can avoid checkpoint renames after initialization: retain an exclusive
+lock and append writer, write a complete transaction, and sync it before acknowledging. Append
+a complete checkpoint, sync it, then append its commit marker and sync again. Keep earlier
+records until a separate safe reclamation protocol exists. The consumer owns its record framing,
+checksums, ordering, and recovery rules. A failed operation has an uncertain outcome and requires
+recovery before further writes. On Windows, opening an existing file and syncing it does not prove
+that the file's name was durably created; `createDurable` deliberately refuses initialization.
+
+`fs.readAt` uses positional file reads instead of a memory map. If the file becomes shorter while
+a read is in progress, it reports an error rather than returning an incorrectly sized buffer.
+
 Mapped readers must not be used while another handle truncates the same underlying file; reading
 an invalidated mapping can terminate the process. Use positional reads for actively mutated files,
 or replace a complete file through a new inode while readers retain the old one.

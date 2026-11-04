@@ -699,7 +699,7 @@ fn fixture_recover(mut bytes: &[u8]) -> std::result::Result<(Vec<u64>, bool), &'
     Ok((sequences, false))
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn fixture_lua_bytes(bytes: &[u8]) -> String {
     let numbers = bytes.iter().map(u8::to_string).collect::<Vec<_>>().join(",");
     format!("string.char({numbers})")
@@ -878,4 +878,71 @@ fn durable_create_fails_before_creating_when_directory_sync_is_unsupported() {
             scratch.lua()
         ))
         .unwrap();
+}
+
+#[cfg(any(unix, windows))]
+#[test]
+fn write_through_writer_remains_usable_after_sync() {
+    let scratch = Scratch::new("write-through");
+    runtime().exec(&format!(
+        "local path = {} .. '/stream' local w = assert(fs.openWrite(path, {{ exclusive = true, writeThrough = true }})) \
+         assert(w:write('one') == 3) assert(w:syncAll()) assert(w:write('two') == 3) \
+         assert(w:syncData()) assert(w:close()) assert(fs.readFileString(path) == 'onetwo')",
+        scratch.lua()
+    )).unwrap();
+}
+
+// A protocol fixture over the general filesystem API. Windows uses an already provisioned file:
+// its first durable name publication remains unsupported, so this test makes no bootstrap claim.
+#[cfg(any(unix, windows))]
+#[test]
+fn retained_single_file_checkpoint_fixture() {
+    let records = [
+        fixture_frame(1, b"transaction one"),
+        fixture_frame(2, b"transaction two"),
+        fixture_frame(3, b"checkpoint"),
+        fixture_frame(4, b"checkpoint commit"),
+        fixture_frame(5, b"transaction three"),
+    ];
+    for phase in 0..=4 {
+        let scratch = Scratch::new(&format!("single-file-{phase}"));
+        let path = scratch.0.join("stream");
+        if cfg!(windows) {
+            std::fs::write(&path, &records[0]).unwrap();
+            std::fs::OpenOptions::new().write(true).open(&path).unwrap().sync_all().unwrap();
+        }
+        let create =
+            if cfg!(windows) { String::new() } else { "assert(fs.createDurable(path, first) == #first)".to_owned() };
+        let script = format!(
+            "local root = {root} local path = root .. '/stream' local first = {first} \
+             local tx = {tx} local checkpoint = {checkpoint} local marker = {marker} local last = {last} \
+             local lock = assert(fs.lock(root .. '/lock')) {create} \
+             local w = assert(fs.openWrite(path, {{ append = true, create = false, writeThrough = true }})) \
+             if {phase} >= 1 then assert(w:write(tx) == #tx) assert(w:syncData()) end \
+             if {phase} >= 2 then assert(w:write(checkpoint) == #checkpoint) assert(w:syncAll()) end \
+             if {phase} >= 3 then assert(w:write(marker) == #marker) assert(w:syncData()) end \
+             if {phase} >= 4 then assert(w:write(last) == #last) assert(w:syncData()) end \
+             assert(w:close()) assert(lock:unlock())",
+            root = scratch.lua(),
+            first = fixture_lua_bytes(&records[0]),
+            tx = fixture_lua_bytes(&records[1]),
+            checkpoint = fixture_lua_bytes(&records[2]),
+            marker = fixture_lua_bytes(&records[3]),
+            last = fixture_lua_bytes(&records[4]),
+        );
+        runtime().exec(&script).unwrap();
+        let expected: Vec<u8> = records[..=phase].iter().flatten().copied().collect();
+        let read = std::fs::read(&path).unwrap();
+        assert_eq!(read, expected, "phase {phase}");
+        let recovered = fixture_recover(&read).unwrap();
+        assert_eq!(recovered, ((1..=u64::try_from(phase + 1).unwrap()).collect(), false));
+        let expected_lua = fixture_lua_bytes(&expected);
+        runtime()
+            .exec(&format!(
+                "local path = {} .. '/stream' local expected = {expected_lua} \
+             assert(buffer.tostring(fs.readAt(path, 0, #expected)) == expected)",
+                scratch.lua()
+            ))
+            .unwrap();
+    }
 }

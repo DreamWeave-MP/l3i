@@ -505,7 +505,7 @@ const MEMBERS: &[Member] = &[
     ),
     member(
         "openWrite",
-        "(path: string, options: { append: boolean?, truncate: boolean?, create: boolean?, exclusive: boolean? }?) -> (dream_fs_Writer?, string?, dream_fs_ErrorKind?)",
+        "(path: string, options: { append: boolean?, truncate: boolean?, create: boolean?, exclusive: boolean?, writeThrough: boolean? }?) -> (dream_fs_Writer?, string?, dream_fs_ErrorKind?)",
         "A writer over path, truncated unless append or truncate = false; created unless create = false.",
         true,
     ),
