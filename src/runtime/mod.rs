@@ -763,6 +763,31 @@ mod tests {
     }
 
     #[test]
+    fn while_local_rebinds_its_condition_every_iteration() {
+        let runtime = Runtime::new().unwrap();
+        runtime
+            .exec(
+                "local queue, i, seen, closures = {1, 2, 3}, 0, 0, {}
+                 while local value = queue[i + 1] do
+                     i += 1
+                     closures[i] = function() return value end
+                     if value == 2 then continue end
+                     seen += value
+                 end
+                 assert(seen == 4 and i == 3, seen)
+                 assert(closures[1]() == 1 and closures[3]() == 3)
+                 local rows = {{1, 2}}
+                 while local row = table.remove(rows) do
+                     local doubled = [for x in row => x * 2]
+                     assert(doubled[2] == 4)
+                 end
+                 local value = nil
+                 while const item = value do error(item) end",
+            )
+            .unwrap();
+    }
+
+    #[test]
     fn fastpcall_bytecode_loads_and_runs() {
         let runtime = Runtime::new().unwrap();
         runtime.exec("local ok, err = pcall(function() error('x') end) assert(not ok and err:find('x'))").unwrap();

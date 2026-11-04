@@ -992,3 +992,38 @@ fn long_shadow_chains_do_not_recurse() {
         stack.load_source("=shadows", &surface, &runtime.compile_options()).unwrap();
     }
 }
+
+#[test]
+fn a_while_local_binding_is_a_local_its_body_uses() {
+    runtime()
+        .exec(
+            r#"
+            local result = luau.parse("while local line = nextLine() do print(line) end\nwhile true do end\n")
+            assert(#result.errors == 0, 'no errors')
+            local loop = result.root.body[1]
+            assert(loop.kind == 'StatWhile' and loop.conditionLocal.name == 'line', 'the binding')
+            assert(loop.body.body[1].expr.args[1]['local'] == loop.conditionLocal, 'a use is its declaration')
+            assert(result.root.body[2].conditionLocal == nil, 'a plain while has none')
+            "#,
+        )
+        .unwrap();
+}
+#[test]
+fn while_local_locations_survive_dialect_lowering() {
+    surface_test(
+        r"
+        local source = 'local xs = [for x in {1, 2} => x]\nwhile local item =\n  next(xs) do\n  local item = item\nend\n'
+        local result = luau.parse(source)
+        assert(#result.errors == 0, result.errors[1] and result.errors[1].message)
+        local loop = result.root.body[2]
+        assert(loop.kind == 'StatWhile' and loop.line == 2 and loop.column == 1)
+        local binding = loop.conditionLocal
+        assert(binding.name == 'item' and binding.line == 2 and binding.column == 13)
+        span(source, result, binding, 'item')
+        local inner = loop.body.body[1]
+        assert(inner.vars[1].line == 4 and inner.vars[1].column == 9)
+        assert(inner.values[1]['local'] == binding, 'initializer reads the outer binding')
+        span(source, result, inner.values[1], 'item')
+        ",
+    );
+}

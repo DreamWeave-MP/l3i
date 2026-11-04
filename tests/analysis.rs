@@ -1694,3 +1694,39 @@ fn collectgarbage_is_declared_only_when_the_policy_grants_it() {
     let report = analysis.check("main", false);
     assert!(report.is_clean(), "{report:#?}\n---\n{definitions}");
 }
+
+#[test]
+fn while_local_types_its_binding_as_the_truthy_condition() {
+    let mut modules = HashMap::new();
+    modules.insert(
+        "good",
+        "--!strict\nlocal function nextLine(): string? return nil end\nwhile local line = nextLine() do\n    local text: string = line\n    print(text)\nend\n",
+    );
+    modules.insert(
+        "bad",
+        "--!strict\nlocal function nextLine(): string? return nil end\nwhile local line = nextLine() do\n    local count: number = line\n    print(count)\nend\n",
+    );
+    let analysis = Analysis::new(Sources { modules }, AnalysisOptions::default()).unwrap();
+    assert!(analysis.check("good", false).is_clean());
+    assert!(!analysis.check("bad", false).is_clean());
+}
+#[test]
+fn while_local_diagnostics_keep_original_coordinates_after_lowering() {
+    let source = concat!(
+        "--!strict\n",
+        "local xs = [for x in {1, 2} => x]\n",
+        "local function nextValue(): string? return nil end\n",
+        "while local value =\n",
+        "    nextValue() do\n",
+        "    local count: number = value\n",
+        "    print(count)\n",
+        "end\n",
+    );
+    let analysis = comprehension_analysis(HashMap::from([("while_error", source)]), analysis::Solver::New);
+    let report = analysis.check("while_error", false);
+    let error = report.diagnostics.iter().find(|error| error.kind == DiagnosticKind::TypeError).expect("type error");
+    assert_eq!(error.span.begin_line, 5, "{error:?}");
+    assert_eq!(error.span.begin_column, 26, "{error:?}");
+    assert_eq!(error.span.end_line, 5, "{error:?}");
+    assert_eq!(error.span.end_column, 31, "{error:?}");
+}

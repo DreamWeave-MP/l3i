@@ -206,12 +206,15 @@ emits, so `flags::initialize()` freezes one policy before the first VM is create
 (`flags::LUAU_FLAGS`, plus `flags::LUAU_CODEGEN_FLAGS` under `jit`), never Luau's "enable
 everything". Every flag on it is there for a stated reason, in the source next to its name:
 
-- The compiler and runtime optimizations and fixes that Luau 0.744 still gates, including the
+- The compiler and runtime optimizations and fixes that Luau 0.745 still gates, including the
   two 0.742 miscompile fixes (`LuauCompileMoveElisionFix`, `LuauCompileTableFoldFix`) and the
   0.741 GC pacing fix (`LuauGcHeapShrinkFix`), which read a heap that shrank between
   measurements as an enormous allocation rate.
 - `LuauExperimentalIfLocalSyntax`, so `if local x = f() then .. end` parses. The C++ binder
   leaves it off.
+- `DebugLuauWhileLocalSyntax`, so `while local x = f() do .. end` parses, with `while const`, and,
+  under `analysis`, `DebugLuauWhileLocalAnalysis` (`flags::LUAU_ANALYSIS_FLAGS`) to type it. Luau
+  still calls this syntax experimental, so it can change with a Luau release.
 - `LuauGcTraceUdata` and `LuauBufferCage`, which gate the embedder GC and memory cage APIs the
   binder exposes; both are inert until a host installs the callback.
 - `LuauCoroutineFinally` is the one flag not on the list: the builder's `coroutine_finalizers`

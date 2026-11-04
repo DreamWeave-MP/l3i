@@ -44,6 +44,9 @@ pub const LUAU_FLAGS: &[&str] = &[
     "LuauCompileReuseLowersLimit",
     // `if local x = f() then ... end` syntax. The C++ binder leaves this off.
     "LuauExperimentalIfLocalSyntax",
+    // Luau 0.745: `while local x = f() do ... end`, the condition re-evaluated and rebound every
+    // iteration. Luau gates it behind a debug flag while the syntax is experimental.
+    "DebugLuauWhileLocalSyntax",
     // Runtime side
     "LuauIntegerLibrary",
     "LuauOptimizeStringSplit",
@@ -70,6 +73,10 @@ pub const LUAU_FLAGS: &[&str] = &[
     // callback.
     "LuauGcTraceUdata",
     "LuauBufferCage",
+    // Luau 0.745: a caged buffer page keeps its header in ordinary memory and only its data in
+    // the cage, so memory corruption inside the cage cannot reach the allocator's bookkeeping.
+    // Inert until a host installs a cage.
+    "LuauCageSplitData",
     // Luau 0.741's fix for GC pacing, which read a heap that shrank between measurements as an
     // enormous allocation rate. A dynamic flag, off upstream by default.
     "LuauGcHeapShrinkFix",
@@ -81,33 +88,27 @@ pub const LUAU_FLAGS: &[&str] = &[
 /// architecture, so each of those exists at run time on its own architecture only.
 /// Luau 0.742 removed `AddReturnExectargetCheck` together with
 /// `disableNativeExecutionForFunction`, the one function that needed it; 0.743 and 0.744
-/// graduated `LuauCodegenNoLinearFastpcall` and `LuauCodegenLimitVersions`.
+/// graduated `LuauCodegenNoLinearFastpcall` and `LuauCodegenLimitVersions`; 0.745 graduated
+/// `LuauCodegenX64IntSpillRestore`, `LuauCodegenExitSyncUpdate`,
+/// `LuauCodegenScopedSpillKeepLazy`, `LuauCodegenNoZeroScale` and
+/// `LuauCodegenLimitVersionsExtra`.
 pub const LUAU_CODEGEN_FLAGS: &[&str] = &[
     "LuauCodegenPropagateFallbackTags",
-    "LuauCodegenX64IntSpillRestore",
+    // Luau 0.745's fixes. A comparison can run `__eq`, but one whose result went unused was
+    // deleted with its metamethod; and a store removed from a register marked dead left the
+    // register dead at a VM exit that still read it.
+    "LuauCodegenCmpAnySideEffecting",
+    "LuauCodegenMarkUsed",
     "LuauCodegenA64ForgLoopArray",
     "LuauCodeGenFastpcall",
     "LuauCodegenInteger3",
     "LuauCodegenIntegerCompare",
     "LuauCodegenBufferInteger",
-    // Luau 0.742's register allocator fixes: restores a VM exit would clobber are made before
-    // the exit's own stores, running out of registers fails the compilation instead of
-    // asserting, and a conditional spill no longer marks a lazy restore location materialized.
-    // Both are defined in the A64 allocator and read by the X64 one, so they exist on either.
-    "LuauCodegenExitSyncUpdate",
-    "LuauCodegenScopedSpillKeepLazy",
-    // Luau 0.742: a buffer offset multiplied by a constant zero keeps its scale.
-    "LuauCodegenNoZeroScale",
-    // Constant propagation packs a register's version into twenty bits of an operand and, since
-    // 0.744 graduated the first half of the fix, stops propagating along a block chain before a
-    // version outgrows them. This flag (0.742) makes stopping sound, applying pending
-    // substitutions and discarding the fallback entry tags recorded before the stop.
-    "LuauCodegenLimitVersionsExtra",
     // Luau 0.744's fixes. Dead store elimination kept a tag store whose load had been
     // overwritten; `INVOKE_FASTPCALL` can replace the environment, so it now invalidates the
     // safe-environment assumption; a VM exit's register restores are planned per exit (a crash
-    // Luau's fuzzer found, superseding the 0.742 fix above); and code with a libunwind unwinder
-    // registers each FDE where it used to register the whole frame, which Intel macOS needs.
+    // Luau's fuzzer found); and code with a libunwind unwinder registers each FDE where it used
+    // to register the whole frame, which Intel macOS needs.
     "LuauCodegenDseTrackTagInvalidation",
     "LuauCodegenUpdateSafeEnvList",
     "LuauCodegenImprovedExitSync",
@@ -118,6 +119,12 @@ pub const LUAU_CODEGEN_FLAGS: &[&str] = &[
     "LuauCodegenA64BitlrotateSelf",
     "LuauCodegenA64ReloadLargeConstOffset",
 ];
+
+/// The flags defined in Luau's Analysis component, which only the `analysis` feature compiles.
+/// `DebugLuauWhileLocalAnalysis` types the `while local` binding the parser flag lets through. The
+/// linker keeps the file that defines it only in a binary that uses the type checker, so a binary
+/// that doesn't has no such flag, and none of its checks to apply it to.
+pub const LUAU_ANALYSIS_FLAGS: &[&str] = &["DebugLuauWhileLocalAnalysis"];
 
 static INITIALIZED: OnceLock<std::result::Result<(), String>> = OnceLock::new();
 
@@ -141,10 +148,30 @@ pub fn initialize() -> Result<()> {
                     return Err(format!("Luau {} has no fast flag named {flag}", crate::LUAU_VERSION));
                 }
             }
+            for flag in LUAU_ANALYSIS_FLAGS {
+                let name = CString::new(*flag).expect("flag names are literals");
+                // SAFETY: as above. Absent from a binary that does not use the type checker.
+                unsafe { ffi::luau_setfflag(name.as_ptr(), 1) };
+            }
             Ok(())
         })
         .clone()
         .map_err(Error::Logic)
+}
+
+/// Verify Analysis flags when the frontend is actually linked and used. Merely enabling the
+/// feature does not keep its object files in a binary that never invokes Analysis.
+#[cfg(feature = "analysis")]
+pub(crate) fn validate_analysis() -> Result<()> {
+    for flag in LUAU_ANALYSIS_FLAGS {
+        if crate::memory::fast_flag(flag) != Some(true) {
+            return Err(Error::logic(format!(
+                "Luau {} Analysis fast flag {flag} is missing or disabled",
+                crate::LUAU_VERSION
+            )));
+        }
+    }
+    Ok(())
 }
 
 static COROUTINE_FINALIZERS: OnceLock<std::result::Result<bool, String>> = OnceLock::new();

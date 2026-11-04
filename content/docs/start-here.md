@@ -14,7 +14,7 @@ kind = "tutorial"
 l3i = { version = "2", features = ["jit"] }
 ```
 
-The crate's name in code is `l3i`. It needs Rust 1.92 or newer and edition 2024. Three features
+The crate's name in code is `l3i`. It needs Rust 1.95 or newer and edition 2024. Three features
 are optional:
 
 | Feature | Adds |
@@ -96,7 +96,7 @@ the gain. Both are why `build.rs` checks up front.
 
 ## Building from a checkout
 
-Luau is the `luau/` git submodule, pinned at release 0.744. A crates.io
+Luau is the `luau/` git submodule, pinned at release 0.745. A crates.io
 package carries the Luau sources it needs; a checkout has to fetch them:
 
 ```sh

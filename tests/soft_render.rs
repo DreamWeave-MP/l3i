@@ -176,7 +176,7 @@ fn malformed_input_fails_loudly() {
         ("frame:rect(vector.create(0, 0), vector.create(4, 4), raster.CLIP_ALL, raster.CLIP_ALL)", "Color"),
         ("frame:rect(vector.create(0, 0), vector.create(4, 4), raster.WHITE, raster.WHITE)", "ClipRect"),
         ("renderer:createTexture(2, 2, buffer.create(15))", "15 bytes, expected 16"),
-        ("renderer:createTexture(0, 2, buffer.create(0))", "empty or overflows"),
+        ("renderer:createTexture(0, 2, buffer.create(0))", "is empty, overflows"),
         ("renderer:beginFrame(1281, 721)", "pixel budget"),
         ("renderer:readInto(buffer.create(8 * 8 * 4 - 1))", "out of bounds"),
         (
