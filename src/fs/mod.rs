@@ -498,6 +498,12 @@ const MEMBERS: &[Member] = &[
         true,
     ),
     member(
+        "createDurable",
+        "(path: string, data: buffer | string) -> (number?, string?, dream_fs_ErrorKind?)",
+        "Exclusively creates and writes a file, then synchronizes the file and its parent directory; unsupported where directory synchronization is unavailable.",
+        true,
+    ),
+    member(
         "openWrite",
         "(path: string, options: { append: boolean?, truncate: boolean?, create: boolean?, exclusive: boolean? }?) -> (dream_fs_Writer?, string?, dream_fs_ErrorKind?)",
         "A writer over path, truncated unless append or truncate = false; created unless create = false.",
@@ -652,6 +658,7 @@ impl Extension for FsExtension {
         bind!("fileName", path::file_name);
         bind!("extension", path::extension);
         bind!("isFileName", path::is_file_name);
+        bind!("createDurable", io::create_durable);
         bind!("writeFile", io::write_file);
         bind!("openWrite", |call: &Call<'_>,
                             path: &[u8],

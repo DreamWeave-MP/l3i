@@ -844,3 +844,38 @@ fn checkpoint_failure_model_validates_complete_generations() {
     // The new image is acceptable only after it has been completely validated.
     assert_eq!(valid_checkpoint(&new), Ok(vec![1, 2]));
 }
+
+#[cfg(unix)]
+#[test]
+fn durable_create_is_exclusive_and_initializes_contents() {
+    let scratch = Scratch::new("durable-create");
+    runtime()
+        .exec(&format!(
+            "local root = {} local path = root .. '/journal' \
+         assert(fs.createDurable(path, 'header') == 6) assert(fs.readFileString(path) == 'header') \
+         local ok, message, kind = fs.createDurable(path, 'overwrite') \
+         assert(ok == nil and kind == 'alreadyExists' and message:find('createDurable')) \
+         assert(fs.readFileString(path) == 'header') \
+         local w = assert(fs.openWrite(path, {{ append = true, create = false }})) \
+         assert(w:write('record') == 6) assert(w:syncData()) assert(w:close()) \
+         assert(fs.readFileString(path) == 'headerrecord') \
+         ok, message, kind = fs.createDurable(root .. '/missing/file', 'x') \
+         assert(ok == nil and kind == 'notFound' and message:find('createDurable'))",
+            scratch.lua()
+        ))
+        .unwrap();
+}
+
+#[cfg(not(unix))]
+#[test]
+fn durable_create_fails_before_creating_when_directory_sync_is_unsupported() {
+    let scratch = Scratch::new("durable-create-unsupported");
+    runtime()
+        .exec(&format!(
+            "local path = {} .. '/journal' local ok, message, kind = fs.createDurable(path, 'header') \
+         assert(ok == nil and kind == 'unsupported' and message:find('createDurable')) \
+         assert(not fs.exists(path))",
+            scratch.lua()
+        ))
+        .unwrap();
+}

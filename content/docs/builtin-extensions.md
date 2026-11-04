@@ -1425,6 +1425,12 @@ and directory synchronization and replacement where supported. No power-cut test
 performed. These tests do not prove that a filesystem or storage device honors barriers.
 
 
+`fs.createDurable(path, data)` exclusively creates a file, writes all data, syncs the file and
+then its parent directory. It returns the byte count or an error. It returns `unsupported` before
+creating anything on platforms without a supported directory barrier, including Windows. On any
+other failure, the path may already exist and the outcome is uncertain. The caller must prevent
+concurrent renames or replacement of the parent directory while initialization is in progress.
+
 For creation, sync the file then its parent directory. For a checkpoint, create an exclusive
 sibling, write the complete image, syncAll and close it, replace the destination, then sync the
 parent directory. A failure after replacement can leave either complete version after recovery;

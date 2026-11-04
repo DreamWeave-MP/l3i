@@ -656,6 +656,32 @@ pub(crate) fn write_file(
     Ok(Outcome::of(write.write(&host, bytes).map(|()| bytes.len() as f64), "writeFile", path))
 }
 
+/// Creates a new file, writes all bytes, synchronizes it and then its containing directory.
+/// An error after creation leaves the path in an uncertain state for the caller to recover.
+pub(crate) fn create_durable(path: &[u8], data: BytesView<'_>) -> Result<Outcome<f64>> {
+    let host = super::host_path("createDurable", path)?;
+    // SAFETY: the bytes are read only during this native call, without calling into Lua.
+    let bytes = unsafe { data.bytes_unchecked() };
+    #[cfg(unix)]
+    let result = (|| -> io::Result<()> {
+        let parent = host.parent().filter(|parent| !parent.as_os_str().is_empty()).unwrap_or(Path::new("."));
+        let directory = File::open(parent)?;
+        if !directory.metadata()?.is_dir() {
+            return Err(io::Error::new(io::ErrorKind::NotADirectory, "parent is not a directory"));
+        }
+        let mut file = OpenOptions::new().write(true).create_new(true).open(&host)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        directory.sync_all()
+    })();
+    #[cfg(not(unix))]
+    let result: io::Result<()> = {
+        let _ = &host;
+        Err(io::Error::new(io::ErrorKind::Unsupported, "durable file creation is unsupported on this platform"))
+    };
+    Ok(Outcome::of(result.map(|()| bytes.len() as f64), "createDurable", path))
+}
+
 /// A writer's open file: `None` once closed.
 #[derive(Debug)]
 pub(crate) struct WriterFile(RefCell<Option<BufWriter<File>>>);
