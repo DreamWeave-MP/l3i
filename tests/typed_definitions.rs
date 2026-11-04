@@ -230,17 +230,6 @@ const FS_SCRIPT: (&str, &str) = (
        local length: number = positional:size() or 0\n\
        positional:close()\n\
      end\n\
-     local manifest, commitment = fs.authManifest('x', { chunkSize = 65536 })\n\
-     if manifest and commitment then\n\
-       local verified: dream_fs_AuthenticatedReader?, why: string?, failure: dream_fs_AuthErrorKind? = fs.openAuthenticated('x', manifest, commitment)\n\
-       if verified then\n\
-         local range = verified:readAt(0, 4)\n\
-         local copied: number = verified:readAtInto(buffer.create(4), 0, 4, 0) or 0\n\
-         local total: number = verified:size() + verified:chunkSize()\n\
-         local root: string = verified:commitment()\n\
-         verified:close()\n\
-       end\n\
-     end\n\
      local stat: dream_fs_Stat? = fs.lstat('x')\n\
      local kind: dream_fs_FileKind = if stat then stat.kind else 'other'\n\
      local walk = fs.walk('.', { followLinks = true, include = 'files', metadata = true, sort = true, maxDepth = 3 })\n\
@@ -266,6 +255,24 @@ const FS_SCRIPT: (&str, &str) = (
      local names: { string } = fs.list('.') or {}\n\
      fs.remove('d', { recursive = true })\n\
      print(count, kind, written, closed, made, same, target, names, fs.canonicalize('.'), fs.copy('x', 'w'))\n",
+);
+
+#[cfg(feature = "fs-authenticated")]
+const FS_AUTHENTICATED_SCRIPT: (&str, &str) = (
+    "fs_authenticated_script",
+    "--!strict\n\
+     local fs = require('@dream/fs')\n\
+     local manifest, commitment = fs.authManifest('x', { chunkSize = 65536 })\n\
+     if manifest and commitment then\n\
+       local verified: dream_fs_AuthenticatedReader?, why: string?, failure: dream_fs_AuthErrorKind? = fs.openAuthenticated('x', manifest, commitment)\n\
+       if verified then\n\
+         local range = verified:readAt(0, 4)\n\
+         local copied: number = verified:readAtInto(buffer.create(4), 0, 4, 0) or 0\n\
+         local total: number = verified:size() + verified:chunkSize()\n\
+         local root: string = verified:commitment()\n\
+         verified:close()\n\
+       end\n\
+     end\n",
 );
 
 #[cfg(feature = "process")]
@@ -556,6 +563,8 @@ fn the_generated_definitions_type_check_and_typed_scripts_pass_strict_mode() {
     all_scripts.push(SYNTAX_SCRIPT);
     #[cfg(feature = "fs")]
     all_scripts.push(FS_SCRIPT);
+    #[cfg(feature = "fs-authenticated")]
+    all_scripts.push(FS_AUTHENTICATED_SCRIPT);
     #[cfg(feature = "process")]
     all_scripts.push(PROCESS_SCRIPT);
     #[cfg(feature = "tcp")]
