@@ -394,6 +394,13 @@ fn smoke() -> bool {
     std::env::args().any(|arg| arg == "--test")
 }
 
+/// Whether the sweep was asked for by name: `cargo bench -- data_f32` or `-- data_receivers`. A
+/// plain `cargo bench` runs a few representative sizes and no counter rounds, so an ordinary
+/// benchmark job does not pay for an investigation.
+fn sweep_asked() -> bool {
+    std::env::args().skip(1).any(|arg| arg.contains("data_f32") || arg.contains("data_receivers"))
+}
+
 /// One raw row per case on stderr, for scripts: per-call instructions, cycles, nanoseconds and
 /// branch misses, each the min, median and max of nine rounds. User-space counts only. Instruction counts repeat to
 /// within a few parts per thousand on a busy machine; the cycle and nanosecond spreads say how far
@@ -405,7 +412,7 @@ fn f32_row(op: &str, n: usize, variant: &str, invoke: &mut dyn FnMut()) {
             Counter, PERF_COUNT_HW_BRANCH_MISSES, PERF_COUNT_HW_CPU_CYCLES, PERF_COUNT_HW_INSTRUCTIONS,
             PERF_TYPE_HARDWARE, measure_all,
         };
-        if smoke() {
+        if smoke() || !sweep_asked() {
             return;
         }
         let (Some(instructions), Some(cycles), Some(misses)) = (
@@ -417,8 +424,8 @@ fn f32_row(op: &str, n: usize, variant: &str, invoke: &mut dyn FnMut()) {
             return;
         };
         let counters = [instructions, cycles, misses];
-        // Roughly two million elements a round, so large and small spans get comparable samples.
-        let calls = (2_000_000 / n.max(1)).clamp(1, 2048);
+        // Roughly half a million elements a round, so large and small spans get comparable samples.
+        let calls = (500_000 / n.max(1)).clamp(1, 2048);
         let mut rows = [[0u64; 4]; 9];
         invoke();
         for row in &mut rows {
@@ -452,8 +459,9 @@ fn f32_setup(n: usize) -> String {
          ia, ib, iout = buffer.create(n * 4), buffer.create(n * 4), buffer.create(n * 4)
          da, db, dout = buffer.create(n * 8), buffer.create(n * 8), buffer.create(n * 8)
          sa, sout = buffer.create(n * 8 + 8), buffer.create(n * 8 + 8)
-         fall, twos = buffer.create(n * 4), buffer.create(n * 4)
+         fall, twos, bytes = buffer.create(n * 4), buffer.create(n * 4), buffer.create(n)
          for i = 0, n - 1 do
+             buffer.writeu8(bytes, i, (i * 37) % 251)
              buffer.writef32(fall, i * 4, -i) buffer.writef32(twos, i * 4, 2)
              local x, y = ((i * 37) % 251) / 7 - 15, ((i * 53) % 241) / 3 - 40
              buffer.writef32(a, i * 4, x) buffer.writef32(b, i * 4, y)
@@ -544,7 +552,7 @@ const F32_OPS: [(&str, &str, &str); 14] = [
 
 /// What the specialization must not slow: other kinds, strided layouts, overlapping and in-place
 /// spans, and the receivers (Luau IR loops under jit, bound methods without it).
-const F32_CONTROLS: [(&str, &str); 25] = [
+const F32_CONTROLS: [(&str, &str); 31] = [
     // The block scans' worst cases: every block holds an improvement, or the first element decides.
     ("min strictly falling", "return data.min(fall, 'f32', 0, n) or 0"),
     ("argmin strictly falling", "return data.argmin(fall, 'f32', 0, n) or 0"),
@@ -571,6 +579,12 @@ const F32_CONTROLS: [(&str, &str); 25] = [
     ("receiver f32 countGt", "local K: dream_data_Kind_f32 = F local c = K:countGt(a, 0, n, 0) return c"),
     ("receiver f32 min", "local K: dream_data_Kind_f32 = F local m = K:min(a, 0, n) return m or 0"),
     ("jsl recognized f32 sum", "return sum[for v in a[1:n, 'f32'] => v]"),
+    ("jsl recognized f32 count", "return #[for v in a[1:n, 'f32'] if v > 0 => v]"),
+    ("jsl recognized f32 any", "return if any[for v in a[1:n, 'f32'] => v > 1000] then 1 else 0"),
+    ("jsl recognized u8 count", "return #[for x in bytes[1:n] if x > 127 => x]"),
+    ("receiver f32 selectGt", "local K: dream_data_Kind_f32 = F local s = K:selectGt(a, 0, n, 0, sel) return n"),
+    ("receiver f64 min", "local K: dream_data_Kind_f64 = D local m = K:min(da, 0, n) return m or 0"),
+    ("receiver i32 countGt", "local K: dream_data_Kind_i32 = I local c = K:countGt(ia, 0, n, 0) return c"),
 ];
 
 /// Contiguous f32 operations at every span length: the `dream.data` call, the handwritten Luau
@@ -579,7 +593,13 @@ const F32_CONTROLS: [(&str, &str); 25] = [
 /// execution. Criterion reports time; `f32_row` reports counters and the spread of nine rounds.
 fn f32_bulk(c: &mut Criterion) {
     use std::hint::black_box;
-    let sizes: &[usize] = if smoke() { &[0, 16] } else { &[0, 1, 16, 256, 1024, 16384, 65536, 1_048_576] };
+    let sizes: &[usize] = if smoke() {
+        &[0, 16]
+    } else if sweep_asked() {
+        &[0, 1, 4, 16, 64, 128, 256, 512, 1024, 4096, 16384, 65536, 262_144, 1_048_576]
+    } else {
+        &[16, 1024, 65536]
+    };
     let word = |bits: f32| bits.to_ne_bytes();
     // The counter rows run outside Criterion's filter, so honor it here: `-- data_f32/65536`.
     let filter = std::env::args().skip(1).find(|arg| !arg.starts_with('-'));
@@ -650,22 +670,71 @@ fn f32_bulk(c: &mut Criterion) {
             f32_row(op, n, "rust reference", &mut || kernel(black_box(&mut sink)));
             group.bench_function(format!("{op} rust reference"), |b| b.iter(|| kernel(black_box(&mut sink))));
         }
-        if matches!(n, 0 | 1 | 16 | 1024 | 65536) {
-            for (control, body) in F32_CONTROLS {
-                let function = compile(body);
-                f32_row(control, n, "control", &mut || {
-                    black_box(function.invoke::<f64, _>(&stack, ()).unwrap());
-                });
-                group.bench_function(format!("control {control}"), |b| {
-                    b.iter(|| function.invoke::<f64, _>(&stack, ()).unwrap());
-                });
-            }
+        for (control, body) in F32_CONTROLS {
+            let function = compile(body);
+            f32_row(control, n, "control", &mut || {
+                black_box(function.invoke::<f64, _>(&stack, ()).unwrap());
+            });
+            group.bench_function(format!("control {control}"), |b| {
+                b.iter(|| function.invoke::<f64, _>(&stack, ()).unwrap());
+            });
         }
         group.finish();
     }
 }
 
+/// Where a lowered receiver call and the bound method it can fall back to cross, per kind and
+/// member: `cargo bench -- data_receivers`. Counter rows only, and only when asked for by name.
+fn receiver_crossover() {
+    use std::hint::black_box;
+    let asked = std::env::args().skip(1).any(|arg| arg.contains("data_receivers"));
+    if !asked || smoke() {
+        return;
+    }
+    let members = [
+        ("sum", "local t = K:sum(B, 0, n) return t"),
+        ("min", "local t = K:min(B, 0, n) return t or 0"),
+        ("max", "local t = K:max(B, 0, n) return t or 0"),
+        ("countGt", "local t = K:countGt(B, 0, n, 0) return t"),
+        ("anyGt", "local t = K:anyGt(B, 0, n, 1000) return if t then 1 else 0"),
+        ("allLt", "local t = K:allLt(B, 0, n, 1000) return if t then 1 else 0"),
+        ("sumGt", "local t = K:sumGt(B, 0, n, 0) return t"),
+        ("selectGt", "local t = K:selectGt(B, 0, n, 0, sel) return n"),
+    ];
+    for n in [4usize, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 16384, 65536] {
+        let setup = format!(
+            "n = {n} sel = data.selection(n)
+             bu8, bi16, bi32, bf32, bf64 = buffer.create(n), buffer.create(n * 2), buffer.create(n * 4), buffer.create(n * 4), buffer.create(n * 8)
+             for i = 0, n - 1 do
+                 local x = ((i * 37) % 251) / 7 - 15
+                 buffer.writeu8(bu8, i, (i * 37) % 251) buffer.writei16(bi16, i * 2, x * 7) buffer.writei32(bi32, i * 4, x * 7)
+                 buffer.writef32(bf32, i * 4, x) buffer.writef64(bf64, i * 8, x)
+             end
+             Ku8, Ki16, Ki32, Kf32, Kf64 = data.u8(), data.i16(), data.i32(), data.f32(), data.f64()"
+        );
+        let runtime = runtime(true, &setup);
+        let stack = runtime.stack();
+        for kind in ["u8", "i16", "i32", "f32", "f64"] {
+            for (member, body) in members {
+                for (variant, annotation) in
+                    [("lowered", format!(": dream_data_Kind_{kind}")), ("bound", String::new())]
+                {
+                    let source = format!(
+                        "--!native\nreturn function() local K{annotation} = K{kind} local B = b{kind} {body} end"
+                    );
+                    let chunk = stack.load_source("=case", &source, &runtime.compile_options()).unwrap();
+                    let function = chunk.invoke::<l3i::value::Function, _>(&stack, ()).unwrap();
+                    f32_row(&format!("{kind} {member}"), n, variant, &mut || {
+                        black_box(function.invoke::<f64, _>(&stack, ()).unwrap());
+                    });
+                }
+            }
+        }
+    }
+}
+
 fn all(c: &mut Criterion) {
+    receiver_crossover();
     sums(c);
     counts(c);
     movement(c);
