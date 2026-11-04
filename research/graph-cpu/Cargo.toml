@@ -6,4 +6,9 @@ rust-version = "1.99.1"
 publish = false
 [workspace]
 [dependencies]
-l3i = { path = "../..", default-features = false, features = ["data", "jit"] }
+l3i = { path = "../..", default-features = false, features = ["data"] }
+
+[features]
+# Luau's native code generator, for the generated-Luau comparator only. The kernels never need it,
+# and every test runs both with and without it: no-JIT is a supported configuration, not a fallback.
+luau-jit = ["l3i/jit"]

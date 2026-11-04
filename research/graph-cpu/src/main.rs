@@ -51,6 +51,13 @@ fn collecting<R>(call: &Call<'_>, budget: &Budget, mut body: impl FnMut() -> Res
     first
 }
 
+/// Whether two byte ranges share a byte. An empty range shares none. A range's end never overflows,
+/// because a slice cannot extend past the end of the address space.
+fn overlaps(a: &[u8], b: &[u8]) -> bool {
+    let (a, b) = (a.as_ptr_range(), b.as_ptr_range());
+    a.start != a.end && b.start != b.end && a.start < b.end && b.start < a.end
+}
+
 /// `program:runInto(out, a, b, ...)`: Luau buffers, borrowed for this call and never retained.
 fn run_into(
     program: &Program,
@@ -61,12 +68,13 @@ fn run_into(
     if inputs.len() != program.signature().len() {
         return Err(l3i::Error::runtime("input slot set mismatch"));
     }
-    // SAFETY: no Lua runs and no other view writes between here and the end of `run_into`
-    // below. Distinct Luau buffers never overlap, so comparing start addresses is sufficient
-    // to establish that `out` aliases no input; aliased inputs only read.
+    // SAFETY: no Lua runs and no other view writes between here and the end of `run_into` below.
+    // The exclusive slice is only made after every input's byte range is shown disjoint from it,
+    // so this holds for any `BufferView`, including sub-ranges of one buffer. Inputs only read, so
+    // they may overlap each other.
     let (input_bytes, out_bytes) = unsafe {
-        let start = out.bytes_unchecked().as_ptr();
-        if !out.is_empty() && inputs.iter().any(|input| input.bytes_unchecked().as_ptr() == start) {
+        let target = out.bytes_unchecked();
+        if inputs.iter().any(|input| overlaps(input.bytes_unchecked(), target)) {
             return Err(l3i::Error::runtime("output buffer aliases an input"));
         }
         let reads: Vec<&[u8]> = inputs.iter().map(|input| input.bytes_unchecked()).collect();
@@ -136,9 +144,11 @@ impl LuauModule for Research {
             ty.method("native_source", |p: &CompiledProgram| p.0.native_source())?;
             ty.method("shader_source", |p: &CompiledProgram, mode: String| p.0.shader_source(&mode))?;
             ty.method("native", |p: &CompiledProgram, call: &Call<'_>| -> Result<l3i::value::Function> {
-                let generator = l3i::native_code::NativeCodeGen::for_scope(call)
-                    .ok_or_else(|| l3i::Error::runtime("native backend unavailable"))?;
-                if !generator.is_available() {
+                // Without the generator the same source runs interpreted: slower, identical results.
+                #[cfg(feature = "luau-jit")]
+                if !l3i::native_code::NativeCodeGen::for_scope(call)
+                    .is_some_and(l3i::native_code::NativeCodeGen::is_available)
+                {
                     return Err(l3i::Error::runtime("native backend unavailable"));
                 }
                 let chunk = call.load_source(
@@ -160,11 +170,14 @@ impl LuauModule for Research {
                 .map(|t| Owned(TensorValue(t)))
         })?;
         module.function("collect", |call: &Call<'_>| collect(call))?;
+        #[cfg(feature = "luau-jit")]
         module.function("setNative", |call: &Call<'_>, enabled: bool| {
             if let Some(generator) = l3i::native_code::NativeCodeGen::for_scope(call) {
                 generator.set_native_execution_enabled(call, enabled);
             }
         })?;
+        #[cfg(not(feature = "luau-jit"))]
+        module.function("setNative", |_enabled: bool| ())?;
         module.function("constant", move |v: f32| {
             Expr::constant(v, service_domain.clone()).map(|e| Owned(Expression(e)))
         })?;
@@ -182,14 +195,11 @@ impl LuauModule for Research {
 }
 
 fn runtime() -> Result<Runtime> {
-    let plan = l3i::extension::RuntimePlan::builder()
-        .policy(
-            l3i::extension::RuntimePolicy::new()
-                .compat_global("@dream/data", "data")
-                .native_code(l3i::extension::NativeCodePolicy { record_counters: cfg!(test), ..Default::default() }),
-        )
-        .extension(l3i::data::DataExtension)
-        .finalize()?;
+    let policy = l3i::extension::RuntimePolicy::new().compat_global("@dream/data", "data");
+    #[cfg(feature = "luau-jit")]
+    let policy =
+        policy.native_code(l3i::extension::NativeCodePolicy { record_counters: cfg!(test), ..Default::default() });
+    let plan = l3i::extension::RuntimePlan::builder().policy(policy).extension(l3i::data::DataExtension).finalize()?;
     let runtime = Runtime::from_plan(&plan)?;
     let module = runtime.register_module::<Research>()?;
     runtime.set_global("compute", &module)?;
@@ -211,9 +221,8 @@ fn run() -> Result<()> {
     let runtime = runtime()?;
     runtime.exec(include_str!("../example.jsl"))?;
     runtime.exec(include_str!("../slots.jsl"))?;
-    if cfg!(test) {
-        assert!(runtime.native_code().unwrap().execution_stats(&runtime.stack()).regular_blocks_executed > 0);
-    }
+    #[cfg(all(test, feature = "luau-jit"))]
+    assert!(runtime.native_code().unwrap().execution_stats(&runtime.stack()).regular_blocks_executed > 0);
     runtime.collect_garbage();
     // A program survives collection of everything but itself, and runs on new inputs.
     runtime.exec(
@@ -232,6 +241,7 @@ fn run() -> Result<()> {
         runtime.collect_garbage();
         runtime.exec("assert(compute.used()==0)")?;
     }
+    #[cfg(feature = "luau-jit")]
     if let Some(path) = arguments.iter().skip_while(|arg| *arg != "--emit-luau-assembly").nth(1) {
         let chunk = runtime.stack().load_source(
             "=luau-kernels",
@@ -259,9 +269,34 @@ fn main() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    /// Sub-ranges with different starts still count: start-address equality would miss these.
+    #[test]
+    fn overlap_is_a_range_check() {
+        let bytes = [0u8; 16];
+        assert!(super::overlaps(&bytes[0..12], &bytes[4..8]), "contained, different start");
+        assert!(super::overlaps(&bytes[0..8], &bytes[4..12]), "partial");
+        assert!(super::overlaps(&bytes[4..12], &bytes[0..8]), "partial, other order");
+        assert!(super::overlaps(&bytes, &bytes), "identical");
+        assert!(!super::overlaps(&bytes[0..8], &bytes[8..16]), "adjacent");
+        assert!(!super::overlaps(&bytes[8..16], &bytes[0..8]), "adjacent, other order");
+        assert!(!super::overlaps(&bytes[4..4], &bytes), "empty");
+        assert!(!super::overlaps(&bytes, &bytes[4..4]), "empty, other side");
+    }
+
     #[test]
     fn jsl_programs_and_teardown() {
         super::run().unwrap();
         super::run().unwrap();
+        // Without the feature, everything above ran with no executable memory mapped at runtime.
+        #[cfg(all(not(feature = "luau-jit"), target_os = "linux"))]
+        {
+            let maps = std::fs::read_to_string("/proc/self/maps").unwrap();
+            let anonymous_executable = maps.lines().filter(|line| {
+                let mut fields = line.split_whitespace();
+                let permissions = fields.nth(1).unwrap_or("");
+                permissions.contains('x') && fields.nth(3).is_none()
+            });
+            assert_eq!(anonymous_executable.count(), 0, "no-JIT must map no anonymous executable memory:\n{maps}");
+        }
     }
 }
