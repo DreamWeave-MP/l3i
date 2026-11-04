@@ -1710,3 +1710,23 @@ fn while_local_types_its_binding_as_the_truthy_condition() {
     assert!(analysis.check("good", false).is_clean());
     assert!(!analysis.check("bad", false).is_clean());
 }
+#[test]
+fn while_local_diagnostics_keep_original_coordinates_after_lowering() {
+    let source = concat!(
+        "--!strict\n",
+        "local xs = [for x in {1, 2} => x]\n",
+        "local function nextValue(): string? return nil end\n",
+        "while local value =\n",
+        "    nextValue() do\n",
+        "    local count: number = value\n",
+        "    print(count)\n",
+        "end\n",
+    );
+    let analysis = comprehension_analysis(HashMap::from([("while_error", source)]), analysis::Solver::New);
+    let report = analysis.check("while_error", false);
+    let error = report.diagnostics.iter().find(|error| error.kind == DiagnosticKind::TypeError).expect("type error");
+    assert_eq!(error.span.begin_line, 5, "{error:?}");
+    assert_eq!(error.span.begin_column, 26, "{error:?}");
+    assert_eq!(error.span.end_line, 5, "{error:?}");
+    assert_eq!(error.span.end_column, 31, "{error:?}");
+}

@@ -768,3 +768,36 @@ fn the_buffer_cage_holds_buffer_data_without_the_page_headers() {
     assert!(*largest < 16 * 1024 - 24, "{sizes:?}");
     drop(runtime);
 }
+#[test]
+fn buffer_cage_recovers_from_allocation_failure() {
+    struct FailOnce {
+        failing: Rc<Cell<bool>>,
+        inner: CountingCage,
+    }
+    impl BufferCage for FailOnce {
+        fn allocate(&self, ptr: *mut c_void, old_size: usize, new_size: usize, kind: c_int) -> *mut c_void {
+            if new_size > 0 && self.failing.replace(false) {
+                return std::ptr::null_mut();
+            }
+            self.inner.allocate(ptr, old_size, new_size, kind)
+        }
+    }
+    for size in [60, 65_536] {
+        let failing = Rc::new(Cell::new(false));
+        let runtime = Runtime::builder()
+            .buffer_cage(FailOnce {
+                failing: failing.clone(),
+                inner: CountingCage { allocations: Cell::new(0), frees: Cell::new(0) },
+            })
+            .build()
+            .unwrap();
+        failing.set(true);
+        let source =
+            format!("local b = buffer.create({size}) buffer.writeu8(b, 0, 42) assert(buffer.readu8(b, 0) == 42)");
+        assert!(runtime.exec(&source).is_err(), "cage allocation must report failure");
+        assert!(!failing.get(), "the cage allocation was attempted");
+        runtime.exec(&source).unwrap();
+        runtime.collect_garbage();
+        runtime.exec(&source).unwrap();
+    }
+}

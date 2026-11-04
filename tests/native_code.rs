@@ -366,6 +366,8 @@ fn native_branches_and_vm_fallbacks_preserve_live_values() {
             return 2
         end })
         local function run(t: any, count: number)
+            local a,b,c,d,e,f,g,h = count+1,count+2,count+3,count+4,count+5,count+6,count+7,count+8
+            local j,k,l,m,n,o,p,q = count+9,count+10,count+11,count+12,count+13,count+14,count+15,count+16
             local total = 0
             for i = 1, count do
                 local dead = i * 9
@@ -375,11 +377,11 @@ fn native_branches_and_vm_fallbacks_preserve_live_values() {
                     total += i
                 end
             end
-            return total
+            return total + a+b+c+d+e+f+g+h+j+k+l+m+n+o+p+q
         end
         local total = run(proxy, 30)
         return `{total} {calls}`
         "#,
-        "255 15",
+        "871 15",
     );
 }
