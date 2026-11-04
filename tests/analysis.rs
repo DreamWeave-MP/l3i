@@ -1675,3 +1675,22 @@ fn buffer_slice_generators_specialize_without_retained_type_graphs_and_in_requir
         assert!(report.is_clean(), "{solver:?}, again: {report:#?}");
     }
 }
+
+#[test]
+fn collectgarbage_is_declared_only_when_the_policy_grants_it() {
+    use l3i::extension::{RuntimePlan, RuntimePolicy};
+    let without = RuntimePlan::builder().finalize().unwrap();
+    assert!(!without.type_definitions().contains("collectgarbage"));
+    let plan = RuntimePlan::builder().policy(RuntimePolicy::new().collectgarbage(true)).finalize().unwrap();
+    plan.check_definitions().unwrap();
+    let definitions = plan.type_definitions();
+    let main = "collectgarbage()\ncollectgarbage('collect')\nlocal kilobytes: number = collectgarbage('count')\nprint(kilobytes + 1)\n";
+    let scripts = plan.analysis_sources(Sources { modules: HashMap::from([("main", main)]) });
+    let options = AnalysisOptions {
+        definitions: vec![analysis::Definitions { name: "collect.d.luau".to_owned(), source: definitions.clone() }],
+        ..AnalysisOptions::default()
+    };
+    let analysis = Analysis::new(scripts, options).unwrap_or_else(|e| panic!("{e}\n{definitions}"));
+    let report = analysis.check("main", false);
+    assert!(report.is_clean(), "{report:#?}\n---\n{definitions}");
+}

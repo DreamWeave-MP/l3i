@@ -105,6 +105,7 @@ results are pushed. Injected into a callable as `&Call`. Implements `Scope`.
 | `fn result_count(&self) -> c_int` | Values above the arguments |
 | `fn forward_to(&self, function: &Function, first_argument: c_int) -> Result<c_int>` | Calls `function` with the arguments from `first_argument` to the last, forwarding every result. On failure the error object stays on top and `Error::LuaErrorOnStack` is returned, so the entry re-raises it unchanged |
 | `fn is_yieldable(&self) -> bool` | True when the running function may yield |
+| `fn collect_garbage(&self)` | A full collection from inside the call. Rust destructors of unreachable userdata run inside; this call's arguments survive |
 
 ## Parameters
 
