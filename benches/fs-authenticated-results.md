@@ -146,3 +146,53 @@ Hashing. A read of most of the object costs about what full verification does (9
 against 310 to 314), so it stays competitive but saves little, and it is roughly ten times a plain
 read on this CPU. A read that happens to straddle a boundary pays for two chunks. Uniform random small
 reads almost never hit a held chunk, whatever the budget.
+
+## Tiny-chunk cache check (Linux, 2026-11-04)
+
+The expanded harness runs 512-byte and 4 KiB chunks at one and 1,024 slots, and 16 KiB
+and 64 KiB chunks at realistic capacities. A 64 MiB file was warm, with 64-byte reads and five
+samples. The machine was also compiling and testing, so timings are indicative, not controlled.
+
+| Chunk | Workload | One slot µs/read | 1,024 slots µs/read | Bytes hashed/read, 1 / 1,024 |
+| ---: | --- | ---: | ---: | ---: |
+| 512 B | uniform | 3.5 | 6.1 | 574 / 568 |
+| 512 B | hot | 2.8 | 0.1 | 481 / 0 |
+| 512 B | sequential | 3.0 | 5.2 | 512 / 512 |
+| 512 B | skewed | 3.4 | 1.7 | 555 / 150 |
+| 4 KiB | uniform | 17.9 | 19.0 | 4,158 / 3,903 |
+| 4 KiB | hot | 16.2 | 0.1 | 3,846 / 0 |
+| 4 KiB | sequential | 17.6 | 19.6 | 4,096 / 4,096 |
+| 4 KiB | skewed | 17.4 | 4.2 | 4,099 / 843 |
+
+A one-pass victim search was also tried; under the same concurrent load its 512-byte uniform
+result was 6.5 µs/read and table/record 5.0 µs/read versus 6.1 and 3.1 above. It did not demonstrate
+an improvement and was removed. No claim is made that these noisy measurements isolate a small
+change. The retained linear search has a measurable worst-case cost for tiny chunks, while hot
+accesses benefit strongly from the larger cache.
+
+The same session also reran `cargo bench --features fs-authenticated -- fs_authenticated`.
+For one 64-byte read of the 64 MiB object with 16 KiB authentication chunks, it reported:
+
+| Mode | Samples | Median µs | p95 µs | CPU µs | Bytes read / hashed | Calls | Allocations |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Full SHA-256 | 5 | 539,224 | — | 529,330 | 67,108,864 / 67,108,864 | 1 | 4 |
+| Plain | 49,817 | 0.9 | 1.2 | 1.0 | 64 / 0 | 1 | 2 |
+| Authenticated warm, one slot | 672 | 72.8 | 85.3 | 73.9 | 16,384 / 16,384 | 1 | 2 |
+| Authenticated cold | 76 | 657.1 | 709.8 | 657.1 | 147,488 / 147,488 | 2 | 7 |
+
+The 131,104-byte manifest verification median was 563.9 µs. These measurements ran while other
+builds and tests were active; CPU and latency should not be treated as an isolated comparison.
+The five full-hash samples are too few for a p95. The harness reports aggregate process CPU and
+allocation counts; it does not measure cache occupancy or separate per-reader RSS.
+
+For the multi-reader resource test, `/usr/bin/time -v` around the already-built Linux test binary
+reported a peak RSS of 128,600 KiB. The test populated seven separate 16 MiB cached chunks, checked
+that the next reader was refused, closed and reopened readers, collected them, and opened another
+runtime. This is one process-level peak under concurrent machine load, not a hard RSS bound or a
+measurement of allocator overhead per reader.
+
+The final cache harness also records per-read source calls, allocations and process CPU time. Its
+p95 is the nearest-rank value of five batch samples, so it is a maximum of those samples and is not a
+stable tail-latency estimate. Cache occupancy is not instrumented. For 512-byte chunks, a corrected
+1,025-chunk thrashing cycle with 1,024 slots measured 8.7 µs/read and one source call/read, against
+5.1 µs/read with one slot, in a later run under heavier concurrent load.

@@ -365,12 +365,15 @@ fn publication(object: &ObjectFile, size: u64, chunk: u32, budget: &Budget) -> (
 }
 
 /// A workload for the held-chunk comparison: the offsets of one sample's small reads.
-fn workload(name: &str, size: u64, count: usize, random: &mut Random) -> Vec<u64> {
+fn workload(name: &str, size: u64, count: usize, random: &mut Random, chunk: u32) -> Vec<u64> {
     const READ: u64 = 64;
     let last = size - READ;
     let mut offsets = Vec::with_capacity(count + 32);
     match name {
         "uniform" => offsets.extend((0..count).map(|_| random.next() % last)),
+        "hot" => offsets.extend((0..count).map(|_| (random.next() % 16) * u64::from(chunk))),
+        "sequential" => offsets.extend((0..count).map(|i| (i as u64 * u64::from(chunk)) % last)),
+        "thrash" => offsets.extend((0..count).map(|i| ((i as u64 % 1025) * u64::from(chunk)) % last)),
         // Popularity falling as 1/rank over 4096 records scattered across the object, an 80/20
         // shaped load; ranks come from inverting the harmonic sum.
         "skewed" => {
@@ -429,41 +432,58 @@ pub fn cache_main() {
     let cases: &[(u32, &[usize], usize, usize)] = if quick {
         &[(16 << 10, &[1, 8], 64, 1)]
     } else {
-        &[(16 << 10, &[1, 2, 4, 8, 16, 64, 256], 2000, 5), (64 << 10, &[1, 2, 4, 16, 64], 500, 3)]
+        &[
+            (512, &[1, 1024], 2050, 5),
+            (4 << 10, &[1, 1024], 2050, 5),
+            (16 << 10, &[1, 16], 2000, 5),
+            (64 << 10, &[1, 4], 500, 5),
+        ]
     };
-    println!("fs_authenticated_cache,chunk,workload,slots,held_bytes,median_us_per_read,bytes_hashed_per_read");
+    println!(
+        "fs_authenticated_cache,chunk,workload,slots,held_bytes,median_us_per_read,p95_us_per_read,cpu_us_per_read,bytes_hashed_per_read,read_calls_per_read,allocations_per_read"
+    );
     for &(chunk, slots, reads, samples) in cases {
         let file = File::open(&object.path).unwrap();
         let built = build_manifest(&file, chunk).unwrap();
         let verified = std::sync::Arc::new(VerifiedManifest::verify(&built.bytes, &built.commitment).unwrap());
-        for name in ["uniform", "skewed", "binary_search", "clustered", "table_then_record"] {
+        for name in ["uniform", "hot", "sequential", "thrash", "skewed", "clustered", "table_then_record"] {
             for &count in slots {
                 let source = Counted::new(File::open(&object.path).unwrap());
                 let budget = count as u64 * u64::from(chunk);
                 let mut reader = AuthenticatedReader::open(&source, verified.clone()).unwrap().hold_bytes(budget);
                 let mut random = Random(0x5EED_CAC4);
-                for offset in workload(name, size, reads, &mut random) {
+                for offset in workload(name, size, reads, &mut random, chunk) {
                     black_box(reader.read_at(offset, 64).unwrap());
                 }
                 let mut times = Vec::new();
-                let (mut total, mut hashed) = (0, 0);
+                let (mut total, mut hashed, mut calls, mut allocations) = (0, 0, 0, 0);
+                let mut cpu = Duration::ZERO;
                 for _ in 0..samples {
-                    let offsets = workload(name, size, reads, &mut random);
+                    let offsets = workload(name, size, reads, &mut random, chunk);
                     source.calls.set(0);
                     source.bytes.set(0);
                     let before = Instant::now();
+                    let cpu_start = cpu_time();
+                    let allocation_start = ALLOCATIONS.load(Ordering::Relaxed);
                     for offset in &offsets {
                         black_box(reader.read_at(*offset, 64).unwrap());
                     }
                     times.push(before.elapsed().as_secs_f64() * 1e6 / offsets.len() as f64);
+                    cpu += cpu_time().saturating_sub(cpu_start);
+                    allocations += ALLOCATIONS.load(Ordering::Relaxed).saturating_sub(allocation_start);
                     total += offsets.len();
                     hashed += source.bytes.get();
+                    calls += source.calls.get();
                 }
                 times.sort_unstable_by(f64::total_cmp);
                 println!(
-                    "fs_authenticated_cache,{chunk},{name},{count},{budget},{median:.1},{per:.0}",
+                    "fs_authenticated_cache,{chunk},{name},{count},{budget},{median:.1},{p95:.1},{cpu:.1},{per:.0},{calls:.3},{allocations:.3}",
                     median = times[times.len() / 2],
+                    p95 = times[(times.len() * 95).div_ceil(100) - 1],
+                    cpu = cpu.as_secs_f64() * 1e6 / total as f64,
                     per = hashed as f64 / total as f64,
+                    calls = calls as f64 / total as f64,
+                    allocations = allocations as f64 / total as f64,
                 );
             }
         }

@@ -49,6 +49,18 @@ fn main() {
     let filter = std::env::args().skip(1).find(|arg| !arg.starts_with('-'));
     let wanted = |name: &str| filter.as_deref().is_none_or(|filter| name.contains(filter));
 
+    // These standalone harnesses need no Criterion setup (which has unrelated side effects).
+    #[cfg(feature = "fs-authenticated")]
+    if filter.as_deref() == Some("fs_authenticated_cache") {
+        fs_authenticated::cache_main();
+        return;
+    }
+    #[cfg(feature = "fs-authenticated")]
+    if filter.as_deref() == Some("fs_authenticated") {
+        fs_authenticated::main();
+        return;
+    }
+
     hot_paths::benches();
     udp::benches();
     packed_quat::benches();
