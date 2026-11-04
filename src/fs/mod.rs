@@ -49,6 +49,8 @@
 //! argument of the wrong type, an unknown option, a negative offset, a position past the end, a
 //! closed handle) is the script's mistake, and raises.
 
+#[cfg(feature = "fs-authenticated")]
+pub mod authenticated;
 mod io;
 mod lock;
 mod path;
@@ -416,6 +418,20 @@ const MEMBERS: &[Member] = &[
         "A retained, unmapped file handle for positional reads; its size reflects the open file.",
         false,
     ),
+    #[cfg(feature = "fs-authenticated")]
+    member(
+        "authManifest",
+        "(path: string, options: { chunkSize: number? }?) -> (buffer?, string?, dream_fs_AuthErrorKind?)",
+        "Reads the whole file and returns its authentication manifest and, second, the commitment as hex. Store the manifest anywhere; deliver the commitment through a channel the file's storage cannot write to.",
+        false,
+    ),
+    #[cfg(feature = "fs-authenticated")]
+    member(
+        "openAuthenticated",
+        "(path: string, manifest: buffer | string, commitment: string) -> (dream_fs_AuthenticatedReader?, string?, dream_fs_AuthErrorKind?)",
+        "A reader whose every returned byte is verified against commitment, 64 hex digits from a trusted source: the manifest must hash to it, and the file must be the committed length.",
+        false,
+    ),
     member(
         "stat",
         "(path: string) -> (dream_fs_Stat?, string?, dream_fs_ErrorKind?)",
@@ -606,6 +622,8 @@ impl Extension for FsExtension {
         d.type_alias("dream_fs_Walk", WALK_TYPE);
         io::describe_reader(d);
         io::describe_positional_reader(d);
+        #[cfg(feature = "fs-authenticated")]
+        authenticated::describe_authenticated_reader(d);
         io::describe_writer(d);
         lock::describe_lock(d);
         d.optional_capability(READ_CAPABILITY);
@@ -642,6 +660,12 @@ impl Extension for FsExtension {
         bind!("readAt", io::read_at);
         bind!("open", |path: &[u8]| Reader::open(path).map(owned));
         bind!("openPositional", |path: &[u8]| io::PositionalReader::open(path).map(owned));
+        #[cfg(feature = "fs-authenticated")]
+        bind!("authManifest", authenticated::auth_manifest);
+        #[cfg(feature = "fs-authenticated")]
+        bind!("openAuthenticated", |path: &[u8], manifest: crate::convert::BytesView<'_>, commitment: &[u8]| {
+            authenticated::open_authenticated(path, manifest, commitment).map(owned)
+        });
         bind!("stat", |call: &Call<'_>, path: &[u8]| stat(call, "stat", path, true));
         bind!("lstat", |call: &Call<'_>, path: &[u8]| stat(call, "lstat", path, false));
         bind!("exists", |path: &[u8]| -> Result<Outcome<bool>> {

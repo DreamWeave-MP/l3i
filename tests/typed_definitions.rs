@@ -230,6 +230,17 @@ const FS_SCRIPT: (&str, &str) = (
        local length: number = positional:size() or 0\n\
        positional:close()\n\
      end\n\
+     local manifest, commitment = fs.authManifest('x', { chunkSize = 65536 })\n\
+     if manifest and commitment then\n\
+       local verified: dream_fs_AuthenticatedReader?, why: string?, failure: dream_fs_AuthErrorKind? = fs.openAuthenticated('x', manifest, commitment)\n\
+       if verified then\n\
+         local range = verified:readAt(0, 4)\n\
+         local copied: number = verified:readAtInto(buffer.create(4), 0, 4, 0) or 0\n\
+         local total: number = verified:size() + verified:chunkSize()\n\
+         local root: string = verified:commitment()\n\
+         verified:close()\n\
+       end\n\
+     end\n\
      local stat: dream_fs_Stat? = fs.lstat('x')\n\
      local kind: dream_fs_FileKind = if stat then stat.kind else 'other'\n\
      local walk = fs.walk('.', { followLinks = true, include = 'files', metadata = true, sort = true, maxDepth = 3 })\n\
