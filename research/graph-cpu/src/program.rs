@@ -89,6 +89,7 @@ pub(crate) enum Value {
 enum Work {
     Elementwise(Elementwise),
     SumRows { source: Value, shape: Shape, columns: usize },
+    Softmax { source: Value, shape: Shape },
     MatMul { a: Value, b: Value, shape: Shape, inner: usize },
 }
 #[derive(Debug)]
@@ -271,7 +272,11 @@ fn plan_elementwise(steps: &[Step], root: usize, boundary: &[Option<Value>], num
                 read(b);
             }
             Instruction::Relu(a) => read(a),
-            Instruction::Slot(_) | Instruction::Constant(_) | Instruction::SumRows(_) | Instruction::MatMul(..) => (),
+            Instruction::Slot(_)
+            | Instruction::Constant(_)
+            | Instruction::SumRows(_)
+            | Instruction::Softmax(_)
+            | Instruction::MatMul(..) => (),
         }
     }
     let mut planned: Vec<Option<Planned>> = vec![None; root + 1];
@@ -293,7 +298,7 @@ fn plan_elementwise(steps: &[Step], root: usize, boundary: &[Option<Value>], num
                 planned[id] = Some(Planned::Constant(v));
                 continue;
             }
-            Instruction::Slot(_) | Instruction::SumRows(_) | Instruction::MatMul(..) => {
+            Instruction::Slot(_) | Instruction::SumRows(_) | Instruction::Softmax(_) | Instruction::MatMul(..) => {
                 let value = boundary[id].expect("slots and matmuls are materialized");
                 planned[id] = Some(Planned::Source(value));
                 continue;
@@ -390,23 +395,7 @@ impl Program {
         }
         let slots: Vec<Shape> =
             slots.into_iter().collect::<Option<_>>().ok_or_else(|| error("slot ids must be dense"))?;
-        // Materialization boundaries: the root, matmuls and their elementwise operands.
-        let mut materialized = vec![false; steps.len()];
-        materialized[root] = true;
-        for step in &steps {
-            if let Instruction::SumRows(a) = step.op {
-                materialized[a] = true;
-            }
-            if let Instruction::MatMul(a, b) = step.op {
-                materialized[a] = true;
-                materialized[b] = true;
-            }
-        }
-        for (id, step) in steps.iter().enumerate() {
-            if matches!(step.op, Instruction::MatMul(..) | Instruction::SumRows(_)) {
-                materialized[id] = true;
-            }
-        }
+        let materialized = materialization_boundaries(&steps);
         let mut boundary: Vec<Option<Value>> = vec![None; steps.len()];
         let mut stages = Vec::new();
         let mut temps = 0u16;
@@ -419,7 +408,9 @@ impl Program {
             } else if !materialized[id] {
                 continue;
             }
-            let work = if let Instruction::SumRows(a) = steps[id].op {
+            let work = if let Instruction::Softmax(a) = steps[id].op {
+                Work::Softmax { source: boundary[a].expect("operand materialized"), shape: steps[id].shape }
+            } else if let Instruction::SumRows(a) = steps[id].op {
                 Work::SumRows {
                     source: boundary[a].expect("operand materialized"),
                     shape: steps[id].shape,
@@ -444,6 +435,7 @@ impl Program {
         for stage in &stages {
             let (shape, factor) = match &stage.work {
                 Work::Elementwise(e) => (e.shape, e.operations),
+                Work::Softmax { shape, .. } => (*shape, 6),
                 Work::SumRows { shape, columns, .. } => (*shape, *columns),
                 Work::MatMul { shape, inner, .. } => (*shape, *inner),
             };
@@ -464,7 +456,7 @@ impl Program {
             };
             match &stage.work {
                 Work::Elementwise(e) => e.sources.iter().copied().for_each(&mut read),
-                Work::SumRows { source, .. } => read(*source),
+                Work::Softmax { source, .. } | Work::SumRows { source, .. } => read(*source),
                 Work::MatMul { a, b, .. } => {
                     read(*a);
                     read(*b);
@@ -516,6 +508,9 @@ impl Program {
                             writeln!(text).unwrap();
                         }
                     }
+                }
+                Work::Softmax { source, shape } => {
+                    writeln!(text, "stage {index}: softmax {shape:?} {source:?}").unwrap();
                 }
                 Work::SumRows { source, shape, .. } => {
                     writeln!(text, "stage {index}: sum_rows {shape:?} {source:?}").unwrap();
@@ -587,7 +582,7 @@ impl Program {
             let mut allocation = None;
             let shape = match &stage.work {
                 Work::Elementwise(e) => e.shape,
-                Work::SumRows { shape, .. } | Work::MatMul { shape, .. } => *shape,
+                Work::Softmax { shape, .. } | Work::SumRows { shape, .. } | Work::MatMul { shape, .. } => *shape,
             };
             if index != last {
                 allocation = Some(budget.allocate(shape.elements()? * 4)?);
@@ -608,6 +603,31 @@ impl Program {
                     kernels::with_scratch(needed, |scratch| {
                         kernels::elementwise(e, &sources, scratch, target, isa, chunk);
                     })?;
+                }
+                Work::Softmax { source, shape } => {
+                    let input = view_of(*source);
+                    let (rows, cols) = shape.dims();
+                    let scratch_columns = if rows == 0 { 0 } else { cols };
+                    let _charge = budget.charge(scratch_columns * 8)?;
+                    let mut values = Vec::new();
+                    let mut output = Vec::new();
+                    values
+                        .try_reserve_exact(scratch_columns)
+                        .map_err(|_| error("softmax scratch allocation failed"))?;
+                    output
+                        .try_reserve_exact(scratch_columns)
+                        .map_err(|_| error("softmax scratch allocation failed"))?;
+                    values.resize(scratch_columns, 0.0f32);
+                    output.resize(scratch_columns, 0.0f32);
+                    for row in 0..rows {
+                        for (col, value) in values.iter_mut().enumerate() {
+                            *value = input.at(row, col);
+                        }
+                        crate::reduction::softmax(&values, &mut output);
+                        for (col, value) in output.iter().enumerate() {
+                            target[(row * cols + col) * 4..][..4].copy_from_slice(&value.to_le_bytes());
+                        }
+                    }
                 }
                 Work::SumRows { source, shape, columns } => {
                     let input = view_of(*source);
@@ -663,4 +683,25 @@ fn contiguous<'a>(view: View<'a>, budget: &Arc<Budget>) -> Result<Packed<'a>> {
             Ok(Packed::Owned(pack))
         }
     }
+}
+
+fn materialization_boundaries(steps: &[Step]) -> Vec<bool> {
+    // Materialization boundaries: the root, matmuls and their elementwise operands.
+    let mut materialized = vec![false; steps.len()];
+    materialized[steps.len() - 1] = true;
+    for step in steps {
+        if let Instruction::SumRows(a) | Instruction::Softmax(a) = step.op {
+            materialized[a] = true;
+        }
+        if let Instruction::MatMul(a, b) = step.op {
+            materialized[a] = true;
+            materialized[b] = true;
+        }
+    }
+    for (id, step) in steps.iter().enumerate() {
+        if matches!(step.op, Instruction::MatMul(..) | Instruction::SumRows(_) | Instruction::Softmax(_)) {
+            materialized[id] = true;
+        }
+    }
+    materialized
 }

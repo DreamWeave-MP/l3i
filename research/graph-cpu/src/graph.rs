@@ -66,6 +66,7 @@ enum Op {
     Mul(Expr, Expr),
     Relu(Expr),
     SumRows(Expr),
+    Softmax(Expr),
     MatMul(Expr, Expr),
 }
 #[derive(Debug)]
@@ -117,6 +118,10 @@ impl Expr {
         Self::new(self.0.shape, Op::Relu(self.clone()), 1 + self.0.depth, self.0.lease.domain.clone())
     }
     /// Ordered f32 sum across columns, retaining one column per row.
+    /// Accurate softmax independently across each row; see [`crate::reduction::softmax`].
+    pub fn softmax(&self) -> Result<Self> {
+        Self::new(self.0.shape, Op::Softmax(self.clone()), 1 + self.0.depth, self.0.lease.domain.clone())
+    }
     pub fn sum_rows(&self) -> Result<Self> {
         let (rows, _) = self.0.shape.dims();
         Self::new(Shape::Matrix(rows, 1), Op::SumRows(self.clone()), 1 + self.0.depth, self.0.lease.domain.clone())
@@ -154,6 +159,7 @@ impl Expr {
                 Op::Add(a, b) => Instruction::Add(visit(a, ids, steps)?, visit(b, ids, steps)?),
                 Op::Mul(a, b) => Instruction::Mul(visit(a, ids, steps)?, visit(b, ids, steps)?),
                 Op::MatMul(a, b) => Instruction::MatMul(visit(a, ids, steps)?, visit(b, ids, steps)?),
+                Op::Softmax(a) => Instruction::Softmax(visit(a, ids, steps)?),
                 Op::SumRows(a) => Instruction::SumRows(visit(a, ids, steps)?),
                 Op::Relu(a) => Instruction::Relu(visit(a, ids, steps)?),
             };
@@ -179,6 +185,7 @@ pub enum Instruction {
     Mul(usize, usize),
     Relu(usize),
     SumRows(usize),
+    Softmax(usize),
     MatMul(usize, usize),
 }
 /// One typed value in the validated topological plan.

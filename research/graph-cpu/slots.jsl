@@ -69,3 +69,21 @@ do
  empty:runInto(zeros,buffer.create(0))
  for i=0,2 do assert(buffer.readf32(zeros,i*4)==0) end
 end
+
+do
+ local input=buffer.create(24)
+ local logits={1,2,3,math.huge,0,math.huge}
+ for i,v in logits do buffer.writef32(input,(i-1)*4,v) end
+ local x=compute.slot(0,2,3)
+ local p=x:softmax():compile()
+ local out=buffer.create(24)
+ p:runInto(out,input)
+ local reference=p:runReference(compute.f32(input,2,3)):read()
+ for i=0,5 do assert(buffer.readf32(out,i*4)==buffer.readf32(reference,i*4)) end
+ assert(buffer.readf32(out,12)==0.5 and buffer.readf32(out,16)==0 and buffer.readf32(out,20)==0.5)
+ local summed=x:softmax():sumRows():compile()
+ local sums=buffer.create(8)
+ summed:runInto(sums,input)
+ for i=0,1 do assert(math.abs(buffer.readf32(sums,i*4)-1)<1e-6) end
+ compute.slot(0,3,0):softmax():compile():runInto(buffer.create(0),buffer.create(0))
+end

@@ -16,7 +16,10 @@ impl Program {
     pub fn run_reference(&self, inputs: &[View<'_>], budget: &Arc<Budget>) -> Result<Tensor> {
         self.check(inputs)?;
         let shape = self.output_shape();
-        let fused = !self.steps.iter().any(|step| matches!(step.op, Instruction::MatMul(..) | Instruction::SumRows(_)));
+        let fused = !self
+            .steps
+            .iter()
+            .any(|step| matches!(step.op, Instruction::MatMul(..) | Instruction::SumRows(_) | Instruction::Softmax(_)));
         if fused {
             let mut output = budget.allocate(shape.elements()? * 4)?;
             self.reference_into(inputs, &mut output.bytes);
@@ -48,6 +51,37 @@ impl Program {
                         Instruction::Add(a, b) => value(a).at(row, col) + value(b).at(row, col),
                         Instruction::Mul(a, b) => value(a).at(row, col) * value(b).at(row, col),
                         Instruction::Relu(a) => relu(value(a).at(row, col)),
+                        Instruction::Softmax(a) => {
+                            let input = value(a);
+                            let width = input.shape.dims().1;
+                            let mut maximum = f64::NEG_INFINITY;
+                            let mut positive = 0u32;
+                            let mut nan = false;
+                            for c in 0..width {
+                                let v = input.at(row, c);
+                                nan |= v.is_nan();
+                                positive += u32::from(v == f32::INFINITY);
+                                maximum = maximum.max(f64::from(v));
+                            }
+                            let v = input.at(row, col);
+                            let probability = if nan {
+                                f64::NAN
+                            } else if positive != 0 {
+                                if v == f32::INFINITY { 1.0 / f64::from(positive) } else { 0.0 }
+                            } else if maximum == f64::NEG_INFINITY {
+                                0.0
+                            } else {
+                                let mut denominator = 0.0;
+                                for c in 0..width {
+                                    denominator += (f64::from(input.at(row, c)) - maximum).exp();
+                                }
+                                (f64::from(v) - maximum).exp() / denominator
+                            };
+                            #[allow(clippy::cast_possible_truncation)]
+                            {
+                                probability as f32
+                            }
+                        }
                         Instruction::SumRows(a) => {
                             let input = value(a);
                             (0..input.shape.dims().1).fold(0.0f32, |acc, c| acc + input.at(row, c))
@@ -85,7 +119,7 @@ impl Program {
                         Instruction::Add(a, b) => registers[a] + registers[b],
                         Instruction::Mul(a, b) => registers[a] * registers[b],
                         Instruction::Relu(a) => relu(registers[a]),
-                        Instruction::MatMul(..) | Instruction::SumRows(_) => {
+                        Instruction::MatMul(..) | Instruction::SumRows(_) | Instruction::Softmax(_) => {
                             unreachable!("fused graphs have no matmul")
                         }
                     };

@@ -922,3 +922,75 @@ fn row_sum_composes_with_fusion_and_preserves_empty_rows() {
         assert!(program.native_source().is_err());
     }
 }
+
+#[test]
+fn row_sum_accepts_strides_and_rejects_unfunded_intermediates() {
+    let budget = Budget::new(4096);
+    let domain = domain();
+    let tensor = tensor(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], Shape::Matrix(2, 3), &budget);
+    let transposed = tensor.view(Shape::Matrix(3, 2), 0, [4, 12]).unwrap();
+    let x = Expr::slot(0, Shape::Matrix(3, 2), domain.clone()).unwrap();
+    let program = x.sum_rows().unwrap().compile().unwrap();
+    assert_same(&read(&program.run(&[&transposed], &budget).unwrap()), &[5.0, 7.0, 9.0], "transposed sums");
+    let repeated = tensor.view(Shape::Matrix(3, 2), 0, [0, 0]).unwrap();
+    assert_same(&read(&program.run(&[&repeated], &budget).unwrap()), &[2.0; 3], "zero strides");
+    let pipeline = x.sum_rows().unwrap().relu().unwrap().compile().unwrap();
+    let denied = Budget::new(0);
+    let mut out = [0x55; 12];
+    assert!(pipeline.run_into(&[transposed.borrow()], &mut out, &denied).is_err());
+    assert_eq!(out, [0x55; 12], "allocation fails before writing final output");
+    assert_eq!(denied.used(), 0);
+    assert_eq!(domain.live_plans(), 2);
+}
+
+#[test]
+fn softmax_stage_handles_rows_and_budgeted_scratch() {
+    let budget = Budget::new(4096);
+    let domain = domain();
+    let input = tensor(&[1.0, 2.0, 3.0, f32::INFINITY, 0.0, f32::INFINITY], Shape::Matrix(2, 3), &budget);
+    let x = Expr::slot(0, Shape::Matrix(2, 3), domain).unwrap();
+    let program = x.softmax().unwrap().compile().unwrap();
+    let actual = read(&program.run(&[&input], &budget).unwrap());
+    let expected = read(&program.run_reference(&[input.borrow()], &budget).unwrap());
+    assert_same(&actual, &expected, "softmax stage");
+    assert_same(&actual[3..], &[0.5, 0.0, 0.5], "infinite logits");
+    let sums = x.softmax().unwrap().sum_rows().unwrap().compile().unwrap();
+    for value in read(&sums.run(&[&input], &budget).unwrap()) {
+        assert!((value - 1.0).abs() < 1e-6);
+    }
+    let denied = Budget::new(23);
+    let mut out = [0x55; 24];
+    assert!(program.run_into(&[input.borrow()], &mut out, &denied).is_err());
+    assert_eq!(out, [0x55; 24]);
+    assert_eq!(denied.used(), 0);
+}
+
+#[test]
+fn softmax_strides_special_values_and_empty_shapes_match_reference() {
+    let budget = Budget::new(1 << 20);
+    let domain = domain();
+    let mut random = Random(0x1234_5678_9abc_def0);
+    for columns in [0, 1, 7, 16, 33] {
+        let values: Vec<f32> = (0..3 * columns).map(|_| random.moderate()).collect();
+        let owned = tensor(&values, Shape::Matrix(columns, 3), &budget);
+        let input = owned.view(Shape::Matrix(3, columns), 0, [4, 12]).unwrap();
+        let p = Expr::slot(0, input.shape(), domain.clone()).unwrap().softmax().unwrap().compile().unwrap();
+        assert_same(
+            &read(&p.run(&[&input], &budget).unwrap()),
+            &read(&p.run_reference(&[input.borrow()], &budget).unwrap()),
+            "strided softmax",
+        );
+    }
+    for values in [[f32::NEG_INFINITY; 3], [f32::NAN, 0.0, 1.0], [f32::MAX, -f32::MAX, 0.0]] {
+        let input = tensor(&values, Shape::Matrix(1, 3), &budget);
+        let p = Expr::slot(0, input.shape(), domain.clone()).unwrap().softmax().unwrap().compile().unwrap();
+        assert_same(
+            &read(&p.run(&[&input], &budget).unwrap()),
+            &read(&p.run_reference(&[input.borrow()], &budget).unwrap()),
+            "special softmax",
+        );
+    }
+    let shape = Shape::Matrix(0, 1024);
+    let p = Expr::slot(0, shape, domain).unwrap().softmax().unwrap().compile().unwrap();
+    p.run_into(&[View::contiguous(&[], shape).unwrap()], &mut [], &Budget::new(0)).unwrap();
+}

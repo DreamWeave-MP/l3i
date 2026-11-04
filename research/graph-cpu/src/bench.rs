@@ -572,6 +572,12 @@ pub fn reductions() {
         row("ordered_sum_kernel", n, || {
             black_box(sum(black_box(&values)));
         });
+        let softmax_plan =
+            Expr::slot(0, Shape::Matrix(1, n), Domain::new(1024, 1024)).unwrap().softmax().unwrap().compile().unwrap();
+        let mut softmax_bytes = vec![0u8; n * 4];
+        row("accurate_softmax_program", n, || {
+            softmax_plan.run_into(black_box(&[tensor.borrow()]), black_box(&mut softmax_bytes), &budget).unwrap();
+        });
         row("accurate_softmax_kernel", n, || softmax(black_box(&values), black_box(&mut out)));
         let total: f64 = out.iter().map(|v| f64::from(*v)).sum();
         assert!((total - 1.0).abs() < 1e-6);

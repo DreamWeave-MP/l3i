@@ -9,7 +9,7 @@ impl Program {
         let shape = self.output_shape();
         for step in &self.steps {
             match step.op {
-                Instruction::MatMul(..) | Instruction::SumRows(_) => {
+                Instruction::MatMul(..) | Instruction::SumRows(_) | Instruction::Softmax(_) => {
                     return Err(error("backend supports elementwise input slots only"));
                 }
                 Instruction::Slot(_) if step.shape != shape => {
@@ -60,7 +60,9 @@ impl Program {
                     format!("t{id}.x")
                 }
                 Instruction::Relu(a) => format!("if v{a} <= 0 then 0 else v{a}"),
-                Instruction::MatMul(..) | Instruction::SumRows(_) => unreachable!("validated lowering subset"),
+                Instruction::MatMul(..) | Instruction::SumRows(_) | Instruction::Softmax(_) => {
+                    unreachable!("validated lowering subset")
+                }
             };
             writeln!(source, "local v{id}: number = {value}").unwrap();
         }
@@ -104,7 +106,9 @@ impl Program {
                 Instruction::Add(a, b) => format!("v{a}+v{b}"),
                 Instruction::Mul(a, b) => format!("v{a}*v{b}"),
                 Instruction::Relu(a) => format!("shader.max(v{a},shader.float(0))"),
-                Instruction::MatMul(..) | Instruction::SumRows(_) => unreachable!("validated subset"),
+                Instruction::MatMul(..) | Instruction::SumRows(_) | Instruction::Softmax(_) => {
+                    unreachable!("validated subset")
+                }
             };
             writeln!(s, "local v{id}={value}").unwrap();
         }
