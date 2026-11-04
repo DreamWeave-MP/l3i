@@ -1,0 +1,15 @@
+[package]
+name = "l3i-cubecl-compare"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.99.1"
+publish = false
+
+[workspace]
+
+[dependencies]
+cubecl = { version = "=0.11.3", default-features = false, features = ["std", "cpu"] }
+cubecl-runtime = { version = "=0.11.3", default-features = false }
+l3i-graph-cpu-research = { path = "../graph-cpu" }
+libc = "0.2"
+rayon = "1"

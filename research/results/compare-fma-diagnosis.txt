@@ -1,0 +1,4 @@
+diagnose side=8 vs_strict=29 vs_fma=0 vs_f64_accumulate=29 worst_ulps_from_strict=35 first_actual=1.7494673 first_strict=1.7494673 first_fma=1.7494673
+diagnose side=64 vs_strict=3056 vs_fma=0 vs_f64_accumulate=3260 worst_ulps_from_strict=2090 first_actual=16.803478 first_strict=16.803478 first_fma=16.803478
+diagnose elementwise product_add vs_strict=1311 vs_fma=0 fixture_distinguishes=1311
+host_has_fma=true
