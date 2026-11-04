@@ -186,7 +186,7 @@ and unrolling, and workers pinned the same way. Reports are in `results/compare-
 
 Its optimizer fuses every `a * b + c` whose product has no other use into an FMA, unconditionally, and no
 option turns that off (`cubecl-opt`'s `InstCombine`). Its output matches an FMA oracle exactly and differs from
-separately rounded f32 on 76% of 64x64 matmul elements, by up to 2,090 ULPs in the sum
+separately rounded f32 on 75% of 64x64 matmul elements, by up to 2,090 ULPs
 (`results/compare-fma-diagnosis.txt`). This is not necessarily a defect, since FMA is more accurate per step, but
 it is a different contract. So the "nofma" rows give each product a second use that is never taken, which makes
 CubeCL strict: all of them match the strict oracle bitwise. Elementwise without a multiply is strict either way,
@@ -244,15 +244,15 @@ threading of its own yet.
 | Compile limits | Bounded by the planner | No hard LLVM time or memory limit |
 
 The copies only happen at the boundary: a computation that keeps its tensors inside CubeCL pays them once, not
-on every step. Both sides of the copy row include one input clone per call on CubeCL's side, as a host taking a
-Luau buffer would need.
+on every step. CubeCL's persistent-handle figures include cloning both inputs per call, as a host handing over a
+Luau buffer would have to.
 
 ### What this establishes
 
 Neither engine dominates on speed. Ours is far ahead at small and medium sizes and on any path that crosses a
 boundary per call. CubeCL's generated code is ahead by about 1.5 to 2.6x on long expressions over large arrays,
-and at those sizes threading widens rather than closes that gap. Matmul is a tie on this hardware, with FMA worth
-about 10%.
+though at eight threads that is a tie at n=65,536 and 2.3x at n=1,048,576 (1.5x on minimums). Matmul is a tie on
+this hardware single-threaded, ours by 1.3x strict at eight threads, with FMA worth about 10%.
 
 The chain result is **fusion, not CubeCL**: handwritten fused Rust matches or beats CubeCL's strict code at every
 size. Our kernels pay a load and store per operation that a fused loop keeps in registers, which fits a store-port
@@ -305,7 +305,7 @@ collection, and a retained program survives collection and runs on new inputs.
   run there, and this hardware has no AVX-512.
 - **Fusion.** Fused kernels for common expression shapes, measured on realistic graphs, then generated code only
   if those fall short.
-- **An opt-in FMA mode.** Worth about 10% on matmul and 25 to 30% on the chain here. It changes results, so it
+- **An opt-in FMA mode.** Worth about 10% on matmul and 20 to 30% on the chain here. It changes results, so it
   must be explicit.
 - **A packed matmul microkernel.** Both engines here are unpacked.
 - **CubeCL on GPU and CubeK**, if a workload makes them relevant.
