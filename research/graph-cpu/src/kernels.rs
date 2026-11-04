@@ -238,9 +238,13 @@ step!(MulS, true, false, false, false, |acc, xs, ys, vx, vy, i| acc * at(xs, i))
 step!(MulV, false, false, true, false, |acc, xs, ys, vx, vy, i| acc * vx);
 step!(Relu, false, false, false, false, |acc, xs, ys, vx, vy, i| relu(acc));
 // `Numeric::Fast` only: a fused multiply-add, under an instantiation that has the instruction.
+#[cfg(target_arch = "x86_64")]
 step!(MaSS, true, true, false, false, |acc, xs, ys, vx, vy, i| acc.mul_add(at(xs, i), at(ys, i)));
+#[cfg(target_arch = "x86_64")]
 step!(MaSV, true, false, false, true, |acc, xs, ys, vx, vy, i| acc.mul_add(at(xs, i), vy));
+#[cfg(target_arch = "x86_64")]
 step!(MaVS, false, true, true, false, |acc, xs, ys, vx, vy, i| acc.mul_add(vx, at(ys, i)));
+#[cfg(target_arch = "x86_64")]
 step!(MaVV, false, false, true, true, |acc, xs, ys, vx, vy, i| acc.mul_add(vx, vy));
 
 /// How a fused loop obtains its first value.
@@ -348,6 +352,7 @@ type KernelFn = for<'c> fn(&Frame<'c>, &Binding<'c>, &mut [Element]);
 struct Form {
     op: Op,
     x: bool,
+    #[cfg(target_arch = "x86_64")]
     y: bool,
 }
 
@@ -484,7 +489,12 @@ fn elementwise_loop(
         },
     };
     let is_slice = |operand: Operand| !matches!(bound(operand), Bound::Value(_));
-    let form = |step: TileStep| Form { op: step.op, x: is_slice(step.x), y: is_slice(step.y) };
+    let form = |step: TileStep| Form {
+        op: step.op,
+        x: is_slice(step.x),
+        #[cfg(target_arch = "x86_64")]
+        y: is_slice(step.y),
+    };
     let bound_tiles: Vec<(KernelFn, Dst, Binding<'_>)> = tiles
         .iter()
         .map(|tile| {
