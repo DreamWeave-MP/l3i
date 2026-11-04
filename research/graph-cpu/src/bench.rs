@@ -581,6 +581,17 @@ pub fn reductions() {
         row("accurate_softmax_kernel", n, || softmax(black_box(&values), black_box(&mut out)));
         let total: f64 = out.iter().map(|v| f64::from(*v)).sum();
         assert!((total - 1.0).abs() < 1e-6);
+        for (center, label) in [(false, "accurate_rms_norm_program"), (true, "accurate_layer_norm_program")] {
+            let plan = Expr::slot(0, Shape::Matrix(1, n), Domain::new(1024, 1024))
+                .unwrap()
+                .normalize(1e-5, center)
+                .unwrap()
+                .compile()
+                .unwrap();
+            row(label, n, || {
+                plan.run_into(black_box(&[tensor.borrow()]), black_box(&mut softmax_bytes), &budget).unwrap();
+            });
+        }
         row("accurate_rms_norm_kernel", n, || normalize(black_box(&values), black_box(&mut out), 1e-5, false).unwrap());
         row("accurate_layer_norm_kernel", n, || {
             normalize(black_box(&values), black_box(&mut out), 1e-5, true).unwrap();

@@ -994,3 +994,27 @@ fn softmax_strides_special_values_and_empty_shapes_match_reference() {
     let p = Expr::slot(0, shape, domain).unwrap().softmax().unwrap().compile().unwrap();
     p.run_into(&[View::contiguous(&[], shape).unwrap()], &mut [], &Budget::new(0)).unwrap();
 }
+
+#[test]
+fn normalization_stages_match_reference_and_compose() {
+    let budget = Budget::new(1 << 20);
+    let domain = domain();
+    for values in [[1.0, 3.0, 3.0, 4.0], [f32::MAX, -f32::MAX, 0.0, -0.0], [f32::NAN, 1.0, f32::INFINITY, 1.0]] {
+        let input = tensor(&values, Shape::Matrix(2, 2), &budget);
+        let x = Expr::slot(0, input.shape(), domain.clone()).unwrap();
+        for center in [false, true] {
+            let p = x.normalize(1e-5, center).unwrap().compile().unwrap();
+            assert_same(
+                &read(&p.run(&[&input], &budget).unwrap()),
+                &read(&p.run_reference(&[input.borrow()], &budget).unwrap()),
+                "normalization graph",
+            );
+        }
+        assert!(x.normalize(0.0, true).is_err());
+        assert!(x.normalize(f64::NAN, false).is_err());
+    }
+    let input = tensor(&[1.0, 3.0], Shape::Matrix(1, 2), &budget);
+    let x = Expr::slot(0, input.shape(), domain).unwrap();
+    let p = x.normalize(3.0, true).unwrap().relu().unwrap().sum_rows().unwrap().compile().unwrap();
+    assert_same(&read(&p.run(&[&input], &budget).unwrap()), &[0.5], "normalized composition");
+}

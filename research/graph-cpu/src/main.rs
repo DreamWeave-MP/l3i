@@ -91,6 +91,8 @@ fn run_into(
 struct Research;
 impl LuauModule for Research {
     const NAME: &'static str = "dream.research.compute";
+    // Keep the experimental module declarations together for auditing its public surface.
+    #[allow(clippy::too_many_lines)]
     fn register(_runtime: &Runtime, module: &mut ModuleBuilder<'_>) -> Result<()> {
         let service_budget = Budget::new(64 * 1024 * 1024);
         let service_domain = Domain::new(4096, 512);
@@ -114,6 +116,12 @@ impl LuauModule for Research {
             ty.method("add", |a: &Expression, b: &Expression| a.0.add(&b.0).map(|e| Owned(Expression(e))))?;
             ty.method("mul", |a: &Expression, b: &Expression| a.0.mul(&b.0).map(|e| Owned(Expression(e))))?;
             ty.method("relu", |a: &Expression| a.0.relu().map(|e| Owned(Expression(e))))?;
+            ty.method("rmsNorm", |a: &Expression, epsilon: f64| {
+                a.0.normalize(epsilon, false).map(|e| Owned(Expression(e)))
+            })?;
+            ty.method("layerNorm", |a: &Expression, epsilon: f64| {
+                a.0.normalize(epsilon, true).map(|e| Owned(Expression(e)))
+            })?;
             ty.method("softmax", |a: &Expression| a.0.softmax().map(|e| Owned(Expression(e))))?;
             ty.method("sumRows", |a: &Expression| a.0.sum_rows().map(|e| Owned(Expression(e))))?;
             ty.method("matmul", |a: &Expression, b: &Expression| a.0.matmul(&b.0).map(|e| Owned(Expression(e))))?;

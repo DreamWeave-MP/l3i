@@ -86,10 +86,15 @@ pub(crate) enum Value {
     Temp(u16),
 }
 #[derive(Debug)]
+enum RowMap {
+    Softmax,
+    Normalize { epsilon: f64, center: bool },
+}
+#[derive(Debug)]
 enum Work {
     Elementwise(Elementwise),
     SumRows { source: Value, shape: Shape, columns: usize },
-    Softmax { source: Value, shape: Shape },
+    RowMap { source: Value, shape: Shape, operation: RowMap },
     MatMul { a: Value, b: Value, shape: Shape, inner: usize },
 }
 #[derive(Debug)]
@@ -276,6 +281,7 @@ fn plan_elementwise(steps: &[Step], root: usize, boundary: &[Option<Value>], num
             | Instruction::Constant(_)
             | Instruction::SumRows(_)
             | Instruction::Softmax(_)
+            | Instruction::Normalize(..)
             | Instruction::MatMul(..) => (),
         }
     }
@@ -298,7 +304,11 @@ fn plan_elementwise(steps: &[Step], root: usize, boundary: &[Option<Value>], num
                 planned[id] = Some(Planned::Constant(v));
                 continue;
             }
-            Instruction::Slot(_) | Instruction::SumRows(_) | Instruction::Softmax(_) | Instruction::MatMul(..) => {
+            Instruction::Slot(_)
+            | Instruction::SumRows(_)
+            | Instruction::Softmax(_)
+            | Instruction::Normalize(..)
+            | Instruction::MatMul(..) => {
                 let value = boundary[id].expect("slots and matmuls are materialized");
                 planned[id] = Some(Planned::Source(value));
                 continue;
@@ -408,8 +418,18 @@ impl Program {
             } else if !materialized[id] {
                 continue;
             }
-            let work = if let Instruction::Softmax(a) = steps[id].op {
-                Work::Softmax { source: boundary[a].expect("operand materialized"), shape: steps[id].shape }
+            let work = if let Instruction::Normalize(a, epsilon, center) = steps[id].op {
+                Work::RowMap {
+                    source: boundary[a].expect("operand materialized"),
+                    shape: steps[id].shape,
+                    operation: RowMap::Normalize { epsilon, center },
+                }
+            } else if let Instruction::Softmax(a) = steps[id].op {
+                Work::RowMap {
+                    source: boundary[a].expect("operand materialized"),
+                    shape: steps[id].shape,
+                    operation: RowMap::Softmax,
+                }
             } else if let Instruction::SumRows(a) = steps[id].op {
                 Work::SumRows {
                     source: boundary[a].expect("operand materialized"),
@@ -435,7 +455,7 @@ impl Program {
         for stage in &stages {
             let (shape, factor) = match &stage.work {
                 Work::Elementwise(e) => (e.shape, e.operations),
-                Work::Softmax { shape, .. } => (*shape, 6),
+                Work::RowMap { shape, .. } => (*shape, 6),
                 Work::SumRows { shape, columns, .. } => (*shape, *columns),
                 Work::MatMul { shape, inner, .. } => (*shape, *inner),
             };
@@ -456,7 +476,7 @@ impl Program {
             };
             match &stage.work {
                 Work::Elementwise(e) => e.sources.iter().copied().for_each(&mut read),
-                Work::Softmax { source, .. } | Work::SumRows { source, .. } => read(*source),
+                Work::RowMap { source, .. } | Work::SumRows { source, .. } => read(*source),
                 Work::MatMul { a, b, .. } => {
                     read(*a);
                     read(*b);
@@ -509,8 +529,8 @@ impl Program {
                         }
                     }
                 }
-                Work::Softmax { source, shape } => {
-                    writeln!(text, "stage {index}: softmax {shape:?} {source:?}").unwrap();
+                Work::RowMap { source, shape, operation } => {
+                    writeln!(text, "stage {index}: row {operation:?} {shape:?} {source:?}").unwrap();
                 }
                 Work::SumRows { source, shape, .. } => {
                     writeln!(text, "stage {index}: sum_rows {shape:?} {source:?}").unwrap();
@@ -582,7 +602,7 @@ impl Program {
             let mut allocation = None;
             let shape = match &stage.work {
                 Work::Elementwise(e) => e.shape,
-                Work::Softmax { shape, .. } | Work::SumRows { shape, .. } | Work::MatMul { shape, .. } => *shape,
+                Work::RowMap { shape, .. } | Work::SumRows { shape, .. } | Work::MatMul { shape, .. } => *shape,
             };
             if index != last {
                 allocation = Some(budget.allocate(shape.elements()? * 4)?);
@@ -604,7 +624,7 @@ impl Program {
                         kernels::elementwise(e, &sources, scratch, target, isa, chunk);
                     })?;
                 }
-                Work::Softmax { source, shape } => {
+                Work::RowMap { source, shape, operation } => {
                     let input = view_of(*source);
                     let (rows, cols) = shape.dims();
                     let scratch_columns = if rows == 0 { 0 } else { cols };
@@ -623,7 +643,12 @@ impl Program {
                         for (col, value) in values.iter_mut().enumerate() {
                             *value = input.at(row, col);
                         }
-                        crate::reduction::softmax(&values, &mut output);
+                        match operation {
+                            RowMap::Softmax => crate::reduction::softmax(&values, &mut output),
+                            RowMap::Normalize { epsilon, center } => {
+                                crate::reduction::normalize(&values, &mut output, *epsilon, *center)?;
+                            }
+                        }
                         for (col, value) in output.iter().enumerate() {
                             target[(row * cols + col) * 4..][..4].copy_from_slice(&value.to_le_bytes());
                         }
@@ -690,7 +715,7 @@ fn materialization_boundaries(steps: &[Step]) -> Vec<bool> {
     let mut materialized = vec![false; steps.len()];
     materialized[steps.len() - 1] = true;
     for step in steps {
-        if let Instruction::SumRows(a) | Instruction::Softmax(a) = step.op {
+        if let Instruction::SumRows(a) | Instruction::Softmax(a) | Instruction::Normalize(a, ..) = step.op {
             materialized[a] = true;
         }
         if let Instruction::MatMul(a, b) = step.op {
@@ -699,7 +724,10 @@ fn materialization_boundaries(steps: &[Step]) -> Vec<bool> {
         }
     }
     for (id, step) in steps.iter().enumerate() {
-        if matches!(step.op, Instruction::MatMul(..) | Instruction::SumRows(_) | Instruction::Softmax(_)) {
+        if matches!(
+            step.op,
+            Instruction::MatMul(..) | Instruction::SumRows(_) | Instruction::Softmax(_) | Instruction::Normalize(..)
+        ) {
             materialized[id] = true;
         }
     }

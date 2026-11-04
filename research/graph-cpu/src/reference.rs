@@ -16,10 +16,15 @@ impl Program {
     pub fn run_reference(&self, inputs: &[View<'_>], budget: &Arc<Budget>) -> Result<Tensor> {
         self.check(inputs)?;
         let shape = self.output_shape();
-        let fused = !self
-            .steps
-            .iter()
-            .any(|step| matches!(step.op, Instruction::MatMul(..) | Instruction::SumRows(_) | Instruction::Softmax(_)));
+        let fused = !self.steps.iter().any(|step| {
+            matches!(
+                step.op,
+                Instruction::MatMul(..)
+                    | Instruction::SumRows(_)
+                    | Instruction::Softmax(_)
+                    | Instruction::Normalize(..)
+            )
+        });
         if fused {
             let mut output = budget.allocate(shape.elements()? * 4)?;
             self.reference_into(inputs, &mut output.bytes);
@@ -51,6 +56,9 @@ impl Program {
                         Instruction::Add(a, b) => value(a).at(row, col) + value(b).at(row, col),
                         Instruction::Mul(a, b) => value(a).at(row, col) * value(b).at(row, col),
                         Instruction::Relu(a) => relu(value(a).at(row, col)),
+                        Instruction::Normalize(a, epsilon, center) => {
+                            normalize_reference(value(a), row, col, epsilon, center)
+                        }
                         Instruction::Softmax(a) => {
                             let input = value(a);
                             let width = input.shape.dims().1;
@@ -119,7 +127,10 @@ impl Program {
                         Instruction::Add(a, b) => registers[a] + registers[b],
                         Instruction::Mul(a, b) => registers[a] * registers[b],
                         Instruction::Relu(a) => relu(registers[a]),
-                        Instruction::MatMul(..) | Instruction::SumRows(_) | Instruction::Softmax(_) => {
+                        Instruction::MatMul(..)
+                        | Instruction::SumRows(_)
+                        | Instruction::Softmax(_)
+                        | Instruction::Normalize(..) => {
                             unreachable!("fused graphs have no matmul")
                         }
                     };
@@ -128,5 +139,27 @@ impl Program {
                 out[at..at + 4].copy_from_slice(&registers[registers.len() - 1].to_le_bytes());
             }
         }
+    }
+}
+
+fn normalize_reference(input: View<'_>, row: usize, col: usize, epsilon: f64, center: bool) -> f32 {
+    let width = input.shape.dims().1;
+    #[allow(clippy::cast_precision_loss)]
+    let count = width as f64;
+    let mut mean = 0.0;
+    if center {
+        for c in 0..width {
+            mean += f64::from(input.at(row, c));
+        }
+        mean /= count;
+    }
+    let mut variance = 0.0;
+    for c in 0..width {
+        let d = f64::from(input.at(row, c)) - mean;
+        variance += d * d;
+    }
+    #[allow(clippy::cast_possible_truncation)]
+    {
+        ((f64::from(input.at(row, col)) - mean) / (variance / count + epsilon).sqrt()) as f32
     }
 }

@@ -87,3 +87,19 @@ do
  for i=0,1 do assert(math.abs(buffer.readf32(sums,i*4)-1)<1e-6) end
  compute.slot(0,3,0):softmax():compile():runInto(buffer.create(0),buffer.create(0))
 end
+
+do
+ local input=buffer.create(8)
+ buffer.writef32(input,0,1); buffer.writef32(input,4,3)
+ local x=compute.slot(0,1,2)
+ local p=x:layerNorm(3):relu():sumRows():compile()
+ local out=buffer.create(4)
+ p:runInto(out,input)
+ assert(buffer.readf32(out,0)==0.5)
+ local rms=x:rmsNorm(0.5):compile()
+ local actual=rms:run(compute.f32(input,1,2)):read()
+ local reference=rms:runReference(compute.f32(input,1,2)):read()
+ for i=0,1 do assert(buffer.readf32(actual,i*4)==buffer.readf32(reference,i*4)) end
+ assert(not pcall(function() x:layerNorm(0) end))
+ assert(not pcall(function() x:rmsNorm(math.huge) end))
+end

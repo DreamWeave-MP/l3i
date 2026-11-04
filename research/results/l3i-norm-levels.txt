@@ -1,0 +1,49 @@
+
+# Row kernels: preallocated, accurate normalization, ordered f32 sum
+ordered_sum_program                            n=1        median_us=0.022        min_us=0.021        p90_us=0.023        ns_per_element=22.145
+ordered_sum_kernel                             n=1        median_us=0.001        min_us=0.001        p90_us=0.001        ns_per_element=1.397
+accurate_softmax_program                       n=1        median_us=0.097        min_us=0.093        p90_us=0.102        ns_per_element=97.042
+accurate_softmax_kernel                        n=1        median_us=0.014        min_us=0.014        p90_us=0.015        ns_per_element=14.122
+accurate_rms_norm_program                      n=1        median_us=0.097        min_us=0.090        p90_us=0.102        ns_per_element=96.952
+accurate_layer_norm_program                    n=1        median_us=0.103        min_us=0.098        p90_us=0.107        ns_per_element=103.125
+accurate_rms_norm_kernel                       n=1        median_us=0.004        min_us=0.004        p90_us=0.005        ns_per_element=4.461
+accurate_layer_norm_kernel                     n=1        median_us=0.007        min_us=0.006        p90_us=0.007        ns_per_element=6.629
+ordered_sum_program                            n=16       median_us=0.033        min_us=0.032        p90_us=0.034        ns_per_element=2.082
+ordered_sum_kernel                             n=16       median_us=0.005        min_us=0.005        p90_us=0.006        ns_per_element=0.334
+accurate_softmax_program                       n=16       median_us=0.300        min_us=0.291        p90_us=0.306        ns_per_element=18.768
+accurate_softmax_kernel                        n=16       median_us=0.191        min_us=0.186        p90_us=0.193        ns_per_element=11.923
+accurate_rms_norm_program                      n=16       median_us=0.139        min_us=0.133        p90_us=0.149        ns_per_element=8.661
+accurate_layer_norm_program                    n=16       median_us=0.157        min_us=0.150        p90_us=0.166        ns_per_element=9.786
+accurate_rms_norm_kernel                       n=16       median_us=0.022        min_us=0.021        p90_us=0.024        ns_per_element=1.403
+accurate_layer_norm_kernel                     n=16       median_us=0.038        min_us=0.035        p90_us=0.040        ns_per_element=2.368
+ordered_sum_program                            n=1024     median_us=1.016        min_us=0.949        p90_us=1.083        ns_per_element=0.992
+ordered_sum_kernel                             n=1024     median_us=0.899        min_us=0.872        p90_us=0.944        ns_per_element=0.878
+accurate_softmax_program                       n=1024     median_us=12.871       min_us=11.887       p90_us=13.317       ns_per_element=12.569
+accurate_softmax_kernel                        n=1024     median_us=11.921       min_us=11.650       p90_us=12.156       ns_per_element=11.642
+accurate_rms_norm_program                      n=1024     median_us=2.579        min_us=2.412        p90_us=2.866        ns_per_element=2.518
+accurate_layer_norm_program                    n=1024     median_us=3.456        min_us=3.337        p90_us=3.618        ns_per_element=3.375
+accurate_rms_norm_kernel                       n=1024     median_us=1.494        min_us=1.415        p90_us=1.598        ns_per_element=1.459
+accurate_layer_norm_kernel                     n=1024     median_us=2.455        min_us=2.304        p90_us=2.663        ns_per_element=2.397
+ordered_sum_program                            n=65536    median_us=63.460       min_us=58.592       p90_us=68.707       ns_per_element=0.968
+ordered_sum_kernel                             n=65536    median_us=59.968       min_us=58.465       p90_us=63.889       ns_per_element=0.915
+accurate_softmax_program                       n=65536    median_us=847.374      min_us=791.970      p90_us=866.901      ns_per_element=12.930
+accurate_softmax_kernel                        n=65536    median_us=785.221      min_us=766.216      p90_us=799.769      ns_per_element=11.982
+accurate_rms_norm_program                      n=65536    median_us=164.421      min_us=152.665      p90_us=173.382      ns_per_element=2.509
+accurate_layer_norm_program                    n=65536    median_us=220.370      min_us=212.105      p90_us=241.771      ns_per_element=3.363
+accurate_rms_norm_kernel                       n=65536    median_us=99.234       min_us=92.039       p90_us=106.503      ns_per_element=1.514
+accurate_layer_norm_kernel                     n=65536    median_us=173.586      min_us=153.748      p90_us=188.086      ns_per_element=2.649
+ordered_sum_program                            n=1048576  median_us=1060.866     min_us=962.433      p90_us=1201.523     ns_per_element=1.012
+ordered_sum_kernel                             n=1048576  median_us=1045.746     min_us=972.245      p90_us=1144.647     ns_per_element=0.997
+accurate_softmax_program                       n=1048576  median_us=14550.895    min_us=14062.703    p90_us=15131.404    ns_per_element=13.877
+accurate_softmax_kernel                        n=1048576  median_us=12950.165    min_us=12653.082    p90_us=13203.382    ns_per_element=12.350
+accurate_rms_norm_program                      n=1048576  median_us=2753.671     min_us=2692.709     p90_us=3107.158     ns_per_element=2.626
+accurate_layer_norm_program                    n=1048576  median_us=4589.991     min_us=3927.103     p90_us=5532.232     ns_per_element=4.377
+accurate_rms_norm_kernel                       n=1048576  median_us=1548.724     min_us=1480.657     p90_us=1752.506     ns_per_element=1.477
+accurate_layer_norm_kernel                     n=1048576  median_us=2779.718     min_us=2450.991     p90_us=2958.454     ns_per_element=2.651
+programs: rebinding, fusion, broadcast, shared views, matrix, borrowed buffers, errors verified
+rebindable graph verified across the reference, chunked and generated native executors
+jsl_ordered_sum_runInto n=1 median_us=0.139 min_us=0.134 p90_us=0.146
+jsl_ordered_sum_runInto n=16 median_us=0.153 min_us=0.149 p90_us=0.161
+jsl_ordered_sum_runInto n=1024 median_us=1.090 min_us=1.041 p90_us=1.147
+jsl_ordered_sum_runInto n=65536 median_us=63.879 min_us=59.668 p90_us=68.941
+jsl_ordered_sum_runInto n=1048576 median_us=1005.767 min_us=939.588 p90_us=1065.552

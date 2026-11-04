@@ -25,3 +25,11 @@ Softmax currently recomputes exponentials to avoid scratch and intermediate f32 
 The reference interpreter computes each result independently from the row, without calling the production kernel. Tests include transposed random inputs, NaNs, positive infinities, all-masked rows, extreme finite logits, empty dimensions, composition with ordered sums, JSL invocation and insufficient scratch budgets. Reference execution is intentionally quadratic in row width and is not a performance path. GPU/generated-Luau lowering rejects softmax rather than silently changing semantics.
 
 Initial program-versus-kernel medians: 13.427 versus 11.282 us at 1,024 elements, 891.255 versus 772.061 us at 65,536. See ../results/l3i-softmax-levels*.txt. This report includes sum JSL timings, not softmax JSL timings; no softmax end-to-end claim follows. Softmax is not yet optimized: two exponential evaluations per element and conversion-row allocation remain visible costs. Normalization is still standalone pending graph integration.
+
+## Normalization graph integration
+
+`Expr::normalize(epsilon, center)` and JSL `rmsNorm(epsilon)` / `layerNorm(epsilon)` now preserve shape and normalize each row. Epsilon is validated when constructing the expression, before graph execution. Both numerical modes use the documented accurate f64 statistics and final f32 rounding. Affine gain/bias remain explicit graph arithmetic.
+
+Softmax and normalization share one row-map execution stage and its budgeted conversion storage; they do not introduce separate executors. Reference normalization uses its own scalar mean/deviation loops. Tests cover composition with ReLU and reductions, extreme finite values, nonfinite values, epsilon rejection and actual JSL calls.
+
+Initial 1,024-element timings: RMS program 2.579 us versus kernel 1.494 us; layer normalization program 3.456 us versus kernel 2.455 us. Raw reports: ../results/l3i-norm-levels*.txt. Conversion and allocation costs are significant for small rows and remain optimization candidates. These are program/kernel measurements, not normalization JSL timings.
