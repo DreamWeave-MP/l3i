@@ -3,8 +3,6 @@ name: CPU compute research
 on:
   workflow_dispatch:
   pull_request:
-  push:
-    branches: [feat/jsl-compute-rd]
 
 permissions:
   contents: read

@@ -1,7 +1,7 @@
 # Reusable f32 computations over chunked native kernels
 
-An **isolated research crate**. It is not an L3i extension: no default feature, CI job, syntax or
-public L3i API changes, and no dependency beyond L3i itself. The decision and its evidence are in
+An **isolated research crate**. It is not an L3i extension: no default feature, syntax or
+public L3i API changes, and no dependency beyond L3i itself. Focused native x86-64 and AArch64 CI tests this crate separately. The decision and its evidence are in
 [`../findings.md`](../findings.md); this page is the contract. From the repository root, so the
 verified Clang/LTO configuration applies:
 
@@ -103,7 +103,7 @@ tiles. Everything else on this page describes the strict default.
 - `Domain` bounds live nodes and plans, `Budget` bounds live native payload including temporaries and
   scratch. Both belong to the host; the prototype's process-wide counters are gone.
 - A program is bounded at compile time: 1,024 nodes and at most 67,108,864 scalar operations per run.
-- Each thread retains at most 64 KiB of scratch after a run, charged only while the run is live.
+- Scratch is allocated for the active stage, charged for its full requested payload, and freed before its budget guard drops. No thread-local scratch survives a call.
 
 Native payload looks small to Luau's collector, so unreachable results can hold the whole budget
 without triggering a cycle. The host's calls collect once and retry when the budget refuses them, and

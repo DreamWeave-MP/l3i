@@ -530,23 +530,13 @@ fn elementwise_loop(
     }
 }
 
-/// A thread's retained scratch: the planner writes every register before reading it, so its old
-/// contents are never observed. Larger requests are served and freed, never retained.
-const SCRATCH_RETAINED: usize = 64 * 1024;
-thread_local! {
-    static SCRATCH: std::cell::Cell<Vec<u8>> = const { std::cell::Cell::new(Vec::new()) };
-}
+/// Scratch lives only for the charged call. No thread-local allocation survives its budget.
+/// The planner writes every register before reading it.
 pub(crate) fn with_scratch<R>(bytes: usize, body: impl FnOnce(&mut [u8]) -> R) -> l3i::Result<R> {
-    let mut scratch = SCRATCH.take();
-    if scratch.len() < bytes {
-        scratch.try_reserve_exact(bytes - scratch.len()).map_err(|_| crate::error("scratch allocation failed"))?;
-        scratch.resize(bytes, 0);
-    }
-    let result = body(&mut scratch[..bytes]);
-    if scratch.len() <= SCRATCH_RETAINED {
-        SCRATCH.set(scratch);
-    }
-    Ok(result)
+    let mut scratch = Vec::new();
+    scratch.try_reserve_exact(bytes).map_err(|_| crate::error("scratch allocation failed"))?;
+    scratch.resize(bytes, 0);
+    Ok(body(&mut scratch))
 }
 
 /// Scratch elements one elementwise stage needs for `count` output elements.
