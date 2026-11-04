@@ -1047,3 +1047,112 @@ fn column_microkernel_preserves_special_values_and_row_remainders() {
         }
     }
 }
+
+/// A view whose reads are all strided, so any stage touching it would have to pack it under budget.
+fn strided(values: &[f32], rows: usize, cols: usize, budget: &Arc<Budget>) -> Tensor {
+    let mut spaced = vec![0.0f32; rows * cols * 2];
+    for (index, value) in values.iter().enumerate() {
+        spaced[index * 2] = *value;
+    }
+    tensor(&spaced, Shape::Matrix(1, rows * cols * 2), budget)
+        .view(Shape::Matrix(rows, cols), 0, [cols * 8, 8])
+        .unwrap()
+}
+
+#[test]
+fn empty_matmul_spends_nothing_in_any_dimension_combination() {
+    let domain = domain();
+    let dimensions = [0usize, 1, 5, 16, 17, 128, 129];
+    for m in dimensions {
+        for k in dimensions {
+            for n in dimensions {
+                if m * n != 0 && k != 0 {
+                    continue;
+                }
+                let setup = Budget::new(1 << 24);
+                let (a, b) = (vec![f32::NAN; m * k], vec![f32::NAN; k * n]);
+                for (ta, tb) in [
+                    (tensor(&a, Shape::Matrix(m, k), &setup), tensor(&b, Shape::Matrix(k, n), &setup)),
+                    (strided(&a, m, k, &setup), strided(&b, k, n, &setup)),
+                ] {
+                    let x = Expr::slot(0, ta.shape(), domain.clone()).unwrap();
+                    let y = Expr::slot(1, tb.shape(), domain.clone()).unwrap();
+                    for numeric in [Numeric::Strict, Numeric::Fast] {
+                        let p = x.matmul(&y).unwrap().compile_with(numeric).unwrap();
+                        for isa in isas().into_iter().chain([Isa::detect_fast()]) {
+                            // The result is positive zeros, written over whatever was there. Not
+                            // a byte of budget is needed, and a stale output must not survive.
+                            let denied = Budget::new(0);
+                            let mut out = vec![0x55; m * n * 4];
+                            p.run_with(&[ta.borrow(), tb.borrow()], &mut out, &denied, isa, CHUNK).unwrap();
+                            assert!(out.iter().all(|byte| *byte == 0), "{m}x{k}x{n} {isa:?}");
+                            assert_eq!((denied.peak(), denied.denials()), (0, 0), "{m}x{k}x{n} {isa:?}");
+                        }
+                        // Shapes are still validated though no element is read.
+                        let wrong = tensor(&[], Shape::Matrix(0, k + 1), &setup);
+                        assert!(p.run(&[&wrong, &tb], &setup).is_err());
+                        assert!(p.run(&[&ta], &setup).is_err());
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn stages_only_an_empty_result_reads_are_not_executed() {
+    let domain = domain();
+    let setup = Budget::new(1 << 24);
+    let slot = |id, rows, cols| Expr::slot(id, Shape::Matrix(rows, cols), domain.clone()).unwrap();
+    let filled =
+        |value: f32, rows: usize, cols: usize| tensor(&vec![value; rows * cols], Shape::Matrix(rows, cols), &setup);
+    let assert_free = |program: &Program, inputs: &[View<'_>], out: &mut [u8]| {
+        let denied = Budget::new(0);
+        program.run_into(inputs, out, &denied).unwrap();
+        assert_eq!((denied.peak(), denied.allocations(), denied.denials()), (0, 0, 0), "{}", program.dump());
+        assert!(out.iter().all(|byte| *byte == 0));
+    };
+
+    // The right operand of an empty product is a whole elementwise stage, then a row stage, then
+    // another product. None of them runs, though each would be charged and none is empty.
+    let (a, b0, b1) = (filled(1.0, 0, 128), filled(1.0, 128, 16), filled(2.0, 128, 16));
+    let views = [a.borrow(), b0.borrow(), b1.borrow()];
+    let product = slot(1, 128, 16).mul(&slot(2, 128, 16)).unwrap();
+    assert_free(&slot(0, 0, 128).matmul(&product).unwrap().compile().unwrap(), &views, &mut []);
+    assert_free(&slot(0, 0, 128).matmul(&product.softmax().unwrap()).unwrap().compile().unwrap(), &views, &mut []);
+    let (c, d) = (filled(1.0, 128, 32), filled(1.0, 32, 16));
+    let nested = slot(0, 0, 128).matmul(&slot(1, 128, 32).matmul(&slot(2, 32, 16)).unwrap()).unwrap();
+    assert_free(&nested.compile().unwrap(), &[a.borrow(), c.borrow(), d.borrow()], &mut []);
+
+    // An empty elementwise result broadcast from a nonempty row stage reads it no more than matmul.
+    let (zero_rows, one_row) = (filled(1.0, 0, 16), filled(1.0, 1, 16));
+    let broadcast = slot(0, 0, 16).add(&slot(1, 1, 16).softmax().unwrap()).unwrap().compile().unwrap();
+    assert_free(&broadcast, &[zero_rows.borrow(), one_row.borrow()], &mut []);
+
+    // A nonempty product over no inner dimension fills zeros without running its operands.
+    let (x, y0) = (filled(1.0, 3, 0), filled(1.0, 0, 128));
+    let over_nothing = slot(0, 3, 0).matmul(&slot(1, 0, 128).matmul(&slot(2, 128, 4)).unwrap()).unwrap();
+    let z = filled(1.0, 128, 4);
+    assert_free(&over_nothing.compile().unwrap(), &[x.borrow(), y0.borrow(), z.borrow()], &mut [0x55; 48]);
+
+    // A stage with a dead reader and a live reader runs once, and is released. Here the dead reader
+    // sits under a zero-inner product, whose zeros still add to the live path's values.
+    let (p, q) = (filled(1.5, 3, 16), filled(2.0, 3, 16));
+    let shared = slot(1, 3, 16).add(&slot(2, 3, 16)).unwrap();
+    let dead = slot(0, 0, 3).matmul(&shared).unwrap();
+    let zeros = slot(3, 3, 0).matmul(&dead).unwrap();
+    let mixed = zeros.add(&shared).unwrap().compile().unwrap();
+    let (empty_a, empty_x) = (filled(1.0, 0, 3), filled(1.0, 3, 0));
+    let budget = Budget::new(1 << 20);
+    let inputs = [empty_a.borrow(), p.borrow(), q.borrow(), empty_x.borrow()];
+    let mut out = vec![0x55; 48 * 4];
+    mixed.run_into(&inputs, &mut out, &budget).unwrap();
+    assert_same(&floats(&out), &[3.5; 48], "live reader of a shared stage");
+    assert_same(
+        &floats(&out),
+        &read(&mixed.run_reference(&inputs, &budget).unwrap()),
+        "reference agrees with skipping the dead reader",
+    );
+    assert!(mixed.dump().contains("not executed"), "{}", mixed.dump());
+    assert_eq!(budget.used(), 0);
+}

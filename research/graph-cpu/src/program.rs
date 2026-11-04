@@ -97,11 +97,39 @@ enum Work {
     RowMap { source: Value, shape: Shape, operation: RowMap },
     MatMul { a: Value, b: Value, shape: Shape, inner: usize },
 }
+impl Work {
+    fn shape(&self) -> Shape {
+        match self {
+            Self::Elementwise(e) => e.shape,
+            Self::RowMap { shape, .. } | Self::SumRows { shape, .. } | Self::MatMul { shape, .. } => *shape,
+        }
+    }
+    /// Whether this stage's result depends on any element of its inputs. An empty result depends
+    /// on none, however large an input is, and neither does a nonempty product with no inner
+    /// dimension: it is all positive zeros.
+    fn reads_inputs(&self) -> bool {
+        let (rows, cols) = self.shape().dims();
+        rows != 0 && cols != 0 && !matches!(self, Self::MatMul { inner: 0, .. })
+    }
+    fn sources(&self, mut read: impl FnMut(Value)) {
+        match self {
+            Self::Elementwise(e) => e.sources.iter().copied().for_each(read),
+            Self::RowMap { source, .. } | Self::SumRows { source, .. } => read(*source),
+            Self::MatMul { a, b, .. } => {
+                read(*a);
+                read(*b);
+            }
+        }
+    }
+}
 #[derive(Debug)]
 struct Stage {
     work: Work,
     /// Temporaries nothing later reads, released after this stage to bound peak memory.
     release: Vec<u16>,
+    /// False when nothing that reaches the result reads this stage's value: running it could only
+    /// spend budget. Its temporary stays unset, and whatever would read it does not.
+    live: bool,
 }
 
 /// The validated, reusable computation.
@@ -448,11 +476,29 @@ impl Program {
             };
             boundary[id] = Some(Value::Temp(temps));
             temps += 1;
-            stages.push(Stage { work, release: Vec::new() });
+            stages.push(Stage { work, release: Vec::new(), live: false });
+        }
+        // A temporary's number is its stage's index. Stages only read earlier ones, so one backward
+        // pass finds everything the result depends on. Input validation is independent of this:
+        // `check` holds every slot to its shape, read or not.
+        let last = stages.len() - 1;
+        stages[last].live = true;
+        for index in (0..=last).rev() {
+            if stages[index].live && stages[index].work.reads_inputs() {
+                let mut read = Vec::new();
+                stages[index].work.sources(|value| {
+                    if let Value::Temp(t) = value {
+                        read.push(t as usize);
+                    }
+                });
+                for t in read {
+                    stages[t].live = true;
+                }
+            }
         }
         // Bound the work one invocation may perform, from what the stages actually execute.
         let mut total = 0usize;
-        for stage in &stages {
+        for stage in stages.iter().filter(|stage| stage.live) {
             let (shape, factor) = match &stage.work {
                 Work::Elementwise(e) => (e.shape, e.operations),
                 Work::RowMap { shape, .. } => (*shape, 6),
@@ -469,18 +515,12 @@ impl Program {
         // Release each temporary after its last reader (the last stage's result is returned).
         let mut last_reader = vec![None; temps as usize];
         for (index, stage) in stages.iter().enumerate() {
-            let mut read = |value: Value| {
-                if let Value::Temp(t) = value {
-                    last_reader[t as usize] = Some(index);
-                }
-            };
-            match &stage.work {
-                Work::Elementwise(e) => e.sources.iter().copied().for_each(&mut read),
-                Work::RowMap { source, .. } | Work::SumRows { source, .. } => read(*source),
-                Work::MatMul { a, b, .. } => {
-                    read(*a);
-                    read(*b);
-                }
+            if stage.live && stage.work.reads_inputs() {
+                stage.work.sources(|value| {
+                    if let Value::Temp(t) = value {
+                        last_reader[t as usize] = Some(index);
+                    }
+                });
             }
         }
         for (temp, reader) in last_reader.into_iter().enumerate() {
@@ -538,6 +578,9 @@ impl Program {
                 Work::MatMul { a, b, shape, .. } => {
                     writeln!(text, "stage {index}: matmul {shape:?} {a:?} {b:?}").unwrap();
                 }
+            }
+            if !stage.live {
+                writeln!(text, "  (not executed: nothing reaching the result reads it)").unwrap();
             }
         }
         text
@@ -598,12 +641,12 @@ impl Program {
         let mut temps: Vec<Option<Tensor>> = Vec::new();
         temps.resize_with(last, || None);
         for (index, stage) in self.stages.iter().enumerate() {
+            if !stage.live {
+                continue;
+            }
             // Only the last stage writes to `out`; earlier results are budgeted temporaries.
             let mut allocation = None;
-            let shape = match &stage.work {
-                Work::Elementwise(e) => e.shape,
-                Work::RowMap { shape, .. } | Work::SumRows { shape, .. } | Work::MatMul { shape, .. } => *shape,
-            };
+            let shape = stage.work.shape();
             if index != last {
                 allocation = Some(budget.allocate(shape.elements()? * 4)?);
             }
@@ -616,6 +659,8 @@ impl Program {
                 None => &mut *out,
             };
             match &stage.work {
+                // Binds no view, charges no scratch, packs nothing: its operands may never have run.
+                work if !work.reads_inputs() => target.fill(0),
                 Work::Elementwise(e) => {
                     let sources = kernels::bind_sources(e.sources.iter().map(|v| view_of(*v)), e.shape);
                     let needed = kernels::scratch_elements(e, &sources, target.len() / 4, chunk) * 4;
@@ -668,7 +713,7 @@ impl Program {
                     let (a, b) = (view_of(*a), view_of(*b));
                     let (a_elements, b_elements) = (contiguous(a, budget)?, contiguous(b, budget)?);
                     let (k, n) = (a.shape.dims().1, b.shape.dims().1);
-                    let needed = kernels::matmul_scratch((target.len() / 4).checked_div(n).unwrap_or(0), k, n);
+                    let needed = kernels::matmul_scratch(target.len() / 4 / n, k, n);
                     let _charge = budget.charge(needed)?;
                     kernels::with_scratch(needed, |scratch| {
                         kernels::matmul(a_elements.elements(), b_elements.elements(), k, n, target, scratch, isa);

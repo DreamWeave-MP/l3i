@@ -646,9 +646,10 @@ fn accumulate1<const FUSED: bool>(out: &mut [Element], a: f32, b: &[Element]) {
     }
 }
 
-/// Bytes of scratch `matmul` needs: one `K_BLOCK` of `b`, packed by column block.
+/// Bytes of scratch `matmul` needs: one `K_BLOCK` of `b`, packed by column block. Nothing when the
+/// call does no packing, which includes every product with no elements or no inner dimension.
 pub(crate) fn matmul_scratch(m: usize, k: usize, n: usize) -> usize {
-    if m == 1 { 0 } else { k.min(K_BLOCK) * (n / NR) * NR * 4 }
+    if m <= 1 { 0 } else { k.min(K_BLOCK) * (n / NR) * NR * 4 }
 }
 
 /// The row-major `a @ b` kernel. `k` advances in ascending blocks, so each output element sees its
