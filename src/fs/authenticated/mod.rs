@@ -1,6 +1,27 @@
 //! Authenticated ranged reads (feature `fs-authenticated`): a few bytes of a large immutable
 //! object, proven to belong to it, without reading or hashing the rest.
 //!
+//! ```
+//! use l3i::fs::authenticated::{AuthError, AuthenticatedReader, VerifiedManifest, build_manifest};
+//!
+//! // Publishing: the manifest goes anywhere, the commitment through a trusted channel.
+//! let object = vec![7_u8; 100_000];
+//! let published = build_manifest(&object[..], 4096)?;
+//! let (manifest, commitment) = (published.bytes, published.commitment);
+//!
+//! // Reading: nothing is believed until the manifest has matched the commitment.
+//! let verified = VerifiedManifest::verify(&manifest, &commitment)?;
+//! let mut reader = AuthenticatedReader::open(&object[..], verified.clone())?;
+//! assert_eq!(reader.read_at(50_000, 16)?, [7; 16]);
+//!
+//! // A damaged byte fails the read that covers it, with nothing returned.
+//! let mut damaged = object.clone();
+//! damaged[50_000] = 8;
+//! let mut reader = AuthenticatedReader::open(&damaged[..], verified)?;
+//! assert!(matches!(reader.read_at(50_000, 16), Err(AuthError::ChunkMismatch { index: 12 })));
+//! # Ok::<(), AuthError>(())
+//! ```
+//!
 //! # The trust model
 //!
 //! The only thing this module trusts is a [`Commitment`] the caller got through a channel the

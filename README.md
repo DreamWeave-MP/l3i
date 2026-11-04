@@ -143,6 +143,7 @@ Each row is a page of the guide.
 | `intl` | The `@dream/intl` extension | ICU4X (`icu_locale_core`, `icu_plurals`, `icu_decimal`, Unicode-3.0), `fixed_decimal`, `writeable` |
 | `syntax` | The `@dream/luau` extension | none |
 | `fs` | The `@dream/fs` extension | `memmap2`, `walkdir`, `same-file` |
+| `fs-authenticated` | Ranged reads of `@dream/fs` verified against a trusted commitment | `sha2` |
 | `process` | The `@dream/process` extension | none |
 | `tcp` | The `@dream/tcp` extension | `mio` (`socket2` is already a dependency of `dream-net`) |
 | `dns` | The `@dream/dns` extension | `idna` (ICU4X's normalizer, Unicode-3.0), `libc` on Unix |

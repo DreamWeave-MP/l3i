@@ -91,6 +91,7 @@ l3i = { version = "2", features = ["jit"] }
 | `intl` | off | The `dream.intl` extension (`l3i::intl`) with ICU4X's `icu_locale_core`, `icu_plurals` and `icu_decimal` and their compiled CLDR data, `fixed_decimal` and `writeable`: BCP 47 locales, plural rules, decimal formatting |
 | `syntax` | off | The `dream.luau` extension (`l3i::syntax`) and `csrc/syntax.cpp`, which builds Luau's parse tree as tables; Luau's Ast library is in every build, so no dependencies |
 | `fs` | off | The `dream.fs` extension (`l3i::fs`) with `memmap2`, `walkdir` and `same-file` |
+| `fs-authenticated` | off | `fs` plus `sha2`: `fs.authManifest` and `fs.openAuthenticated` (`l3i::fs::authenticated`), ranged reads verified against a trusted commitment |
 | `process` | off | The `dream.process` extension (`l3i::process`); no dependencies |
 | `tcp` | off | The `dream.tcp` extension (`l3i::tcp`) with `mio` (epoll, kqueue, IOCP) and `socket2` (backlog, address reuse, Apple's `SO_NOSIGPIPE`): TCP listeners, streams and a readiness poller |
 | `dns` | off | The `dream.dns` extension (`l3i::dns`) with `idna` (over ICU4X's normalizer) and, on Unix, `libc` for `getaddrinfo`: host name resolution on a bounded worker pool |

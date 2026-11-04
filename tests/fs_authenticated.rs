@@ -1086,6 +1086,40 @@ mod through_luau {
             .unwrap();
     }
 
+    /// The example on the Built-in Extensions page, verbatim but for the file's name.
+    const DOCUMENTED_EXAMPLE: &str = r#"
+local fs = require("@dream/fs")
+
+-- Publishing: once, by whoever makes the object.
+local manifest, commitment = assert(fs.authManifest("assets.pak"))
+assert(fs.writeFile("assets.pak.manifest", manifest))
+-- Store `commitment` somewhere the file's storage cannot write: a signed record, your program's
+-- own constants, a catalog you already authenticated. This is the step that makes it all mean something.
+
+-- Reading: the manifest can come from anywhere, the commitment cannot.
+local reader, message, kind = fs.openAuthenticated(
+    "assets.pak",
+    assert(fs.readAt("assets.pak.manifest", 0, 4 * 1024 * 1024)),
+    commitment
+)
+assert(reader, message)
+local bytes = assert(reader:readAt(1048576, 4096))
+
+-- Damage is an answer, like anything else the disk does.
+assert(fs.writeFile("assets.pak", "x", { offset = 0 }))
+local nothing, reason, failure = reader:readAt(0, 16)
+assert(nothing == nil and failure == "integrityFailed", reason)
+"#;
+
+    #[test]
+    fn the_documented_example_does_what_it_says() {
+        let scratch = Scratch::new("luau-example");
+        let path = scratch.0.join("assets.pak");
+        std::fs::write(&path, object(2 << 20)).unwrap();
+        let script = DOCUMENTED_EXAMPLE.replace("assets.pak", &path.display().to_string().replace('\\', "/"));
+        runtime().exec(&script).unwrap();
+    }
+
     #[test]
     fn plain_reads_are_untouched_by_the_feature() {
         let scratch = Scratch::new("luau-plain");
