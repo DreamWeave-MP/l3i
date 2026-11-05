@@ -95,13 +95,17 @@ enum Work {
     Elementwise(Elementwise),
     SumRows { source: Value, shape: Shape, columns: usize },
     RowMap { source: Value, shape: Shape, operation: RowMap },
+    Transpose { source: Value, shape: Shape },
     MatMul { a: Value, b: Value, shape: Shape, inner: usize },
 }
 impl Work {
     fn shape(&self) -> Shape {
         match self {
             Self::Elementwise(e) => e.shape,
-            Self::RowMap { shape, .. } | Self::SumRows { shape, .. } | Self::MatMul { shape, .. } => *shape,
+            Self::RowMap { shape, .. }
+            | Self::SumRows { shape, .. }
+            | Self::Transpose { shape, .. }
+            | Self::MatMul { shape, .. } => *shape,
         }
     }
     /// Whether this stage's result depends on any element of its inputs. An empty result depends
@@ -114,7 +118,9 @@ impl Work {
     fn sources(&self, mut read: impl FnMut(Value)) {
         match self {
             Self::Elementwise(e) => e.sources.iter().copied().for_each(read),
-            Self::RowMap { source, .. } | Self::SumRows { source, .. } => read(*source),
+            Self::RowMap { source, .. } | Self::SumRows { source, .. } | Self::Transpose { source, .. } => {
+                read(*source);
+            }
             Self::MatMul { a, b, .. } => {
                 read(*a);
                 read(*b);
@@ -309,6 +315,7 @@ fn plan_elementwise(steps: &[Step], root: usize, boundary: &[Option<Value>], num
             | Instruction::Constant(_)
             | Instruction::SumRows(_)
             | Instruction::Softmax(_)
+            | Instruction::Transpose(_)
             | Instruction::Normalize(..)
             | Instruction::MatMul(..) => (),
         }
@@ -335,6 +342,7 @@ fn plan_elementwise(steps: &[Step], root: usize, boundary: &[Option<Value>], num
             Instruction::Slot(_)
             | Instruction::SumRows(_)
             | Instruction::Softmax(_)
+            | Instruction::Transpose(_)
             | Instruction::Normalize(..)
             | Instruction::MatMul(..) => {
                 let value = boundary[id].expect("slots and matmuls are materialized");
@@ -416,6 +424,7 @@ fn plan_elementwise(steps: &[Step], root: usize, boundary: &[Option<Value>], num
 }
 
 impl Program {
+    #[allow(clippy::too_many_lines)] // Linear passes over one plan; each depends on the one before.
     pub(crate) fn plan(steps: Vec<Step>, lease: Lease, numeric: Numeric) -> Result<Self> {
         let root = steps.len() - 1;
         // The signature: dense slot ids, one shape each.
@@ -458,6 +467,8 @@ impl Program {
                     shape: steps[id].shape,
                     operation: RowMap::Softmax,
                 }
+            } else if let Instruction::Transpose(a) = steps[id].op {
+                Work::Transpose { source: boundary[a].expect("operand materialized"), shape: steps[id].shape }
             } else if let Instruction::SumRows(a) = steps[id].op {
                 Work::SumRows {
                     source: boundary[a].expect("operand materialized"),
@@ -502,6 +513,7 @@ impl Program {
             let (shape, factor) = match &stage.work {
                 Work::Elementwise(e) => (e.shape, e.operations),
                 Work::RowMap { shape, .. } => (*shape, 6),
+                Work::Transpose { shape, .. } => (*shape, 1),
                 Work::SumRows { shape, columns, .. } => (*shape, *columns),
                 Work::MatMul { shape, inner, .. } => (*shape, *inner),
             };
@@ -574,6 +586,9 @@ impl Program {
                 }
                 Work::SumRows { source, shape, .. } => {
                     writeln!(text, "stage {index}: sum_rows {shape:?} {source:?}").unwrap();
+                }
+                Work::Transpose { source, shape } => {
+                    writeln!(text, "stage {index}: transpose {shape:?} {source:?}").unwrap();
                 }
                 Work::MatMul { a, b, shape, .. } => {
                     writeln!(text, "stage {index}: matmul {shape:?} {a:?} {b:?}").unwrap();
@@ -699,6 +714,11 @@ impl Program {
                         }
                     }
                 }
+                Work::Transpose { source, shape } => {
+                    let input = view_of(*source);
+                    let swapped = View { shape: *shape, strides: [input.strides[1], input.strides[0]], ..input };
+                    Source::bind(swapped, *shape).materialize(target);
+                }
                 Work::SumRows { source, shape, columns } => {
                     let input = view_of(*source);
                     for row in 0..shape.dims().0 {
@@ -760,7 +780,11 @@ fn materialization_boundaries(steps: &[Step]) -> Vec<bool> {
     let mut materialized = vec![false; steps.len()];
     materialized[steps.len() - 1] = true;
     for step in steps {
-        if let Instruction::SumRows(a) | Instruction::Softmax(a) | Instruction::Normalize(a, ..) = step.op {
+        if let Instruction::SumRows(a)
+        | Instruction::Softmax(a)
+        | Instruction::Normalize(a, ..)
+        | Instruction::Transpose(a) = step.op
+        {
             materialized[a] = true;
         }
         if let Instruction::MatMul(a, b) = step.op {
@@ -771,7 +795,11 @@ fn materialization_boundaries(steps: &[Step]) -> Vec<bool> {
     for (id, step) in steps.iter().enumerate() {
         if matches!(
             step.op,
-            Instruction::MatMul(..) | Instruction::SumRows(_) | Instruction::Softmax(_) | Instruction::Normalize(..)
+            Instruction::MatMul(..)
+                | Instruction::SumRows(_)
+                | Instruction::Softmax(_)
+                | Instruction::Transpose(_)
+                | Instruction::Normalize(..)
         ) {
             materialized[id] = true;
         }

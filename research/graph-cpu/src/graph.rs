@@ -67,6 +67,7 @@ enum Op {
     Relu(Expr),
     SumRows(Expr),
     Softmax(Expr),
+    Transpose(Expr),
     Normalize(Expr, f64, bool),
     MatMul(Expr, Expr),
 }
@@ -134,6 +135,11 @@ impl Expr {
     pub fn softmax(&self) -> Result<Self> {
         Self::new(self.0.shape, Op::Softmax(self.clone()), 1 + self.0.depth, self.0.lease.domain.clone())
     }
+    /// Exchanges rows and columns. Copies bits and does no arithmetic.
+    pub fn transpose(&self) -> Result<Self> {
+        let (rows, cols) = self.0.shape.dims();
+        Self::new(Shape::Matrix(cols, rows), Op::Transpose(self.clone()), 1 + self.0.depth, self.0.lease.domain.clone())
+    }
     /// Ordered f32 sum across columns, retaining one column per row.
     pub fn sum_rows(&self) -> Result<Self> {
         let (rows, _) = self.0.shape.dims();
@@ -174,6 +180,7 @@ impl Expr {
                 Op::MatMul(a, b) => Instruction::MatMul(visit(a, ids, steps)?, visit(b, ids, steps)?),
                 Op::Normalize(a, epsilon, center) => Instruction::Normalize(visit(a, ids, steps)?, *epsilon, *center),
                 Op::Softmax(a) => Instruction::Softmax(visit(a, ids, steps)?),
+                Op::Transpose(a) => Instruction::Transpose(visit(a, ids, steps)?),
                 Op::SumRows(a) => Instruction::SumRows(visit(a, ids, steps)?),
                 Op::Relu(a) => Instruction::Relu(visit(a, ids, steps)?),
             };
@@ -200,6 +207,7 @@ pub enum Instruction {
     Relu(usize),
     SumRows(usize),
     Softmax(usize),
+    Transpose(usize),
     Normalize(usize, f64, bool),
     MatMul(usize, usize),
 }

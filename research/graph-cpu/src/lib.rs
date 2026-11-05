@@ -6,7 +6,9 @@
 //! - [`storage`]: immutable owners, checked views, the payload budget.
 //! - [`reference`]: the per-element interpreter, kept as an oracle and a baseline.
 //! - [`lowering`]: the same validated plan as generated Luau and as a Jess shader program.
+//! - [`forward`]: a synthetic forward pass, the composition workload tests and benches share.
 #![allow(clippy::missing_errors_doc, clippy::missing_panics_doc)]
+pub mod forward;
 pub mod graph;
 pub mod kernels;
 pub mod lowering;
@@ -14,6 +16,8 @@ pub mod program;
 pub mod reference;
 pub mod storage;
 
+#[cfg(test)]
+mod adversarial;
 #[cfg(test)]
 mod tests;
 

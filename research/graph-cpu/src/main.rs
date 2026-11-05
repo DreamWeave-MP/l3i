@@ -124,6 +124,7 @@ impl LuauModule for Research {
             })?;
             ty.method("softmax", |a: &Expression| a.0.softmax().map(|e| Owned(Expression(e))))?;
             ty.method("sumRows", |a: &Expression| a.0.sum_rows().map(|e| Owned(Expression(e))))?;
+            ty.method("transpose", |a: &Expression| a.0.transpose().map(|e| Owned(Expression(e))))?;
             ty.method("matmul", |a: &Expression, b: &Expression| a.0.matmul(&b.0).map(|e| Owned(Expression(e))))?;
             ty.method("compile", |a: &Expression| a.0.compile().map(|e| Owned(CompiledProgram(e))))?;
             ty.method("compileFast", |a: &Expression| {
@@ -245,6 +246,10 @@ fn run() -> Result<()> {
     runtime.exec("assert(compute.used()==0)")?;
 
     let arguments: Vec<String> = std::env::args().collect();
+    if arguments.iter().any(|arg| arg == "--bench-shapes") {
+        bench::shapes();
+        runtime.exec(include_str!("../bench-shapes.jsl"))?;
+    }
     if arguments.iter().any(|arg| arg == "--bench-rows") {
         bench::reductions();
         runtime.exec(include_str!("../bench-rows.jsl"))?;

@@ -12,6 +12,7 @@ impl Program {
                 Instruction::MatMul(..)
                 | Instruction::SumRows(_)
                 | Instruction::Softmax(_)
+                | Instruction::Transpose(_)
                 | Instruction::Normalize(..) => {
                     return Err(error("backend supports elementwise input slots only"));
                 }
@@ -66,6 +67,7 @@ impl Program {
                 Instruction::MatMul(..)
                 | Instruction::SumRows(_)
                 | Instruction::Softmax(_)
+                | Instruction::Transpose(_)
                 | Instruction::Normalize(..) => {
                     unreachable!("validated lowering subset")
                 }
@@ -115,6 +117,7 @@ impl Program {
                 Instruction::MatMul(..)
                 | Instruction::SumRows(_)
                 | Instruction::Softmax(_)
+                | Instruction::Transpose(_)
                 | Instruction::Normalize(..) => {
                     unreachable!("validated subset")
                 }

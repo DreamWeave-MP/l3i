@@ -22,6 +22,7 @@ impl Program {
                 Instruction::MatMul(..)
                     | Instruction::SumRows(_)
                     | Instruction::Softmax(_)
+                    | Instruction::Transpose(_)
                     | Instruction::Normalize(..)
             )
         });
@@ -90,6 +91,7 @@ impl Program {
                                 probability as f32
                             }
                         }
+                        Instruction::Transpose(a) => value(a).at(col, row),
                         Instruction::SumRows(a) => {
                             let input = value(a);
                             (0..input.shape.dims().1).fold(0.0f32, |acc, c| acc + input.at(row, c))
@@ -130,6 +132,7 @@ impl Program {
                         Instruction::MatMul(..)
                         | Instruction::SumRows(_)
                         | Instruction::Softmax(_)
+                        | Instruction::Transpose(_)
                         | Instruction::Normalize(..) => {
                             unreachable!("fused graphs have no matmul")
                         }
