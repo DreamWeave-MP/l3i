@@ -128,11 +128,11 @@ The engine allocates through 64-byte aligned, budget-charged blocks, and no row 
 
 - **LLVM rebuilt six addresses per iteration.** Inlined, the 6x16 kernel's six runs of `a` are visibly a fixed distance apart, so loop strength reduction kept one base: 30 instructions per iteration, against 4 a cycle of rename, or 7.5 cycles where the fused multiply-adds need 6. Out of line it's 23 instructions. The earlier note here that rename width wasn't the limit was wrong for this loop.
 - **malloc's large blocks start 16 bytes into a page**, so vector accesses straddled lines and buffers shared page offsets. Aligning everything the engine owns cut chains' in-cache cycles by 35 to 45%. Caller's buffers can't be aligned for them, so a `runInto` over Luau buffers doesn't get all of this.
-- Tried and dropped, none clearly better than noise: block sizes other than 128 and 256, including 256 and 128 the other way round, and a prefetch of factors in the kernel loop. Packing all of `a` wasn't retried, though 1024 square's L1 misses (13.8M against BLIS's 6.2M) suggest its 4 KiB stride aliases in the first-level cache, and that's the next thing to try.
+- Tried and dropped, none clearly better than noise: block sizes other than 128 and 256, including 256 and 128 the other way round, and a prefetch of factors in the kernel loop. Packing all of `a` wasn't retried. L1 misses (13.8M against BLIS's 6.2M at 1024 square) are about one per kernel iteration, one line of packed `b`, and 1000 square shows the same ratio, so a 4 KiB stride aliasing isn't what explains them.
 
 ### Remaining gaps, by what they could buy
 
-1. **Square products past the caches**, 15 to 23% behind OpenBLAS, and matmul is 84 to 90% of a transformer-style pass. Packing `a` when its stride aliases, and a cache-aware row block.
+1. **Square products past the caches**, 15 to 23% behind OpenBLAS, and matmul is 84 to 90% of a transformer-style pass. Holding a slice of `b` in the first-level cache with `a` packed, as BLIS does, and counting TLB misses on unpacked `a` and `out`.
 2. **AArch64 strict**, more than 3x Fast on Neoverse-N2. Read LLVM's code, then an explicit kernel if it is the cause.
 3. **Eight threads**, up to 2x behind OpenBLAS. Sharing packed `b` among workers, and row stages.
 4. **Short `k` and tiny products**: 8x8x8 is 3x matrixmultiply, and prepared beats the unprepared textbook path there, so the tiny threshold looks wrong; and the 10% regressions above.

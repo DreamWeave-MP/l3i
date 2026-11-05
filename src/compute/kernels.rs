@@ -904,6 +904,16 @@ struct Rows16<'a> {
     elements: &'a [Element],
     step: usize,
 }
+/// Calls a kernel with one row of factors too few, which no caller does: its bounds must hold anyway.
+#[cfg(all(test, target_arch = "x86_64"))]
+pub(crate) fn short_factors_reach_the_kernel() {
+    let scale = [[0u8; 4]; 2];
+    let elements = [[0u8; 4]; 16];
+    let mut out = [[0u8; 4]; 96];
+    let at = Block { base: 0, stride: 16, cols: 16 };
+    // SAFETY: the caller confirmed these features, and the kernel's assertion stops it before it reads.
+    unsafe { fused_6x16([&scale[..]; 6], Rows16 { elements: &elements, step: 16 }, &mut out, at) };
+}
 /// One rounding per product and sum.
 #[cfg(target_arch = "x86_64")]
 #[inline]

@@ -13,7 +13,10 @@ local SRC = "src/compute/"
 type Mutation = { label: string, file: string, old: string, new: string, integration: boolean? }
 -- Left out because no test could catch them, as they change nothing: padding lanes, whose results
 -- are discarded; `prepared: None` on a transposed view, which only `Source::bind` reads; and a view's
--- outer count, which the check against the parent's end already bounds.
+-- outer count, which the check against the parent's end already bounds. Also out: the strict explicit
+-- kernel switched off, which gives the same bits by design; a nonzero start on the one-chunk path, which
+-- only ever runs from 0 because shares are far longer than a chunk; and shares not in whole chunks,
+-- because a chunk's boundary doesn't change any element's arithmetic.
 local mutations: { Mutation } = {
 	{ label = "control: comment only, must survive", file = "reduction.rs",
 	  old = "/// Independent f64 accumulators per row.", new = "/// Independent f64 accumulators, per row." },
@@ -163,8 +166,6 @@ local mutations: { Mutation } = {
 	  old = "                    f = f.wrapping_add(factors.step);\n", new = "                    f = f.wrapping_add(if p == 3 { 2 * factors.step } else { factors.step });\n" },
 	{ label = "strict 6x16: drops the running sum", file = "kernels.rs",
 	  old = "_mm256_add_ps(sum, _mm256_mul_ps(scale, factor))", new = "{ let _ = sum; _mm256_add_ps(_mm256_mul_ps(scale, factor), _mm256_mul_ps(scale, factor)) }" },
-	{ label = "strict 6x16: reached by the baseline instantiation's flag", file = "kernels.rs",
-	  old = "matmul_body::<false>(operands, out, scratch, true);", new = "matmul_body::<false>(operands, out, scratch, false);" },
 	{ label = "dispatch: fused kernel on a strict program", file = "kernels.rs",
 	  old = "            if FUSED {\n                fused_6x16(six, factors, out, at);", new = "            if true {\n                fused_6x16(six, factors, out, at);" },
 	{ label = "relaxed dot: tail dropped", file = "kernels.rs",
@@ -255,16 +256,12 @@ local mutations: { Mutation } = {
 	  old = "first_column + column..], step: self.n }", new = "first_column + column..], step: 16 }" },
 	{ label = "6x16: a short run of factors accepted", file = "kernels.rs",
 	  old = "assert!(rows == 0 || (rows - 1) * factors.step + 16 <= factors.elements.len());", new = "" },
-	{ label = "elementwise: walked sources start from the wrong element", file = "kernels.rs",
-	  old = "walk.fill(first, &mut walked[walk.register * width..][..width]);", new = "walk.fill(0, &mut walked[walk.register * width..][..width]);" },
 	{ label = "elementwise: chunks restart from the first element", file = "kernels.rs",
 	  old = "let mut start = first;", new = "let mut start = 0;" },
 	{ label = "elementwise: a step binds a clamp's unused operand as read", file = "kernels.rs",
 	  old = "let y = if step.op == Op::MulAdd { bound(step.y) } else { unused };", new = "let y = unused;" },
 
 	-- Work shared among a host's workers.
-	{ label = "parallel: a share not in whole chunks", file = "program.rs",
-	  old = "let share = (elements / workers).next_multiple_of(chunk);", new = "let share = (elements / workers).next_multiple_of(chunk) + 1;" },
 	{ label = "parallel: every product share reads the first rows", file = "program.rs",
 	  old = "a: if left.is_some() { a_elements } else { &a_elements[row * k..] },", new = "a: a_elements," },
 	{ label = "parallel: every share reads the first panels", file = "program.rs",

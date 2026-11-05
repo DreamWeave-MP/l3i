@@ -239,6 +239,15 @@ fn a_tiny_product_needs_no_scratch() {
     assert_eq!(floats(&out)[0], (0..8).map(|p| (p * p * 8) as f32).sum::<f32>());
 }
 
+/// The explicit kernels check what they read before reading it, whatever their callers promise.
+#[test]
+#[cfg(target_arch = "x86_64")]
+#[should_panic(expected = "factors.step")]
+fn a_full_size_kernel_refuses_too_few_factors() {
+    assert!(Isa::Fma.available(), "this host can't run the kernel under test");
+    crate::compute::kernels::short_factors_reach_the_kernel();
+}
+
 /// Everything the engine allocates starts on a cache line, at any size and when empty.
 #[test]
 fn engine_buffers_start_on_a_cache_line() {

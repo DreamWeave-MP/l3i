@@ -561,7 +561,8 @@ mod tests {
         let good = Groups { rows: 1, scales: &[1.0, 1.0] };
         assert!(matvec_i4(&[0; 2], &[1, 2], good, 1.0, &mut out).is_ok());
         out = [9.0; 2];
-        assert!(matvec_i4(&[0; 3], &[1, 2], good, 1.0, &mut out).is_err(), "short weights");
+        assert!(matvec_i4(&[0; 3], &[1, 2], good, 1.0, &mut out).is_err(), "too many weights");
+        assert!(matvec_i4(&[0; 1], &[1, 2], good, 1.0, &mut out).is_err(), "too few weights");
         assert!(matvec_i4(&[0; 2], &[1, 2], Groups { rows: 0, scales: &[] }, 1.0, &mut out).is_err(), "empty group");
         assert!(
             matvec_i4(&[0; 2], &[1, 2], Groups { rows: 1, scales: &[1.0] }, 1.0, &mut out).is_err(),
