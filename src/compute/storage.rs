@@ -74,6 +74,9 @@ impl Budget {
         self.reserve(len)?;
         let mut allocation = Allocation { bytes: Vec::new(), charge: len, budget: self.clone() };
         if len > 0 {
+            if !crate::compute::may_allocate(len) {
+                return Err(error("allocation failed"));
+            }
             allocation.bytes.try_reserve_exact(len).map_err(|_| error("allocation failed"))?;
             allocation.bytes.resize(len, 0);
             self.allocations.fetch_add(1, Ordering::Relaxed);

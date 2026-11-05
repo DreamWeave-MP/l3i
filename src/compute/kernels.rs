@@ -593,6 +593,9 @@ pub(crate) fn with_scratch<R>(bytes: usize, body: impl FnOnce(&mut [u8]) -> R) -
 /// `len` copies of `value`, reporting allocation failure. Touches the heap only when `len` is not 0.
 pub(crate) fn filled_scratch<T: Clone>(len: usize, value: T) -> crate::Result<Vec<T>> {
     let mut scratch = Vec::new();
+    if len > 0 && !crate::compute::may_allocate(len * size_of::<T>()) {
+        return Err(crate::compute::error("scratch allocation failed"));
+    }
     scratch.try_reserve_exact(len).map_err(|_| crate::compute::error("scratch allocation failed"))?;
     scratch.resize(len, value);
     Ok(scratch)

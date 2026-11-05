@@ -25,6 +25,8 @@ pub mod storage;
 #[cfg(all(test, feature = "compute-testing"))]
 mod adversarial;
 #[cfg(all(test, feature = "compute-testing"))]
+mod audit;
+#[cfg(all(test, feature = "compute-testing"))]
 mod tests;
 
 pub use graph::{Domain, Expr, Instruction, Step};
@@ -36,6 +38,42 @@ pub(crate) const MAX_ELEMENTS: usize = 1_048_576;
 
 pub(crate) fn error(message: &str) -> crate::Error {
     crate::Error::runtime(message)
+}
+
+/// Asked before every fallible allocation: a test decides whether it fails and sees what is charged.
+#[cfg(test)]
+pub(crate) fn may_allocate(bytes: usize) -> bool {
+    ALLOCATION_HOOK.with_borrow_mut(|hook| hook.as_mut().is_none_or(|hook| hook(bytes)))
+}
+#[cfg(not(test))]
+#[inline(always)]
+#[allow(clippy::inline_always)] // This must vanish from every kernel path.
+pub(crate) fn may_allocate(_bytes: usize) -> bool {
+    true
+}
+#[cfg(test)]
+type AllocationHook = Box<dyn FnMut(usize) -> bool>;
+#[cfg(test)]
+thread_local! {
+    static ALLOCATION_HOOK: std::cell::RefCell<Option<AllocationHook>> = const { std::cell::RefCell::new(None) };
+}
+/// `body`, with `hook` answering [`may_allocate`] on this thread. The hook may borrow locals because
+/// it is gone again before this returns.
+#[cfg(all(test, feature = "compute-testing"))]
+pub(crate) fn with_allocation_hook<R>(mut hook: impl FnMut(usize) -> bool, body: impl FnOnce() -> R) -> R {
+    let local: &mut dyn FnMut(usize) -> bool = &mut hook;
+    // SAFETY: only the lifetime changes, and `Reset` clears the slot before `hook` can die, also on panic.
+    let stored: *mut (dyn FnMut(usize) -> bool + 'static) = unsafe { std::mem::transmute(local) };
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            ALLOCATION_HOOK.with_borrow_mut(|slot| *slot = None);
+        }
+    }
+    // SAFETY: as above; the box only forwards.
+    ALLOCATION_HOOK.with_borrow_mut(|slot| *slot = Some(Box::new(move |bytes| unsafe { (*stored)(bytes) })));
+    let _reset = Reset;
+    body()
 }
 
 /// Experimental allocation-free row reduction kernels.

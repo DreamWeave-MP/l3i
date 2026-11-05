@@ -1279,33 +1279,6 @@ fn softmax_notices_nans_of_either_sign() {
     }
 }
 
-/// Sampled from outside while a stage runs: a charge released early would almost never be seen.
-#[test]
-fn row_scratch_is_charged_for_nearly_all_of_a_run() {
-    let width = 1 << 16;
-    let domain = Domain::new(64, 64);
-    let values: Vec<f32> = (0..width).map(|i| (i % 97) as f32 * 0.25).collect();
-    let input = laid_out(&values, 1, width, 1, false);
-    let program = Expr::slot(0, Shape::Matrix(1, width), domain).unwrap().softmax().unwrap().compile().unwrap();
-    let budget = Budget::new(1 << 24);
-    let done = std::sync::atomic::AtomicBool::new(false);
-    let (mut samples, mut charged) = (0u64, 0u64);
-    std::thread::scope(|scope| {
-        scope.spawn(|| {
-            let mut out = vec![0u8; width * 4];
-            for _ in 0..100 {
-                program.run_into(&[input.borrow()], &mut out, &budget).unwrap();
-            }
-            done.store(true, std::sync::atomic::Ordering::Relaxed);
-        });
-        while !done.load(std::sync::atomic::Ordering::Relaxed) {
-            samples += 1;
-            charged += u64::from(budget.used() > 0);
-        }
-    });
-    assert!(charged * 4 > samples, "charged in only {charged} of {samples} samples");
-}
-
 /// Weights prepared for one kind of product still answer every other kind, from their elements.
 #[test]
 fn prepared_weights_serve_products_they_were_not_packed_for() {
