@@ -325,7 +325,8 @@ fn main() -> l3i::Result<()> {
 {{ api_signature(value="trait BufferCage: 'static { fn allocate(&self, ptr: *mut c_void, old_size: usize, new_size: usize, kind: c_int) -> *mut c_void; }") }}
 
 A caged allocator for Luau buffers (`lua_setmemorycage`): every `buffer` allocation goes through
-it. The `lua_Alloc` contract: `new_size == 0` frees `ptr` and returns null; `ptr` null with
+it, and Luau keeps the headers of the pages small buffers share outside the cage, so the cage holds
+only buffer data. The `lua_Alloc` contract: `new_size == 0` frees `ptr` and returns null; `ptr` null with
 `new_size > 0` allocates; otherwise reallocates. Installed through
 `RuntimeBuilder::buffer_cage` before any buffer exists.
 
@@ -333,8 +334,9 @@ it. The `lua_Alloc` contract: `new_size == 0` frees `ptr` and returns null; `ptr
 
 The embedder side of cross-heap marking (`lua_setembeddergc`): each cycle Luau first asks the
 embedder to reset its bookkeeping, then, once it has marked userdata through `UserdataMark`
-callbacks, asks it to mark every weak reference reachable from marked native objects. No Lua API
-may be used from these methods.
+callbacks, asks it to mark every weak reference reachable from marked native objects, again until
+a pass marks nothing new. Marking a reference twice is harmless. No Lua API may be used from these
+methods.
 
 {{ api_signature(value="trait UserdataMark<T: Userdata>: 'static { fn mark(value: &T); }") }}
 

@@ -144,12 +144,12 @@ impl<'c> Call<'c> {
 }
 
 impl Call<'_> {
-    /// Runs a full collection from inside this call, as Luau's `collectgarbage("collect")`
-    /// does: a native resource a runtime caps may be held only by garbage.
-    #[cfg(feature = "tcp")]
-    pub(crate) fn collect_garbage(&self) {
+    /// Runs a full collection from inside this call, as `collectgarbage("collect")` does: a
+    /// native resource a runtime caps may be held only by garbage. Rust destructors of
+    /// unreachable userdata run inside; this call's arguments are on its stack and survive.
+    pub fn collect_garbage(&self) {
         // SAFETY: the state is live for the call, and a full collection is permitted from a C
-        // function (Luau's own collectgarbage is one); no userdata destructor calls the Lua API.
+        // function (the Luau CLI's collectgarbage is one); no userdata destructor calls the Lua API.
         unsafe { ffi::lua_gc(self.stack.state(), ffi::LUA_GCCOLLECT, 0) };
     }
 }

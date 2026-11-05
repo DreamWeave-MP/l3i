@@ -7,6 +7,7 @@ use std::ffi::{CStr, CString, c_char, c_int, c_void};
 use std::path::Path;
 use std::rc::Weak;
 
+use crate::bind::{Call, Variadic};
 use crate::convert::{FromView, Push};
 use crate::error::{Error, Result};
 use crate::raw::ffi;
@@ -35,6 +36,21 @@ pub enum GcControl {
     IsPaused,
 }
 
+fn collectgarbage(call: &Call<'_>, option: Option<&str>) -> Result<Variadic<f64>> {
+    match option.unwrap_or("collect") {
+        "collect" => {
+            call.collect_garbage();
+            Ok(Variadic(Vec::new()))
+        }
+        "count" => {
+            // SAFETY: the state is live for the call; a count neither allocates nor collects.
+            let kilobytes = unsafe { ffi::lua_gc(Scope::state(call), ffi::LUA_GCCOUNT, 0) };
+            Ok(Variadic(vec![f64::from(kilobytes)]))
+        }
+        _ => Err(Error::runtime("collectgarbage must be called with 'count' or 'collect'")),
+    }
+}
+
 impl Runtime {
     /// Drives the collector (`lua_gc`) and returns its answer.
     pub fn gc(&self, control: GcControl) -> c_int {
@@ -53,6 +69,33 @@ impl Runtime {
         };
         // SAFETY: live state; lua_gc is always permitted from the host.
         unsafe { ffi::lua_gc(self.stack().state_ptr(), what, data) }
+    }
+
+    /// Installs the `collectgarbage` global the Luau CLI gives its scripts, which the VM does not
+    /// have: `collectgarbage()` or `collectgarbage("collect")` runs a full cycle and returns
+    /// nothing, `collectgarbage("count")` returns the heap size in KB, and any other option raises.
+    /// Unlike the CLI's, which ignores them, this one raises on arguments after the first.
+    /// Call it before [`Runtime::sandbox_globals`] and [`Runtime::sandbox`]. This is for a runtime
+    /// without a plan: a plan decides with [`crate::extension::RuntimePolicy::collectgarbage`], so
+    /// its runtime and its type definitions agree.
+    ///
+    /// # Errors
+    /// A runtime made from a plan, running out of memory, or globals that are already read-only.
+    pub fn open_collectgarbage(&self) -> Result<()> {
+        if self.plan().is_some() {
+            return Err(Error::logic(
+                "open_collectgarbage on a runtime made from a plan; set RuntimePolicy::collectgarbage instead",
+            ));
+        }
+        self.install_collectgarbage()
+    }
+
+    /// The installer behind [`Runtime::open_collectgarbage`] and the planner.
+    pub(crate) fn install_collectgarbage(&self) -> Result<()> {
+        // `collectgarbage` alone is not a valid debug name; the root makes it one in every VM,
+        // whichever roots the host configured.
+        let function = crate::bind::function(&self.stack(), &["dream"], "dream.collectgarbage", collectgarbage)?;
+        self.set_global("collectgarbage", &function)
     }
 
     /// Bytes allocated per second, as Luau estimates it (`lua_allocationrate`); `-1` until the
@@ -160,6 +203,8 @@ unsafe extern "C" fn category_name(_: *mut ffi::lua_State, memcat: u8) -> *const
 
 /// A caged allocator for Luau buffers (`lua_setmemorycage`): every `buffer` allocation goes
 /// through it, so the host can place buffers in a guarded region or account for them exactly.
+/// Luau keeps the headers of the pages small buffers share outside the cage, so the cage holds only
+/// buffer data.
 /// Installed through [`crate::runtime::RuntimeBuilder::buffer_cage`] before any buffer exists.
 pub trait BufferCage: 'static {
     /// The `lua_Alloc` contract: `nsize == 0` frees `ptr` and returns null; `ptr` null with
@@ -183,22 +228,40 @@ pub(crate) unsafe extern "C" fn cage_callback(
 /// The embedder side of cross-heap marking (`lua_setembeddergc`): each GC cycle Luau first
 /// asks the embedder to reset its bookkeeping, then, once it has marked userdata through
 /// [`UserdataMark`] callbacks, asks it to mark every weak reference reachable from marked
-/// native objects. No Lua API may be used from these methods.
+/// native objects, and asks again until a pass marks nothing new, so what one pass marks can
+/// make more reachable for the next. Each call to `mark_reachable` must traverse the complete
+/// transitive closure of currently reachable native objects before returning. Discovering only a
+/// native object does not schedule another pass; another pass is guaranteed only when a Lua
+/// reference was newly marked. Marking a reference twice is harmless. No Lua API may be used
+/// from these methods.
 pub trait EmbedderGc: 'static {
     fn reset(&self);
     fn mark_reachable(&self, mark: &mut dyn FnMut(&WeakRef));
 }
 
-unsafe extern "C" fn embedder_gc_callback(state: *mut ffi::lua_State, markref: Option<ffi::lua_EmbedderMark>) {
+unsafe extern "C" fn embedder_gc_callback(state: *mut ffi::lua_State, markref: Option<ffi::lua_EmbedderMark>) -> c_int {
     let _guard = crate::raw::trampoline::AbortOnPanic::new();
     // SAFETY: called by the collector on a live VM; Shared outlives it.
-    let Some(shared) = (unsafe { crate::runtime::shared_for(state) }) else { return };
-    let Ok(slot) = shared.embedder_gc().try_borrow() else { return };
-    let Some(gc) = slot.as_ref() else { return };
-    match markref {
-        None => gc.reset(),
-        Some(mark) => gc.mark_reachable(&mut |weak: &WeakRef| unsafe { mark(state, weak.id) }),
-    }
+    let Some(shared) = (unsafe { crate::runtime::shared_for(state) }) else { return 0 };
+    let Ok(slot) = shared.embedder_gc().try_borrow() else { return 0 };
+    let Some(gc) = slot.as_ref() else { return 0 };
+    let Some(mark) = markref else {
+        gc.reset();
+        return 0;
+    };
+    // Luau repeats this callback while it returns nonzero and an embedder marks everything it can
+    // reach on every pass, so progress is a reference not marked already. Objects only go from
+    // unmarked to marked within a cycle, so the passes end.
+    let mut progress = false;
+    gc.mark_reachable(&mut |weak: &WeakRef| {
+        // SAFETY: inside the collector's atomic step on this VM; the check only reads the weak
+        // registry and `mark` is the collector's own.
+        unsafe {
+            progress |= ffi::l3i_weakref_unmarked(state, weak.id) != 0;
+            mark(state, weak.id);
+        }
+    });
+    c_int::from(progress)
 }
 
 /// A userdata mark callback for `T` (`lua_setuserdatamark`): the collector calls

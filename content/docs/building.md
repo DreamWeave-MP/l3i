@@ -7,9 +7,9 @@ weight = 100
 kind = "guide"
 +++
 
-l3i owns its Luau build. Luau is the `luau/` git submodule, pinned at release 0.744;
+l3i owns its Luau build. Luau is the `luau/` git submodule, pinned at release 0.745;
 `build.rs` compiles it and the binder's C++ additions with `cc`, in parallel, from
-the checkout alone. There is no network access at build time and no external Lua crate. Rust 1.92
+the checkout alone. There is no network access at build time and no external Lua crate. Rust 1.95
 or newer, edition 2024.
 
 ```sh
@@ -44,7 +44,7 @@ binder's own C additions are `csrc/extra.cpp`; the shims over the C++-only APIs 
 Hosts may append compiler flags through `LUAU_CXXFLAGS`. Under `jit`, `build.rs` also parses
 `Luau/IrData.h` and `Luau/CodeGenOptions.h` and writes `ir_enums.rs` into `OUT_DIR`, the mirrors
 of `IrCmd`, `IrCondition`, `IrBlockKind` and `HostMetamethod` for that exact Luau build. It exports
-`LUAU_VERSION` (`0.744`) and `L3I_TAG_LIMIT` to the crate.
+`LUAU_VERSION` (`0.745`) and `L3I_TAG_LIMIT` to the crate.
 
 Compiled chunks default to optimisation level 2 and debug level 1, and runtime plans turn type
 information on so native code sees the userdata types.
@@ -91,6 +91,7 @@ l3i = { version = "2", features = ["jit"] }
 | `intl` | off | The `dream.intl` extension (`l3i::intl`) with ICU4X's `icu_locale_core`, `icu_plurals` and `icu_decimal` and their compiled CLDR data, `fixed_decimal` and `writeable`: BCP 47 locales, plural rules, decimal formatting |
 | `syntax` | off | The `dream.luau` extension (`l3i::syntax`) and `csrc/syntax.cpp`, which builds Luau's parse tree as tables; Luau's Ast library is in every build, so no dependencies |
 | `fs` | off | The `dream.fs` extension (`l3i::fs`) with `memmap2`, `walkdir` and `same-file` |
+| `fs-authenticated` | off | `fs` plus `sha2`: `fs.authManifest` and `fs.openAuthenticated` (`l3i::fs::authenticated`), ranged reads verified against a trusted commitment |
 | `process` | off | The `dream.process` extension (`l3i::process`); no dependencies |
 | `tcp` | off | The `dream.tcp` extension (`l3i::tcp`) with `mio` (epoll, kqueue, IOCP) and `socket2` (backlog, address reuse, Apple's `SO_NOSIGPIPE`): TCP listeners, streams and a readiness poller |
 | `dns` | off | The `dream.dns` extension (`l3i::dns`) with `idna` (over ICU4X's normalizer) and, on Unix, `libc` for `getaddrinfo`: host name resolution on a bounded worker pool |

@@ -12,7 +12,7 @@ use l3i::native_code::vector_buffer::VectorBufferWriter;
 use l3i::native_code::{NativeCodeGen, NativeCodeMode, NativeCodeOptions, NativeCodeStatus, module_id};
 use l3i::runtime::{CallContext, MemoryCategory};
 use l3i::sandbox::{InstanceSpec, SandboxOptions};
-use l3i::source::CompileOptions;
+use l3i::source::{CompileOptions, LoadScope};
 use l3i::userdata::{Userdata, tagged};
 
 static WRITER_LOWERINGS: AtomicU32 = AtomicU32::new(0);
@@ -292,4 +292,96 @@ fn assembly_dumps_and_the_perf_log_describe_compiled_code() {
     assert!(!seen.lock().unwrap().is_empty(), "perf log entries");
     assert!(seen.lock().unwrap().iter().all(|entry| entry.size > 0));
     l3i::native_code::clear_perf_log();
+}
+
+/// A program run by the interpreter and again as native code: what it returns, and how many
+/// native blocks the second run executed.
+fn interpreted_and_native(source: &str) -> (String, String, u64) {
+    // Type information is what lets native code drop its numeric paths and read a whole
+    // comparison as one block, where dead store elimination can see the unused result.
+    let options = CompileOptions { type_info_level: 1, ..CompileOptions::default() };
+    let interpreter = Runtime::new().unwrap();
+    let interpreted = {
+        let stack = interpreter.stack();
+        let chunk = stack.load_source("=program", source, &options).unwrap();
+        chunk.invoke::<String, _>(&stack, ()).unwrap()
+    };
+    let runtime = Runtime::builder()
+        .native_code(NativeCodeOptions {
+            mode: NativeCodeMode::Eager,
+            record_counters: true,
+            ..NativeCodeOptions::default()
+        })
+        .build()
+        .unwrap();
+    let generator = runtime.native_code().unwrap();
+    assert!(generator.is_available(), "this platform has no Luau code generator");
+    let stack = runtime.stack();
+    let before = generator.execution_stats(&stack).regular_blocks_executed;
+    let chunk = stack.load_source("=program", source, &options).unwrap();
+    let native = chunk.invoke::<String, _>(&stack, ()).unwrap();
+    (interpreted, native, generator.execution_stats(&stack).regular_blocks_executed - before)
+}
+
+fn assert_same_when_native(source: &str, expected: &str) {
+    let (interpreted, native, blocks) = interpreted_and_native(source);
+    assert_eq!(interpreted, expected, "the interpreter");
+    assert_eq!(native, expected, "native code");
+    assert!(blocks > 0, "the program ran natively");
+}
+
+#[test]
+fn a_comparison_whose_result_goes_unused_still_runs_its_metamethod() {
+    assert_same_when_native(
+        r#"
+        local calls = 0
+        local meta = { __eq = function() calls += 1 return true end }
+        local a, b = setmetatable({}, meta), setmetatable({}, meta)
+        local function equal(a: {}, b: {}) local unused = a == b end
+        local function different(a: {}, b: {}) local unused = a ~= b end
+        local function same(a: {}) local unused = a == a end
+        local function looped(a: {}, b: {}, n: number) for _ = 1, n do local unused = a == b end end
+        local function overwritten(a: {}, b: {}) local result: any = a == b result = 1 return result end
+        equal(a, b) different(a, b) same(a) looped(a, b, 4) overwritten(a, b)
+        local function raises()
+            local function raise() error("from __eq") end
+            local value = setmetatable({}, { __eq = raise })
+            for _ = 0, 4 do local b = buffer.create(60) end
+            local unused = value == value
+        end
+        local ok, message = pcall(raises)
+        return `{calls} {ok} {string.match(tostring(message), "from __eq")}`
+        "#,
+        "8 false from __eq",
+    );
+}
+#[test]
+fn native_branches_and_vm_fallbacks_preserve_live_values() {
+    assert_same_when_native(
+        r#"
+        local calls = 0
+        local proxy = setmetatable({}, { __index = function(_, key)
+            assert(key == "value")
+            calls += 1
+            return 2
+        end })
+        local function run(t: any, count: number)
+            local a,b,c,d,e,f,g,h = count+1,count+2,count+3,count+4,count+5,count+6,count+7,count+8
+            local j,k,l,m,n,o,p,q = count+9,count+10,count+11,count+12,count+13,count+14,count+15,count+16
+            local total = 0
+            for i = 1, count do
+                local dead = i * 9
+                if i % 2 == 0 then
+                    total += t.value
+                else
+                    total += i
+                end
+            end
+            return total + a+b+c+d+e+f+g+h+j+k+l+m+n+o+p+q
+        end
+        local total = run(proxy, 30)
+        return `{total} {calls}`
+        "#,
+        "871 15",
+    );
 }

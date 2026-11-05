@@ -217,6 +217,7 @@ defaults; each method takes and returns the policy.
 | `first_tag(tag)` | `1` | The first tag the planner hands out; lower tags stay free for the host |
 | `capability(name)` | none | Grants a capability to extensions |
 | `compat_global(path, global)` | none | Also exposes the module at `path` as a global, host policy during migrations |
+| `collectgarbage(bool)` | `false` | Gives scripts the `collectgarbage` global, see [the collector](@/docs/runtime-options.md#the-collector) |
 | `debug_root(root)` | none | Extra debug-name roots beside the ones extension ids imply |
 | `native_code(NativeCodePolicy)` | `None` | Native code generation (`jit` feature) |
 

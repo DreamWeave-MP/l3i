@@ -36,8 +36,8 @@
 //! for a source those bytes start inside the string's or buffer's own header at worst, and the
 //! arena keeps eight zero bytes in front of its first spelling for the same reason.
 
+use std::cell::Cell;
 use std::ffi::c_int;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use super::Pool;
 use super::layout::{
@@ -48,31 +48,35 @@ use crate::native_code::hooks::{NamecallSite, NativeCodeHooks, NativeContext};
 use crate::native_code::ir::{IrBlockKind, IrBuilder, IrCmd, IrCondition, IrOp, bytecode_type};
 use crate::raw::ffi::{LUA_TBUFFER, LUA_TNIL, LUA_TNUMBER, LUA_TSTRING, LUA_TUSERDATA};
 
-static LOWERED: AtomicUsize = AtomicUsize::new(0);
-static BINDER_CALLS: AtomicUsize = AtomicUsize::new(0);
-
-/// How many call sites the hook has lowered in this process (a diagnostic for tests).
-#[doc(hidden)]
-pub fn lowered_sites() -> usize {
-    LOWERED.load(Ordering::Relaxed)
+// Per thread: a test compares these before and after, and tests run in parallel, so a process-wide
+// count would blame one test for another's calls.
+thread_local! {
+    static LOWERED: Cell<usize> = const { Cell::new(0) };
+    static BINDER_CALLS: Cell<usize> = const { Cell::new(0) };
 }
 
-/// How many times `Pool:intern` and `Pool:find` ran through the binder in this process: what a
+/// How many call sites the hook has lowered on this thread (a diagnostic for tests).
+#[doc(hidden)]
+pub fn lowered_sites() -> usize {
+    LOWERED.get()
+}
+
+/// How many times `Pool:intern` and `Pool:find` ran through the binder on this thread: what a
 /// lowered site's slow path costs (a diagnostic for tests).
 #[doc(hidden)]
 pub fn binder_calls() -> usize {
-    BINDER_CALLS.load(Ordering::Relaxed)
+    BINDER_CALLS.get()
 }
 
 pub(super) fn count_binder_call() {
-    BINDER_CALLS.fetch_add(1, Ordering::Relaxed);
+    BINDER_CALLS.set(BINDER_CALLS.get() + 1);
 }
 
 /// The hook set; [`super::InternExtension`] registers it.
 pub struct InternLowering;
 
 /// `offsetof(Udata, data)`: what `BUFFER_READI64` adds under the userdata tag.
-const UDATA_DATA: i64 = 16;
+const UDATA_DATA: i64 = crate::native_code::USERDATA_PAYLOAD_OFFSET;
 /// `offsetof(TString, data)`; the length is the high half of the word at 16.
 const STRING_DATA: i64 = 24;
 const STRING_LENGTH_WORD: i64 = 16;
@@ -1005,7 +1009,7 @@ impl NativeCodeHooks for InternLowering {
         emit.jump(done);
 
         emit.begin(done);
-        LOWERED.fetch_add(1, Ordering::Relaxed);
+        LOWERED.set(LOWERED.get() + 1);
         true
     }
 }

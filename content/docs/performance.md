@@ -11,19 +11,19 @@ kind = "reference"
 
 l3i is on 2.x: every release in 2.x keeps the Rust API compatible, as Cargo's semver rules
 expect, and the [changelog](@/home/_changelog.md) lists what 2.0 changed against 1.3.1 and how
-to move. The Luau it embeds is release 0.744, as the `luau/` submodule; bumping it is a
+to move. The Luau it embeds is release 0.745, as the `luau/` submodule; bumping it is a
 deliberate change that re-audits the hand-declared C API and the flag list.
 
 ## Rust and dependencies
 
-- **Rust 1.92** or newer, declared as `rust-version` and checked in CI. Edition 2024. The optional `dream-soft-render` dependency declares the same.
+- **Rust 1.95** or newer, declared as `rust-version` and checked in CI. Edition 2024.
 - `unsafe` is used, at the FFI boundary and in the value-layout reads; every block states the invariant it relies on (see [Safety](@/docs/safety.md)).
 - Optional features, all off by default: `jit`, `analysis`, `soft-render`, `bytes` with `bytes-codecs`, `bytes-digests`, `bytes-text` and `bytes-regex`, `intern`, `intl`, `syntax`, `tcp`, `dns` and `tls` (see [Building](@/docs/building.md)).
 
 | Dependency | Version | For |
 |---|---|---|
 | `dream-net` | `=1.1.0` | The `dream.udp` bridge every plan carries |
-| `dream-soft-render` | `=1.0.0`, optional (`soft-render`) | The `dream.soft_render` extension |
+| `dream-soft-render` | `=2.0.0`, optional (`soft-render`) | The `dream.soft_render` extension |
 | `memchr`, `miniz_oxide`, `lz4_flex`, `ruzstd`, `lzma-rs`, `crc32fast`, `adler2`, `xxhash-rust`, `md-5`, `sha1`, `sha2`, `blake3`, `encoding_rs` | Optional, behind `bytes` and its `bytes-*` features | `@dream/bytes`'s searches, codecs, digests and text encodings |
 | `icu_locale_core`, `icu_plurals`, `icu_decimal`, `fixed_decimal`, `writeable` | `2.3` (`fixed_decimal` `0.7` with `ryu`, `writeable` `0.6`), optional, behind `intl` | `@dream/intl`'s locales, plural rules and decimal formatting, with ICU4X's compiled CLDR data |
 | `mio`, `socket2` | `1.2` (`os-poll`, `net`), `0.6` (`all`), optional, behind `tcp` | `@dream/tcp`'s nonblocking sockets and OS readiness; `socket2` is already in the tree through `dream-net` |
@@ -60,7 +60,7 @@ Every push to `main`, every pull request and every tag runs
 [StroggForge](https://github.com/DreamWeave-MP/StroggForge)'s library workflow, whose
 `setup-llvm` step gives every job that compiles a clang and lld whose LLVM major matches the
 active rustc: the tests on Windows, Linux and macOS; `rustfmt`; Clippy; a check against Rust
-1.92 (`msrv: auto`); and a dry run of the crates.io publish. A bare version tag publishes that
+1.95 (`msrv: auto`); and a dry run of the crates.io publish. A bare version tag publishes that
 version to crates.io, runs the Criterion hot paths and attaches them to its GitHub release as
 `BENCHMARKS.md`.
 
@@ -470,8 +470,9 @@ Compile options always travel with the source rather than falling back to Luau's
 the same defaults: optimisation 2, debug 1, no type information, no coverage.
 
 Further: the flags are set by name through `luau_setfflag`, and a name the linked Luau does not
-have is a logic error at the first runtime, so a Luau bump cannot drop a flag quietly. Three
-flags are l3i's own: `LuauExperimentalIfLocalSyntax`, `LuauGcTraceUdata` and `LuauBufferCage`.
+have is a logic error for required linked components. L3i also enables its own policy choices:
+`LuauExperimentalIfLocalSyntax`, `DebugLuauWhileLocalSyntax`, `LuauGcTraceUdata`,
+`LuauBufferCage`, `LuauCageSplitData`, and the Analysis and CodeGen fixes listed in `flags`.
 The options own their strings instead of borrowing pointers for the duration of a compile.
 
 ### Calls into Luau

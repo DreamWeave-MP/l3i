@@ -427,6 +427,11 @@ fn resolve_modules(
     let mut global_names: HashMap<&str, &str> = HashMap::new();
     for (path, global) in &policy.compat_globals {
         validate_identifier("compat global", global)?;
+        if policy.collectgarbage && global == "collectgarbage" {
+            return Err(Error::logic(format!(
+                "compat global 'collectgarbage' for '{path}' collides with the policy's collectgarbage"
+            )));
+        }
         if !module_paths.contains(path) {
             return Err(Error::logic(format!("compat global for '{path}', which no extension provides")));
         }

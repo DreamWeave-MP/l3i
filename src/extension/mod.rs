@@ -810,6 +810,11 @@ pub struct RuntimePolicy {
     /// `("@dream/archive", "dreamArchive")`. Frozen modules exposed this way also become
     /// compiler-known libraries.
     pub compat_globals: Vec<(String, String)>,
+    /// Whether scripts get the `collectgarbage` global ([`Runtime::open_collectgarbage`]). A full
+    /// cycle runs to its end without a watchdog check, so a script's use of it is the host's call.
+    ///
+    /// [`Runtime::open_collectgarbage`]: crate::runtime::Runtime::open_collectgarbage
+    pub collectgarbage: bool,
     /// Native code generation for scripts (`jit` feature).
     #[cfg(feature = "jit")]
     pub native_code: Option<NativeCodePolicy>,
@@ -865,6 +870,7 @@ impl Default for RuntimePolicy {
             first_tag: 1,
             capabilities: BTreeSet::new(),
             compat_globals: Vec::new(),
+            collectgarbage: false,
             #[cfg(feature = "jit")]
             native_code: None,
         }
@@ -883,6 +889,11 @@ impl RuntimePolicy {
 
     pub fn compat_global(mut self, module_path: &str, global: &str) -> Self {
         self.compat_globals.push((module_path.to_owned(), global.to_owned()));
+        self
+    }
+
+    pub fn collectgarbage(mut self, enabled: bool) -> Self {
+        self.collectgarbage = enabled;
         self
     }
 

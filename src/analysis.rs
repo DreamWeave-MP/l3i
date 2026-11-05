@@ -557,7 +557,7 @@ impl Analysis {
         // The frontend parses Luau's builtin definitions under the process-wide fast flags; freeze
         // the policy here too, or a runtime created on another thread meanwhile flips flags under
         // that parse (Luau then fails its `loadResult.success` assertion).
-        crate::flags::initialize().map_err(|error| {
+        crate::flags::initialize().and_then(|()| crate::flags::validate_analysis()).map_err(|error| {
             vec![Diagnostic {
                 kind: DiagnosticKind::Internal,
                 code: 0,

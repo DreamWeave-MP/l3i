@@ -6,10 +6,11 @@ use std::ffi::{c_int, c_void};
 use std::rc::Rc;
 
 use l3i::Runtime;
+use l3i::extension::{RuntimePlan, RuntimePolicy};
 use l3i::memory::{self, BufferCage, EmbedderGc, GcControl, LightUserdata, UserdataMark, WeakRef};
 use l3i::stack::Scope;
 use l3i::thread::Resume;
-use l3i::userdata::{Userdata, tagged};
+use l3i::userdata::{Owned, Userdata, tagged};
 use l3i::value::Table;
 
 #[test]
@@ -42,6 +43,126 @@ fn gc_controls_and_counters() {
     assert!(Runtime::clock() >= before);
     let pointer = 0x1000_usize;
     assert_ne!(runtime.encode_pointer(pointer), pointer, "pointer encoding is seeded by default");
+}
+
+// Each collection that checks the weak table is a plain statement: nested in an expression, the
+// call sits above registers that can still hold the table from `fill`'s frame, and the collector
+// marks everything below the top of the stack.
+const COLLECTGARBAGE_SCRIPT: &str = "\
+    local weak = setmetatable({}, { __mode = 'v' }) \
+    local function fill() weak[1] = {} end \
+    fill() \
+    assert(weak[1] ~= nil) \
+    collectgarbage() \
+    assert(weak[1] == nil, 'a default collectgarbage is a full cycle') \
+    fill() \
+    collectgarbage('collect') \
+    assert(weak[1] == nil, 'collect is a full cycle') \
+    assert(select('#', collectgarbage()) == 0) \
+    assert(select('#', collectgarbage('collect')) == 0) \
+    local kilobytes = collectgarbage('count') \
+    assert(type(kilobytes) == 'number' and kilobytes > 0) \
+    local extra_ok, extra_err = pcall(collectgarbage, 'count', 123) \
+    assert(not extra_ok and extra_err:find('expected at most 1, got 2'), extra_err) \
+    local ok, err = pcall(collectgarbage, 'step') \
+    assert(not ok and err:find(\"must be called with 'count' or 'collect'\"), err) \
+    local co = coroutine.wrap(function() fill() collectgarbage() return weak[1] end) \
+    assert(co() == nil, 'a coroutine collects too')";
+
+#[test]
+fn collectgarbage_is_opt_in_and_runs_from_scripts() {
+    let default = Runtime::from_plan(&RuntimePlan::builder().finalize().unwrap()).unwrap();
+    default.exec("assert(collectgarbage == nil)").unwrap();
+    for sandbox in [false, true] {
+        let policy = RuntimePolicy::new().collectgarbage(true).sandbox(sandbox);
+        let plan = RuntimePlan::builder().policy(policy).finalize().unwrap();
+        Runtime::from_plan(&plan).unwrap().exec(COLLECTGARBAGE_SCRIPT).unwrap();
+    }
+    let without_plan = Runtime::new().unwrap();
+    without_plan.open_collectgarbage().unwrap();
+    without_plan.exec(COLLECTGARBAGE_SCRIPT).unwrap();
+}
+
+#[test]
+fn a_planned_runtime_takes_collectgarbage_only_from_its_policy() {
+    for enabled in [false, true] {
+        let policy = RuntimePolicy::new().collectgarbage(enabled);
+        let plan = RuntimePlan::builder().policy(policy).finalize().unwrap();
+        let runtime = Runtime::from_plan(&plan).unwrap();
+        let error = runtime.open_collectgarbage().unwrap_err().to_string();
+        assert!(error.contains("RuntimePolicy::collectgarbage"), "{error}");
+        let present: bool = runtime.eval("return collectgarbage ~= nil").unwrap();
+        assert_eq!(present, enabled);
+        assert_eq!(runtime.type_definitions().unwrap().contains("collectgarbage"), enabled);
+    }
+}
+
+thread_local! {
+    static FINALIZED: RefCell<Vec<i64>> = const { RefCell::new(Vec::new()) };
+    static FINALIZED_DURING_CALL: RefCell<Vec<i64>> = const { RefCell::new(Vec::new()) };
+}
+
+struct Tracked(i64);
+
+impl Drop for Tracked {
+    fn drop(&mut self) {
+        FINALIZED.with(|finalized| finalized.borrow_mut().push(self.0));
+    }
+}
+
+// SAFETY: the name is unique among the types registered in this test's VM.
+unsafe impl Userdata for Tracked {
+    const NAME: &'static str = "dreamweave.test.Tracked";
+}
+
+#[test]
+fn a_collection_in_a_call_finalizes_garbage_once_and_keeps_the_calls_arguments() {
+    let runtime = Runtime::new().unwrap();
+    tagged::register::<Tracked>(&runtime, 7, |ty| ty.method("id", |tracked: &Tracked| tracked.0)).unwrap();
+    let make = runtime.bind_function("dreamweave.test.make", |id: i64| Owned(Tracked(id))).unwrap();
+    runtime.set_global("make", &make).unwrap();
+    let hold = runtime
+        .bind_function("dreamweave.test.hold", |call: &l3i::bind::Call<'_>, held: &Tracked| {
+            call.collect_garbage();
+            let finalized = FINALIZED.with(|finalized| finalized.borrow().clone());
+            FINALIZED_DURING_CALL.with(|during| *during.borrow_mut() = finalized);
+            held.0
+        })
+        .unwrap();
+    runtime.set_global("hold", &hold).unwrap();
+    // Two chunks, so that no register of the second can still hold the first's garbage. The only
+    // reference to the second userdata is the argument of the call that collects.
+    runtime.exec("make(1)").unwrap();
+    runtime.exec("assert(hold(make(2)) == 2)").unwrap();
+    assert_eq!(FINALIZED_DURING_CALL.with(|during| during.borrow().clone()), [1]);
+    runtime.collect_garbage();
+    assert_eq!(FINALIZED.with(|finalized| finalized.borrow().clone()), [1, 2]);
+    drop(runtime);
+    assert_eq!(FINALIZED.with(|finalized| finalized.borrow().clone()), [1, 2], "each exactly once");
+}
+
+#[test]
+fn a_compat_global_may_not_take_the_name_collectgarbage() {
+    let policy = RuntimePolicy::new().collectgarbage(true).compat_global("@dream/quat", "collectgarbage");
+    let error = RuntimePlan::builder().policy(policy).extension(l3i::quat::QuatExtension).finalize().unwrap_err();
+    assert!(error.to_string().contains("collides"), "{error}");
+}
+
+#[test]
+fn a_native_function_collects_through_its_call() {
+    let runtime = Runtime::new().unwrap();
+    let collect =
+        runtime.bind_function("dreamweave.test.collect", |call: &l3i::bind::Call<'_>| call.collect_garbage()).unwrap();
+    runtime.set_global("collect", &collect).unwrap();
+    runtime
+        .exec(
+            "local weak = setmetatable({}, { __mode = 'v' }) \
+             local function fill() weak[1] = {} end \
+             fill() \
+             collect() \
+             assert(weak[1] == nil)",
+        )
+        .unwrap();
 }
 
 #[test]
@@ -139,6 +260,105 @@ unsafe impl Userdata for Native {
     const NAME: &'static str = "dreamweave.tests.Native";
 }
 
+thread_local!(static REVEALED: Cell<bool> = const { Cell::new(false) });
+
+/// Reaches `second` only once the collector has marked the userdata behind `first`.
+struct Chain {
+    first: Rc<WeakRef>,
+    second: Rc<WeakRef>,
+}
+
+impl EmbedderGc for Chain {
+    fn reset(&self) {
+        REVEALED.with(|revealed| revealed.set(false));
+    }
+    fn mark_reachable(&self, mark: &mut dyn FnMut(&WeakRef)) {
+        // Read before marking: the mark callback runs inside `mark`, and an embedder that learns
+        // of a reference while marking only reaches it on the next pass.
+        let revealed = REVEALED.with(Cell::get);
+        mark(&self.first);
+        if revealed {
+            mark(&self.second);
+        }
+    }
+}
+
+struct RevealOnMark;
+
+impl UserdataMark<Native> for RevealOnMark {
+    fn mark(_: &Native) {
+        REVEALED.with(|revealed| revealed.set(true));
+    }
+}
+
+#[test]
+fn the_embedder_gc_repeats_until_a_pass_marks_nothing_new() {
+    let runtime = Runtime::new().unwrap();
+    tagged::register::<Native>(&runtime, 34, |_| Ok(())).unwrap();
+    memory::set_userdata_mark::<Native, RevealOnMark>(&runtime).unwrap();
+    let (first, second) = runtime
+        .stack()
+        .with_frame(|frame| {
+            let first = runtime.weak_ref(tagged::push(frame, Native { id: 1 })?)?;
+            let table = Table::new(frame, 0, 0)?;
+            let second = runtime.weak_ref(table.push_to(frame)?.value())?;
+            Ok((Rc::new(first), Rc::new(second)))
+        })
+        .unwrap();
+    runtime.set_embedder_gc(Chain { first: first.clone(), second: second.clone() });
+    runtime.collect_garbage();
+    runtime.collect_garbage();
+    // A marked userdata leaves nothing for the collector to propagate, so only the report of
+    // progress brings the second pass that marks what the userdata revealed.
+    let alive = |weak: &WeakRef| runtime.stack().with_frame(|frame| Ok(weak.get(frame).is_some())).unwrap();
+    assert!(alive(&first), "the first pass marks the userdata");
+    assert!(alive(&second), "the second pass marks what the userdata revealed");
+    runtime.clear_embedder_gc();
+}
+
+// A Lua-rooted userdata reaches native node 0, which reaches node 1, which holds
+// a weak reference back into Lua. The callback must finish the native closure itself.
+#[test]
+fn embedder_traverses_native_edges_before_returning() {
+    struct NativeGraph(Rc<WeakRef>);
+    impl EmbedderGc for NativeGraph {
+        fn reset(&self) {
+            REVEALED.with(|r| r.set(false));
+        }
+        fn mark_reachable(&self, mark: &mut dyn FnMut(&WeakRef)) {
+            let mut pending = if REVEALED.with(Cell::get) { vec![0] } else { vec![] };
+            while let Some(node) = pending.pop() {
+                match node {
+                    0 => pending.push(1),
+                    1 => mark(&self.0),
+                    _ => unreachable!(),
+                }
+            }
+        }
+    }
+    let runtime = Runtime::new().unwrap();
+    tagged::register::<Native>(&runtime, 34, |_| Ok(())).unwrap();
+    memory::set_userdata_mark::<Native, RevealOnMark>(&runtime).unwrap();
+    let weak = runtime
+        .stack()
+        .with_frame(|frame| {
+            let table = Table::new(frame, 0, 0)?;
+            let weak = Rc::new(runtime.weak_ref(table.push_to(frame)?.value())?);
+            tagged::push(frame, Native { id: 1 })?;
+            frame.set_global("gc_native_root")?;
+            Ok(weak)
+        })
+        .unwrap();
+    runtime.set_embedder_gc(NativeGraph(weak.clone()));
+    runtime.collect_garbage();
+    assert!(runtime.stack().with_frame(|frame| Ok(weak.get(frame).is_some())).unwrap());
+    runtime.exec("gc_native_root = nil").unwrap();
+    runtime.collect_garbage();
+    runtime.collect_garbage();
+    assert!(runtime.stack().with_frame(|frame| Ok(weak.get(frame).is_none())).unwrap());
+    runtime.clear_embedder_gc();
+}
+
 thread_local!(static MARKED: RefCell<Vec<u32>> = const { RefCell::new(Vec::new()) });
 
 struct RecordMark;
@@ -231,6 +451,46 @@ fn the_buffer_cage_sees_every_buffer_allocation() {
     runtime.collect_garbage();
     assert!(CAGE_STATS.with(Cell::get).1 >= 1, "the collected buffer was freed through the cage");
     drop(runtime);
+}
+
+#[test]
+fn buffer_cage_reclaims_pages_across_allocation_cycles() {
+    struct Reporting(CountingCage);
+    impl BufferCage for Reporting {
+        fn allocate(&self, ptr: *mut c_void, old_size: usize, new_size: usize, kind: c_int) -> *mut c_void {
+            let result = self.0.allocate(ptr, old_size, new_size, kind);
+            CAGE_STATS.with(|stats| stats.set((self.0.allocations.get(), self.0.frees.get())));
+            result
+        }
+    }
+    CAGE_STATS.with(|stats| stats.set((0, 0)));
+    let runtime = Runtime::builder()
+        .buffer_cage(Reporting(CountingCage { allocations: Cell::new(0), frees: Cell::new(0) }))
+        .build()
+        .unwrap();
+    for _ in 0..3 {
+        runtime
+            .exec(
+                r"
+            local values = {}
+            for _, size in {1, 60, 127, 128, 255, 256, 511, 512, 1024, 4096, 16384} do
+                for i = 1, 40 do
+                    local value = buffer.create(size)
+                    buffer.writeu8(value, 0, i)
+                    table.insert(values, value)
+                end
+            end
+            for i, value in values do assert(buffer.readu8(value, 0) == (i - 1) % 40 + 1) end
+        ",
+            )
+            .unwrap();
+        runtime.collect_garbage();
+        runtime.collect_garbage();
+    }
+    drop(runtime);
+    let (allocations, frees) = CAGE_STATS.with(Cell::get);
+    assert!(allocations > 1);
+    assert_eq!(allocations, frees, "all cage allocations must be freed when the VM closes");
 }
 
 /// The first runtime of a process decides whether it has coroutine finalizers, and this binary's
@@ -482,4 +742,62 @@ fn scalar_and_pinned_pushes_past_the_stack_limit_fail_instead_of_aborting() {
 #[test]
 fn luau_checks_its_assertions_exactly_when_rust_debug_assertions_are_on() {
     assert_eq!(l3i::flags::luau_assertions(), cfg!(debug_assertions));
+}
+
+thread_local!(static CAGE_SIZES: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) });
+
+#[test]
+fn the_buffer_cage_holds_buffer_data_without_the_page_headers() {
+    struct Recording(CountingCage);
+    impl BufferCage for Recording {
+        fn allocate(&self, ptr: *mut c_void, old_size: usize, new_size: usize, kind: c_int) -> *mut c_void {
+            if ptr.is_null() {
+                CAGE_SIZES.with(|sizes| sizes.borrow_mut().push(new_size));
+            }
+            self.0.allocate(ptr, old_size, new_size, kind)
+        }
+    }
+    let runtime = Runtime::builder()
+        .buffer_cage(Recording(CountingCage { allocations: Cell::new(0), frees: Cell::new(0) }))
+        .build()
+        .unwrap();
+    runtime.exec("local b = buffer.create(60) buffer.writeu32(b, 0, 7) assert(buffer.readu32(b, 0) == 7)").unwrap();
+    let sizes = CAGE_SIZES.with(|sizes| sizes.borrow().clone());
+    // A whole page, header included, is 16 KiB less what Luau leaves for an allocator's metadata.
+    let largest = sizes.iter().max().expect("buffer.create went through the cage");
+    assert!(*largest < 16 * 1024 - 24, "{sizes:?}");
+    drop(runtime);
+}
+#[test]
+fn buffer_cage_recovers_from_allocation_failure() {
+    struct FailOnce {
+        failing: Rc<Cell<bool>>,
+        inner: CountingCage,
+    }
+    impl BufferCage for FailOnce {
+        fn allocate(&self, ptr: *mut c_void, old_size: usize, new_size: usize, kind: c_int) -> *mut c_void {
+            if new_size > 0 && self.failing.replace(false) {
+                return std::ptr::null_mut();
+            }
+            self.inner.allocate(ptr, old_size, new_size, kind)
+        }
+    }
+    for size in [60, 65_536] {
+        let failing = Rc::new(Cell::new(false));
+        let runtime = Runtime::builder()
+            .buffer_cage(FailOnce {
+                failing: failing.clone(),
+                inner: CountingCage { allocations: Cell::new(0), frees: Cell::new(0) },
+            })
+            .build()
+            .unwrap();
+        failing.set(true);
+        let source =
+            format!("local b = buffer.create({size}) buffer.writeu8(b, 0, 42) assert(buffer.readu8(b, 0) == 42)");
+        assert!(runtime.exec(&source).is_err(), "cage allocation must report failure");
+        assert!(!failing.get(), "the cage allocation was attempted");
+        runtime.exec(&source).unwrap();
+        runtime.collect_garbage();
+        runtime.exec(&source).unwrap();
+    }
 }

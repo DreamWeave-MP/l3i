@@ -9,10 +9,10 @@
 #[cfg(target_os = "linux")]
 #[path = "instructions/counter.rs"]
 mod counter;
-#[cfg(any(feature = "intl", feature = "tcp", feature = "tls"))]
+#[cfg(any(feature = "intl", feature = "tcp", feature = "tls", feature = "fs-authenticated"))]
 mod counting_alloc;
 
-#[cfg(any(feature = "intl", feature = "tcp", feature = "tls"))]
+#[cfg(any(feature = "intl", feature = "tcp", feature = "tls", feature = "fs-authenticated"))]
 #[global_allocator]
 static GLOBAL: counting_alloc::Counting = counting_alloc::Counting;
 
@@ -30,6 +30,8 @@ mod bytes;
 mod data;
 #[cfg(all(feature = "dns", feature = "tls"))]
 mod dns_tls;
+#[cfg(feature = "fs-authenticated")]
+mod fs_authenticated;
 #[cfg(feature = "intern")]
 mod intern;
 #[cfg(feature = "intl")]
@@ -56,6 +58,18 @@ fn main() {
         return;
     }
 
+    // These standalone harnesses need no Criterion setup (which has unrelated side effects).
+    #[cfg(feature = "fs-authenticated")]
+    if filter.as_deref() == Some("fs_authenticated_cache") {
+        fs_authenticated::cache_main();
+        return;
+    }
+    #[cfg(feature = "fs-authenticated")]
+    if filter.as_deref() == Some("fs_authenticated") {
+        fs_authenticated::main();
+        return;
+    }
+
     hot_paths::benches();
     udp::benches();
     packed_quat::benches();
@@ -72,6 +86,14 @@ fn main() {
 
     if wanted("instructions") {
         instructions::main();
+    }
+    #[cfg(feature = "fs-authenticated")]
+    if wanted("fs_authenticated") {
+        fs_authenticated::main();
+    }
+    #[cfg(feature = "fs-authenticated")]
+    if wanted("fs_authenticated_cache") {
+        fs_authenticated::cache_main();
     }
     #[cfg(feature = "intern")]
     if wanted("intern") {

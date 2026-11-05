@@ -1,6 +1,6 @@
 # l3i
 
-**The Luau runtime for DreamWeave.** A Rust binder for [Luau](https://luau.org) 0.744 that
+**The Luau runtime for DreamWeave.** A Rust binder for [Luau](https://luau.org) 0.745 that
 owns its own Luau build, plans every VM before it exists, and lowers hot script calls to native
 code.
 
@@ -143,6 +143,7 @@ Each row is a page of the guide.
 | `intl` | The `@dream/intl` extension | ICU4X (`icu_locale_core`, `icu_plurals`, `icu_decimal`, Unicode-3.0), `fixed_decimal`, `writeable` |
 | `syntax` | The `@dream/luau` extension | none |
 | `fs` | The `@dream/fs` extension | `memmap2`, `walkdir`, `same-file` |
+| `fs-authenticated` | Ranged reads of `@dream/fs` verified against a trusted commitment | `sha2` |
 | `process` | The `@dream/process` extension | none |
 | `tcp` | The `@dream/tcp` extension | `mio` (`socket2` is already a dependency of `dream-net`) |
 | `dns` | The `@dream/dns` extension | `idna` (ICU4X's normalizer, Unicode-3.0), `libc` on Unix |
@@ -181,12 +182,12 @@ binder.
 
 | | |
 |---|---|
-| Luau | git submodule `luau/`, release 0.744; `git clone --recurse-submodules` |
+| Luau | git submodule `luau/`, release 0.745; `git clone --recurse-submodules` |
 | C++ side | compiled by `build.rs` with `cc`: `LUAI_MAXCSTACK=8000`, three-component vectors, `LUA_UTAG_LIMIT=254`, `-fno-math-errno`, no `-march` |
 | Toolchain | clang++, lld, cross-language thin LTO, clang and rustc on the same LLVM major; enforced by `build.rs` |
 | Apple targets | clang and lld without `-Clinker-plugin-lto` (ld64.lld rejects it); macOS forfeits the cross-language inlining |
 | MSVC targets | `clang-cl` compiles, rustc links with `lld-link` |
-| Rust | 1.92 or newer, edition 2024 |
+| Rust | 1.95 or newer, edition 2024 |
 | Network at build time | none |
 
 The value layout the binder reads is pinned by `static_assert`s in `csrc/extra.cpp` and proven

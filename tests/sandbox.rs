@@ -102,6 +102,20 @@ fn templates_reject_binary_chunks_and_report_syntax_errors() {
 }
 
 #[test]
+fn collectgarbage_opened_first_reaches_an_instance() {
+    let runtime = Runtime::new().unwrap();
+    runtime.open_collectgarbage().unwrap();
+    let (sandbox, _log) = sandbox_with_log(&runtime, SandboxOptions::default());
+    let loader = runtime.load_function("return function(name) error('module ' .. name .. ' not found') end").unwrap();
+    let instance = sandbox
+        .new_instance(&runtime, &InstanceSpec { name: "a", packages: &[], hidden_data: None, loader: &loader })
+        .unwrap();
+    let template =
+        sandbox.load_template(&runtime, "collect.lua", "collectgarbage() assert(collectgarbage('count') > 0)").unwrap();
+    sandbox.run(&runtime, &template, &instance, context()).unwrap();
+}
+
+#[test]
 fn templates_resolve_their_imports_against_the_base_env() {
     let runtime = Runtime::new().unwrap();
     runtime.exec("lib = { answer = 42 }").unwrap();

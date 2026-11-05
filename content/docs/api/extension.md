@@ -210,7 +210,7 @@ or an `f64` is `number`; a class is its generated name, the key with dots replac
 
 ### RuntimePolicy
 
-{{ api_signature(value="struct RuntimePolicy { pub debug_roots: Vec<String>, pub standard_libraries: bool, pub sandbox: bool, pub limits: Limits, pub profiler: bool, pub pointer_encoding: bool, pub first_tag: RuntimeTag, pub capabilities: BTreeSet<String>, pub compat_globals: Vec<(String, String)>, pub native_code: Option<NativeCodePolicy> }") }}
+{{ api_signature(value="struct RuntimePolicy { pub debug_roots: Vec<String>, pub standard_libraries: bool, pub sandbox: bool, pub limits: Limits, pub profiler: bool, pub pointer_encoding: bool, pub first_tag: RuntimeTag, pub capabilities: BTreeSet<String>, pub compat_globals: Vec<(String, String)>, pub collectgarbage: bool, pub native_code: Option<NativeCodePolicy> }") }}
 
 Execution policy for runtimes made from a plan: the VM's configuration and what scripts may do.
 `native_code` exists with the `jit` feature. `Clone`, `Debug`, `Default`.
@@ -226,10 +226,11 @@ Execution policy for runtimes made from a plan: the VM's configuration and what 
 | `first_tag` | 1 | The first tag the planner hands out; lower tags stay free for the host |
 | `capabilities` | empty | Granted to extensions, checked at finalisation and at install |
 | `compat_globals` | empty | Module paths also exposed as globals, host policy during migrations: `("@dream/archive", "dreamArchive")`. Frozen modules exposed this way also become compiler-known libraries |
+| `collectgarbage` | `false` | Gives scripts the `collectgarbage` global, see [the collector](@/docs/runtime-options.md#the-collector) |
 | `native_code` | `None` | Native code generation for scripts |
 
 Builder methods, each `self -> Self`: `new()`, `capability(name)`, `compat_global(module_path,
-global)`, `sandbox(enabled)`, `standard_libraries(enabled)`, `limits(limits)`,
+global)`, `collectgarbage(enabled)`, `sandbox(enabled)`, `standard_libraries(enabled)`, `limits(limits)`,
 `profiler(enabled)`, `first_tag(tag)`, `debug_root(root)`, `native_code(policy)`; and
 `fn grants(&self, capability: &str) -> bool`.
 

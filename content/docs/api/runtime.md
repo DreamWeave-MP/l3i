@@ -230,6 +230,12 @@ of `steps` kilobytes (0 is one basic step), true when a cycle finished; the same
 time. `Runtime::gc(GcControl)` and the rest of the collector controls are on
 [Direct access and the VM](@/docs/api/direct.md).
 
+{{ api_signature(value="fn open_collectgarbage(&self) -> Result<()>") }}
+
+Installs [the `collectgarbage` global](@/docs/runtime-options.md#the-collector) on a runtime
+without a plan, before it is sandboxed. A runtime made from a plan refuses: there
+`RuntimePolicy::collectgarbage` decides, so the runtime and its type definitions agree.
+
 ### The stack
 
 {{ api_signature(value="fn stack(&self) -> Stack<'_>") }}
@@ -539,16 +545,18 @@ anything else.
 
 {{ api_signature(value="const LUAU_CODEGEN_FLAGS: &[&str]") }}
 
+{{ api_signature(value="const LUAU_ANALYSIS_FLAGS: &[&str]") }}
+
 l3i's flag policy: the flags in the Ast, Bytecode, Compiler and VM components, which are always
 linked, including `LuauExperimentalIfLocalSyntax` and the two that gate APIs the binder exposes
-(`LuauGcTraceUdata`, `LuauBufferCage`); and the CodeGen flags, applied only with the `jit`
-feature. Each name carries its reason in the source. The X64 and A64 flags exist only on their
+(`LuauGcTraceUdata`, `LuauBufferCage`); the CodeGen flags, applied only with the `jit`
+feature; and the Analysis flags, applied only with the `analysis` feature. Each name carries its reason in the source. The X64 and A64 flags exist only on their
 own architecture, and `LuauCoroutineFinally` is raised separately by the builder.
 
 {{ api_signature(value="fn initialize() -> Result<()>") }}
 
 Freezes the policy. Idempotent and thread-safe. A flag name the linked Luau lacks is
-`Error::Logic` (`Luau 0.744 has no fast flag named ...`) rather than a silent no-op.
+`Error::Logic` (`Luau 0.745 has no fast flag named ...`) rather than a silent no-op.
 
 {{ api_signature(value="fn coroutine_finalizers() -> bool") }}
 

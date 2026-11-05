@@ -95,6 +95,9 @@ public:
         {
             if (stat->hasDo)
                 remap(stat->doLocation);
+            remap(stat->conditionKeywordLocation);
+            remap(stat->conditionEqualsLocation);
+            remapLocal(stat->conditionLocal);
         }
         else if (auto* stat = node->as<Luau::AstStatFor>())
         {

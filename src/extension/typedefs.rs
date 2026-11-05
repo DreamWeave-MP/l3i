@@ -159,6 +159,10 @@ pub(crate) fn render_with(plan: &RuntimePlan, members: Option<&ModuleMembers>) -
         }
         out.push('\n');
     }
+    if plan.policy.collectgarbage {
+        let _ =
+            writeln!(out, "declare collectgarbage: ((option: \"collect\"?) -> ()) & ((option: \"count\") -> number)");
+    }
     out
 }
 

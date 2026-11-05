@@ -147,9 +147,18 @@ to. `CallKind` says what the scope wraps:
 
 ## The collector
 
-Luau has no `collectgarbage`, so a host that wants collection at frame boundaries steps it
+Luau's VM has no `collectgarbage`, so a host that wants collection at frame boundaries steps it
 there. `Runtime::gc(control)` is `lua_gc`; `collect_garbage()` runs a full cycle, `gc_step(kb)`
 one incremental step and `gc_step_timed(kb)` the same with its wall time, for GC accounting.
+A native function can run a full cycle too, with `Call::collect_garbage()`.
+
+A host can hand the decision to scripts instead. `RuntimePolicy::collectgarbage(true)`, or
+`Runtime::open_collectgarbage()` before sandboxing on a runtime without a plan (a planned runtime
+refuses that call), installs the global the Luau CLI gives its scripts: `collectgarbage()` or
+`collectgarbage("collect")` runs a full cycle and returns nothing, `collectgarbage("count")` returns
+the heap size in KB, and any other option raises. Arguments after the first raise too, where the
+CLI ignores them. It is off by default, because a full cycle runs to its end without a watchdog
+check.
 
 | `memory::GcControl` | Does |
 |---|---|
@@ -197,12 +206,15 @@ emits, so `flags::initialize()` freezes one policy before the first VM is create
 (`flags::LUAU_FLAGS`, plus `flags::LUAU_CODEGEN_FLAGS` under `jit`), never Luau's "enable
 everything". Every flag on it is there for a stated reason, in the source next to its name:
 
-- The compiler and runtime optimizations and fixes that Luau 0.744 still gates, including the
+- The compiler and runtime optimizations and fixes that Luau 0.745 still gates, including the
   two 0.742 miscompile fixes (`LuauCompileMoveElisionFix`, `LuauCompileTableFoldFix`) and the
   0.741 GC pacing fix (`LuauGcHeapShrinkFix`), which read a heap that shrank between
   measurements as an enormous allocation rate.
 - `LuauExperimentalIfLocalSyntax`, so `if local x = f() then .. end` parses. The C++ binder
   leaves it off.
+- `DebugLuauWhileLocalSyntax`, so `while local x = f() do .. end` parses, with `while const`, and,
+  under `analysis`, `DebugLuauWhileLocalAnalysis` (`flags::LUAU_ANALYSIS_FLAGS`) to type it. Luau
+  still calls this syntax experimental, so it can change with a Luau release.
 - `LuauGcTraceUdata` and `LuauBufferCage`, which gate the embedder GC and memory cage APIs the
   binder exposes; both are inert until a host installs the callback.
 - `LuauCoroutineFinally` is the one flag not on the list: the builder's `coroutine_finalizers`

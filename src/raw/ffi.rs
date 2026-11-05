@@ -1,4 +1,4 @@
-//! Luau 0.744 C API, transcribed from `VM/include/lua.h`, `VM/include/lualib.h`,
+//! Luau 0.745 C API, transcribed from `VM/include/lua.h`, `VM/include/lualib.h`,
 //! `Compiler/include/luacode.h`, `CodeGen/include/luacodegen.h`, and the binder's own additions
 //! in `csrc/`.
 //!
@@ -109,8 +109,10 @@ pub type lua_CageAlloc =
 pub type lua_Destructor = unsafe extern "C" fn(L: *mut lua_State, userdata: *mut c_void);
 pub type lua_UserdataMark = unsafe extern "C" fn(L: *mut lua_State, ud: *mut c_void);
 pub type lua_EmbedderMark = unsafe extern "C" fn(L: *mut lua_State, r#ref: c_int);
-/// `markref` is null for the reset call at the start of a cycle.
-pub type lua_EmbedderGc = unsafe extern "C" fn(L: *mut lua_State, markref: Option<lua_EmbedderMark>);
+/// `markref` is null for the reset call at the start of a cycle. Otherwise the collector calls
+/// again, after propagating marks, until this returns zero: return nonzero only for a pass that
+/// made progress, or the collector never finishes.
+pub type lua_EmbedderGc = unsafe extern "C" fn(L: *mut lua_State, markref: Option<lua_EmbedderMark>) -> c_int;
 pub type lua_CategoryName = unsafe extern "C" fn(L: *mut lua_State, memcat: u8) -> *const c_char;
 
 /// `void (*)(lua_State*, void* data, int atom, uint16_t* cachedslot, int utag)`
@@ -597,6 +599,8 @@ unsafe extern "C" {
     pub fn luarequire_createplaceholder(L: *mut lua_State);
 
     // l3i csrc/extra.cpp
+    #[cfg(test)]
+    pub fn l3i_userdata_payload_offset() -> usize;
     pub fn luau_setfflag(name: *const c_char, value: c_int) -> c_int;
     pub fn luau_getfflag(name: *const c_char) -> c_int;
     pub fn luau_setfint(name: *const c_char, value: c_int) -> c_int;
@@ -617,6 +621,7 @@ unsafe extern "C" {
     pub fn l3i_host_level(L: *mut lua_State) -> c_int;
     pub fn l3i_thread_resettable(L: *mut lua_State) -> c_int;
     pub fn l3i_luau_assertions() -> c_int;
+    pub fn l3i_weakref_unmarked(L: *mut lua_State, r#ref: c_int) -> c_int;
     pub fn l3i_direct_enter(
         L: *mut lua_State,
         threaddata: *mut *mut c_void,
