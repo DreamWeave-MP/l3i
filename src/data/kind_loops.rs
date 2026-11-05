@@ -798,9 +798,9 @@ fn order_key(kind: Kind, span: &Span, index: usize) -> u64 {
 }
 
 /// The permutation that orders the keys, stable, read once before anything is written, so `out`
-/// may overlap them. From [`RADIX_FROM`] keys of at most four bytes, a radix sort over that snapshot.
-/// Below it, sorting a key with its position makes every pair distinct, so an unstable sort gives
-/// the one stable order.
+/// may overlap them. Each key of at most four bytes is packed with its position, which makes every
+/// pair distinct, so an unstable sort gives the one stable order; from [`RADIX_FROM`] keys, a radix
+/// sort of those pairs.
 #[inline(always)]
 fn sort_keys_loop(keys: Span, out: &Indices) {
     let kind = keys.kind;
@@ -814,10 +814,8 @@ fn sort_keys_loop(keys: Span, out: &Indices) {
                 out.set(slot, *index as usize);
             }
         } else if keys.count >= RADIX_FROM {
-            let snapshot: Vec<u64> = (0..keys.count).map(|i| order_key(kind, &keys, i)).collect();
-            let mut spare = vec![0u8; keys.count * 4];
-            let scratch = Indices { base: spare.as_mut_ptr(), count: keys.count };
-            radix_sort(keys.count, kind.size(), |i| snapshot[i], out, &scratch);
+            let order: Vec<u64> = (0..keys.count).map(|i| order_key(kind, &keys, i) << 32 | i as u64).collect();
+            radix_sort_packed(order, kind.size(), out);
         } else {
             // Every other key fits 32 bits, so a key and its position pack into one word.
             let mut order: Vec<u64> = (0..keys.count).map(|i| order_key(kind, &keys, i) << 32 | i as u64).collect();
@@ -880,6 +878,42 @@ fn radix_sort(total: usize, bytes: usize, key: impl Fn(usize) -> u64, out: &Indi
         for position in 0..total {
             out.set(position, from.get(position));
         }
+    }
+}
+
+/// A least-significant-digit radix sort of keys packed above their positions, which `out` receives.
+/// Each pass reads and writes in sequence, where looking a key up by position would miss the cache
+/// on nearly every element once the keys outgrow it.
+#[inline(always)]
+fn radix_sort_packed(mut from: Vec<u64>, bytes: usize, out: &Indices) {
+    let total = from.len();
+    let mut histograms = [[0u32; 256]; 4];
+    for packed in &from {
+        for (byte, histogram) in histograms.iter_mut().enumerate().take(bytes) {
+            histogram[(packed >> (32 + byte * 8)) as usize & 0xff] += 1;
+        }
+    }
+    let mut to = vec![0u64; total];
+    for (byte, histogram) in histograms.iter().enumerate().take(bytes) {
+        // Every key shares this digit: the pass would copy, so skip it.
+        if histogram.contains(&(total as u32)) {
+            continue;
+        }
+        let mut offsets = [0u32; 256];
+        let mut offset = 0;
+        for (slot, tally) in offsets.iter_mut().zip(histogram) {
+            *slot = offset;
+            offset += tally;
+        }
+        for packed in &from {
+            let digit = (packed >> (32 + byte * 8)) as usize & 0xff;
+            to[offsets[digit] as usize] = *packed;
+            offsets[digit] += 1;
+        }
+        std::mem::swap(&mut from, &mut to);
+    }
+    for (slot, packed) in from.iter().enumerate() {
+        out.set(slot, (*packed & 0xffff_ffff) as usize);
     }
 }
 
