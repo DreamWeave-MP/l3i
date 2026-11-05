@@ -114,6 +114,7 @@ Each row is a page of the guide.
 | `dream.quat` | `@dream/quat` | Unit rotations packed into one Luau integer (smallest-three, 18 bits per component) and animation keys; `quat.math()` lowers `rotate` to 21 ns native. |
 | `dream.raster` | `@dream/raster` | RGBA8 colours, clip rectangles and RGBA16 colours as packed integers; `raster.math()` lowers colour arithmetic. |
 | `dream.bytes` (`bytes`) | `@dream/bytes` | For parsing foreign file formats in script: searching, C strings, varints, big-endian and half-float reads lowered natively, plus codecs, digests and text codepages behind `bytes-codecs`, `bytes-digests`, `bytes-text`. |
+| `dream.compute` (`compute`) | `@dream/compute` | Typed f32 matrix computations compiled once and run on precompiled native kernels, with no runtime code generation. |
 | `dream.data` (`data`) | `@dream/data` | The generic bulk-data plane: typed spans of buffers reduced, compared into selections, gathered, scattered, filled, combined, stably argsorted and partitioned natively with no per-element callbacks; reductions also lower to native loops under `jit`, and the dialect's recognized pipelines over buffer slices use it automatically ([dream.data](https://DreamWeave-MP.github.io/l3i/docs/builtin-extensions/#dream-data)). |
 | `dream.intern` (`intern`) | `@dream/intern` | Textual identity as dense numbers: pools that intern strings or buffer spans exactly, ASCII case-insensitively, or by their normal form under byte rules (case, replaced bytes, collapsed runs, trimmed ends), folding inside the hash, with no Luau string made for a duplicate. |
 | `dream.intl` (`intl`) | `@dream/intl` | BCP 47 locale identity, CLDR cardinal and ordinal plural categories that see visible fraction digits, and locale-aware decimal formatting (digits, separators, grouping, half-even fraction digits), from ICU4X and its compiled CLDR data; no catalog, no current locale. |
@@ -138,6 +139,7 @@ Each row is a page of the guide.
 | `bytes-crypto` | Secure random bytes, HMAC with constant-time verification, RSA and ECDSA signing (RS256, ES256) | `ring` |
 | `bytes-text` | Every WHATWG text encoding | `encoding_rs` |
 | `bytes-regex` | Regular expressions over bytes, many ranges in one call | `regex` |
+| `compute` | The `@dream/compute` extension | none |
 | `data` | The `@dream/data` extension | none |
 | `intern` | The `@dream/intern` extension | none |
 | `intl` | The `@dream/intl` extension | ICU4X (`icu_locale_core`, `icu_plurals`, `icu_decimal`, Unicode-3.0), `fixed_decimal`, `writeable` |

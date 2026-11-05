@@ -13,16 +13,16 @@ for _, n in {1,16,1024,65536,1048576} do
  assert(buffer.readf32(out,0)==expected)
  local iterations=1
  while true do
-  local start=compute.clock()
+  local start=testing.clock()
   for _=1,iterations do p:runInto(out,input) end
-  if compute.clock()-start>=0.003 then break end
+  if testing.clock()-start>=0.003 then break end
   iterations*=2
  end
  local samples={}
  for i=1,31 do
-  local start=compute.clock()
+  local start=testing.clock()
   for _=1,iterations do p:runInto(out,input) end
-  samples[i]=(compute.clock()-start)*1e6/iterations
+  samples[i]=(testing.clock()-start)*1e6/iterations
  end
  table.sort(samples)
  print(string.format('jsl_ordered_sum_runInto n=%d median_us=%.3f min_us=%.3f p90_us=%.3f',n,samples[16],samples[1],samples[28]))

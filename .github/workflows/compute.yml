@@ -49,6 +49,9 @@ jobs:
           rustc -vV
           clang --version
           lscpu
+      - name: The extension with only its own feature
+        run: |
+          cargo test --features compute compute::
       - name: Debug no-JIT correctness
         run: |
           cargo test --features compute-testing compute::

@@ -41,6 +41,9 @@ pub(crate) fn error(message: &str) -> crate::Error {
 /// Experimental allocation-free row reduction kernels.
 pub mod reduction;
 
+/// The `@dream/compute` extension.
+pub mod script;
+
 /// Experimental exact-accumulation int8 primitives.
 #[cfg(feature = "compute-testing")]
 pub mod quantized;

@@ -33,6 +33,10 @@ impl Budget {
         })
     }
     #[must_use]
+    pub fn limit(&self) -> usize {
+        self.limit
+    }
+    #[must_use]
     pub fn used(&self) -> usize {
         self.used.load(Ordering::Relaxed)
     }

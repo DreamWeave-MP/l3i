@@ -1,4 +1,4 @@
--- Isolated host module, not a production @dream/compute extension.
+-- @dream/compute through whole invocations, with the test runtime's oracles alongside.
 local function bytes(values)
     local b = buffer.create(#values * 4)
     for i, v in values do buffer.writef32(b, (i - 1) * 4, v) end

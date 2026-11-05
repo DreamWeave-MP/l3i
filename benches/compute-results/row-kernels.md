@@ -41,7 +41,7 @@ Scratch is acquired once per stage, reused across its rows, and released before 
 
 ## Softmax strategies measured
 
-Single row, one thread, preallocated output, on an i7-10870H under mixed load. Run `cargo bench --features compute-testing --bench main -- compute_softmax` to reproduce; raw reports are in `../results/l3i-softmax-strategies*.txt`.
+Single row, one thread, preallocated output, on an i7-10870H under mixed load. Run `cargo bench --features compute-testing --bench main -- compute_softmax` to reproduce; raw reports are in `l3i-softmax-strategies*.txt`.
 
 | Strategy | ns per element at 4,096 | Contract |
 | --- | ---: | --- |
@@ -65,7 +65,7 @@ That is the failure mode the earlier synthetic transformer experiment found, so 
 
 `adversarial.rs` compares every stage in four memory layouts and every available instantiation, which must agree to the bit, against double-double oracles that share no code with the kernels. It uses row widths from 1 to 257 and 8 families of adversarial values: moderate, wide, nearly constant, large finite, subnormal, signed zero, large offset and near the cutoff.
 
-Other tests cover special rows sharing a matrix, repeated rows and elements through zero strides, exact budget boundaries and recovery. `research/mutate.jsl` injects bugs one at a time and is the evidence that these tests detect them; its record is `../results/mutations.txt`.
+Other tests cover special rows sharing a matrix, repeated rows and elements through zero strides, exact budget boundaries and recovery. `research/mutate.jsl` injects bugs one at a time and is the evidence that these tests detect them; its record is `mutations.txt`.
 
 The reference interpreter computes each element independently through `View::at`, but it follows the same contracts and shares `exp_nonpositive`, so it is a check on layouts and row handling and not on the exponential itself. GPU and generated-Luau lowering reject these stages explicitly rather than change their meaning.
 

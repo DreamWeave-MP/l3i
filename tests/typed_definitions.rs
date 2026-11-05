@@ -38,6 +38,8 @@ fn plan() -> Rc<RuntimePlan> {
     let builder = builder.extension(l3i::audio::AudioExtension);
     #[cfg(feature = "bytes")]
     let builder = builder.extension(l3i::bytes::BytesExtension);
+    #[cfg(feature = "compute")]
+    let builder = builder.extension(l3i::compute::script::ComputeExtension::default());
     #[cfg(feature = "data")]
     let builder = builder.extension(l3i::data::DataExtension);
     #[cfg(feature = "intern")]
@@ -164,6 +166,26 @@ const AUDIO_SCRIPT: (&str, &str) = (
 );
 
 #[cfg(feature = "intern")]
+#[cfg(feature = "compute")]
+const COMPUTE_SCRIPT: (&str, &str) = (
+    "compute_script",
+    "--!strict\n\
+     local compute = require('@dream/compute')\n\
+     local x = compute.slot(0, 2, 2)\n\
+     local y = x:add(compute.constant(2)):mul(x):relu():softmax():rmsNorm(1):layerNorm(1)\n\
+     local z = y:transpose():matmul(x):sumRows()\n\
+     local program = z:compile()\n\
+     local fast = z:compileFast()\n\
+     local t = compute.f32(buffer.create(16), 2, 2)\n\
+     local result = program:run(t)\n\
+     local bytes: buffer = result:read()\n\
+     local out = buffer.create(8)\n\
+     program:runInto(out, buffer.create(16))\n\
+     fast:runTensorsInto(out, t:prepareLeft():prepareRight():view(2, 2, 0, 8, 4))\n\
+     local used: number = compute.used() + compute.limit()\n\
+     return { bytes, used }\n",
+);
+
 const INTERN_SCRIPT: (&str, &str) = (
     "intern_script",
     "--!strict\n\
@@ -553,6 +575,8 @@ fn the_generated_definitions_type_check_and_typed_scripts_pass_strict_mode() {
     all_scripts.push(BYTES_REGEX_SCRIPT);
     #[cfg(feature = "bytes-codecs")]
     all_scripts.push(BYTES_CODECS_SCRIPT);
+    #[cfg(feature = "compute")]
+    all_scripts.push(COMPUTE_SCRIPT);
     #[cfg(feature = "data")]
     all_scripts.push(DATA_SCRIPT);
     #[cfg(feature = "intern")]

@@ -20,11 +20,23 @@ pub struct Domain {
     plans: AtomicUsize,
     node_limit: usize,
     plan_limit: usize,
+    denials: AtomicUsize,
 }
 impl Domain {
     #[must_use]
     pub fn new(node_limit: usize, plan_limit: usize) -> Arc<Self> {
-        Arc::new(Self { nodes: AtomicUsize::new(0), plans: AtomicUsize::new(0), node_limit, plan_limit })
+        Arc::new(Self {
+            nodes: AtomicUsize::new(0),
+            plans: AtomicUsize::new(0),
+            node_limit,
+            plan_limit,
+            denials: AtomicUsize::new(0),
+        })
+    }
+    /// How many requests the limits have refused. See [`crate::compute::Budget::denials`].
+    #[must_use]
+    pub fn denials(&self) -> usize {
+        self.denials.load(Ordering::Relaxed)
     }
     #[must_use]
     pub fn live_plans(&self) -> usize {
@@ -45,9 +57,10 @@ impl Lease {
     pub(crate) fn acquire(domain: Arc<Domain>, plan: bool) -> Result<Self> {
         let (counter, limit) =
             if plan { (&domain.plans, domain.plan_limit) } else { (&domain.nodes, domain.node_limit) };
-        counter
-            .try_update(Ordering::Relaxed, Ordering::Relaxed, |n| (n < limit).then_some(n + 1))
-            .map_err(|_| error("domain graph budget exhausted"))?;
+        counter.try_update(Ordering::Relaxed, Ordering::Relaxed, |n| (n < limit).then_some(n + 1)).map_err(|_| {
+            domain.denials.fetch_add(1, Ordering::Relaxed);
+            error("domain graph budget exhausted")
+        })?;
         Ok(Self { domain, plan })
     }
 }

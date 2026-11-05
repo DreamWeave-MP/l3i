@@ -1,212 +1,90 @@
-//! The JSL host the compute tests and benches share: L3i's module machinery around the engine.
+//! The runtime the compute tests and benches share: the production `@dream/compute` extension, plus
+//! an extension of the oracles and instruments only they use, none of which a real runtime has.
 
-use l3i::compute::{Budget, Domain, Expr, Numeric, Program, Shape, Tensor, View};
-use l3i::source::LoadScope;
-use l3i::{
-    Result, Runtime,
-    bind::{Call, VarArgs},
-    convert::{BufferView, Exact, NewBuffer},
-    module::{LuauModule, ModuleBuilder},
-    userdata::{Owned, Userdata},
-};
+use std::sync::Arc;
 
-struct TensorValue(Tensor);
-struct Expression(Expr);
-struct CompiledProgram(Program);
-// SAFETY: these payloads own native immutable storage and never access Lua in destructors.
-unsafe impl Userdata for TensorValue {
-    const NAME: &'static str = "dream.research.Tensor";
-}
-// SAFETY: as above.
-unsafe impl Userdata for Expression {
-    const NAME: &'static str = "dream.research.Expression";
-}
-// SAFETY: as above.
-unsafe impl Userdata for CompiledProgram {
-    const NAME: &'static str = "dream.research.Program";
+use l3i::bind::{Call, VarArgs};
+use l3i::compute::script::{ComputeExtension, ScriptProgram, ScriptTensor};
+use l3i::compute::{Budget, Domain, View};
+use l3i::extension::{Extension, ExtensionDescriptor, InstallContext, RuntimePlan, RuntimePolicy};
+use l3i::source::{CompileOptions, LoadScope};
+use l3i::userdata::{Owned, Userdata};
+use l3i::{Error, Result, Runtime};
+
+const TESTING: &str = "@compute/testing";
+
+struct ComputeTesting {
+    budget: Arc<Budget>,
 }
 
-/// Native tensors look small to Luau's collector, so results can be garbage that holds the budget
-/// without ever triggering a cycle. When the budget refuses `body`, collect once and retry.
-fn collecting<R>(call: &Call<'_>, budget: &Budget, mut body: impl FnMut() -> Result<R>) -> Result<R> {
-    let denials = budget.denials();
-    let first = body();
-    if first.is_err() && budget.denials() != denials {
-        call.collect_garbage();
-        return body();
+impl Extension for ComputeTesting {
+    fn id(&self) -> &'static str {
+        "compute.testing"
     }
-    first
-}
 
-/// Whether two byte ranges share a byte. An empty range shares none. A range's end never overflows,
-/// because a slice cannot extend past the end of the address space.
-pub(super) fn overlaps(a: &[u8], b: &[u8]) -> bool {
-    let (a, b) = (a.as_ptr_range(), b.as_ptr_range());
-    a.start != a.end && b.start != b.end && a.start < b.end && b.start < a.end
-}
-
-/// `program:runInto(out, a, b, ...)`: Luau buffers, borrowed for this call and never retained.
-fn run_into(
-    program: &Program,
-    out: &mut BufferView<'_>,
-    inputs: &[BufferView<'_>],
-    budget: &std::sync::Arc<Budget>,
-) -> Result<()> {
-    if inputs.len() != program.signature().len() {
-        return Err(l3i::Error::runtime("input slot set mismatch"));
-    }
-    // SAFETY: no Lua runs and no other view writes between here and the end of `run_into` below.
-    // The exclusive slice is only made after every input's byte range is shown disjoint from it,
-    // so this holds for any `BufferView`, including sub-ranges of one buffer. Inputs only read, so
-    // they may overlap each other.
-    let (input_bytes, out_bytes) = unsafe {
-        let target = out.bytes_unchecked();
-        if inputs.iter().any(|input| overlaps(input.bytes_unchecked(), target)) {
-            return Err(l3i::Error::runtime("output buffer aliases an input"));
-        }
-        let reads: Vec<&[u8]> = inputs.iter().map(|input| input.bytes_unchecked()).collect();
-        (reads, out.bytes_mut_unchecked())
-    };
-    let views = input_bytes
-        .iter()
-        .zip(program.signature())
-        .map(|(bytes, shape)| View::contiguous(bytes, *shape))
-        .collect::<Result<Vec<View<'_>>>>()?;
-    program.run_into(&views, out_bytes, budget)
-}
-
-struct Research;
-impl LuauModule for Research {
-    const NAME: &'static str = "dream.research.compute";
-    // Keep the experimental module declarations together for auditing its public surface.
-    #[allow(clippy::too_many_lines)]
-    fn register(_runtime: &Runtime, module: &mut ModuleBuilder<'_>) -> Result<()> {
-        let service_budget = Budget::new(64 * 1024 * 1024);
-        let service_domain = Domain::new(4096, 512);
-        module.userdata::<TensorValue>(None, |ty| {
-            ty.method("read", |t: &TensorValue| t.0.readback().map(NewBuffer))?;
-            ty.method("shares", |a: &TensorValue, b: &TensorValue| a.0.shares_storage(&b.0))?;
-            let budget = service_budget.clone();
-            ty.method("prepareRight", move |t: &TensorValue, call: &Call<'_>| {
-                collecting(call, &budget, || t.0.prepare_right(&budget)).map(|p| Owned(TensorValue(p)))
-            })?;
-            let budget = service_budget.clone();
-            ty.method("prepareLeft", move |t: &TensorValue, call: &Call<'_>| {
-                collecting(call, &budget, || t.0.prepare_left(&budget)).map(|p| Owned(TensorValue(p)))
-            })?;
-            ty.method(
-                "view",
-                |t: &TensorValue,
-                 rows: Exact<usize>,
-                 cols: Exact<usize>,
-                 offset: Exact<usize>,
-                 row_stride: Exact<usize>,
-                 col_stride: Exact<usize>| {
-                    t.0.view(Shape::Matrix(rows.0, cols.0), offset.0, [row_stride.0, col_stride.0])
-                        .map(|v| Owned(TensorValue(v)))
-                },
-            )
-        })?;
-        module.userdata::<Expression>(None, |ty| {
-            ty.method("add", |a: &Expression, b: &Expression| a.0.add(&b.0).map(|e| Owned(Expression(e))))?;
-            ty.method("mul", |a: &Expression, b: &Expression| a.0.mul(&b.0).map(|e| Owned(Expression(e))))?;
-            ty.method("relu", |a: &Expression| a.0.relu().map(|e| Owned(Expression(e))))?;
-            ty.method("rmsNorm", |a: &Expression, epsilon: f64| {
-                a.0.normalize(epsilon, false).map(|e| Owned(Expression(e)))
-            })?;
-            ty.method("layerNorm", |a: &Expression, epsilon: f64| {
-                a.0.normalize(epsilon, true).map(|e| Owned(Expression(e)))
-            })?;
-            ty.method("softmax", |a: &Expression| a.0.softmax().map(|e| Owned(Expression(e))))?;
-            ty.method("sumRows", |a: &Expression| a.0.sum_rows().map(|e| Owned(Expression(e))))?;
-            ty.method("transpose", |a: &Expression| a.0.transpose().map(|e| Owned(Expression(e))))?;
-            ty.method("matmul", |a: &Expression, b: &Expression| a.0.matmul(&b.0).map(|e| Owned(Expression(e))))?;
-            ty.method("compile", |a: &Expression| a.0.compile().map(|e| Owned(CompiledProgram(e))))?;
-            ty.method("compileFast", |a: &Expression| {
-                a.0.compile_with(Numeric::Fast).map(|e| Owned(CompiledProgram(e)))
+    fn describe(&self, d: &mut ExtensionDescriptor) -> Result<()> {
+        d.requires("dream.compute");
+        let mut tensor = d.augment_userdata::<ScriptTensor>(ScriptTensor::NAME);
+        tensor.method("shares", |a: &ScriptTensor, b: &ScriptTensor| a.tensor().shares_storage(b.tensor())).untyped();
+        let mut program = d.augment_userdata::<ScriptProgram>(ScriptProgram::NAME);
+        program
+            .method("runReference", |p: &ScriptProgram, call: &Call<'_>, tensors: VarArgs<&ScriptTensor>| {
+                let views: Vec<View<'_>> = tensors.values.iter().map(|t| t.tensor().borrow()).collect();
+                let budget = p.budget();
+                let denials = budget.denials();
+                let mut result = p.program().run_reference(&views, budget);
+                if result.is_err() && budget.denials() != denials {
+                    call.collect_garbage();
+                    result = p.program().run_reference(&views, budget);
+                }
+                Ok::<_, Error>(Owned(ScriptTensor::new(result?, budget.clone())))
             })
-        })?;
-        module.userdata::<CompiledProgram>(None, |ty| {
-            let budget = service_budget.clone();
-            ty.method("run", move |p: &CompiledProgram, call: &Call<'_>, tensors: VarArgs<&TensorValue>| {
-                let tensors: Vec<&Tensor> = tensors.values.iter().map(|t| &t.0).collect();
-                collecting(call, &budget, || p.0.run(&tensors, &budget)).map(|t| Owned(TensorValue(t)))
-            })?;
-            let budget = service_budget.clone();
-            ty.method(
-                "runInto",
-                move |p: &CompiledProgram,
-                      call: &Call<'_>,
-                      mut out: BufferView<'_>,
-                      inputs: VarArgs<BufferView<'_>>| {
-                    collecting(call, &budget, || run_into(&p.0, &mut out, &inputs.values, &budget))
-                },
-            )?;
-            let budget = service_budget.clone();
-            ty.method(
-                "runTensorsInto",
-                move |p: &CompiledProgram, call: &Call<'_>, mut out: BufferView<'_>, tensors: VarArgs<&TensorValue>| {
-                    let views: Vec<View<'_>> = tensors.values.iter().map(|t| t.0.borrow()).collect();
-                    collecting(call, &budget, || {
-                        // SAFETY: a tensor's bytes are native, never a Luau buffer, so this exclusive
-                        // slice overlaps no input, and no Lua runs while it is alive.
-                        let target = unsafe { out.bytes_mut_unchecked() };
-                        p.0.run_into(&views, target, &budget)
-                    })
-                },
-            )?;
-            let budget = service_budget.clone();
-            ty.method("runReference", move |p: &CompiledProgram, call: &Call<'_>, tensors: VarArgs<&TensorValue>| {
-                let views: Vec<View<'_>> = tensors.values.iter().map(|t| t.0.borrow()).collect();
-                collecting(call, &budget, || p.0.run_reference(&views, &budget)).map(|t| Owned(TensorValue(t)))
-            })?;
-            ty.method("native_source", |p: &CompiledProgram| p.0.native_source())?;
-            ty.method("shader_source", |p: &CompiledProgram, mode: String| p.0.shader_source(&mode))?;
-            ty.method("native", |p: &CompiledProgram, call: &Call<'_>| -> Result<l3i::value::Function> {
+            .untyped();
+        program.method("native_source", |p: &ScriptProgram| p.program().native_source()).untyped();
+        program.method("shader_source", |p: &ScriptProgram, mode: String| p.program().shader_source(&mode)).untyped();
+        program.method("ir", |p: &ScriptProgram| p.program().dump()).untyped();
+        program
+            .method("native", |p: &ScriptProgram, call: &Call<'_>| -> Result<l3i::value::Function> {
                 // Without the generator the same source runs interpreted: slower, identical results.
                 #[cfg(feature = "jit")]
                 if !l3i::native_code::NativeCodeGen::for_scope(call)
                     .is_some_and(l3i::native_code::NativeCodeGen::is_available)
                 {
-                    return Err(l3i::Error::runtime("native backend unavailable"));
+                    return Err(Error::runtime("native backend unavailable"));
                 }
                 let chunk = call.load_source(
                     "=tensor-native",
-                    &p.0.native_source()?,
-                    &l3i::source::CompileOptions { type_info_level: 1, ..Default::default() },
+                    &p.program().native_source()?,
+                    &CompileOptions { type_info_level: 1, ..Default::default() },
                 )?;
                 chunk.invoke::<l3i::value::Function, _>(call, ())
-            })?;
-            ty.method("ir", |p: &CompiledProgram| p.0.dump())
-        })?;
-        let domain = service_domain.clone();
-        module.function("slot", move |slot: Exact<usize>, rows: Exact<usize>, cols: Exact<usize>| {
-            Expr::slot(slot.0, Shape::Matrix(rows.0, cols.0), domain.clone()).map(|e| Owned(Expression(e)))
-        })?;
-        let budget = service_budget.clone();
-        module.function("f32", move |call: &Call<'_>, bytes: BufferView, r: Exact<usize>, c: Exact<usize>| {
-            collecting(call, &budget, || Tensor::import_view(&bytes, Shape::Matrix(r.0, c.0), &budget))
-                .map(|t| Owned(TensorValue(t)))
-        })?;
-        module.function("collect", |call: &Call<'_>| call.collect_garbage())?;
+            })
+            .untyped();
+        let module = d.module(TESTING);
+        module.installed("peak").untyped();
+        module.installed("allocations").untyped();
+        module.installed("clock").untyped();
+        module.function("collect", |call: &Call<'_>| call.collect_garbage()).untyped();
+        module.function("noop", || ()).untyped();
         #[cfg(feature = "jit")]
-        module.function("setNative", |call: &Call<'_>, enabled: bool| {
-            if let Some(generator) = l3i::native_code::NativeCodeGen::for_scope(call) {
-                generator.set_native_execution_enabled(call, enabled);
-            }
-        })?;
+        module
+            .function("setNative", |call: &Call<'_>, enabled: bool| {
+                if let Some(generator) = l3i::native_code::NativeCodeGen::for_scope(call) {
+                    generator.set_native_execution_enabled(call, enabled);
+                }
+            })
+            .untyped();
         #[cfg(not(feature = "jit"))]
-        module.function("setNative", |_enabled: bool| ())?;
-        module.function("constant", move |v: f32| {
-            Expr::constant(v, service_domain.clone()).map(|e| Owned(Expression(e)))
-        })?;
-        let budget = service_budget.clone();
-        module.function("used", move || budget.used())?;
-        let budget = service_budget.clone();
-        module.function("peak", move || budget.peak())?;
-        module.function("allocations", move || service_budget.allocations())?;
-        module.function("noop", || ())?;
+        module.function("setNative", |_enabled: bool| ()).untyped();
+        Ok(())
+    }
 
+    fn install(&self, context: &mut InstallContext<'_>) -> Result<()> {
+        let module = context.module(TESTING)?;
+        let budget = self.budget.clone();
+        module.function("peak", move || budget.peak())?;
+        let budget = self.budget.clone();
+        module.function("allocations", move || budget.allocations())?;
         let start = std::time::Instant::now();
         module.function("clock", move || start.elapsed().as_secs_f64())?;
         Ok(())
@@ -214,18 +92,25 @@ impl LuauModule for Research {
 }
 
 pub(super) fn runtime() -> Result<Runtime> {
-    let policy = l3i::extension::RuntimePolicy::new().compat_global("@dream/data", "data");
+    let policy = RuntimePolicy::new()
+        .compat_global("@dream/data", "data")
+        .compat_global("@dream/compute", "compute")
+        .compat_global(TESTING, "testing");
     #[cfg(feature = "jit")]
     let policy =
         policy.native_code(l3i::extension::NativeCodePolicy { record_counters: cfg!(test), ..Default::default() });
-    let plan = l3i::extension::RuntimePlan::builder().policy(policy).extension(l3i::data::DataExtension).finalize()?;
+    let budget = Budget::new(64 * 1024 * 1024);
+    let plan = RuntimePlan::builder()
+        .policy(policy)
+        .extension(l3i::data::DataExtension)
+        .extension(ComputeExtension::shared(budget.clone(), Domain::new(4096, 512)))
+        .extension(ComputeTesting { budget })
+        .finalize()?;
     let runtime = Runtime::from_plan(&plan)?;
-    let module = runtime.register_module::<Research>()?;
-    runtime.set_global("compute", &module)?;
     let kernels = runtime.stack().load_source(
         "=luau-kernels",
         include_str!("luau-kernels.jsl"),
-        &l3i::source::CompileOptions { type_info_level: 1, ..Default::default() },
+        &CompileOptions { type_info_level: 1, ..Default::default() },
     )?;
     let kernels: l3i::value::Value = kernels.invoke(&runtime.stack(), ())?;
     runtime.set_global("kernels", &kernels)?;

@@ -3,16 +3,16 @@ local SAMPLES = 31
 local function sample(n, body)
     local iterations = 1
     while true do
-        local start = compute.clock()
+        local start = testing.clock()
         for _ = 1, iterations do body() end
-        if compute.clock() - start >= 0.002 or iterations >= 4096 then break end
+        if testing.clock() - start >= 0.002 or iterations >= 4096 then break end
         iterations *= 2
     end
     local times = {}
     for s = 1, SAMPLES do
-        local start = compute.clock()
+        local start = testing.clock()
         for _ = 1, iterations do body() end
-        times[s] = (compute.clock() - start) * 1e6 / iterations
+        times[s] = (testing.clock() - start) * 1e6 / iterations
     end
     table.sort(times)
     return times[(SAMPLES + 1) // 2], times[1], times[math.ceil(SAMPLES * 0.9)]
@@ -32,29 +32,29 @@ for _, n in { 0, 1, 16, 1024, 65536, 1048576 } do
         buffer.writef32(b, i * 4, i % 13 - 6)
         buffer.writef32(two, i * 4, 2)
     end
-    local start = compute.clock()
+    local start = testing.clock()
     local x, y = compute.slot(0, 1, n), compute.slot(1, 1, n)
     local graph = x:add(y):add(compute.constant(2)):relu()
-    local built = (compute.clock() - start) * 1e6
-    start = compute.clock()
+    local built = (testing.clock() - start) * 1e6
+    start = testing.clock()
     local program = graph:compile()
-    local compiled = (compute.clock() - start) * 1e6
-    start = compute.clock()
+    local compiled = (testing.clock() - start) * 1e6
+    start = testing.clock()
     local ta, tb = compute.f32(a, 1, n), compute.f32(b, 1, n)
-    local imported = (compute.clock() - start) * 1e6
+    local imported = (testing.clock() - start) * 1e6
     print(string.format('phases n=%d graph_build_us=%.3f plan_compile_us=%.3f import_both_inputs_us=%.3f', n, built, compiled, imported))
 
-    start = compute.clock()
+    start = testing.clock()
     program:runInto(out, a, b)
-    print(string.format('first_runInto n=%d us=%.3f', n, (compute.clock() - start) * 1e6))
+    print(string.format('first_runInto n=%d us=%.3f', n, (testing.clock() - start) * 1e6))
     row('jsl_chunked_runInto_borrowed_buffers', n, function() program:runInto(out, a, b) end)
     for i = 0, n - 1 do
         assert(buffer.readf32(out, i * 4) == math.max(i % 101 - 50 + i % 13 - 6 + 2, 0))
     end
 
-    local allocated = compute.allocations()
+    local allocated = testing.allocations()
     local result = program:run(ta, tb)
-    print(string.format('run_payload_allocations n=%d count=%d', n, compute.allocations() - allocated))
+    print(string.format('run_payload_allocations n=%d count=%d', n, testing.allocations() - allocated))
     row('jsl_chunked_run_fresh_tensor', n, function() result = program:run(ta, tb) end)
     if n < 1048576 then
         row('jsl_reference_run_fresh_tensor', n, function() result = program:runReference(ta, tb) end)
@@ -70,9 +70,9 @@ for _, n in { 0, 1, 16, 1024, 65536, 1048576 } do
         assert(buffer.readf32(out, i * 4) == math.max(i % 101 - 50 + i % 13 - 6 + 2, 0))
     end
 
-    start = compute.clock()
+    start = testing.clock()
     local native = program:native()
-    print(string.format('luau_native_load_and_jit n=%d us=%.3f', n, (compute.clock() - start) * 1e6))
+    print(string.format('luau_native_load_and_jit n=%d us=%.3f', n, (testing.clock() - start) * 1e6))
     local inputs = { a, b }
     if n <= 65536 then
         row('jsl_generated_luau_native_strict', n, function() native(inputs, out) end)
@@ -85,13 +85,13 @@ for _, n in { 0, 1, 16, 1024, 65536, 1048576 } do
         for i = 0, n - 1 do
             assert(buffer.readf32(out, i * 4) == math.max(i % 101 - 50 + i % 13 - 6 + 2, 0))
         end
-        compute.setNative(false)
+        testing.setNative(false)
         row('jsl_handwritten_luau_interpreted_f64', n, function() kernels.relu_sum(a, b, out, n) end)
-        compute.setNative(true)
+        testing.setNative(true)
     end
 
     result, ta, tb, program, graph, x, y, native = nil, nil, nil, nil, nil, nil, nil, nil
-    compute.collect()
+    testing.collect()
 end
 
 print('\n# JSL matrix multiplication, fresh tensor')
@@ -109,7 +109,7 @@ for _, side in { 16, 64, 256 } do
     row('jsl_matmul_handwritten_luau_native_f64', side * side * side, function() kernels.matmul(a, b, out, side) end)
 end
 
-local start = compute.clock()
-for _ = 1, 100000 do compute.noop() end
-print(string.format('noop_plus_jsl_loop_us=%.4f', (compute.clock() - start) * 1e6 / 100000))
-print(string.format('budget_peak_bytes=%d', compute.peak()))
+local start = testing.clock()
+for _ = 1, 100000 do testing.noop() end
+print(string.format('noop_plus_jsl_loop_us=%.4f', (testing.clock() - start) * 1e6 / 100000))
+print(string.format('budget_peak_bytes=%d', testing.peak()))

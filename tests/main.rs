@@ -70,7 +70,7 @@ mod audio;
 mod bytes;
 mod call;
 mod comprehension;
-#[cfg(feature = "compute-testing")]
+#[cfg(feature = "compute")]
 mod compute;
 #[cfg(feature = "data")]
 mod data;

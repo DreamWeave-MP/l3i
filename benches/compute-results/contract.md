@@ -1,8 +1,7 @@
 # Reusable f32 computations over chunked native kernels
 
-An **isolated research crate**. It is not an L3i extension: no default feature, syntax or
-public L3i API changes, and no dependency beyond L3i itself. Focused native x86-64 and AArch64 CI tests this crate separately. The decision and its evidence are in
-[`../findings.md`](../findings.md); this page is the contract. From the repository root, so the
+The `@dream/compute` extension (`src/compute`, feature `compute`). Focused native x86-64 and AArch64 CI tests it. The decision and its evidence are in
+[`../compute-results.md`](../compute-results.md); this page is the contract. From the repository root, so the
 verified Clang/LTO configuration applies:
 
 ```sh
@@ -13,6 +12,7 @@ cargo test --release --features compute-testing,jit compute::
 ## From JSL
 
 ```luau
+local compute = require("@dream/compute")
 local x, y = compute.slot(0, 1, n), compute.slot(1, 1, n)
 local program = x:add(y):add(compute.constant(2)):relu():compile()
 
@@ -39,7 +39,7 @@ threads at once (`Program: Send + Sync`).
 Nothing generates machine code at run time, so there is no code cache to bound and no W^X policy. No-JIT is the default
 configuration, and its test asserts no anonymous executable memory is mapped; `luau-jit` enables Luau's generator for the
 generated-Luau comparator only.
-Disassembly in [`../results/kernel-instructions.txt`](../results/kernel-instructions.txt) shows
+Disassembly in [`kernel-instructions.txt`](kernel-instructions.txt) shows
 `vaddps`, `vmulps` and `vcmpnleps` on `ymm` registers, and no fused multiply-add.
 
 ## How a graph becomes a plan
@@ -123,4 +123,4 @@ Scalar/rank-two f32 graphs support add, multiply, ReLU, matmul, transpose, order
 
 There is no executor-owned thread pool. Concurrent immutable programs are supported; a host-supplied intra-program scheduling interface remains future work. A standalone [int8 research primitive](INT8.md) investigates exact quantized matrix-vector arithmetic; it is not a graph or JSL API. Ranks above two are not implemented.
 
-Native x86-64 and AArch64 correctness and benchmark jobs passed at `1f0e952`; [the evidence](../results/native-1f0e952.md) records exact runs and raw artifacts. AArch64 uses compiler-vectorized baseline kernels and its architectural FMA support in fast mode; x86 selects AVX2/FMA at runtime. Hosted-runner timing is not controlled hardware benchmarking. AVX-512 remains untested.
+Native x86-64 and AArch64 correctness and benchmark jobs passed at `1f0e952`; [the evidence](native-1f0e952.md) records exact runs and raw artifacts. AArch64 uses compiler-vectorized baseline kernels and its architectural FMA support in fast mode; x86 selects AVX2/FMA at runtime. Hosted-runner timing is not controlled hardware benchmarking. AVX-512 remains untested.

@@ -12,7 +12,7 @@ local function floats(bytes)
 end
 local function near(a,b) return math.abs(a-b)<=1e-6*math.max(1,math.abs(b)) end
 
-compute.collect()
+testing.collect()
 local base=compute.used()
 local input=buffer_of({1,2,3,4,5,6})
 local x=compute.slot(0,2,3)
@@ -65,7 +65,7 @@ local program=compute.slot(0,m,k):matmul(compute.slot(1,k,n)):compile()
 local plain,packed=buffer.create(m*n*4),buffer.create(m*n*4)
 local ta,tb=compute.f32(a,m,k),compute.f32(b,k,n)
 program:runInto(plain,a,b)
-compute.collect()
+testing.collect()
 local before=compute.used()
 local left=ta:prepareLeft()
 assert(compute.used()>before,'a packing is charged')
@@ -74,10 +74,10 @@ program:runTensorsInto(packed,left,tb)
 for i=0,m*n-1 do assert(buffer.readu32(plain,i*4)==buffer.readu32(packed,i*4)) end
 assert(program:runReference(left,tb):read()~=nil)
 left=nil
-compute.collect()
+testing.collect()
 assert(compute.used()==before,'a dead packing is uncharged by collection')
 ta,tb=nil,nil
-compute.collect()
+testing.collect()
 
 -- A row sum over no columns is +0 per row, however the empty view says its rows are spaced.
 do
@@ -93,7 +93,7 @@ do
  assert(#reference==2 and reference[1]==0 and reference[2]==0)
  assert(#floats(compute.slot(0,2,0):softmax():compile():run(empty):read())==0)
 end
-compute.collect()
+testing.collect()
 
 -- Hold results until the budget refuses, recover, and see every byte come back.
 local held={}
@@ -106,13 +106,13 @@ for _=1,128 do
 end
 assert(refused,'a 64 MiB budget refuses 128 MiB')
 held=nil
-compute.collect()
+testing.collect()
 assert(compute.used()==base)
 -- Unreferenced results that would exhaust it instead are collected on the way, with no error.
 local noise=compute.slot(0,1,262144):relu():compile()
 local logits=compute.f32(megabyte,1,262144)
 for _=1,128 do noise:run(logits) end
 logits=nil
-compute.collect()
+testing.collect()
 assert(compute.used()==base)
 print('rows: stages, errors, packed weights, exhaustion and recovery verified')

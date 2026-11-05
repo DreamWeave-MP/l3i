@@ -19,6 +19,7 @@ that requires its module type checks against the plan's definitions.
 | `dream.raster` | `@dream/raster` | `l3i::raster::RasterExtension` | always |
 | `dream.soft_render` | `@dream/soft-render` | `l3i::soft_render::SoftRenderExtension` | `soft-render` |
 | `dream.bytes` | `@dream/bytes` | `l3i::bytes::BytesExtension` | `bytes` |
+| `dream.compute` | `@dream/compute` | `l3i::compute::script::ComputeExtension` | `compute` |
 | `dream.data` | `@dream/data` | `l3i::data::DataExtension` | `data` (native loops need `jit`) |
 | `dream.intern` | `@dream/intern` | `l3i::intern::InternExtension` | `intern` |
 | `dream.intl` | `@dream/intl` | `l3i::intl::IntlExtension` | `intl` |
@@ -974,6 +975,48 @@ field), `argsort` through caller scratch (a spatial-index builder otherwise hand
 stable merge), buffer sinks (a spatial query writes a filtered index list into a caller buffer
 with a capacity), and thresholds held in locals (every comparison in those loops is against a
 local). Nothing on the original list remains deferred.
+
+## dream.compute
+
+Feature `compute`; module `@dream/compute`, `l3i::compute::script::ComputeExtension`. Typed f32
+matrix computations compiled once and run on precompiled native kernels, with no runtime code
+generation. The same program runs with or without `jit`.
+
+```luau
+local compute = require("@dream/compute")
+local x, y = compute.slot(0, 1, n), compute.slot(1, 1, n)
+local program = x:add(y):add(compute.constant(2)):relu():compile()
+
+program:runInto(out, a, b)    -- Buffers, borrowed for this call: no copy, no result object.
+local r = program:run(ta, tb) -- Immutable tensors, giving a new immutable tensor.
+local bytes = r:read()        -- An explicit copy into a new buffer.
+```
+
+An expression holds structure and shapes, never data, so one program runs on any inputs of its
+slots' shapes and retains none of them. Expressions have `add`, `mul`, `matmul`, `relu`, `softmax`,
+`sumRows`, `transpose`, `rmsNorm` and `layerNorm`. `compile` gives separately rounded f32 arithmetic
+in a defined order, the same bits on every CPU. `compileFast` may fuse multiply-add, so its results
+can differ in the last place between CPUs.
+
+A tensor is immutable. `tensor:view(rows, cols, offset, rowStride, colStride)` shares elements
+without copying and can only address elements its parent holds. `prepareRight` and `prepareLeft`
+pack weights ahead of time for repeated matrix products.
+
+### Limits
+
+Native tensors are invisible to Luau's memory limit, so the host bounds them. By default each runtime
+gets its own domain of 64 MiB, 4096 expression nodes and 512 programs; `ComputeExtension::new` takes
+other limits, and `ComputeExtension::shared` charges every runtime from a plan to one domain the
+host holds. A call the budget refuses collects garbage once and retries, then raises an ordinary
+error, and the runtime stays usable. `compute.used()` and `compute.limit()` report the domain's bytes.
+
+Scratch, temporaries and results all count. Memory returns when its tensor is collected or its
+runtime closes.
+
+### What it costs
+
+Measurements, comparisons against CubeCL, matrixmultiply and OpenBLAS, and how to reproduce them are
+in [`benches/compute-results.md`](https://github.com/DreamWeave-MP/l3i/blob/main/benches/compute-results.md).
 
 ## dream.intern
 

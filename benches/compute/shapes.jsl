@@ -3,16 +3,16 @@
 local function measure(label, body)
  local iterations=1
  while true do
-  local start=compute.clock()
+  local start=testing.clock()
   for _=1,iterations do body() end
-  if compute.clock()-start>=0.003 then break end
+  if testing.clock()-start>=0.003 then break end
   iterations*=2
  end
  local samples={}
  for i=1,31 do
-  local start=compute.clock()
+  local start=testing.clock()
   for _=1,iterations do body() end
-  samples[i]=(compute.clock()-start)*1e6/iterations
+  samples[i]=(testing.clock()-start)*1e6/iterations
  end
  table.sort(samples)
  print(string.format('%s median_us=%.3f min_us=%.3f p90_us=%.3f',label,samples[16],samples[1],samples[28]))
@@ -84,7 +84,7 @@ for i,s in shapes do
  tensors[i]=compute.f32(buffers[i],s[1],s[2])
 end
 local expression=graph()
-measure('jsl_forward_build_and_compile',function() graph():compile() compute.collect() end)
+measure('jsl_forward_build_and_compile',function() graph():compile() testing.collect() end)
 local out=buffer.create(tokens*width*4)
 for mode,program in {strict=expression:compile(),fast=expression:compileFast()} do
  measure('jsl_forward_runInto_'..mode,function() program:runInto(out,table.unpack(buffers)) end)
@@ -98,4 +98,4 @@ for i=0,tokens*width-1 do
  local a,b=buffer.readu32(out,i*4),buffer.readu32(reference,i*4)
  assert(a==b,'forward pass disagrees with the reference')
 end
-print(string.format('jsl_forward_budget_peak_bytes=%d',compute.peak()))
+print(string.format('jsl_forward_budget_peak_bytes=%d',testing.peak()))

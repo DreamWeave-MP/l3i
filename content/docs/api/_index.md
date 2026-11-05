@@ -30,6 +30,7 @@ the root.
 | `bytes-digests` | CRC-32, Adler-32, FNV-1a, xxHash, MD5, SHA-1, SHA-256, BLAKE3, one-shot and incremental | `bytes::digests` |
 | `bytes-crypto` | Bytes from the OS CSPRNG, HMAC and its constant-time verification, PKCS#1 v1.5 RSA and ECDSA signing | `bytes::crypto` |
 | `bytes-text` | Decoding and encoding every WHATWG-labelled text encoding | `bytes::text` |
+| `compute` | The `dream.compute` extension and `@dream/compute` module: typed f32 graphs compiled to reusable programs over native kernels | `compute` |
 | `data` | The `dream.data` extension and `@dream/data` module: reductions, selections, gather and scatter, element-wise arithmetic, stable argsort and partition over typed buffer spans, with typed receivers lowered under `jit` | `data` |
 | `intern` | The `dream.intern` extension and `@dream/intern` module: pools that turn strings and buffer spans into dense number identities | `intern` |
 | `intl` | The `dream.intl` extension and `@dream/intl` module: BCP 47 locale identity, CLDR plural rules and decimal formatting | `intl` |
