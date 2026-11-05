@@ -142,6 +142,9 @@ libc = "0.2"
 [target.'cfg(l3i_compare)'.dev-dependencies]
 cubecl = { version = "=0.11.3", default-features = false, features = ["std", "cpu"] }
 cubecl-runtime = { version = "=0.11.3", default-features = false }
+# The matrix tournament needs only these, so CI can run it natively under `--cfg l3i_matrix` on an
+# architecture CubeCL's prebuilt LLVM may not cover.
+[target.'cfg(any(l3i_compare, l3i_matrix))'.dev-dependencies]
 matrixmultiply = "=0.3.11"
 rayon = "1"
 

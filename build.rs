@@ -83,6 +83,7 @@ fn sources(dir: &Path) -> Vec<PathBuf> {
 fn main() {
     println!("cargo:rerun-if-env-changed=LUAU_CXXFLAGS");
     println!("cargo:rustc-check-cfg=cfg(l3i_compare)");
+    println!("cargo:rustc-check-cfg=cfg(l3i_matrix)");
     println!("cargo:rerun-if-changed=luau");
     println!("cargo:rerun-if-changed=csrc");
     println!("cargo:rustc-env=L3I_TAG_LIMIT={TAG_LIMIT}");

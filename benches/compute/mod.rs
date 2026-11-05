@@ -16,7 +16,7 @@
 mod cubecl;
 #[path = "../../tests/compute/host.rs"]
 mod host;
-#[cfg(l3i_compare)]
+#[cfg(any(l3i_compare, l3i_matrix))]
 mod matrix;
 
 use crate::counting_alloc::{ALLOCATED as BYTES, ALLOCATIONS};
@@ -1056,7 +1056,7 @@ pub fn main(filter: &str) {
         "compute_int8" => quantized(),
         #[cfg(feature = "jit")]
         "compute_luau_assembly" => luau_assembly(&argument.expect("a path to write the assembly to")),
-        #[cfg(l3i_compare)]
+        #[cfg(any(l3i_compare, l3i_matrix))]
         "compute_matrix" => matrix::main(),
         #[cfg(l3i_compare)]
         "compute_cubecl" => cubecl::main(argument.as_deref()),

@@ -27,6 +27,47 @@ jobs:
         run: >-
           cargo clippy --config "target.'cfg(all())'.rustflags=['--cfg','l3i_compare']"
           --benches --features compute-testing -- -W clippy::pedantic -D warnings
+  # The same tournament on real hardware of each architecture, against OpenBLAS and BLIS as the
+  # distribution builds them. Shared runners make these elapsed times evidence of shape, not of a
+  # lead: hardware counters aren't available there, and nothing here can fail on speed.
+  tournament:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    env:
+      CARGO_BUILD_JOBS: 2
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: true
+      - uses: dtolnay/rust-toolchain@1.99.1
+      - uses: DreamWeave-MP/StroggForge/.github/actions/setup-llvm@v55
+      - name: Install BLAS libraries
+        run: sudo apt-get install -y libopenblas0-pthread libblis4-pthread
+      - name: Record the CPU
+        run: lscpu | tee "tournament-${{ matrix.runner }}.txt"
+      - name: One thread, then all of them
+        run: |
+          arch_dir="/usr/lib/$(uname -m)-linux-gnu"
+          export L3I_BENCH_BLAS="openblas=$arch_dir/openblas-pthread/libblas.so.3,blis=$arch_dir/blis-pthread/libblis.so.4"
+          export L3I_BENCH_SHAPES=6x128x16,12x128x16,16x16x16,31x127x17,64x64x64,128x128x128,128x64x512,256x256x1,256x256x256,512x512x512,1024x1024x1024,1x4096x1,1x1024x1024
+          run_matrix() {
+            cargo bench --config "target.'cfg(all())'.rustflags=['--cfg','l3i_matrix']" \
+              --features compute-testing --bench main -- compute_matrix
+          }
+          run_matrix | tee -a "tournament-${{ matrix.runner }}.txt"
+          OMP_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 L3I_BENCH_THREADS=4 L3I_BENCH_SHAPES=256x256x256,512x512x512,1024x1024x1024 \
+            run_matrix | tee -a "tournament-${{ matrix.runner }}.txt"
+      - name: Integer kernels and row stages
+        run: |
+          cargo bench --features compute-testing --bench main -- compute_int8 | tee -a "tournament-${{ matrix.runner }}.txt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tournament-${{ matrix.runner }}
+          path: tournament-${{ matrix.runner }}.txt
   correctness:
     strategy:
       fail-fast: false
