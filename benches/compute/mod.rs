@@ -952,7 +952,7 @@ pub fn reductions() {
 }
 
 pub fn quantized() {
-    use l3i::compute::quantized::matvec;
+    use l3i::compute::quantized::{Groups, IntegerIsa, dot_with, matvec, matvec_i4, matvec_with};
     for rows in [1, 64, 1024] {
         let columns = 1024;
         let weights: Vec<i8> = (0..rows * columns).map(|i| i8::try_from(i % 15).unwrap() - 7).collect();
@@ -970,6 +970,36 @@ pub fn quantized() {
         heap("int8_exact_matvec_heap", &mut || {
             matvec(black_box(&weights), black_box(&input), &scales, 1.0, black_box(&mut output)).unwrap();
         });
+        let exact = output.clone();
+        row("int8_exact_matvec_baseline", weights.len(), || {
+            matvec_with(
+                black_box(&weights),
+                black_box(&input),
+                &scales,
+                1.0,
+                black_box(&mut output),
+                IntegerIsa::Baseline,
+            )
+            .unwrap();
+        });
+        assert_eq!(output, exact, "every instantiation gives the same integers");
+        row("int8_exact_dot", input.len(), || {
+            black_box(dot_with(black_box(&input), black_box(&input), IntegerIsa::detect()));
+        });
+        row("int8_exact_dot_baseline", input.len(), || {
+            black_box(dot_with(black_box(&input), black_box(&input), IntegerIsa::Baseline));
+        });
+        // The same weights where they fit four bits, in half the memory, with one scale per 32 rows.
+        let narrow: Vec<u8> = weights
+            .chunks_exact(columns)
+            .flat_map(|row| row.chunks(2).map(|pair| (pair[0].to_ne_bytes()[0] & 15) | (pair[1].to_ne_bytes()[0] << 4)))
+            .collect();
+        let group_scales = vec![1.0; rows.div_ceil(32)];
+        row("int4_exact_matvec", weights.len(), || {
+            let groups = Groups { rows: 32, scales: &group_scales };
+            matvec_i4(black_box(&narrow), black_box(&input), groups, 1.0, black_box(&mut output)).unwrap();
+        });
+        assert_eq!(output, exact, "values that fit four bits mean the same in four bits");
         let budget = Budget::new(64 << 20);
         let domain = Domain::new(1024, 1024);
         let bytes = |v: &[i8]| v.iter().flat_map(|v| f32::from(*v).to_le_bytes()).collect::<Vec<_>>();
@@ -984,6 +1014,10 @@ pub fn quantized() {
         let mut result = vec![0u8; rows * 4];
         row("f32_strict_matvec_program", weights.len(), || {
             program.run_into(black_box(&[a.borrow(), b.borrow()]), black_box(&mut result), &budget).unwrap();
+        });
+        let prepared = a.prepare_left(&budget).unwrap();
+        row("f32_strict_matvec_prepared", weights.len(), || {
+            program.run_into(black_box(&[prepared.borrow(), b.borrow()]), black_box(&mut result), &budget).unwrap();
         });
         assert_eq!(
             output.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
