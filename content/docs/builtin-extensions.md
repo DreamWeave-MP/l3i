@@ -1798,6 +1798,74 @@ running a program that prints it. `clearEnv = true` clears `PATH` too.
 deadline is killed and reaped, a capture still open then (a process the child started can hold
 the pipe after the child is gone) is abandoned, and the script stops with the time limit.
 
+### Reading standard input
+
+With `process.stdio`, `@dream/process` exposes `openStdin()`. It claims an exclusive
+consumer across all L3i runtimes and worker threads in the host process. A second claim
+returns `nil, message, "wouldBlock"`. Host code must coordinate any direct stdin reads
+with L3i; stdin is a single stream, not a broadcast channel.
+
+```luau
+local process = require('@dream/process')
+local input = assert(process.openStdin())
+while true do
+    local line, message, kind = input:readLine(65536)
+    if kind == 'wouldBlock' then
+        input:wait(1000) -- explicit blocking wait, suitable for standalone commands
+    elseif message then
+        input:close()
+        error(message)
+    elseif line == nil then
+        break -- EOF, distinct from an empty line ('')
+    else
+        print(line)
+    end
+end
+input:close()
+```
+
+For frame-driven applications, call `readLine` or `read` from the existing scheduler and
+retry `wouldBlock` on a later frame. Do not call `wait` in a frame handler. The reader
+never invokes Luau or schedules callbacks. Hosts should close the handle when its owning
+context or generation ends; runtime destruction also releases it through userdata teardown.
+
+- `read(maxBytes)` returns up to the requested number of bytes in a binary Luau string.
+  The integer bound is 1–1,048,576. Short reads are normal.
+- `readLine(maxBytes?)` defaults to 65,536 bytes before LF, with the same maximum bound.
+  It strips LF and a preceding CR; a final unterminated line is returned unchanged.
+  It preserves UTF-8 and arbitrary non-UTF-8 bytes exactly. Text validation is the caller's
+  choice. Empty input returns EOF; an empty line returns `''`.
+- Pending reads return `nil, message, "wouldBlock"`; EOF returns nil without an error.
+  OS failures return `nil, message, kind`, as other process operations do.
+- A pending line must be retried with the same bound before switching to raw reads.
+  An oversized line returns `invalidInput`, consuming the prefix through the first excess
+  byte. It does not drain an arbitrarily long line: the next `readLine` carries on with what
+  is left of it, so to skip the line, call again until one comes back instead of
+  `invalidInput` (that one is its tail). Or close the handle. A bound includes CR before LF.
+- `wait(timeoutMs)` waits up to 60,000 milliseconds, capped by the execution time limit.
+  It returns whether input, EOF, or an error is available, and does not initiate a read.
+- `close()` is idempotent and immediately releases ownership. A pending partial line is
+  discarded. Bytes not yet consumed remain in the process buffer for the next owner.
+
+One lazy OS-reader thread serves the process, with at most 8 KiB of shared buffering and
+one bounded partial line for the owner. It reads only on demand. Closing or destroying a
+runtime never joins a thread blocked in terminal input. That single thread may remain
+blocked until input arrives or the process exits; a new consumer can use its eventual
+result. No new thread is created on restart.
+
+`process.stdio` is checked when stdin is opened. The handle is then the authority to read:
+passing it to less privileged code delegates reading. `Runtime::shutdown()` releases the claim
+even while a script still holds the handle, whose reads then report a closed consumer.
+
+A host can add its own check with `ProcessExtension.with_input_policy(policy)`, an
+`Rc<dyn process::input::Policy>` asked about `Open` and `Wait` at every such call. What it
+refuses raises in the caller. It runs after the `process.stdio` gate, which it cannot bypass;
+reads and `close()` are never checked.
+
+Windows console reads use Rust's standard
+input behavior (Unicode console input); redirected pipes preserve binary bytes on all
+platforms. No terminal, raw terminal mode, or network capability is required.
+
 ## dream.tcp
 
 Feature `tcp`; module `@dream/tcp`, `l3i::tcp::TcpExtension`. Raw TCP byte streams and a

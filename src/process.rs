@@ -34,6 +34,8 @@
 //! The program is found the way the OS finds one (`PATH`), and the arguments go to it as they
 //! are, with no shell in between: nothing is split, quoted or expanded.
 
+pub mod input;
+
 use std::process::{Command, Stdio};
 
 use crate::bind::{Call, StackResults};
@@ -52,7 +54,7 @@ pub const MODULE: &str = "@dream/process";
 pub const SPAWN_CAPABILITY: &str = "process.spawn";
 /// The capability `process.env` needs.
 pub const ENVIRONMENT_CAPABILITY: &str = "process.environment";
-/// The capability `process.write` needs: the host's standard streams.
+/// The capability `process.write` and `process.openStdin` need: the host's standard streams.
 pub const STDIO_CAPABILITY: &str = "process.stdio";
 
 const RUN_SIGNATURE: &str = "(program: string, args: { string }?, options: dream_process_RunOptions?) -> (dream_process_Result?, string?, dream_process_ErrorKind?)";
@@ -511,6 +513,7 @@ impl Extension for ProcessExtension {
     }
 
     fn describe(&self, d: &mut ExtensionDescriptor) -> Result<()> {
+        input::describe(d);
         d.type_alias("dream_process_RunOptions", OPTIONS_TYPE);
         d.type_alias("dream_process_Result", RESULT_TYPE);
         d.type_alias("dream_process_ErrorKind", crate::outcome::ERROR_KIND_TYPE);
@@ -531,6 +534,9 @@ impl Extension for ProcessExtension {
             .function("platform", platform)
             .signature("() -> string")
             .doc("The OS the host was built for, as Rust names it: windows, macos, linux, android, and so on.")
+            .installed("openStdin")
+            .signature("() -> (dream_process_Stdin?, string?, dream_process_ErrorKind?)")
+            .doc("Claims the process stdin stream exclusively; needs process.stdio. Returns wouldBlock if another runtime, worker or handle owns it. Read methods are nonblocking; wait is explicit. Close releases ownership without waiting for the OS reader. Host code must not concurrently read stdin outside this API.")
             .installed("write")
             .signature("(stream: \"stdout\" | \"stderr\", data: buffer | string) -> (boolean?, string?, dream_process_ErrorKind?)")
             .doc("Writes data to the host's standard output or error, without the newline print adds; needs the process.stdio capability.")
@@ -544,23 +550,54 @@ impl Extension for ProcessExtension {
     }
 
     fn install(&self, cx: &mut InstallContext<'_>) -> Result<()> {
-        let granted = cx.has_capability(SPAWN_CAPABILITY)?;
-        let environment = cx.has_capability(ENVIRONMENT_CAPABILITY)?;
-        let stdio = cx.has_capability(STDIO_CAPABILITY)?;
-        let module = cx.module(MODULE)?;
-        module.gated("env", ENVIRONMENT_CAPABILITY, environment, |name: &[u8]| -> Result<Option<Vec<u8>>> {
-            Ok(std::env::var_os(os_string("a variable name", name)?).map(|value| value.as_encoded_bytes().to_vec()))
-        })?;
-        module.gated("knownFolder", ENVIRONMENT_CAPABILITY, environment, known_folder)?;
-        module.gated("write", STDIO_CAPABILITY, stdio, write)?;
-        module.gated(
-            "run",
-            SPAWN_CAPABILITY,
-            granted,
-            move |call: &Call<'_>, program: &[u8], args: Option<ValueView<'_>>, options: Option<ValueView<'_>>| {
-                run(call, program, args, options, environment)
-            },
-        )?;
-        Ok(())
+        install(cx, None)
     }
+}
+
+impl ProcessExtension {
+    /// This extension with a host's [`input::Policy`] checked at every stdin operation, on top of
+    /// the `process.stdio` capability gate.
+    #[must_use]
+    pub fn with_input_policy(self, policy: std::rc::Rc<dyn input::Policy>) -> impl Extension {
+        InputProcessExtension { policy }
+    }
+}
+
+struct InputProcessExtension {
+    policy: std::rc::Rc<dyn input::Policy>,
+}
+
+impl Extension for InputProcessExtension {
+    fn id(&self) -> &'static str {
+        EXTENSION_ID
+    }
+    fn describe(&self, d: &mut ExtensionDescriptor) -> Result<()> {
+        ProcessExtension.describe(d)
+    }
+    fn install(&self, cx: &mut InstallContext<'_>) -> Result<()> {
+        install(cx, Some(std::rc::Rc::clone(&self.policy)))
+    }
+}
+
+fn install(cx: &mut InstallContext<'_>, input_policy: Option<std::rc::Rc<dyn input::Policy>>) -> Result<()> {
+    let granted = cx.has_capability(SPAWN_CAPABILITY)?;
+    let environment = cx.has_capability(ENVIRONMENT_CAPABILITY)?;
+    let stdio = cx.has_capability(STDIO_CAPABILITY)?;
+    let module = cx.module(MODULE)?;
+    module.gated("env", ENVIRONMENT_CAPABILITY, environment, |name: &[u8]| -> Result<Option<Vec<u8>>> {
+        Ok(std::env::var_os(os_string("a variable name", name)?).map(|value| value.as_encoded_bytes().to_vec()))
+    })?;
+    module.gated("knownFolder", ENVIRONMENT_CAPABILITY, environment, known_folder)?;
+    module.gated("write", STDIO_CAPABILITY, stdio, write)?;
+    module
+        .gated("openStdin", STDIO_CAPABILITY, stdio, move |call: &Call<'_>| input::open(call, input_policy.as_ref()))?;
+    module.gated(
+        "run",
+        SPAWN_CAPABILITY,
+        granted,
+        move |call: &Call<'_>, program: &[u8], args: Option<ValueView<'_>>, options: Option<ValueView<'_>>| {
+            run(call, program, args, options, environment)
+        },
+    )?;
+    Ok(())
 }

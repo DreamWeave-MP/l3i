@@ -59,7 +59,7 @@ pub fn expire_if_due(scope: &impl crate::stack::Scope) {
 }
 
 /// Records `resource` with the runtime `scope` belongs to, for [`Runtime::shutdown`].
-#[cfg(feature = "fs")]
+#[cfg(any(feature = "fs", feature = "process"))]
 pub(crate) fn register_resource(scope: &impl crate::stack::Scope, resource: std::rc::Weak<dyn shared::Resource>) {
     // SAFETY: as in `watchdog_remaining`.
     if let Some(shared) = unsafe { shared_for(scope.state()) } {
