@@ -995,8 +995,10 @@ local bytes = r:read()        -- An explicit copy into a new buffer.
 An expression holds structure and shapes, never data, so one program runs on any inputs of its
 slots' shapes and retains none of them. Expressions have `add`, `mul`, `matmul`, `relu`, `softmax`,
 `sumRows`, `transpose`, `rmsNorm` and `layerNorm`. `compile` gives separately rounded f32 arithmetic
-in a defined order, the same bits on every CPU. `compileFast` may fuse multiply-add, so its results
-can differ in the last place between CPUs.
+in a defined order, the same bits on every CPU. `compileFast` may fuse multiply-add and add the terms
+of long dot products in lanes rather than in order. Its results can differ from `compile`'s, and
+between CPUs with and without FMA, by as much as any summation order can: the bound is about
+`k * 2^-24 * sum(|a[i] * b[i]|)`, which cancellation can make large relative to the result.
 
 A tensor is immutable. `tensor:view(rows, cols, offset, rowStride, colStride)` shares elements
 without copying and can only address elements its parent holds. `prepareRight` and `prepareLeft`

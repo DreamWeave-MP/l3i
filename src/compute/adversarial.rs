@@ -1075,3 +1075,105 @@ fn preparing_empty_weights_holds_nothing_and_still_multiplies() {
     }
     assert_eq!((exhausted.used(), exhausted.allocations()), (0, 0));
 }
+
+/// The exact sum of exact f32 products, and the sum of their magnitudes, by compensated f64.
+fn exact_dot(a: &[f32], b: &[f32]) -> (f64, f64) {
+    let (mut sum, mut compensation, mut magnitude) = (0.0f64, 0.0f64, 0.0f64);
+    for (x, y) in a.iter().zip(b) {
+        let term = f64::from(*x) * f64::from(*y);
+        magnitude += term.abs();
+        let next = sum + term;
+        compensation += if sum.abs() >= term.abs() { (sum - next) + term } else { (term - next) + sum };
+        sum = next;
+    }
+    (sum + compensation, magnitude)
+}
+
+fn fast_dot(a: &[f32], b: &[f32], m: usize, k: usize) -> Vec<f32> {
+    let budget = Budget::new(1 << 26);
+    let domain = Domain::new(1 << 12, 1 << 12);
+    let x = Expr::slot(0, Shape::Matrix(m, k), domain.clone()).unwrap();
+    let y = Expr::slot(1, Shape::Matrix(k, 1), domain).unwrap();
+    let program = x.matmul(&y).unwrap().compile_with(Numeric::Fast).unwrap();
+    let ta = Tensor::import(&bytes_of(a), Shape::Matrix(m, k), &budget).unwrap();
+    let tb = Tensor::import(&bytes_of(b), Shape::Matrix(k, 1), &budget).unwrap();
+    floats(&program.run(&[&ta, &tb], &budget).unwrap().readback().unwrap())
+}
+
+/// Fast products may reorder additions, within the error any order of a sum can have.
+#[test]
+fn fast_dot_products_stay_within_the_bound_of_a_sum_in_any_order() {
+    let mut rng = Rng(0x1234_5678_9abc_def1);
+    for k in [63, 64, 65, 95, 96, 97, 127, 128, 129, 257, 1000, 4096] {
+        let rows = 3;
+        for kind in 0..FAMILIES {
+            let a: Vec<f32> = (0..rows).flat_map(|_| rng.row(k, kind)).collect();
+            let b = rng.row(k, kind);
+            if a.iter().chain(&b).any(|v| !v.is_finite() || v.abs() > 1e15) {
+                continue;
+            }
+            let result = fast_dot(&a, &b, rows, k);
+            for (row, actual) in a.chunks_exact(k).zip(&result) {
+                let (exact, magnitude) = exact_dot(row, &b);
+                let bound = (k + 8) as f64 * f64::from(f32::EPSILON) * magnitude + f64::from(f32::MIN_POSITIVE);
+                let error = (f64::from(*actual) - exact).abs();
+                assert!(error <= bound, "k {k} kind {kind}: {actual} vs {exact}, error {error} over {bound}");
+            }
+        }
+    }
+}
+
+/// Every element reaches the result, wherever it falls among the lanes and the tail.
+#[test]
+fn fast_dot_products_read_every_element_exactly_once() {
+    for k in [64, 65, 95, 96, 97, 128, 129, 300] {
+        for at in 0..k {
+            let mut a = vec![0.0f32; k];
+            let mut b = vec![0.0f32; k];
+            a[at] = 3.0;
+            b[at] = 5.0;
+            assert_eq!(fast_dot(&a, &b, 1, k), [15.0], "k {k}, element {at}");
+            // A lone NaN or infinity reaches the result from any lane too.
+            a[at] = f32::NAN;
+            assert!(fast_dot(&a, &b, 1, k)[0].is_nan(), "k {k}, NaN at {at}");
+            a[at] = f32::INFINITY;
+            assert_eq!(fast_dot(&a, &b, 1, k), [f32::INFINITY], "k {k}, infinity at {at}");
+        }
+    }
+}
+
+/// The lanes are fixed, not the vector width, so these bits are a contract across fusing CPUs.
+#[test]
+fn fast_dot_products_combine_lanes_in_their_documented_order() {
+    if !Isa::Fma.available() && !cfg!(target_arch = "aarch64") {
+        return;
+    }
+    let mut rng = Rng(0xfeed_0000_1234_5678);
+    let k = 32 * 5 + 7;
+    let a = rng.row(k, 0);
+    let b = rng.row(k, 0);
+    let (mut lanes, split) = ([0.0f32; 32], k / 32 * 32);
+    for (i, (x, y)) in a[..split].iter().zip(&b[..split]).enumerate() {
+        lanes[i % 32] = x.mul_add(*y, lanes[i % 32]);
+    }
+    let per_column: Vec<f32> = (0..8).map(|l| (lanes[l] + lanes[16 + l]) + (lanes[8 + l] + lanes[24 + l])).collect();
+    let s = &per_column;
+    let total = ((s[0] + s[4]) + (s[2] + s[6])) + ((s[1] + s[5]) + (s[3] + s[7]));
+    let want = a[split..].iter().zip(&b[split..]).fold(total, |sum, (x, y)| x.mul_add(*y, sum));
+    assert_eq!(fast_dot(&a, &b, 1, k)[0].to_bits(), want.to_bits());
+}
+
+/// Huge terms that absorb small ones unless paired first: another combining order answers 2.
+#[test]
+fn fast_dot_product_lane_order_is_observable_and_fixed() {
+    if !Isa::Fma.available() && !cfg!(target_arch = "aarch64") {
+        return;
+    }
+    let big = 1e8f32;
+    let b = vec![1.0f32; 64];
+    for placed in [[0, 4, 2, 6], [1, 5, 3, 7], [0, 16, 8, 24], [3, 19, 11, 27]] {
+        let mut a = vec![0.0f32; 64];
+        (a[placed[0]], a[placed[1]], a[placed[2]], a[placed[3]]) = (big, 1.0, -big, 1.0);
+        assert_eq!(fast_dot(&a, &b, 1, 64), [0.0], "{placed:?}");
+    }
+}

@@ -970,9 +970,42 @@ fn stream_row<const FUSED: bool>(a: &[Element], b: &[Element], n: usize, out: &m
     }
 }
 
+/// Elements in the lanes of [`relaxed_dot`], and the shortest row it pays for: the ordered kernel
+/// overlaps four rows in the pipeline, which beats combining lanes for every row until then.
+const RELAXED_LANES: usize = 32;
+const RELAXED_FROM: usize = 64;
+
+/// A dot product under `Numeric::Fast`, accumulated in fixed lanes and combined in a fixed order.
+/// The lane count is not the vector width, so this gives the same bits on every fusing CPU. Rounding
+/// differs from an ordered sum's but stays within its bound, `k * u * sum(|a[i] * b[i]|)` to first
+/// order; cancellation can make that large relative to the result, as in any floating-point sum.
+#[inline(always)]
+fn relaxed_dot(a: &[Element], b: &[Element]) -> f32 {
+    let (left, left_tail) = a.as_chunks::<RELAXED_LANES>();
+    let (right, right_tail) = b.as_chunks::<RELAXED_LANES>();
+    let mut lanes = [[0.0f32; 8]; 4];
+    for (x, y) in left.iter().zip(right) {
+        for (r, lane) in lanes.iter_mut().enumerate() {
+            for (l, sum) in lane.iter_mut().enumerate() {
+                *sum = read(x[r * 8 + l]).mul_add(read(y[r * 8 + l]), *sum);
+            }
+        }
+    }
+    let [l0, l1, l2, l3] = lanes;
+    let s: [f32; 8] = std::array::from_fn(|l| (l0[l] + l2[l]) + (l1[l] + l3[l]));
+    let total = ((s[0] + s[4]) + (s[2] + s[6])) + ((s[1] + s[5]) + (s[3] + s[7]));
+    left_tail.iter().zip(right_tail).fold(total, |sum, (x, y)| read(*x).mul_add(read(*y), sum))
+}
+
 /// One output column: independent ordered sums, four at once, overlapping in the pipeline.
 #[inline(always)]
 fn column_rows<const FUSED: bool>(a: &[Element], b: &[Element], k: usize, out: &mut [Element]) {
+    if FUSED && k >= RELAXED_FROM {
+        for (slot, row) in out.iter_mut().zip(a.chunks_exact(k)) {
+            *slot = relaxed_dot(row, b).to_le_bytes();
+        }
+        return;
+    }
     const ROWS: usize = 4;
     let term = |sum: f32, left: Element, right: f32| {
         if FUSED { read(left).mul_add(right, sum) } else { sum + read(left) * right }

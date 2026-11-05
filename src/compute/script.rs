@@ -288,7 +288,7 @@ fn describe_expression(d: &mut ExtensionDescriptor) {
     expression
         .method("compileFast", |a: &ScriptExpression, call: &Call<'_>| a.compile(call, Numeric::Fast))
         .signature("(self): dream_compute_Program")
-        .doc("A reusable program that may fuse multiply-add where the CPU has it, so results can differ in the last place between CPUs.");
+        .doc("A reusable program that may fuse multiply-add where the CPU has it and reorder the additions of long dot products. Results can differ from compile's and between CPUs with and without FMA, by what any summation order can differ by.");
 }
 
 fn describe_program(d: &mut ExtensionDescriptor) {

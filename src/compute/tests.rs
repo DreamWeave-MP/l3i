@@ -726,7 +726,7 @@ fn fast_mode_fuses_multiply_adds_and_nothing_else() {
         .collect();
     assert_same(&read(&twice.run(&[&ta, &tb], &budget).unwrap()), &want, "shared product");
     // Matmul: each element fuses its products, still in increasing k.
-    for (m, k, c) in [(9, 70, 37), (4, 16, 16), (3, 5, 2), (1, 257, 17), (31, 257, 1), (31, 257, 17)] {
+    for (m, k, c) in [(9, 70, 37), (4, 16, 16), (3, 5, 2), (1, 257, 17), (31, 63, 1), (31, 257, 17)] {
         let (p, q): (Vec<f32>, Vec<f32>) =
             ((0..m * k).map(|_| random.moderate()).collect(), (0..k * c).map(|_| random.moderate()).collect());
         let mut want = vec![0.0f32; m * c];

@@ -154,8 +154,10 @@ pub enum Numeric {
     /// Every add and multiply rounds to f32 separately: the same bits on every instantiation.
     #[default]
     Strict,
-    /// `a * b + c` may round once, where the host has FMA. More accurate per step and faster, but
-    /// results then depend on the host and on how the plan was tiled.
+    /// `a * b + c` may round once, where the host has FMA, and a long dot product may add in lanes
+    /// rather than in order. Faster, but results then depend on whether the host has FMA, on how the
+    /// plan was tiled and on whether weights were prepared. Reordered sums stay within the error
+    /// bound of any summation order, which cancellation can make large relative to the result.
     Fast,
 }
 
