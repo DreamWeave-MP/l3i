@@ -7,9 +7,9 @@
 //! - [`program`]: validated DAG, stage plan and execution entry points.
 //! - [`kernels`]: the monomorphic bulk loops that do the arithmetic.
 //! - [`storage`]: immutable owners, checked views, the payload budget.
-//! - [`reference`]: the per-element interpreter, kept as an oracle and a baseline.
-//! - [`lowering`]: the same validated plan as generated Luau and as a Jess shader program.
-//! - [`forward`]: a synthetic forward pass, the composition workload tests and benches share.
+//! - `reference`: the per-element interpreter, kept as an oracle and a baseline.
+//! - `lowering`: the same validated plan as generated Luau and as a Jess shader program.
+//! - `forward`: a synthetic forward pass, the composition workload tests and benches share.
 #![allow(clippy::missing_errors_doc, clippy::missing_panics_doc)]
 #[cfg(feature = "compute-testing")]
 pub mod forward;
@@ -63,8 +63,11 @@ pub trait Executor: Send + Sync + std::fmt::Debug {
     /// How many tasks can usefully run at once. A run asks for no more than this.
     fn workers(&self) -> usize;
     /// Calls `task(i)` once for each `i` in `0..tasks`, on whatever threads it likes, and returns when
-    /// every call has returned. Tasks run no Lua and don't block on each other. A task skipped, or
-    /// `run` returning early, is reported as an error rather than a wrong result.
+    /// every call has returned. Tasks run no Lua and don't block on each other. Breaking this can't
+    /// break memory safety and never passes for a result: a task skipped is reported as an error. But
+    /// the tasks that did run have written their shares by then, so that error is the one a run can
+    /// give with its output partly written. Copying every output to guard against it would cost every
+    /// host that keeps this contract.
     fn run(&self, tasks: usize, task: &(dyn Fn(usize) + Sync));
 }
 

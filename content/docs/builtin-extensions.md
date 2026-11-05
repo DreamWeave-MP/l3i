@@ -1014,7 +1014,8 @@ error, and the runtime stays usable; `runInto` leaves its output as it was. A si
 raises at once, since collecting cannot help. `compute.used()` and `compute.limit()` report the domain's bytes.
 
 `ComputeExtension::with_executor` lends a host's workers to large matrix products and elementwise
-stages, with the same result to the bit and no threads of the engine's own.
+stages, with the same result to the bit and no threads of the engine's own. An executor that skips a
+task gets an error, and is the one case where `runInto` can raise with its output partly written.
 
 Scratch, temporaries and results all count. Memory returns when its tensor is collected or its
 runtime closes.

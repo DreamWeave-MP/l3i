@@ -227,13 +227,23 @@ fn a_refused_worker_leaves_the_output_untouched() {
     assert!(out == want, "the peak is enough");
 }
 
+/// The one error that doesn't leave the output alone, which is why the promise names it: the host broke
+/// its contract, and the other tasks have written their shares. It's still an error, and nothing else
+/// is left behind, so the same call on a host that behaves gives the right answer in the same output.
 #[test]
 fn a_host_that_skips_a_task_gets_an_error_and_one_that_repeats_gets_the_answer() {
     let (program, tensor, budget) = shareable();
-    let mut out = vec![0u8; 256 * 256 * 4];
-    assert!(program.run_into_parallel(&[tensor.borrow()], &mut out, &budget, &Careless).is_err());
+    let before = budget.used();
     let mut want = vec![0u8; 256 * 256 * 4];
     program.run_into(&[tensor.borrow()], &mut want, &budget).unwrap();
+    let mut out = vec![0x5au8; 256 * 256 * 4];
+    let message = program.run_into_parallel(&[tensor.borrow()], &mut out, &budget, &Careless).unwrap_err();
+    assert!(message.to_string().contains("skipped a task"), "{message}");
+    assert_eq!(budget.used(), before, "a skipped task keeps no charge");
+    assert!(out.iter().any(|byte| *byte != 0x5a), "the tasks that ran wrote their shares, as documented");
+    assert!(out.contains(&0x5a), "the skipped task's share was not written");
+    program.run_into_parallel(&[tensor.borrow()], &mut out, &budget, &Backward(4)).unwrap();
+    assert_eq!(out, want, "nothing lingers from the broken attempt");
     program.run_into_parallel(&[tensor.borrow()], &mut out, &budget, &Overeager).unwrap();
     assert_eq!(out, want);
 }

@@ -2,8 +2,8 @@
 //! or generates code, and every instantiation produces the same bits, because the kernels use only
 //! IEEE addition, multiplication, division, square root and narrowing, in an order the source fixes.
 //!
-//! Sums over a row's f64 values accumulate into [`LANES`] independent totals by index modulo
-//! [`LANES`], then add those in lane order. That order is part of the contract: it is what lets the
+//! Sums over a row's f64 values accumulate into `LANES` independent totals by index modulo
+//! `LANES`, then add those in lane order. That order is part of the contract: it is what lets the
 //! loops vectorize without reassociation, and it loses no accuracy to a single ordered sum.
 // `inline(always)` is how a body gets compiled under each instantiation's target features.
 #![allow(clippy::inline_always, clippy::cast_possible_truncation, clippy::cast_precision_loss)]

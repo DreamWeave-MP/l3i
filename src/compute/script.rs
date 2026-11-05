@@ -75,7 +75,8 @@ impl ComputeExtension {
 
     /// Lends these workers to every program scripts run, where sharing the work pays. Each worker's
     /// scratch counts against the domain's memory, and results are the same to the bit. Without this a
-    /// run stays on the thread that called it.
+    /// run stays on the thread that called it. `runInto`'s promise that a call that raises leaves its
+    /// output alone relies on `executor` keeping [`Executor::run`]'s contract.
     #[must_use]
     pub fn with_executor(mut self, executor: Arc<dyn Executor>) -> Self {
         self.executor = Some(executor);

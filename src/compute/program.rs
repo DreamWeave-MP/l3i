@@ -1,7 +1,7 @@
 //! A compiled computation: typed structure and a stage plan, with no input data and no codegen.
 //!
 //! Planning splits the validated DAG at matrix multiplications. Each run of elementwise nodes
-//! becomes one [`Elementwise`] stage, a short list of [`Kernel`]s over a small register file;
+//! becomes one elementwise stage, a short list of kernels over a small register file;
 //! constants fold with the same f32 operations the kernels perform. A `Program` is immutable,
 //! `Send + Sync`, and can run concurrently against any compatible inputs.
 use crate::Result;
@@ -656,7 +656,8 @@ impl Program {
     /// [`Self::run_into`] sharing work among a host's workers where that pays, with the same result to
     /// the bit: only how the rows and elements are divided changes, never how one is computed. Each
     /// worker's scratch is charged and held before the first of them starts, so an `Err` still leaves
-    /// `out` as it was.
+    /// `out` as it was, provided `executor` keeps [`Executor::run`]'s contract. If it skips a task the
+    /// `Err` says so and `out` holds no particular value.
     pub fn run_into_parallel(
         &self,
         inputs: &[View<'_>],
@@ -844,8 +845,8 @@ impl Program {
 
 /// Runs `work` on disjoint `pieces` of a stage's output among `executor`'s workers, each piece with
 /// its own `scratch` bytes. Everything that can fail happens before any piece starts, except a host
-/// that doesn't run a task, which then has only itself to blame for a partly written temporary or
-/// output: that one is reported rather than returned as a result.
+/// breaking [`Executor::run`]'s contract by not running a task: that is reported, with whatever the
+/// other tasks wrote left in place.
 fn shared<'p>(
     budget: &Budget,
     executor: &dyn Executor,
