@@ -679,7 +679,9 @@ struct Block {
 }
 
 /// Accumulates one `ROWS x WIDTH` output block over ascending rows of `b`, with the block held in
-/// SIMD registers throughout. `scales` holds `a`'s rows, one `[f32; ROWS]` per row of `b`. Every
+/// SIMD registers throughout. `scales` holds `ROWS` runs of `a`, read in place, one element for each
+/// of the `rows` rows of `b`; broadcasting straight from `a` costs what a packed copy would, without
+/// the copy. Every
 /// element still adds its products in increasing `k`, starting from what the previous block left,
 /// so strict results are bit-identical to the triple loop. With `FUSED`, each product and add round
 /// once instead, which only `Numeric::Fast` asks for.
@@ -687,23 +689,36 @@ struct Block {
 /// Only fixed-size arrays touch the block between its load and its store, which is what keeps it in
 /// registers: LLVM cannot split an array that a variable index reaches.
 #[inline(always)]
+fn at_unchecked(run: &[Element], p: usize) -> f32 {
+    debug_assert!(p < run.len());
+    // SAFETY: `micro` asserts each run has `rows` elements, and `p` counts up from 0 below `rows`.
+    read(unsafe { *run.get_unchecked(p) })
+}
+
+#[inline(always)]
 fn micro<const FUSED: bool, const ROWS: usize, const WIDTH: usize>(
-    scales: &[[f32; ROWS]],
+    scales: [&[Element]; ROWS],
+    rows: usize,
     factors: impl Iterator<Item = [Element; WIDTH]>,
     out: &mut [Element],
     at: Block,
 ) {
+    for run in scales {
+        assert_eq!(run.len(), rows);
+    }
     let mut block = [[0.0f32; WIDTH]; ROWS];
     for (r, row) in block.iter_mut().enumerate() {
         let mut source = [[0u8; 4]; WIDTH];
         source[..at.cols].copy_from_slice(&out[at.base + r * at.stride..][..at.cols]);
         *row = source.map(read);
     }
-    for (scales, factor) in scales.iter().zip(factors) {
+    for (p, factor) in (0..rows).zip(factors) {
         let factor: [f32; WIDTH] = factor.map(read);
-        for (row, scale) in block.iter_mut().zip(scales) {
+        for (row, run) in block.iter_mut().zip(&scales) {
+            // A checked index here would keep a compare and a branch for each row of each product.
+            let scale = at_unchecked(run, p);
             for (value, f) in row.iter_mut().zip(&factor) {
-                *value = if FUSED { scale.mul_add(*f, *value) } else { *value + *scale * *f };
+                *value = if FUSED { scale.mul_add(*f, *value) } else { *value + scale * *f };
             }
         }
     }
@@ -770,60 +785,67 @@ fn pack_pass(b: &[Element], n: usize, first: usize, cols: usize, start: usize, e
     }
 }
 
-/// `ROWS` output rows starting at `row`, across one pass of `b`.
-#[inline(always)]
-fn row_group<const FUSED: bool, const ROWS: usize>(
-    a: &[Element],
+/// What every kernel of one pass over `b` shares.
+#[derive(Clone, Copy)]
+struct Pass<'a> {
+    a: &'a [Element],
     k: usize,
-    pass: (usize, usize, usize, usize),
+    start: usize,
+    rows: usize,
+    first: usize,
+    n: usize,
+}
+/// One `ROWS x WIDTH` block of the output.
+#[inline(always)]
+fn group<const FUSED: bool, const ROWS: usize, const WIDTH: usize>(
+    pass: Pass<'_>,
     factors: impl Factors,
     out: &mut [Element],
     row: usize,
-    n: usize,
+    (column, cols): (usize, usize),
 ) {
-    let (start, end, first, cols) = pass;
-    // Packed once per row group, then read by every column block of that group.
-    let mut scales = [[0.0f32; ROWS]; K_BLOCK];
-    for (p, scale) in (start..end).zip(&mut scales) {
-        for (r, value) in scale.iter_mut().enumerate() {
-            *value = read(a[(row + r) * k + p]);
-        }
-    }
-    let scales = &scales[..end - start];
+    let Pass { a, k, start, rows, first, n } = pass;
+    let scales: [&[Element]; ROWS] = std::array::from_fn(|r| &a[(row + r) * k + start..][..rows]);
+    let at = Block { base: row * n + first + column, stride: n, cols };
+    micro::<FUSED, ROWS, WIDTH>(scales, rows, factors.column::<WIDTH>(column, cols), out, at);
+}
+/// One row group, across every column block of the pass. This order keeps the group's runs of `a`
+/// and its stretch of `out` in the first-level cache, while `b`'s packed blocks stream from the
+/// second. The other order, one block of `b` across all rows, measured 15% slower at 256x256x256:
+/// `a` and `out` then take the misses, and `out`'s are scattered.
+#[inline(always)]
+fn row_block<const FUSED: bool, const ROWS: usize>(
+    pass: Pass<'_>,
+    factors: impl Factors,
+    out: &mut [Element],
+    row: usize,
+    cols: usize,
+) {
     let whole = cols / NR * NR;
-    let block = |column: usize, cols: usize| Block { base: row * n + first + column, stride: n, cols };
     for column in (0..whole).step_by(NR) {
-        micro::<FUSED, ROWS, NR>(scales, factors.column::<NR>(column, NR), out, block(column, NR));
+        group::<FUSED, ROWS, NR>(pass, factors, out, row, (column, NR));
     }
     let tail = cols - whole;
     match remainder_width(tail) {
         0 => {}
-        NR_NARROW => {
-            micro::<FUSED, ROWS, NR_NARROW>(scales, factors.column::<NR_NARROW>(whole, tail), out, block(whole, tail));
-        }
-        _ => micro::<FUSED, ROWS, NR>(scales, factors.column::<NR>(whole, tail), out, block(whole, tail)),
+        NR_NARROW => group::<FUSED, ROWS, NR_NARROW>(pass, factors, out, row, (whole, tail)),
+        _ => group::<FUSED, ROWS, NR>(pass, factors, out, row, (whole, tail)),
     }
 }
-
-/// `rows` output rows from `row`, any count up to [`MR`].
+/// Every row group of one pass over `b`, `cols` columns wide.
 #[inline(always)]
-fn short_group<const FUSED: bool>(
-    a: &[Element],
-    k: usize,
-    pass: (usize, usize, usize, usize),
-    factors: impl Factors,
-    out: &mut [Element],
-    (row, rows): (usize, usize),
-    n: usize,
-) {
-    match rows {
+fn whole_pass<const FUSED: bool>(pass: Pass<'_>, factors: impl Factors, out: &mut [Element], m: usize, cols: usize) {
+    let whole = m / MR * MR;
+    for row in (0..whole).step_by(MR) {
+        row_block::<FUSED, MR>(pass, factors, out, row, cols);
+    }
+    match m - whole {
         0 => {}
-        1 => row_group::<FUSED, 1>(a, k, pass, factors, out, row, n),
-        2 => row_group::<FUSED, 2>(a, k, pass, factors, out, row, n),
-        3 => row_group::<FUSED, 3>(a, k, pass, factors, out, row, n),
-        4 => row_group::<FUSED, 4>(a, k, pass, factors, out, row, n),
-        5 => row_group::<FUSED, 5>(a, k, pass, factors, out, row, n),
-        _ => row_group::<FUSED, MR>(a, k, pass, factors, out, row, n),
+        1 => row_block::<FUSED, 1>(pass, factors, out, whole, cols),
+        2 => row_block::<FUSED, 2>(pass, factors, out, whole, cols),
+        3 => row_block::<FUSED, 3>(pass, factors, out, whole, cols),
+        4 => row_block::<FUSED, 4>(pass, factors, out, whole, cols),
+        _ => row_block::<FUSED, 5>(pass, factors, out, whole, cols),
     }
 }
 
@@ -945,29 +967,26 @@ fn panels_times_column<const FUSED: bool>(panels: &[Element], b: &[Element], k: 
     let m = out.len();
     let whole = m / PANEL * PANEL;
     let tail = m - whole;
-    let mut scales = [[0.0f32; 1]; K_BLOCK];
     for start in (0..k).step_by(K_BLOCK) {
         let end = (start + K_BLOCK).min(k);
-        for (scale, value) in scales.iter_mut().zip(&b[start..end]) {
-            scale[0] = read(*value);
-        }
-        let scales = &scales[..end - start];
+        let rows = end - start;
+        let scales = [&b[start..end]];
         for row in (0..whole).step_by(PANEL) {
-            let columns = &panels[row * k + start * PANEL..][..(end - start) * PANEL];
+            let columns = &panels[row * k + start * PANEL..][..rows * PANEL];
             let factors = columns.as_chunks::<PANEL>().0.iter().copied();
-            micro::<FUSED, 1, PANEL>(scales, factors, out, Block { base: row, stride: 0, cols: PANEL });
+            micro::<FUSED, 1, PANEL>(scales, rows, factors, out, Block { base: row, stride: 0, cols: PANEL });
         }
         let last = &panels[whole * k..];
         let at = Block { base: whole, stride: 0, cols: tail };
         match remainder_width(tail) {
             0 => {}
             NR_NARROW => {
-                let columns = &last[start * NR_NARROW..][..(end - start) * NR_NARROW];
-                micro::<FUSED, 1, NR_NARROW>(scales, columns.as_chunks::<NR_NARROW>().0.iter().copied(), out, at);
+                let columns = &last[start * NR_NARROW..][..rows * NR_NARROW];
+                micro::<FUSED, 1, NR_NARROW>(scales, rows, columns.as_chunks::<NR_NARROW>().0.iter().copied(), out, at);
             }
             _ => {
-                let columns = &last[start * NR..][..(end - start) * NR];
-                micro::<FUSED, 1, NR>(scales, columns.as_chunks::<NR>().0.iter().copied(), out, at);
+                let columns = &last[start * NR..][..rows * NR];
+                micro::<FUSED, 1, NR>(scales, rows, columns.as_chunks::<NR>().0.iter().copied(), out, at);
             }
         }
     }
@@ -1000,12 +1019,12 @@ fn matmul_body<const FUSED: bool>(operands: &Operands<'_>, out: &mut [Element], 
         return stream_row::<FUSED>(a, b, n, out);
     }
     let mut prepared = right;
-    for pass in passes(k, n) {
-        let (start, end, first, cols) = pass;
+    for (start, end, first, cols) in passes(k, n) {
+        let pass = Pass { a, k, start, rows: end - start, first, n };
         // A single row group would read a packing once, which a copy cannot repay.
         if m <= MR && prepared.is_none() {
             let factors = InPlace { b, n, first_column: first, start, end };
-            short_group::<FUSED>(a, k, pass, factors, out, (0, m), n);
+            whole_pass::<FUSED>(pass, factors, out, m, cols);
             continue;
         }
         let pack: &[Element] = if let Some(weights) = prepared {
@@ -1016,12 +1035,7 @@ fn matmul_body<const FUSED: bool>(operands: &Operands<'_>, out: &mut [Element], 
             pack_pass(b, n, first, cols, start, end, scratch);
             scratch
         };
-        let factors = Packed { pack, rows: end - start };
-        let whole = m / MR * MR;
-        for row in (0..whole).step_by(MR) {
-            row_group::<FUSED, MR>(a, k, pass, factors, out, row, n);
-        }
-        short_group::<FUSED>(a, k, pass, factors, out, (whole, m - whole), n);
+        whole_pass::<FUSED>(pass, Packed { pack, rows: end - start }, out, m, cols);
     }
 }
 /// A matmul's inputs: contiguous operands, unless weights packed ahead of time stand in for one.

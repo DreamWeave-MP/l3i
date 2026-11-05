@@ -37,15 +37,22 @@ fn main() {
     );
     println!("strict: ordered f32; fast: ordered FMA where available; matrixmultiply: library-selected arithmetic");
     for (m, k, n) in [
-        (1usize, 256, 256),
+        (1usize, 128, 128),
+        (1, 256, 256),
         (1, 1024, 1024),
+        (1, 4096, 1),
         (4, 1024, 1024),
+        (8, 512, 512),
         (16, 16, 16),
-        (64, 64, 64),
-        (256, 256, 256),
         (31, 127, 17),
-        (256, 256, 1),
+        (64, 64, 64),
+        (64, 128, 1),
+        (64, 128, 128),
+        (128, 128, 128),
         (128, 64, 512),
+        (256, 256, 1),
+        (256, 256, 256),
+        (4096, 16, 1),
     ] {
         println!("shape m={m} k={k} n={n}");
         let a: Vec<f32> = (0..m * k).map(|i| (i % 29) as f32 * 0.013 - 0.17).collect();
@@ -83,6 +90,20 @@ fn main() {
                 plan.run_into(black_box(&[ta.borrow(), tb.borrow()]), black_box(&mut output), &budget).unwrap();
             });
             validate(&output.as_chunks::<4>().0.iter().map(|v| f32::from_le_bytes(*v)).collect::<Vec<_>>());
+            // Weights packed once beforehand, the packing charged and not counted per call. Only
+            // shapes with a kernel that reads a packing have this row.
+            if m > 1 {
+                let (left, right) = if n == 1 {
+                    (ta.prepare_left(&budget).unwrap(), tb.clone())
+                } else {
+                    (ta.clone(), tb.prepare_right(&budget).unwrap())
+                };
+                timing(&format!("graph_{mode:?}_prepared"), || {
+                    plan.run_into(black_box(&[left.borrow(), right.borrow()]), black_box(&mut output), &budget)
+                        .unwrap();
+                });
+                validate(&output.as_chunks::<4>().0.iter().map(|v| f32::from_le_bytes(*v)).collect::<Vec<_>>());
+            }
         }
         let mut output = vec![0.0f32; m * n];
         timing("matrixmultiply", || {
@@ -109,8 +130,16 @@ fn main() {
         validate(&output);
         #[cfg(feature = "openblas")]
         {
-            timing("openblas", || blas::multiply(m, k, n, &a, &b, &mut output));
+            timing("openblas_sgemm", || blas::multiply(m, k, n, &a, &b, &mut output));
             validate(&output);
+            // A vector product has its own tuned BLAS routine, which is the fair comparison.
+            if n == 1 {
+                timing("openblas_sgemv", || blas::matrix_vector(m, k, &a, &b, &mut output));
+                validate(&output);
+            } else if m == 1 {
+                timing("openblas_sgemv_transposed", || blas::vector_matrix(k, n, &a, &b, &mut output));
+                validate(&output);
+            }
         }
         println!("graph_budget_peak_bytes={}", budget.peak());
     }
@@ -120,6 +149,20 @@ fn main() {
 mod blas {
     use std::ffi::{CStr, c_char, c_int};
     unsafe extern "C" {
+        fn cblas_sgemv(
+            order: c_int,
+            trans: c_int,
+            m: c_int,
+            n: c_int,
+            alpha: f32,
+            a: *const f32,
+            lda: c_int,
+            x: *const f32,
+            incx: c_int,
+            beta: f32,
+            y: *mut f32,
+            incy: c_int,
+        );
         fn openblas_set_num_threads(count: c_int);
         fn openblas_get_config() -> *const c_char;
         fn cblas_sgemm(
@@ -156,6 +199,21 @@ mod blas {
             openblas_set_num_threads(1);
         }
         println!("OpenBLAS {config}; threads=1");
+    }
+    /// `out = a x`, with `a` `m` by `k`.
+    pub fn matrix_vector(m: usize, k: usize, a: &[f32], x: &[f32], out: &mut [f32]) {
+        assert_eq!((a.len(), x.len(), out.len()), (m * k, k, m));
+        let (m, k) = (c_int::try_from(m).unwrap(), c_int::try_from(k).unwrap());
+        // SAFETY: LP64 checked at initialization; 101 is row-major, 111 is no transpose. The disjoint
+        // slices have exactly these extents.
+        unsafe { cblas_sgemv(101, 111, m, k, 1.0, a.as_ptr(), k, x.as_ptr(), 1, 0.0, out.as_mut_ptr(), 1) };
+    }
+    /// `out = x b`, with `b` `k` by `n`, as the transposed product.
+    pub fn vector_matrix(k: usize, n: usize, x: &[f32], b: &[f32], out: &mut [f32]) {
+        assert_eq!((b.len(), x.len(), out.len()), (k * n, k, n));
+        let (k, n) = (c_int::try_from(k).unwrap(), c_int::try_from(n).unwrap());
+        // SAFETY: as for `matrix_vector`, with 112 the transpose.
+        unsafe { cblas_sgemv(101, 112, k, n, 1.0, b.as_ptr(), n, x.as_ptr(), 1, 0.0, out.as_mut_ptr(), 1) };
     }
     #[allow(clippy::many_single_char_names)]
     pub fn multiply(m: usize, k: usize, n: usize, a: &[f32], b: &[f32], out: &mut [f32]) {
