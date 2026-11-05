@@ -796,6 +796,7 @@ fn fused_6x16(scales: [&[Element]; 6], factors: &[[Element; 16]], out: &mut [Ele
 trait Factors: Copy {
     fn column<const WIDTH: usize>(self, column: usize, cols: usize) -> impl Iterator<Item = [Element; WIDTH]>;
     /// The same elements as adjacent rows, when they already are.
+    #[cfg(target_arch = "x86_64")]
     fn packed(&self, column: usize, width: usize) -> Option<&[Element]>;
 }
 /// Rows of `b` read in place: no copy, for the products too short to repay one.
@@ -808,6 +809,7 @@ struct InPlace<'a> {
     end: usize,
 }
 impl Factors for InPlace<'_> {
+    #[cfg(target_arch = "x86_64")]
     #[inline(always)]
     fn packed(&self, _column: usize, _width: usize) -> Option<&[Element]> {
         None
@@ -829,6 +831,7 @@ struct Packed<'a> {
     rows: usize,
 }
 impl Factors for Packed<'_> {
+    #[cfg(target_arch = "x86_64")]
     #[inline(always)]
     fn packed(&self, column: usize, width: usize) -> Option<&[Element]> {
         Some(&self.pack[column * self.rows..][..self.rows * width])
