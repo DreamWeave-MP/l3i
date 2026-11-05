@@ -533,28 +533,52 @@ fn elementwise_loop(
             Source::Walk(walk) => Bound::Walked(walk.register),
         },
     };
-    let is_slice = |operand: Operand| !matches!(bound(operand), Bound::Value(_));
-    let form = |step: TileStep| Form {
-        op: step.op,
-        x: is_slice(step.x),
-        #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
-        y: is_slice(step.y),
+    let is_slice = |bound: Bound<'_>| !matches!(bound, Bound::Value(_));
+    // Most tiles leave steps unused, and most steps leave `y` unused: those bind nothing at all.
+    let step = |step: TileStep| {
+        let unused = Bound::Value(0.0);
+        let x = if matches!(step.op, Op::None | Op::Relu) { unused } else { bound(step.x) };
+        let y = if step.op == Op::MulAdd { bound(step.y) } else { unused };
+        let form = Form {
+            op: step.op,
+            x: is_slice(x),
+            #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+            y: is_slice(y),
+        };
+        (form, x, y)
     };
-    let bound_tiles: Inline<(KernelFn, Dst, Binding<'_>), 8> = tiles
-        .iter()
-        .map(|tile| {
-            let kernel = select(is_slice(tile.start), [form(tile.steps[0]), form(tile.steps[1]), form(tile.steps[2])]);
-            let binding = Binding {
-                start: bound(tile.start),
-                x: [bound(tile.steps[0].x), bound(tile.steps[1].x), bound(tile.steps[2].x)],
-                y: [bound(tile.steps[0].y), bound(tile.steps[1].y), bound(tile.steps[2].y)],
-            };
-            (kernel, tile.dst, binding)
-        })
-        .collect();
+    let bind = |tile: &Tile| {
+        let (a, b, c) = (step(tile.steps[0]), step(tile.steps[1]), step(tile.steps[2]));
+        let start = bound(tile.start);
+        let binding = Binding { start, x: [a.1, b.1, c.1], y: [a.2, b.2, c.2] };
+        (select(is_slice(start), [a.0, b.0, c.0]), binding)
+    };
     let any_walk = sources.iter().any(|source| matches!(source, Source::Walk(_)));
     let width = out.len().min(chunk);
     let (registers, walked) = scratch.split_at_mut(registers_used * width);
+    // One chunk's worth has nothing to gain from binding ahead, and a small call pays for copying a
+    // list of bindings about, however few it holds.
+    if out.len() <= chunk {
+        if any_walk {
+            for source in sources {
+                if let Source::Walk(walk) = source {
+                    walk.fill(0, &mut walked[walk.register * width..][..width]);
+                }
+            }
+        }
+        for tile in tiles {
+            let (kernel, binding) = bind(tile);
+            run_tile(kernel, tile.dst, &binding, (registers, registers_used, width), walked, 0, out);
+        }
+        return;
+    }
+    let bound_tiles: Vec<(KernelFn, Dst, Binding<'_>)> = tiles
+        .iter()
+        .map(|tile| {
+            let (kernel, binding) = bind(tile);
+            (kernel, tile.dst, binding)
+        })
+        .collect();
     let mut start = 0;
     for out_chunk in out.chunks_mut(chunk) {
         let len = out_chunk.len();
@@ -565,23 +589,36 @@ fn elementwise_loop(
                 }
             }
         }
-        for (kernel, dst, binding) in bound_tiles.iter() {
-            match *dst {
-                Dst::Output => {
-                    let frame =
-                        Frame { boundary: registers_used, before: registers, after: &[], walked, width, start, len };
-                    kernel(&frame, binding, out_chunk);
-                }
-                Dst::Register(r) => {
-                    let r = r as usize;
-                    let (before, rest) = registers.split_at_mut(r * width);
-                    let (register, after) = rest.split_at_mut(width);
-                    let frame = Frame { boundary: r, before, after, walked, width, start, len };
-                    kernel(&frame, binding, &mut register[..len]);
-                }
-            }
+        for (kernel, dst, binding) in &bound_tiles {
+            run_tile(*kernel, *dst, binding, (registers, registers_used, width), walked, start, out_chunk);
         }
         start += len;
+    }
+}
+/// One tile over one chunk, with registers split around where it writes.
+#[inline(always)]
+fn run_tile(
+    kernel: KernelFn,
+    dst: Dst,
+    binding: &Binding<'_>,
+    (registers, registers_used, width): (&mut [Element], usize, usize),
+    walked: &[Element],
+    start: usize,
+    out_chunk: &mut [Element],
+) {
+    let len = out_chunk.len();
+    match dst {
+        Dst::Output => {
+            let frame = Frame { boundary: registers_used, before: registers, after: &[], walked, width, start, len };
+            kernel(&frame, binding, out_chunk);
+        }
+        Dst::Register(r) => {
+            let r = r as usize;
+            let (before, rest) = registers.split_at_mut(r * width);
+            let (register, after) = rest.split_at_mut(width);
+            let frame = Frame { boundary: r, before, after, walked, width, start, len };
+            kernel(&frame, binding, &mut register[..len]);
+        }
     }
 }
 

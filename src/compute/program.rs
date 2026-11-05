@@ -685,7 +685,7 @@ impl Program {
                 Work::Elementwise(e) => {
                     let sources = kernels::bind_sources(e.sources.iter().map(|v| view_of(*v)), e.shape);
                     let needed = kernels::scratch_elements(e, &sources, target.len() / 4, chunk) * 4;
-                    let _charge = budget.charge(needed)?;
+                    let _charge = charge(budget, needed)?;
                     kernels::with_scratch(needed, |scratch| {
                         kernels::elementwise(e, &sources, scratch, target, isa, chunk);
                     })?;
@@ -699,7 +699,7 @@ impl Program {
                     let needed =
                         if matches!(operation, RowMap::Softmax) { reduction::softmax_scratch(cols) } else { 0 };
                     let (copied, exponentials) = (rows.copied_elements(), needed);
-                    let _charge = budget.charge(copied * 4 + exponentials * 8)?;
+                    let _charge = charge(budget, copied * 4 + exponentials * 8)?;
                     let mut copy = kernels::filled_scratch(copied, [0u8; 4])?;
                     let mut exponentials = kernels::filled_scratch(exponentials, 0.0f64)?;
                     let (outputs, _) = target.as_chunks_mut::<4>();
@@ -742,7 +742,7 @@ impl Program {
                     let a_elements = if left.is_some() { Packed::Borrowed(&[]) } else { contiguous(a, budget)? };
                     let b_elements = if right.is_some() { Packed::Borrowed(&[]) } else { contiguous(b, budget)? };
                     let needed = if right.is_some() { 0 } else { kernels::matmul_scratch(m, k, n) };
-                    let _charge = budget.charge(needed)?;
+                    let _charge = charge(budget, needed)?;
                     let operands =
                         kernels::Operands { a: a_elements.elements(), b: b_elements.elements(), k, n, left, right };
                     kernels::with_scratch(needed, |scratch| kernels::matmul(&operands, target, scratch, isa))?;
@@ -757,6 +757,12 @@ impl Program {
         }
         Ok(())
     }
+}
+
+/// A charge for what a stage needs beyond its output, which small stages often don't: then the
+/// budget's shared counters aren't touched at all.
+fn charge(budget: &Budget, bytes: usize) -> Result<Option<crate::compute::storage::Charge<'_>>> {
+    if bytes == 0 { Ok(None) } else { budget.charge(bytes).map(Some) }
 }
 
 /// Contiguous elements of a view: borrowed when they already are, packed under budget if not.
