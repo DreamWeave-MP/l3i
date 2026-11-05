@@ -13,6 +13,8 @@
     clippy::too_many_lines
 )]
 use l3i_graph_cpu_research::forward::Model;
+use l3i_graph_cpu_research::reduction::exp_nonpositive;
+use l3i_graph_cpu_research::reference::softmax_platform_exp;
 use l3i_graph_cpu_research::{Budget, CHUNK, Domain, Expr, Isa, Numeric, Program, Shape, Storage, Tensor, View};
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::hint::black_box;
@@ -741,6 +743,159 @@ pub fn shapes() {
     }
 }
 
+/// Softmax with the platform's `exp` once per element, keeping every exponential in f64 scratch.
+fn softmax_platform_once(values: &[f32], out: &mut [f32], exponentials: &mut [f64]) {
+    let max = f64::from(values.iter().copied().fold(f32::NEG_INFINITY, f32::max));
+    let mut total = 0.0;
+    for (value, target) in values.iter().zip(exponentials.iter_mut()) {
+        *target = (f64::from(*value) - max).exp();
+        total += *target;
+    }
+    for (slot, exponential) in out.iter_mut().zip(exponentials.iter()) {
+        *slot = (*exponential / total) as f32;
+    }
+}
+
+/// The deterministic exponential twice per element: no scratch, twice the arithmetic.
+#[inline(always)]
+fn softmax_two_pass_body(values: &[f32], out: &mut [f32]) {
+    let max = f64::from(values.iter().copied().fold(f32::NEG_INFINITY, f32::max));
+    let mut totals = [0.0f64; 4];
+    let (blocks, rest) = values.as_chunks::<4>();
+    for block in blocks {
+        for lane in 0..4 {
+            totals[lane] += exp_nonpositive(f64::from(block[lane]) - max);
+        }
+    }
+    for (lane, value) in rest.iter().enumerate() {
+        totals[lane] += exp_nonpositive(f64::from(*value) - max);
+    }
+    let total = totals[0] + totals[1] + totals[2] + totals[3];
+    for (slot, value) in out.iter_mut().zip(values) {
+        *slot = (exp_nonpositive(f64::from(*value) - max) / total) as f32;
+    }
+}
+
+/// `e^x` for `x <= 0` to about 2e-7 relative in f32: degree 5 and f32 exponents. An experiment under
+/// its own error model, and not the accurate contract.
+#[inline(always)]
+fn exp_f32_approximate(x: f32) -> f32 {
+    let rounded = x * std::f32::consts::LOG2_E + 12_582_912.0;
+    let k = rounded - 12_582_912.0;
+    let r = x - k * 0.693_359_4 - k * -2.121_944_4e-4;
+    let p = 1.0 + r * (1.0 + r * (0.5 + r * (0.166_666_67 + r * (0.041_666_668 + r * 0.008_333_334))));
+    let scale = f32::from_bits(rounded.to_bits().wrapping_add(127) << 23);
+    if x < -87.0 { 0.0 } else { p * scale }
+}
+#[inline(always)]
+fn softmax_approximate_body(values: &[f32], out: &mut [f32]) {
+    let max = values.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+    for (slot, value) in out.iter_mut().zip(values) {
+        *slot = exp_f32_approximate(*value - max);
+    }
+    let mut totals = [0.0f32; 8];
+    let (blocks, rest) = out.as_chunks::<8>();
+    for block in blocks {
+        for lane in 0..8 {
+            totals[lane] += block[lane];
+        }
+    }
+    for (lane, value) in rest.iter().enumerate() {
+        totals[lane] += *value;
+    }
+    let total: f32 = totals.iter().sum();
+    let scale = 1.0 / total;
+    for slot in out.iter_mut() {
+        *slot *= scale;
+    }
+}
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+fn softmax_two_pass_avx2(values: &[f32], out: &mut [f32]) {
+    softmax_two_pass_body(values, out);
+}
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2,fma")]
+fn softmax_approximate_fma(values: &[f32], out: &mut [f32]) {
+    softmax_approximate_body(values, out);
+}
+fn softmax_two_pass(values: &[f32], out: &mut [f32]) {
+    #[cfg(target_arch = "x86_64")]
+    if Isa::Avx2.available() {
+        // SAFETY: AVX2 was just detected.
+        return unsafe { softmax_two_pass_avx2(values, out) };
+    }
+    softmax_two_pass_body(values, out);
+}
+fn softmax_approximate(values: &[f32], out: &mut [f32]) {
+    #[cfg(target_arch = "x86_64")]
+    if Isa::Fma.available() {
+        // SAFETY: AVX2 and FMA were just detected.
+        return unsafe { softmax_approximate_fma(values, out) };
+    }
+    softmax_approximate_body(values, out);
+}
+
+/// Every softmax strategy the review asked about, timed and held against the same f64 oracle.
+pub fn softmax_strategies() {
+    println!("\n# Softmax strategies, one row, preallocated");
+    let budget = Budget::new(1 << 26);
+    for n in [16usize, 128, 1024, 4096, 65536] {
+        let values: Vec<f32> = (0..n).map(|i| (i * 37 % 127) as f32 * 0.125 - 8.0).collect();
+        let mut out = vec![0.0f32; n];
+        let mut exponentials = vec![0.0f64; n];
+        row("softmax_a_platform_exp_twice", n, || {
+            softmax_platform_exp(black_box(&values), black_box(&mut out));
+        });
+        row("softmax_b_platform_exp_once_scratch", n, || {
+            softmax_platform_once(black_box(&values), black_box(&mut out), black_box(&mut exponentials));
+        });
+        row("softmax_d_deterministic_exp_twice_no_scratch", n, || {
+            softmax_two_pass(black_box(&values), black_box(&mut out));
+        });
+        let shape = Shape::Matrix(1, n);
+        let tensor = Tensor::import(&row_operand(1, n), shape, &budget).unwrap();
+        let program = Expr::slot(0, shape, domain()).unwrap().softmax().unwrap().compile().unwrap();
+        let mut bytes = vec![0u8; n * 4];
+        row("softmax_c_deterministic_exp_once_program", n, || {
+            program.run_into(black_box(&[tensor.borrow()]), black_box(&mut bytes), &budget).unwrap();
+        });
+        row("softmax_e_approximate_f32", n, || {
+            softmax_approximate(black_box(&values), black_box(&mut out));
+        });
+    }
+    println!("\n# Approximate f32 softmax against the platform-exp f64 oracle");
+    let cases: [(&str, Vec<f32>); 4] = [
+        ("moderate", (0..1024).map(|i| (i * 37 % 127) as f32 * 0.125 - 8.0).collect()),
+        ("wide_90", (0..1024).map(|i| (i * 37 % 1021) as f32 * 0.09 - 90.0).collect()),
+        ("extreme_negative", (0..1024).map(|i| if i == 0 { 0.0 } else { -(i as f32) }).collect()),
+        ("large_offset", (0..1024).map(|i| 1.0e7 + (i * 37 % 127) as f32).collect()),
+    ];
+    for (name, values) in &cases {
+        let mut oracle = vec![0.0f32; values.len()];
+        let mut approximate = oracle.clone();
+        softmax_platform_exp(values, &mut oracle);
+        softmax_approximate(values, &mut approximate);
+        let (mut absolute, mut relative) = (0.0f64, 0.0f64);
+        let mut total = 0.0f64;
+        for (a, o) in approximate.iter().zip(&oracle) {
+            let difference = (f64::from(*a) - f64::from(*o)).abs();
+            absolute = absolute.max(difference);
+            if *o > 0.0 {
+                relative = relative.max(difference / f64::from(*o));
+            } else if *a > 0.0 {
+                relative = f64::INFINITY;
+            }
+            total += f64::from(*a);
+        }
+        println!(
+            "softmax_e_error case={name} max_absolute={absolute:.3e} max_relative={relative:.3e} total_minus_one={:.3e}",
+            total - 1.0
+        );
+    }
+    assert_eq!(budget.used(), 0);
+}
+
 pub fn reductions() {
     use l3i_graph_cpu_research::reduction::{normalize, softmax, sum};
     println!("\n# Row kernels: preallocated, accurate normalization, ordered f32 sum");
@@ -766,7 +921,10 @@ pub fn reductions() {
         row("accurate_softmax_program", n, || {
             softmax_plan.run_into(black_box(&[tensor.borrow()]), black_box(&mut softmax_bytes), &budget).unwrap();
         });
-        row("accurate_softmax_kernel", n, || softmax(black_box(&values), black_box(&mut out)));
+        let mut exponentials = vec![0.0; n];
+        row("accurate_softmax_kernel", n, || {
+            softmax(black_box(&values), black_box(&mut out), black_box(&mut exponentials));
+        });
         let total: f64 = out.iter().map(|v| f64::from(*v)).sum();
         assert!((total - 1.0).abs() < 1e-6);
         for (center, label) in [(false, "accurate_rms_norm_program"), (true, "accurate_layer_norm_program")] {

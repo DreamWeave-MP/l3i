@@ -118,6 +118,48 @@ impl<'a> Source<'a> {
         }
     }
 }
+/// A view read one row at a time, in its own shape. A row whose columns are adjacent in memory is
+/// borrowed in place, even when the rows themselves are spread apart.
+#[derive(Clone, Copy)]
+pub(crate) struct Rows<'a> {
+    walk: Walk<'a>,
+    adjacent: bool,
+}
+impl<'a> Rows<'a> {
+    pub(crate) fn new(view: View<'a>) -> Self {
+        let (rows, cols) = view.shape.dims();
+        let row_stride = if rows == 1 { 0 } else { view.strides[0] };
+        let col_stride = if cols == 1 { 4 } else { view.strides[1] };
+        let walk = Walk { bytes: view.bytes, offset: view.offset, row_stride, col_stride, cols, register: 0 };
+        Self { walk, adjacent: col_stride == 4 }
+    }
+    /// Elements of scratch [`Self::row`] needs for each row.
+    pub(crate) fn copied_elements(&self) -> usize {
+        if self.adjacent { 0 } else { self.walk.cols }
+    }
+    /// One row: in place when its columns are adjacent, otherwise copied to `scratch`.
+    #[inline(always)]
+    pub(crate) fn row<'s>(&self, row: usize, scratch: &'s mut [Element]) -> &'s [Element]
+    where
+        'a: 's,
+    {
+        let Walk { bytes, offset, row_stride, cols, .. } = self.walk;
+        if self.adjacent {
+            let at = offset + row * row_stride;
+            bytes[at..at + cols * 4].as_chunks::<4>().0
+        } else {
+            self.walk.fill(row * cols, scratch);
+            scratch
+        }
+    }
+    /// All rows' elements and the distance between rows in elements, when rows are adjacent runs a
+    /// whole number of elements apart.
+    pub(crate) fn evenly_spaced(&self) -> Option<(&'a [Element], usize)> {
+        let Walk { bytes, offset, row_stride, .. } = self.walk;
+        (self.adjacent && row_stride.is_multiple_of(4)).then(|| (bytes[offset..].as_chunks::<4>().0, row_stride / 4))
+    }
+}
+
 impl Walk<'_> {
     /// Fills `out` with the elements from output position `start`, in row-major order.
     #[inline(always)]
@@ -543,10 +585,14 @@ fn elementwise_loop(
 /// Scratch lives only for the charged call. No thread-local allocation survives its budget.
 /// The planner writes every register before reading it.
 pub(crate) fn with_scratch<R>(bytes: usize, body: impl FnOnce(&mut [u8]) -> R) -> l3i::Result<R> {
+    Ok(body(&mut filled_scratch(bytes, 0u8)?))
+}
+/// `len` copies of `value`, reporting allocation failure. Touches the heap only when `len` is not 0.
+pub(crate) fn filled_scratch<T: Clone>(len: usize, value: T) -> l3i::Result<Vec<T>> {
     let mut scratch = Vec::new();
-    scratch.try_reserve_exact(bytes).map_err(|_| crate::error("scratch allocation failed"))?;
-    scratch.resize(bytes, 0);
-    Ok(body(&mut scratch))
+    scratch.try_reserve_exact(len).map_err(|_| crate::error("scratch allocation failed"))?;
+    scratch.resize(len, value);
+    Ok(scratch)
 }
 
 /// Scratch elements one elementwise stage needs for `count` output elements.

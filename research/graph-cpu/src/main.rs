@@ -246,6 +246,9 @@ fn run() -> Result<()> {
     runtime.exec("assert(compute.used()==0)")?;
 
     let arguments: Vec<String> = std::env::args().collect();
+    if arguments.iter().any(|arg| arg == "--bench-softmax") {
+        bench::softmax_strategies();
+    }
     if arguments.iter().any(|arg| arg == "--bench-shapes") {
         bench::shapes();
         runtime.exec(include_str!("../bench-shapes.jsl"))?;

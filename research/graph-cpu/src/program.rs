@@ -5,9 +5,9 @@
 //! constants fold with the same f32 operations the kernels perform. A `Program` is immutable,
 //! `Send + Sync`, and can run concurrently against any compatible inputs.
 use crate::graph::{Instruction, Lease, MAX_WORK, Step};
-use crate::kernels::{self, CHUNK, Element, Isa, Source};
+use crate::kernels::{self, CHUNK, Element, Isa, Rows, Source};
 use crate::storage::Allocation;
-use crate::{Budget, Shape, Tensor, View, error};
+use crate::{Budget, Shape, Tensor, View, error, reduction};
 use l3i::Result;
 use std::fmt::Write;
 use std::sync::Arc;
@@ -685,32 +685,25 @@ impl Program {
                     })?;
                 }
                 Work::RowMap { source, shape, operation } => {
-                    let input = view_of(*source);
-                    let (rows, cols) = shape.dims();
-                    let scratch_columns = if rows == 0 { 0 } else { cols };
-                    let _charge = budget.charge(scratch_columns * 8)?;
-                    let mut values = Vec::new();
-                    let mut output = Vec::new();
-                    values
-                        .try_reserve_exact(scratch_columns)
-                        .map_err(|_| error("softmax scratch allocation failed"))?;
-                    output
-                        .try_reserve_exact(scratch_columns)
-                        .map_err(|_| error("softmax scratch allocation failed"))?;
-                    values.resize(scratch_columns, 0.0f32);
-                    output.resize(scratch_columns, 0.0f32);
-                    for row in 0..rows {
-                        for (col, value) in values.iter_mut().enumerate() {
-                            *value = input.at(row, col);
-                        }
+                    // Outputs are written in place, and inputs read in place when their columns are
+                    // adjacent. What remains is scratch only a row's own arithmetic needs: an f64
+                    // per softmax column, and a copy of a row whose columns are spread apart.
+                    let rows = Rows::new(view_of(*source));
+                    let cols = shape.dims().1;
+                    let needed =
+                        if matches!(operation, RowMap::Softmax) { reduction::softmax_scratch(cols) } else { 0 };
+                    let (copied, exponentials) = (rows.copied_elements(), needed);
+                    let _charge = budget.charge(copied * 4 + exponentials * 8)?;
+                    let mut copy = kernels::filled_scratch(copied, [0u8; 4])?;
+                    let mut exponentials = kernels::filled_scratch(exponentials, 0.0f64)?;
+                    let (outputs, _) = target.as_chunks_mut::<4>();
+                    for (row, output) in outputs.chunks_exact_mut(cols).enumerate() {
+                        let values = rows.row(row, &mut copy);
                         match operation {
-                            RowMap::Softmax => crate::reduction::softmax(&values, &mut output),
+                            RowMap::Softmax => reduction::softmax_row(values, output, &mut exponentials, isa),
                             RowMap::Normalize { epsilon, center } => {
-                                crate::reduction::normalize(&values, &mut output, *epsilon, *center)?;
+                                reduction::normalize_row(values, output, *epsilon, *center, isa);
                             }
-                        }
-                        for (col, value) in output.iter().enumerate() {
-                            target[(row * cols + col) * 4..][..4].copy_from_slice(&value.to_le_bytes());
                         }
                     }
                 }
@@ -721,12 +714,13 @@ impl Program {
                 }
                 Work::SumRows { source, shape, columns } => {
                     let input = view_of(*source);
-                    for row in 0..shape.dims().0 {
-                        let mut sum = 0.0f32;
-                        for col in 0..*columns {
-                            sum += input.at(row, col);
+                    let (outputs, _) = target.as_chunks_mut::<4>();
+                    if let Some((elements, stride)) = Rows::new(input).evenly_spaced() {
+                        reduction::sum_rows(elements, stride, *columns, outputs, isa);
+                    } else {
+                        for (row, output) in (0..shape.dims().0).zip(outputs) {
+                            *output = (0..*columns).fold(0.0f32, |sum, col| sum + input.at(row, col)).to_le_bytes();
                         }
-                        target[row * 4..][..4].copy_from_slice(&sum.to_le_bytes());
                     }
                 }
                 Work::MatMul { a, b, .. } => {

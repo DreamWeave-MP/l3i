@@ -3,6 +3,7 @@
 //! exactly as the first prototype did. It is deliberately not an optimized path.
 use crate::graph::Instruction;
 use crate::program::Program;
+use crate::reduction::{LANES, exp_nonpositive};
 use crate::{Budget, Tensor, View};
 use l3i::Result;
 use std::sync::Arc;
@@ -80,11 +81,9 @@ impl Program {
                             } else if maximum == f64::NEG_INFINITY {
                                 0.0
                             } else {
-                                let mut denominator = 0.0;
-                                for c in 0..width {
-                                    denominator += (f64::from(input.at(row, c)) - maximum).exp();
-                                }
-                                (f64::from(v) - maximum).exp() / denominator
+                                let denominator =
+                                    lane_sum(width, |c| exp_nonpositive(f64::from(input.at(row, c)) - maximum));
+                                exp_nonpositive(f64::from(v) - maximum) / denominator
                             };
                             #[allow(clippy::cast_possible_truncation)]
                             {
@@ -145,22 +144,60 @@ impl Program {
     }
 }
 
+/// The row kernels' f64 accumulation contract, one element at a time.
+fn lane_sum(width: usize, term: impl Fn(usize) -> f64) -> f64 {
+    let mut totals = [0.0f64; LANES];
+    for c in 0..width {
+        totals[c % LANES] += term(c);
+    }
+    totals[0] + totals[1] + totals[2] + totals[3]
+}
+
+/// The first softmax kernel: the platform's `exp`, twice per element and with no scratch. Kept as
+/// the baseline the current kernel is measured against, and as a check on it. Its bits depend on
+/// the host's math library, which the current kernel's do not.
+pub fn softmax_platform_exp(values: &[f32], out: &mut [f32]) {
+    assert_eq!(values.len(), out.len());
+    if values.is_empty() {
+        return;
+    }
+    if values.iter().any(|v| v.is_nan()) {
+        out.fill(f32::NAN);
+        return;
+    }
+    let infinities = values.iter().filter(|v| **v == f32::INFINITY).count();
+    if infinities != 0 {
+        #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+        let probability = (1.0 / infinities as f64) as f32;
+        for (slot, value) in out.iter_mut().zip(values) {
+            *slot = if *value == f32::INFINITY { probability } else { 0.0 };
+        }
+        return;
+    }
+    let max = values.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+    if max == f32::NEG_INFINITY {
+        out.fill(0.0);
+        return;
+    }
+    let max = f64::from(max);
+    let total: f64 = values.iter().map(|v| (f64::from(*v) - max).exp()).sum();
+    for (slot, value) in out.iter_mut().zip(values) {
+        #[allow(clippy::cast_possible_truncation)]
+        {
+            *slot = ((f64::from(*value) - max).exp() / total) as f32;
+        }
+    }
+}
+
 fn normalize_reference(input: View<'_>, row: usize, col: usize, epsilon: f64, center: bool) -> f32 {
     let width = input.shape.dims().1;
     #[allow(clippy::cast_precision_loss)]
     let count = width as f64;
-    let mut mean = 0.0;
-    if center {
-        for c in 0..width {
-            mean += f64::from(input.at(row, c));
-        }
-        mean /= count;
-    }
-    let mut variance = 0.0;
-    for c in 0..width {
+    let mean = if center { lane_sum(width, |c| f64::from(input.at(row, c))) / count } else { 0.0 };
+    let variance = lane_sum(width, |c| {
         let d = f64::from(input.at(row, c)) - mean;
-        variance += d * d;
-    }
+        d * d
+    });
     #[allow(clippy::cast_possible_truncation)]
     {
         ((f64::from(input.at(row, col)) - mean) / (variance / count + epsilon).sqrt()) as f32
