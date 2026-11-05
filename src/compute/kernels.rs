@@ -588,7 +588,12 @@ fn elementwise_loop(
 /// Scratch lives only for the charged call. No thread-local allocation survives its budget.
 /// The planner writes every register before reading it.
 pub(crate) fn with_scratch<R>(bytes: usize, body: impl FnOnce(&mut [u8]) -> R) -> crate::Result<R> {
-    Ok(body(&mut filled_scratch(bytes, 0u8)?))
+    if bytes > 0 && !crate::compute::may_allocate(bytes) {
+        return Err(crate::compute::error("scratch allocation failed"));
+    }
+    let mut scratch = crate::compute::storage::Aligned::zeroed(bytes)
+        .ok_or_else(|| crate::compute::error("scratch allocation failed"))?;
+    Ok(body(&mut scratch))
 }
 /// `len` copies of `value`, reporting allocation failure. Touches the heap only when `len` is not 0.
 pub(crate) fn filled_scratch<T: Clone>(len: usize, value: T) -> crate::Result<Vec<T>> {
@@ -1226,10 +1231,8 @@ pub(crate) fn matmul_scratch(m: usize, k: usize, n: usize) -> usize {
         return 0;
     }
     let widest = if n >= N_BLOCK { N_BLOCK } else { n / NR * NR + remainder_width(n % NR) };
-    k.min(K_BLOCK) * widest * 4 + CACHE_LINE
+    k.min(K_BLOCK) * widest * 4
 }
-/// A cache line. Packed factors start on one, so no 256-bit load of them straddles two.
-pub(crate) const CACHE_LINE: usize = 64;
 
 /// Most scalar products a plain loop beats the block machinery at, whose setup and partial blocks
 /// cost more than this many multiply-adds.
@@ -1329,8 +1332,7 @@ fn matmul_baseline(operands: &Operands<'_>, out: &mut [Element], scratch: &mut [
 pub(crate) fn matmul(operands: &Operands<'_>, out: &mut [u8], scratch: &mut [u8], isa: Isa) {
     out.fill(0);
     let (out, _) = out.as_chunks_mut::<4>();
-    let shift = scratch.as_ptr().align_offset(CACHE_LINE).min(scratch.len());
-    let (scratch, _) = scratch[shift..].as_chunks_mut::<4>();
+    let (scratch, _) = scratch.as_chunks_mut::<4>();
     assert!(isa.available(), "{isa:?} is not available on this host");
     match isa {
         #[cfg(target_arch = "x86_64")]

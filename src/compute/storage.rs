@@ -86,16 +86,75 @@ impl Budget {
     }
     pub(crate) fn allocate(self: &Arc<Self>, len: usize) -> Result<Allocation> {
         self.reserve(len)?;
-        let mut allocation = Allocation { bytes: Vec::new(), charge: len, budget: self.clone() };
+        // Holds the charge, so that every way out of here returns it.
+        let charge = Charge(self.as_ref(), len);
+        if len > 0 && !crate::compute::may_allocate(len) {
+            return Err(error("allocation failed"));
+        }
+        let bytes = Aligned::zeroed(len).ok_or_else(|| error("allocation failed"))?;
+        std::mem::forget(charge);
         if len > 0 {
-            if !crate::compute::may_allocate(len) {
-                return Err(error("allocation failed"));
-            }
-            allocation.bytes.try_reserve_exact(len).map_err(|_| error("allocation failed"))?;
-            allocation.bytes.resize(len, 0);
             self.allocations.fetch_add(1, Ordering::Relaxed);
         }
-        Ok(allocation)
+        Ok(Allocation { bytes, charge: len, budget: self.clone() })
+    }
+}
+
+/// Zeroed bytes starting on a cache line. Loads and stores of whole vectors then never straddle two
+/// lines, and the engine's own buffers don't share a page offset with every other large allocation,
+/// each of which malloc starts 16 bytes into a page. Either costs far more than it sounds: together
+/// they made a long elementwise chain take twice the cycles.
+pub(crate) struct Aligned {
+    start: std::ptr::NonNull<u8>,
+    len: usize,
+}
+// SAFETY: `Aligned` owns its bytes as a `Vec<u8>` would.
+unsafe impl Send for Aligned {}
+// SAFETY: as above.
+unsafe impl Sync for Aligned {}
+impl Aligned {
+    const LINE: usize = 64;
+    fn layout(len: usize) -> Option<std::alloc::Layout> {
+        std::alloc::Layout::from_size_align(len, Self::LINE).ok()
+    }
+    /// `None` if the allocator refuses, or `len` can't be the size of anything.
+    pub(crate) fn zeroed(len: usize) -> Option<Self> {
+        let layout = Self::layout(len)?;
+        let start = if len == 0 {
+            // SAFETY: the line size isn't zero, and no bytes are ever accessed through this.
+            unsafe { std::ptr::NonNull::new_unchecked(std::ptr::without_provenance_mut(Self::LINE)) }
+        } else {
+            // SAFETY: the layout's size isn't zero.
+            std::ptr::NonNull::new(unsafe { std::alloc::alloc_zeroed(layout) })?
+        };
+        Some(Self { start, len })
+    }
+}
+impl Drop for Aligned {
+    fn drop(&mut self) {
+        if self.len != 0 {
+            let layout = Self::layout(self.len).expect("it was allocated with this layout");
+            // SAFETY: allocated by `zeroed` with this layout.
+            unsafe { std::alloc::dealloc(self.start.as_ptr(), layout) };
+        }
+    }
+}
+impl std::ops::Deref for Aligned {
+    type Target = [u8];
+    fn deref(&self) -> &[u8] {
+        // SAFETY: `len` initialized bytes owned by this value, or none.
+        unsafe { std::slice::from_raw_parts(self.start.as_ptr(), self.len) }
+    }
+}
+impl std::ops::DerefMut for Aligned {
+    fn deref_mut(&mut self) -> &mut [u8] {
+        // SAFETY: as for `deref`, exclusively through `&mut self`.
+        unsafe { std::slice::from_raw_parts_mut(self.start.as_ptr(), self.len) }
+    }
+}
+impl std::fmt::Debug for Aligned {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "Aligned({} bytes)", self.len)
     }
 }
 
@@ -108,7 +167,7 @@ impl Drop for Charge<'_> {
 
 #[derive(Debug)]
 pub(crate) struct Allocation {
-    pub(crate) bytes: Vec<u8>,
+    pub(crate) bytes: Aligned,
     charge: usize,
     budget: Arc<Budget>,
 }
@@ -234,13 +293,11 @@ pub(crate) enum PreparedSide {
 #[derive(Debug)]
 pub struct Prepared {
     pack: Allocation,
-    /// Where the elements start: a cache line, so that no vector load of them straddles two.
-    start: usize,
     side: PreparedSide,
 }
 impl Prepared {
     pub(crate) fn elements(&self, side: PreparedSide) -> Option<&[[u8; 4]]> {
-        (self.side == side).then(|| self.pack.bytes[self.start..].as_chunks::<4>().0)
+        (self.side == side).then(|| self.pack.bytes.as_chunks::<4>().0)
     }
 }
 
@@ -402,9 +459,7 @@ impl Tensor {
             PreparedSide::Right => crate::compute::kernels::prepared_right_elements(rows, cols),
             PreparedSide::Left => crate::compute::kernels::prepared_left_elements(rows, cols),
         };
-        let padding = if elements == 0 { 0 } else { crate::compute::kernels::CACHE_LINE };
-        let mut pack = budget.allocate(elements * 4 + padding)?;
-        let start = pack.bytes.as_ptr().align_offset(crate::compute::kernels::CACHE_LINE).min(pack.bytes.len());
+        let mut pack = budget.allocate(elements * 4)?;
         let source = crate::compute::kernels::Source::bind(self.borrow(), self.shape);
         let walked;
         let contiguous = if let crate::compute::kernels::Source::Direct(contiguous) = source {
@@ -417,12 +472,12 @@ impl Tensor {
             };
             walked.bytes.as_chunks::<4>().0
         };
-        let target = pack.bytes[start..].as_chunks_mut::<4>().0;
+        let target = pack.bytes.as_chunks_mut::<4>().0;
         match side {
             PreparedSide::Right => crate::compute::kernels::prepare_right(contiguous, rows, cols, target),
             PreparedSide::Left => crate::compute::kernels::prepare_left(contiguous, rows, cols, target),
         }
-        Ok(Self { prepared: Some(Arc::new(Prepared { pack, start, side })), ..self.clone() })
+        Ok(Self { prepared: Some(Arc::new(Prepared { pack, side })), ..self.clone() })
     }
     /// Budgeted bytes this tensor's [`Prepared`] weights hold, shared with whatever else holds them.
     #[must_use]
