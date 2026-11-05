@@ -1,5 +1,6 @@
 //! Single-thread, packing-inclusive comparison; matrixmultiply may contract/reassociate.
 #![allow(clippy::cast_precision_loss, clippy::cast_possible_wrap, clippy::too_many_lines)]
+use crate::counter::{Counter, PERF_COUNT_HW_CPU_CYCLES, PERF_COUNT_HW_INSTRUCTIONS, PERF_TYPE_HARDWARE};
 use l3i::compute::{Budget, Domain, Expr, Numeric, Shape, Tensor};
 use std::{hint::black_box, time::Instant};
 
@@ -26,7 +27,30 @@ fn timing(label: &str, mut run: impl FnMut()) {
         })
         .collect();
     samples.sort_by(f64::total_cmp);
-    println!("{label} median_us={:.3} min_us={:.3} p90_us={:.3}", samples[15], samples[0], samples[27]);
+    // Cycles are what a change to a kernel moves: frequency and machine load don't touch them.
+    let cycles = Counter::open(PERF_TYPE_HARDWARE, PERF_COUNT_HW_CPU_CYCLES);
+    let instructions = Counter::open(PERF_TYPE_HARDWARE, PERF_COUNT_HW_INSTRUCTIONS);
+    let counted = |counter: Option<&Counter>, run: &mut dyn FnMut()| {
+        counter.map_or(0.0, |counter| {
+            let mut counts: Vec<u64> = (0..15)
+                .map(|_| {
+                    counter.measure(&mut || {
+                        for _ in 0..repetitions {
+                            run();
+                        }
+                    })
+                })
+                .collect();
+            counts.sort_unstable();
+            counts[7] as f64 / f64::from(repetitions)
+        })
+    };
+    let per_run_cycles = counted(cycles.as_ref(), &mut run);
+    let per_run_instructions = counted(instructions.as_ref(), &mut run);
+    println!(
+        "{label} median_us={:.3} min_us={:.3} p90_us={:.3} cycles={per_run_cycles:.0} instructions={per_run_instructions:.0}",
+        samples[15], samples[0], samples[27]
+    );
 }
 
 pub fn main() {
@@ -36,24 +60,39 @@ pub fn main() {
         "prepared contiguous inputs; preallocated outputs; packing included; one thread; no cached packed weights"
     );
     println!("strict: ordered f32; fast: ordered FMA where available; matrixmultiply: library-selected arithmetic");
-    for (m, k, n) in [
-        (1usize, 128, 128),
-        (1, 256, 256),
-        (1, 1024, 1024),
-        (1, 4096, 1),
-        (4, 1024, 1024),
-        (8, 512, 512),
-        (16, 16, 16),
-        (31, 127, 17),
-        (64, 64, 64),
-        (64, 128, 1),
-        (64, 128, 128),
-        (128, 128, 128),
-        (128, 64, 512),
-        (256, 256, 1),
-        (256, 256, 256),
-        (4096, 16, 1),
-    ] {
+    // `L3I_BENCH_SHAPES=256x256x256,6x128x16` runs these instead.
+    let shapes = std::env::var("L3I_BENCH_SHAPES").map_or_else(
+        |_| {
+            vec![
+                (1usize, 128, 128),
+                (1, 256, 256),
+                (1, 1024, 1024),
+                (1, 4096, 1),
+                (4, 1024, 1024),
+                (8, 512, 512),
+                (16, 16, 16),
+                (31, 127, 17),
+                (64, 64, 64),
+                (64, 128, 1),
+                (64, 128, 128),
+                (128, 128, 128),
+                (128, 64, 512),
+                (256, 256, 1),
+                (256, 256, 256),
+                (4096, 16, 1),
+            ]
+        },
+        |shapes| {
+            shapes
+                .split(',')
+                .map(|shape| {
+                    let mut parts = shape.split('x').map(|part| part.parse::<usize>().expect("MxKxN"));
+                    (parts.next().unwrap(), parts.next().unwrap(), parts.next().unwrap())
+                })
+                .collect()
+        },
+    );
+    for (m, k, n) in shapes {
         println!("shape m={m} k={k} n={n}");
         let a: Vec<f32> = (0..m * k).map(|i| (i % 29) as f32 * 0.013 - 0.17).collect();
         let b: Vec<f32> = (0..k * n).map(|i| (i % 31) as f32 * 0.017 - 0.21).collect();
