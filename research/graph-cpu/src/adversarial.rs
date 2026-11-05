@@ -632,3 +632,98 @@ fn row_scratch_stays_charged_while_other_threads_contend_for_the_budget() {
     assert!(budget.denials() > 0, "four threads never overlapped on one stage's budget");
     assert!(budget.peak() <= crate::reduction::softmax_scratch(width) * 8);
 }
+
+fn ordered_product(a: &[f32], b: &[f32], m: usize, k: usize, n: usize, fused: bool) -> Vec<f32> {
+    let mut out = vec![0.0f32; m * n];
+    for i in 0..m {
+        for j in 0..n {
+            let mut sum = 0.0f32;
+            for p in 0..k {
+                let (x, y) = (a[i * k + p], b[p * n + j]);
+                sum = if fused { x.mul_add(y, sum) } else { sum + x * y };
+            }
+            out[i * n + j] = sum;
+        }
+    }
+    out
+}
+
+/// Every boundary the kernels branch on, in each dimension: row groups, narrow and wide column
+/// blocks, packing passes and column passes. Results must be the ordered triple loop's, to the bit.
+#[test]
+fn matmul_every_kernel_boundary_matches_the_ordered_triple_loop() {
+    let domain = Domain::new(1 << 14, 1 << 14);
+    let mut rng = Rng(0xabcd_ef01_2345_6789);
+    let sign = |rng: &mut Rng| {
+        let u = rng.unit();
+        (u * 2.0 - 1.0) * 1.000_001
+    };
+    let shapes = [1usize, 2, 3, 4, 5, 6, 7, 11, 12, 13]
+        .into_iter()
+        .flat_map(|m| [1usize, 2, 3, 4, 5, 127, 128, 129].map(|k| (m, k)))
+        .flat_map(|(m, k)| [2usize, 3, 7, 8, 9, 15, 16, 17, 24, 25, 31, 32, 33].map(|n| (m, k, n)))
+        .chain([
+            (7, 3, 255),
+            (7, 3, 256),
+            (7, 3, 257),
+            (7, 130, 272),
+            (7, 300, 513),
+            (2, 3, 513),
+            (1, 4097, 3),
+            (1, 5, 257),
+        ]);
+    let budget = Budget::new(1 << 24);
+    for (m, k, n) in shapes {
+        let a: Vec<f32> = (0..m * k).map(|_| sign(&mut rng)).collect();
+        let b: Vec<f32> = (0..k * n).map(|_| sign(&mut rng)).collect();
+        let (ta, tb) = (laid_out(&a, m, k, 1, false), laid_out(&b, k, n, 1, false));
+        let x = Expr::slot(0, ta.shape(), domain.clone()).unwrap();
+        let y = Expr::slot(1, tb.shape(), domain.clone()).unwrap();
+        let strict = ordered_product(&a, &b, m, k, n, false);
+        let program = x.matmul(&y).unwrap().compile().unwrap();
+        for isa in strict_isas() {
+            let mut out = vec![0x55u8; m * n * 4];
+            program.run_with(&[ta.borrow(), tb.borrow()], &mut out, &budget, isa, CHUNK).unwrap();
+            let actual = floats(&out);
+            for (i, (p, q)) in actual.iter().zip(&strict).enumerate() {
+                assert_eq!(p.to_bits(), q.to_bits(), "{m}x{k}x{n} {isa:?} element {i}");
+            }
+        }
+        if Isa::Fma.available() {
+            let fused = ordered_product(&a, &b, m, k, n, true);
+            let program = x.matmul(&y).unwrap().compile_with(Numeric::Fast).unwrap();
+            let mut out = vec![0x55u8; m * n * 4];
+            program.run_with(&[ta.borrow(), tb.borrow()], &mut out, &budget, Isa::Fma, CHUNK).unwrap();
+            for (i, (p, q)) in floats(&out).iter().zip(&fused).enumerate() {
+                assert_eq!(p.to_bits(), q.to_bits(), "fused {m}x{k}x{n} element {i}");
+            }
+        }
+    }
+    assert_eq!(budget.used(), 0);
+}
+
+/// Padding lanes hold zeros that meet whatever `a` holds, so a NaN or infinity in `a` makes NaN in
+/// a discarded lane. It must stay discarded, and a stale output element must not survive.
+#[test]
+fn matmul_remainder_padding_never_reaches_a_real_element() {
+    let domain = Domain::new(1 << 12, 1 << 12);
+    let budget = Budget::new(1 << 20);
+    for (m, k, n) in [(7, 5, 9), (7, 5, 3), (13, 3, 25), (2, 3, 3), (6, 129, 17), (3, 4, 2)] {
+        let a = vec![f32::INFINITY; m * k];
+        let b = vec![0.0f32; k * n];
+        let finite = vec![1.0f32; m * k];
+        let weights: Vec<f32> = (0..k * n).map(|i| i as f32).collect();
+        let (ta, tb) = (laid_out(&a, m, k, 1, false), laid_out(&b, k, n, 1, false));
+        let (fa, fb) = (laid_out(&finite, m, k, 1, false), laid_out(&weights, k, n, 1, false));
+        let x = Expr::slot(0, ta.shape(), domain.clone()).unwrap();
+        let p = x.matmul(&Expr::slot(1, tb.shape(), domain.clone()).unwrap()).unwrap().compile().unwrap();
+        let mut out = vec![0x55u8; m * n * 4];
+        // An infinity times a real zero is a real NaN.
+        p.run_into(&[ta.borrow(), tb.borrow()], &mut out, &budget).unwrap();
+        assert!(floats(&out).iter().all(|v| v.is_nan()), "{m}x{k}x{n}");
+        // Infinite scales against nonzero weights never see the padding's zeros as output.
+        let mut ones = vec![0x55u8; m * n * 4];
+        p.run_into(&[fa.borrow(), fb.borrow()], &mut ones, &budget).unwrap();
+        assert!(floats(&ones).iter().all(|v| v.is_finite()), "{m}x{k}x{n}");
+    }
+}

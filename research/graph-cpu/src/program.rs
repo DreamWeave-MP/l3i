@@ -650,7 +650,7 @@ impl Program {
 
     fn execute(&self, inputs: &[View<'_>], out: &mut [u8], budget: &Arc<Budget>, isa: Isa, chunk: usize) -> Result<()> {
         // A strict program never fuses, whatever it is asked to run with.
-        let isa = if isa == Isa::Fma && self.numeric == Numeric::Strict { Isa::Avx2 } else { isa };
+        let isa = if isa == Isa::Fma && self.numeric == Numeric::Strict { Isa::detect() } else { isa };
         // Only a multi-stage program has temporaries; a single stage performs no heap work here.
         let last = self.stages.len() - 1;
         let mut temps: Vec<Option<Tensor>> = Vec::new();

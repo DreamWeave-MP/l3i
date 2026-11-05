@@ -640,7 +640,10 @@ fn shaped_matmul() {
     let domain = domain();
     let budget = Budget::new(1 << 30);
     for (m, k, n) in [
-        (1usize, 128usize, 128usize),
+        (1usize, 32usize, 32usize),
+        (1, 64, 64),
+        (1, 128, 128),
+        (1, 256, 256),
         (1, 4096, 1),
         (1, 1024, 1024),
         (4, 1024, 1024),

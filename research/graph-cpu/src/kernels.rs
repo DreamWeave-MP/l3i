@@ -29,7 +29,8 @@ const K_BLOCK: usize = 128;
 pub enum Isa {
     Baseline,
     Avx2,
-    /// AVX2 and FMA. Executes a `Numeric::Fast` program's fused tiles; strict programs run as AVX2.
+    /// Hardware fused multiply-add: AVX2 and FMA on `x86_64`, the baseline itself on `aarch64`. Executes
+    /// a `Numeric::Fast` program's fused tiles; strict programs run as the best strict instantiation.
     Fma,
 }
 impl Isa {
@@ -52,6 +53,8 @@ impl Isa {
             Self::Avx2 => std::is_x86_feature_detected!("avx2"),
             #[cfg(target_arch = "x86_64")]
             Self::Fma => std::is_x86_feature_detected!("avx2") && std::is_x86_feature_detected!("fma"),
+            #[cfg(target_arch = "aarch64")]
+            Self::Fma => true,
             #[cfg(not(target_arch = "x86_64"))]
             _ => false,
         }
@@ -280,13 +283,13 @@ step!(MulS, true, false, false, false, |acc, xs, ys, vx, vy, i| acc * at(xs, i))
 step!(MulV, false, false, true, false, |acc, xs, ys, vx, vy, i| acc * vx);
 step!(Relu, false, false, false, false, |acc, xs, ys, vx, vy, i| relu(acc));
 // `Numeric::Fast` only: a fused multiply-add, under an instantiation that has the instruction.
-#[cfg(target_arch = "x86_64")]
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
 step!(MaSS, true, true, false, false, |acc, xs, ys, vx, vy, i| acc.mul_add(at(xs, i), at(ys, i)));
-#[cfg(target_arch = "x86_64")]
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
 step!(MaSV, true, false, false, true, |acc, xs, ys, vx, vy, i| acc.mul_add(at(xs, i), vy));
-#[cfg(target_arch = "x86_64")]
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
 step!(MaVS, false, true, true, false, |acc, xs, ys, vx, vy, i| acc.mul_add(vx, at(ys, i)));
-#[cfg(target_arch = "x86_64")]
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
 step!(MaVV, false, false, true, true, |acc, xs, ys, vx, vy, i| acc.mul_add(vx, vy));
 
 /// How a fused loop obtains its first value.
@@ -394,7 +397,7 @@ type KernelFn = for<'c> fn(&Frame<'c>, &Binding<'c>, &mut [Element]);
 struct Form {
     op: Op,
     x: bool,
-    #[cfg(target_arch = "x86_64")]
+    #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
     y: bool,
 }
 
@@ -496,7 +499,7 @@ fn select_strict<R: Arch>(start: bool, f: [Form; TILE_STEPS]) -> KernelFn {
 }
 
 /// Chooses the compiled loop for a `Numeric::Fast` tile: up to two steps, multiply-adds counting once.
-#[cfg(target_arch = "x86_64")]
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
 fn select_fast<R: Arch>(start: bool, f: [Form; TILE_STEPS]) -> KernelFn {
     fn second<R: Arch, S: Start, A: Step>(f: [Form; TILE_STEPS]) -> KernelFn {
         with_step!(f[1], B => R::run::<S, A, B, Nop>, fused)
@@ -534,7 +537,7 @@ fn elementwise_loop(
     let form = |step: TileStep| Form {
         op: step.op,
         x: is_slice(step.x),
-        #[cfg(target_arch = "x86_64")]
+        #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
         y: is_slice(step.y),
     };
     let bound_tiles: Vec<(KernelFn, Dst, Binding<'_>)> = tiles
@@ -635,6 +638,9 @@ pub(crate) fn elementwise(
     match (isa, stage.fast.is_empty()) {
         #[cfg(target_arch = "x86_64")]
         (Isa::Fma, false) => elementwise_loop(&stage.fast, r, sources, scratch, out, chunk, select_fast::<x86::Fma>),
+        // AArch64's baseline already has the instruction `mul_add` compiles to.
+        #[cfg(target_arch = "aarch64")]
+        (Isa::Fma, false) => elementwise_loop(&stage.fast, r, sources, scratch, out, chunk, select_fast::<Base>),
         #[cfg(target_arch = "x86_64")]
         (Isa::Avx2 | Isa::Fma, _) => {
             elementwise_loop(&stage.tiles, r, sources, scratch, out, chunk, select_strict::<x86::Avx2>);
@@ -643,33 +649,58 @@ pub(crate) fn elementwise(
     }
 }
 
-/// Output rows and columns one matmul microkernel holds in registers.
+/// Output rows and columns one matmul microkernel holds in registers, and the narrower column
+/// block short remainders use. Both fit in sixteen 256-bit registers and in thirty-two NEON ones.
 const MR: usize = 6;
 const NR: usize = 16;
+const NR_NARROW: usize = 8;
+/// Columns per packed pass, so one pass of `b` (`K_BLOCK * N_BLOCK * 4` bytes) fits half of the
+/// smallest second-level cache this targets. `k` still ascends for every element, inside each pass.
+const N_BLOCK: usize = 256;
 
-/// Accumulates one `ROWS x NR` output block over ascending rows of `b`, with the block held in SIMD
-/// registers throughout. `a` is packed, one `[f32; ROWS]` per row of `b`. Every element still adds its
-/// products in increasing `k`, starting from what the previous block left, so strict results are
-/// bit-identical to the triple loop. With `FUSED`, each product and add round once instead, which
-/// only `Numeric::Fast` asks for.
-#[inline(always)]
-fn micro<const FUSED: bool, const ROWS: usize>(
-    a: &[[f32; ROWS]],
-    b: &[[Element; NR]],
-    n: usize,
-    j: usize,
-    out: &mut [Element],
-    i: usize,
-) {
-    let mut block = [[0.0f32; NR]; ROWS];
-    for (r, row) in block.iter_mut().enumerate() {
-        let source: &[Element; NR] = out[(i + r) * n + j..][..NR].try_into().expect("in bounds");
-        for (value, element) in row.iter_mut().zip(source) {
-            *value = read(*element);
-        }
+/// The width a remainder of `columns < NR` packs to: its lanes past `columns` hold zeros and their
+/// results are discarded, so a remainder costs one fixed kernel and never a scalar loop.
+const fn remainder_width(columns: usize) -> usize {
+    if columns == 0 {
+        0
+    } else if columns <= NR_NARROW {
+        NR_NARROW
+    } else {
+        NR
     }
-    for (scales, b_row) in a.iter().zip(b) {
-        let factor: [f32; NR] = std::array::from_fn(|c| read(b_row[c]));
+}
+
+/// Where one kernel's output block sits: `rows` rows of `cols <= WIDTH` elements each.
+#[derive(Clone, Copy)]
+struct Block {
+    base: usize,
+    stride: usize,
+    cols: usize,
+}
+
+/// Accumulates one `ROWS x WIDTH` output block over ascending rows of `b`, with the block held in
+/// SIMD registers throughout. `scales` holds `a`'s rows, one `[f32; ROWS]` per row of `b`. Every
+/// element still adds its products in increasing `k`, starting from what the previous block left,
+/// so strict results are bit-identical to the triple loop. With `FUSED`, each product and add round
+/// once instead, which only `Numeric::Fast` asks for.
+///
+/// Only fixed-size arrays touch the block between its load and its store, which is what keeps it in
+/// registers: LLVM cannot split an array that a variable index reaches.
+#[inline(always)]
+fn micro<const FUSED: bool, const ROWS: usize, const WIDTH: usize>(
+    scales: &[[f32; ROWS]],
+    factors: impl Iterator<Item = [Element; WIDTH]>,
+    out: &mut [Element],
+    at: Block,
+) {
+    let mut block = [[0.0f32; WIDTH]; ROWS];
+    for (r, row) in block.iter_mut().enumerate() {
+        let mut source = [[0u8; 4]; WIDTH];
+        source[..at.cols].copy_from_slice(&out[at.base + r * at.stride..][..at.cols]);
+        *row = source.map(read);
+    }
+    for (scales, factor) in scales.iter().zip(factors) {
+        let factor: [f32; WIDTH] = factor.map(read);
         for (row, scale) in block.iter_mut().zip(scales) {
             for (value, f) in row.iter_mut().zip(&factor) {
                 *value = if FUSED { scale.mul_add(*f, *value) } else { *value + *scale * *f };
@@ -677,30 +708,200 @@ fn micro<const FUSED: bool, const ROWS: usize>(
         }
     }
     for (r, row) in block.iter().enumerate() {
-        let target: &mut [Element; NR] = (&mut out[(i + r) * n + j..][..NR]).try_into().expect("in bounds");
-        for (element, value) in target.iter_mut().zip(row) {
-            *element = value.to_le_bytes();
+        let target = row.map(f32::to_le_bytes);
+        out[at.base + r * at.stride..][..at.cols].copy_from_slice(&target[..at.cols]);
+    }
+}
+
+/// One pass's view of `b`: `WIDTH` elements per row of `b`, from column `column` of the pass, padded
+/// with zeros past `cols`.
+trait Factors: Copy {
+    fn column<const WIDTH: usize>(self, column: usize, cols: usize) -> impl Iterator<Item = [Element; WIDTH]>;
+}
+/// Rows of `b` read in place: no copy, for the products too short to repay one.
+#[derive(Clone, Copy)]
+struct InPlace<'a> {
+    b: &'a [Element],
+    n: usize,
+    first_column: usize,
+    start: usize,
+    end: usize,
+}
+impl Factors for InPlace<'_> {
+    #[inline(always)]
+    fn column<const WIDTH: usize>(self, column: usize, cols: usize) -> impl Iterator<Item = [Element; WIDTH]> {
+        (self.start..self.end).map(move |p| {
+            let mut row = [[0u8; 4]; WIDTH];
+            row[..cols].copy_from_slice(&self.b[p * self.n + self.first_column + column..][..cols]);
+            row
+        })
+    }
+}
+/// One pass of `b`, packed by column block: each block's rows are adjacent, at `rows` elements per
+/// column of the pass.
+#[derive(Clone, Copy)]
+struct Packed<'a> {
+    pack: &'a [Element],
+    rows: usize,
+}
+impl Factors for Packed<'_> {
+    #[inline(always)]
+    fn column<const WIDTH: usize>(self, column: usize, _cols: usize) -> impl Iterator<Item = [Element; WIDTH]> {
+        self.pack[column * self.rows..][..self.rows * WIDTH].as_chunks::<WIDTH>().0.iter().copied()
+    }
+}
+/// Packs rows `start..end` of columns `first..first + cols` of `b` for [`Packed`].
+fn pack_pass(b: &[Element], n: usize, first: usize, cols: usize, start: usize, end: usize, pack: &mut [Element]) {
+    let rows = end - start;
+    let whole = cols / NR * NR;
+    let tail = remainder_width(cols - whole);
+    let (blocks, rest) = pack[..rows * (whole + tail)].split_at_mut(rows * whole);
+    for (block, target) in blocks.chunks_exact_mut(rows * NR).enumerate() {
+        for (p, row) in (start..end).zip(target.as_chunks_mut::<NR>().0) {
+            row.copy_from_slice(&b[p * n + first + block * NR..][..NR]);
+        }
+    }
+    if tail != 0 {
+        for (p, row) in (start..end).zip(rest.chunks_exact_mut(tail)) {
+            let (used, padding) = row.split_at_mut(cols - whole);
+            used.copy_from_slice(&b[p * n + first + whole..][..cols - whole]);
+            padding.fill([0; 4]);
         }
     }
 }
 
+/// `ROWS` output rows starting at `row`, across one pass of `b`.
 #[inline(always)]
-fn accumulate1<const FUSED: bool>(out: &mut [Element], a: f32, b: &[Element]) {
-    for (slot, b) in out.iter_mut().zip(b) {
-        let value = read(*slot);
-        *slot = (if FUSED { a.mul_add(read(*b), value) } else { value + a * read(*b) }).to_le_bytes();
+fn row_group<const FUSED: bool, const ROWS: usize>(
+    a: &[Element],
+    k: usize,
+    pass: (usize, usize, usize, usize),
+    factors: impl Factors,
+    out: &mut [Element],
+    row: usize,
+    n: usize,
+) {
+    let (start, end, first, cols) = pass;
+    // Packed once per row group, then read by every column block of that group.
+    let mut scales = [[0.0f32; ROWS]; K_BLOCK];
+    for (p, scale) in (start..end).zip(&mut scales) {
+        for (r, value) in scale.iter_mut().enumerate() {
+            *value = read(a[(row + r) * k + p]);
+        }
+    }
+    let scales = &scales[..end - start];
+    let whole = cols / NR * NR;
+    let block = |column: usize, cols: usize| Block { base: row * n + first + column, stride: n, cols };
+    for column in (0..whole).step_by(NR) {
+        micro::<FUSED, ROWS, NR>(scales, factors.column::<NR>(column, NR), out, block(column, NR));
+    }
+    let tail = cols - whole;
+    match remainder_width(tail) {
+        0 => {}
+        NR_NARROW => {
+            micro::<FUSED, ROWS, NR_NARROW>(scales, factors.column::<NR_NARROW>(whole, tail), out, block(whole, tail));
+        }
+        _ => micro::<FUSED, ROWS, NR>(scales, factors.column::<NR>(whole, tail), out, block(whole, tail)),
     }
 }
 
-/// Bytes of scratch `matmul` needs: one `K_BLOCK` of `b`, packed by column block. Nothing when the
-/// call does no packing, which includes every product with no elements or no inner dimension.
-pub(crate) fn matmul_scratch(m: usize, k: usize, n: usize) -> usize {
-    if m <= 1 { 0 } else { k.min(K_BLOCK) * (n / NR) * NR * 4 }
+/// `rows` output rows from `row`, any count up to [`MR`].
+#[inline(always)]
+fn short_group<const FUSED: bool>(
+    a: &[Element],
+    k: usize,
+    pass: (usize, usize, usize, usize),
+    factors: impl Factors,
+    out: &mut [Element],
+    (row, rows): (usize, usize),
+    n: usize,
+) {
+    match rows {
+        0 => {}
+        1 => row_group::<FUSED, 1>(a, k, pass, factors, out, row, n),
+        2 => row_group::<FUSED, 2>(a, k, pass, factors, out, row, n),
+        3 => row_group::<FUSED, 3>(a, k, pass, factors, out, row, n),
+        4 => row_group::<FUSED, 4>(a, k, pass, factors, out, row, n),
+        5 => row_group::<FUSED, 5>(a, k, pass, factors, out, row, n),
+        _ => row_group::<FUSED, MR>(a, k, pass, factors, out, row, n),
+    }
 }
 
-/// The row-major `a @ b` kernel. `k` advances in ascending blocks, so each output element sees its
-/// products in increasing `k` whichever order its neighbours are computed in. Each block of `b` is
-/// packed once, so column blocks read contiguous memory however wide `b`'s rows are.
+/// One output row, streaming `b` by rows. Four rows at a time hold each output in a register across
+/// four products, instead of loading and storing it for each one.
+#[inline(always)]
+fn stream_row<const FUSED: bool>(a: &[Element], b: &[Element], n: usize, out: &mut [Element]) {
+    let term = |sum: f32, scale: f32, factor: Element| {
+        if FUSED { scale.mul_add(read(factor), sum) } else { sum + scale * read(factor) }
+    };
+    const STREAM_ROWS: usize = 4;
+    const STREAM_WIDTH: usize = 8;
+    let (scales, rest) = a.as_chunks::<STREAM_ROWS>();
+    let mut rows = b.chunks_exact(n);
+    for scale in scales {
+        let s = scale.map(read);
+        let lanes: [&[Element]; STREAM_ROWS] = std::array::from_fn(|_| rows.next().expect("k rows of n columns"));
+        let (blocks, tail) = out.as_chunks_mut::<STREAM_WIDTH>();
+        let [r0, r1, r2, r3] = lanes.map(|lane| lane.as_chunks::<STREAM_WIDTH>());
+        for ((((block, x0), x1), x2), x3) in blocks.iter_mut().zip(r0.0).zip(r1.0).zip(r2.0).zip(r3.0) {
+            let (mut sums, x0, x1, x2, x3) = (block.map(read), *x0, *x1, *x2, *x3);
+            for l in 0..STREAM_WIDTH {
+                sums[l] = term(term(term(term(sums[l], s[0], x0[l]), s[1], x1[l]), s[2], x2[l]), s[3], x3[l]);
+            }
+            *block = sums.map(f32::to_le_bytes);
+        }
+        for ((((slot, x0), x1), x2), x3) in tail.iter_mut().zip(r0.1).zip(r1.1).zip(r2.1).zip(r3.1) {
+            *slot = term(term(term(term(read(*slot), s[0], *x0), s[1], *x1), s[2], *x2), s[3], *x3).to_le_bytes();
+        }
+    }
+    for (scale, row) in rest.iter().zip(rows) {
+        let scale = read(*scale);
+        for (slot, factor) in out.iter_mut().zip(row) {
+            *slot = term(read(*slot), scale, *factor).to_le_bytes();
+        }
+    }
+}
+
+/// One output column: independent ordered sums, four at once, overlapping in the pipeline.
+#[inline(always)]
+fn column_rows<const FUSED: bool>(a: &[Element], b: &[Element], k: usize, out: &mut [Element]) {
+    const ROWS: usize = 4;
+    let term = |sum: f32, left: Element, right: f32| {
+        if FUSED { read(left).mul_add(right, sum) } else { sum + read(left) * right }
+    };
+    let (groups, rest) = out.as_chunks_mut::<ROWS>();
+    let mut rows = a.chunks_exact(k);
+    for group in groups {
+        let mut next = || &rows.next().expect("m rows of k columns")[..b.len()];
+        let lanes = [next(), next(), next(), next()];
+        let mut sums = [0.0f32; ROWS];
+        for (p, weight) in b.iter().enumerate() {
+            let weight = read(*weight);
+            for (sum, lane) in sums.iter_mut().zip(&lanes) {
+                *sum = term(*sum, lane[p], weight);
+            }
+        }
+        *group = sums.map(f32::to_le_bytes);
+    }
+    for (slot, row) in rest.iter_mut().zip(rows) {
+        let sum = row.iter().zip(b).fold(0.0f32, |sum, (left, right)| term(sum, *left, read(*right)));
+        *slot = sum.to_le_bytes();
+    }
+}
+
+/// Bytes of scratch `matmul` needs: one pass of `b`, packed by column block. Nothing when the call
+/// does no packing, which includes every product with no elements or no inner dimension and every
+/// product with a single row group to read the packing.
+pub(crate) fn matmul_scratch(m: usize, k: usize, n: usize) -> usize {
+    if m <= MR || n <= 1 {
+        return 0;
+    }
+    let widest = if n >= N_BLOCK { N_BLOCK } else { n / NR * NR + remainder_width(n % NR) };
+    k.min(K_BLOCK) * widest * 4
+}
+
+/// The row-major `a @ b` kernel. Each pass of `b` covers ascending `k`, so each output element sees
+/// its products in increasing `k` whichever order its neighbours are computed in.
 #[inline(always)]
 fn matmul_body<const FUSED: bool>(
     a: &[Element],
@@ -711,90 +912,30 @@ fn matmul_body<const FUSED: bool>(
     scratch: &mut [Element],
 ) {
     let m = out.len() / n;
-    // A single row has no reuse of packed weights. Stream each row of b directly,
-    // retaining ascending k and the same separately rounded strict operations.
-    if m == 1 {
-        for (scale, row) in a.iter().zip(b.chunks_exact(n)) {
-            accumulate1::<FUSED>(out, read(*scale), row);
-        }
-        return;
-    }
     if n == 1 {
-        const ROWS: usize = 4;
-        let whole = m / ROWS * ROWS;
-        for i in (0..whole).step_by(ROWS) {
-            let mut sums = [0.0f32; ROWS];
-            for p in 0..k {
-                let weight = read(b[p]);
-                for (r, sum) in sums.iter_mut().enumerate() {
-                    let value = read(a[(i + r) * k + p]);
-                    *sum = if FUSED { value.mul_add(weight, *sum) } else { *sum + value * weight };
-                }
-            }
-            for (r, sum) in sums.iter().enumerate() {
-                out[i + r] = sum.to_le_bytes();
-            }
-        }
-        for i in whole..m {
-            let mut sum = 0.0f32;
-            for p in 0..k {
-                let value = read(a[i * k + p]);
-                let weight = read(b[p]);
-                sum = if FUSED { value.mul_add(weight, sum) } else { sum + value * weight };
-            }
-            out[i] = sum.to_le_bytes();
-        }
-        return;
+        return column_rows::<FUSED>(a, b, k, out);
     }
-    let (whole_rows, whole_columns) = (m / MR * MR, n / NR * NR);
-    let column_blocks = n / NR;
-    let (pack, _) = scratch.as_chunks_mut::<NR>();
-    let mut packed = [[0.0f32; MR]; K_BLOCK];
-    for start in (0..k).step_by(K_BLOCK) {
-        let end = (start + K_BLOCK).min(k);
-        let rows = end - start;
-        if column_blocks > 0 {
-            for (block, column) in pack[..column_blocks * rows].chunks_exact_mut(rows).enumerate() {
-                for (p, target) in column.iter_mut().enumerate() {
-                    target.copy_from_slice(&b[(start + p) * n + block * NR..][..NR]);
-                }
+    if m == 1 {
+        return stream_row::<FUSED>(a, b, n, out);
+    }
+    for first in (0..n).step_by(N_BLOCK) {
+        let cols = (n - first).min(N_BLOCK);
+        for start in (0..k).step_by(K_BLOCK) {
+            let end = (start + K_BLOCK).min(k);
+            let pass = (start, end, first, cols);
+            // A single row group would read a packing once, which a copy cannot repay.
+            if m <= MR {
+                let factors = InPlace { b, n, first_column: first, start, end };
+                short_group::<FUSED>(a, k, pass, factors, out, (0, m), n);
+                continue;
             }
-            for i in (0..whole_rows).step_by(MR) {
-                // Packed once per row group, then read by every column block of that group.
-                for (p, scales) in (start..end).zip(&mut packed) {
-                    for (r, scale) in scales.iter_mut().enumerate() {
-                        *scale = read(a[(i + r) * k + p]);
-                    }
-                }
-                for (block, column) in pack[..column_blocks * rows].chunks_exact(rows).enumerate() {
-                    micro::<FUSED, MR>(&packed[..rows], column, n, block * NR, out, i);
-                }
+            pack_pass(b, n, first, cols, start, end, scratch);
+            let factors = Packed { pack: scratch, rows: end - start };
+            let whole = m / MR * MR;
+            for row in (0..whole).step_by(MR) {
+                row_group::<FUSED, MR>(a, k, pass, factors, out, row, n);
             }
-            // Leftover rows keep the same packed columns, one row in registers at a time.
-            let mut single = [[0.0f32; 1]; K_BLOCK];
-            for i in whole_rows..m {
-                for (p, scale) in (start..end).zip(&mut single) {
-                    scale[0] = read(a[i * k + p]);
-                }
-                for (block, column) in pack[..column_blocks * rows].chunks_exact(rows).enumerate() {
-                    micro::<FUSED, 1>(&single[..rows], column, n, block * NR, out, i);
-                }
-            }
-        }
-        if whole_columns < n {
-            // Keep each tail output in a scalar register across k, rather than dispatching
-            // a tiny slice loop and reloading/storing the output for every product.
-            for i in 0..m {
-                for j in whole_columns..n {
-                    let mut value = read(out[i * n + j]);
-                    for p in start..end {
-                        let left = read(a[i * k + p]);
-                        let right = read(b[p * n + j]);
-                        value = if FUSED { left.mul_add(right, value) } else { value + left * right };
-                    }
-                    out[i * n + j] = value.to_le_bytes();
-                }
-            }
+            short_group::<FUSED>(a, k, pass, factors, out, (whole, m - whole), n);
         }
     }
 }
@@ -808,19 +949,23 @@ fn matmul_avx2(a: &[Element], b: &[Element], k: usize, n: usize, out: &mut [Elem
 fn matmul_fma(a: &[Element], b: &[Element], k: usize, n: usize, out: &mut [Element], scratch: &mut [Element]) {
     matmul_body::<true>(a, b, k, n, out, scratch);
 }
+/// AArch64 always has the fused instruction, so its fused instantiation needs no target feature.
+#[cfg(target_arch = "aarch64")]
+#[inline(never)]
+fn matmul_fma(a: &[Element], b: &[Element], k: usize, n: usize, out: &mut [Element], scratch: &mut [Element]) {
+    matmul_body::<true>(a, b, k, n, out, scratch);
+}
 #[inline(never)]
 fn matmul_baseline(a: &[Element], b: &[Element], k: usize, n: usize, out: &mut [Element], scratch: &mut [Element]) {
     matmul_body::<false>(a, b, k, n, out, scratch);
 }
 
-/// `a @ b` into row-major `out`. Operands are contiguous elements (`packed` by the caller when
-/// their views are not); `+0` starts every element, and no zero is skipped: `0 * inf` is NaN.
-/// `Isa::Fma` fuses, so `execute` only passes it for a `Numeric::Fast` program.
+/// `a @ b` into row-major `out`, which holds at least one element and for which `k` is not zero:
+/// [`crate::Program`] answers those products without calling this. Operands are contiguous elements
+/// (`packed` by the caller when their views are not); `+0` starts every element, and no zero is
+/// skipped: `0 * inf` is NaN. `Isa::Fma` fuses, so `execute` only passes it for a `Numeric::Fast` program.
 pub(crate) fn matmul(a: &[Element], b: &[Element], k: usize, n: usize, out: &mut [u8], scratch: &mut [u8], isa: Isa) {
     out.fill(0);
-    if out.is_empty() || k == 0 {
-        return;
-    }
     let (out, _) = out.as_chunks_mut::<4>();
     let (scratch, _) = scratch.as_chunks_mut::<4>();
     assert!(isa.available(), "{isa:?} is not available on this host");
@@ -831,6 +976,8 @@ pub(crate) fn matmul(a: &[Element], b: &[Element], k: usize, n: usize, out: &mut
         #[cfg(target_arch = "x86_64")]
         // SAFETY: availability was just asserted.
         Isa::Fma => unsafe { matmul_fma(a, b, k, n, out, scratch) },
+        #[cfg(target_arch = "aarch64")]
+        Isa::Fma => matmul_fma(a, b, k, n, out, scratch),
         _ => matmul_baseline(a, b, k, n, out, scratch),
     }
 }
