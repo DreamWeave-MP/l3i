@@ -83,6 +83,42 @@ mod tests {
             }
         }
     }
+    /// The scales multiply each other first. Ordinary values can't show it, because an f64 rounding
+    /// difference almost never survives conversion to f32, but scales that only fit once they have
+    /// met each other can.
+    #[test]
+    fn the_scales_multiply_each_other_first() {
+        let mut out = [f32::NAN];
+        matvec(&[-128], &[-128], &[1e305], 1e-305, &mut out).unwrap();
+        assert!((out[0] - 16384.0).abs() < 0.01, "applied one at a time this overflows: {}", out[0]);
+        matvec(&[-128], &[-128], &[1e-305], 1e-20, &mut out).unwrap();
+        assert_eq!(out[0], 0.0, "the product underflows to zero at f32, as it should");
+    }
+    /// Results a f32 can't tell from the exact product, for scales that aren't powers of two.
+    #[test]
+    #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+    fn results_stay_within_one_place_of_the_exact_dequantized_value() {
+        let mut state = 0x0123_4567_89ab_cdef_u64;
+        let mut next = || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        for columns in [1usize, 15, 16, 17, 4097] {
+            let weights: Vec<i8> = (0..columns).map(|_| i8::from_ne_bytes([next().to_ne_bytes()[1]])).collect();
+            let input: Vec<i8> = (0..columns).map(|_| i8::from_ne_bytes([next().to_ne_bytes()[2]])).collect();
+            let (numerator, denominator) = (next() % 9973 + 1, next() % 9967 + 1);
+            let scale = numerator as f64 / denominator as f64;
+            let exact: i128 = weights.iter().zip(&input).map(|(x, y)| i128::from(*x) * i128::from(*y)).sum();
+            let mut out = [f32::NAN];
+            matvec(&weights, &input, &[scale], 1.0, &mut out).unwrap();
+            // The exact accumulator, from i128 rather than the kernel's accumulation.
+            let expected = exact as f64 * numerator as f64 / denominator as f64;
+            let place = f64::from(f32::EPSILON) * expected.abs().max(f64::from(f32::MIN_POSITIVE));
+            assert!((f64::from(out[0]) - expected).abs() <= place, "{columns}: {} vs {expected}", out[0]);
+        }
+    }
     #[test]
     fn scales_and_validation_are_explicit() {
         let mut out = [9.0; 2];

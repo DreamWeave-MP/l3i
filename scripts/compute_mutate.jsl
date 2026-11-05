@@ -16,6 +16,8 @@ local mutations: { Mutation } = {
 	  old = "i32::from(*x) * i32::from(*y)", new = "i32::from(*x as u8) * i32::from(*y as u8)" },
 	{ label = "int8: row scale ignored", file = "quantized.rs",
 	  old = "accumulator as f64 * (*scale * input_scale)", new = "accumulator as f64 * input_scale" },
+	{ label = "int8: scales applied one at a time", file = "quantized.rs",
+	  old = "accumulator as f64 * (*scale * input_scale)", new = "(accumulator as f64 * *scale) * input_scale" },
 	{ label = "int8: final chunk omitted", file = "quantized.rs",
 	  old = "left.chunks(4096)", new = "left.chunks_exact(4096)" },
 
