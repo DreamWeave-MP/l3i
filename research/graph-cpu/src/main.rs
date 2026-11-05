@@ -99,6 +99,14 @@ impl LuauModule for Research {
         module.userdata::<TensorValue>(None, |ty| {
             ty.method("read", |t: &TensorValue| t.0.readback().map(NewBuffer))?;
             ty.method("shares", |a: &TensorValue, b: &TensorValue| a.0.shares_storage(&b.0))?;
+            let budget = service_budget.clone();
+            ty.method("prepareRight", move |t: &TensorValue, call: &Call<'_>| {
+                collecting(call, &budget, || t.0.prepare_right(&budget)).map(|p| Owned(TensorValue(p)))
+            })?;
+            let budget = service_budget.clone();
+            ty.method("prepareLeft", move |t: &TensorValue, call: &Call<'_>| {
+                collecting(call, &budget, || t.0.prepare_left(&budget)).map(|p| Owned(TensorValue(p)))
+            })?;
             ty.method(
                 "view",
                 |t: &TensorValue,
@@ -145,6 +153,19 @@ impl LuauModule for Research {
                       mut out: BufferView<'_>,
                       inputs: VarArgs<BufferView<'_>>| {
                     collecting(call, &budget, || run_into(&p.0, &mut out, &inputs.values, &budget))
+                },
+            )?;
+            let budget = service_budget.clone();
+            ty.method(
+                "runTensorsInto",
+                move |p: &CompiledProgram, call: &Call<'_>, mut out: BufferView<'_>, tensors: VarArgs<&TensorValue>| {
+                    let views: Vec<View<'_>> = tensors.values.iter().map(|t| t.0.borrow()).collect();
+                    collecting(call, &budget, || {
+                        // SAFETY: a tensor's bytes are native, never a Luau buffer, so this exclusive
+                        // slice overlaps no input, and no Lua runs while it is alive.
+                        let target = unsafe { out.bytes_mut_unchecked() };
+                        p.0.run_into(&views, target, &budget)
+                    })
                 },
             )?;
             let budget = service_budget.clone();

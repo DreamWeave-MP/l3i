@@ -727,3 +727,225 @@ fn matmul_remainder_padding_never_reaches_a_real_element() {
         assert!(floats(&ones).iter().all(|v| v.is_finite()), "{m}x{k}x{n}");
     }
 }
+
+/// The elements of a strided parent are the only ones its views may reach. Byte intervals would allow
+/// every rejection below.
+#[test]
+fn views_are_element_capabilities_not_byte_intervals() {
+    let base: Vec<f32> = (0..24).map(|i| i as f32).collect();
+    let owner: Arc<dyn Storage> = Arc::new(Vector(bytes_of(&base)));
+    // Every second element of a 2x12 block: rows 48 bytes apart, columns 8 apart, 6 columns.
+    let gapped = Tensor::from_storage(owner.clone(), Shape::Matrix(2, 6), 0, [48, 8]).unwrap();
+    let matrix = |r, c| Shape::Matrix(r, c);
+
+    // Inside the parent's elements: subsets, reorderings, and repeats of them.
+    for (shape, offset, strides, expected) in [
+        (matrix(1, 3), 8, [0, 8], vec![2.0, 4.0, 6.0]),
+        (matrix(2, 2), 0, [48, 16], vec![0.0, 4.0, 12.0, 16.0]),
+        (matrix(3, 2), 0, [8, 48], vec![0.0, 12.0, 2.0, 14.0, 4.0, 16.0]),
+        (matrix(2, 2), 8, [0, 0], vec![2.0; 4]),
+        (matrix(4, 1), 48, [8, 0], vec![12.0, 14.0, 16.0, 18.0]),
+    ] {
+        let view = gapped.view(shape, offset, strides).unwrap();
+        assert_eq!(floats(&view.readback().unwrap()), expected, "{shape:?} {offset} {strides:?}");
+    }
+    // Refused though every byte is inside the parent's interval: gaps, split elements, widening.
+    for (shape, offset, strides, what) in [
+        (matrix(1, 3), 0, [0, 4], "adjacent elements span a gap"),
+        (matrix(1, 1), 4, [0, 0], "a single element in a gap"),
+        (matrix(1, 1), 2, [0, 0], "bytes across two elements"),
+        (matrix(1, 1), 48 + 4, [0, 0], "a gap in the second row"),
+        (matrix(2, 1), 0, [44, 0], "a row stride landing in a gap"),
+        (matrix(1, 2), 88, [0, 8], "running past the last element"),
+        (matrix(2, 1), 40, [4, 0], "a row stride from the last element of a row into a gap"),
+    ] {
+        assert!(gapped.view(shape, offset, strides).is_err(), "{what}");
+    }
+
+    // A child can never recover what its own parent gave up.
+    let row = gapped.view(matrix(1, 3), 8, [0, 8]).unwrap();
+    assert!(row.view(matrix(1, 1), 24, [0, 0]).is_err(), "past the row");
+    assert!(row.view(matrix(1, 2), 0, [0, 4]).is_err(), "into a gap");
+    assert_eq!(floats(&row.view(matrix(1, 1), 16, [0, 0]).unwrap().readback().unwrap()), [6.0]);
+
+    // A contiguous parent: any whole-element walk inside it, but not across its elements.
+    let whole = Tensor::from_storage(owner.clone(), matrix(4, 6), 0, [24, 4]).unwrap();
+    assert!(whole.view(matrix(2, 6), 24, [24, 4]).is_ok());
+    assert!(whole.view(matrix(6, 4), 0, [4, 24]).is_ok(), "transposed");
+    assert!(whole.view(matrix(1, 1), 1, [0, 0]).is_err(), "unaligned");
+    assert!(whole.view(matrix(2, 2), 4, [6, 4]).is_err(), "row stride splits elements");
+    assert!(whole.view(matrix(1, 2), 92, [0, 4]).is_err(), "past the end");
+
+    // A repeated row addresses only that row.
+    let repeated = Tensor::from_storage(owner.clone(), matrix(5, 3), 0, [0, 4]).unwrap();
+    assert!(repeated.view(matrix(2, 3), 0, [0, 4]).is_ok());
+    assert!(repeated.view(matrix(1, 1), 12, [0, 0]).is_err(), "the next row was never granted");
+    // A transposed parent's elements, addressed along its own walk.
+    let transposed = Tensor::from_storage(owner.clone(), matrix(3, 2), 0, [8, 48]).unwrap();
+    assert!(transposed.view(matrix(1, 2), 8, [0, 48]).is_ok());
+    assert!(transposed.view(matrix(1, 2), 4, [0, 48]).is_err());
+
+    // Steps that collide have no one reading of an address: only the parent itself re-derives.
+    let colliding = Tensor::from_storage(owner.clone(), matrix(3, 3), 0, [8, 4]).unwrap();
+    assert!(colliding.view(matrix(3, 3), 0, [8, 4]).is_ok());
+    assert!(colliding.view(matrix(1, 1), 0, [0, 0]).is_err());
+    let overlapping = Tensor::from_storage(owner.clone(), matrix(1, 3), 0, [0, 2]).unwrap();
+    assert!(overlapping.view(matrix(1, 1), 2, [0, 0]).is_err());
+
+    // An empty view grants nothing, wherever it says it is, as long as it stays in bounds.
+    assert!(gapped.view(matrix(0, 3), 4, [0, 4]).is_ok());
+    let empty = gapped.view(matrix(0, 3), 4, [0, 4]).unwrap();
+    assert!(empty.view(matrix(1, 1), 0, [0, 0]).is_err(), "an empty parent has no elements");
+    // The host's entry stays free to describe any bytes: it is the trusted root.
+    assert!(Tensor::from_storage(owner, matrix(1, 1), 2, [0, 0]).is_ok());
+}
+
+fn prepared_shapes() -> Vec<(usize, usize, usize)> {
+    let mut shapes = vec![(7, 3, 2), (7, 129, 17), (13, 300, 33), (7, 130, 257), (64, 128, 128), (9, 5, 513)];
+    for m in [2, 3, 8, 15, 16, 17, 31, 32, 33, 40, 48, 49] {
+        for k in [1, 2, 127, 128, 129, 300] {
+            shapes.push((m, k, 1));
+        }
+    }
+    for m in [2, 6, 7, 12, 13] {
+        for n in [2, 8, 9, 16, 17, 25] {
+            shapes.push((m, 129, n));
+        }
+    }
+    shapes
+}
+
+/// Packed weights are an optimization and nothing else: the same bits, in both modes, on every
+/// instantiation and from any layout of the weights.
+#[test]
+fn prepared_weights_change_no_bit_in_any_mode_or_layout() {
+    let domain = Domain::new(1 << 14, 1 << 14);
+    let mut rng = Rng(0x1357_9bdf_0246_8ace);
+    let mut value = move || (rng.unit() * 2.0 - 1.0) * 1.000_001;
+    let budget = Budget::new(1 << 26);
+    let isas: Vec<Isa> = strict_isas();
+    for (m, k, n) in prepared_shapes() {
+        let a: Vec<f32> = (0..m * k).map(|_| value()).collect();
+        let b: Vec<f32> = (0..k * n).map(|_| value()).collect();
+        let (x, y) = (
+            Expr::slot(0, Shape::Matrix(m, k), domain.clone()).unwrap(),
+            Expr::slot(1, Shape::Matrix(k, n), domain.clone()).unwrap(),
+        );
+        let (strict, fused) = (ordered_product(&a, &b, m, k, n, false), ordered_product(&a, &b, m, k, n, true));
+        for (spacing, transposed) in [(1, false), (2, true)] {
+            let (ta, tb) = (laid_out(&a, m, k, spacing, transposed), laid_out(&b, k, n, spacing, transposed));
+            let (pa, pb) = if n == 1 {
+                (ta.prepare_left(&budget).unwrap(), tb.clone())
+            } else {
+                (ta.clone(), tb.prepare_right(&budget).unwrap())
+            };
+            assert!(pa.prepared_bytes() + pb.prepared_bytes() > 0);
+            assert!(ta.shares_storage(&pa) && tb.shares_storage(&pb), "no copy of the elements");
+            let views = [pa.borrow(), pb.borrow()];
+            let program = x.matmul(&y).unwrap().compile().unwrap();
+            for isa in &isas {
+                let denied = Budget::new(if spacing == 1 { 0 } else { (m * k + k * n) * 4 });
+                let mut out = vec![0x55u8; m * n * 4];
+                program.run_with(&views, &mut out, &denied, *isa, CHUNK).unwrap();
+                for (i, (p, q)) in floats(&out).iter().zip(&strict).enumerate() {
+                    assert_eq!(p.to_bits(), q.to_bits(), "{m}x{k}x{n} {spacing} {isa:?} element {i}");
+                }
+            }
+            if Isa::Fma.available() {
+                let program = x.matmul(&y).unwrap().compile_with(Numeric::Fast).unwrap();
+                let mut out = vec![0x55u8; m * n * 4];
+                program.run_with(&views, &mut out, &budget, Isa::Fma, CHUNK).unwrap();
+                for (i, (p, q)) in floats(&out).iter().zip(&fused).enumerate() {
+                    assert_eq!(p.to_bits(), q.to_bits(), "fused {m}x{k}x{n} {spacing} element {i}");
+                }
+            }
+        }
+    }
+    assert_eq!(budget.used(), 0, "the last tensor sharing a packing releases its charge");
+}
+
+#[test]
+fn prepared_weights_are_charged_while_they_live_and_refused_past_the_budget() {
+    let domain = Domain::new(64, 64);
+    let setup = Budget::new(1 << 24);
+    let (m, k, n) = (16, 300, 20);
+    let bytes: Vec<u8> = (0..k * n).flat_map(|i| (i as f32).to_le_bytes()).collect();
+    let weights = Tensor::import(&bytes, Shape::Matrix(k, n), &setup).unwrap();
+    let left = Tensor::import(&vec![1u8; m * k * 4], Shape::Matrix(m, k), &setup).unwrap();
+    let held = setup.used();
+
+    // The exact size is refused one byte short, cleanly, and the charge is exact when it fits.
+    let size = crate::kernels::prepared_right_elements(k, n) * 4;
+    let tight = Budget::new(size - 1);
+    assert!(weights.prepare_right(&tight).is_err());
+    assert_eq!(tight.used(), 0);
+    let budget = Budget::new(size);
+    let prepared = weights.prepare_right(&budget).unwrap();
+    assert_eq!((budget.used(), prepared.prepared_bytes()), (size, size));
+
+    // Packing's scratch is what preparation saves: the product needs no budget beyond it, while
+    // the same product without it does. Derived views give the packing up and pay again.
+    let program = Expr::slot(0, left.shape(), domain.clone())
+        .unwrap()
+        .matmul(&Expr::slot(1, weights.shape(), domain).unwrap())
+        .unwrap()
+        .compile()
+        .unwrap();
+    let mut out = vec![0u8; m * n * 4];
+    program.run_into(&[left.borrow(), prepared.borrow()], &mut out, &Budget::new(0)).unwrap();
+    assert!(program.run_into(&[left.borrow(), weights.borrow()], &mut out, &Budget::new(0)).is_err());
+    let derived = prepared.view(prepared.shape(), 0, [n * 4, 4]).unwrap();
+    assert_eq!(derived.prepared_bytes(), 0);
+    assert!(program.run_into(&[left.borrow(), derived.borrow()], &mut out, &Budget::new(0)).is_err());
+
+    // A clone shares the packing; it stays charged until the last holder drops, and no longer.
+    let clone = prepared.clone();
+    drop(prepared);
+    assert_eq!(budget.used(), size);
+    program.run_into(&[left.borrow(), clone.borrow()], &mut out, &Budget::new(0)).unwrap();
+    drop(clone);
+    drop(derived);
+    assert_eq!(budget.used(), 0);
+
+    // A packing for the other side, or a product with a shape it doesn't serve, costs what a plain
+    // operand costs and gives the same bits.
+    let wrong_side = weights.prepare_left(&setup).unwrap();
+    let mut plain = vec![0u8; m * n * 4];
+    program.run_into(&[left.borrow(), weights.borrow()], &mut plain, &setup).unwrap();
+    program.run_into(&[left.borrow(), wrong_side.borrow()], &mut out, &setup).unwrap();
+    assert_eq!(out, plain);
+    drop(wrong_side);
+    assert_eq!(setup.used(), held);
+}
+
+/// One program and one packing shared by threads, under one budget, with every result checked.
+#[test]
+fn prepared_weights_serve_concurrent_runs() {
+    let domain = Domain::new(64, 64);
+    let budget = Budget::new(1 << 24);
+    let (m, k) = (48, 129);
+    let a: Vec<f32> = (0..m * k).map(|i| (i % 19) as f32 * 0.25 - 2.0).collect();
+    let b: Vec<f32> = (0..k).map(|i| (i % 7) as f32 * 0.5 - 1.5).collect();
+    let (ta, tb) = (laid_out(&a, m, k, 1, false), laid_out(&b, k, 1, 1, false));
+    let prepared = ta.prepare_left(&budget).unwrap();
+    let program = Expr::slot(0, ta.shape(), domain.clone())
+        .unwrap()
+        .matmul(&Expr::slot(1, tb.shape(), domain).unwrap())
+        .unwrap()
+        .compile()
+        .unwrap();
+    let expected = ordered_product(&a, &b, m, k, 1, false);
+    std::thread::scope(|scope| {
+        for _ in 0..4 {
+            scope.spawn(|| {
+                for _ in 0..200 {
+                    let mut out = vec![0x55u8; m * 4];
+                    program.run_into(&[prepared.borrow(), tb.borrow()], &mut out, &budget).unwrap();
+                    assert_eq!(floats(&out), expected);
+                }
+            });
+        }
+    });
+    drop(prepared);
+    assert_eq!(budget.used(), 0);
+}

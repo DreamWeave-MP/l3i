@@ -679,6 +679,21 @@ fn shaped_matmul() {
             row(&label, m * k * n, &mut body);
             heap(&label, &mut body);
         }
+        // Weights packed ahead of time, where a kernel reads them: the packing's cost is its own row.
+        if m > 1 {
+            let prepared_at = Instant::now();
+            let prepared = if n == 1 { ta.prepare_left(&budget).unwrap() } else { tb.prepare_right(&budget).unwrap() };
+            let prepare_us = prepared_at.elapsed().as_secs_f64() * 1e6;
+            println!("matmul_prepare_{m}x{k}x{n} once_us={prepare_us:.3} bytes={}", prepared.prepared_bytes());
+            let views = if n == 1 { [prepared.borrow(), tb.borrow()] } else { [ta.borrow(), prepared.borrow()] };
+            for (mode, numeric) in [("strict", Numeric::Strict), ("fast", Numeric::Fast)] {
+                let program = expression.compile_with(numeric).unwrap();
+                let label = format!("matmul_{mode}_prepared_{m}x{k}x{n}");
+                let mut body = || program.run_into(black_box(&views), black_box(&mut out), &budget).unwrap();
+                row(&label, m * k * n, &mut body);
+                heap(&label, &mut body);
+            }
+        }
         let strict = expression.compile().unwrap();
         row(&format!("matmul_baseline_{m}x{k}x{n}"), m * k * n, || {
             strict.run_with(black_box(&views), black_box(&mut out), &budget, Isa::Baseline, CHUNK).unwrap();
@@ -724,6 +739,19 @@ fn forward_pass() {
             black_box(program.run(black_box(&references), &budget).unwrap());
         });
         println!("forward_budget_peak_bytes_{mode}={}", budget.peak());
+        // Every weight packed once, for the whole life of the model.
+        let prepared: Vec<Tensor> = tensors
+            .iter()
+            .enumerate()
+            .map(|(slot, tensor)| if slot == 0 { tensor.clone() } else { tensor.prepare_right(&budget).unwrap() })
+            .collect();
+        let views: Vec<View<'_>> = prepared.iter().map(Tensor::borrow).collect();
+        let label = format!("forward_run_into_prepared_{mode}");
+        let mut body = || program.run_into(black_box(&views), black_box(&mut out), &budget).unwrap();
+        row(&label, elements, &mut body);
+        heap(&label, &mut body);
+        drop(views);
+        drop(prepared);
     }
     assert_eq!(budget.used(), tensors.iter().map(|t| t.shape().elements().unwrap() * 4).sum::<usize>());
 }

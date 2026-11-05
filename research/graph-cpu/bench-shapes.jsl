@@ -49,6 +49,12 @@ for _,shape in {{1,4096,1},{1,128,128},{64,128,128},{256,256,1}} do
  local suffix=string.format('_%dx%dx%d',m,k,n)
  measure('jsl_matmul_strict_runInto'..suffix,function() strict:runInto(out,a,b) end)
  measure('jsl_matmul_fast_runInto'..suffix,function() fast:runInto(out,a,b) end)
+ if m>1 then
+  local ta,tb=compute.f32(a,m,k),compute.f32(b,k,n)
+  if n==1 then ta=ta:prepareLeft() else tb=tb:prepareRight() end
+  measure('jsl_matmul_strict_prepared_runTensorsInto'..suffix,function() strict:runTensorsInto(out,ta,tb) end)
+  measure('jsl_matmul_fast_prepared_runTensorsInto'..suffix,function() fast:runTensorsInto(out,ta,tb) end)
+ end
 end
 
 -- The forward pass, as src/forward.rs builds it: 64 tokens, width 128, two blocks.

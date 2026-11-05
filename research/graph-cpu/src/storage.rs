@@ -172,6 +172,7 @@ pub struct View<'a> {
     pub(crate) shape: Shape,
     pub(crate) offset: usize,
     pub(crate) strides: [usize; 2],
+    pub(crate) prepared: Option<&'a Prepared>,
 }
 impl<'a> View<'a> {
     /// A row-major contiguous view of exactly `bytes`.
@@ -179,7 +180,7 @@ impl<'a> View<'a> {
         if bytes.len() != shape.elements()? * 4 {
             return Err(error("input byte size mismatch"));
         }
-        Ok(Self { bytes, shape, offset: 0, strides: [shape.dims().1 * 4, 4] })
+        Ok(Self { bytes, shape, offset: 0, strides: [shape.dims().1 * 4, 4], prepared: None })
     }
     #[must_use]
     pub fn shape(&self) -> Shape {
@@ -197,6 +198,71 @@ impl<'a> View<'a> {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PreparedSide {
+    Left,
+    Right,
+}
+/// A tensor's elements packed ahead of time, under the budget that was asked for them.
+#[derive(Debug)]
+pub struct Prepared {
+    pack: Allocation,
+    side: PreparedSide,
+}
+impl Prepared {
+    pub(crate) fn elements(&self, side: PreparedSide) -> Option<&[[u8; 4]]> {
+        (self.side == side).then(|| self.pack.bytes.as_chunks::<4>().0)
+    }
+}
+
+/// A view's element addresses in a form that decides membership at once: two steps where the
+/// smaller's whole run fits inside one larger step, so every address has one decomposition. Each
+/// pair is a count and a step in bytes.
+struct Lattice {
+    origin: usize,
+    outer: (usize, usize),
+    inner: (usize, usize),
+}
+impl Lattice {
+    /// `None` when a view's steps can reach one address in two ways, or its elements partly overlap:
+    /// then no single decomposition exists, and this declines to search for one.
+    fn of(view: &Tensor) -> Result<Option<Self>> {
+        let (rows, cols) = view.shape.dims();
+        if view.shape.elements()? == 0 {
+            return Ok(Some(Self { origin: view.offset, outer: (0, 1), inner: (1, 1) }));
+        }
+        // A repeated dimension adds no addresses.
+        let row = if rows == 1 || view.strides[0] == 0 { (1, 1) } else { (rows, view.strides[0]) };
+        let col = if cols == 1 || view.strides[1] == 0 { (1, 1) } else { (cols, view.strides[1]) };
+        let (outer, inner) = if row.1 >= col.1 { (row, col) } else { (col, row) };
+        let partial = (inner.0 > 1 && inner.1 < 4) || (outer.0 > 1 && outer.1 < 4);
+        if partial || (inner.0 > 1 && (inner.0 - 1) * inner.1 + 4 > outer.1) {
+            return Ok(None);
+        }
+        Ok(Some(Self { origin: view.offset, outer, inner }))
+    }
+    /// Whether the elements are one gapless run from the origin.
+    fn contiguous(&self) -> bool {
+        if self.inner.0 == 1 {
+            self.outer.0 == 1 || self.outer.1 == 4
+        } else {
+            self.inner.1 == 4 && self.outer.1 == self.inner.0 * 4
+        }
+    }
+    fn contains(&self, address: usize) -> bool {
+        let Some(distance) = address.checked_sub(self.origin) else {
+            return false;
+        };
+        let (outer, inner) = (distance / self.outer.1, distance % self.outer.1);
+        outer < self.outer.0
+            && if self.inner.0 == 1 {
+                inner == 0
+            } else {
+                inner.is_multiple_of(self.inner.1) && inner / self.inner.1 < self.inner.0
+            }
+    }
+}
+
 /// An owner, a checked byte interval and a shape. Cloning retains the owner, never the payload.
 #[derive(Clone, Debug)]
 pub struct Tensor {
@@ -205,6 +271,7 @@ pub struct Tensor {
     offset: usize,
     strides: [usize; 2],
     end: usize,
+    prepared: Option<Arc<Prepared>>,
 }
 impl Tensor {
     /// Trusted host entry: retain an existing immutable owner, without a payload copy.
@@ -214,7 +281,7 @@ impl Tensor {
         if end > owner.bytes().len() {
             return Err(error("view outside storage"));
         }
-        Ok(Self { owner, shape, offset, strides, end })
+        Ok(Self { owner, shape, offset, strides, end, prepared: None })
     }
     pub fn import(bytes: &[u8], shape: Shape, budget: &Arc<Budget>) -> Result<Self> {
         if bytes.len() != shape.elements()? * 4 {
@@ -235,18 +302,110 @@ impl Tensor {
     pub(crate) fn contiguous(allocation: Allocation, shape: Shape) -> Result<Self> {
         Self::from_storage(Arc::new(allocation), shape, 0, [shape.dims().1 * 4, 4])
     }
-    /// Derive a view of the same owner; it cannot widen the parent's backing byte interval.
+    /// Derives a view of the same owner, with `offset` in bytes from this view's first element.
+    ///
+    /// A view is an element-level capability: every element of the result must be an element of
+    /// this view, at the same byte address. Gaps a strided parent steps over stay unreachable, and so
+    /// does any reinterpretation of bytes across its elements. Repeating a parent's elements is
+    /// allowed, since it reveals nothing new. A parent whose own strides make different positions
+    /// overlap can only re-derive itself. The check costs one comparison when the parent is
+    /// contiguous and the result's strides are whole elements, and otherwise one per derived element.
+    /// A derived view carries no [`Prepared`] weights: they describe the parent's elements.
     pub fn view(&self, shape: Shape, offset: usize, strides: [usize; 2]) -> Result<Self> {
         let offset = self.offset.checked_add(offset).ok_or_else(|| error("offset overflow"))?;
         let view = Self::from_storage(self.owner.clone(), shape, offset, strides)?;
         if view.end > self.end {
-            return Err(error("view widens parent byte interval"));
+            return Err(error("view widens parent elements"));
+        }
+        if !self.covers(&view)? {
+            return Err(error("view reaches outside parent elements"));
         }
         Ok(view)
     }
+    /// Whether every element of `child` sits at the byte address of one of this view's elements.
+    fn covers(&self, child: &Self) -> Result<bool> {
+        let (rows, cols) = child.shape.dims();
+        if child.shape.elements()? == 0 {
+            return Ok(true);
+        }
+        if self.shape == child.shape && self.offset == child.offset && self.strides == child.strides {
+            return Ok(true);
+        }
+        let Some(lattice) = Lattice::of(self)? else {
+            return Err(error("view of a parent whose elements overlap"));
+        };
+        // A contiguous parent is one interval, already checked against `end`.
+        let step = |count: usize, stride: usize| count == 1 || stride.is_multiple_of(4);
+        if lattice.contiguous()
+            && (child.offset - lattice.origin).is_multiple_of(4)
+            && step(rows, child.strides[0])
+            && step(cols, child.strides[1])
+        {
+            return Ok(true);
+        }
+        for row in 0..rows {
+            for col in 0..cols {
+                if !lattice.contains(child.offset + row * child.strides[0] + col * child.strides[1]) {
+                    return Ok(false);
+                }
+            }
+        }
+        Ok(true)
+    }
+    /// A tensor over the same elements that also holds them packed for use as the right operand of
+    /// a matmul with more than one output row and column, so repeated products skip packing and its
+    /// scratch. The packing is charged to `budget` until the last tensor sharing it drops. The owner
+    /// is immutable, so a packing can never go stale. Views derived from the result don't inherit it.
+    pub fn prepare_right(&self, budget: &Arc<Budget>) -> Result<Self> {
+        self.prepare(budget, PreparedSide::Right)
+    }
+    /// A tensor over the same elements that also holds them in column panels for use as the left
+    /// operand of a matmul with one output column, a weight matrix times a vector. Packing rows
+    /// sideways is what lets strict additions use every SIMD lane, so unlike [`Self::prepare_right`]
+    /// this changes the kernel rather than only saving a copy. Charged and shared the same way.
+    pub fn prepare_left(&self, budget: &Arc<Budget>) -> Result<Self> {
+        self.prepare(budget, PreparedSide::Left)
+    }
+    fn prepare(&self, budget: &Arc<Budget>, side: PreparedSide) -> Result<Self> {
+        let (rows, cols) = self.shape.dims();
+        let elements = match side {
+            PreparedSide::Right => crate::kernels::prepared_right_elements(rows, cols),
+            PreparedSide::Left => crate::kernels::prepared_left_elements(rows, cols),
+        };
+        let mut pack = budget.allocate(elements * 4)?;
+        let source = crate::kernels::Source::bind(self.borrow(), self.shape);
+        let walked;
+        let contiguous = if let crate::kernels::Source::Direct(contiguous) = source {
+            contiguous
+        } else {
+            walked = {
+                let mut copy = budget.allocate(self.shape.elements()? * 4)?;
+                source.materialize(&mut copy.bytes);
+                copy
+            };
+            walked.bytes.as_chunks::<4>().0
+        };
+        let target = pack.bytes.as_chunks_mut::<4>().0;
+        match side {
+            PreparedSide::Right => crate::kernels::prepare_right(contiguous, rows, cols, target),
+            PreparedSide::Left => crate::kernels::prepare_left(contiguous, rows, cols, target),
+        }
+        Ok(Self { prepared: Some(Arc::new(Prepared { pack, side })), ..self.clone() })
+    }
+    /// Budgeted bytes this tensor's [`Prepared`] weights hold, shared with whatever else holds them.
+    #[must_use]
+    pub fn prepared_bytes(&self) -> usize {
+        self.prepared.as_ref().map_or(0, |prepared| prepared.pack.bytes.len())
+    }
     #[must_use]
     pub fn borrow(&self) -> View<'_> {
-        View { bytes: self.owner.bytes(), shape: self.shape, offset: self.offset, strides: self.strides }
+        View {
+            bytes: self.owner.bytes(),
+            shape: self.shape,
+            offset: self.offset,
+            strides: self.strides,
+            prepared: self.prepared.as_deref(),
+        }
     }
     #[must_use]
     pub fn shape(&self) -> Shape {

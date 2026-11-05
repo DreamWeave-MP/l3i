@@ -889,6 +889,90 @@ fn column_rows<const FUSED: bool>(a: &[Element], b: &[Element], k: usize, out: &
     }
 }
 
+/// One packing pass per block of rows of `b` and per block of its columns, in the order `matmul_body`
+/// reads them.
+fn passes(k: usize, n: usize) -> impl Iterator<Item = (usize, usize, usize, usize)> {
+    (0..n).step_by(N_BLOCK).flat_map(move |first| {
+        let cols = (n - first).min(N_BLOCK);
+        (0..k).step_by(K_BLOCK).map(move |start| (start, (start + K_BLOCK).min(k), first, cols))
+    })
+}
+fn pass_elements(start: usize, end: usize, cols: usize) -> usize {
+    (end - start) * (cols / NR * NR + remainder_width(cols % NR))
+}
+/// Elements [`prepare_right`] writes for a `k x n` operand.
+pub(crate) fn prepared_right_elements(k: usize, n: usize) -> usize {
+    passes(k, n).map(|(start, end, _, cols)| pass_elements(start, end, cols)).sum()
+}
+/// Packs all of `b`, every pass adjacent, in the order `matmul_body` reads them.
+pub(crate) fn prepare_right(b: &[Element], k: usize, n: usize, mut pack: &mut [Element]) {
+    for (start, end, first, cols) in passes(k, n) {
+        let (pass, rest) = pack.split_at_mut(pass_elements(start, end, cols));
+        pack_pass(b, n, first, cols, start, end, pass);
+        pack = rest;
+    }
+}
+/// Rows of `a` per column panel, one lane each.
+const PANEL: usize = NR;
+/// Elements [`prepare_left`] writes for an `m x k` operand.
+pub(crate) const fn prepared_left_elements(m: usize, k: usize) -> usize {
+    (m / PANEL * PANEL + remainder_width(m % PANEL)) * k
+}
+/// Packs `a` as column panels: for each panel of rows and each column of `a`, one lane per row.
+pub(crate) fn prepare_left(a: &[Element], m: usize, k: usize, panels: &mut [Element]) {
+    if k == 0 {
+        return;
+    }
+    let whole = m / PANEL * PANEL;
+    let mut rest = panels;
+    let mut row = 0;
+    while row < m {
+        let lanes = if row < whole { PANEL } else { remainder_width(m - whole) };
+        let (panel, after) = rest.split_at_mut(lanes * k);
+        for (p, column) in panel.chunks_exact_mut(lanes).enumerate() {
+            for (lane, slot) in column.iter_mut().enumerate() {
+                *slot = if row + lane < m { a[(row + lane) * k + p] } else { [0; 4] };
+            }
+        }
+        rest = after;
+        row += lanes;
+    }
+}
+/// A weight matrix in column panels times one column: every strict addition of every row happens in
+/// increasing `k`, across SIMD lanes rather than one register per row.
+#[inline(always)]
+fn panels_times_column<const FUSED: bool>(panels: &[Element], b: &[Element], k: usize, out: &mut [Element]) {
+    let m = out.len();
+    let whole = m / PANEL * PANEL;
+    let tail = m - whole;
+    let mut scales = [[0.0f32; 1]; K_BLOCK];
+    for start in (0..k).step_by(K_BLOCK) {
+        let end = (start + K_BLOCK).min(k);
+        for (scale, value) in scales.iter_mut().zip(&b[start..end]) {
+            scale[0] = read(*value);
+        }
+        let scales = &scales[..end - start];
+        for row in (0..whole).step_by(PANEL) {
+            let columns = &panels[row * k + start * PANEL..][..(end - start) * PANEL];
+            let factors = columns.as_chunks::<PANEL>().0.iter().copied();
+            micro::<FUSED, 1, PANEL>(scales, factors, out, Block { base: row, stride: 0, cols: PANEL });
+        }
+        let last = &panels[whole * k..];
+        let at = Block { base: whole, stride: 0, cols: tail };
+        match remainder_width(tail) {
+            0 => {}
+            NR_NARROW => {
+                let columns = &last[start * NR_NARROW..][..(end - start) * NR_NARROW];
+                micro::<FUSED, 1, NR_NARROW>(scales, columns.as_chunks::<NR_NARROW>().0.iter().copied(), out, at);
+            }
+            _ => {
+                let columns = &last[start * NR..][..(end - start) * NR];
+                micro::<FUSED, 1, NR>(scales, columns.as_chunks::<NR>().0.iter().copied(), out, at);
+            }
+        }
+    }
+}
+
 /// Bytes of scratch `matmul` needs: one pass of `b`, packed by column block. Nothing when the call
 /// does no packing, which includes every product with no elements or no inner dimension and every
 /// product with a single row group to read the packing.
@@ -903,68 +987,78 @@ pub(crate) fn matmul_scratch(m: usize, k: usize, n: usize) -> usize {
 /// The row-major `a @ b` kernel. Each pass of `b` covers ascending `k`, so each output element sees
 /// its products in increasing `k` whichever order its neighbours are computed in.
 #[inline(always)]
-fn matmul_body<const FUSED: bool>(
-    a: &[Element],
-    b: &[Element],
-    k: usize,
-    n: usize,
-    out: &mut [Element],
-    scratch: &mut [Element],
-) {
+fn matmul_body<const FUSED: bool>(operands: &Operands<'_>, out: &mut [Element], scratch: &mut [Element]) {
+    let &Operands { a, b, k, n, left, right } = operands;
     let m = out.len() / n;
     if n == 1 {
+        if let Some(panels) = left {
+            return panels_times_column::<FUSED>(panels, b, k, out);
+        }
         return column_rows::<FUSED>(a, b, k, out);
     }
     if m == 1 {
         return stream_row::<FUSED>(a, b, n, out);
     }
-    for first in (0..n).step_by(N_BLOCK) {
-        let cols = (n - first).min(N_BLOCK);
-        for start in (0..k).step_by(K_BLOCK) {
-            let end = (start + K_BLOCK).min(k);
-            let pass = (start, end, first, cols);
-            // A single row group would read a packing once, which a copy cannot repay.
-            if m <= MR {
-                let factors = InPlace { b, n, first_column: first, start, end };
-                short_group::<FUSED>(a, k, pass, factors, out, (0, m), n);
-                continue;
-            }
-            pack_pass(b, n, first, cols, start, end, scratch);
-            let factors = Packed { pack: scratch, rows: end - start };
-            let whole = m / MR * MR;
-            for row in (0..whole).step_by(MR) {
-                row_group::<FUSED, MR>(a, k, pass, factors, out, row, n);
-            }
-            short_group::<FUSED>(a, k, pass, factors, out, (whole, m - whole), n);
+    let mut prepared = right;
+    for pass in passes(k, n) {
+        let (start, end, first, cols) = pass;
+        // A single row group would read a packing once, which a copy cannot repay.
+        if m <= MR && prepared.is_none() {
+            let factors = InPlace { b, n, first_column: first, start, end };
+            short_group::<FUSED>(a, k, pass, factors, out, (0, m), n);
+            continue;
         }
+        let pack: &[Element] = if let Some(weights) = prepared {
+            let (this, rest) = weights.split_at(pass_elements(start, end, cols));
+            prepared = Some(rest);
+            this
+        } else {
+            pack_pass(b, n, first, cols, start, end, scratch);
+            scratch
+        };
+        let factors = Packed { pack, rows: end - start };
+        let whole = m / MR * MR;
+        for row in (0..whole).step_by(MR) {
+            row_group::<FUSED, MR>(a, k, pass, factors, out, row, n);
+        }
+        short_group::<FUSED>(a, k, pass, factors, out, (whole, m - whole), n);
     }
+}
+/// A matmul's inputs: contiguous operands, unless weights packed ahead of time stand in for one.
+pub(crate) struct Operands<'a> {
+    pub(crate) a: &'a [Element],
+    pub(crate) b: &'a [Element],
+    pub(crate) k: usize,
+    pub(crate) n: usize,
+    pub(crate) left: Option<&'a [Element]>,
+    pub(crate) right: Option<&'a [Element]>,
 }
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
-fn matmul_avx2(a: &[Element], b: &[Element], k: usize, n: usize, out: &mut [Element], scratch: &mut [Element]) {
-    matmul_body::<false>(a, b, k, n, out, scratch);
+fn matmul_avx2(operands: &Operands<'_>, out: &mut [Element], scratch: &mut [Element]) {
+    matmul_body::<false>(operands, out, scratch);
 }
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2,fma")]
-fn matmul_fma(a: &[Element], b: &[Element], k: usize, n: usize, out: &mut [Element], scratch: &mut [Element]) {
-    matmul_body::<true>(a, b, k, n, out, scratch);
+fn matmul_fma(operands: &Operands<'_>, out: &mut [Element], scratch: &mut [Element]) {
+    matmul_body::<true>(operands, out, scratch);
 }
 /// AArch64 always has the fused instruction, so its fused instantiation needs no target feature.
 #[cfg(target_arch = "aarch64")]
 #[inline(never)]
-fn matmul_fma(a: &[Element], b: &[Element], k: usize, n: usize, out: &mut [Element], scratch: &mut [Element]) {
-    matmul_body::<true>(a, b, k, n, out, scratch);
+fn matmul_fma(operands: &Operands<'_>, out: &mut [Element], scratch: &mut [Element]) {
+    matmul_body::<true>(operands, out, scratch);
 }
 #[inline(never)]
-fn matmul_baseline(a: &[Element], b: &[Element], k: usize, n: usize, out: &mut [Element], scratch: &mut [Element]) {
-    matmul_body::<false>(a, b, k, n, out, scratch);
+fn matmul_baseline(operands: &Operands<'_>, out: &mut [Element], scratch: &mut [Element]) {
+    matmul_body::<false>(operands, out, scratch);
 }
 
 /// `a @ b` into row-major `out`, which holds at least one element and for which `k` is not zero:
 /// [`crate::Program`] answers those products without calling this. Operands are contiguous elements
 /// (`packed` by the caller when their views are not); `+0` starts every element, and no zero is
 /// skipped: `0 * inf` is NaN. `Isa::Fma` fuses, so `execute` only passes it for a `Numeric::Fast` program.
-pub(crate) fn matmul(a: &[Element], b: &[Element], k: usize, n: usize, out: &mut [u8], scratch: &mut [u8], isa: Isa) {
+pub(crate) fn matmul(operands: &Operands<'_>, out: &mut [u8], scratch: &mut [u8], isa: Isa) {
     out.fill(0);
     let (out, _) = out.as_chunks_mut::<4>();
     let (scratch, _) = scratch.as_chunks_mut::<4>();
@@ -972,12 +1066,12 @@ pub(crate) fn matmul(a: &[Element], b: &[Element], k: usize, n: usize, out: &mut
     match isa {
         #[cfg(target_arch = "x86_64")]
         // SAFETY: availability was just asserted.
-        Isa::Avx2 => unsafe { matmul_avx2(a, b, k, n, out, scratch) },
+        Isa::Avx2 => unsafe { matmul_avx2(operands, out, scratch) },
         #[cfg(target_arch = "x86_64")]
         // SAFETY: availability was just asserted.
-        Isa::Fma => unsafe { matmul_fma(a, b, k, n, out, scratch) },
+        Isa::Fma => unsafe { matmul_fma(operands, out, scratch) },
         #[cfg(target_arch = "aarch64")]
-        Isa::Fma => matmul_fma(a, b, k, n, out, scratch),
-        _ => matmul_baseline(a, b, k, n, out, scratch),
+        Isa::Fma => matmul_fma(operands, out, scratch),
+        _ => matmul_baseline(operands, out, scratch),
     }
 }

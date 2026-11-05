@@ -6,7 +6,7 @@
 //! `Send + Sync`, and can run concurrently against any compatible inputs.
 use crate::graph::{Instruction, Lease, MAX_WORK, Step};
 use crate::kernels::{self, CHUNK, Element, Isa, Rows, Source};
-use crate::storage::Allocation;
+use crate::storage::{Allocation, PreparedSide};
 use crate::{Budget, Shape, Tensor, View, error, reduction};
 use l3i::Result;
 use std::fmt::Write;
@@ -648,6 +648,7 @@ impl Program {
         self.execute(inputs, out, budget, isa, chunk)
     }
 
+    #[allow(clippy::many_single_char_names)] // The matmul names are the mathematics'.
     fn execute(&self, inputs: &[View<'_>], out: &mut [u8], budget: &Arc<Budget>, isa: Isa, chunk: usize) -> Result<()> {
         // A strict program never fuses, whatever it is asked to run with.
         let isa = if isa == Isa::Fma && self.numeric == Numeric::Strict { Isa::detect() } else { isa };
@@ -709,7 +710,8 @@ impl Program {
                 }
                 Work::Transpose { source, shape } => {
                     let input = view_of(*source);
-                    let swapped = View { shape: *shape, strides: [input.strides[1], input.strides[0]], ..input };
+                    let swapped =
+                        View { shape: *shape, strides: [input.strides[1], input.strides[0]], prepared: None, ..input };
                     Source::bind(swapped, *shape).materialize(target);
                 }
                 Work::SumRows { source, shape, columns } => {
@@ -725,13 +727,20 @@ impl Program {
                 }
                 Work::MatMul { a, b, .. } => {
                     let (a, b) = (view_of(*a), view_of(*b));
-                    let (a_elements, b_elements) = (contiguous(a, budget)?, contiguous(b, budget)?);
-                    let (k, n) = (a.shape.dims().1, b.shape.dims().1);
-                    let needed = kernels::matmul_scratch(target.len() / 4 / n, k, n);
+                    let (m, k, n) = (a.shape.dims().0, a.shape.dims().1, b.shape.dims().1);
+                    // Weights packed ahead of time serve the kernels that read packed weights, and
+                    // their operand then needs no contiguous form at all.
+                    let left =
+                        if n == 1 && m > 1 { a.prepared.and_then(|p| p.elements(PreparedSide::Left)) } else { None };
+                    let right =
+                        if n > 1 && m > 1 { b.prepared.and_then(|p| p.elements(PreparedSide::Right)) } else { None };
+                    let a_elements = if left.is_some() { Packed::Borrowed(&[]) } else { contiguous(a, budget)? };
+                    let b_elements = if right.is_some() { Packed::Borrowed(&[]) } else { contiguous(b, budget)? };
+                    let needed = if right.is_some() { 0 } else { kernels::matmul_scratch(m, k, n) };
                     let _charge = budget.charge(needed)?;
-                    kernels::with_scratch(needed, |scratch| {
-                        kernels::matmul(a_elements.elements(), b_elements.elements(), k, n, target, scratch, isa);
-                    })?;
+                    let operands =
+                        kernels::Operands { a: a_elements.elements(), b: b_elements.elements(), k, n, left, right };
+                    kernels::with_scratch(needed, |scratch| kernels::matmul(&operands, target, scratch, isa))?;
                 }
             }
             if let Some(allocation) = allocation {
@@ -759,6 +768,10 @@ impl Packed<'_> {
     }
 }
 fn contiguous<'a>(view: View<'a>, budget: &Arc<Budget>) -> Result<Packed<'a>> {
+    // One element is contiguous wherever it sits, whatever its strides say.
+    if view.shape.elements()? == 1 {
+        return Ok(Packed::Borrowed(view.bytes[view.offset..view.offset + 4].as_chunks::<4>().0));
+    }
     match Source::bind(view, view.shape) {
         Source::Direct(elements) => Ok(Packed::Borrowed(elements)),
         source => {
