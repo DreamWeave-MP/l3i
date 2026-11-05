@@ -6,6 +6,67 @@ The engine is `src/compute` behind the `compute` feature; `compute-testing` adds
 - Against competitors: `scripts/compute_compare.sh compute_matrix` (matrixmultiply, and OpenBLAS with `L3I_BENCH_OPENBLAS`) and `scripts/compute_compare.sh compute_cubecl ours` (CubeCL; `scripts/compute_cubecl_container.sh` counts inside a disposable container).
 - Injected bugs: `jess scripts/compute_mutate.jsl`.
 
+## Where it stands (2026-11-05)
+
+Single thread on an i7-10870H, packing included, in user-space cycles from the CPU's counter:
+`L3I_BENCH_OPENBLAS=/usr/lib64/libopenblaso.so.0 L3I_BENCH_SHAPES=256x256x256 scripts/compute_compare.sh compute_matrix`.
+Fast programs against matrixmultiply and OpenBLAS 0.3.29. Instruction counts repeat to within a few
+parts in a million between runs of one binary; cycles move by a percent or two.
+
+| Shape | Fast | matrixmultiply | OpenBLAS |
+|---|---:|---:|---:|
+| 12x128x16 | 3,616 | | 3,738 |
+| 16x16x16 | 1,128 | 1,145 | 1,012 |
+| 64x64x64 | 26,619 | 28,086 | 24,467 |
+| 128x128x128 | 187,381 | 191,385 | 166,458 |
+| 256x256x256 | 1,418,390 | 1,403,887 | 1,241,528 |
+| 1x4096x1, against `sgemv` | 1,494 | | 2,254 |
+
+Square products are level with matrixmultiply and 3 to 14% behind OpenBLAS. Wide and prepared shapes
+lead, as `matrix-compare.md` records. On AArch64 none of this has been measured, and the explicit
+kernel below is x86 only.
+
+Fast dot products reorder additions and OpenBLAS's do too; strict programs do neither and have no
+competitor to compare with here. CubeCL's side has not been rerun since these changes.
+
+### What moved these
+
+- **LLVM left a row of the 6x16 block on the stack**, written in pieces and read back whole, stalling
+  on failed store-forwards at every kernel call. `fused_6x16` names its twelve accumulators. Three
+  plausible explanations came first and the counters refused each: rename width (13% fewer
+  instructions moved no cycles), second-level streaming of `b`, and runtime-length copies.
+- **Packing all of `a` is not worth it.** It gained less than the kernel alone, cost scratch that
+  prepared weights had run without, and slowed small products by half.
+- `K_BLOCK` and `N_BLOCK` are still right for this kernel: nothing tried from 96 to 256 and at 128
+  or 256 columns beats 128 and 256 overall.
+
+### What a small call costs
+
+`cargo bench --features compute-testing --bench main -- compute_overhead`, cycles per call over a
+loop in JSL that costs 45:
+
+| Call | Cycles | |
+|---|---:|---|
+| a native function | 47 | |
+| a method, no arguments | 89 | |
+| a method, a buffer and optional and variadic arguments | 111 | |
+| `sum:runInto`, 1x4 | 352 | was 642 |
+| `add:runInto`, 1x4 | 818 | was 1,208 |
+| `matmul:runInto`, 2x2x2 | 677 | was 1,159 |
+
+So L3i's binder costs about 110 cycles of these, and rewriting it would gain little. Most of the rest
+is planning work per call: a 1x4 `add` from Rust is still 549 cycles and 1,447 instructions with no
+allocations, against 109 for a row sum.
+
+### What applications spend
+
+JessQL's own bench suite under `jess run --profile`, at JessQL 0.1.6: the hottest lines are row-table
+JSL in `engine.jsl`, closures reading `row[key]`, `table.sort` under a comparator reading a field, and
+`table.clone` per result row, with 4.6 GB of allocation growth across the suite. Native calls such as
+`data.argsort` barely register. The limit there is JessQL's row layout and the interpreter, not this
+binder or these kernels, so neither binder work nor more numeric kernels would speed those queries.
+Rook's worker journal bench needs a temporary managed target and was not run.
+
 > Historical research record. Later implementations and measurements supersede several "not done" entries below. Consult `compute-results/contract.md`, `combined-baseline.md`, and `results/native-1f0e952.md` for the current contract, integrated baseline, and native CI evidence. Historical speedup claims are not fresh measurements.
 
 # Compute architecture: decision and evidence
