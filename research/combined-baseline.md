@@ -1,3 +1,5 @@
+> Historical baseline and incremental notes. Later packed-weight, row-kernel and native CI work supersedes outstanding-status statements below; see [current executor](graph-cpu/README.md) and [native CI evidence](results/native-1f0e952.md). Initial timings remain baseline observations, not current results.
+
 # Combined baseline, 2026-11-04
 
 Main e1ca1ccfefe0d386ea54fe81f0fea11f4562a5fd was merged first (ce7e2fc), then PR #6 83f699365fe06532e30b450e8843a7307d1eb19d. Combined baseline: aa9cc7c867d47976033073c911685fee63d46278. Five main conflicts only concerned Rust versions; retained 1.99.1. Dependency merge had no conflicts. Luau is main's 0.745.

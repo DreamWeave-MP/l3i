@@ -31,7 +31,7 @@ threads at once (`Program: Send + Sync`).
 | --- | --- |
 | Building and compiling a graph | JSL calling bound Rust: 4 to 7 us each from JSL, under 1 us from Rust. No code generation. |
 | Elementwise stage | Rust kernels compiled ahead of time, chosen once per run (AVX2 or baseline), dispatched **once per tile per 1,024-element chunk** |
-| Matrix multiply | One ahead-of-time Rust kernel: 6x16 and 1x16 output blocks held in registers over packed `a` and `b`, in ascending blocks of `k` |
+| Matrix multiply | One ahead-of-time Rust kernel: 6x16 and 1x16 output blocks held in registers over packed right-hand panels and directly broadcast left-hand values, in ascending blocks of `k` |
 | `program:native()` | Generated `--!native` Luau, run by Luau's JIT: scalar, Luau buffers only. A comparator, not the execution path. |
 | `program:shader_source('integer-exact')` | Generated JSL for Jess's existing shader frontend, device and dispatch |
 | `program:runReference` | The first prototype's per-element interpreter: oracle and baseline only |
@@ -69,7 +69,7 @@ Elements are `[u8; 4]`, so inputs may sit at any byte offset and the same safe c
 Luau buffers and host storage. LLVM vectorizes through the byte conversion: it costs nothing
 measurable. The `unsafe` in the kernels is calling a SIMD instantiation after detecting it, and one unchecked index in the fused
 loops, whose slices are asserted to the output's length, because a checked index forces a scalar tail on every chunk.
-The host adds its `Userdata` declarations, the one-call Luau buffer borrow, and `lua_gc`.
+The host adds its `Userdata` declarations and one-call Luau buffer borrow, using L3i public garbage collection.
 
 ## Numerical contract
 
@@ -99,7 +99,7 @@ tiles. Everything else on this page describes the strict default.
 - Luau buffers are never retained. `runInto` borrows them for one call in which no Lua runs, and
   rejects an output whose byte range overlaps any input's. Inputs may alias each other.
 - `Tensor::from_storage` retains an existing immutable owner without a copy; this is the seam for a
-  Jess `SharedBuffer` adapter. Views keep the owner alive and cannot widen the parent's byte interval.
+  Jess `SharedBuffer` adapter. Derived views keep the owner alive and may address only complete elements authorized by the parent, including for padded and transposed parents.
 - `Domain` bounds live nodes and plans, `Budget` bounds live native payload including temporaries and
   scratch. Both belong to the host; the prototype's process-wide counters are gone.
 - A program is bounded at compile time: 1,024 nodes and at most 67,108,864 scalar operations per run.
@@ -107,17 +107,20 @@ tiles. Everything else on this page describes the strict default.
 
 Native payload looks small to Luau's collector, so unreachable results can hold the whole budget
 without triggering a cycle. The host's calls collect once and retry when the budget refuses them, and
-a test runs 320 MiB of unreferenced results through a 64 MiB budget. L3i has that collection as a
-private `Call` method behind its `tcp` feature; this crate declares `lua_gc` itself rather than change
-production code, and a production adapter needs that method public.
+a test runs 320 MiB of unreferenced results through a 64 MiB budget. The host uses public `Call::collect_garbage`; it declares no private GC FFI.
 
 **A host must sandbox its globals** (`Runtime::sandbox_globals`). Luau's builtin fast paths and JIT
 guards require a safe environment. The first version of this host did not, which made
 `buffer.readf32` loops about 15x slower and made native code look useless.
 
-## Limits
+## Prepared weights
 
-f32 only, scalar or rank two, with add, multiply, ReLU and matmul. One output per program. No
-multi-threaded execution: chunks are independent given their output position, so a host scheduler
-could split one, but nothing here does. Results above are for x86-64 with AVX2; aarch64 uses the
-baseline instantiation (NEON through autovectorization), which compiles but has not been measured.
+`tensor:prepareRight()` retains a budget-charged immutable right-hand packing; `prepareLeft()` prepares column panels for single-column products. `program:runTensorsInto(out, tensors...)` uses those owners while borrowing the output for one call. Packings remain charged until their last owner drops. Derived views do not inherit packings. Preparation is explicit: ordinary execution remains available without persistent duplicate storage.
+
+## Operations and limits
+
+Scalar/rank-two f32 graphs support add, multiply, ReLU, matmul, transpose, ordered row sums, accurate softmax, RMS normalization and layer normalization. See [row contracts](ROW-KERNELS.md) for statistics and approximation semantics; not every row operation is strict-f32 arithmetic. GPU/generated-Luau lowering rejects unsupported stages.
+
+There is no executor-owned thread pool. Concurrent immutable programs are supported; a host-supplied intra-program scheduling interface remains future work. A standalone [int8 research primitive](INT8.md) investigates exact quantized matrix-vector arithmetic; it is not a graph or JSL API. Ranks above two are not implemented.
+
+Native x86-64 and AArch64 correctness and benchmark jobs passed at `1f0e952`; [the evidence](../results/native-1f0e952.md) records exact runs and raw artifacts. AArch64 uses compiler-vectorized baseline kernels and its architectural FMA support in fast mode; x86 selects AVX2/FMA at runtime. Hosted-runner timing is not controlled hardware benchmarking. AVX-512 remains untested.

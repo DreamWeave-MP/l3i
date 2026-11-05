@@ -1,3 +1,5 @@
+> Historical research record. Later implementations and measurements supersede several "not done" entries below. Consult `graph-cpu/README.md`, `combined-baseline.md`, and `results/native-1f0e952.md` for the current contract, integrated baseline, and native CI evidence. Historical speedup claims are not fresh measurements.
+
 # Compute architecture: decision and evidence
 
 ## Decision

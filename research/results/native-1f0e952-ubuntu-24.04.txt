@@ -1,0 +1,372 @@
+
+# Softmax strategies, one row, preallocated
+softmax_a_platform_exp_twice                   n=16       median_us=0.185        min_us=0.185        p90_us=0.187        ns_per_element=11.577
+softmax_b_platform_exp_once_scratch            n=16       median_us=0.100        min_us=0.100        p90_us=0.100        ns_per_element=6.265
+softmax_d_deterministic_exp_twice_no_scratch   n=16       median_us=0.139        min_us=0.139        p90_us=0.140        ns_per_element=8.717
+softmax_c_deterministic_exp_once_program       n=16       median_us=0.107        min_us=0.107        p90_us=0.108        ns_per_element=6.712
+softmax_e_approximate_f32                      n=16       median_us=0.027        min_us=0.027        p90_us=0.027        ns_per_element=1.709
+softmax_a_platform_exp_twice                   n=128      median_us=1.453        min_us=1.449        p90_us=1.459        ns_per_element=11.348
+softmax_b_platform_exp_once_scratch            n=128      median_us=0.796        min_us=0.793        p90_us=0.800        ns_per_element=6.218
+softmax_d_deterministic_exp_twice_no_scratch   n=128      median_us=1.034        min_us=1.032        p90_us=1.037        ns_per_element=8.078
+softmax_c_deterministic_exp_once_program       n=128      median_us=0.346        min_us=0.346        p90_us=0.348        ns_per_element=2.706
+softmax_e_approximate_f32                      n=128      median_us=0.097        min_us=0.096        p90_us=0.097        ns_per_element=0.756
+softmax_a_platform_exp_twice                   n=1024     median_us=11.526       min_us=11.499       p90_us=11.577       ns_per_element=11.255
+softmax_b_platform_exp_once_scratch            n=1024     median_us=6.360        min_us=6.342        p90_us=6.367        ns_per_element=6.211
+softmax_d_deterministic_exp_twice_no_scratch   n=1024     median_us=8.162        min_us=8.143        p90_us=8.206        ns_per_element=7.971
+softmax_c_deterministic_exp_once_program       n=1024     median_us=2.537        min_us=2.520        p90_us=2.542        ns_per_element=2.477
+softmax_e_approximate_f32                      n=1024     median_us=0.704        min_us=0.703        p90_us=0.708        ns_per_element=0.688
+softmax_a_platform_exp_twice                   n=4096     median_us=46.014       min_us=45.967       p90_us=46.246       ns_per_element=11.234
+softmax_b_platform_exp_once_scratch            n=4096     median_us=25.434       min_us=25.374       p90_us=25.712       ns_per_element=6.209
+softmax_d_deterministic_exp_twice_no_scratch   n=4096     median_us=32.617       min_us=32.546       p90_us=32.759       ns_per_element=7.963
+softmax_c_deterministic_exp_once_program       n=4096     median_us=10.151       min_us=10.122       p90_us=10.223       ns_per_element=2.478
+softmax_e_approximate_f32                      n=4096     median_us=2.789        min_us=2.785        p90_us=2.794        ns_per_element=0.681
+softmax_a_platform_exp_twice                   n=65536    median_us=739.122      min_us=737.427      p90_us=741.301      ns_per_element=11.278
+softmax_b_platform_exp_once_scratch            n=65536    median_us=408.889      min_us=407.233      p90_us=411.665      ns_per_element=6.239
+softmax_d_deterministic_exp_twice_no_scratch   n=65536    median_us=524.519      min_us=522.554      p90_us=527.213      ns_per_element=8.004
+softmax_c_deterministic_exp_once_program       n=65536    median_us=170.468      min_us=168.983      p90_us=171.792      ns_per_element=2.601
+softmax_e_approximate_f32                      n=65536    median_us=47.686       min_us=47.386       p90_us=48.121       ns_per_element=0.728
+
+# Approximate f32 softmax against the platform-exp f64 oracle
+softmax_e_error case=moderate max_absolute=7.451e-9 max_relative=2.594e-6 total_minus_one=2.173e-8
+softmax_e_error case=wide_90 max_absolute=7.078e-8 max_relative=1.000e0 total_minus_one=8.143e-9
+softmax_e_error case=extreme_negative max_absolute=2.980e-7 max_relative=1.000e0 total_minus_one=9.680e-8
+softmax_e_error case=large_offset max_absolute=3.725e-8 max_relative=1.000e0 total_minus_one=1.210e-7
+# isa=Avx2 fast_isa=Fma samples=31 sample_ms=3
+
+# Row stages by shape: preallocated output, whole program, one thread
+softmax_1x128                                  n=128      median_us=0.350        min_us=0.347        p90_us=0.351        ns_per_element=2.732
+softmax_1x128                                  allocations_per_run=1.0 bytes_per_run=1024
+layer_norm_1x128                               n=128      median_us=0.160        min_us=0.159        p90_us=0.161        ns_per_element=1.250
+layer_norm_1x128                               allocations_per_run=0.0 bytes_per_run=0
+rms_norm_1x128                                 n=128      median_us=0.122        min_us=0.121        p90_us=0.122        ns_per_element=0.951
+rms_norm_1x128                                 allocations_per_run=0.0 bytes_per_run=0
+sum_rows_1x128                                 n=128      median_us=0.136        min_us=0.136        p90_us=0.136        ns_per_element=1.060
+sum_rows_1x128                                 allocations_per_run=0.0 bytes_per_run=0
+softmax_1x4096                                 n=4096     median_us=10.238       min_us=10.217       p90_us=10.304       ns_per_element=2.500
+softmax_1x4096                                 allocations_per_run=1.0 bytes_per_run=32768
+layer_norm_1x4096                              n=4096     median_us=3.408        min_us=3.403        p90_us=3.417        ns_per_element=0.832
+layer_norm_1x4096                              allocations_per_run=0.0 bytes_per_run=0
+rms_norm_1x4096                                n=4096     median_us=2.443        min_us=2.441        p90_us=2.459        ns_per_element=0.596
+rms_norm_1x4096                                allocations_per_run=0.0 bytes_per_run=0
+sum_rows_1x4096                                n=4096     median_us=3.845        min_us=3.836        p90_us=3.882        ns_per_element=0.939
+sum_rows_1x4096                                allocations_per_run=0.0 bytes_per_run=0
+softmax_1x65536                                n=65536    median_us=168.575      min_us=167.073      p90_us=169.848      ns_per_element=2.572
+softmax_1x65536                                allocations_per_run=1.0 bytes_per_run=524288
+layer_norm_1x65536                             n=65536    median_us=54.039       min_us=53.793       p90_us=54.199       ns_per_element=0.825
+layer_norm_1x65536                             allocations_per_run=0.0 bytes_per_run=0
+rms_norm_1x65536                               n=65536    median_us=38.688       min_us=38.498       p90_us=38.814       ns_per_element=0.590
+rms_norm_1x65536                               allocations_per_run=0.0 bytes_per_run=0
+sum_rows_1x65536                               n=65536    median_us=61.346       min_us=61.212       p90_us=61.664       ns_per_element=0.936
+sum_rows_1x65536                               allocations_per_run=0.0 bytes_per_run=0
+softmax_64x64                                  n=4096     median_us=10.344       min_us=10.306       p90_us=10.422       ns_per_element=2.525
+softmax_64x64                                  allocations_per_run=1.0 bytes_per_run=512
+softmax_64x64_strided                          n=4096     median_us=13.746       min_us=13.674       p90_us=13.871       ns_per_element=3.356
+layer_norm_64x64                               n=4096     median_us=3.927        min_us=3.923        p90_us=3.939        ns_per_element=0.959
+layer_norm_64x64                               allocations_per_run=0.0 bytes_per_run=0
+layer_norm_64x64_strided                       n=4096     median_us=8.692        min_us=8.668        p90_us=8.750        ns_per_element=2.122
+rms_norm_64x64                                 n=4096     median_us=2.619        min_us=2.611        p90_us=2.634        ns_per_element=0.639
+rms_norm_64x64                                 allocations_per_run=0.0 bytes_per_run=0
+rms_norm_64x64_strided                         n=4096     median_us=7.207        min_us=7.197        p90_us=7.244        ns_per_element=1.760
+sum_rows_64x64                                 n=4096     median_us=0.713        min_us=0.708        p90_us=0.717        ns_per_element=0.174
+sum_rows_64x64                                 allocations_per_run=0.0 bytes_per_run=0
+sum_rows_64x64_strided                         n=4096     median_us=2.744        min_us=2.742        p90_us=2.759        ns_per_element=0.670
+softmax_128x128                                n=16384    median_us=38.466       min_us=38.366       p90_us=38.657       ns_per_element=2.348
+softmax_128x128                                allocations_per_run=1.0 bytes_per_run=1024
+softmax_128x128_strided                        n=16384    median_us=61.294       min_us=60.893       p90_us=61.608       ns_per_element=3.741
+layer_norm_128x128                             n=16384    median_us=15.040       min_us=14.997       p90_us=15.091       ns_per_element=0.918
+layer_norm_128x128                             allocations_per_run=0.0 bytes_per_run=0
+layer_norm_128x128_strided                     n=16384    median_us=39.752       min_us=39.065       p90_us=39.880       ns_per_element=2.426
+rms_norm_128x128                               n=16384    median_us=10.405       min_us=10.370       p90_us=10.427       ns_per_element=0.635
+rms_norm_128x128                               allocations_per_run=0.0 bytes_per_run=0
+rms_norm_128x128_strided                       n=16384    median_us=34.893       min_us=34.388       p90_us=34.977       ns_per_element=2.130
+sum_rows_128x128                               n=16384    median_us=2.880        min_us=2.868        p90_us=2.906        ns_per_element=0.176
+sum_rows_128x128                               allocations_per_run=0.0 bytes_per_run=0
+sum_rows_128x128_strided                       n=16384    median_us=21.228       min_us=20.158       p90_us=22.745       ns_per_element=1.296
+softmax_64x128                                 n=8192     median_us=19.270       min_us=19.191       p90_us=19.375       ns_per_element=2.352
+softmax_64x128                                 allocations_per_run=1.0 bytes_per_run=1024
+softmax_64x128_strided                         n=8192     median_us=25.979       min_us=25.933       p90_us=26.054       ns_per_element=3.171
+layer_norm_64x128                              n=8192     median_us=7.547        min_us=7.526        p90_us=7.574        ns_per_element=0.921
+layer_norm_64x128                              allocations_per_run=0.0 bytes_per_run=0
+layer_norm_64x128_strided                      n=8192     median_us=15.336       min_us=15.278       p90_us=15.427       ns_per_element=1.872
+rms_norm_64x128                                n=8192     median_us=5.227        min_us=5.216        p90_us=5.253        ns_per_element=0.638
+rms_norm_64x128                                allocations_per_run=0.0 bytes_per_run=0
+rms_norm_64x128_strided                        n=8192     median_us=12.871       min_us=12.838       p90_us=12.966       ns_per_element=1.571
+sum_rows_64x128                                n=8192     median_us=1.435        min_us=1.429        p90_us=1.462        ns_per_element=0.175
+sum_rows_64x128                                allocations_per_run=0.0 bytes_per_run=0
+sum_rows_64x128_strided                        n=8192     median_us=6.877        min_us=6.833        p90_us=6.959        ns_per_element=0.840
+softmax_1000x7                                 n=7000     median_us=50.057       min_us=49.932       p90_us=50.184       ns_per_element=7.151
+softmax_1000x7                                 allocations_per_run=1.0 bytes_per_run=64
+softmax_1000x7_strided                         n=7000     median_us=61.428       min_us=61.299       p90_us=61.588       ns_per_element=8.775
+layer_norm_1000x7                              n=7000     median_us=27.993       min_us=27.906       p90_us=28.118       ns_per_element=3.999
+layer_norm_1000x7                              allocations_per_run=0.0 bytes_per_run=0
+layer_norm_1000x7_strided                      n=7000     median_us=55.176       min_us=55.077       p90_us=55.393       ns_per_element=7.882
+rms_norm_1000x7                                n=7000     median_us=21.210       min_us=21.188       p90_us=21.260       ns_per_element=3.030
+rms_norm_1000x7                                allocations_per_run=0.0 bytes_per_run=0
+rms_norm_1000x7_strided                        n=7000     median_us=44.892       min_us=44.752       p90_us=45.050       ns_per_element=6.413
+sum_rows_1000x7                                n=7000     median_us=1.519        min_us=1.516        p90_us=1.530        ns_per_element=0.217
+sum_rows_1000x7                                allocations_per_run=0.0 bytes_per_run=0
+sum_rows_1000x7_strided                        n=7000     median_us=4.613        min_us=4.580        p90_us=4.708        ns_per_element=0.659
+softmax_333x13                                 n=4329     median_us=19.410       min_us=19.249       p90_us=19.528       ns_per_element=4.484
+softmax_333x13                                 allocations_per_run=1.0 bytes_per_run=128
+softmax_333x13_strided                         n=4329     median_us=25.871       min_us=25.817       p90_us=26.035       ns_per_element=5.976
+layer_norm_333x13                              n=4329     median_us=9.696        min_us=9.680        p90_us=9.740        ns_per_element=2.240
+layer_norm_333x13                              allocations_per_run=0.0 bytes_per_run=0
+layer_norm_333x13_strided                      n=4329     median_us=19.688       min_us=19.633       p90_us=19.822       ns_per_element=4.548
+rms_norm_333x13                                n=4329     median_us=7.425        min_us=7.414        p90_us=7.449        ns_per_element=1.715
+rms_norm_333x13                                allocations_per_run=0.0 bytes_per_run=0
+rms_norm_333x13_strided                        n=4329     median_us=16.319       min_us=16.009       p90_us=16.522       ns_per_element=3.770
+sum_rows_333x13                                n=4329     median_us=0.843        min_us=0.842        p90_us=0.846        ns_per_element=0.195
+sum_rows_333x13                                allocations_per_run=0.0 bytes_per_run=0
+sum_rows_333x13_strided                        n=4329     median_us=2.562        min_us=2.554        p90_us=2.582        ns_per_element=0.592
+softmax_7x1000                                 n=7000     median_us=16.226       min_us=16.198       p90_us=16.268       ns_per_element=2.318
+softmax_7x1000                                 allocations_per_run=1.0 bytes_per_run=8000
+softmax_7x1000_strided                         n=7000     median_us=21.831       min_us=21.795       p90_us=22.693       ns_per_element=3.119
+layer_norm_7x1000                              n=7000     median_us=5.884        min_us=5.870        p90_us=5.914        ns_per_element=0.841
+layer_norm_7x1000                              allocations_per_run=0.0 bytes_per_run=0
+layer_norm_7x1000_strided                      n=7000     median_us=11.665       min_us=11.599       p90_us=11.985       ns_per_element=1.666
+rms_norm_7x1000                                n=7000     median_us=4.198        min_us=4.189        p90_us=4.212        ns_per_element=0.600
+rms_norm_7x1000                                allocations_per_run=0.0 bytes_per_run=0
+rms_norm_7x1000_strided                        n=7000     median_us=9.922        min_us=9.890        p90_us=9.935        ns_per_element=1.417
+sum_rows_7x1000                                n=7000     median_us=6.223        min_us=6.211        p90_us=6.248        ns_per_element=0.889
+sum_rows_7x1000                                allocations_per_run=0.0 bytes_per_run=0
+sum_rows_7x1000_strided                        n=7000     median_us=6.485        min_us=6.473        p90_us=6.496        ns_per_element=0.926
+softmax_4096x1                                 n=4096     median_us=179.317      min_us=178.843      p90_us=179.755      ns_per_element=43.779
+softmax_4096x1                                 allocations_per_run=1.0 bytes_per_run=32
+layer_norm_4096x1                              n=4096     median_us=62.580       min_us=62.366       p90_us=62.989       ns_per_element=15.278
+layer_norm_4096x1                              allocations_per_run=0.0 bytes_per_run=0
+rms_norm_4096x1                                n=4096     median_us=47.061       min_us=46.880       p90_us=47.816       ns_per_element=11.489
+rms_norm_4096x1                                allocations_per_run=0.0 bytes_per_run=0
+sum_rows_4096x1                                n=4096     median_us=2.279        min_us=2.277        p90_us=2.289        ns_per_element=0.556
+sum_rows_4096x1                                allocations_per_run=0.0 bytes_per_run=0
+
+# Matmul by shape: preallocated output, whole program including packing, one thread
+matmul_strict_1x32x32                          n=1024     median_us=0.135        min_us=0.135        p90_us=0.136        ns_per_element=0.132
+matmul_strict_1x32x32                          allocations_per_run=0.0 bytes_per_run=0
+matmul_fast_1x32x32                            n=1024     median_us=0.142        min_us=0.141        p90_us=0.143        ns_per_element=0.139
+matmul_fast_1x32x32                            allocations_per_run=0.0 bytes_per_run=0
+matmul_baseline_1x32x32                        n=1024     median_us=0.356        min_us=0.354        p90_us=0.358        ns_per_element=0.347
+matmul_strict_1x64x64                          n=4096     median_us=0.280        min_us=0.278        p90_us=0.282        ns_per_element=0.068
+matmul_strict_1x64x64                          allocations_per_run=0.0 bytes_per_run=0
+matmul_fast_1x64x64                            n=4096     median_us=0.275        min_us=0.274        p90_us=0.277        ns_per_element=0.067
+matmul_fast_1x64x64                            allocations_per_run=0.0 bytes_per_run=0
+matmul_baseline_1x64x64                        n=4096     median_us=1.095        min_us=1.089        p90_us=1.100        ns_per_element=0.267
+matmul_strict_1x128x128                        n=16384    median_us=0.750        min_us=0.747        p90_us=0.753        ns_per_element=0.046
+matmul_strict_1x128x128                        allocations_per_run=0.0 bytes_per_run=0
+matmul_fast_1x128x128                          n=16384    median_us=0.772        min_us=0.768        p90_us=0.780        ns_per_element=0.047
+matmul_fast_1x128x128                          allocations_per_run=0.0 bytes_per_run=0
+matmul_baseline_1x128x128                      n=16384    median_us=4.116        min_us=4.104        p90_us=4.126        ns_per_element=0.251
+matmul_strict_1x256x256                        n=65536    median_us=2.876        min_us=2.839        p90_us=2.910        ns_per_element=0.044
+matmul_strict_1x256x256                        allocations_per_run=0.0 bytes_per_run=0
+matmul_fast_1x256x256                          n=65536    median_us=3.010        min_us=2.998        p90_us=3.015        ns_per_element=0.046
+matmul_fast_1x256x256                          allocations_per_run=0.0 bytes_per_run=0
+matmul_baseline_1x256x256                      n=65536    median_us=15.823       min_us=15.771       p90_us=15.916       ns_per_element=0.241
+matmul_strict_1x4096x1                         n=4096     median_us=3.900        min_us=3.889        p90_us=3.912        ns_per_element=0.952
+matmul_strict_1x4096x1                         allocations_per_run=0.0 bytes_per_run=0
+matmul_fast_1x4096x1                           n=4096     median_us=5.161        min_us=5.149        p90_us=5.173        ns_per_element=1.260
+matmul_fast_1x4096x1                           allocations_per_run=0.0 bytes_per_run=0
+matmul_baseline_1x4096x1                       n=4096     median_us=3.884        min_us=3.877        p90_us=3.890        ns_per_element=0.948
+matmul_strict_1x1024x1024                      n=1048576  median_us=73.876       min_us=72.597       p90_us=76.218       ns_per_element=0.070
+matmul_strict_1x1024x1024                      allocations_per_run=0.0 bytes_per_run=0
+matmul_fast_1x1024x1024                        n=1048576  median_us=76.407       min_us=75.168       p90_us=77.464       ns_per_element=0.073
+matmul_fast_1x1024x1024                        allocations_per_run=0.0 bytes_per_run=0
+matmul_baseline_1x1024x1024                    n=1048576  median_us=263.250      min_us=261.305      p90_us=266.126      ns_per_element=0.251
+matmul_strict_4x1024x1024                      n=4194304  median_us=260.218      min_us=254.970      p90_us=263.389      ns_per_element=0.062
+matmul_strict_4x1024x1024                      allocations_per_run=0.0 bytes_per_run=0
+matmul_fast_4x1024x1024                        n=4194304  median_us=284.774      min_us=283.070      p90_us=287.895      ns_per_element=0.068
+matmul_fast_4x1024x1024                        allocations_per_run=0.0 bytes_per_run=0
+matmul_prepare_4x1024x1024 once_us=525.047 bytes=4194304
+matmul_strict_prepared_4x1024x1024             n=4194304  median_us=126.173      min_us=125.127      p90_us=127.601      ns_per_element=0.030
+matmul_strict_prepared_4x1024x1024             allocations_per_run=0.0 bytes_per_run=0
+matmul_fast_prepared_4x1024x1024               n=4194304  median_us=97.100       min_us=95.240       p90_us=98.627       ns_per_element=0.023
+matmul_fast_prepared_4x1024x1024               allocations_per_run=0.0 bytes_per_run=0
+matmul_baseline_4x1024x1024                    n=4194304  median_us=405.590      min_us=402.152      p90_us=409.206      ns_per_element=0.097
+matmul_strict_8x512x512                        n=2097152  median_us=103.680      min_us=103.318      p90_us=104.467      ns_per_element=0.049
+matmul_strict_8x512x512                        allocations_per_run=1.0 bytes_per_run=131072
+matmul_fast_8x512x512                          n=2097152  median_us=96.420       min_us=95.900       p90_us=97.204       ns_per_element=0.046
+matmul_fast_8x512x512                          allocations_per_run=1.0 bytes_per_run=131072
+matmul_prepare_8x512x512 once_us=123.761 bytes=1048576
+matmul_strict_prepared_8x512x512               n=2097152  median_us=62.090       min_us=61.674       p90_us=62.832       ns_per_element=0.030
+matmul_strict_prepared_8x512x512               allocations_per_run=0.0 bytes_per_run=0
+matmul_fast_prepared_8x512x512                 n=2097152  median_us=55.303       min_us=54.946       p90_us=55.752       ns_per_element=0.026
+matmul_fast_prepared_8x512x512                 allocations_per_run=0.0 bytes_per_run=0
+matmul_baseline_8x512x512                      n=2097152  median_us=203.410      min_us=202.251      p90_us=205.337      ns_per_element=0.097
+matmul_strict_64x128x1                         n=8192     median_us=2.041        min_us=2.038        p90_us=2.056        ns_per_element=0.249
+matmul_strict_64x128x1                         allocations_per_run=0.0 bytes_per_run=0
+matmul_fast_64x128x1                           n=8192     median_us=2.410        min_us=2.404        p90_us=2.422        ns_per_element=0.294
+matmul_fast_64x128x1                           allocations_per_run=0.0 bytes_per_run=0
+matmul_prepare_64x128x1 once_us=14.346 bytes=32768
+matmul_strict_prepared_64x128x1                n=8192     median_us=0.520        min_us=0.518        p90_us=0.522        ns_per_element=0.063
+matmul_strict_prepared_64x128x1                allocations_per_run=0.0 bytes_per_run=0
+matmul_fast_prepared_64x128x1                  n=8192     median_us=0.595        min_us=0.594        p90_us=0.597        ns_per_element=0.073
+matmul_fast_prepared_64x128x1                  allocations_per_run=0.0 bytes_per_run=0
+matmul_baseline_64x128x1                       n=8192     median_us=2.129        min_us=2.123        p90_us=2.148        ns_per_element=0.260
+matmul_strict_256x256x1                        n=65536    median_us=15.617       min_us=15.579       p90_us=15.732       ns_per_element=0.238
+matmul_strict_256x256x1                        allocations_per_run=0.0 bytes_per_run=0
+matmul_fast_256x256x1                          n=65536    median_us=19.798       min_us=19.732       p90_us=19.932       ns_per_element=0.302
+matmul_fast_256x256x1                          allocations_per_run=0.0 bytes_per_run=0
+matmul_prepare_256x256x1 once_us=65.291 bytes=262144
+matmul_strict_prepared_256x256x1               n=65536    median_us=4.056        min_us=4.034        p90_us=4.134        ns_per_element=0.062
+matmul_strict_prepared_256x256x1               allocations_per_run=0.0 bytes_per_run=0
+matmul_fast_prepared_256x256x1                 n=65536    median_us=4.628        min_us=4.605        p90_us=4.660        ns_per_element=0.071
+matmul_fast_prepared_256x256x1                 allocations_per_run=0.0 bytes_per_run=0
+matmul_baseline_256x256x1                      n=65536    median_us=16.081       min_us=15.977       p90_us=16.135       ns_per_element=0.245
+matmul_strict_4096x16x1                        n=65536    median_us=14.681       min_us=14.657       p90_us=14.730       ns_per_element=0.224
+matmul_strict_4096x16x1                        allocations_per_run=0.0 bytes_per_run=0
+matmul_fast_4096x16x1                          n=65536    median_us=13.593       min_us=13.556       p90_us=13.720       ns_per_element=0.207
+matmul_fast_4096x16x1                          allocations_per_run=0.0 bytes_per_run=0
+matmul_prepare_4096x16x1 once_us=63.718 bytes=262144
+matmul_strict_prepared_4096x16x1               n=65536    median_us=3.936        min_us=3.890        p90_us=3.966        ns_per_element=0.060
+matmul_strict_prepared_4096x16x1               allocations_per_run=0.0 bytes_per_run=0
+matmul_fast_prepared_4096x16x1                 n=65536    median_us=3.895        min_us=3.878        p90_us=3.928        ns_per_element=0.059
+matmul_fast_prepared_4096x16x1                 allocations_per_run=0.0 bytes_per_run=0
+matmul_baseline_4096x16x1                      n=65536    median_us=17.445       min_us=17.304       p90_us=17.573       ns_per_element=0.266
+matmul_strict_16x16x16                         n=4096     median_us=0.287        min_us=0.285        p90_us=0.288        ns_per_element=0.070
+matmul_strict_16x16x16                         allocations_per_run=1.0 bytes_per_run=1024
+matmul_fast_16x16x16                           n=4096     median_us=0.256        min_us=0.255        p90_us=0.258        ns_per_element=0.063
+matmul_fast_16x16x16                           allocations_per_run=1.0 bytes_per_run=1024
+matmul_prepare_16x16x16 once_us=0.932 bytes=1024
+matmul_strict_prepared_16x16x16                n=4096     median_us=0.226        min_us=0.224        p90_us=0.228        ns_per_element=0.055
+matmul_strict_prepared_16x16x16                allocations_per_run=0.0 bytes_per_run=0
+matmul_fast_prepared_16x16x16                  n=4096     median_us=0.194        min_us=0.193        p90_us=0.195        ns_per_element=0.047
+matmul_fast_prepared_16x16x16                  allocations_per_run=0.0 bytes_per_run=0
+matmul_baseline_16x16x16                       n=4096     median_us=0.491        min_us=0.488        p90_us=0.495        ns_per_element=0.120
+matmul_strict_5x7x3                            n=105      median_us=0.271        min_us=0.270        p90_us=0.273        ns_per_element=2.581
+matmul_strict_5x7x3                            allocations_per_run=0.0 bytes_per_run=0
+matmul_fast_5x7x3                              n=105      median_us=0.269        min_us=0.267        p90_us=0.270        ns_per_element=2.562
+matmul_fast_5x7x3                              allocations_per_run=0.0 bytes_per_run=0
+matmul_prepare_5x7x3 once_us=1.603 bytes=224
+matmul_strict_prepared_5x7x3                   n=105      median_us=0.134        min_us=0.134        p90_us=0.135        ns_per_element=1.281
+matmul_strict_prepared_5x7x3                   allocations_per_run=0.0 bytes_per_run=0
+matmul_fast_prepared_5x7x3                     n=105      median_us=0.129        min_us=0.129        p90_us=0.130        ns_per_element=1.231
+matmul_fast_prepared_5x7x3                     allocations_per_run=0.0 bytes_per_run=0
+matmul_baseline_5x7x3                          n=105      median_us=0.245        min_us=0.244        p90_us=0.247        ns_per_element=2.334
+matmul_strict_31x127x17                        n=66929    median_us=4.559        min_us=4.542        p90_us=4.579        ns_per_element=0.068
+matmul_strict_31x127x17                        allocations_per_run=1.0 bytes_per_run=12192
+matmul_fast_31x127x17                          n=66929    median_us=4.156        min_us=4.145        p90_us=4.191        ns_per_element=0.062
+matmul_fast_31x127x17                          allocations_per_run=1.0 bytes_per_run=12192
+matmul_prepare_31x127x17 once_us=2.524 bytes=12192
+matmul_strict_prepared_31x127x17               n=66929    median_us=3.292        min_us=3.283        p90_us=3.303        ns_per_element=0.049
+matmul_strict_prepared_31x127x17               allocations_per_run=0.0 bytes_per_run=0
+matmul_fast_prepared_31x127x17                 n=66929    median_us=2.900        min_us=2.895        p90_us=2.934        ns_per_element=0.043
+matmul_fast_prepared_31x127x17                 allocations_per_run=0.0 bytes_per_run=0
+matmul_baseline_31x127x17                      n=66929    median_us=9.214        min_us=9.192        p90_us=9.283        ns_per_element=0.138
+matmul_strict_64x64x64                         n=262144   median_us=8.038        min_us=8.023        p90_us=8.149        ns_per_element=0.031
+matmul_strict_64x64x64                         allocations_per_run=1.0 bytes_per_run=16384
+matmul_fast_64x64x64                           n=262144   median_us=6.809        min_us=6.790        p90_us=6.837        ns_per_element=0.026
+matmul_fast_64x64x64                           allocations_per_run=1.0 bytes_per_run=16384
+matmul_prepare_64x64x64 once_us=2.495 bytes=16384
+matmul_strict_prepared_64x64x64                n=262144   median_us=7.342        min_us=7.334        p90_us=7.370        ns_per_element=0.028
+matmul_strict_prepared_64x64x64                allocations_per_run=0.0 bytes_per_run=0
+matmul_fast_prepared_64x64x64                  n=262144   median_us=6.113        min_us=6.102        p90_us=6.139        ns_per_element=0.023
+matmul_fast_prepared_64x64x64                  allocations_per_run=0.0 bytes_per_run=0
+matmul_baseline_64x64x64                       n=262144   median_us=21.777       min_us=21.722       p90_us=21.869       ns_per_element=0.083
+matmul_strict_64x128x128                       n=1048576  median_us=30.585       min_us=30.479       p90_us=30.833       ns_per_element=0.029
+matmul_strict_64x128x128                       allocations_per_run=1.0 bytes_per_run=65536
+matmul_fast_64x128x128                         n=1048576  median_us=25.600       min_us=25.521       p90_us=25.640       ns_per_element=0.024
+matmul_fast_64x128x128                         allocations_per_run=1.0 bytes_per_run=65536
+matmul_prepare_64x128x128 once_us=5.571 bytes=65536
+matmul_strict_prepared_64x128x128              n=1048576  median_us=27.762       min_us=27.674       p90_us=27.902       ns_per_element=0.026
+matmul_strict_prepared_64x128x128              allocations_per_run=0.0 bytes_per_run=0
+matmul_fast_prepared_64x128x128                n=1048576  median_us=22.809       min_us=22.741       p90_us=22.913       ns_per_element=0.022
+matmul_fast_prepared_64x128x128                allocations_per_run=0.0 bytes_per_run=0
+matmul_baseline_64x128x128                     n=1048576  median_us=85.593       min_us=85.432       p90_us=85.799       ns_per_element=0.082
+matmul_strict_128x128x128                      n=2097152  median_us=58.047       min_us=57.933       p90_us=58.210       ns_per_element=0.028
+matmul_strict_128x128x128                      allocations_per_run=1.0 bytes_per_run=65536
+matmul_fast_128x128x128                        n=2097152  median_us=48.690       min_us=48.496       p90_us=48.858       ns_per_element=0.023
+matmul_fast_128x128x128                        allocations_per_run=1.0 bytes_per_run=65536
+matmul_prepare_128x128x128 once_us=5.841 bytes=65536
+matmul_strict_prepared_128x128x128             n=2097152  median_us=55.164       min_us=54.995       p90_us=55.334       ns_per_element=0.026
+matmul_strict_prepared_128x128x128             allocations_per_run=0.0 bytes_per_run=0
+matmul_fast_prepared_128x128x128               n=2097152  median_us=45.814       min_us=45.767       p90_us=46.289       ns_per_element=0.022
+matmul_fast_prepared_128x128x128               allocations_per_run=0.0 bytes_per_run=0
+matmul_baseline_128x128x128                    n=2097152  median_us=177.118      min_us=169.759      p90_us=178.156      ns_per_element=0.084
+matmul_strict_256x256x256                      n=16777216 median_us=453.347      min_us=451.472      p90_us=456.222      ns_per_element=0.027
+matmul_strict_256x256x256                      allocations_per_run=1.0 bytes_per_run=131072
+matmul_fast_256x256x256                        n=16777216 median_us=376.008      min_us=374.408      p90_us=380.472      ns_per_element=0.022
+matmul_fast_256x256x256                        allocations_per_run=1.0 bytes_per_run=131072
+matmul_prepare_256x256x256 once_us=24.686 bytes=262144
+matmul_strict_prepared_256x256x256             n=16777216 median_us=442.846      min_us=441.563      p90_us=444.348      ns_per_element=0.026
+matmul_strict_prepared_256x256x256             allocations_per_run=0.0 bytes_per_run=0
+matmul_fast_prepared_256x256x256               n=16777216 median_us=366.090      min_us=364.697      p90_us=368.179      ns_per_element=0.022
+matmul_fast_prepared_256x256x256               allocations_per_run=0.0 bytes_per_run=0
+matmul_baseline_256x256x256                    n=16777216 median_us=1345.678     min_us=1341.834     p90_us=1360.792     ns_per_element=0.080
+matmul_strict_128x64x512                       n=4194304  median_us=122.654      min_us=122.056      p90_us=124.358      ns_per_element=0.029
+matmul_strict_128x64x512                       allocations_per_run=1.0 bytes_per_run=65536
+matmul_fast_128x64x512                         n=4194304  median_us=104.360      min_us=103.882      p90_us=108.495      ns_per_element=0.025
+matmul_fast_128x64x512                         allocations_per_run=1.0 bytes_per_run=65536
+matmul_prepare_128x64x512 once_us=11.171 bytes=131072
+matmul_strict_prepared_128x64x512              n=4194304  median_us=117.052      min_us=116.712      p90_us=118.166      ns_per_element=0.028
+matmul_strict_prepared_128x64x512              allocations_per_run=0.0 bytes_per_run=0
+matmul_fast_prepared_128x64x512                n=4194304  median_us=98.944       min_us=98.533       p90_us=100.066      ns_per_element=0.024
+matmul_fast_prepared_128x64x512                allocations_per_run=0.0 bytes_per_run=0
+matmul_baseline_128x64x512                     n=4194304  median_us=345.295      min_us=343.955      p90_us=347.596      ns_per_element=0.082
+matmul_strict_512x64x32                        n=1048576  median_us=29.272       min_us=29.226       p90_us=29.533       ns_per_element=0.028
+matmul_strict_512x64x32                        allocations_per_run=1.0 bytes_per_run=8192
+matmul_fast_512x64x32                          n=1048576  median_us=24.641       min_us=24.617       p90_us=24.854       ns_per_element=0.023
+matmul_fast_512x64x32                          allocations_per_run=1.0 bytes_per_run=8192
+matmul_prepare_512x64x32 once_us=2.164 bytes=8192
+matmul_strict_prepared_512x64x32               n=1048576  median_us=28.903       min_us=28.878       p90_us=29.105       ns_per_element=0.028
+matmul_strict_prepared_512x64x32               allocations_per_run=0.0 bytes_per_run=0
+matmul_fast_prepared_512x64x32                 n=1048576  median_us=24.297       min_us=24.204       p90_us=24.578       ns_per_element=0.023
+matmul_fast_prepared_512x64x32                 allocations_per_run=0.0 bytes_per_run=0
+matmul_baseline_512x64x32                      n=1048576  median_us=85.326       min_us=85.158       p90_us=86.887       ns_per_element=0.081
+matmul_strict_400x400x400                      n=64000000 median_us=1749.456     min_us=1739.697     p90_us=1766.452     ns_per_element=0.027
+matmul_strict_400x400x400                      allocations_per_run=1.0 bytes_per_run=131072
+matmul_fast_400x400x400                        n=64000000 median_us=1451.397     min_us=1443.960     p90_us=1457.576     ns_per_element=0.023
+matmul_fast_400x400x400                        allocations_per_run=1.0 bytes_per_run=131072
+matmul_prepare_400x400x400 once_us=71.974 bytes=640000
+matmul_strict_prepared_400x400x400             n=64000000 median_us=1735.449     min_us=1726.027     p90_us=1754.154     ns_per_element=0.027
+matmul_strict_prepared_400x400x400             allocations_per_run=0.0 bytes_per_run=0
+matmul_fast_prepared_400x400x400               n=64000000 median_us=1435.518     min_us=1428.665     p90_us=1456.564     ns_per_element=0.022
+matmul_fast_prepared_400x400x400               allocations_per_run=0.0 bytes_per_run=0
+matmul_baseline_400x400x400                    n=64000000 median_us=5178.387     min_us=5160.664     p90_us=5249.039     ns_per_element=0.081
+
+# Synthetic forward pass as one graph, one thread
+forward_expression_construction                n=0        median_us=2.502        min_us=2.498        p90_us=2.510        ns_per_element=0.000
+forward_compile_strict                         n=0        median_us=8.302        min_us=8.241        p90_us=8.350        ns_per_element=0.000
+forward_bind_views_strict                      n=0        median_us=0.070        min_us=0.070        p90_us=0.071        ns_per_element=0.000
+forward_run_into_strict                        n=8192     median_us=649.535      min_us=647.171      p90_us=651.970      ns_per_element=79.289
+forward_run_into_strict                        allocations_per_run=97.0 bytes_per_run=2104632
+forward_fresh_result_strict                    n=8192     median_us=650.020      min_us=646.698      p90_us=653.883      ns_per_element=79.348
+forward_budget_peak_bytes_strict=1376256
+forward_run_into_prepared_strict               n=8192     median_us=608.497      min_us=606.095      p90_us=613.583      ns_per_element=74.279
+forward_run_into_prepared_strict               allocations_per_run=85.0 bytes_per_run=1187128
+forward_compile_fast                           n=0        median_us=9.067        min_us=9.038        p90_us=9.152        ns_per_element=0.000
+forward_bind_views_fast                        n=0        median_us=0.070        min_us=0.070        p90_us=0.070        ns_per_element=0.000
+forward_run_into_fast                          n=8192     median_us=561.076      min_us=557.725      p90_us=566.899      ns_per_element=68.491
+forward_run_into_fast                          allocations_per_run=97.0 bytes_per_run=2104632
+forward_fresh_result_fast                      n=8192     median_us=561.670      min_us=558.843      p90_us=566.187      ns_per_element=68.563
+forward_budget_peak_bytes_fast=2310144
+forward_run_into_prepared_fast                 n=8192     median_us=518.705      min_us=517.468      p90_us=521.587      ns_per_element=63.319
+forward_run_into_prepared_fast                 allocations_per_run=85.0 bytes_per_run=1187128
+programs: rebinding, fusion, broadcast, shared views, matrix, borrowed buffers, errors verified
+rebindable graph verified across the reference, chunked and generated native executors
+rows: stages, errors, packed weights, exhaustion and recovery verified
+jsl_softmax_runInto_1x128 median_us=0.514 min_us=0.512 p90_us=0.515
+jsl_layer_norm_runInto_1x128 median_us=0.305 min_us=0.304 p90_us=0.308
+jsl_softmax_runInto_1x4096 median_us=10.174 min_us=10.142 p90_us=10.238
+jsl_layer_norm_runInto_1x4096 median_us=3.603 min_us=3.590 p90_us=3.615
+jsl_softmax_runInto_64x64 median_us=10.318 min_us=10.303 p90_us=10.349
+jsl_layer_norm_runInto_64x64 median_us=4.135 min_us=4.129 p90_us=4.165
+jsl_softmax_runInto_128x128 median_us=39.058 min_us=39.004 p90_us=39.140
+jsl_layer_norm_runInto_128x128 median_us=15.365 min_us=15.326 p90_us=15.405
+jsl_softmax_runInto_64x128 median_us=19.613 min_us=19.589 p90_us=19.731
+jsl_layer_norm_runInto_64x128 median_us=7.976 min_us=7.969 p90_us=8.003
+jsl_matmul_strict_runInto_1x4096x1 median_us=4.099 min_us=4.094 p90_us=4.106
+jsl_matmul_fast_runInto_1x4096x1 median_us=5.375 min_us=5.363 p90_us=5.394
+jsl_matmul_strict_runInto_1x128x128 median_us=1.233 min_us=1.230 p90_us=1.238
+jsl_matmul_fast_runInto_1x128x128 median_us=1.222 min_us=1.219 p90_us=1.226
+jsl_matmul_strict_runInto_64x128x128 median_us=31.089 min_us=31.025 p90_us=33.115
+jsl_matmul_fast_runInto_64x128x128 median_us=26.184 min_us=26.080 p90_us=26.456
+jsl_matmul_strict_prepared_runTensorsInto_64x128x128 median_us=28.378 min_us=28.286 p90_us=28.479
+jsl_matmul_fast_prepared_runTensorsInto_64x128x128 median_us=23.465 min_us=23.416 p90_us=23.528
+jsl_matmul_strict_runInto_256x256x1 median_us=15.948 min_us=15.902 p90_us=16.146
+jsl_matmul_fast_runInto_256x256x1 median_us=20.095 min_us=20.063 p90_us=20.176
+jsl_matmul_strict_prepared_runTensorsInto_256x256x1 median_us=4.080 min_us=4.063 p90_us=4.133
+jsl_matmul_fast_prepared_runTensorsInto_256x256x1 median_us=4.449 min_us=4.414 p90_us=4.520
+jsl_forward_build_and_compile median_us=38.429 min_us=38.061 p90_us=39.019
+jsl_forward_runInto_fast median_us=566.512 min_us=564.580 p90_us=568.503
+jsl_forward_run_fresh_tensor_fast median_us=562.330 min_us=558.114 p90_us=570.294
+jsl_forward_runInto_strict median_us=657.198 min_us=654.048 p90_us=662.048
+jsl_forward_run_fresh_tensor_strict median_us=651.340 min_us=646.734 p90_us=657.077
+jsl_forward_budget_peak_bytes=67108864
