@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use crate::bind::{Call, VarArgs};
 use crate::compute::kernels::Inline;
-use crate::compute::{Budget, Domain, Expr, Numeric, Program, Shape, Tensor, View};
+use crate::compute::{Budget, Domain, Expr, Limits, Numeric, Program, Shape, Tensor, View};
 use crate::convert::{BufferView, Exact, NewBuffer};
 use crate::error::{Error, Result};
 use crate::extension::{Extension, ExtensionDescriptor, InstallContext, TagPolicy};
@@ -29,11 +29,14 @@ pub struct ComputeLimits {
     pub graph_nodes: usize,
     /// Live compiled programs.
     pub programs: usize,
+    /// What one tensor and one run of a program may be. Raise these only for trusted scripts, and
+    /// with `memory_bytes` to match: a run can do this much work however little memory it holds.
+    pub graph: Limits,
 }
 
 impl Default for ComputeLimits {
     fn default() -> Self {
-        Self { memory_bytes: 64 << 20, graph_nodes: 4096, programs: 512 }
+        Self { memory_bytes: 64 << 20, graph_nodes: 4096, programs: 512, graph: Limits::default() }
     }
 }
 
@@ -220,7 +223,9 @@ fn describe_tensor(d: &mut ExtensionDescriptor) {
              offset: Exact<usize>,
              row_stride: Exact<usize>,
              col_stride: Exact<usize>| {
-                let view = t.tensor.view(Shape::Matrix(rows.0, cols.0), offset.0, [row_stride.0, col_stride.0])?;
+                let shape = Shape::Matrix(rows.0, cols.0);
+                t.budget.admit(shape)?;
+                let view = t.tensor.view(shape, offset.0, [row_stride.0, col_stride.0])?;
                 Ok::<_, Error>(Owned(ScriptTensor { tensor: view, budget: t.budget.clone() }))
             },
         )
@@ -381,9 +386,10 @@ impl Extension for ComputeExtension {
 
     fn install(&self, context: &mut InstallContext<'_>) -> Result<()> {
         let (budget, domain) = match &self.resources {
-            Resources::PerRuntime(limits) => {
-                (Budget::new(limits.memory_bytes), Domain::new(limits.graph_nodes, limits.programs))
-            }
+            Resources::PerRuntime(limits) => (
+                Budget::with_elements(limits.memory_bytes, limits.graph.elements),
+                Domain::with_limits(limits.graph_nodes, limits.programs, limits.graph),
+            ),
             Resources::Shared(budget, domain) => (budget.clone(), domain.clone()),
         };
         let module = context.module(MODULE)?;

@@ -102,7 +102,8 @@ tiles. Everything else on this page describes the strict default.
   Jess `SharedBuffer` adapter. Derived views keep the owner alive and may address only complete elements authorized by the parent, including for padded and transposed parents.
 - `Domain` bounds live nodes and plans, `Budget` bounds live native payload including temporaries and
   scratch. Both belong to the host; the prototype's process-wide counters are gone.
-- A program is bounded at compile time: 1,024 nodes and at most 67,108,864 scalar operations per run.
+- A program is bounded at compile time: 1,024 nodes (mechanical: plans number values in `u16`) and, by default, 67,108,864 scalar operations per run. A failed `runInto` leaves its output as it was: only the last stage writes it, and that stage's fallible work comes first.
+- `Limits` holds what a host allows: elements per tensor (default 1,048,576) and work per run. `ComputeLimits::graph`, `Domain::with_limits` and `Budget::with_elements` raise them. The only limits a host can't raise are mechanical: `isize::MAX / 64` elements, and work that can be counted in a `usize`.
 - Scratch is allocated for the active stage, charged for its full requested payload, and freed before its budget guard drops. No thread-local scratch survives a call.
 
 Native payload looks small to Luau's collector, so unreachable results can hold the whole budget

@@ -1007,10 +1007,11 @@ pack weights ahead of time for repeated matrix products.
 ### Limits
 
 Native tensors are invisible to Luau's memory limit, so the host bounds them. By default each runtime
-gets its own domain of 64 MiB, 4096 expression nodes and 512 programs; `ComputeExtension::new` takes
-other limits, and `ComputeExtension::shared` charges every runtime from a plan to one domain the
+gets its own domain of 64 MiB, 4096 expression nodes, 512 programs, 1,048,576 elements per tensor and
+67,108,864 scalar operations per run; `ComputeExtension::new` takes other limits, and `ComputeExtension::shared` charges every runtime from a plan to one domain the
 host holds. A call the budget refuses collects garbage once and retries, then raises an ordinary
-error, and the runtime stays usable. `compute.used()` and `compute.limit()` report the domain's bytes.
+error, and the runtime stays usable; `runInto` leaves its output as it was. A size or work limit
+raises at once, since collecting cannot help. `compute.used()` and `compute.limit()` report the domain's bytes.
 
 Scratch, temporaries and results all count. Memory returns when its tensor is collected or its
 runtime closes.

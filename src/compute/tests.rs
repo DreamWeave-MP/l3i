@@ -420,7 +420,7 @@ fn views_cannot_widen_and_share_their_owner() {
     assert!(narrow.view(Shape::Matrix(1, 3), 0, [12, 4]).is_err(), "widens past its parent");
     assert!(t.view(Shape::Matrix(usize::MAX, usize::MAX), 0, [usize::MAX, usize::MAX]).is_err());
     assert!(t.view(Shape::Matrix(1, 1), usize::MAX, [0, 0]).is_err());
-    assert!(Shape::Matrix(1 << 21, 0).elements().is_err());
+    assert!(Shape::Matrix(1 << 21, 0).within(Limits::default().elements).is_err());
     assert!(Tensor::import(&[0; 3], Shape::Matrix(1, 1), &budget).is_err());
     let owner = Arc::downgrade(&t.owner);
     drop(t);

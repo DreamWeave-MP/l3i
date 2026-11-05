@@ -165,6 +165,61 @@ fn every_allocation_during_a_run_is_already_charged() {
     }
 }
 
+/// What no host policy can permit: sizes this crate's arithmetic couldn't represent are refused
+/// before anything is allocated, and a huge graph that compiles costs nothing until it is run.
+#[test]
+fn no_policy_lifts_what_the_arithmetic_can_represent() {
+    let anything = Limits { elements: usize::MAX, work: usize::MAX };
+    let domain = Domain::with_limits(64, 8, anything);
+    let huge = |rows, cols| Expr::slot(0, Shape::Matrix(rows, cols), domain.clone());
+    assert!(Shape::Matrix(usize::MAX, 2).elements().is_err());
+    assert!(Shape::Matrix(1 << 40, 1 << 40).elements().is_err(), "the product overflows");
+    assert!(Shape::Matrix(usize::MAX, 0).elements().is_err(), "a zero doesn't excuse the other side");
+    assert!(huge(1 << 58, 1).is_err(), "past what bytes can address");
+    assert!(huge(1 << 30, 1 << 30).is_err());
+    let budget = Budget::with_elements(1 << 20, usize::MAX);
+    assert!(Tensor::import(&[], Shape::Matrix(1 << 58, 1), &budget).is_err());
+    // Work that overflows when counted.
+    let a = huge(1 << 28, 1 << 28).unwrap();
+    let b = huge(1 << 28, 1 << 28).unwrap();
+    assert!(a.matmul(&b).is_err());
+    // Work the count can hold: compiling allocates nothing, and running asks the budget first.
+    let big = huge(1 << 28, 1 << 20).unwrap().relu().unwrap().compile().unwrap();
+    assert_eq!(budget.used(), 0);
+    let empty: [u8; 0] = [];
+    let input = View::contiguous(&empty, Shape::Matrix(0, 0)).unwrap();
+    assert!(big.run_into(&[input], &mut [], &budget).is_err(), "the wrong shape, caught before any size");
+    let out = big.run(&[], &budget);
+    assert!(out.is_err(), "no input");
+    assert_eq!(budget.peak(), 0);
+    // Under a host's limits, the same sizes are refused sooner.
+    let cautious = Domain::new(64, 8);
+    assert!(Expr::slot(0, Shape::Matrix(1 << 20, 2), cautious.clone()).is_err());
+    assert!(Expr::slot(0, Shape::Matrix(1 << 21, 0), cautious).is_err());
+}
+
+/// The work a plan counts reaches the policy for every kind of stage, whichever limit it comes from.
+#[test]
+fn the_work_limit_counts_what_each_stage_executes() {
+    let shape = Shape::Matrix(64, 64);
+    let limited = |work| Domain::with_limits(64, 8, Limits { elements: 1 << 20, work });
+    let elementwise = |domain: Arc<Domain>| {
+        let x = Expr::slot(0, shape, domain).unwrap();
+        x.add(&x).unwrap().relu().unwrap().compile().is_ok()
+    };
+    assert!(elementwise(limited(64 * 64 * 2)));
+    assert!(!elementwise(limited(64 * 64 * 2 - 1)));
+    let product = |domain: Arc<Domain>| {
+        let x = Expr::slot(0, shape, domain).unwrap();
+        x.matmul(&x).map(|_| ()).is_ok()
+    };
+    assert!(product(limited(64 * 64 * 64)));
+    assert!(!product(limited(64 * 64 * 64 - 1)));
+    let rows = |domain: Arc<Domain>| Expr::slot(0, shape, domain).unwrap().softmax().unwrap().compile().is_ok();
+    assert!(rows(limited(64 * 64 * 6)));
+    assert!(!rows(limited(64 * 64 * 6 - 1)));
+}
+
 /// Bytes that must survive a kernel, around a region it may write.
 const GUARD: usize = 64;
 struct Guarded {

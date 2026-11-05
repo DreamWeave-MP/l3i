@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use l3i::Runtime;
 use l3i::compute::script::{ComputeExtension, ComputeLimits, ScriptTensor};
-use l3i::compute::{Budget, Domain, Shape, Storage, Tensor};
+use l3i::compute::{Budget, Domain, Limits, Shape, Storage, Tensor};
 use l3i::extension::{RuntimePlan, RuntimePolicy};
 use l3i::userdata::Owned;
 
@@ -22,7 +22,7 @@ fn plan(extension: ComputeExtension) -> Rc<RuntimePlan> {
 }
 
 fn limited(memory_bytes: usize, graph_nodes: usize, programs: usize) -> Rc<RuntimePlan> {
-    plan(ComputeExtension::new(ComputeLimits { memory_bytes, graph_nodes, programs }))
+    plan(ComputeExtension::new(ComputeLimits { memory_bytes, graph_nodes, programs, ..ComputeLimits::default() }))
 }
 
 #[test]
@@ -452,6 +452,69 @@ fn run_tensors_into_refuses_a_host_tensor_over_the_output() {
              assert(buffer.readf32(out, 0) == -1, 'wrote while refusing')",
         )
         .unwrap();
+}
+
+/// The sizes a host allows are its own, and a default script can't reach past them.
+#[test]
+fn what_one_graph_may_do_is_the_hosts_to_raise() {
+    let script = "local n = 512
+         local bytes = buffer.create(n * n * 4)
+         for i = 0, n * n - 1 do buffer.writef32(bytes, i * 4, 1) end
+         local x, y = compute.slot(0, n, n), compute.slot(1, n, n)
+         local program = x:matmul(y):compile()
+         local out = buffer.create(n * n * 4)
+         program:runInto(out, bytes, bytes)
+         assert(buffer.readf32(out, 0) == n, 'a product of ones counts its inner dimension')
+         local tall = compute.f32(buffer.create(1048580), 1, 262145)
+         local large = compute.slot(0, 2048, 1024):relu():compile()
+         local input = buffer.create(2048 * 1024 * 4)
+         large:runInto(buffer.create(2048 * 1024 * 4), input)";
+    let cautious = Runtime::from_plan(&plan(ComputeExtension::default())).unwrap();
+    assert!(cautious.exec(script).is_err(), "the defaults refuse a 512x512 product");
+    let trusted = ComputeExtension::new(ComputeLimits {
+        memory_bytes: 1 << 26,
+        graph: Limits { elements: 1 << 22, work: 1 << 28 },
+        ..ComputeLimits::default()
+    });
+    Runtime::from_plan(&plan(trusted)).unwrap().exec(script).unwrap();
+}
+
+/// A size refused by policy allocates nothing, can't be helped by collecting and doesn't pretend it
+/// can, while memory under a raised size limit still refuses, retries and recovers.
+#[test]
+fn raised_sizes_still_answer_to_the_memory_limit_and_its_garbage() {
+    let budget = Budget::with_elements(1 << 20, 1 << 22);
+    let domain = Domain::with_limits(64, 8, Limits { elements: 1 << 22, work: 1 << 30 });
+    let plan = plan(ComputeExtension::shared(budget.clone(), domain.clone()));
+    let runtime = Runtime::from_plan(&plan).unwrap();
+    runtime
+        .exec(
+            "-- A shape over the policy: no allocation, no retry.
+             assert(not pcall(compute.slot, 0, 4194305, 1))
+             local tensor = compute.f32(buffer.create(4), 1, 1)
+             assert(not pcall(function() return tensor:view(2097152, 4, 0, 0, 0) end), 'repeats past the limit')
+             local repeated = tensor:view(2048, 2048, 0, 0, 0)
+             -- Allowed by size, refused by memory: its result would be 16 MB under a 1 MB limit.
+             local program = compute.slot(0, 2048, 2048):relu():compile()
+             local refused, message = pcall(function() return program:run(repeated) end)
+             assert(not refused and string.find(message, 'budget', 1, true), message)
+             -- Garbage in the way gives way, at the same raised sizes.
+             for _ = 1, 8 do compute.f32(buffer.create(524288), 512, 256) end
+             local kept = compute.f32(buffer.create(524288), 512, 256)
+             assert(compute.used() == 4 + 524288)",
+        )
+        .unwrap();
+    assert_eq!(domain.denials(), 0, "no graph limit was involved");
+    let refused = budget.denials();
+    runtime
+        .exec(
+            "local first = compute.f32(buffer.create(524288), 512, 256)
+             local second = compute.f32(buffer.create(524288), 512, 256)
+             assert(not pcall(compute.f32, buffer.create(524288), 512, 256), 'three of these cannot fit')
+             assert(first:read() and second:read())",
+        )
+        .unwrap();
+    assert!(budget.denials() > refused, "memory refused after collecting");
 }
 
 #[test]

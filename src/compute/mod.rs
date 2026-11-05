@@ -34,7 +34,26 @@ pub use kernels::{CHUNK, Isa};
 pub use program::{Numeric, Program};
 pub use storage::{Budget, Shape, Storage, Tensor, View};
 
-pub(crate) const MAX_ELEMENTS: usize = 1_048_576;
+/// The most elements any shape can have: what the address space and this crate's byte arithmetic can
+/// represent, leaving room for a packing's padding (at most 8x) and four bytes each without overflow.
+/// This is a mechanical limit. What a host allows is [`Limits`], and is much smaller by default.
+pub(crate) const ADDRESSABLE_ELEMENTS: usize = isize::MAX.unsigned_abs() / 64;
+
+/// What a host allows one graph and one tensor. Nothing here is a limit of the engine: these are
+/// policy, conservative by default for untrusted scripts, and every check still uses checked
+/// arithmetic whatever they are set to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Limits {
+    /// Elements in one tensor or graph value, and in each of its dimensions.
+    pub elements: usize,
+    /// Scalar operations one run of a program may perform, as its plan counts them.
+    pub work: usize,
+}
+impl Default for Limits {
+    fn default() -> Self {
+        Self { elements: 1 << 20, work: 1 << 26 }
+    }
+}
 
 pub(crate) fn error(message: &str) -> crate::Error {
     crate::Error::runtime(message)

@@ -78,7 +78,7 @@ pub fn exp_nonpositive(x: f64) -> f64 {
 /// What a row's special values decide, before any arithmetic.
 enum RowClass {
     Nan,
-    Infinities(u32),
+    Infinities(usize),
     AllMasked,
     Finite(f32),
 }
@@ -103,7 +103,7 @@ fn classify<L: Lane>(values: &[L]) -> RowClass {
         RowClass::Nan
     } else if max.contains(&f32::INFINITY) {
         let count = values.iter().filter(|value| value.get() == f32::INFINITY).count();
-        RowClass::Infinities(u32::try_from(count).expect("rows are bounded by MAX_ELEMENTS"))
+        RowClass::Infinities(count)
     } else {
         let max = max.iter().copied().fold(f32::NEG_INFINITY, |a, b| if b > a { b } else { a });
         if max == f32::NEG_INFINITY { RowClass::AllMasked } else { RowClass::Finite(max) }
@@ -139,7 +139,8 @@ fn softmax_body<L: Lane>(values: &[L], out: &mut [L], exponentials: &mut [f64]) 
         RowClass::Nan => return out.fill(L::put(f32::NAN)),
         RowClass::AllMasked => return out.fill(L::put(0.0)),
         RowClass::Infinities(count) => {
-            let share = L::put((1.0 / f64::from(count)) as f32);
+            #[allow(clippy::cast_precision_loss)] // Past 2^53 infinities, the share isn't a number f32 has either.
+            let share = L::put((1.0 / count as f64) as f32);
             for (slot, value) in out.iter_mut().zip(values) {
                 *slot = if value.get() == f32::INFINITY { share } else { L::put(0.0) };
             }

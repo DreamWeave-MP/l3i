@@ -1,6 +1,6 @@
 //! Immutable tensor storage, checked views and the host-owned payload budget.
 use crate::Result;
-use crate::compute::{MAX_ELEMENTS, error};
+use crate::compute::{ADDRESSABLE_ELEMENTS, Limits, error};
 use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},
@@ -18,19 +18,33 @@ pub struct Budget {
     used: AtomicUsize,
     peak: AtomicUsize,
     limit: usize,
+    /// Elements one tensor made under this budget may have, which memory alone can't bound for a
+    /// view repeating a few elements.
+    elements: usize,
     allocations: AtomicUsize,
     denials: AtomicUsize,
 }
 impl Budget {
+    /// `limit` bytes, and [`Limits::default`]'s tensor size.
     #[must_use]
     pub fn new(limit: usize) -> Arc<Self> {
+        Self::with_elements(limit, Limits::default().elements)
+    }
+    /// `limit` bytes, and tensors of up to `elements` elements.
+    #[must_use]
+    pub fn with_elements(limit: usize, elements: usize) -> Arc<Self> {
         Arc::new(Self {
             used: AtomicUsize::new(0),
             peak: AtomicUsize::new(0),
             allocations: AtomicUsize::new(0),
             denials: AtomicUsize::new(0),
             limit,
+            elements,
         })
+    }
+    /// Refuses a tensor shape over this budget's element limit. Not a denial: no collection helps.
+    pub(crate) fn admit(&self, shape: Shape) -> Result<()> {
+        shape.within(self.elements).map(drop)
     }
     #[must_use]
     pub fn limit(&self) -> usize {
@@ -116,13 +130,19 @@ pub enum Shape {
     Matrix(usize, usize),
 }
 impl Shape {
+    /// How many elements this shape has, if that is a number this crate can represent.
     pub fn elements(self) -> Result<usize> {
+        self.within(ADDRESSABLE_ELEMENTS)
+    }
+    /// The element count, when it and each dimension are at most `limit`. Each dimension is bounded
+    /// even when another is zero.
+    pub(crate) fn within(self, limit: usize) -> Result<usize> {
+        let limit = limit.min(ADDRESSABLE_ELEMENTS);
         let (rows, cols) = self.dims();
-        // Bound each dimension even when another dimension is zero.
-        if rows > MAX_ELEMENTS || cols > MAX_ELEMENTS {
+        if rows > limit || cols > limit {
             return Err(error("dimension budget exceeded"));
         }
-        rows.checked_mul(cols).filter(|n| *n <= MAX_ELEMENTS).ok_or_else(|| error("element budget exceeded"))
+        rows.checked_mul(cols).filter(|n| *n <= limit).ok_or_else(|| error("element budget exceeded"))
     }
     #[must_use]
     pub fn dims(self) -> (usize, usize) {
@@ -291,7 +311,7 @@ impl Tensor {
         Ok(Self { owner, shape, offset, strides, end, prepared: None })
     }
     pub fn import(bytes: &[u8], shape: Shape, budget: &Arc<Budget>) -> Result<Self> {
-        if bytes.len() != shape.elements()? * 4 {
+        if bytes.len() != shape.within(budget.elements)? * 4 {
             return Err(error("input byte size mismatch"));
         }
         let mut allocation = budget.allocate(bytes.len())?;
@@ -299,7 +319,7 @@ impl Tensor {
         Self::contiguous(allocation, shape)
     }
     pub fn import_view(bytes: &crate::convert::BufferView<'_>, shape: Shape, budget: &Arc<Budget>) -> Result<Self> {
-        if bytes.len() != shape.elements()? * 4 {
+        if bytes.len() != shape.within(budget.elements)? * 4 {
             return Err(error("input byte size mismatch"));
         }
         let mut allocation = budget.allocate(bytes.len())?;
@@ -374,6 +394,7 @@ impl Tensor {
         self.prepare(budget, PreparedSide::Left)
     }
     fn prepare(&self, budget: &Arc<Budget>, side: PreparedSide) -> Result<Self> {
+        budget.admit(self.shape)?;
         let (rows, cols) = self.shape.dims();
         let elements = match side {
             PreparedSide::Right => crate::compute::kernels::prepared_right_elements(rows, cols),

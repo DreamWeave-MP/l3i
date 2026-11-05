@@ -1095,10 +1095,16 @@ fn pass_elements(start: usize, end: usize, cols: usize) -> usize {
 }
 /// Elements [`prepare_right`] writes for a `k x n` operand.
 pub(crate) fn prepared_right_elements(k: usize, n: usize) -> usize {
+    if k == 0 {
+        return 0;
+    }
     passes(k, n).map(|(start, end, _, cols)| pass_elements(start, end, cols)).sum()
 }
 /// Packs all of `b`, every pass adjacent, in the order `matmul_body` reads them.
 pub(crate) fn prepare_right(b: &[Element], k: usize, n: usize, mut pack: &mut [Element]) {
+    if k == 0 {
+        return;
+    }
     for (start, end, first, cols) in passes(k, n) {
         let (pass, rest) = pack.split_at_mut(pass_elements(start, end, cols));
         pack_pass(b, n, first, cols, start, end, pass);

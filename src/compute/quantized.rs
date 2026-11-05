@@ -2,7 +2,10 @@
 //! Row-major weights and activations are signed int8, zero point zero. Accumulation is exact i64;
 //! each 4096-element partial fits i32 even for -128 * -128. Output applies explicit positive
 //! finite f64 scales and rounds once to f32. This is not strict-f32 tensor matmul semantics.
-use crate::compute::{MAX_ELEMENTS, error};
+use crate::compute::error;
+
+/// Longest slice whose i64 total can't overflow, at 2^14 per element.
+const MAX_ELEMENTS: usize = 1 << 48;
 
 /// Exact integer dot product. Equal lengths required; no temporary allocation.
 #[must_use]

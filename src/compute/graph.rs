@@ -1,17 +1,16 @@
 //! Typed expression nodes: structure and shapes only. Nodes never hold input data.
 use crate::Result;
 use crate::compute::program::{Numeric, Program};
-use crate::compute::{Shape, error};
+use crate::compute::{Limits, Shape, error};
 use std::collections::HashMap;
 use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},
 };
 
-/// Largest compiled graph, and the longest path through it.
+/// Largest compiled graph, and the longest path through it. Mechanical: plans number their values
+/// in `u16` and validation recurses once per level.
 pub(crate) const MAX_NODES: usize = 1024;
-/// Scalar operations one invocation may perform.
-pub(crate) const MAX_WORK: usize = 67_108_864;
 
 /// Host-owned accounting domain. Every limit here belongs to its caller; nothing is process-wide.
 #[derive(Debug)]
@@ -20,18 +19,29 @@ pub struct Domain {
     plans: AtomicUsize,
     node_limit: usize,
     plan_limit: usize,
+    limits: Limits,
     denials: AtomicUsize,
 }
 impl Domain {
+    /// These node and program counts, and [`Limits::default`].
     #[must_use]
     pub fn new(node_limit: usize, plan_limit: usize) -> Arc<Self> {
+        Self::with_limits(node_limit, plan_limit, Limits::default())
+    }
+    /// These node and program counts, and what the host allows one graph.
+    #[must_use]
+    pub fn with_limits(node_limit: usize, plan_limit: usize, limits: Limits) -> Arc<Self> {
         Arc::new(Self {
             nodes: AtomicUsize::new(0),
             plans: AtomicUsize::new(0),
             node_limit,
             plan_limit,
+            limits,
             denials: AtomicUsize::new(0),
         })
+    }
+    pub(crate) fn limits(&self) -> Limits {
+        self.limits
     }
     /// How many requests the limits have refused. See [`crate::compute::Budget::denials`].
     #[must_use]
@@ -96,7 +106,7 @@ struct Node {
 pub struct Expr(Arc<Node>);
 impl Expr {
     fn new(shape: Shape, op: Op, depth: usize, domain: Arc<Domain>) -> Result<Self> {
-        shape.elements()?;
+        shape.within(domain.limits.elements)?;
         if depth > MAX_NODES {
             return Err(error("graph depth budget exceeded"));
         }
@@ -169,7 +179,7 @@ impl Expr {
         shape
             .elements()?
             .checked_mul(k)
-            .filter(|n| *n <= MAX_WORK)
+            .filter(|n| *n <= self.0.lease.domain.limits.work)
             .ok_or_else(|| error("matmul work budget exceeded"))?;
         self.binary(rhs, shape, Op::MatMul(self.clone(), rhs.clone()))
     }
@@ -206,7 +216,8 @@ impl Expr {
         }
         let mut steps = Vec::new();
         visit(self, &mut Ids::new(), &mut steps)?;
-        Program::plan(steps, Lease::acquire(self.0.lease.domain.clone(), true)?, numeric)
+        let domain = &self.0.lease.domain;
+        Program::plan(steps, Lease::acquire(domain.clone(), true)?, numeric, domain.limits().work)
     }
 }
 

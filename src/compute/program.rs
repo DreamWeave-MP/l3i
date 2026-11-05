@@ -5,7 +5,7 @@
 //! constants fold with the same f32 operations the kernels perform. A `Program` is immutable,
 //! `Send + Sync`, and can run concurrently against any compatible inputs.
 use crate::Result;
-use crate::compute::graph::{Instruction, Lease, MAX_WORK, Step};
+use crate::compute::graph::{Instruction, Lease, Step};
 use crate::compute::kernels::{self, CHUNK, Element, Isa, Rows, Source};
 use crate::compute::storage::{Allocation, PreparedSide};
 use crate::compute::{Budget, Shape, Tensor, View, error, reduction};
@@ -427,7 +427,7 @@ fn plan_elementwise(steps: &[Step], root: usize, boundary: &[Option<Value>], num
 
 impl Program {
     #[allow(clippy::too_many_lines)] // Linear passes over one plan; each depends on the one before.
-    pub(crate) fn plan(steps: Vec<Step>, lease: Lease, numeric: Numeric) -> Result<Self> {
+    pub(crate) fn plan(steps: Vec<Step>, lease: Lease, numeric: Numeric, work_limit: usize) -> Result<Self> {
         let root = steps.len() - 1;
         // The signature: dense slot ids, one shape each.
         let mut slots: Vec<Option<Shape>> = Vec::new();
@@ -523,7 +523,7 @@ impl Program {
                 .elements()?
                 .checked_mul(factor.max(1))
                 .and_then(|n| total.checked_add(n))
-                .filter(|n| *n <= MAX_WORK)
+                .filter(|n| *n <= work_limit)
                 .ok_or_else(|| error("graph work budget exceeded"))?;
         }
         // Release each temporary after its last reader (the last stage's result is returned).
