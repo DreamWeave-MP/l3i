@@ -22,7 +22,7 @@ deliberate change that re-audits the hand-declared C API and the flag list.
 
 | Dependency | Version | For |
 |---|---|---|
-| `dream-net` | `=1.1.0` | The `dream.udp` bridge every plan carries |
+| `dream-net` | `=1.1.1` | The `dream.udp` bridge every plan carries |
 | `dream-soft-render` | `=2.0.0`, optional (`soft-render`) | The `dream.soft_render` extension |
 | `memchr`, `miniz_oxide`, `lz4_flex`, `ruzstd`, `lzma-rs`, `crc32fast`, `adler2`, `xxhash-rust`, `md-5`, `sha1`, `sha2`, `blake3`, `encoding_rs` | Optional, behind `bytes` and its `bytes-*` features | `@dream/bytes`'s searches, codecs, digests and text encodings |
 | `icu_locale_core`, `icu_plurals`, `icu_decimal`, `fixed_decimal`, `writeable` | `2.3` (`fixed_decimal` `0.7` with `ryu`, `writeable` `0.6`), optional, behind `intl` | `@dream/intl`'s locales, plural rules and decimal formatting, with ICU4X's compiled CLDR data |
