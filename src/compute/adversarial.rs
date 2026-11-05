@@ -1177,3 +1177,89 @@ fn fast_dot_product_lane_order_is_observable_and_fixed() {
         assert_eq!(fast_dot(&a, &b, 1, 64), [0.0], "{placed:?}");
     }
 }
+
+/// A plain loop and the block kernels answer every tiny shape identically, in both modes.
+#[test]
+fn tiny_products_match_the_block_kernels_across_their_threshold() {
+    let domain = Domain::new(1 << 12, 1 << 12);
+    let budget = Budget::new(1 << 24);
+    let mut rng = Rng(0xabad_1dea_5eed_0001);
+    for (m, k, n) in [
+        (1, 1, 1),
+        (2, 2, 2),
+        (3, 1, 2),
+        (1, 7, 3),
+        (8, 8, 8),
+        (9, 8, 8),
+        (7, 9, 8),
+        (2, 63, 4),
+        (1, 63, 8),
+        (8, 63, 1),
+        (2, 4, 64),
+        (1, 1, 512),
+        (1, 1, 513),
+    ] {
+        let a = rng.row(m * k, 0);
+        let b = rng.row(k * n, 0);
+        let mut ordered = vec![0.0f32; m * n];
+        let mut fused = vec![0.0f32; m * n];
+        for i in 0..m {
+            for j in 0..n {
+                for p in 0..k {
+                    let (x, y) = (a[i * k + p], b[p * n + j]);
+                    ordered[i * n + j] += x * y;
+                    fused[i * n + j] = x.mul_add(y, fused[i * n + j]);
+                }
+            }
+        }
+        let (ta, tb) = (
+            Tensor::import(&bytes_of(&a), Shape::Matrix(m, k), &budget).unwrap(),
+            Tensor::import(&bytes_of(&b), Shape::Matrix(k, n), &budget).unwrap(),
+        );
+        let product = Expr::slot(0, Shape::Matrix(m, k), domain.clone())
+            .unwrap()
+            .matmul(&Expr::slot(1, Shape::Matrix(k, n), domain.clone()).unwrap())
+            .unwrap();
+        let strict = floats(&product.compile().unwrap().run(&[&ta, &tb], &budget).unwrap().readback().unwrap());
+        let bits = |values: &[f32]| values.iter().map(|v| v.to_bits()).collect::<Vec<_>>();
+        assert_eq!(bits(&strict), bits(&ordered), "{m}x{k}x{n} strict");
+        if Isa::Fma.available() {
+            let fast = floats(
+                &product.compile_with(Numeric::Fast).unwrap().run(&[&ta, &tb], &budget).unwrap().readback().unwrap(),
+            );
+            assert_eq!(bits(&fast), bits(&fused), "{m}x{k}x{n} fast");
+        }
+    }
+}
+
+/// Past its inline capacity a list keeps every item, in order.
+#[test]
+fn inline_lists_spill_without_losing_or_reordering_anything() {
+    for count in [0usize, 1, 7, 8, 9, 16, 100] {
+        let list: crate::compute::kernels::Inline<usize, 8> = (0..count).collect();
+        assert_eq!(&*list, (0..count).collect::<Vec<_>>().as_slice(), "{count}");
+    }
+    // Programs with more sources than the inline capacity bind them all.
+    let domain = Domain::new(1 << 12, 1 << 12);
+    let budget = Budget::new(1 << 20);
+    let mut expression = Expr::slot(0, Shape::Matrix(1, 1), domain.clone()).unwrap();
+    for slot in 1..12 {
+        expression = expression.add(&Expr::slot(slot, Shape::Matrix(1, 1), domain.clone()).unwrap()).unwrap();
+    }
+    let program = expression.compile().unwrap();
+    let inputs: Vec<Tensor> = (0..12)
+        .map(|i| Tensor::import(&(1u32 << i).cast_float_bytes(), Shape::Matrix(1, 1), &budget).unwrap())
+        .collect();
+    let refs: Vec<&Tensor> = inputs.iter().collect();
+    assert_eq!(floats(&program.run(&refs, &budget).unwrap().readback().unwrap()), [4095.0]);
+}
+
+trait CastFloatBytes {
+    fn cast_float_bytes(self) -> [u8; 4];
+}
+impl CastFloatBytes for u32 {
+    #[allow(clippy::cast_precision_loss)]
+    fn cast_float_bytes(self) -> [u8; 4] {
+        (self as f32).to_le_bytes()
+    }
+}

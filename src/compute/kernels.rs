@@ -540,7 +540,7 @@ fn elementwise_loop(
         #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
         y: is_slice(step.y),
     };
-    let bound_tiles: Vec<(KernelFn, Dst, Binding<'_>)> = tiles
+    let bound_tiles: Inline<(KernelFn, Dst, Binding<'_>), 8> = tiles
         .iter()
         .map(|tile| {
             let kernel = select(is_slice(tile.start), [form(tile.steps[0]), form(tile.steps[1]), form(tile.steps[2])]);
@@ -565,7 +565,7 @@ fn elementwise_loop(
                 }
             }
         }
-        for (kernel, dst, binding) in &bound_tiles {
+        for (kernel, dst, binding) in bound_tiles.iter() {
             match *dst {
                 Dst::Output => {
                     let frame =
@@ -604,8 +604,55 @@ pub(crate) fn scratch_elements(stage: &Elementwise, sources: &[Source<'_>], coun
     (stage.registers + walked) * count.min(chunk)
 }
 
+/// A short list held inline, so the common small plan binds without touching the heap, spilling for
+/// the rare long one.
+pub(crate) struct Inline<T: Copy, const N: usize> {
+    items: [std::mem::MaybeUninit<T>; N],
+    len: usize,
+    spilled: Vec<T>,
+}
+impl<T: Copy, const N: usize> Inline<T, N> {
+    pub(crate) fn new() -> Self {
+        Self { items: [std::mem::MaybeUninit::uninit(); N], len: 0, spilled: Vec::new() }
+    }
+    #[inline]
+    pub(crate) fn push(&mut self, item: T) {
+        if self.spilled.is_empty() && self.len < N {
+            self.items[self.len].write(item);
+            self.len += 1;
+        } else {
+            if self.spilled.is_empty() {
+                let held: &[T] = self;
+                self.spilled = held.to_vec();
+            }
+            self.spilled.push(item);
+        }
+    }
+}
+impl<T: Copy, const N: usize> FromIterator<T> for Inline<T, N> {
+    fn from_iter<I: IntoIterator<Item = T>>(items: I) -> Self {
+        let mut list = Self::new();
+        for item in items {
+            list.push(item);
+        }
+        list
+    }
+}
+impl<T: Copy, const N: usize> std::ops::Deref for Inline<T, N> {
+    type Target = [T];
+    #[inline]
+    fn deref(&self) -> &[T] {
+        if self.spilled.is_empty() {
+            // SAFETY: `push` initialized the first `len` items, and `len <= N`.
+            unsafe { std::slice::from_raw_parts(self.items.as_ptr().cast::<T>(), self.len) }
+        } else {
+            &self.spilled
+        }
+    }
+}
+
 /// Resolves every view against `shape` and numbers the walked ones.
-pub(crate) fn bind_sources<'a>(views: impl Iterator<Item = View<'a>>, shape: Shape) -> Vec<Source<'a>> {
+pub(crate) fn bind_sources<'a>(views: impl Iterator<Item = View<'a>>, shape: Shape) -> Inline<Source<'a>, 8> {
     let mut walked = 0;
     views
         .map(|view| {
@@ -1125,12 +1172,33 @@ pub(crate) fn matmul_scratch(m: usize, k: usize, n: usize) -> usize {
     k.min(K_BLOCK) * widest * 4
 }
 
+/// Most scalar products a plain loop beats the block machinery at, whose setup and partial blocks
+/// cost more than this many multiply-adds.
+const TINY_PRODUCT: usize = 512;
+/// A small product by the textbook loop, each element adding its products in increasing `k`.
+#[inline(always)]
+fn tiny_product<const FUSED: bool>(a: &[Element], b: &[Element], k: usize, n: usize, out: &mut [Element]) {
+    for (row, sums) in a.chunks_exact(k).zip(out.chunks_exact_mut(n)) {
+        for (scale, factors) in row.iter().zip(b.chunks_exact(n)) {
+            let scale = read(*scale);
+            for (sum, factor) in sums.iter_mut().zip(factors) {
+                let value = read(*sum);
+                let factor = read(*factor);
+                *sum = (if FUSED { scale.mul_add(factor, value) } else { value + scale * factor }).to_le_bytes();
+            }
+        }
+    }
+}
+
 /// The row-major `a @ b` kernel. Each pass of `b` covers ascending `k`, so each output element sees
 /// its products in increasing `k` whichever order its neighbours are computed in.
 #[inline(always)]
 fn matmul_body<const FUSED: bool>(operands: &Operands<'_>, out: &mut [Element], scratch: &mut [Element]) {
     let &Operands { a, b, k, n, left, right } = operands;
     let m = out.len() / n;
+    if m * k * n <= TINY_PRODUCT && k < RELAXED_FROM && left.is_none() && right.is_none() {
+        return tiny_product::<FUSED>(a, b, k, n, out);
+    }
     if n == 1 {
         if let Some(panels) = left {
             return panels_times_column::<FUSED>(panels, b, k, out);

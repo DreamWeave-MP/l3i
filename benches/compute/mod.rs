@@ -1017,6 +1017,7 @@ pub fn main(filter: &str) {
             jsl(include_str!("rows.jsl"));
         }
         "compute_softmax" => softmax_strategies(),
+        "compute_overhead" => overhead(),
         "compute_int8" => quantized(),
         #[cfg(feature = "jit")]
         "compute_luau_assembly" => luau_assembly(&argument.expect("a path to write the assembly to")),
@@ -1055,4 +1056,98 @@ fn luau_assembly(path: &str) {
         })
         .unwrap();
     std::fs::write(path, text).unwrap();
+}
+
+/// What one call costs beyond its arithmetic, for operations small enough that the arithmetic is
+/// nearly nothing: cycles, instructions and allocations per call, from Rust and from JSL.
+fn overhead() {
+    use crate::counter::{Counter, PERF_COUNT_HW_CPU_CYCLES, PERF_COUNT_HW_INSTRUCTIONS, PERF_TYPE_HARDWARE};
+    const CALLS: usize = 2000;
+    let open = |config| Counter::open(PERF_TYPE_HARDWARE, config).expect("hardware counters");
+    let (cycles, instructions) = (open(PERF_COUNT_HW_CPU_CYCLES), open(PERF_COUNT_HW_INSTRUCTIONS));
+    let median = |counter: &Counter, calls: f64, body: &mut dyn FnMut()| {
+        let mut samples: Vec<u64> = (0..21).map(|_| counter.measure(&mut *body)).collect();
+        samples.sort_unstable();
+        samples[10] as f64 / calls
+    };
+    let domain = domain();
+    let budget = Budget::new(1 << 24);
+    let shape = Shape::Matrix(1, 4);
+    let x = Expr::slot(0, shape, domain.clone()).unwrap();
+    let y = Expr::slot(1, shape, domain.clone()).unwrap();
+    let m = Expr::slot(0, Shape::Matrix(2, 2), domain.clone()).unwrap();
+    let n = Expr::slot(1, Shape::Matrix(2, 2), domain.clone()).unwrap();
+    let values = bytes_of_floats(&[1.0, 2.0, 3.0, 4.0]);
+    let row = View::contiguous(&values, shape).unwrap();
+    let square = View::contiguous(&values, Shape::Matrix(2, 2)).unwrap();
+    let cases: [(&str, Program, Vec<View<'_>>, usize); 5] = [
+        ("add_1x4", x.add(&y).unwrap().compile().unwrap(), vec![row, row], 16),
+        ("chain_1x4", x.add(&y).unwrap().relu().unwrap().compile().unwrap(), vec![row, row], 16),
+        ("sum_rows_1x4", x.sum_rows().unwrap().compile().unwrap(), vec![row], 4),
+        ("softmax_1x4", x.softmax().unwrap().compile().unwrap(), vec![row], 16),
+        ("matmul_2x2x2", m.matmul(&n).unwrap().compile().unwrap(), vec![square, square], 16),
+    ];
+    println!("# per call, from Rust, program:run_into");
+    for (name, program, inputs, size) in &cases {
+        let mut out = vec![0u8; *size];
+        let mut body = || {
+            for _ in 0..CALLS {
+                program.run_into(inputs, &mut out, &budget).unwrap();
+                black_box(&mut out);
+            }
+        };
+        let (c, i) = (median(&cycles, CALLS as f64, &mut body), median(&instructions, CALLS as f64, &mut body));
+        let before = crate::counting_alloc::ALLOCATIONS.load(Ordering::Relaxed);
+        body();
+        let allocations = crate::counting_alloc::ALLOCATIONS.load(Ordering::Relaxed) - before;
+        println!(
+            "{name:<16} cycles={c:<8.0} instructions={i:<8.0} allocations={:.1}",
+            allocations as f64 / CALLS as f64
+        );
+    }
+    let runtime = host::runtime().unwrap();
+    runtime
+        .exec(
+            "local s = shared.state
+             local function bytes(t) local b = buffer.create(#t * 4) for i, v in t do buffer.writef32(b, (i - 1) * 4, v) end return b end
+             s.a, s.o = bytes({1, 2, 3, 4}), buffer.create(16)
+             s.o1 = buffer.create(4)
+             local x, y = compute.slot(0, 1, 4), compute.slot(1, 1, 4)
+             local m, n = compute.slot(0, 2, 2), compute.slot(1, 2, 2)
+             s.add, s.sum = x:add(y):compile(), x:sumRows():compile()
+             s.chain, s.softmax = x:add(y):relu():compile(), x:softmax():compile()
+             s.matmul = m:matmul(n):compile()
+             s.t, s.t2 = compute.f32(s.a, 1, 4), compute.f32(s.a, 2, 2)",
+        )
+        .unwrap();
+    println!("# per call, from JSL, including the interpreter's loop");
+    let loop_of = |call: &str| {
+        format!(
+            "local s = shared.state local a, o, o1, t, t2 = s.a, s.o, s.o1, s.t, s.t2 local add, sum, chain, softmax, matmul = s.add, s.sum, s.chain, s.softmax, s.matmul local noop = testing.noop for _ = 1, {CALLS} do {call} end"
+        )
+    };
+    for (name, call) in [
+        ("empty_loop", ""),
+        ("native_noop", "noop()"),
+        ("method 0 args", "sum:probe0()"),
+        ("method 1 buffer", "sum:probe1(o)"),
+        ("method 1+call", "sum:probeCall(o)"),
+        ("method 4 opts", "sum:probeOptional(o, a)"),
+        ("method 4+rest", "sum:probeRest(o, a)"),
+        ("add runInto", "add:runInto(o, a, a)"),
+        ("chain runInto", "chain:runInto(o, a, a)"),
+        ("sum runInto", "sum:runInto(o1, a)"),
+        ("softmax runInto", "softmax:runInto(o, a)"),
+        ("matmul runInto", "matmul:runInto(o, a, a)"),
+        ("add run+tensor", "add:run(t, t)"),
+    ] {
+        let source = loop_of(call);
+        let mut body = || runtime.exec(&source).unwrap();
+        let (c, i) = (median(&cycles, CALLS as f64, &mut body), median(&instructions, CALLS as f64, &mut body));
+        println!("{name:<16} cycles={c:<8.0} instructions={i:<8.0}");
+    }
+}
+
+fn bytes_of_floats(values: &[f32]) -> Vec<u8> {
+    values.iter().flat_map(|v| v.to_le_bytes()).collect()
 }

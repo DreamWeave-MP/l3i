@@ -9,6 +9,7 @@
 use std::sync::Arc;
 
 use crate::bind::{Call, VarArgs};
+use crate::compute::kernels::Inline;
 use crate::compute::{Budget, Domain, Expr, Numeric, Program, Shape, Tensor, View};
 use crate::convert::{BufferView, Exact, NewBuffer};
 use crate::error::{Error, Result};
@@ -167,33 +168,37 @@ fn overlaps(a: &[u8], b: &[u8]) -> bool {
     a.start != a.end && b.start != b.end && a.start < b.end && b.start < a.end
 }
 
-/// `program:runInto(out, a, b, ...)`: Luau buffers, borrowed for this call and never retained.
+/// `program:runInto(out, a, b, ...)`: Luau buffers, borrowed for this call and never retained. The
+/// first few arrive as separate parameters so that the usual call collects nothing.
 fn run_buffers_into(
     program: &Program,
     out: &mut BufferView<'_>,
-    inputs: &[BufferView<'_>],
+    first: [Option<&BufferView<'_>>; 3],
+    rest: &[BufferView<'_>],
     budget: &Arc<Budget>,
 ) -> Result<()> {
-    if inputs.len() != program.signature().len() {
+    let given = first.iter().take_while(|input| input.is_some()).count();
+    let contiguous = first[given..].iter().all(Option::is_none) && (given == first.len() || rest.is_empty());
+    if !contiguous || given + rest.len() != program.signature().len() {
         return Err(Error::runtime("input slot set mismatch"));
     }
+    let inputs = first.iter().flatten().copied().chain(rest);
+    let mut views: Inline<View<'_>, 8> = Inline::new();
     // SAFETY: no Lua runs and no other view writes between here and the end of `run_into` below.
     // The exclusive slice is only made after every input's byte range is shown disjoint from it,
     // so this holds for any `BufferView`, including sub-ranges of one buffer. Inputs only read, so
     // they may overlap each other.
-    let (input_bytes, out_bytes) = unsafe {
+    let out_bytes = unsafe {
         let target = out.bytes_unchecked();
-        if inputs.iter().any(|input| overlaps(input.bytes_unchecked(), target)) {
-            return Err(Error::runtime("output buffer aliases an input"));
+        for (input, shape) in inputs.zip(program.signature()) {
+            let bytes = input.bytes_unchecked();
+            if overlaps(bytes, target) {
+                return Err(Error::runtime("output buffer aliases an input"));
+            }
+            views.push(View::contiguous(bytes, *shape)?);
         }
-        let reads: Vec<&[u8]> = inputs.iter().map(|input| input.bytes_unchecked()).collect();
-        (reads, out.bytes_mut_unchecked())
+        out.bytes_mut_unchecked()
     };
-    let views = input_bytes
-        .iter()
-        .zip(program.signature())
-        .map(|(bytes, shape)| View::contiguous(bytes, *shape))
-        .collect::<Result<Vec<View<'_>>>>()?;
     program.run_into(&views, out_bytes, budget)
 }
 
@@ -298,23 +303,33 @@ fn describe_program(d: &mut ExtensionDescriptor) {
         .doc("A validated computation, compiled once and run on any inputs of its slots' shapes.");
     program
         .method("run", |p: &ScriptProgram, call: &Call<'_>, tensors: VarArgs<&ScriptTensor>| {
-            let tensors: Vec<&Tensor> = tensors.values.iter().map(|t| &t.tensor).collect();
+            let tensors: Inline<&Tensor, 8> = tensors.values.iter().map(|t| &t.tensor).collect();
             let result = collecting(call, &p.budget, || p.program.run(&tensors, &p.budget))?;
             Ok::<_, Error>(Owned(ScriptTensor { tensor: result, budget: p.budget.clone() }))
         })
         .signature("(self, ...: dream_compute_Tensor): dream_compute_Tensor")
         .doc("Runs on tensors, one per slot in order, giving a new tensor charged until collected.");
     program
-        .method("runInto", |p: &ScriptProgram, call: &Call<'_>, mut out: BufferView<'_>, inputs: VarArgs<BufferView<'_>>| {
-            collecting(call, &p.budget, || run_buffers_into(&p.program, &mut out, &inputs.values, &p.budget))
-        })
+        .method(
+            "runInto",
+            |p: &ScriptProgram,
+             call: &Call<'_>,
+             mut out: BufferView<'_>,
+             first: Option<BufferView<'_>>,
+             second: Option<BufferView<'_>>,
+             third: Option<BufferView<'_>>,
+             rest: VarArgs<BufferView<'_>>| {
+                let given = [first.as_ref(), second.as_ref(), third.as_ref()];
+                collecting(call, &p.budget, || run_buffers_into(&p.program, &mut out, given, &rest.values, &p.budget))
+            },
+        )
         .signature("(self, out: buffer, ...: buffer)")
         .doc("Runs on buffers of little-endian f32, one per slot in order, writing to out. Nothing is retained. Raises if out overlaps an input.");
     program
         .method(
             "runTensorsInto",
             |p: &ScriptProgram, call: &Call<'_>, mut out: BufferView<'_>, tensors: VarArgs<&ScriptTensor>| {
-                let views: Vec<View<'_>> = tensors.values.iter().map(|t| t.tensor.borrow()).collect();
+                let views: Inline<View<'_>, 8> = tensors.values.iter().map(|t| t.tensor.borrow()).collect();
                 collecting(call, &p.budget, || {
                     // SAFETY: a tensor's bytes are native, never a Luau buffer, so this exclusive
                     // slice overlaps no input, and no Lua runs while it is alive.

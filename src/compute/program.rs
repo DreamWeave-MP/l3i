@@ -615,7 +615,7 @@ impl Program {
 
     /// Runs against `inputs` by position, into a fresh immutable result charged to `budget`.
     pub fn run(&self, inputs: &[&Tensor], budget: &Arc<Budget>) -> Result<Tensor> {
-        let views: Vec<View<'_>> = inputs.iter().map(|t| t.borrow()).collect();
+        let views: kernels::Inline<View<'_>, 8> = inputs.iter().map(|t| t.borrow()).collect();
         self.check(&views)?;
         let shape = self.output_shape();
         let mut output = budget.allocate(shape.elements()? * 4)?;

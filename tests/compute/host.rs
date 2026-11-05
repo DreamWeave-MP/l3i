@@ -6,6 +6,7 @@ use std::sync::Arc;
 use l3i::bind::{Call, VarArgs};
 use l3i::compute::script::{ComputeExtension, ScriptProgram, ScriptTensor};
 use l3i::compute::{Budget, Domain, View};
+use l3i::convert::BufferView;
 use l3i::extension::{Extension, ExtensionDescriptor, InstallContext, RuntimePlan, RuntimePolicy};
 use l3i::source::{CompileOptions, LoadScope};
 use l3i::userdata::{Owned, Userdata};
@@ -43,6 +44,30 @@ impl Extension for ComputeTesting {
         program.method("native_source", |p: &ScriptProgram| p.program().native_source()).untyped();
         program.method("shader_source", |p: &ScriptProgram, mode: String| p.program().shader_source(&mode)).untyped();
         program.method("ir", |p: &ScriptProgram| p.program().dump()).untyped();
+        program.method("probe0", |_: &ScriptProgram| ()).untyped();
+        program.method("probe1", |_: &ScriptProgram, _: BufferView<'_>| ()).untyped();
+        program.method("probeCall", |_: &ScriptProgram, _: &Call<'_>, _: BufferView<'_>| ()).untyped();
+        program
+            .method(
+                "probeOptional",
+                |_: &ScriptProgram,
+                 _: BufferView<'_>,
+                 _: Option<BufferView<'_>>,
+                 _: Option<BufferView<'_>>,
+                 _: Option<BufferView<'_>>| (),
+            )
+            .untyped();
+        program
+            .method(
+                "probeRest",
+                |_: &ScriptProgram,
+                 _: BufferView<'_>,
+                 _: Option<BufferView<'_>>,
+                 _: Option<BufferView<'_>>,
+                 _: Option<BufferView<'_>>,
+                 _: VarArgs<BufferView<'_>>| (),
+            )
+            .untyped();
         program
             .method("native", |p: &ScriptProgram, call: &Call<'_>| -> Result<l3i::value::Function> {
                 // Without the generator the same source runs interpreted: slower, identical results.

@@ -316,3 +316,25 @@ fn building_graphs_in_a_loop_never_runs_out_of_what_it_no_longer_holds() {
         )
         .unwrap();
 }
+
+#[test]
+fn run_into_takes_any_number_of_inputs_in_order_and_refuses_gaps() {
+    let runtime = Runtime::from_plan(&limited(1 << 20, 64, 8)).unwrap();
+    runtime
+        .exec(
+            "local function one(v) local b = buffer.create(4) buffer.writef32(b, 0, v) return b end
+             local sum = compute.slot(0, 1, 1)
+             for slot = 1, 4 do sum = sum:mul(compute.constant(10)):add(compute.slot(slot, 1, 1)) end
+             local program = sum:compile()
+             local out = buffer.create(4)
+             program:runInto(out, one(1), one(2), one(3), one(4), one(5))
+             assert(buffer.readf32(out, 0) == 12345, 'inputs past the fixed parameters keep their order')
+             assert(not pcall(function() program:runInto(out, one(1), nil, one(3), one(4), one(5)) end), 'a gap')
+             assert(not pcall(function() program:runInto(out, nil, one(1), one(3), one(4), one(5)) end), 'a leading gap')
+             local six = out
+             assert(not pcall(function() program:runInto(six, one(1), one(2), one(3), one(4), six) end), 'aliased past the fixed parameters')
+             assert(not pcall(function() program:runInto(out, one(1), one(2), one(3), one(4)) end), 'too few')
+             assert(not pcall(function() program:runInto(out, one(1), one(2), one(3), one(4), one(5), one(6)) end), 'too many')",
+        )
+        .unwrap();
+}
