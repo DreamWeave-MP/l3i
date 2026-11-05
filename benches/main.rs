@@ -47,6 +47,15 @@ fn main() {
     let filter = std::env::args().skip(1).find(|arg| !arg.starts_with('-'));
     let wanted = |name: &str| filter.as_deref().is_none_or(|filter| name.contains(filter));
 
+    // Every group below sets itself up before Criterion filters its benches, which takes minutes.
+    // A filter that can only name a data group skips straight to them.
+    #[cfg(feature = "data")]
+    if filter.as_deref().is_some_and(|filter| filter.starts_with("data_")) {
+        data::benches();
+        criterion::Criterion::default().configure_from_args().final_summary();
+        return;
+    }
+
     hot_paths::benches();
     udp::benches();
     packed_quat::benches();

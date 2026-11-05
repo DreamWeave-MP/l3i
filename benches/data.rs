@@ -415,6 +415,10 @@ fn f32_row(op: &str, n: usize, variant: &str, invoke: &mut dyn FnMut()) {
         if smoke() || !sweep_asked() {
             return;
         }
+        // One row of interest, for an investigation that should not wait for the rest.
+        if std::env::var("L3I_ROW").is_ok_and(|row| !op.contains(&row)) {
+            return;
+        }
         let (Some(instructions), Some(cycles), Some(misses)) = (
             Counter::open(PERF_TYPE_HARDWARE, PERF_COUNT_HW_INSTRUCTIONS),
             Counter::open(PERF_TYPE_HARDWARE, PERF_COUNT_HW_CPU_CYCLES),
@@ -445,6 +449,21 @@ fn f32_row(op: &str, n: usize, variant: &str, invoke: &mut dyn FnMut()) {
             format!("{}|{}|{}", values[0], values[4], values[8])
         };
         eprintln!("f32row|{op}|{n}|{variant}|{}|{}|{}|{}", spread(0), spread(1), spread(2), spread(3));
+        // Raw PMU events by hex config, for chasing what a row's cycles go on: `L3I_RAW=0479,0879`.
+        if let Ok(list) = std::env::var("L3I_RAW") {
+            const PERF_TYPE_RAW: u32 = 4;
+            let raw: Vec<Counter> = list
+                .split(',')
+                .filter_map(|event| Counter::open(PERF_TYPE_RAW, u64::from_str_radix(event, 16).ok()?))
+                .collect();
+            let counted = measure_all(&raw, &mut || {
+                for _ in 0..calls {
+                    invoke();
+                }
+            });
+            let per_call: Vec<String> = counted.iter().map(|count| (count / calls as u64).to_string()).collect();
+            eprintln!("rawrow|{op}|{n}|{variant}|{}", per_call.join("|"));
+        }
     }
     #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
     {
@@ -460,8 +479,10 @@ fn f32_setup(n: usize) -> String {
          da, db, dout = buffer.create(n * 8), buffer.create(n * 8), buffer.create(n * 8)
          sa, sout = buffer.create(n * 8 + 8), buffer.create(n * 8 + 8)
          fall, twos, bytes = buffer.create(n * 4), buffer.create(n * 4), buffer.create(n)
+         order, perm, scratch = buffer.create(n * 4), buffer.create(n * 4), buffer.create(n * 4)
          for i = 0, n - 1 do
              buffer.writeu8(bytes, i, (i * 37) % 251)
+             buffer.writeu32(order, i * 4, n - 1 - i)
              buffer.writef32(fall, i * 4, -i) buffer.writef32(twos, i * 4, 2)
              local x, y = ((i * 37) % 251) / 7 - 15, ((i * 53) % 241) / 3 - 40
              buffer.writef32(a, i * 4, x) buffer.writef32(b, i * 4, y)
@@ -469,7 +490,7 @@ fn f32_setup(n: usize) -> String {
              buffer.writef64(da, i * 8, x) buffer.writef64(db, i * 8, y)
              buffer.writef32(sa, i * 8, x)
          end
-         sel = data.selection(n) F = data.f32() I = data.i32() D = data.f64()"
+         sel = data.selection(n) F = data.f32() F8 = data.f32(8) I = data.i32() D = data.f64()"
     )
 }
 
@@ -552,7 +573,34 @@ const F32_OPS: [(&str, &str, &str); 14] = [
 
 /// What the specialization must not slow: other kinds, strided layouts, overlapping and in-place
 /// spans, and the receivers (Luau IR loops under jit, bound methods without it).
-const F32_CONTROLS: [(&str, &str); 31] = [
+const F32_CONTROLS: [(&str, &str); 55] = [
+    ("receiver f32@8 countGt", "local K: dream_data_Kind_f32 = F8 local c = K:countGt(sa, 0, n, 0) return c"),
+    ("receiver f32@8 min", "local K: dream_data_Kind_f32 = F8 local m = K:min(sa, 0, n) return m or 0"),
+    ("receiver f32@8 sum", "local K: dream_data_Kind_f32 = F8 local t = K:sum(sa, 0, n) return t"),
+    // Strided layouts of each operation.
+    ("clamp f32@8", "data.clamp(sa, 'f32@8', 0, n, -5, 5, sout, 0) return n"),
+    ("fill f32@8", "data.fill(sout, 'f32@8', 0, n, 1.5) return n"),
+    ("min f32@8", "return data.min(sa, 'f32@8', 0, n) or 0"),
+    ("countWhere f32@8", "return data.countWhere(sa, 'f32@8', 0, n, 'gt', 0)"),
+    ("any f32@8, full scan", "return if data.any(sa, 'f32@8', 0, n, 'gt', 1000) then 1 else 0"),
+    ("select f32@8", "data.select(sa, 'f32@8', 0, n, 'gt', 0, sel) return n"),
+    // Filtered reductions: an even filter, and one that rejects nearly everything.
+    ("min f32 where gt", "return data.min(a, 'f32', 0, n, 'gt', 0) or 0"),
+    ("max f32 where lt", "return data.max(a, 'f32', 0, n, 'lt', 0) or 0"),
+    ("sum f32 where sparse", "return data.sum(a, 'f32', 0, n, 'gt', 20)"),
+    ("min f32 where sparse", "return data.min(a, 'f32', 0, n, 'gt', 20) or 0"),
+    ("sum i32 where gt", "return data.sum(ia, 'i32', 0, n, 'gt', 0)"),
+    // Movement and ordering.
+    ("gather f32", "return data.gather(a, 'f32', 0, n, order, out, 0, n)"),
+    ("gather f32@8", "return data.gather(sa, 'f32@8', 0, n, order, out, 0, n)"),
+    ("gather i32", "return data.gather(ia, 'i32', 0, n, order, iout, 0, n)"),
+    ("scatter f32", "return data.scatter(a, 'f32', 0, n, order, out, 0, n)"),
+    ("partition f32", "return data.partition(a, 'f32', 0, n, 'gt', 0, perm)"),
+    ("partition i32", "return data.partition(ia, 'i32', 0, n, 'gt', 0, perm)"),
+    ("argsort f32", "return data.argsort(a, 'f32', 0, n, perm)"),
+    ("argsort f32 with scratch", "return data.argsort(a, 'f32', 0, n, perm, 0, scratch)"),
+    ("argsort i32 with scratch", "return data.argsort(ia, 'i32', 0, n, perm, 0, scratch)"),
+    ("argsort f64", "return data.argsort(da, 'f64', 0, n, perm)"),
     // The block scans' worst cases: every block holds an improvement, or the first element decides.
     ("min strictly falling", "return data.min(fall, 'f32', 0, n) or 0"),
     ("argmin strictly falling", "return data.argmin(fall, 'f32', 0, n) or 0"),
@@ -619,6 +667,7 @@ fn f32_bulk(c: &mut Criterion) {
         };
         let mut group = c.benchmark_group(name);
         group.throughput(Throughput::Elements(n as u64));
+        let rows_only = std::env::var_os("L3I_ROW").is_some();
         group.sample_size(15).measurement_time(std::time::Duration::from_millis(400));
         group.warm_up_time(std::time::Duration::from_millis(100));
         for (op, api, luau) in F32_OPS {
@@ -627,9 +676,11 @@ fn f32_bulk(c: &mut Criterion) {
                 f32_row(op, n, variant, &mut || {
                     black_box(function.invoke::<f64, _>(&stack, ()).unwrap());
                 });
-                group.bench_function(format!("{op} {variant}"), |b| {
-                    b.iter(|| function.invoke::<f64, _>(&stack, ()).unwrap());
-                });
+                if !rows_only {
+                    group.bench_function(format!("{op} {variant}"), |b| {
+                        b.iter(|| function.invoke::<f64, _>(&stack, ()).unwrap());
+                    });
+                }
             }
         }
         // The same values the Luau setup writes, for the kernels no script can reach.
@@ -668,16 +719,20 @@ fn f32_bulk(c: &mut Criterion) {
         ];
         for (op, kernel) in &mut kernels {
             f32_row(op, n, "rust reference", &mut || kernel(black_box(&mut sink)));
-            group.bench_function(format!("{op} rust reference"), |b| b.iter(|| kernel(black_box(&mut sink))));
+            if !rows_only {
+                group.bench_function(format!("{op} rust reference"), |b| b.iter(|| kernel(black_box(&mut sink))));
+            }
         }
         for (control, body) in F32_CONTROLS {
             let function = compile(body);
             f32_row(control, n, "control", &mut || {
                 black_box(function.invoke::<f64, _>(&stack, ()).unwrap());
             });
-            group.bench_function(format!("control {control}"), |b| {
-                b.iter(|| function.invoke::<f64, _>(&stack, ()).unwrap());
-            });
+            if !rows_only {
+                group.bench_function(format!("control {control}"), |b| {
+                    b.iter(|| function.invoke::<f64, _>(&stack, ()).unwrap());
+                });
+            }
         }
         group.finish();
     }
@@ -699,6 +754,8 @@ fn receiver_crossover() {
         ("anyGt", "local t = K:anyGt(B, 0, n, 1000) return if t then 1 else 0"),
         ("allLt", "local t = K:allLt(B, 0, n, 1000) return if t then 1 else 0"),
         ("sumGt", "local t = K:sumGt(B, 0, n, 0) return t"),
+        ("minGt", "local t = K:minGt(B, 0, n, 0) return t or 0"),
+        ("maxLt", "local t = K:maxLt(B, 0, n, 0) return t or 0"),
         ("selectGt", "local t = K:selectGt(B, 0, n, 0, sel) return n"),
     ];
     for n in [4usize, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 16384, 65536] {
