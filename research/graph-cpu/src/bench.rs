@@ -12,7 +12,8 @@
     clippy::many_single_char_names,
     clippy::too_many_lines
 )]
-use l3i_graph_cpu_research::{Budget, CHUNK, Domain, Expr, Isa, Program, Shape, Storage, Tensor, View};
+use l3i_graph_cpu_research::forward::Model;
+use l3i_graph_cpu_research::{Budget, CHUNK, Domain, Expr, Isa, Numeric, Program, Shape, Storage, Tensor, View};
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::hint::black_box;
 use std::sync::Arc;
@@ -551,6 +552,193 @@ pub fn native() {
     reductions();
     attribution();
     matrix();
+}
+
+/// Heap acquisitions per call of `body`, across all of Rust's allocation paths.
+fn heap(label: &str, body: &mut impl FnMut()) {
+    let runs = 64;
+    let before = (ALLOCATIONS.load(Ordering::Relaxed), BYTES.load(Ordering::Relaxed));
+    for _ in 0..runs {
+        body();
+    }
+    let after = (ALLOCATIONS.load(Ordering::Relaxed), BYTES.load(Ordering::Relaxed));
+    println!(
+        "{label:<46} allocations_per_run={:.1} bytes_per_run={:.0}",
+        (after.0 - before.0) as f64 / f64::from(runs),
+        (after.1 - before.1) as f64 / f64::from(runs)
+    );
+}
+
+/// Whether the `L3I_BENCH_ONLY` filter admits this group of rows.
+fn wanted(group: &str) -> bool {
+    std::env::var("L3I_BENCH_ONLY").map_or(true, |filter| filter.split(',').any(|name| group.contains(name)))
+}
+
+fn row_operand(rows: usize, cols: usize) -> Vec<u8> {
+    (0..rows * cols).flat_map(|i| ((i * 37 % 127) as f32 * 0.125 - 8.0).to_le_bytes()).collect()
+}
+
+/// Row operations over inference-shaped inputs, whole program invocations into preallocated output.
+fn shaped_rows() {
+    println!("\n# Row stages by shape: preallocated output, whole program, one thread");
+    let domain = domain();
+    let budget = Budget::new(1 << 30);
+    let shapes = [
+        (1usize, 128usize),
+        (1, 4096),
+        (1, 65536),
+        (64, 64),
+        (128, 128),
+        (64, 128),
+        (1000, 7),
+        (333, 13),
+        (7, 1000),
+        (4096, 1),
+    ];
+    for (rows, cols) in shapes {
+        let shape = Shape::Matrix(rows, cols);
+        let tensor = Tensor::import(&row_operand(rows, cols), shape, &budget).unwrap();
+        // The same shape read across the columns of a contiguous cols-by-rows owner.
+        let transposed = Tensor::import(&row_operand(cols, rows), Shape::Matrix(cols, rows), &budget)
+            .unwrap()
+            .view(shape, 0, [4, rows * 4])
+            .ok();
+        let x = Expr::slot(0, shape, domain.clone()).unwrap();
+        let operations: [(&str, Expr); 4] = [
+            ("softmax", x.softmax().unwrap()),
+            ("layer_norm", x.normalize(1e-5, true).unwrap()),
+            ("rms_norm", x.normalize(1e-5, false).unwrap()),
+            ("sum_rows", x.sum_rows().unwrap()),
+        ];
+        for (name, expression) in operations {
+            let program = expression.compile().unwrap();
+            let mut out = vec![0u8; program.output_shape().elements().unwrap() * 4];
+            let label = format!("{name}_{rows}x{cols}");
+            let views = [tensor.borrow()];
+            let mut body = || program.run_into(black_box(&views), black_box(&mut out), &budget).unwrap();
+            row(&label, rows * cols, &mut body);
+            heap(&label, &mut body);
+            if let Some(transposed) = &transposed
+                && rows > 1
+                && cols > 1
+            {
+                let views = [transposed.borrow()];
+                row(&format!("{label}_strided"), rows * cols, || {
+                    program.run_into(black_box(&views), black_box(&mut out), &budget).unwrap();
+                });
+            }
+        }
+    }
+    assert_eq!(budget.used(), 0);
+}
+
+/// Matrix products by shape, in both numerical modes, with allocation counts.
+fn shaped_matmul() {
+    println!("\n# Matmul by shape: preallocated output, whole program including packing, one thread");
+    let domain = domain();
+    let budget = Budget::new(1 << 30);
+    for (m, k, n) in [
+        (1usize, 128usize, 128usize),
+        (1, 4096, 1),
+        (1, 1024, 1024),
+        (4, 1024, 1024),
+        (8, 512, 512),
+        (64, 128, 1),
+        (256, 256, 1),
+        (4096, 16, 1),
+        (16, 16, 16),
+        (5, 7, 3),
+        (31, 127, 17),
+        (64, 64, 64),
+        (64, 128, 128),
+        (128, 128, 128),
+        (256, 256, 256),
+        (128, 64, 512),
+        (512, 64, 32),
+        (400, 400, 400),
+    ] {
+        let (left, right) = (Shape::Matrix(m, k), Shape::Matrix(k, n));
+        let a: Vec<u8> = (0..m * k).flat_map(|i| ((i % 17) as f32 * 0.25 - 2.0).to_le_bytes()).collect();
+        let b: Vec<u8> = (0..k * n).flat_map(|i| ((i % 23) as f32 * 0.125 - 1.0).to_le_bytes()).collect();
+        let (ta, tb) = (Tensor::import(&a, left, &budget).unwrap(), Tensor::import(&b, right, &budget).unwrap());
+        let views = [ta.borrow(), tb.borrow()];
+        let expression = Expr::slot(0, left, domain.clone())
+            .unwrap()
+            .matmul(&Expr::slot(1, right, domain.clone()).unwrap())
+            .unwrap();
+        let mut out = vec![0u8; m * n * 4];
+        for (mode, numeric) in [("strict", Numeric::Strict), ("fast", Numeric::Fast)] {
+            let program = expression.compile_with(numeric).unwrap();
+            let label = format!("matmul_{mode}_{m}x{k}x{n}");
+            let mut body = || program.run_into(black_box(&views), black_box(&mut out), &budget).unwrap();
+            row(&label, m * k * n, &mut body);
+            heap(&label, &mut body);
+        }
+        let strict = expression.compile().unwrap();
+        row(&format!("matmul_baseline_{m}x{k}x{n}"), m * k * n, || {
+            strict.run_with(black_box(&views), black_box(&mut out), &budget, Isa::Baseline, CHUNK).unwrap();
+        });
+    }
+    assert_eq!(budget.used(), 0);
+}
+
+/// The whole synthetic pass: planning, binding, execution, and what each kernel family costs alone.
+fn forward_pass() {
+    println!("\n# Synthetic forward pass as one graph, one thread");
+    let model = Model { tokens: 64, width: 128, blocks: 2 };
+    let slots = model.slots();
+    let inputs = model.inputs();
+    let domain = Domain::new(1 << 12, 1 << 12);
+    let budget = Budget::new(1 << 30);
+    let tensors: Vec<Tensor> =
+        inputs.iter().zip(&slots).map(|(bytes, shape)| Tensor::import(bytes, *shape, &budget).unwrap()).collect();
+    let expression = model.graph(&domain).unwrap();
+    row("forward_expression_construction", 0, || {
+        black_box(model.graph(&domain).unwrap());
+    });
+    for (mode, numeric) in [("strict", Numeric::Strict), ("fast", Numeric::Fast)] {
+        row(&format!("forward_compile_{mode}"), 0, || {
+            black_box(expression.compile_with(numeric).unwrap());
+        });
+        let program = expression.compile_with(numeric).unwrap();
+        let elements = program.output_shape().elements().unwrap();
+        let mut out = vec![0u8; elements * 4];
+        row(&format!("forward_bind_views_{mode}"), 0, || {
+            let views: Vec<View<'_>> = tensors.iter().map(Tensor::borrow).collect();
+            program.signature().iter().zip(&views).for_each(|(shape, view)| assert_eq!(*shape, view.shape()));
+            black_box(views);
+        });
+        let views: Vec<View<'_>> = tensors.iter().map(Tensor::borrow).collect();
+        let label = format!("forward_run_into_{mode}");
+        let mut body = || program.run_into(black_box(&views), black_box(&mut out), &budget).unwrap();
+        row(&label, elements, &mut body);
+        heap(&label, &mut body);
+        assert!(floats(&out).iter().all(|e| f32::from_le_bytes(*e).is_finite()));
+        let references: Vec<&Tensor> = tensors.iter().collect();
+        row(&format!("forward_fresh_result_{mode}"), elements, || {
+            black_box(program.run(black_box(&references), &budget).unwrap());
+        });
+        println!("forward_budget_peak_bytes_{mode}={}", budget.peak());
+    }
+    assert_eq!(budget.used(), tensors.iter().map(|t| t.shape().elements().unwrap() * 4).sum::<usize>());
+}
+
+pub fn shapes() {
+    println!(
+        "# isa={:?} fast_isa={:?} samples={SAMPLES} sample_ms={}",
+        Isa::detect(),
+        Isa::detect_fast(),
+        SAMPLE_TIME.as_millis()
+    );
+    if wanted("rows") {
+        shaped_rows();
+    }
+    if wanted("matmul") {
+        shaped_matmul();
+    }
+    if wanted("forward") {
+        forward_pass();
+    }
 }
 
 pub fn reductions() {
