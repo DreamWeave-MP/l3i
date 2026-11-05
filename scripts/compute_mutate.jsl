@@ -1,12 +1,16 @@
 -- Injects one bug at a time into the compute engine and asks its release tests to catch it.
 -- Run from the repository root with a clean src/compute: jess scripts/compute_mutate.jsl
 -- Each bug is one exact, unique replacement in one source file, restored before the next. A bug no
--- test notices is a gap in the tests, reported as SURVIVED; only the control should survive.
+-- test notices is a gap in the tests, reported as SURVIVED; only the control should survive. Results
+-- keep apart what they prove: a wrong answer caught by an assertion, a bug that didn't compile, which
+-- says nothing about the tests, and a test binary that crashed without reporting a failure.
+-- `--check` only confirms every bug still applies, which needs no build.
 local fs = require("@dream/fs")
 local process = require("@dream/process")
 
 local SRC = "src/compute/"
-type Mutation = { label: string, file: string, old: string, new: string }
+-- `integration` also runs the whole-runtime tests, for bugs only a script can reach.
+type Mutation = { label: string, file: string, old: string, new: string, integration: boolean? }
 -- Left out because no test could catch them, as they change nothing: padding lanes, whose results
 -- are discarded; `prepared: None` on a transposed view, which only `Source::bind` reads; and a view's
 -- outer count, which the check against the parent's end already bounds.
@@ -22,7 +26,7 @@ local mutations: { Mutation } = {
 	{ label = "int8: scales applied one at a time", file = "quantized.rs",
 	  old = "(accumulator as f64 * (scale * input_scale)) as f32", new = "((accumulator as f64 * scale) * input_scale) as f32" },
 	{ label = "int8: final chunk omitted", file = "quantized.rs",
-	  old = "left.chunks(PARTIAL)", new = "left.chunks_exact(PARTIAL)" },
+	  old = "left.chunks(PARTIAL)\n        .zip(right.chunks(PARTIAL))\n        .map(", new = "left.chunks_exact(PARTIAL)\n        .zip(right.chunks(PARTIAL))\n        .map(" },
 	{ label = "int8 avx2: a chain dropped", file = "quantized.rs",
 	  old = "_mm256_add_epi32(_mm256_add_epi32(s0, s1), _mm256_add_epi32(s2, s3))", new = "_mm256_add_epi32(_mm256_add_epi32(s0, s1), s2)" },
 	{ label = "int8 avx2: unsigned widening", file = "quantized.rs",
@@ -45,6 +49,10 @@ local mutations: { Mutation } = {
 	  old = "total += i64::from(nibble::<false>(packed[pairs.len()])) * i64::from(*last);", new = "let _ = last;" },
 	{ label = "int4: the wrong group's scale", file = "quantized.rs",
 	  old = "for (group, (rows, scale)) in weights.chunks(stride * groups.rows).zip(groups.scales).enumerate() {", new = "for (group, (rows, scale)) in weights.chunks(stride * groups.rows).zip(groups.scales.iter().rev()).enumerate() {" },
+	{ label = "int4: a group's size overflows", file = "quantized.rs",
+	  old = "let groups = Groups { rows: groups.rows.min(out.len().max(1)), scales: groups.scales };", new = "" },
+	{ label = "int4: no rows at all divide by nothing", file = "quantized.rs",
+	  old = "groups.rows.min(out.len().max(1))", new = "groups.rows.min(out.len())" },
 	{ label = "int4: groups overwrite the same rows", file = "quantized.rs",
 	  old = "let first = group * groups.rows;", new = "let first = group;" },
 	{ label = "int4: a short weight matrix accepted", file = "quantized.rs",
@@ -128,11 +136,11 @@ local mutations: { Mutation } = {
 	{ label = "stage: sums treat unaligned rows as whole elements", file = "kernels.rs",
 	  old = "(self.adjacent && row_stride.is_multiple_of(4))", new = "self.adjacent" },
 	{ label = "stage: scratch released before it is used", file = "program.rs",
-	  old = "let _charge = budget.charge(copied * 4 + exponentials * 8)?;", new = "budget.charge(copied * 4 + exponentials * 8)?;" },
+	  old = "let _charge = charge(budget, copied * 4 + exponentials * 8)?;", new = "charge(budget, copied * 4 + exponentials * 8)?;" },
 	{ label = "stage: copied rows not charged", file = "program.rs",
-	  old = "budget.charge(copied * 4 + exponentials * 8)?", new = "budget.charge(exponentials * 8)?" },
+	  old = "charge(budget, copied * 4 + exponentials * 8)?", new = "charge(budget, exponentials * 8)?" },
 	{ label = "stage: exponentials not charged", file = "program.rs",
-	  old = "budget.charge(copied * 4 + exponentials * 8)?", new = "budget.charge(copied * 4)?" },
+	  old = "charge(budget, copied * 4 + exponentials * 8)?", new = "charge(budget, copied * 4)?" },
 	{ label = "stage: partial output writes", file = "program.rs",
 	  old = "for (row, output) in outputs.chunks_exact_mut(cols).enumerate() {", new = "for (row, output) in outputs.chunks_exact_mut(cols).enumerate().skip(1) {" },
 	{ label = "stage: strided softmax reads the wrong row", file = "program.rs",
@@ -150,7 +158,7 @@ local mutations: { Mutation } = {
 	{ label = "fused 6x16: ignores what the previous pass left", file = "kernels.rs",
 	  old = "let (mut a1, mut b1) = (_mm256_loadu_ps(row(1)), _mm256_loadu_ps(row(1).add(8)));", new = "let (mut a1, mut b1) = (_mm256_set1_ps(0.0), _mm256_set1_ps(0.0));" },
 	{ label = "fused 6x16: skips a row of factors", file = "kernels.rs",
-	  old = "            f = f.add(16);\n", new = "            f = f.add(if p == 3 { 32 } else { 16 });\n" },
+	  old = "                    f = f.wrapping_add(factors.step);\n", new = "                    f = f.wrapping_add(if p == 3 { 2 * factors.step } else { factors.step });\n" },
 	{ label = "strict 6x16: drops the running sum", file = "kernels.rs",
 	  old = "_mm256_add_ps(sum, _mm256_mul_ps(scale, factor))", new = "{ let _ = sum; _mm256_add_ps(_mm256_mul_ps(scale, factor), _mm256_mul_ps(scale, factor)) }" },
 	{ label = "strict 6x16: reached by the baseline instantiation's flag", file = "kernels.rs",
@@ -212,7 +220,69 @@ local mutations: { Mutation } = {
 	{ label = "matmul: scratch one pass too small", file = "kernels.rs",
 	  old = "let widest = if n >= N_BLOCK { N_BLOCK } else { n / NR * NR + remainder_width(n % NR) };", new = "let widest = if n >= N_BLOCK { N_BLOCK } else { n / NR * NR };" },
 	{ label = "matmul: scratch never charged", file = "program.rs",
-	  old = "let needed = if right.is_some() { 0 } else { kernels::matmul_scratch(m, k, n) };\n                    let _charge = budget.charge(needed)?;", new = "let needed = if right.is_some() { 0 } else { kernels::matmul_scratch(m, k, n) };" },
+	  old = "let needed = if right.is_some() { 0 } else { kernels::matmul_scratch(m, k, n) };\n                        let _charge = charge(budget, needed)?;", new = "let needed = if right.is_some() { 0 } else { kernels::matmul_scratch(m, k, n) };" },
+
+	-- What a host may raise, and what it can't.
+	{ label = "limits: a graph ignores the host's element limit", file = "graph.rs",
+	  old = "shape.within(domain.limits.elements)?;", new = "shape.elements()?;" },
+	{ label = "limits: a product ignores the work limit", file = "graph.rs",
+	  old = ".filter(|n| *n <= self.0.lease.domain.limits.work)", new = "" },
+	{ label = "limits: a plan ignores the work limit", file = "program.rs",
+	  old = ".filter(|n| *n <= work_limit)", new = "" },
+	{ label = "limits: the mechanical limit gives way to policy", file = "storage.rs",
+	  old = "let limit = limit.min(ADDRESSABLE_ELEMENTS);", new = "" },
+	{ label = "limits: a zero excuses the other dimension", file = "storage.rs",
+	  old = "if rows > limit || cols > limit {", new = "if rows > 0 && cols > 0 && (rows > limit || cols > limit) {" },
+	{ label = "limits: a script view repeats past the limit", file = "script.rs", integration = true,
+	  old = "t.budget.admit(shape)?;", new = "" },
+
+	-- Storage and its charges.
+	{ label = "storage: buffers no longer start on a line", file = "storage.rs",
+	  old = "const LINE: usize = 64;", new = "const LINE: usize = 16;" },
+	{ label = "storage: a refused allocation keeps its charge", file = "storage.rs",
+	  old = "let charge = Charge(self.as_ref(), len);", new = "let charge = std::mem::ManuallyDrop::new(Charge(self.as_ref(), len));" },
+	{ label = "storage: a live allocation releases its charge", file = "storage.rs",
+	  old = "        std::mem::forget(charge);\n", new = "        drop(charge);\n" },
+	{ label = "script: a tensor may be the output", file = "script.rs", integration = true,
+	  old = "if views.iter().any(|view| overlaps(view.bytes, target)) {", new = "if false && views.iter().any(|view| overlaps(view.bytes, target)) {" },
+	{ label = "script: a buffer may be the output", file = "script.rs", integration = true,
+	  old = "            if overlaps(bytes, target) {", new = "            if false && overlaps(bytes, target) {" },
+
+	-- Kernels reading rows of `b` in place, and small calls.
+	{ label = "6x16: rows in place read as if packed", file = "kernels.rs",
+	  old = "first_column + column..], step: self.n }", new = "first_column + column..], step: 16 }" },
+	{ label = "6x16: a short run of factors accepted", file = "kernels.rs",
+	  old = "assert!(rows == 0 || (rows - 1) * factors.step + 16 <= factors.elements.len());", new = "" },
+	{ label = "elementwise: walked sources start from the wrong element", file = "kernels.rs",
+	  old = "walk.fill(first, &mut walked[walk.register * width..][..width]);", new = "walk.fill(0, &mut walked[walk.register * width..][..width]);" },
+	{ label = "elementwise: chunks restart from the first element", file = "kernels.rs",
+	  old = "let mut start = first;", new = "let mut start = 0;" },
+	{ label = "elementwise: a step binds a clamp's unused operand as read", file = "kernels.rs",
+	  old = "let y = if step.op == Op::MulAdd { bound(step.y) } else { unused };", new = "let y = unused;" },
+
+	-- Work shared among a host's workers.
+	{ label = "parallel: a share not in whole chunks", file = "program.rs",
+	  old = "let share = (elements / workers).next_multiple_of(chunk);", new = "let share = (elements / workers).next_multiple_of(chunk) + 1;" },
+	{ label = "parallel: every product share reads the first rows", file = "program.rs",
+	  old = "a: if left.is_some() { a_elements } else { &a_elements[row * k..] },", new = "a: a_elements," },
+	{ label = "parallel: every share reads the first panels", file = "program.rs",
+	  old = "left: left.map(|panels| &panels[row * k..]),", new = "left," },
+	{ label = "parallel: shares start at the wrong row", file = "program.rs",
+	  old = "target.chunks_mut(rows * n * 4).enumerate().map(|(index, piece)| (index * rows, piece))", new = "target.chunks_mut(rows * n * 4).enumerate().map(|(index, piece)| (index, piece))" },
+	{ label = "parallel: panels split between whole panels", file = "program.rs",
+	  old = "let group = if left.is_some() { kernels::PANEL } else { kernels::ROW_GROUP };", new = "let group = kernels::ROW_GROUP;" },
+	{ label = "parallel: scratch isn't charged", file = "program.rs",
+	  old = "let _charge = charge(budget, total)?;", new = "" },
+	{ label = "parallel: a skipped task goes unnoticed", file = "program.rs",
+	  old = "if finished { Ok(()) } else { Err(error(\"the host's executor skipped a task\")) }", new = "{ let _ = finished; Ok(()) }" },
+	{ label = "parallel: small work reaches the host", file = "program.rs",
+	  old = "executor.workers().min(work / PARALLEL_FROM)", new = "executor.workers().min(work)" },
+	{ label = "parallel: one prepared row takes the path that reads b", file = "kernels.rs",
+	  old = "if m == 1 && right.is_none() {", new = "if m == 1 {" },
+
+	-- What a Fast dot product promises.
+	{ label = "relaxed dot: a lane visited twice", file = "kernels.rs",
+	  old = "*sum = read(x[r * 8 + l]).mul_add(read(y[r * 8 + l]), *sum);", new = "*sum = read(x[r * 8 + l]).mul_add(read(y[r * 8 + l]), *sum); *sum = read(x[r * 8]).mul_add(0.0, *sum);" },
 	{ label = "matmul: strict program runs fused", file = "program.rs",
 	  old = "let isa = if isa == Isa::Fma && self.numeric == Numeric::Strict { Isa::detect() } else { isa };", new = "" },
 
@@ -265,16 +335,28 @@ local mutations: { Mutation } = {
 	  old = "strides: [input.strides[1], input.strides[0]]", new = "strides: input.strides" },
 }
 
-local function run(): (boolean, string)
-	local result, message = process.run("cargo", {
-		"test", "--release", "--features", "compute-testing", "--lib", "-j", "4", "compute::",
-	}, { stdout = "capture", stderr = "capture" })
+local function run(integration: boolean?): (boolean, string)
+	local arguments = { "test", "--release", "--features", "compute-testing", "--lib" }
+	if integration then
+		table.insert(arguments, "--test")
+		table.insert(arguments, "integration")
+	end
+	table.insert(arguments, "compute::")
+	local result, message = process.run("cargo", arguments, { stdout = "capture", stderr = "capture" })
 	assert(result, message)
 	return result.success, (result.stdout or "") .. "\n" .. (result.stderr or "")
 end
 
 -- Optional arguments keep only the bugs whose label contains one of them; the control always runs.
-local filters = { ... }
+local filters = {}
+local check_only = false
+for _, argument in { ... } do
+	if argument == "--check" then
+		check_only = true
+	else
+		table.insert(filters, argument)
+	end
+end
 if #filters > 0 then
 	local kept = {}
 	for index, mutation in mutations do
@@ -301,8 +383,12 @@ for _, mutation in mutations do
 	end
 end
 assert(#stale == 0, table.concat(stale, "\n"))
+if check_only then
+	print(string.format("%d bugs all apply", #mutations))
+	return
+end
 
-local caught, survived = 0, 0
+local counts = { asserted = 0, rejected = 0, crashed = 0, survived = 0, control = 0 }
 for index, mutation in mutations do
 	local path = SRC .. mutation.file
 	local original, message = fs.readFileString(path)
@@ -316,22 +402,32 @@ for index, mutation in mutations do
 		assert(written, why)
 	end
 	write(changed)
-	local ok, output = run()
+	local ok, output = run(mutation.integration)
 	write(original :: string)
 	local failures = {}
 	for name in string.gmatch(output, "test ([%w_:]+) %.%.%. FAILED") do
 		table.insert(failures, (string.gsub(name, "^.*::", "")))
 	end
-	if ok then
-		survived += 1
+	local is_control = string.find(mutation.label, "control:", 1, true) == 1
+	if ok and is_control then
+		counts.control += 1
+		print(string.format("%d [%s] control survived, as it must", index, mutation.label))
+	elseif ok then
+		counts.survived += 1
 		print(string.format("%d [%s] SURVIVED", index, mutation.label))
-	elseif #failures == 0 then
-		caught += 1
-		local reason = string.match(output, "error[^\n]*") or "unknown failure"
-		print(string.format("%d [%s] NOT COMPILED OR CRASHED: %s", index, mutation.label, reason))
+	elseif #failures > 0 then
+		counts.asserted += 1
+		print(string.format("%d [%s] asserted: %s", index, mutation.label, table.concat(failures, " ")))
+	elseif string.find(output, "could not compile", 1, true) then
+		counts.rejected += 1
+		local reason = string.match(output, "error[^\n]*") or "unknown"
+		print(string.format("%d [%s] REJECTED AT COMPILATION: %s", index, mutation.label, reason))
 	else
-		caught += 1
-		print(string.format("%d [%s] caught: %s", index, mutation.label, table.concat(failures, " ")))
+		counts.crashed += 1
+		print(string.format("%d [%s] CRASHED: %s", index, mutation.label, string.match(output, "error[^\n]*") or "no report"))
 	end
 end
-print(string.format("caught %d, survived %d, of %d", caught, survived, #mutations))
+print(string.format(
+	"of %d: %d asserted, %d rejected at compilation, %d crashed, %d survived, %d control",
+	#mutations, counts.asserted, counts.rejected, counts.crashed, counts.survived, counts.control
+))

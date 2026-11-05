@@ -212,6 +212,12 @@ pub fn main() {
                 } else {
                     (ta.clone(), tb.prepare_right(&budget).unwrap())
                 };
+                // What preparing costs once, against what each prepared call saves.
+                timing(&format!("graph_{mode:?}_prepare_once"), || {
+                    let prepared =
+                        if n == 1 { ta.prepare_left(&budget).unwrap() } else { tb.prepare_right(&budget).unwrap() };
+                    black_box(prepared);
+                });
                 if timing(&format!("graph_{mode:?}_prepared"), || {
                     plan.run_into(black_box(&[left.borrow(), right.borrow()]), black_box(&mut output), &budget)
                         .unwrap();

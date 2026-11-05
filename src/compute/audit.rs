@@ -220,6 +220,21 @@ fn the_work_limit_counts_what_each_stage_executes() {
     assert!(!rows(limited(64 * 64 * 6 - 1)));
 }
 
+/// Everything the engine allocates starts on a cache line, at any size and when empty.
+#[test]
+fn engine_buffers_start_on_a_cache_line() {
+    let budget = Budget::new(1 << 24);
+    for bytes in [0usize, 1, 4, 63, 64, 65, 4096, 1 << 17, 1 << 20] {
+        let allocation = budget.allocate(bytes).unwrap();
+        assert!(allocation.bytes.as_ptr().addr().is_multiple_of(64), "{bytes} bytes");
+        assert_eq!(allocation.bytes.len(), bytes);
+        assert!(allocation.bytes.iter().all(|byte| *byte == 0), "{bytes} bytes aren't zeroed");
+    }
+    let mut seen = None;
+    crate::compute::kernels::with_scratch(1024, |scratch| seen = Some(scratch.as_ptr().addr())).unwrap();
+    assert!(seen.unwrap().is_multiple_of(64));
+}
+
 /// Bytes that must survive a kernel, around a region it may write.
 const GUARD: usize = 64;
 struct Guarded {
@@ -311,6 +326,47 @@ fn products_stay_inside_misaligned_outputs_and_match_the_textbook_at_every_bound
                         } else if isa != Isa::Fma {
                             assert_eq!(bits(&floats(out.out())), bits(&strict_want), "fast {label}");
                         }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// The explicit kernels at the smallest products that reach them, small enough for Miri to run:
+/// `MIRIFLAGS=-Zmiri-disable-isolation RUSTFLAGS='-Ctarget-feature=+avx2,+fma' cargo +nightly miri test`.
+#[test]
+fn the_full_size_kernels_at_their_smallest_stay_inside_what_they_were_given() {
+    // Under those flags Miri must really be walking the explicit kernels, not the baseline.
+    #[cfg(all(miri, target_feature = "fma"))]
+    assert!(Isa::Fma.available() && Isa::Avx2.available());
+    let domain = Domain::new(16, 16);
+    let budget = Budget::new(1 << 20);
+    for (m, k, n) in [(6, 3, 16), (7, 3, 16), (12, 2, 17), (6, 1, 32), (13, 2, 33)] {
+        let a: Vec<f32> = (0..m * k).map(|i| i as f32 * 0.5 - 2.0).collect();
+        let b: Vec<f32> = (0..k * n).map(|i| i as f32 * 0.25 - 1.0).collect();
+        let shift = |values: &[f32], rows, cols| {
+            let mut bytes = vec![0u8; 1];
+            bytes.extend_from_slice(&bytes_of(values));
+            Tensor::from_storage(Arc::new(Vector(bytes)), Shape::Matrix(rows, cols), 1, [cols * 4, 4]).unwrap()
+        };
+        let (ta, tb) = (shift(&a, m, k), shift(&b, k, n));
+        let prepared = tb.prepare_right(&budget).unwrap();
+        let product = Expr::slot(0, Shape::Matrix(m, k), domain.clone())
+            .unwrap()
+            .matmul(&Expr::slot(1, Shape::Matrix(k, n), domain.clone()).unwrap())
+            .unwrap();
+        for numeric in [Numeric::Strict, Numeric::Fast] {
+            let program = product.compile_with(numeric).unwrap();
+            for right in [&tb, &prepared] {
+                let mut out = Guarded::new(m * n * 4, 1);
+                program.run_into(&[ta.borrow(), right.borrow()], out.out(), &budget).unwrap();
+                out.assert_guards("smallest");
+                for i in 0..m {
+                    for j in 0..n {
+                        let want: f32 = (0..k).map(|p| a[i * k + p] * b[p * n + j]).sum();
+                        let got = floats(out.out())[i * n + j];
+                        assert!((got - want).abs() <= 1e-3, "{m}x{k}x{n}: {got} against {want}");
                     }
                 }
             }
