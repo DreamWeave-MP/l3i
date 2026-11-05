@@ -41,3 +41,13 @@ jobs:
         run: cargo test --locked --release --features luau-jit --manifest-path "$G"
       - name: Pedantic Clippy
         run: cargo clippy --locked --manifest-path "$G" --all-targets --all-features -- -W clippy::pedantic -D warnings
+      # Runs on this runner's real CPU, for the record. Shared cloud machines are noisy, so this is
+      # evidence about shape and instruction set, not a pass-fail gate on speed.
+      - name: Native benchmarks
+        run: |
+          cargo build --locked --release --manifest-path "$G"
+          research/graph-cpu/target/release/l3i-graph-cpu-research --bench-shapes --bench-softmax | tee "bench-${{ matrix.runner }}.txt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bench-${{ matrix.runner }}
+          path: bench-${{ matrix.runner }}.txt
