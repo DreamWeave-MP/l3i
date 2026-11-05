@@ -7,6 +7,9 @@ local process = require("@dream/process")
 
 local SRC = "src/compute/"
 type Mutation = { label: string, file: string, old: string, new: string }
+-- Left out because no test could catch them, as they change nothing: padding lanes, whose results
+-- are discarded; `prepared: None` on a transposed view, which only `Source::bind` reads; and a view's
+-- outer count, which the check against the parent's end already bounds.
 local mutations: { Mutation } = {
 	{ label = "control: comment only, must survive", file = "reduction.rs",
 	  old = "/// Independent f64 accumulators per row.", new = "/// Independent f64 accumulators, per row." },
@@ -152,8 +155,6 @@ local mutations: { Mutation } = {
 	  old = "out[at.base + r * at.stride..][..at.cols].copy_from_slice(&target[..at.cols]);", new = "let end = (at.base + r * at.stride + WIDTH).min(out.len()); let start = at.base + r * at.stride; out[start..end].copy_from_slice(&target[..end - start]);" },
 	{ label = "matmul: remainder width too narrow", file = "kernels.rs",
 	  old = "} else if columns <= NR_NARROW {", new = "} else if columns <= NR_NARROW + 1 {" },
-	{ label = "matmul: padding keeps stale bytes", file = "kernels.rs",
-	  old = "padding.fill([0; 4]);", new = "" },
 	{ label = "matmul: pack reads the wrong column", file = "kernels.rs",
 	  old = "row.copy_from_slice(&b[p * n + first + block * NR..][..NR]);", new = "row.copy_from_slice(&b[p * n + block * NR..][..NR]);" },
 	{ label = "matmul: in-place reads the wrong column", file = "kernels.rs",
@@ -186,20 +187,16 @@ local mutations: { Mutation } = {
 	-- Packed weights.
 	{ label = "prepared: panel column misplaced", file = "kernels.rs",
 	  old = "*slot = if row + lane < m { a[(row + lane) * k + p] } else { [0; 4] };", new = "*slot = if row + lane < m { a[(row + lane) * k + p.saturating_sub(1)] } else { [0; 4] };" },
-	{ label = "prepared: panel padding reads out of the row", file = "kernels.rs",
-	  old = "*slot = if row + lane < m { a[(row + lane) * k + p] } else { [0; 4] };", new = "*slot = if row + lane < m { a[(row + lane) * k + p] } else { [255; 4] };" },
 	{ label = "prepared: panel tail width", file = "kernels.rs",
 	  old = "let last = &panels[whole * k..];", new = "let last = &panels[whole * k + 1..];" },
 	{ label = "prepared: pass cursor stays put", file = "kernels.rs",
 	  old = "prepared = Some(rest);", new = "prepared = Some(weights); let _ = rest;" },
 	{ label = "prepared: left packing used for a product it doesn't suit", file = "program.rs",
-	  old = "let left = if n == 1 && m > 1 {", new = "let left = if m > 1 {" },
+	  old = "if n == 1 && m > 1 { a.prepared", new = "if m > 1 { a.prepared" },
 	{ label = "prepared: right packing used by the wrong side", file = "storage.rs",
 	  old = "(self.side == side).then(|| self.pack.bytes.as_chunks::<4>().0)", new = "Some(self.pack.bytes.as_chunks::<4>().0)" },
 	{ label = "prepared: derived views keep the packing", file = "storage.rs",
 	  old = "if !self.covers(&view)? {\n            return Err(error(\"view reaches outside parent elements\"));\n        }\n        Ok(view)", new = "if !self.covers(&view)? {\n            return Err(error(\"view reaches outside parent elements\"));\n        }\n        Ok(Self { prepared: self.prepared.clone(), ..view })" },
-	{ label = "prepared: transposition keeps the packing", file = "program.rs",
-	  old = "prepared: None,", new = "" },
 	{ label = "prepared: a strided tensor packs its storage instead of its elements", file = "storage.rs",
 	  old = "walked.bytes.as_chunks::<4>().0", new = "self.owner.bytes()[..self.shape.elements()? * 4].as_chunks::<4>().0" },
 
@@ -212,8 +209,6 @@ local mutations: { Mutation } = {
 	  old = "let partial = (inner.0 > 1 && inner.1 < 4) || (outer.0 > 1 && outer.1 < 4);", new = "let partial = false;" },
 	{ label = "views: inner run unbounded", file = "storage.rs",
 	  old = "inner.is_multiple_of(self.inner.1) && inner / self.inner.1 < self.inner.0", new = "inner.is_multiple_of(self.inner.1)" },
-	{ label = "views: outer count unbounded", file = "storage.rs",
-	  old = "outer < self.outer.0\n", new = "(outer < self.outer.0 || self.outer.0 > 1)\n" },
 	{ label = "views: unaligned steps in a contiguous parent", file = "storage.rs",
 	  old = "let step = |count: usize, stride: usize| count == 1 || stride.is_multiple_of(4);", new = "let step = |_count: usize, _stride: usize| true;" },
 	{ label = "views: unaligned start in a contiguous parent", file = "storage.rs",
@@ -262,13 +257,18 @@ if #filters > 0 then
 	mutations = kept
 end
 -- A bug that no longer applies is a stale list, found before any of the long builds.
+local stale = {}
 for _, mutation in mutations do
 	local source, message = fs.readFileString(SRC .. mutation.file)
 	assert(source, message)
 	local _, last = string.find(source :: string, mutation.old, 1, true)
-	assert(last, "not found: " .. mutation.label)
-	assert(not string.find(source :: string, mutation.old, (last :: number) + 1, true), "not unique: " .. mutation.label)
+	if not last then
+		table.insert(stale, "not found: " .. mutation.label)
+	elseif string.find(source :: string, mutation.old, (last :: number) + 1, true) then
+		table.insert(stale, "not unique: " .. mutation.label)
+	end
 end
+assert(#stale == 0, table.concat(stale, "\n"))
 
 local caught, survived = 0, 0
 for index, mutation in mutations do

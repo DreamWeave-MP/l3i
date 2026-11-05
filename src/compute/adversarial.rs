@@ -1263,3 +1263,93 @@ impl CastFloatBytes for u32 {
         (self as f32).to_le_bytes()
     }
 }
+
+/// A NaN with its sign bit set is still a NaN, whichever payload it carries.
+#[test]
+fn softmax_notices_nans_of_either_sign() {
+    for bits in [0x7fc0_0000u32, 0xffc0_0000, 0x7f80_0001, 0xff80_0001, 0xffff_ffff] {
+        // Beside an infinity arithmetic wouldn't spread the NaN, so only noticing it can.
+        for other in [2.0, f32::INFINITY, f32::NEG_INFINITY] {
+            let values = [1.0, f32::from_bits(bits), other];
+            let (mut out, mut exponentials) =
+                ([0.0f32; 3], vec![0.0f64; crate::compute::reduction::softmax_scratch(3)]);
+            crate::compute::reduction::softmax(&values, &mut out, &mut exponentials);
+            assert!(out.iter().all(|v| v.is_nan()), "{bits:#x} beside {other}: {out:?}");
+        }
+    }
+}
+
+/// Sampled from outside while a stage runs: a charge released early would almost never be seen.
+#[test]
+fn row_scratch_is_charged_for_nearly_all_of_a_run() {
+    let width = 1 << 16;
+    let domain = Domain::new(64, 64);
+    let values: Vec<f32> = (0..width).map(|i| (i % 97) as f32 * 0.25).collect();
+    let input = laid_out(&values, 1, width, 1, false);
+    let program = Expr::slot(0, Shape::Matrix(1, width), domain).unwrap().softmax().unwrap().compile().unwrap();
+    let budget = Budget::new(1 << 24);
+    let done = std::sync::atomic::AtomicBool::new(false);
+    let (mut samples, mut charged) = (0u64, 0u64);
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            let mut out = vec![0u8; width * 4];
+            for _ in 0..100 {
+                program.run_into(&[input.borrow()], &mut out, &budget).unwrap();
+            }
+            done.store(true, std::sync::atomic::Ordering::Relaxed);
+        });
+        while !done.load(std::sync::atomic::Ordering::Relaxed) {
+            samples += 1;
+            charged += u64::from(budget.used() > 0);
+        }
+    });
+    assert!(charged * 4 > samples, "charged in only {charged} of {samples} samples");
+}
+
+/// Weights prepared for one kind of product still answer every other kind, from their elements.
+#[test]
+fn prepared_weights_serve_products_they_were_not_packed_for() {
+    let domain = Domain::new(1 << 10, 1 << 10);
+    let budget = Budget::new(1 << 24);
+    let mut rng = Rng(0x0dd5_eed5_0000_0001);
+    for (m, k, n) in [(3, 5, 2), (20, 30, 40), (1, 70, 1), (9, 70, 1), (1, 70, 20), (20, 30, 1)] {
+        let a = rng.row(m * k, 0);
+        let b = rng.row(k * n, 0);
+        let (shape_a, shape_b) = (Shape::Matrix(m, k), Shape::Matrix(k, n));
+        let product = Expr::slot(0, shape_a, domain.clone())
+            .unwrap()
+            .matmul(&Expr::slot(1, shape_b, domain.clone()).unwrap())
+            .unwrap();
+        let program = product.compile().unwrap();
+        let (ta, tb) = (
+            Tensor::import(&bytes_of(&a), shape_a, &budget).unwrap(),
+            Tensor::import(&bytes_of(&b), shape_b, &budget).unwrap(),
+        );
+        let plain = program.run(&[&ta, &tb], &budget).unwrap().readback().unwrap();
+        for (left, right) in [
+            (ta.prepare_left(&budget).unwrap(), tb.clone()),
+            (ta.prepare_right(&budget).unwrap(), tb.clone()),
+            (ta.clone(), tb.prepare_left(&budget).unwrap()),
+            (ta.clone(), tb.prepare_right(&budget).unwrap()),
+        ] {
+            assert_eq!(program.run(&[&left, &right], &budget).unwrap().readback().unwrap(), plain, "{m}x{k}x{n}");
+        }
+    }
+}
+
+/// A parent with adjacent columns and gaps between rows: every byte of the gap is inside its
+/// interval, and none of it is an element.
+#[test]
+fn views_cannot_reach_the_gap_between_a_parents_rows() {
+    let owner: Arc<dyn Storage> = Arc::new(Vector(bytes_of(&(0..16).map(|i| i as f32).collect::<Vec<_>>())));
+    let parent = Tensor::from_storage(owner, Shape::Matrix(2, 3), 0, [48, 4]).unwrap();
+    let one = Shape::Matrix(1, 1);
+    for offset in [12, 16, 44] {
+        assert!(parent.view(one, offset, [0, 0]).is_err(), "offset {offset} is in the gap");
+    }
+    assert!(parent.view(Shape::Matrix(1, 4), 0, [0, 4]).is_err(), "a run past the row's three elements");
+    assert!(parent.view(Shape::Matrix(1, 2), 8, [0, 4]).is_err(), "a run that starts inside and leaves");
+    assert_eq!(floats(&parent.view(one, 8, [0, 0]).unwrap().readback().unwrap()), [2.0]);
+    assert_eq!(floats(&parent.view(one, 48, [0, 0]).unwrap().readback().unwrap()), [12.0]);
+    assert_eq!(floats(&parent.view(Shape::Matrix(2, 1), 4, [48, 0]).unwrap().readback().unwrap()), [1.0, 13.0]);
+}

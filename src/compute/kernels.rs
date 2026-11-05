@@ -901,9 +901,8 @@ fn pack_pass(b: &[Element], n: usize, first: usize, cols: usize, start: usize, e
     }
     if tail != 0 {
         for (p, row) in (start..end).zip(rest.chunks_exact_mut(tail)) {
-            let (used, padding) = row.split_at_mut(cols - whole);
-            used.copy_from_slice(&b[p * n + first + whole..][..cols - whole]);
-            padding.fill([0; 4]);
+            // The lanes past `cols` are computed and discarded, so whatever they hold can't matter.
+            row[..cols - whole].copy_from_slice(&b[p * n + first + whole..][..cols - whole]);
         }
     }
 }
