@@ -314,6 +314,20 @@ impl Span {
     fn is_contiguous(&self) -> bool {
         self.stride == self.kind.size()
     }
+
+    /// This span, safe from writes to `out`: copied if `out` overlaps it, the copy kept alive by the
+    /// first value returned.
+    fn kept_from(self, out: &Indices) -> (Option<Vec<u8>>, Span) {
+        let (begin, end) = byte_range(self.base, self.count, self.stride, self.kind.size());
+        if !overlaps((begin, end), byte_range(out.base, out.count, 4, 4)) {
+            return (None, self);
+        }
+        // SAFETY: the span was bounds-checked at construction, and nothing else touches the buffer
+        // during this copy.
+        let mut copy = unsafe { std::slice::from_raw_parts(self.base, end - begin) }.to_vec();
+        let base = copy.as_mut_ptr();
+        (Some(copy), Span { base, ..self })
+    }
 }
 
 /// A `u32` index vector: zero-based element positions in a buffer, `count` of them from
@@ -325,6 +339,22 @@ struct Indices {
 }
 
 impl Indices {
+    /// These indices, safe from writes through `destination`. They have been checked, and a loop
+    /// reads them as it writes, so an output over them could otherwise turn a checked index into an
+    /// unchecked one and aim a read or write outside its span. Then they are copied; the copy, kept
+    /// alive by the first value returned, is what the loop reads.
+    fn kept_from(self, destination: &Span) -> (Option<Vec<u8>>, Indices) {
+        let written = byte_range(destination.base, destination.count, destination.stride, destination.kind.size());
+        if !overlaps(byte_range(self.base, self.count, 4, 4), written) {
+            return (None, self);
+        }
+        // SAFETY: `count` indices at `base` were bounds-checked at construction, and nothing else
+        // touches the buffer during this copy.
+        let mut copy = unsafe { std::slice::from_raw_parts(self.base, self.count * 4) }.to_vec();
+        let base = copy.as_mut_ptr();
+        (Some(copy), Indices { base, count: self.count })
+    }
+
     fn new(what: &str, buffer: &BufferView<'_>, offset: Exact<i64>, count: Option<Exact<i64>>) -> Result<Indices> {
         let offset =
             usize::try_from(offset.0).map_err(|_| Error::runtime(format!("{what}: negative offset {}", offset.0)))?;
@@ -937,6 +967,7 @@ fn gather(
             )));
         }
     }
+    let (_kept, indices) = indices.kept_from(&destination);
     // Sequential semantics: each element is read then written before the next, so an aliased
     // destination observes earlier writes, deterministically.
     for i in 0..indices.count {
@@ -970,6 +1001,7 @@ fn scatter(
             )));
         }
     }
+    let (_kept, indices) = indices.kept_from(&destination);
     for i in 0..source.count {
         destination.set(indices.get(i), source.get(i));
     }
@@ -1234,6 +1266,10 @@ fn partition(
     let keys = Span::new("data.partition", &keys, Layout::parse("data.partition", kind)?, offset, count)?;
     let comparison = Comparison::parse("data.partition", comparison)?;
     let out = Indices::new("data.partition", &out, out_offset.unwrap_or(Exact(0)), Some(Exact(keys.count as i64)))?;
+    // The keys are read twice, to count and then to place, so an output over them could change the
+    // answer between the two and run its slots past the end. Then they are copied, read once as
+    // the operations table promises; the copy is kept alive by `_kept`.
+    let (_kept, keys) = keys.kept_from(&out);
     let accepted = (0..keys.count).filter(|&i| comparison.test(keys.get(i), threshold)).count();
     let (mut front, mut back) = (0, accepted);
     for i in 0..keys.count {

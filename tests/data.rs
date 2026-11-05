@@ -738,6 +738,58 @@ fn native_spans_that_overflow_take_the_raising_path() {
     assert!(l3i::data::lowering::lowered_sites() > before, "the receiver calls were lowered");
 }
 
+/// Every index is checked before anything is written, so nothing written may change an index that
+/// was checked: an output over the index vector must not turn into an unchecked read or write.
+#[test]
+fn an_output_over_the_indices_cannot_reach_outside_the_span() {
+    exec(
+        r"
+        -- gather: position 0 writes a huge value over the index position 1 will use.
+        local source = buffer.create(16)
+        buffer.writeu32(source, 0, 0x7fffffff)
+        buffer.writeu32(source, 4, 11)
+        local order = buffer.create(12)
+        buffer.writeu32(order, 0, 0) buffer.writeu32(order, 4, 1) buffer.writeu32(order, 8, 1)
+        assert(data.gather(source, 'u32', 0, 2, order, order, 4, 2) == 2)
+        assert(buffer.readu32(order, 4) == 0x7fffffff and buffer.readu32(order, 8) == 11, 'the indices as they were checked')
+        -- scatter: the same, except that the unchecked index would have aimed a write.
+        local values = buffer.create(8)
+        buffer.writeu32(values, 0, 0x7fffffff)
+        buffer.writeu32(values, 4, 22)
+        local target = buffer.create(16)
+        buffer.writeu32(target, 0, 1) buffer.writeu32(target, 4, 2)
+        assert(data.scatter(values, 'u32', 0, 2, target, target, 0, 4) == 2)
+        assert(buffer.readu32(target, 4) == 0x7fffffff and buffer.readu32(target, 8) == 22, 'the indices as they were checked')
+    ",
+    );
+}
+
+/// `partition` reads its keys twice. An output over them must not change the answer between the
+/// reads, which would run its slots past the end of the output.
+#[test]
+fn a_partition_over_its_keys_answers_as_if_they_were_separate() {
+    exec(
+        r"
+        for _, n in {1, 2, 5, 9, 64, 65, 130} do
+            for _, kind in {'u32', 'f32'} do
+                local keys = buffer.create(n * 8 + 8)
+                for i = 0, n - 1 do buffer.writeu32(keys, i * 4, (i * 2654435761) % 4294967296) end
+                local want = buffer.create(n * 4)
+                local accepted = data.partition(keys, kind, 0, n, 'gt', 2147483648, want)
+                for _, at in {0, 4, 8, 2} do
+                    local overlapping = buffer.create(buffer.len(keys))
+                    buffer.copy(overlapping, 0, keys)
+                    assert(data.partition(overlapping, kind, 0, n, 'gt', 2147483648, overlapping, at) == accepted, `{kind} {n} at {at}`)
+                    for i = 0, n - 1 do
+                        assert(buffer.readu32(overlapping, at + i * 4) == buffer.readu32(want, i * 4), `{kind} {n} at {at}: slot {i}`)
+                    end
+                end
+            end
+        end
+    ",
+    );
+}
+
 /// The contiguous f32 corpus: bit patterns chosen for what a vectorized or narrowed loop gets
 /// wrong (both zeros and infinities, quiet and signaling NaNs with payloads, subnormals, values
 /// around rounding boundaries), mixed with deterministic random words.
