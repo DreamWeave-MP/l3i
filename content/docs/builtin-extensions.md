@@ -738,7 +738,9 @@ the input of `gather` and `scatter`, the output of `argsort` and `partition`. A 
 (`dream.data.Selection`) is a bitset over the positions of a span of one length, produced by
 `select`, combined with boolean algebra, counted, or turned into an index vector. Every
 operation that produces output takes the storage from the caller, `into` for selections and
-`out` for buffers, so steady state allocates nothing.
+`out` for buffers, so steady state allocates nothing. The exceptions are temporary working memory:
+`argsort` without scratch, and `gather`, `scatter` or `partition` when their output overlaps the
+indices or keys they read.
 
 ### The operations
 
@@ -761,7 +763,7 @@ operation that produces output takes the storage from the caller, `into` for sel
 | `scale` | span | `out[i] = s[i] × factor` | | Luau `*`; a NaN element with a NaN factor gives a quiet NaN | `out` may be the source | bounds |
 | `clamp` | span | `out[i] = clamp(s[i], low, high)` | | passes through, as `math.clamp` | `out` may be the source | bounds, `low > high` or NaN bounds |
 | `argsort` | key span | u32 permutation into `out` from `outOffset`; count | 0 | NaN keys last, in original order | keys are copied before sorting, so `out` may overlap them | bounds |
-| `partition` | key span | u32 index vector, satisfying positions first then the rest, each in original order; the accepted count | 0 | as `countWhere` | as `argsort` | bounds, comparison name |
+| `partition` | key span | u32 index vector, satisfying positions first then the rest, each in original order; the accepted count | 0 | as `countWhere` | keys are copied first if `out` overlaps them, so `out` may overlap them | bounds, comparison name |
 
 Comparisons are named: `"eq"`, `"ne"`, `"lt"`, `"le"`, `"gt"`, `"ge"`. Aliasing is defined,
 never assumed: element-wise operations read each element and write its result before the next,
@@ -773,8 +775,11 @@ the keys paired with positions, so the buffer is read once and `out` may overlap
 caller scratch of `count × 4` bytes the index vector moves between `out` and the scratch, by a radix
 sort from 512 keys and a merge below that, reading keys from the span as it goes, so nothing is
 allocated in steady state. That is the shape a spatial-index builder otherwise hand-rolls in Luau.
-Keys, `out` and scratch must then not overlap, and the call refuses them if they do. At 65,536 `f32`
-keys the two forms cost about the same.
+Keys, `out` and scratch must then not overlap, and the call refuses them if they do. Without scratch
+a sort of 512 or more keys takes 16 bytes of temporary memory per key, and is usually the faster
+form because each pass reads in sequence: about a quarter less time at 65,536 `f32` keys, and about
+even at 1,048,576, where the page faults on that memory catch up. Scratch is what keeps a repeated
+sort from allocating.
 
 ### Typed receivers
 
@@ -858,8 +863,9 @@ prelude snapshots. Whoever can assign a chunk's globals can redirect its recogni
 with them the buffers they read, exactly as replacing `buffer` would. Scripts that do not trust
 each other must not share a writable global environment: under `Runtime::sandbox_globals` the
 globals are read-only, and a script that assigns `__l3i_data` only shadows it in its own
-environment. The outputs `argsort` and a selection allocate are host memory the VM's memory limit
-does not see.
+environment. The temporary memory `argsort` uses, a selection's bitset, and the copies `gather`,
+`scatter` and `partition` make when an output overlaps are host memory the VM's memory limit does
+not see. Each copy holds only the elements read, however wide their stride.
 
 ### What it costs
 

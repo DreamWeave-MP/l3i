@@ -26,19 +26,22 @@
 //! buffers of zero-based element positions, the input of `gather` and `scatter` and the
 //! output of `argsort` and `partition`. Every operation that produces output takes the output
 //! storage from the caller (`into` selections, `out` buffers), so steady state allocates
-//! nothing.
+//! nothing. The exceptions are temporary working memory: `argsort` without scratch, and `gather`,
+//! `scatter` or `partition` when their output overlaps the indices or keys they read.
 //!
 //! Aliasing is defined, never assumed: element-wise operations (`add`, `scale`, `clamp`, the
 //! copies inside `gather` and `scatter`) read each element then write its result before the
 //! next, so an output that overlaps an input sees the sequential result, and in-place forms
 //! (`out` equal to the input span) are the ordinary case. Out-of-range indices in `gather` and
-//! `scatter` raise before anything is written.
+//! `scatter` raise before anything is written. An output over the indices of `gather` or `scatter`,
+//! or the keys of `partition`, does not change them: they are copied first.
 //!
-//! A contiguous span, of any kind, runs its own compiled loops (`contiguous`), chosen once per
-//! operation after the spans are checked; a strided one runs the generic loops here. The results
-//! are the same, bit for bit, with one exception nothing ever promised: given two different NaN
-//! operands, which payload survives an operation is the optimizer's operand order, here as in the
-//! generic loop, which already answers differently in debug and release.
+//! Every span runs loops compiled for its element kind (`kind_loops`), chosen once per operation
+//! after the spans are checked, so no loop dispatches on the kind per element. A contiguous span
+//! also has an AVX2 form behind a run-time check. The results match a plain loop's, bit for bit,
+//! with one exception nothing ever promised: given two different NaN operands, which payload
+//! survives an operation depends on how the loop was compiled, and can differ between builds,
+//! targets and element kinds.
 //!
 //! ```lua
 //! local data = require('@dream/data')

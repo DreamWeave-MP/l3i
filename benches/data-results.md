@@ -120,6 +120,8 @@ The sweep first showed this row at 0.78× at 1,048,576 keys, slower than before:
 
 Keys now travel with their positions, so each pass reads and writes in sequence. 1,048,576 keys take 46M cycles, 3–4× better than the same code before the change, and 65,536 take 2.5M rather than 3.1M. It costs about 10% at 512 keys and uses more temporary memory: 16 bytes per key rather than 12.
 
+Cycles count user space only, which flatters this row at the largest size. Wall time includes the page faults on that fresh memory: at 1,048,576 keys it goes from about 29 ms to 14–15 ms, about 2× rather than the 2.8× the cycles show, and about even with the caller-scratch form.
+
 The `argsort` f32 rows above and in "Every size" use this code, measured on Luau 0.745 in two processes (`data-results/argsort-packed.txt`). "Before" stays the original sweep on the older Luau, and every other table and row was measured before both changes, including the `argsort` f32 rows under "Small spans" and "AVX2".
 
 ## Every size
