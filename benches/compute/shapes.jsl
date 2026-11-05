@@ -1,0 +1,101 @@
+-- Whole JSL invocations of the workloads compute_shapes measures natively: prepared inputs and
+-- output, one borrowed-buffer call per iteration.
+local function measure(label, body)
+ local iterations=1
+ while true do
+  local start=compute.clock()
+  for _=1,iterations do body() end
+  if compute.clock()-start>=0.003 then break end
+  iterations*=2
+ end
+ local samples={}
+ for i=1,31 do
+  local start=compute.clock()
+  for _=1,iterations do body() end
+  samples[i]=(compute.clock()-start)*1e6/iterations
+ end
+ table.sort(samples)
+ print(string.format('%s median_us=%.3f min_us=%.3f p90_us=%.3f',label,samples[16],samples[1],samples[28]))
+end
+
+-- src/forward.rs's noise, which these doubles reproduce exactly.
+local function noise(slot,index)
+ local mixed=((index+1)*40503+(slot+1)*69069)%65521
+ mixed=(mixed*mixed+12345)%65521
+ return mixed/32760.5-1
+end
+local function filled(slot,rows,cols)
+ local bytes=buffer.create(rows*cols*4)
+ local scale=if slot==0 then 1 else 1/math.sqrt(cols)
+ for i=0,rows*cols-1 do buffer.writef32(bytes,i*4,noise(slot,i)*scale) end
+ return bytes
+end
+
+for _,shape in {{1,128},{1,4096},{64,64},{128,128},{64,128}} do
+ local rows,cols=shape[1],shape[2]
+ local input,out=filled(0,rows,cols),buffer.create(rows*cols*4)
+ local x=compute.slot(0,rows,cols)
+ local suffix=string.format('_%dx%d',rows,cols)
+ local softmax,layer=x:softmax():compile(),x:layerNorm(1e-5):compile()
+ measure('jsl_softmax_runInto'..suffix,function() softmax:runInto(out,input) end)
+ measure('jsl_layer_norm_runInto'..suffix,function() layer:runInto(out,input) end)
+end
+
+for _,shape in {{1,4096,1},{1,128,128},{64,128,128},{256,256,1}} do
+ local m,k,n=shape[1],shape[2],shape[3]
+ local a,b,out=filled(0,m,k),filled(1,k,n),buffer.create(m*n*4)
+ local x,y=compute.slot(0,m,k),compute.slot(1,k,n)
+ local strict,fast=x:matmul(y):compile(),x:matmul(y):compileFast()
+ local suffix=string.format('_%dx%dx%d',m,k,n)
+ measure('jsl_matmul_strict_runInto'..suffix,function() strict:runInto(out,a,b) end)
+ measure('jsl_matmul_fast_runInto'..suffix,function() fast:runInto(out,a,b) end)
+ if m>1 then
+  local ta,tb=compute.f32(a,m,k),compute.f32(b,k,n)
+  if n==1 then ta=ta:prepareLeft() else tb=tb:prepareRight() end
+  measure('jsl_matmul_strict_prepared_runTensorsInto'..suffix,function() strict:runTensorsInto(out,ta,tb) end)
+  measure('jsl_matmul_fast_prepared_runTensorsInto'..suffix,function() fast:runTensorsInto(out,ta,tb) end)
+ end
+end
+
+-- The forward pass, as src/forward.rs builds it: 64 tokens, width 128, two blocks.
+local tokens,width,hidden,blocks=64,128,256,2
+local shapes={{tokens,width}}
+for _=1,blocks do
+ for _,s in {{width,width},{width,width},{width,width},{width,width},{width,hidden},{hidden,width}} do table.insert(shapes,s) end
+end
+local function slot(id) return compute.slot(id,shapes[id+1][1],shapes[id+1][2]) end
+local function graph()
+ local scale=compute.constant(1/math.sqrt(width))
+ local x=slot(0)
+ for block=0,blocks-1 do
+  local function weight(i) return slot(1+block*6+i) end
+  local normalized=x:layerNorm(1e-5)
+  local query,key,value=normalized:matmul(weight(0)),normalized:matmul(weight(1)),normalized:matmul(weight(2))
+  local attention=query:matmul(key:transpose()):mul(scale):softmax()
+  local residual=x:add(attention:matmul(value):matmul(weight(3)))
+  local h=residual:layerNorm(1e-5):matmul(weight(4)):relu()
+  x=residual:add(h:matmul(weight(5)))
+ end
+ return x
+end
+local buffers,tensors={},{}
+for i,s in shapes do
+ buffers[i]=filled(i-1,s[1],s[2])
+ tensors[i]=compute.f32(buffers[i],s[1],s[2])
+end
+local expression=graph()
+measure('jsl_forward_build_and_compile',function() graph():compile() compute.collect() end)
+local out=buffer.create(tokens*width*4)
+for mode,program in {strict=expression:compile(),fast=expression:compileFast()} do
+ measure('jsl_forward_runInto_'..mode,function() program:runInto(out,table.unpack(buffers)) end)
+ measure('jsl_forward_run_fresh_tensor_'..mode,function() program:run(table.unpack(tensors)) end)
+end
+-- The borrowed path and the reference interpreter agree bit for bit on the strict pass.
+local program=expression:compile()
+program:runInto(out,table.unpack(buffers))
+local reference=program:runReference(table.unpack(tensors)):read()
+for i=0,tokens*width-1 do
+ local a,b=buffer.readu32(out,i*4),buffer.readu32(reference,i*4)
+ assert(a==b,'forward pass disagrees with the reference')
+end
+print(string.format('jsl_forward_budget_peak_bytes=%d',compute.peak()))

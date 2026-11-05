@@ -1,0 +1,11 @@
+# Exact int8 matrix-vector experiment
+
+`quantized::matvec` accepts borrowed row-major signed int8 weights, signed int8 activations, one positive finite f64 weight scale per row and one activation scale. Zero points are zero. Quantization and calibration belong to the caller. There is no public JSL operation, packing cache, framework dependency, allocation, or thread creation.
+
+Each dot accumulates bounded 4096-element i32 partials into i64. Even -128 times -128 cannot overflow a partial. With the one-million-element limit the whole sum is exactly representable in f64. The output is `(exact_sum as f64 * (weight_scale * input_scale)) as f32`. Scale products must be finite; ordinary floating-point underflow, signed zero and final f32 overflow remain possible. This is a separate numerical contract, not strict-f32 matmul. Dimensions and scales are all checked before output writes. The slices' lifetimes and Rust borrowing rules protect storage; no memory is retained or charged to a runtime after return.
+
+Release tests use an independent i128 oracle with deterministic randomized signs and dimensions, block boundaries, all -128 inputs, empty dots, invalid shapes/scales and unchanged output on validation failure. Three injected defects (unsigned interpretation, omitted scale, omitted final chunk) are caught by assertions; a comment-only control survives. Raw mutation output accompanies the benchmark results.
+
+Run `cargo bench --features compute-testing --bench main -- compute_int8`. The benchmark has prepared inputs and outputs, no runtime JIT, one caller thread, 31 warm timing samples of at least 3 ms, and separate allocation counts. Conversion/quantization and input allocation are outside timing. The f32 comparator includes graph invocation overhead; it is context, not a matched kernel comparison. Integer fixtures validate arithmetic but establish no real-model quantization accuracy. The largest weight matrix is 1 MiB int8 versus 4 MiB f32, plus 8 bytes of scale per row. These hot-cache sizes do not establish DRAM streaming throughput.
+
+The implementation deliberately leaves vectorization to the native compiler. Integer dot-product extensions, per-block scales, low-bit packing, a graph API and model quality remain unvalidated. A small independently tested kernel is justified for continued research; a quantization framework is not.

@@ -136,6 +136,15 @@ rcgen = { version = "0.14", default-features = false, features = ["ring", "pem"]
 # Signal masks, dispositions and descriptor limits for tests of what the OS does at the edges.
 libc = "0.2"
 
+# The comparison benches' competitors, on only under `--cfg l3i_compare` (`scripts/compute_compare.sh`).
+# Not a feature: `--all-features` builds would compile CubeCL's graphics stack and download its LLVM,
+# and this crate builds offline.
+[target.'cfg(l3i_compare)'.dev-dependencies]
+cubecl = { version = "=0.11.3", default-features = false, features = ["std", "cpu"] }
+cubecl-runtime = { version = "=0.11.3", default-features = false }
+matrixmultiply = "=0.3.11"
+rayon = "1"
+
 [[test]]
 name = "integration"
 path = "tests/main.rs"
@@ -181,6 +190,12 @@ bytes-regex = ["bytes", "dep:regex"]
 # reductions, comparisons into selections, gather/scatter, fill, element-wise arithmetic,
 # stable argsort and partition, natively and without per-element callbacks.
 data = []
+# The CPU compute engine (`compute`): typed f32 graphs compiled to reusable plans over precompiled
+# native kernels, with no runtime code generation.
+compute = []
+# What compute's tests and benches need beyond the engine: the reference oracle, generated-code
+# comparators and shared workloads.
+compute-testing = ["compute", "data"]
 # The `@dream/luau` extension (`syntax`): Luau's own parser for scripts, its syntax tree,
 # comments, errors and tokens built as tables in native code.
 syntax = []

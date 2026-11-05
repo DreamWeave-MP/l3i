@@ -1,4 +1,4 @@
-name: CPU compute research
+name: CPU compute
 
 on:
   workflow_dispatch:
@@ -8,6 +8,25 @@ permissions:
   contents: read
 
 jobs:
+  # The comparison benches are off in every other build, so only this notices when the engine moves
+  # out from under them. Checks and lints; running them is scripts/compute_compare.sh's job.
+  comparisons:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      CARGO_BUILD_JOBS: 2
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: true
+      - uses: dtolnay/rust-toolchain@1.99.1
+        with:
+          components: clippy
+      - uses: DreamWeave-MP/StroggForge/.github/actions/setup-llvm@v55
+      - name: Pedantic Clippy with competitors compiled in
+        run: >-
+          cargo clippy --config "target.'cfg(all())'.rustflags=['--cfg','l3i_compare']"
+          --benches --features compute-testing -- -W clippy::pedantic -D warnings
   correctness:
     strategy:
       fail-fast: false
@@ -17,36 +36,35 @@ jobs:
     timeout-minutes: 30
     env:
       CARGO_BUILD_JOBS: 2
-      G: research/graph-cpu/Cargo.toml
     steps:
       - uses: actions/checkout@v6
         with:
           submodules: true
       - uses: dtolnay/rust-toolchain@1.99.1
         with:
-          components: rustfmt, clippy
+          components: clippy
       - uses: DreamWeave-MP/StroggForge/.github/actions/setup-llvm@v55
       - name: Record compiler and CPU
         run: |
           rustc -vV
           clang --version
           lscpu
-      - name: Formatting
-        run: cargo fmt --manifest-path "$G" --check
       - name: Debug no-JIT correctness
-        run: cargo test --locked --manifest-path "$G"
+        run: cargo test --features compute-testing compute::
       - name: Release no-JIT numerical correctness
-        run: cargo test --locked --release --manifest-path "$G"
+        run: cargo test --release --features compute-testing compute::
       - name: Release optional Luau JIT correctness
-        run: cargo test --locked --release --features luau-jit --manifest-path "$G"
-      - name: Pedantic Clippy
-        run: cargo clippy --locked --manifest-path "$G" --all-targets --all-features -- -W clippy::pedantic -D warnings
+        run: cargo test --release --features compute-testing,jit compute::
+      - name: Pedantic Clippy, engine alone and with its test support
+        run: |
+          cargo clippy --features compute -- -W clippy::pedantic -D warnings
+          cargo clippy --all-targets --features compute-testing,jit -- -W clippy::pedantic -D warnings
       # Runs on this runner's real CPU, for the record. Shared cloud machines are noisy, so this is
       # evidence about shape and instruction set, not a pass-fail gate on speed.
       - name: Native benchmarks
         run: |
-          cargo build --locked --release --manifest-path "$G"
-          research/graph-cpu/target/release/l3i-graph-cpu-research --bench-shapes --bench-softmax | tee "bench-${{ matrix.runner }}.txt"
+          cargo bench --features compute-testing --bench main -- compute_shapes | tee "bench-${{ matrix.runner }}.txt"
+          cargo bench --features compute-testing --bench main -- compute_softmax | tee -a "bench-${{ matrix.runner }}.txt"
       - uses: actions/upload-artifact@v4
         with:
           name: bench-${{ matrix.runner }}

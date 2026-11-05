@@ -75,6 +75,8 @@ mod byte_rules;
 #[cfg(feature = "bytes")]
 pub mod bytes;
 pub mod call;
+#[cfg(feature = "compute")]
+pub mod compute;
 pub mod convert;
 #[cfg(feature = "data")]
 pub mod data;
