@@ -12,6 +12,7 @@
     clippy::cast_possible_truncation,
     clippy::too_many_lines,
     clippy::items_after_statements,
+    clippy::inline_always,
     clippy::needless_pass_by_value
 )]
 
@@ -289,10 +290,512 @@ fn movement(c: &mut Criterion) {
     }
 }
 
+/// Benchmark-only kernels: what one loop with the contract's arithmetic costs with no binder, no
+/// Luau call and slices that promise no aliasing. Nothing a script can call runs these, so they
+/// are the ceiling a `dream.data` call could approach, not a measurement of one.
+mod reference {
+    fn read(bytes: [u8; 4]) -> f64 {
+        f64::from(f32::from_ne_bytes(bytes))
+    }
+
+    fn write(value: f64) -> [u8; 4] {
+        (value as f32).to_ne_bytes()
+    }
+
+    #[inline(never)]
+    pub fn add(left: &[[u8; 4]], right: &[[u8; 4]], out: &mut [[u8; 4]]) {
+        for ((out, left), right) in out.iter_mut().zip(left).zip(right) {
+            *out = write(read(*left) + read(*right));
+        }
+    }
+
+    #[inline(never)]
+    pub fn scale(source: &[[u8; 4]], factor: f64, out: &mut [[u8; 4]]) {
+        for (out, source) in out.iter_mut().zip(source) {
+            *out = write(read(*source) * factor);
+        }
+    }
+
+    #[inline(never)]
+    pub fn clamp(source: &[[u8; 4]], low: f64, high: f64, out: &mut [[u8; 4]]) {
+        for (out, source) in out.iter_mut().zip(source) {
+            let value = read(*source);
+            *out = write(if value < low {
+                low
+            } else if value > high {
+                high
+            } else {
+                value
+            });
+        }
+    }
+
+    #[inline(never)]
+    pub fn fill(out: &mut [[u8; 4]], value: f64) {
+        out.fill(write(value));
+    }
+
+    #[inline(always)]
+    fn relu_passes(left: &[[u8; 4]], right: &[[u8; 4]], twos: &[[u8; 4]], out: &mut [[u8; 4]]) {
+        for ((out, left), right) in out.iter_mut().zip(left).zip(right) {
+            *out = write(read(*left) + read(*right));
+        }
+        for (out, two) in out.iter_mut().zip(twos) {
+            *out = write(read(*out) + read(*two));
+        }
+        for out in out.iter_mut() {
+            let value = f32::from_ne_bytes(*out);
+            *out = (if value < 0.0 { 0.0 } else { value }).to_ne_bytes();
+        }
+    }
+
+    /// The ceiling for three separate passes on this memory system: AVX2, no binder, no overlap.
+    #[inline(never)]
+    pub fn relu(left: &[[u8; 4]], right: &[[u8; 4]], twos: &[[u8; 4]], out: &mut [[u8; 4]]) {
+        #[cfg(target_arch = "x86_64")]
+        {
+            #[target_feature(enable = "avx2")]
+            fn avx2(left: &[[u8; 4]], right: &[[u8; 4]], twos: &[[u8; 4]], out: &mut [[u8; 4]]) {
+                relu_passes(left, right, twos, out);
+            }
+            if std::arch::is_x86_feature_detected!("avx2") {
+                // SAFETY: the CPU was just found to have the one feature `avx2` requires.
+                unsafe { avx2(left, right, twos, out) };
+                return;
+            }
+        }
+        relu_passes(left, right, twos, out);
+    }
+
+    #[inline(never)]
+    pub fn sum(source: &[[u8; 4]]) -> f64 {
+        source.iter().fold(0.0, |total, value| total + read(*value))
+    }
+
+    #[inline(never)]
+    pub fn min(source: &[[u8; 4]]) -> Option<f64> {
+        let (first, rest) = source.split_first()?;
+        Some(
+            rest.iter()
+                .map(|value| read(*value))
+                .fold(read(*first), |best, value| if value < best { value } else { best }),
+        )
+    }
+
+    #[inline(never)]
+    pub fn count_gt(source: &[[u8; 4]], threshold: f64) -> usize {
+        source.iter().map(|value| usize::from(read(*value) > threshold)).sum()
+    }
+}
+
+/// Whether Criterion is smoke-running the benches (`cargo test --all-targets`), where a million
+/// elements and counter rounds would only slow the gate.
+fn smoke() -> bool {
+    std::env::args().any(|arg| arg == "--test")
+}
+
+/// Whether the sweep was asked for by name: `cargo bench -- data_f32` or `-- data_receivers`. A
+/// plain `cargo bench` runs a few representative sizes and no counter rounds, so an ordinary
+/// benchmark job does not pay for an investigation.
+fn sweep_asked() -> bool {
+    std::env::args().skip(1).any(|arg| arg.contains("data_f32") || arg.contains("data_receivers"))
+}
+
+/// One raw row per case on stderr, for scripts: per-call instructions, cycles, nanoseconds and
+/// branch misses, each the min, median and max of nine rounds. User-space counts only. Instruction counts repeat to
+/// within a few parts per thousand on a busy machine; the cycle and nanosecond spreads say how far
+/// to trust a row.
+fn f32_row(op: &str, n: usize, variant: &str, invoke: &mut dyn FnMut()) {
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    {
+        use counter::{
+            Counter, PERF_COUNT_HW_BRANCH_MISSES, PERF_COUNT_HW_CPU_CYCLES, PERF_COUNT_HW_INSTRUCTIONS,
+            PERF_TYPE_HARDWARE, measure_all,
+        };
+        if smoke() || !sweep_asked() {
+            return;
+        }
+        // One row of interest, for an investigation that should not wait for the rest.
+        if std::env::var("L3I_ROW").is_ok_and(|row| !op.contains(&row)) {
+            return;
+        }
+        let (Some(instructions), Some(cycles), Some(misses)) = (
+            Counter::open(PERF_TYPE_HARDWARE, PERF_COUNT_HW_INSTRUCTIONS),
+            Counter::open(PERF_TYPE_HARDWARE, PERF_COUNT_HW_CPU_CYCLES),
+            Counter::open(PERF_TYPE_HARDWARE, PERF_COUNT_HW_BRANCH_MISSES),
+        ) else {
+            eprintln!("f32row|{op}|{n}|{variant}|hardware counters unavailable");
+            return;
+        };
+        let counters = [instructions, cycles, misses];
+        // Roughly half a million elements a round, so large and small spans get comparable samples.
+        let calls = (500_000 / n.max(1)).clamp(1, 2048);
+        let mut rows = [[0u64; 4]; 9];
+        invoke();
+        for row in &mut rows {
+            let begin = std::time::Instant::now();
+            let counted = measure_all(&counters, &mut || {
+                for _ in 0..calls {
+                    invoke();
+                }
+            });
+            let nanos = begin.elapsed().as_nanos() as u64;
+            *row =
+                [counted[0] / calls as u64, counted[1] / calls as u64, nanos / calls as u64, counted[2] / calls as u64];
+        }
+        let spread = |column: usize| {
+            let mut values = rows.map(|row| row[column]);
+            values.sort_unstable();
+            format!("{}|{}|{}", values[0], values[4], values[8])
+        };
+        eprintln!("f32row|{op}|{n}|{variant}|{}|{}|{}|{}", spread(0), spread(1), spread(2), spread(3));
+        // Raw PMU events by hex config, for chasing what a row's cycles go on: `L3I_RAW=0479,0879`.
+        if let Ok(list) = std::env::var("L3I_RAW") {
+            const PERF_TYPE_RAW: u32 = 4;
+            let raw: Vec<Counter> = list
+                .split(',')
+                .filter_map(|event| Counter::open(PERF_TYPE_RAW, u64::from_str_radix(event, 16).ok()?))
+                .collect();
+            let counted = measure_all(&raw, &mut || {
+                for _ in 0..calls {
+                    invoke();
+                }
+            });
+            let per_call: Vec<String> = counted.iter().map(|count| (count / calls as u64).to_string()).collect();
+            eprintln!("rawrow|{op}|{n}|{variant}|{}", per_call.join("|"));
+        }
+    }
+    #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+    {
+        let _ = (op, n, variant, invoke);
+    }
+}
+
+fn f32_setup(n: usize) -> String {
+    format!(
+        "n = {n}
+         a, b, out = buffer.create((n + 1) * 4), buffer.create((n + 1) * 4), buffer.create((n + 1) * 4)
+         ia, ib, iout = buffer.create(n * 4), buffer.create(n * 4), buffer.create(n * 4)
+         da, db, dout = buffer.create(n * 8), buffer.create(n * 8), buffer.create(n * 8)
+         sa, sout = buffer.create(n * 8 + 8), buffer.create(n * 8 + 8)
+         fall, twos, bytes = buffer.create(n * 4), buffer.create(n * 4), buffer.create(n)
+         order, perm, scratch = buffer.create(n * 4), buffer.create(n * 4), buffer.create(n * 4)
+         for i = 0, n - 1 do
+             buffer.writeu8(bytes, i, (i * 37) % 251)
+             buffer.writeu32(order, i * 4, n - 1 - i)
+             buffer.writef32(fall, i * 4, -i) buffer.writef32(twos, i * 4, 2)
+             local x, y = ((i * 37) % 251) / 7 - 15, ((i * 53) % 241) / 3 - 40
+             buffer.writef32(a, i * 4, x) buffer.writef32(b, i * 4, y)
+             buffer.writei32(ia, i * 4, x * 7) buffer.writei32(ib, i * 4, y * 3)
+             buffer.writef64(da, i * 8, x) buffer.writef64(db, i * 8, y)
+             buffer.writef32(sa, i * 8, x)
+         end
+         sel = data.selection(n) F = data.f32() F8 = data.f32(8) I = data.i32() D = data.f64()"
+    )
+}
+
+/// `(operation, the dream.data call, the handwritten Luau loop)`, contiguous, disjoint spans. A
+/// scale factor of 1/3 is not an f32; 0.5 is. `any` and `all` never decide early here: full scans.
+const F32_OPS: [(&str, &str, &str); 14] = [
+    (
+        "add",
+        "data.add(a, 'f32', 0, b, 0, out, 0, n) return n",
+        "local x, y, o = a, b, out for i = 0, n - 1 do buffer.writef32(o, i * 4, buffer.readf32(x, i * 4) + buffer.readf32(y, i * 4)) end return n",
+    ),
+    (
+        "scale_inexact",
+        "data.scale(a, 'f32', 0, n, 1 / 3, out, 0) return n",
+        "local x, o, f = a, out, 1 / 3 for i = 0, n - 1 do buffer.writef32(o, i * 4, buffer.readf32(x, i * 4) * f) end return n",
+    ),
+    (
+        "scale_exact",
+        "data.scale(a, 'f32', 0, n, 0.5, out, 0) return n",
+        "local x, o, f = a, out, 0.5 for i = 0, n - 1 do buffer.writef32(o, i * 4, buffer.readf32(x, i * 4) * f) end return n",
+    ),
+    (
+        "clamp",
+        "data.clamp(a, 'f32', 0, n, -5, 5, out, 0) return n",
+        "local x, o = a, out for i = 0, n - 1 do buffer.writef32(o, i * 4, math.clamp(buffer.readf32(x, i * 4), -5, 5)) end return n",
+    ),
+    (
+        "fill",
+        "data.fill(out, 'f32', 0, n, 1.5) return n",
+        "local o = out for i = 0, n - 1 do buffer.writef32(o, i * 4, 1.5) end return n",
+    ),
+    (
+        "sum",
+        "return data.sum(a, 'f32', 0, n)",
+        "local x, t = a, 0 for i = 0, n - 1 do t += buffer.readf32(x, i * 4) end return t",
+    ),
+    (
+        "sum_filtered",
+        "return data.sum(a, 'f32', 0, n, 'gt', 0)",
+        "local x, t = a, 0 for i = 0, n - 1 do local v = buffer.readf32(x, i * 4) if v > 0 then t += v end end return t",
+    ),
+    (
+        "min",
+        "return data.min(a, 'f32', 0, n) or 0",
+        "local x, m = a, nil for i = 0, n - 1 do local v = buffer.readf32(x, i * 4) if m == nil or v < m then m = v end end return m or 0",
+    ),
+    (
+        "argmax",
+        "return data.argmax(a, 'f32', 0, n) or 0",
+        "local x, m, at = a, nil, 0 for i = 0, n - 1 do local v = buffer.readf32(x, i * 4) if m == nil or v > m then m, at = v, i end end return at",
+    ),
+    (
+        "countWhere",
+        "return data.countWhere(a, 'f32', 0, n, 'gt', 0)",
+        "local x, c = a, 0 for i = 0, n - 1 do if buffer.readf32(x, i * 4) > 0 then c += 1 end end return c",
+    ),
+    (
+        "any",
+        "return if data.any(a, 'f32', 0, n, 'gt', 1000) then 1 else 0",
+        "local x = a for i = 0, n - 1 do if buffer.readf32(x, i * 4) > 1000 then return 1 end end return 0",
+    ),
+    (
+        "all",
+        "return if data.all(a, 'f32', 0, n, 'lt', 1000) then 1 else 0",
+        "local x = a for i = 0, n - 1 do if not (buffer.readf32(x, i * 4) < 1000) then return 0 end end return 1",
+    ),
+    (
+        "select",
+        "data.select(a, 'f32', 0, n, 'gt', 0, sel) return n",
+        "local x, c = a, 0 for i = 0, n - 1 do if buffer.readf32(x, i * 4) > 0 then c += 1 end end return n",
+    ),
+    // The compute research's `relu(a + b + 2)` as three passes, the figure this work chases: a
+    // fused loop is a different contract, so there is no such row here.
+    (
+        "relu three passes",
+        "data.add(a, 'f32', 0, b, 0, out, 0, n) data.add(out, 'f32', 0, twos, 0, out, 0, n) data.clamp(out, 'f32', 0, n, 0, math.huge, out, 0) return n",
+        "local x, y, o = a, b, out for i = 0, n - 1 do buffer.writef32(o, i * 4, math.max(buffer.readf32(x, i * 4) + buffer.readf32(y, i * 4) + 2, 0)) end return n",
+    ),
+];
+
+/// What the specialization must not slow: other kinds, strided layouts, overlapping and in-place
+/// spans, and the receivers (Luau IR loops under jit, bound methods without it).
+const F32_CONTROLS: [(&str, &str); 55] = [
+    ("receiver f32@8 countGt", "local K: dream_data_Kind_f32 = F8 local c = K:countGt(sa, 0, n, 0) return c"),
+    ("receiver f32@8 min", "local K: dream_data_Kind_f32 = F8 local m = K:min(sa, 0, n) return m or 0"),
+    ("receiver f32@8 sum", "local K: dream_data_Kind_f32 = F8 local t = K:sum(sa, 0, n) return t"),
+    // Strided layouts of each operation.
+    ("clamp f32@8", "data.clamp(sa, 'f32@8', 0, n, -5, 5, sout, 0) return n"),
+    ("fill f32@8", "data.fill(sout, 'f32@8', 0, n, 1.5) return n"),
+    ("min f32@8", "return data.min(sa, 'f32@8', 0, n) or 0"),
+    ("countWhere f32@8", "return data.countWhere(sa, 'f32@8', 0, n, 'gt', 0)"),
+    ("any f32@8, full scan", "return if data.any(sa, 'f32@8', 0, n, 'gt', 1000) then 1 else 0"),
+    ("select f32@8", "data.select(sa, 'f32@8', 0, n, 'gt', 0, sel) return n"),
+    // Filtered reductions: an even filter, and one that rejects nearly everything.
+    ("min f32 where gt", "return data.min(a, 'f32', 0, n, 'gt', 0) or 0"),
+    ("max f32 where lt", "return data.max(a, 'f32', 0, n, 'lt', 0) or 0"),
+    ("sum f32 where sparse", "return data.sum(a, 'f32', 0, n, 'gt', 20)"),
+    ("min f32 where sparse", "return data.min(a, 'f32', 0, n, 'gt', 20) or 0"),
+    ("sum i32 where gt", "return data.sum(ia, 'i32', 0, n, 'gt', 0)"),
+    // Movement and ordering.
+    ("gather f32", "return data.gather(a, 'f32', 0, n, order, out, 0, n)"),
+    ("gather f32@8", "return data.gather(sa, 'f32@8', 0, n, order, out, 0, n)"),
+    ("gather i32", "return data.gather(ia, 'i32', 0, n, order, iout, 0, n)"),
+    ("scatter f32", "return data.scatter(a, 'f32', 0, n, order, out, 0, n)"),
+    ("partition f32", "return data.partition(a, 'f32', 0, n, 'gt', 0, perm)"),
+    ("partition i32", "return data.partition(ia, 'i32', 0, n, 'gt', 0, perm)"),
+    ("argsort f32", "return data.argsort(a, 'f32', 0, n, perm)"),
+    ("argsort f32 with scratch", "return data.argsort(a, 'f32', 0, n, perm, 0, scratch)"),
+    ("argsort i32 with scratch", "return data.argsort(ia, 'i32', 0, n, perm, 0, scratch)"),
+    ("argsort f64", "return data.argsort(da, 'f64', 0, n, perm)"),
+    // The block scans' worst cases: every block holds an improvement, or the first element decides.
+    ("min strictly falling", "return data.min(fall, 'f32', 0, n) or 0"),
+    ("argmin strictly falling", "return data.argmin(fall, 'f32', 0, n) or 0"),
+    ("max strictly falling (first wins)", "return data.max(fall, 'f32', 0, n) or 0"),
+    ("any decided by the first element", "return if data.any(a, 'f32', 0, n, 'lt', 1000) then 1 else 0"),
+    ("all decided by the first element", "return if data.all(a, 'f32', 0, n, 'gt', 1000) then 1 else 0"),
+    ("add one element past both", "data.add(a, 'f32', 0, a, 0, a, 4, n) return n"),
+    ("add i32", "data.add(ia, 'i32', 0, ib, 0, iout, 0, n) return n"),
+    ("add f64", "data.add(da, 'f64', 0, db, 0, dout, 0, n) return n"),
+    ("add f32@8", "data.add(sa, 'f32@8', 0, sa, 0, sout, 0, n) return n"),
+    ("add out one element past left", "data.add(a, 'f32', 0, b, 0, a, 4, n) return n"),
+    ("add out one element before left", "data.add(a, 'f32', 4, b, 0, a, 0, n) return n"),
+    ("add in place on left", "data.add(a, 'f32', 0, b, 0, a, 0, n) return n"),
+    ("scale i32", "data.scale(ia, 'i32', 0, n, 3, iout, 0) return n"),
+    ("scale f32@8", "data.scale(sa, 'f32@8', 0, n, 0.5, sout, 0) return n"),
+    ("scale in place", "data.scale(a, 'f32', 0, n, -1, a, 0) return n"),
+    ("clamp in place", "data.clamp(a, 'f32', 0, n, -1000, 1000, a, 0) return n"),
+    ("fill u8", "data.fill(out, 'u8', 0, n, 7) return n"),
+    ("sum i32", "return data.sum(ia, 'i32', 0, n)"),
+    ("sum f32@8", "return data.sum(sa, 'f32@8', 0, n)"),
+    ("min f64", "return data.min(da, 'f64', 0, n) or 0"),
+    ("countWhere i32", "return data.countWhere(ia, 'i32', 0, n, 'gt', 0)"),
+    ("receiver f32 sum", "local K: dream_data_Kind_f32 = F local t = K:sum(a, 0, n) return t"),
+    ("receiver f32 countGt", "local K: dream_data_Kind_f32 = F local c = K:countGt(a, 0, n, 0) return c"),
+    ("receiver f32 min", "local K: dream_data_Kind_f32 = F local m = K:min(a, 0, n) return m or 0"),
+    ("jsl recognized f32 sum", "return sum[for v in a[1:n, 'f32'] => v]"),
+    ("jsl recognized f32 count", "return #[for v in a[1:n, 'f32'] if v > 0 => v]"),
+    ("jsl recognized f32 any", "return if any[for v in a[1:n, 'f32'] => v > 1000] then 1 else 0"),
+    ("jsl recognized u8 count", "return #[for x in bytes[1:n] if x > 127 => x]"),
+    ("receiver f32 selectGt", "local K: dream_data_Kind_f32 = F local s = K:selectGt(a, 0, n, 0, sel) return n"),
+    ("receiver f64 min", "local K: dream_data_Kind_f64 = D local m = K:min(da, 0, n) return m or 0"),
+    ("receiver i32 countGt", "local K: dream_data_Kind_i32 = I local c = K:countGt(ia, 0, n, 0) return c"),
+];
+
+/// Contiguous f32 operations at every span length: the `dream.data` call, the handwritten Luau
+/// loop (Luau `CodeGen` under jit, interpreted without) and, where one exists, the benchmark-only
+/// Rust kernel; then the regression controls. `n = 0` is the bare API cost; a large `n` is bulk
+/// execution. Criterion reports time; `f32_row` reports counters and the spread of nine rounds.
+fn f32_bulk(c: &mut Criterion) {
+    use std::hint::black_box;
+    let sizes: &[usize] = if smoke() {
+        &[0, 16]
+    } else if sweep_asked() {
+        &[0, 1, 4, 16, 64, 128, 256, 512, 1024, 4096, 16384, 65536, 262_144, 1_048_576]
+    } else {
+        &[16, 1024, 65536]
+    };
+    let word = |bits: f32| bits.to_ne_bytes();
+    // The counter rows run outside Criterion's filter, so honor it here: `-- data_f32/65536`.
+    let filter = std::env::args().skip(1).find(|arg| !arg.starts_with('-'));
+    for &n in sizes {
+        let name = format!("data_f32/{n}");
+        if filter.as_deref().is_some_and(|filter| !name.contains(filter)) {
+            continue;
+        }
+        let setup = f32_setup(n);
+        let runtime = runtime(true, &setup);
+        let stack = runtime.stack();
+        // Under jit, native: the chunk and the function it returns.
+        let compile = |body: &str| {
+            let source = format!("--!native\nreturn function() {body} end");
+            let chunk = stack.load_source("=case", &source, &runtime.compile_options()).unwrap();
+            chunk.invoke::<l3i::value::Function, _>(&stack, ()).unwrap()
+        };
+        let mut group = c.benchmark_group(name);
+        group.throughput(Throughput::Elements(n as u64));
+        let rows_only = std::env::var_os("L3I_ROW").is_some();
+        group.sample_size(15).measurement_time(std::time::Duration::from_millis(400));
+        group.warm_up_time(std::time::Duration::from_millis(100));
+        for (op, api, luau) in F32_OPS {
+            for (variant, body) in [("dream.data", api), ("luau loop", luau)] {
+                let function = compile(body);
+                f32_row(op, n, variant, &mut || {
+                    black_box(function.invoke::<f64, _>(&stack, ()).unwrap());
+                });
+                if !rows_only {
+                    group.bench_function(format!("{op} {variant}"), |b| {
+                        b.iter(|| function.invoke::<f64, _>(&stack, ()).unwrap());
+                    });
+                }
+            }
+        }
+        // The same values the Luau setup writes, for the kernels no script can reach.
+        let left: Vec<[u8; 4]> = (0..n).map(|i| word(((((i * 37) % 251) as f64) / 7.0 - 15.0) as f32)).collect();
+        let right: Vec<[u8; 4]> = (0..n).map(|i| word(((((i * 53) % 241) as f64) / 3.0 - 40.0) as f32)).collect();
+        let mut sink = vec![[0u8; 4]; n];
+        type Kernel<'a> = Box<dyn FnMut(&mut [[u8; 4]]) + 'a>;
+        let twos = vec![word(2.0); n];
+        let mut kernels: [(&str, Kernel<'_>); 8] = [
+            (
+                "relu three passes",
+                Box::new(|out| reference::relu(black_box(&left), black_box(&right), black_box(&twos), out)),
+            ),
+            ("add", Box::new(|out| reference::add(black_box(&left), black_box(&right), out))),
+            ("scale_inexact", Box::new(|out| reference::scale(black_box(&left), black_box(1.0 / 3.0), out))),
+            ("clamp", Box::new(|out| reference::clamp(black_box(&left), black_box(-5.0), black_box(5.0), out))),
+            ("fill", Box::new(|out| reference::fill(out, black_box(1.5)))),
+            (
+                "sum",
+                Box::new(|_| {
+                    black_box(reference::sum(black_box(&left)));
+                }),
+            ),
+            (
+                "min",
+                Box::new(|_| {
+                    black_box(reference::min(black_box(&left)));
+                }),
+            ),
+            (
+                "countWhere",
+                Box::new(|_| {
+                    black_box(reference::count_gt(black_box(&left), black_box(0.0)));
+                }),
+            ),
+        ];
+        for (op, kernel) in &mut kernels {
+            f32_row(op, n, "rust reference", &mut || kernel(black_box(&mut sink)));
+            if !rows_only {
+                group.bench_function(format!("{op} rust reference"), |b| b.iter(|| kernel(black_box(&mut sink))));
+            }
+        }
+        for (control, body) in F32_CONTROLS {
+            let function = compile(body);
+            f32_row(control, n, "control", &mut || {
+                black_box(function.invoke::<f64, _>(&stack, ()).unwrap());
+            });
+            if !rows_only {
+                group.bench_function(format!("control {control}"), |b| {
+                    b.iter(|| function.invoke::<f64, _>(&stack, ()).unwrap());
+                });
+            }
+        }
+        group.finish();
+    }
+}
+
+/// Where a lowered receiver call and the bound method it can fall back to cross, per kind and
+/// member: `cargo bench -- data_receivers`. Counter rows only, and only when asked for by name.
+fn receiver_crossover() {
+    use std::hint::black_box;
+    let asked = std::env::args().skip(1).any(|arg| arg.contains("data_receivers"));
+    if !asked || smoke() {
+        return;
+    }
+    let members = [
+        ("sum", "local t = K:sum(B, 0, n) return t"),
+        ("min", "local t = K:min(B, 0, n) return t or 0"),
+        ("max", "local t = K:max(B, 0, n) return t or 0"),
+        ("countGt", "local t = K:countGt(B, 0, n, 0) return t"),
+        ("anyGt", "local t = K:anyGt(B, 0, n, 1000) return if t then 1 else 0"),
+        ("allLt", "local t = K:allLt(B, 0, n, 1000) return if t then 1 else 0"),
+        ("sumGt", "local t = K:sumGt(B, 0, n, 0) return t"),
+        ("minGt", "local t = K:minGt(B, 0, n, 0) return t or 0"),
+        ("maxLt", "local t = K:maxLt(B, 0, n, 0) return t or 0"),
+        ("selectGt", "local t = K:selectGt(B, 0, n, 0, sel) return n"),
+    ];
+    for n in [4usize, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 16384, 65536] {
+        let setup = format!(
+            "n = {n} sel = data.selection(n)
+             bu8, bi16, bi32, bf32, bf64 = buffer.create(n), buffer.create(n * 2), buffer.create(n * 4), buffer.create(n * 4), buffer.create(n * 8)
+             for i = 0, n - 1 do
+                 local x = ((i * 37) % 251) / 7 - 15
+                 buffer.writeu8(bu8, i, (i * 37) % 251) buffer.writei16(bi16, i * 2, x * 7) buffer.writei32(bi32, i * 4, x * 7)
+                 buffer.writef32(bf32, i * 4, x) buffer.writef64(bf64, i * 8, x)
+             end
+             Ku8, Ki16, Ki32, Kf32, Kf64 = data.u8(), data.i16(), data.i32(), data.f32(), data.f64()"
+        );
+        let runtime = runtime(true, &setup);
+        let stack = runtime.stack();
+        for kind in ["u8", "i16", "i32", "f32", "f64"] {
+            for (member, body) in members {
+                for (variant, annotation) in
+                    [("lowered", format!(": dream_data_Kind_{kind}")), ("bound", String::new())]
+                {
+                    let source = format!(
+                        "--!native\nreturn function() local K{annotation} = K{kind} local B = b{kind} {body} end"
+                    );
+                    let chunk = stack.load_source("=case", &source, &runtime.compile_options()).unwrap();
+                    let function = chunk.invoke::<l3i::value::Function, _>(&stack, ()).unwrap();
+                    f32_row(&format!("{kind} {member}"), n, variant, &mut || {
+                        black_box(function.invoke::<f64, _>(&stack, ()).unwrap());
+                    });
+                }
+            }
+        }
+    }
+}
+
 fn all(c: &mut Criterion) {
+    receiver_crossover();
     sums(c);
     counts(c);
     movement(c);
+    f32_bulk(c);
 }
 
 criterion_group!(benches, all);

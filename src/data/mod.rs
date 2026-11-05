@@ -26,13 +26,22 @@
 //! buffers of zero-based element positions, the input of `gather` and `scatter` and the
 //! output of `argsort` and `partition`. Every operation that produces output takes the output
 //! storage from the caller (`into` selections, `out` buffers), so steady state allocates
-//! nothing.
+//! nothing. The exceptions are temporary working memory: `argsort` without scratch, and `gather`,
+//! `scatter` or `partition` when their output overlaps the indices or keys they read.
 //!
 //! Aliasing is defined, never assumed: element-wise operations (`add`, `scale`, `clamp`, the
 //! copies inside `gather` and `scatter`) read each element then write its result before the
 //! next, so an output that overlaps an input sees the sequential result, and in-place forms
 //! (`out` equal to the input span) are the ordinary case. Out-of-range indices in `gather` and
-//! `scatter` raise before anything is written.
+//! `scatter` raise before anything is written. An output over the indices of `gather` or `scatter`,
+//! or the keys of `partition`, does not change them: they are copied first.
+//!
+//! Every span runs loops compiled for its element kind (`kind_loops`), chosen once per operation
+//! after the spans are checked, so no loop dispatches on the kind per element. A contiguous span
+//! also has an AVX2 form behind a run-time check. The results match a plain loop's, bit for bit,
+//! with one exception nothing ever promised: given two different NaN operands, which payload
+//! survives an operation depends on how the loop was compiled, and can differ between builds,
+//! targets and element kinds.
 //!
 //! ```lua
 //! local data = require('@dream/data')
@@ -201,6 +210,21 @@ impl Layout {
     }
 
     pub fn parse(what: &str, name: &str) -> Result<Layout> {
+        // A plain kind is nearly every call, and this is on every call: no searching for `+` or `@`.
+        let plain = match name.as_bytes() {
+            b"f32" => Some(Kind::F32),
+            b"f64" => Some(Kind::F64),
+            b"u8" => Some(Kind::U8),
+            b"i8" => Some(Kind::I8),
+            b"u16" => Some(Kind::U16),
+            b"i16" => Some(Kind::I16),
+            b"u32" => Some(Kind::U32),
+            b"i32" => Some(Kind::I32),
+            _ => None,
+        };
+        if let Some(kind) = plain {
+            return Ok(Layout::contiguous(kind));
+        }
         let (name, offset) = match name.split_once('+') {
             Some((name, offset)) => (
                 name,
@@ -302,6 +326,32 @@ impl Span {
         // SAFETY: as `get`; buffers are writable storage.
         unsafe { self.kind.write(self.base.add(index * self.stride), value) }
     }
+
+    /// Elements packed with no gap, which run the fastest loops in [`kind_loops`].
+    #[inline(always)]
+    fn is_contiguous(&self) -> bool {
+        self.stride == self.kind.size()
+    }
+
+    /// This span, safe from writes to `out`: its elements copied with no gaps if `out` overlaps it,
+    /// the copy kept alive by the first value returned. Only the elements are copied, so a wide
+    /// stride costs nothing extra.
+    fn kept_from(self, out: &Indices) -> (Option<Vec<u8>>, Span) {
+        let span = byte_range(self.base, self.count, self.stride, self.kind.size());
+        if !overlaps(span, byte_range(out.base, out.count, 4, 4)) {
+            return (None, self);
+        }
+        let size = self.kind.size();
+        // The stride is at least the size, so these bytes fit inside the checked span.
+        let mut copy = Vec::with_capacity(self.count * size);
+        for index in 0..self.count {
+            // SAFETY: the span was bounds-checked at construction, and nothing else touches the
+            // buffer during this copy.
+            copy.extend_from_slice(unsafe { std::slice::from_raw_parts(self.base.add(index * self.stride), size) });
+        }
+        let base = copy.as_mut_ptr();
+        (Some(copy), Span { base, stride: size, ..self })
+    }
 }
 
 /// A `u32` index vector: zero-based element positions in a buffer, `count` of them from
@@ -313,6 +363,22 @@ struct Indices {
 }
 
 impl Indices {
+    /// These indices, safe from writes through `destination`. They have been checked, and a loop
+    /// reads them as it writes, so an output over them could otherwise turn a checked index into an
+    /// unchecked one and aim a read or write outside its span. Then they are copied; the copy, kept
+    /// alive by the first value returned, is what the loop reads.
+    fn kept_from(self, destination: &Span) -> (Option<Vec<u8>>, Indices) {
+        let written = byte_range(destination.base, destination.count, destination.stride, destination.kind.size());
+        if !overlaps(byte_range(self.base, self.count, 4, 4), written) {
+            return (None, self);
+        }
+        // SAFETY: `count` indices at `base` were bounds-checked at construction, and nothing else
+        // touches the buffer during this copy.
+        let mut copy = unsafe { std::slice::from_raw_parts(self.base, self.count * 4) }.to_vec();
+        let base = copy.as_mut_ptr();
+        (Some(copy), Indices { base, count: self.count })
+    }
+
     fn new(what: &str, buffer: &BufferView<'_>, offset: Exact<i64>, count: Option<Exact<i64>>) -> Result<Indices> {
         let offset =
             usize::try_from(offset.0).map_err(|_| Error::runtime(format!("{what}: negative offset {}", offset.0)))?;
@@ -349,6 +415,41 @@ impl Indices {
         unsafe { self.base.add(index * 4).cast::<u32>().write_unaligned(value as u32) }
     }
 }
+
+/// `$body` once per comparison, with `$comparison` rebound to a constant, so a loop in the body
+/// has no dispatch left to do.
+macro_rules! constant_comparison {
+    ($comparison:ident => $body:expr) => {
+        match $comparison {
+            Comparison::Eq => {
+                let $comparison = Comparison::Eq;
+                $body
+            }
+            Comparison::Ne => {
+                let $comparison = Comparison::Ne;
+                $body
+            }
+            Comparison::Lt => {
+                let $comparison = Comparison::Lt;
+                $body
+            }
+            Comparison::Le => {
+                let $comparison = Comparison::Le;
+                $body
+            }
+            Comparison::Gt => {
+                let $comparison = Comparison::Gt;
+                $body
+            }
+            Comparison::Ge => {
+                let $comparison = Comparison::Ge;
+                $body
+            }
+        }
+    };
+}
+
+mod kind_loops;
 
 /// A comparison, as a script names it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -598,19 +699,11 @@ fn all(
 /// The index of the first least (or greatest) element by Luau `<` (`>`): a NaN that arrives
 /// first stays, later NaNs never replace. None for an empty span.
 fn extreme(span: &Span, greatest: bool) -> Option<usize> {
-    if span.count == 0 {
-        return None;
+    if span.is_contiguous() {
+        kind_loops::extreme(*span, greatest)
+    } else {
+        kind_loops::extreme_strided(*span, greatest)
     }
-    let mut best = 0;
-    let mut value = span.get(0);
-    for i in 1..span.count {
-        let candidate = span.get(i);
-        if if greatest { candidate > value } else { candidate < value } {
-            best = i;
-            value = candidate;
-        }
-    }
-    Some(best)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -660,10 +753,11 @@ fn count(
 ) -> Result<f64> {
     let span = Span::new("data.countWhere", &buffer, Layout::parse("data.countWhere", kind)?, offset, count)?;
     let comparison = Comparison::parse("data.countWhere", comparison)?;
-    let mut selected = 0usize;
-    for i in 0..span.count {
-        selected += usize::from(comparison.test(span.get(i), threshold));
-    }
+    let selected = if span.is_contiguous() {
+        kind_loops::count(span, comparison, threshold)
+    } else {
+        kind_loops::count_strided(span, comparison, threshold)
+    };
     Ok(selected as f64)
 }
 
@@ -685,18 +779,17 @@ fn compare(
     let span = Span::new("data.select", &buffer, Layout::parse("data.select", kind)?, offset, count)?;
     let comparison = Comparison::parse("data.select", comparison)?;
     let target = Target::prepare(into, span.count);
-    {
-        let selection = target.selection();
-        let mut bits = selection.bits.borrow_mut();
-        for (word, chunk) in bits.iter_mut().zip((0..span.count).step_by(64)) {
-            let mut mask = 0u64;
-            for bit in 0..64.min(span.count - chunk) {
-                mask |= u64::from(comparison.test(span.get(chunk + bit), threshold)) << bit;
-            }
-            *word = mask;
-        }
-    }
+    select_words(&span, comparison, threshold, &mut target.selection().bits.borrow_mut());
     target.finish(call, 7)
+}
+
+/// Writes the comparison's result for each element into `words`, which hold one bit per element.
+fn select_words(span: &Span, comparison: Comparison, threshold: f64, words: &mut [u64]) {
+    if span.is_contiguous() {
+        kind_loops::select(*span, comparison, threshold, words);
+    } else {
+        kind_loops::select_strided(*span, comparison, threshold, words);
+    }
 }
 
 fn selection(len: Exact<i64>) -> Result<Owned<Selection>> {
@@ -853,10 +946,13 @@ fn gather(
             )));
         }
     }
+    let (_kept, indices) = indices.kept_from(&destination);
     // Sequential semantics: each element is read then written before the next, so an aliased
     // destination observes earlier writes, deterministically.
-    for i in 0..indices.count {
-        destination.set(i, source.get(indices.get(i)));
+    if source.is_contiguous() {
+        kind_loops::gather(source, &indices, destination);
+    } else {
+        kind_loops::gather_strided(source, &indices, destination);
     }
     Ok(indices.count as f64)
 }
@@ -886,18 +982,30 @@ fn scatter(
             )));
         }
     }
-    for i in 0..source.count {
-        destination.set(indices.get(i), source.get(i));
+    let (_kept, indices) = indices.kept_from(&destination);
+    if destination.is_contiguous() {
+        kind_loops::scatter(source, &indices, destination);
+    } else {
+        kind_loops::scatter_strided(source, &indices, destination);
     }
     Ok(source.count as f64)
 }
 
 fn fill(buffer: BufferView<'_>, kind: &str, offset: Exact<i64>, count: Exact<i64>, value: f64) -> Result<()> {
     let span = Span::new("data.fill", &buffer, Layout::parse("data.fill", kind)?, offset, count)?;
+    if span.is_contiguous() {
+        kind_loops::fill(span, value);
+    } else {
+        kind_loops::fill_strided(span, value);
+    }
+    Ok(())
+}
+
+#[inline(always)]
+fn fill_elements(span: Span, value: f64) {
     for i in 0..span.count {
         span.set(i, value);
     }
-    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -915,10 +1023,19 @@ fn add(
     let left = Span::new("data.add", &left, kind, left_offset, count)?;
     let right = Span::new("data.add", &right, kind, right_offset, count)?;
     let out = Span::new("data.add", &out, kind, out_offset, count)?;
+    if out.is_contiguous() {
+        kind_loops::add(left, right, out);
+    } else {
+        kind_loops::add_strided(left, right, out);
+    }
+    Ok(())
+}
+
+#[inline(always)]
+fn add_elements(left: Span, right: Span, out: Span) {
     for i in 0..out.count {
         out.set(i, left.get(i) + right.get(i));
     }
-    Ok(())
 }
 
 fn scale(
@@ -933,10 +1050,19 @@ fn scale(
     let kind = Layout::parse("data.scale", kind)?;
     let source = Span::new("data.scale", &source, kind, offset, count)?;
     let out = Span::new("data.scale", &out, kind, out_offset, count)?;
+    if out.is_contiguous() {
+        kind_loops::scale(source, factor, out);
+    } else {
+        kind_loops::scale_strided(source, factor, out);
+    }
+    Ok(())
+}
+
+#[inline(always)]
+fn scale_elements(source: Span, factor: f64, out: Span) {
     for i in 0..out.count {
         out.set(i, source.get(i) * factor);
     }
-    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -956,6 +1082,16 @@ fn clamp(
     }
     let source = Span::new("data.clamp", &source, kind, offset, count)?;
     let out = Span::new("data.clamp", &out, kind, out_offset, count)?;
+    if out.is_contiguous() {
+        kind_loops::clamp(source, low, high, out);
+    } else {
+        kind_loops::clamp_strided(source, low, high, out);
+    }
+    Ok(())
+}
+
+#[inline(always)]
+fn clamp_elements(source: Span, low: f64, high: f64, out: Span) {
     for i in 0..out.count {
         // As math.clamp: NaN passes through, since neither bound compares.
         let value = source.get(i);
@@ -970,7 +1106,6 @@ fn clamp(
             },
         );
     }
-    Ok(())
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1011,17 +1146,12 @@ fn argsort(
         None => {
             // Without scratch the keys are read once into a temporary, so the sort never
             // touches the buffer again and an `out` that overlaps `keys` is well defined.
-            let mut order: Vec<(f64, u32)> = (0..keys.count).map(|i| (keys.get(i), i as u32)).collect();
-            order.sort_by(|a, b| key_order(a.0, b.0));
-            for (slot, (_, index)) in order.iter().enumerate() {
-                out.set(slot, *index as usize);
-            }
+            kind_loops::sort_keys(keys, &out);
         }
         Some(scratch) => {
-            // Steady state, no allocation: a bottom-up stable merge sort of the index vector,
-            // alternating between `out` and the caller's scratch, reading keys from the span as
-            // it compares. The keys are read throughout, so neither index vector may overlap
-            // them, and the two index vectors may not overlap each other.
+            // Steady state, no allocation: the index vector moves between `out` and the caller's
+            // scratch, reading keys from the span as it goes. The keys are read throughout, so
+            // neither index vector may overlap them, and the two may not overlap each other.
             let scratch = Indices::new("data.argsort", &scratch, Exact(0), Some(Exact(keys.count as i64)))?;
             let key_bytes = byte_range(keys.base, keys.count, keys.stride, keys.kind.size());
             let out_bytes = byte_range(out.base, out.count, 4, 4);
@@ -1034,51 +1164,7 @@ fn argsort(
                     "data.argsort: keys, out and scratch must not overlap when scratch is given",
                 ));
             }
-            let total = keys.count;
-            for position in 0..total {
-                out.set(position, position);
-            }
-            let (mut from, mut to) = (&out, &scratch);
-            let mut width = 1;
-            while width < total {
-                let mut left = 0;
-                while left < total {
-                    let mid = (left + width).min(total);
-                    let right = (left + 2 * width).min(total);
-                    let (mut lower, mut upper, mut slot) = (left, mid, left);
-                    while lower < mid && upper < right {
-                        let (first, second) = (from.get(lower), from.get(upper));
-                        // Strictly less moves the upper run's element first; ties keep the
-                        // lower (earlier) run's element: stable.
-                        if key_order(keys.get(second), keys.get(first)) == Ordering::Less {
-                            to.set(slot, second);
-                            upper += 1;
-                        } else {
-                            to.set(slot, first);
-                            lower += 1;
-                        }
-                        slot += 1;
-                    }
-                    while lower < mid {
-                        to.set(slot, from.get(lower));
-                        lower += 1;
-                        slot += 1;
-                    }
-                    while upper < right {
-                        to.set(slot, from.get(upper));
-                        upper += 1;
-                        slot += 1;
-                    }
-                    left = right;
-                }
-                std::mem::swap(&mut from, &mut to);
-                width *= 2;
-            }
-            if !std::ptr::eq(from, &out) {
-                for position in 0..total {
-                    out.set(position, from.get(position));
-                }
-            }
+            kind_loops::sort_with_scratch(keys, &out, &scratch);
         }
     }
     Ok(keys.count as f64)
@@ -1098,17 +1184,15 @@ fn partition(
     let keys = Span::new("data.partition", &keys, Layout::parse("data.partition", kind)?, offset, count)?;
     let comparison = Comparison::parse("data.partition", comparison)?;
     let out = Indices::new("data.partition", &out, out_offset.unwrap_or(Exact(0)), Some(Exact(keys.count as i64)))?;
-    let accepted = (0..keys.count).filter(|&i| comparison.test(keys.get(i), threshold)).count();
-    let (mut front, mut back) = (0, accepted);
-    for i in 0..keys.count {
-        if comparison.test(keys.get(i), threshold) {
-            out.set(front, i);
-            front += 1;
-        } else {
-            out.set(back, i);
-            back += 1;
-        }
-    }
+    // The keys are read twice, to count and then to place, so an output over them could change the
+    // answer between the two and run its slots past the end. Then they are copied, read once as
+    // the operations table promises; the copy is kept alive by `_kept`.
+    let (_kept, keys) = keys.kept_from(&out);
+    let accepted = if keys.is_contiguous() {
+        kind_loops::partition(keys, comparison, threshold, &out)
+    } else {
+        kind_loops::partition_strided(keys, comparison, threshold, &out)
+    };
     Ok(accepted as f64)
 }
 
@@ -1183,6 +1267,13 @@ pub(crate) mod layout {
     };
 }
 
+#[cfg(test)]
+thread_local! {
+    /// How many receiver calls reached a bound method on this thread, so that `lowering`'s tests
+    /// can tell a hand-over from a native loop.
+    pub(crate) static BOUND_RECEIVER_CALLS: Cell<usize> = const { Cell::new(0) };
+}
+
 fn describe_typed<const K: u8>(d: &mut ExtensionDescriptor) {
     let mut receiver = d.userdata::<Typed<K>>(KIND_TYPE_NAMES[K as usize]);
     receiver.tag(TagPolicy::Preferred).compiler_type(CompilerTypePolicy::Preferred).doc(format!(
@@ -1203,6 +1294,8 @@ fn describe_typed<const K: u8>(d: &mut ExtensionDescriptor) {
                       count: Exact<i64>,
                       threshold: Option<f64>|
                       -> Result<StackResults> {
+                    #[cfg(test)]
+                    BOUND_RECEIVER_CALLS.set(BOUND_RECEIVER_CALLS.get() + 1);
                     let span = receiver.span(&what, &buffer, offset, count)?;
                     let threshold = match (filter, threshold) {
                         (Some(_), Some(threshold)) => threshold,
@@ -1242,18 +1335,11 @@ fn describe_select<const K: u8>(receiver: &mut crate::extension::UserdataBuilder
                       threshold: f64,
                       selection: &Selection|
                       -> Result<StackResults> {
+                    #[cfg(test)]
+                    BOUND_RECEIVER_CALLS.set(BOUND_RECEIVER_CALLS.get() + 1);
                     let span = receiver.span(&what, &buffer, offset, count)?;
                     selection.reset(span.count);
-                    {
-                        let mut bits = selection.bits.borrow_mut();
-                        for (word, chunk) in bits.iter_mut().zip((0..span.count).step_by(64)) {
-                            let mut mask = 0u64;
-                            for bit in 0..64.min(span.count - chunk) {
-                                mask |= u64::from(comparison.test(span.get(chunk + bit), threshold)) << bit;
-                            }
-                            *word = mask;
-                        }
-                    }
+                    select_words(&span, comparison, threshold, &mut selection.bits.borrow_mut());
                     Push::push_only(&call.arg(6), call)?;
                     Ok(StackResults)
                 },
@@ -1372,6 +1458,26 @@ impl Answer {
     }
 }
 
+/// The index of the first least (or greatest) element by a plain scan: the oracle for
+/// `kind_loops`' block scan.
+#[cfg(test)]
+#[inline(always)]
+fn extreme_elements(span: &Span, greatest: bool) -> Option<usize> {
+    if span.count == 0 {
+        return None;
+    }
+    let mut best = 0;
+    let mut value = span.get(0);
+    for i in 1..span.count {
+        let candidate = span.get(i);
+        if if greatest { candidate > value } else { candidate < value } {
+            best = i;
+            value = candidate;
+        }
+    }
+    Some(best)
+}
+
 impl ReductionOp {
     const ALL: [ReductionOp; 6] =
         [ReductionOp::Sum, ReductionOp::Min, ReductionOp::Max, ReductionOp::Count, ReductionOp::Any, ReductionOp::All];
@@ -1472,8 +1578,16 @@ impl Reduction {
         members
     };
 
-    /// The bound semantics, element by element in order: the oracle for the native loops.
+    /// The bound semantics: what the native loops are held to.
+    #[inline]
     fn run(self, span: &Span, threshold: f64) -> Answer {
+        if span.is_contiguous() { self.run_contiguous(*span, threshold) } else { self.run_strided(*span, threshold) }
+    }
+
+    /// The reduction as plain loops with the kind dispatched per element, element by element in
+    /// order: the oracle `kind_loops` is tested against.
+    #[cfg(test)]
+    fn run_elements(self, span: &Span, threshold: f64) -> Answer {
         let accept = |value: f64| self.filter.is_none_or(|comparison| comparison.test(value, threshold));
         match self.op {
             ReductionOp::Sum => {
@@ -1489,7 +1603,7 @@ impl Reduction {
             ReductionOp::Count => Answer::Number((0..span.count).filter(|&i| accept(span.get(i))).count() as f64),
             ReductionOp::Min | ReductionOp::Max if self.filter.is_none() => {
                 // The specialized scan: half the instructions of the generic path below.
-                extreme(span, self.op == ReductionOp::Max).map_or(Answer::Nil, |i| Answer::Number(span.get(i)))
+                extreme_elements(span, self.op == ReductionOp::Max).map_or(Answer::Nil, |i| Answer::Number(span.get(i)))
             }
             ReductionOp::Min | ReductionOp::Max => {
                 let mut best: Option<f64> = None;
@@ -1620,5 +1734,883 @@ impl Extension for DataExtension {
             table.push_into(frame)?;
             frame.set_global(LOWERING_GLOBAL)
         })
+    }
+}
+
+/// The compiled forms of each loop held to each other, byte for byte. The integration tests compare
+/// the public functions with handwritten Luau; these compare what LLVM made of the constant-kind
+/// loops with the generic ones. They only test anything optimized: run them with `--release` too.
+#[cfg(test)]
+mod loop_paths {
+    use super::{
+        Answer, Comparison, Indices, Kind, Reduction, ReductionOp, Span, add_elements, clamp_elements, fill_elements,
+        key_order, kind_loops, scale_elements,
+    };
+    use std::hint::black_box;
+
+    /// A wide stride must not cost a copy of everything between its elements.
+    #[test]
+    fn a_kept_span_holds_only_its_elements() {
+        const STRIDE: usize = 4096;
+        let mut storage = vec![0u8; STRIDE * 2 + 4];
+        storage[..4].copy_from_slice(&7u32.to_le_bytes());
+        storage[STRIDE..STRIDE + 4].copy_from_slice(&8u32.to_le_bytes());
+        storage[STRIDE * 2..].copy_from_slice(&9u32.to_le_bytes());
+        let base = storage.as_mut_ptr();
+        let keys = Span { base, kind: Kind::U32, stride: STRIDE, count: 3 };
+        let (copy, kept) = keys.kept_from(&Indices { base, count: 3 });
+        // Held for the reads below: the span points into it.
+        let copy = copy.expect("the output overlaps");
+        assert_eq!(copy.len(), 12);
+        assert_eq!(kept.base, copy.as_ptr().cast_mut());
+        assert_eq!(kept.stride, 4);
+        assert_eq!((kept.get(0), kept.get(1), kept.get(2)), (7.0, 8.0, 9.0));
+    }
+
+    // The oracle: plain loops whose kind stays a run-time value, so `get` and `set` really dispatch
+    // per element. `black_box` keeps LLVM from specializing them on what a test passes.
+    fn add_any(left: Span, right: Span, out: Span) {
+        add_elements(black_box(left), black_box(right), black_box(out));
+    }
+    fn scale_any(source: Span, factor: f64, out: Span) {
+        scale_elements(black_box(source), factor, black_box(out));
+    }
+    fn clamp_any(source: Span, low: f64, high: f64, out: Span) {
+        clamp_elements(black_box(source), low, high, black_box(out));
+    }
+    fn fill_any(span: Span, value: f64) {
+        fill_elements(black_box(span), value);
+    }
+    fn extreme_any(span: &Span, greatest: bool) -> Option<usize> {
+        super::extreme_elements(&black_box(*span), greatest)
+    }
+    fn count_any(span: Span, comparison: Comparison, threshold: f64) -> usize {
+        let span = black_box(span);
+        (0..span.count).filter(|&i| comparison.test(span.get(i), threshold)).count()
+    }
+    fn select_any(span: &Span, comparison: Comparison, threshold: f64, words: &mut [u64]) {
+        let span = black_box(*span);
+        for (word, chunk) in words.iter_mut().zip((0..span.count).step_by(64)) {
+            let mut mask = 0u64;
+            for bit in 0..64.min(span.count - chunk) {
+                mask |= u64::from(comparison.test(span.get(chunk + bit), threshold)) << bit;
+            }
+            *word = mask;
+        }
+    }
+    fn gather_any(source: Span, indices: &Indices, destination: Span) {
+        let (source, destination) = (black_box(source), black_box(destination));
+        for i in 0..indices.count {
+            destination.set(i, source.get(indices.get(i)));
+        }
+    }
+    fn scatter_any(source: Span, indices: &Indices, destination: Span) {
+        let (source, destination) = (black_box(source), black_box(destination));
+        for i in 0..source.count {
+            destination.set(indices.get(i), source.get(i));
+        }
+    }
+    fn partition_any(keys: Span, comparison: Comparison, threshold: f64, out: &Indices) -> usize {
+        let keys = black_box(keys);
+        let accepted = (0..keys.count).filter(|&i| comparison.test(keys.get(i), threshold)).count();
+        let (mut front, mut back) = (0, accepted);
+        for i in 0..keys.count {
+            if comparison.test(keys.get(i), threshold) {
+                out.set(front, i);
+                front += 1;
+            } else {
+                out.set(back, i);
+                back += 1;
+            }
+        }
+        accepted
+    }
+    /// The stable permutation by `key_order`, from a stable sort.
+    fn sorted_any(keys: Span) -> Vec<u32> {
+        let keys = black_box(keys);
+        let mut order: Vec<(f64, u32)> = (0..keys.count).map(|i| (keys.get(i), i as u32)).collect();
+        order.sort_by(|a, b| key_order(a.0, b.0));
+        order.into_iter().map(|(_, index)| index).collect()
+    }
+    impl Reduction {
+        fn run_any(self, span: &Span, threshold: f64) -> Answer {
+            self.run_elements(&black_box(*span), threshold)
+        }
+    }
+
+    /// The compiled forms of a loop. `Best` is what runs: AVX2 where the CPU has it, which is
+    /// `Baseline` everywhere else.
+    #[derive(Clone, Copy)]
+    enum Route {
+        Generic,
+        Baseline,
+        Best,
+    }
+
+    const PATTERNS: [u32; 26] = [
+        0x0000_0000,
+        0x8000_0000,
+        0x7f80_0000,
+        0xff80_0000,
+        0x7fc0_0000,
+        0xffc0_0000,
+        0x7fc1_2345,
+        0xffc5_4321,
+        0x7f80_0001,
+        0xff81_2345,
+        0x0000_0001,
+        0x8000_0001,
+        0x007f_ffff,
+        0x807f_ffff,
+        0x0080_0000,
+        0x7f7f_ffff,
+        0xff7f_ffff,
+        0x7f00_0000,
+        0x3f80_0000,
+        0x3f80_0001,
+        0x3f7f_ffff,
+        0xbf80_0000,
+        0x3380_0000,
+        0x3300_0000,
+        0x4b80_0000,
+        0x4b80_0001,
+    ];
+    const LENGTHS: [usize; 16] = [0, 1, 2, 3, 4, 5, 7, 8, 9, 15, 16, 17, 33, 64, 65, 257];
+    /// Output placement relative to an input, in bytes: identical, overlapping either way by
+    /// whole or split elements, and beyond any vector width.
+    const SHIFTS: [isize; 17] = [-132, -68, -64, -9, -8, -5, -4, -2, -1, 0, 1, 2, 4, 5, 8, 64, 132];
+    const MIDDLE: usize = 136;
+
+    struct Words(u32);
+
+    impl Words {
+        /// The numerical recipes LCG: deterministic, and the words go straight into buffers.
+        fn next(&mut self) -> u32 {
+            self.0 = self.0.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            self.0
+        }
+
+        fn corpus(&mut self, words: usize) -> Vec<u8> {
+            (0..words)
+                .flat_map(|_| {
+                    let pick = self.next() as usize % (PATTERNS.len() * 2);
+                    let word = if pick < PATTERNS.len() { PATTERNS[pick] } else { self.next() };
+                    word.to_ne_bytes()
+                })
+                .collect()
+        }
+    }
+
+    fn span_of(kind: Kind, bytes: &mut [u8], at: usize, count: usize) -> Span {
+        assert!(at + count * kind.size() <= bytes.len());
+        // SAFETY: inside the slice, checked above; the slice outlives the loop that uses the span
+        // and no reference to it is used while the loop runs.
+        Span { base: unsafe { bytes.as_mut_ptr().add(at) }, kind, stride: kind.size(), count }
+    }
+
+    fn span(bytes: &mut [u8], at: usize, count: usize) -> Span {
+        span_of(Kind::F32, bytes, at, count)
+    }
+
+    /// Makes `count` words from `at` finite. With two different NaNs the surviving payload is
+    /// whichever operand the optimizer put first, and the two paths may differ (the generic one
+    /// differs from itself between debug and release); the integration tests hold that case to
+    /// "a quieted copy of one of them". A finite operand leaves one NaN at most, which determines
+    /// every result, even where an overlapping write splits the words of the other operand.
+    fn finite(bytes: &mut [u8], at: usize, count: usize) {
+        for word in bytes[at..at + count * 4].as_chunks_mut::<4>().0 {
+            let bits = u32::from_ne_bytes(*word);
+            if bits & 0x7f80_0000 == 0x7f80_0000 {
+                *word = (bits & 0xbfff_ffff).to_ne_bytes();
+            }
+        }
+    }
+
+    fn first_difference(a: &[u8], b: &[u8]) -> Option<usize> {
+        a.iter().zip(b).position(|(a, b)| a != b)
+    }
+
+    /// Runs `operation` on a copy of `base` through each route and compares every byte.
+    fn agree(what: &str, base: &[u8], operation: impl Fn(&mut [u8], Route)) {
+        let mut generic = base.to_vec();
+        operation(&mut generic, Route::Generic);
+        for (name, route) in [("baseline", Route::Baseline), ("best", Route::Best)] {
+            let mut fast = base.to_vec();
+            operation(&mut fast, route);
+            if let Some(at) = first_difference(&fast, &generic) {
+                let word = at & !3;
+                let read = |bytes: &[u8]| u32::from_ne_bytes(bytes[word..word + 4].try_into().unwrap());
+                panic!("{what}: byte {at}: {name} {:#010x}, generic {:#010x}", read(&fast), read(&generic));
+            }
+        }
+    }
+
+    fn size(count: usize) -> usize {
+        MIDDLE * 2 + (count + 40) * 4
+    }
+
+    #[test]
+    fn add_agrees_at_every_placement() {
+        let mut words = Words(0x2545_f491);
+        for count in LENGTHS {
+            // Past anything the output can reach, the other operand when only one overlaps.
+            let size = (size(count) + count * 4) / 4 * 4;
+            let mut base = words.corpus(size / 4);
+            let far = size - (count + 1) * 4;
+            finite(&mut base, far, count);
+            for shift in SHIFTS {
+                let out = MIDDLE.wrapping_add_signed(shift);
+                for (place, left, right) in [("left", MIDDLE, far), ("right", far, MIDDLE), ("both", MIDDLE, MIDDLE)] {
+                    agree(&format!("add count={count} shift={shift} {place}"), &base, |bytes, route| {
+                        let (l, r, o) = (span(bytes, left, count), span(bytes, right, count), span(bytes, out, count));
+                        match route {
+                            Route::Generic => add_any(l, r, o),
+                            Route::Baseline => kind_loops::add_loop::<true>(l, r, o),
+                            Route::Best => kind_loops::add(l, r, o),
+                        }
+                    });
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn scale_agrees_at_every_placement_and_factor() {
+        let mut words = Words(0x1234_5678);
+        for count in LENGTHS {
+            let size = size(count) / 4 * 4;
+            let base = words.corpus(size / 4);
+            for factor in [1.0 / 3.0, 0.5, -1.0, 0.0, -0.0, 1e300, 1e-320, 1e39, f64::INFINITY] {
+                for shift in SHIFTS {
+                    let out = MIDDLE.wrapping_add_signed(shift);
+                    agree(&format!("scale count={count} factor={factor} shift={shift}"), &base, |bytes, route| {
+                        let (s, o) = (span(bytes, MIDDLE, count), span(bytes, out, count));
+                        match route {
+                            Route::Generic => scale_any(s, factor, o),
+                            Route::Baseline => kind_loops::scale_loop::<true>(s, factor, o),
+                            Route::Best => kind_loops::scale(s, factor, o),
+                        }
+                    });
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn clamp_agrees_at_every_placement_and_bound() {
+        let mut words = Words(0x0bad_cafe);
+        let bounds = [
+            (-5.0, 5.0),
+            (0.0, 0.0),
+            (-0.0, 0.0),
+            (0.0, -0.0),
+            (0.1, 0.2),
+            (f64::NEG_INFINITY, f64::INFINITY),
+            (1.0 + 2f64.powi(-30), 1.0 + 2f64.powi(-29)),
+            (1.0 + 2f64.powi(-24), 1.0 + 2f64.powi(-24)),
+            (1e39, 1e40),
+            (-1e40, -1e39),
+            (-1e-50, 1e-50),
+            (1e-50, 1e-49),
+            (-1e-49, -1e-50),
+            (f64::from(f32::MAX), f64::INFINITY),
+            // A large finite high bound is not an absent one: infinity and values above it clamp.
+            (-1.0, f64::from(f32::MAX)),
+            (-1.0, 1e35),
+            (-1.0, 1e39),
+            (0.0, f64::INFINITY),
+            (f64::NEG_INFINITY, f64::from(f32::MIN)),
+        ];
+        for count in LENGTHS {
+            let size = size(count) / 4 * 4;
+            let base = words.corpus(size / 4);
+            for (low, high) in bounds {
+                for shift in SHIFTS {
+                    let out = MIDDLE.wrapping_add_signed(shift);
+                    agree(&format!("clamp count={count} [{low}, {high}] shift={shift}"), &base, |bytes, route| {
+                        let (s, o) = (span(bytes, MIDDLE, count), span(bytes, out, count));
+                        match route {
+                            Route::Generic => clamp_any(s, low, high, o),
+                            Route::Baseline => kind_loops::clamp_loop::<true>(s, low, high, o),
+                            Route::Best => kind_loops::clamp(s, low, high, o),
+                        }
+                    });
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn fill_agrees_for_every_value() {
+        for count in LENGTHS {
+            let base = vec![0xa5; size(count)];
+            for at in [0, 1, 2, 3, 4] {
+                for value in [1.5, 0.1, -0.0, f64::NAN, -f64::NAN, f64::INFINITY, 1e39, -1e-46, 1.0 + 2f64.powi(-24)] {
+                    agree(&format!("fill count={count} at={at} value={value}"), &base, |bytes, route| {
+                        let s = span(bytes, at, count);
+                        match route {
+                            Route::Generic => fill_any(s, value),
+                            Route::Baseline => kind_loops::fill_loop::<true>(s, value),
+                            Route::Best => kind_loops::fill(s, value),
+                        }
+                    });
+                }
+            }
+        }
+    }
+
+    /// An answer as bits, so that which NaN and which zero came back counts.
+    fn answer(answer: &Answer) -> (u8, u64) {
+        match answer {
+            Answer::Number(value) => (0, value.to_bits()),
+            Answer::Nil => (1, 0),
+            Answer::Bool(value) => (2, u64::from(*value)),
+        }
+    }
+
+    const THRESHOLDS: [f64; 10] = [0.0, -0.0, 1.0, 0.1, -1.0, 1e39, -1e39, 1e-46, f64::INFINITY, f64::NAN];
+    /// Block boundaries and their neighbours, for the scans that work a block at a time.
+    const SCAN_LENGTHS: [usize; 15] = [0, 1, 2, 63, 64, 65, 66, 127, 128, 129, 130, 191, 192, 193, 257];
+
+    /// Every reduction member, comparison and threshold through every route, on `bytes`.
+    fn reductions_agree(what: &str, bytes: &mut [u8], at: usize, count: usize) {
+        reductions_agree_for(Kind::F32, what, bytes, at, count);
+    }
+
+    fn reductions_agree_for(kind: Kind, what: &str, bytes: &mut [u8], at: usize, count: usize) {
+        let s = span_of(kind, bytes, at, count);
+        for greatest in [false, true] {
+            let generic = extreme_any(&s, greatest);
+            assert_eq!(kind_loops::extreme(s, greatest), generic, "extreme {greatest} {what}");
+            assert_eq!(kind_loops::extreme_loop::<true>(s, greatest), generic, "baseline extreme {greatest} {what}");
+        }
+        let ops = [
+            ReductionOp::Sum,
+            ReductionOp::Min,
+            ReductionOp::Max,
+            ReductionOp::Count,
+            ReductionOp::Any,
+            ReductionOp::All,
+        ];
+        for op in [ReductionOp::Sum, ReductionOp::Min, ReductionOp::Max] {
+            let reduction = Reduction::new(op, None);
+            let (fast, plain) = (reduction.run_contiguous(s, 0.0), reduction.run_any(&s, 0.0));
+            reductions_match(kind, op, &fast, &plain, &format!("{op:?} {what}"));
+        }
+        for comparison in Comparison::ALL {
+            for threshold in THRESHOLDS {
+                let label = format!("{comparison:?} {threshold} {what}");
+                for op in ops {
+                    let reduction = Reduction::new(op, Some(comparison));
+                    let (fast, generic) = (reduction.run_contiguous(s, threshold), reduction.run_any(&s, threshold));
+                    reductions_match(kind, op, &fast, &generic, &format!("{op:?} {label}"));
+                }
+                let selected = count_any(s, comparison, threshold);
+                assert_eq!(kind_loops::count(s, comparison, threshold), selected, "count {label}");
+                assert_eq!(
+                    kind_loops::count_loop::<true>(s, comparison, threshold),
+                    selected,
+                    "baseline count {label}"
+                );
+                let any = Reduction::new(ReductionOp::Any, Some(comparison)).run_any(&s, threshold);
+                let all = Reduction::new(ReductionOp::All, Some(comparison)).run_any(&s, threshold);
+                let (found, missed) = (
+                    kind_loops::find_loop::<true>(s, comparison, threshold, true),
+                    kind_loops::find_loop::<true>(s, comparison, threshold, false),
+                );
+                assert_eq!((2, u64::from(found)), answer(&any), "baseline any {label}");
+                assert_eq!((2, u64::from(!missed)), answer(&all), "baseline all {label}");
+                let mut generic = vec![0; count.div_ceil(64)];
+                select_any(&s, comparison, threshold, &mut generic);
+                let mut fast = vec![u64::MAX; count.div_ceil(64)];
+                kind_loops::select(s, comparison, threshold, &mut fast);
+                assert_eq!(fast, generic, "select {label}");
+                fast.fill(u64::MAX);
+                kind_loops::select_loop::<true>(s, comparison, threshold, &mut fast);
+                assert_eq!(fast, generic, "baseline select {label}");
+            }
+        }
+    }
+
+    /// The narrowed threshold against the comparison it replaces, around every `f32` and `f64`
+    /// boundary that could tell them apart: the elements themselves, their neighbours in both
+    /// widths, the midpoints between adjacent `f32` values, and everything past the `f32` range.
+    #[test]
+    fn narrowed_thresholds_answer_as_the_wide_comparison() {
+        let mut elements: Vec<f32> = PATTERNS.iter().map(|bits| f32::from_bits(*bits)).collect();
+        let mut words = Words(0x7e57_ab1e);
+        elements.extend((0..200).map(|_| f32::from_bits(words.next())));
+        elements.extend(elements.clone().iter().flat_map(|value| [value.next_up(), value.next_down()]));
+        let mut thresholds = vec![
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::NAN,
+            -f64::NAN,
+            f64::MAX,
+            f64::MIN,
+            f64::MIN_POSITIVE,
+            -f64::MIN_POSITIVE,
+            1e-320,
+            -1e-320,
+            1e-50,
+            -1e-50,
+            1e39,
+            -1e39,
+        ];
+        for value in &elements {
+            let wide = f64::from(*value);
+            let midpoint = f64::midpoint(wide, f64::from(value.next_up()));
+            thresholds.extend([
+                wide,
+                wide.next_up(),
+                wide.next_down(),
+                midpoint,
+                midpoint.next_up(),
+                midpoint.next_down(),
+            ]);
+        }
+        for comparison in Comparison::ALL {
+            for threshold in &thresholds {
+                let narrow = comparison.narrow(*threshold);
+                for value in &elements {
+                    assert_eq!(
+                        comparison.test_f32(*value, narrow),
+                        comparison.test(f64::from(*value), *threshold),
+                        "{value:e} {comparison:?} {threshold:e} narrowed to {narrow:e}",
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn reductions_agree_on_the_corpus() {
+        let mut words = Words(0x0dea_df00);
+        for count in LENGTHS.into_iter().chain(SCAN_LENGTHS) {
+            for at in [0, 1, 2, 3] {
+                let mut bytes = vec![0; at];
+                bytes.extend(words.corpus(count));
+                reductions_agree(&format!("count={count} at={at}"), &mut bytes, at, count);
+            }
+        }
+    }
+
+    /// One deciding element at every position around the blocks, over a constant background: the
+    /// improvement a block test must not miss, the tie it must not take, the NaN it must ignore.
+    #[test]
+    fn reductions_agree_with_one_deciding_element_anywhere() {
+        let backgrounds = [1.0f32, 0.0, -0.0, f32::NAN];
+        let deciders = [-2.0f32, 2.0, 1.0, 0.0, -0.0, f32::NAN, f32::INFINITY, f32::NEG_INFINITY, f32::from_bits(1)];
+        for count in [64usize, 65, 129, 130] {
+            // Both ends of each block, where a scan that miscounts would miss it.
+            for position in (0..count).filter(|position| !(4..60).contains(&(position % 64))) {
+                for background in backgrounds {
+                    for decider in deciders {
+                        let mut bytes: Vec<u8> = (0..count)
+                            .flat_map(|i| (if i == position { decider } else { background }).to_ne_bytes())
+                            .collect();
+                        let what = format!("count={count} position={position} {background} then {decider}");
+                        reductions_agree(&what, &mut bytes, 0, count);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Strictly improving and strictly worsening runs: the block scan's worst case and best case.
+    #[test]
+    fn extremes_agree_on_monotonic_runs() {
+        for count in SCAN_LENGTHS {
+            let mut rising: Vec<u8> = (0..count).flat_map(|i| (i as f32).to_ne_bytes()).collect();
+            let mut falling: Vec<u8> = (0..count).flat_map(|i| (-(i as f32)).to_ne_bytes()).collect();
+            reductions_agree(&format!("rising {count}"), &mut rising, 0, count);
+            reductions_agree(&format!("falling {count}"), &mut falling, 0, count);
+        }
+    }
+
+    /// Every kind other than `f32`. Integer writes wrap and truncate, so the corpus of raw words
+    /// and these factors and bounds reach every conversion rule: NaN writes zero, values past 2^63
+    /// saturate before the wrap, fractions truncate toward zero.
+    const OTHER_KINDS: [Kind; 7] = [Kind::U8, Kind::I8, Kind::U16, Kind::I16, Kind::U32, Kind::I32, Kind::F64];
+    const OTHER_LENGTHS: [usize; 9] = [0, 1, 3, 8, 17, 33, 64, 65, 257];
+
+    /// As [`finite`], for `f64` words.
+    fn finite_f64(bytes: &mut [u8], at: usize, count: usize) {
+        for word in bytes[at..at + count * 8].as_chunks_mut::<8>().0 {
+            let bits = u64::from_ne_bytes(*word);
+            if bits & 0x7ff0_0000_0000_0000 == 0x7ff0_0000_0000_0000 {
+                *word = (bits & 0xbfff_ffff_ffff_ffff).to_ne_bytes();
+            }
+        }
+    }
+
+    /// The word count of a corpus holding `bytes` bytes, rounded up.
+    fn corpus_of(words: &mut Words, bytes: usize) -> Vec<u8> {
+        let mut base = words.corpus(bytes.div_ceil(4));
+        base.truncate(bytes);
+        base
+    }
+
+    #[test]
+    fn other_kinds_agree_at_every_placement() {
+        let mut words = Words(0x51ed_270b);
+        for kind in OTHER_KINDS {
+            let width = kind.size();
+            for count in OTHER_LENGTHS {
+                // Past anything the output can reach, the other operand when only one overlaps.
+                let total = MIDDLE * 2 + (2 * count + 40) * width;
+                let mut base = corpus_of(&mut words, total);
+                let far = total - (count + 1) * width;
+                if kind == Kind::F64 {
+                    finite_f64(&mut base, far, count);
+                }
+                let what = format!("{kind:?} count={count}");
+                for shift in SHIFTS {
+                    let out = MIDDLE.wrapping_add_signed(shift);
+                    for (left, right) in [(MIDDLE, far), (far, MIDDLE), (MIDDLE, MIDDLE)] {
+                        agree(&format!("add {what} shift={shift} {left} {right}"), &base, |bytes, route| {
+                            let (l, r, o) = (
+                                span_of(kind, bytes, left, count),
+                                span_of(kind, bytes, right, count),
+                                span_of(kind, bytes, out, count),
+                            );
+                            match route {
+                                Route::Generic => add_any(l, r, o),
+                                Route::Baseline => kind_loops::add_loop::<true>(l, r, o),
+                                Route::Best => kind_loops::add(l, r, o),
+                            }
+                        });
+                    }
+                    for factor in [1.0 / 3.0, -1.9, 3.0, 0.0, 1e300, -1e300, f64::INFINITY] {
+                        agree(&format!("scale {what} shift={shift} factor={factor}"), &base, |bytes, route| {
+                            let (s, o) = (span_of(kind, bytes, MIDDLE, count), span_of(kind, bytes, out, count));
+                            match route {
+                                Route::Generic => scale_any(s, factor, o),
+                                Route::Baseline => kind_loops::scale_loop::<true>(s, factor, o),
+                                Route::Best => kind_loops::scale(s, factor, o),
+                            }
+                        });
+                    }
+                    for (low, high) in [(-5.0, 5.0), (0.5, 0.5), (-1.9, 1.9), (0.0, f64::INFINITY), (1e300, 1e301)] {
+                        agree(&format!("clamp {what} shift={shift} [{low}, {high}]"), &base, |bytes, route| {
+                            let (s, o) = (span_of(kind, bytes, MIDDLE, count), span_of(kind, bytes, out, count));
+                            match route {
+                                Route::Generic => clamp_any(s, low, high, o),
+                                Route::Baseline => kind_loops::clamp_loop::<true>(s, low, high, o),
+                                Route::Best => kind_loops::clamp(s, low, high, o),
+                            }
+                        });
+                    }
+                }
+                for value in [1.5, -1.9, 300.0, -300.0, 70000.5, 5e9, 1e300, f64::NAN, f64::INFINITY, -0.0] {
+                    agree(&format!("fill {what} value={value}"), &base, |bytes, route| {
+                        let s = span_of(kind, bytes, 3, count);
+                        match route {
+                            Route::Generic => fill_any(s, value),
+                            Route::Baseline => kind_loops::fill_loop::<true>(s, value),
+                            Route::Best => kind_loops::fill(s, value),
+                        }
+                    });
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn other_kinds_reductions_agree_on_the_corpus() {
+        let mut words = Words(0x2f6e_2b1d);
+        for kind in OTHER_KINDS {
+            for count in OTHER_LENGTHS.into_iter().chain([63, 127, 128, 129, 193]) {
+                for at in [0, 1] {
+                    let mut bytes = corpus_of(&mut words, at + count * kind.size());
+                    reductions_agree_for(kind, &format!("{kind:?} count={count} at={at}"), &mut bytes, at, count);
+                }
+            }
+        }
+    }
+
+    fn strided_of(kind: Kind, bytes: &mut [u8], at: usize, count: usize, stride: usize) -> Span {
+        if count > 0 {
+            assert!(at + (count - 1) * stride + kind.size() <= bytes.len());
+        }
+        // SAFETY: as `span_of`, with the checked extent above.
+        Span { base: unsafe { bytes.as_mut_ptr().add(at) }, kind, stride, count }
+    }
+
+    /// Strided layouts of every kind, each operation against the plain loop, including outputs that
+    /// overlap their source either way. Fields overlap their neighbours at a stride below 2 sizes.
+    #[test]
+    fn strided_layouts_agree_with_the_plain_loops() {
+        let mut words = Words(0x6c07_8965);
+        for kind in super::KINDS {
+            let size = kind.size();
+            // Off the common record sizes, and on the ones `f32` reads have constant loops for.
+            for stride in [size + 1, size * 2 + 3, 8.max(size + 1), 12, 16] {
+                for count in [0usize, 1, 3, 8, 33, 65, 129] {
+                    let total = 64 + (2 * count + 8) * stride;
+                    let mut base = corpus_of(&mut words, total);
+                    let far = total - (count + 1) * stride;
+                    if kind == Kind::F32 {
+                        for i in 0..count {
+                            finite(&mut base, far + i * stride, 1);
+                        }
+                    } else if kind == Kind::F64 {
+                        for i in 0..count {
+                            finite_f64(&mut base, far + i * stride, 1);
+                        }
+                    }
+                    let what = format!("{kind:?}@{stride} count={count}");
+                    for shift in [-16isize, -1, 0, 1, stride as isize, 16] {
+                        let out = 24usize.wrapping_add_signed(shift);
+                        let span = |bytes: &mut [u8], at| strided_of(kind, bytes, at, count, stride);
+                        agree(&format!("add {what} shift={shift}"), &base, |bytes, route| {
+                            let (l, r, o) = (span(bytes, 24), span(bytes, far), span(bytes, out));
+                            if matches!(route, Route::Generic) {
+                                add_any(l, r, o);
+                            } else {
+                                kind_loops::add_strided(l, r, o);
+                            }
+                        });
+                        for factor in [1.0 / 3.0, -1.9, 3.0, 1e300] {
+                            agree(&format!("scale {what} shift={shift} {factor}"), &base, |bytes, route| {
+                                let (s, o) = (span(bytes, 24), span(bytes, out));
+                                if matches!(route, Route::Generic) {
+                                    scale_any(s, factor, o);
+                                } else {
+                                    kind_loops::scale_strided(s, factor, o);
+                                }
+                            });
+                        }
+                        for (low, high) in [(-5.0, 5.0), (0.5, 0.5), (0.0, f64::INFINITY), (1e39, 1e40)] {
+                            agree(&format!("clamp {what} shift={shift} [{low}, {high}]"), &base, |bytes, route| {
+                                let (s, o) = (span(bytes, 24), span(bytes, out));
+                                if matches!(route, Route::Generic) {
+                                    clamp_any(s, low, high, o);
+                                } else {
+                                    kind_loops::clamp_strided(s, low, high, o);
+                                }
+                            });
+                        }
+                    }
+                    for value in [1.5, -1.9, 300.0, 1e300, f64::NAN] {
+                        agree(&format!("fill {what} {value}"), &base, |bytes, route| {
+                            let s = strided_of(kind, bytes, 3, count, stride);
+                            if matches!(route, Route::Generic) {
+                                fill_any(s, value);
+                            } else {
+                                kind_loops::fill_strided(s, value);
+                            }
+                        });
+                    }
+                    let s = strided_of(kind, &mut base, 5, count, stride);
+                    for greatest in [false, true] {
+                        assert_eq!(
+                            kind_loops::extreme_strided(s, greatest),
+                            extreme_any(&s, greatest),
+                            "extreme {what}"
+                        );
+                    }
+                    for op in [ReductionOp::Sum, ReductionOp::Min, ReductionOp::Max] {
+                        let reduction = Reduction::new(op, None);
+                        let (fast, plain) = (reduction.run_strided(s, 0.0), reduction.run_any(&s, 0.0));
+                        reductions_match(kind, op, &fast, &plain, &format!("{op:?} {what}"));
+                    }
+                    for comparison in Comparison::ALL {
+                        for threshold in THRESHOLDS {
+                            let label = format!("{comparison:?} {threshold} {what}");
+                            for op in [
+                                ReductionOp::Sum,
+                                ReductionOp::Min,
+                                ReductionOp::Max,
+                                ReductionOp::Count,
+                                ReductionOp::Any,
+                                ReductionOp::All,
+                            ] {
+                                let reduction = Reduction::new(op, Some(comparison));
+                                let (fast, plain) =
+                                    (reduction.run_strided(s, threshold), reduction.run_any(&s, threshold));
+                                reductions_match(kind, op, &fast, &plain, &format!("{op:?} {label}"));
+                            }
+                            let mut fast = vec![u64::MAX; count.div_ceil(64)];
+                            let mut plain = vec![0; count.div_ceil(64)];
+                            kind_loops::select_strided(s, comparison, threshold, &mut fast);
+                            select_any(&s, comparison, threshold, &mut plain);
+                            assert_eq!(fast, plain, "select {label}");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Answers must be equal bit for bit, except a sum of NaNs: which NaN survives is unspecified.
+    fn reductions_match(kind: Kind, op: ReductionOp, fast: &Answer, plain: &Answer, what: &str) {
+        if let (ReductionOp::Sum, Answer::Number(a), Answer::Number(b)) = (op, fast, plain)
+            && a.is_nan()
+            && b.is_nan()
+        {
+            return;
+        }
+        assert_eq!(answer(fast), answer(plain), "{kind:?} {what}");
+    }
+
+    /// Filtered sums, minima and maxima on contiguous spans, where the block tests are.
+    #[test]
+    fn filtered_reductions_agree_with_a_sparse_or_dense_filter() {
+        let mut words = Words(0x3c6e_f372);
+        for kind in super::KINDS {
+            for count in [0usize, 1, 7, 8, 9, 63, 64, 65, 129, 300] {
+                let mut bytes = corpus_of(&mut words, count * kind.size());
+                let s = span_of(kind, &mut bytes, 0, count);
+                for comparison in Comparison::ALL {
+                    // Thresholds at each kind's extremes make a filter accept almost nothing or almost all.
+                    for threshold in [0.0, 1.0, -1.0, 100.0, 250.0, 1e9, -1e9, 1e30, -1e30, f64::NAN] {
+                        for op in [ReductionOp::Sum, ReductionOp::Min, ReductionOp::Max] {
+                            let reduction = Reduction::new(op, Some(comparison));
+                            let (fast, plain) =
+                                (reduction.run_contiguous(s, threshold), reduction.run_any(&s, threshold));
+                            reductions_match(
+                                kind,
+                                op,
+                                &fast,
+                                &plain,
+                                &format!("{op:?} {comparison:?} {threshold} {count}"),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn index_bytes(values: impl Iterator<Item = u32>) -> Vec<u8> {
+        values.flat_map(u32::to_ne_bytes).collect()
+    }
+
+    fn indices_over(bytes: &mut [u8], at: usize, count: usize) -> Indices {
+        assert!(at + count * 4 <= bytes.len());
+        // SAFETY: inside the slice, checked above.
+        Indices { base: unsafe { bytes.as_mut_ptr().add(at) }, count }
+    }
+
+    #[test]
+    fn gather_and_scatter_agree_including_overlaps_and_signaling_nans() {
+        let mut words = Words(0x1f83_d9ab);
+        for kind in super::KINDS {
+            let size = kind.size();
+            for stride in [size, size + 1, size * 2 + 3] {
+                for count in [0usize, 1, 3, 8, 17, 64, 65] {
+                    let total = 128 + (2 * count + 8) * stride;
+                    let base = corpus_of(&mut words, total);
+                    let mut indices = index_bytes((0..count).map(|_| words.next() % count.max(1) as u32));
+                    let what = format!("{kind:?}@{stride} count={count}");
+                    for shift in [-8isize, -1, 0, 1, 8, 64] {
+                        let destination = 24usize.wrapping_add_signed(shift);
+                        agree(&format!("gather {what} shift={shift}"), &base, |bytes, route| {
+                            let source = strided_of(kind, bytes, 24, count, stride);
+                            let out = span_of(kind, bytes, destination, count);
+                            let mut copy = indices.clone();
+                            let order = indices_over(&mut copy, 0, count);
+                            match route {
+                                Route::Generic => gather_any(source, &order, out),
+                                _ if stride == size => kind_loops::gather(source, &order, out),
+                                _ => kind_loops::gather_strided(source, &order, out),
+                            }
+                        });
+                        agree(&format!("scatter {what} shift={shift}"), &base, |bytes, route| {
+                            let source = span_of(kind, bytes, 24, count);
+                            let out = strided_of(kind, bytes, destination, count, stride);
+                            let mut copy = indices.clone();
+                            let order = indices_over(&mut copy, 0, count);
+                            match route {
+                                Route::Generic => scatter_any(source, &order, out),
+                                _ if stride == size => kind_loops::scatter(source, &order, out),
+                                _ => kind_loops::scatter_strided(source, &order, out),
+                            }
+                        });
+                    }
+                    indices.clear();
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn partition_agrees_including_output_over_the_keys() {
+        let mut words = Words(0x5be0_cd19);
+        for kind in super::KINDS {
+            let size = kind.size();
+            for stride in [size, size + 1, size * 2 + 3] {
+                for count in [0usize, 1, 3, 8, 17, 64, 65, 129] {
+                    let total = 64 + (count + 8) * stride.max(4) + count * 4;
+                    let base = corpus_of(&mut words, total);
+                    for comparison in Comparison::ALL {
+                        for threshold in [0.0, 1.0, -1.0, 100.0, f64::NAN] {
+                            // Past the keys: `partition` copies any keys its output overlaps, and a
+                            // test through Luau holds that case to the answer on separate buffers.
+                            {
+                                let out_at = total - count * 4;
+                                let what = format!("{kind:?}@{stride} {count} {comparison:?} {threshold}");
+                                agree(&what, &base, |bytes, route| {
+                                    let keys = strided_of(kind, bytes, 16, count, stride);
+                                    let out = indices_over(bytes, out_at, count);
+                                    let accepted = match route {
+                                        Route::Generic => partition_any(keys, comparison, threshold, &out),
+                                        _ if stride == size => kind_loops::partition(keys, comparison, threshold, &out),
+                                        _ => kind_loops::partition_strided(keys, comparison, threshold, &out),
+                                    };
+                                    let accepted = accepted as u32;
+                                    bytes[..4].copy_from_slice(&accepted.to_ne_bytes());
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Both zeros tie, every NaN ties and comes last, and ties keep their order, on every path:
+    /// the allocating sort, the merge below the radix length, and the radix sort from it.
+    #[test]
+    fn argsort_agrees_with_a_stable_sort() {
+        let mut words = Words(0x9b05_688c);
+        for kind in super::KINDS {
+            let size = kind.size();
+            for stride in [size, size + 3] {
+                for count in [0usize, 1, 2, 3, 7, 64, 511, 512, 513, 2000] {
+                    // Raw words for every bit pattern, then a small alphabet for long runs of ties.
+                    for mut bytes in [
+                        corpus_of(&mut words, 8 + count * stride + size),
+                        (0..8 + count * stride + size).map(|_| (words.next() >> 28) as u8).collect::<Vec<u8>>(),
+                    ] {
+                        let keys = strided_of(kind, &mut bytes, 8, count, stride);
+                        let expected = sorted_any(keys);
+                        let mut out = vec![0u8; count * 4];
+                        let mut scratch = vec![0u8; count * 4];
+                        let (order, spare) = (indices_over(&mut out, 0, count), indices_over(&mut scratch, 0, count));
+                        kind_loops::sort_keys(keys, &order);
+                        let got: Vec<u32> = (0..count).map(|i| order.get(i) as u32).collect();
+                        assert_eq!(got, expected, "sort_keys {kind:?}@{stride} count={count}");
+                        kind_loops::sort_with_scratch(keys, &order, &spare);
+                        let got: Vec<u32> = (0..count).map(|i| order.get(i) as u32).collect();
+                        assert_eq!(got, expected, "sort_with_scratch {kind:?}@{stride} count={count}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn eligibility_is_exactly_stride_equal_to_size() {
+        let mut bytes = vec![0u8; 64];
+        for kind in super::KINDS {
+            let base = span_of(kind, &mut bytes, 0, 2);
+            assert!(base.is_contiguous(), "{kind:?}");
+            for extra in [1, 3, 8] {
+                let stride = kind.size() + extra;
+                assert!(!Span { stride, ..base }.is_contiguous(), "{kind:?} at stride {stride}");
+            }
+        }
     }
 }

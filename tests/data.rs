@@ -467,10 +467,9 @@ fn run_native(runtime: &Runtime, chunk: &str) -> u64 {
 #[test]
 fn kind_receiver_reductions_lower_to_native_loops_with_the_bound_semantics() {
     let Some((runtime, before)) = native_runtime() else { return };
-    let chunk = per_kind_chunk(
-        r"
+    let body = r"
         local name, size = '{name}', {size}
-        local n = 1000
+        local n = {n}
         local buf = buffer.create(n * size + 5)
         local write = buffer['write' .. name]
         for i = 0, n - 1 do
@@ -487,7 +486,7 @@ fn kind_receiver_reductions_lower_to_native_loops_with_the_bound_semantics() {
         assert(S:countGt(buf, 5, n // 2, 3) == data.countWhere(buf, name .. '@' .. (size * 2), 5, n // 2, 'gt', 3), name .. ' strided count')
         assert(S:min(buf, 5, n // 2) == data.min(buf, name .. '@' .. (size * 2), 5, n // 2), name .. ' strided min')
         if name == 'f32' or name == 'f64' then
-            write(buf, 5 + 400 * size, nan)
+            write(buf, 5 + (n * 2 // 5) * size, nan)
             local total = K:sum(buf, 5, n)
             assert(total ~= total and data.sum(buf, name, 5, n) ~= total, name .. ' NaN sum')
         end
@@ -496,8 +495,8 @@ fn kind_receiver_reductions_lower_to_native_loops_with_the_bound_semantics() {
         assert(K:min(buf, 5, 0) == nil and K:max(buf, 5, 0) == nil, name .. ' empty extrema')
         if name == 'f32' or name == 'f64' then
             -- A leading NaN stays in min/max on both paths; a later one never replaces.
-            assert(K:min(buf, 5 + 400 * size, 10) ~= K:min(buf, 5 + 400 * size, 10), name .. ' leading NaN')
-            assert(K:min(buf, 5, 500) == data.min(buf, name, 5, 500), name .. ' later NaN')
+            assert(K:min(buf, 5 + (n * 2 // 5) * size, 10) ~= K:min(buf, 5 + (n * 2 // 5) * size, 10), name .. ' leading NaN')
+            assert(K:min(buf, 5, n // 2) == data.min(buf, name, 5, n // 2), name .. ' later NaN')
         end
         -- Misuse leaves native code for the binder, whose errors are the contract.
         local ok, message = pcall(function() return K:sum(buf, 5, n + 1) end)
@@ -508,9 +507,10 @@ fn kind_receiver_reductions_lower_to_native_loops_with_the_bound_semantics() {
         assert(not ok, name .. ' not a buffer')
         ok, message = pcall(function() return K:sum(buf, -1, 1) end)
         assert(not ok and string.find(message, 'negative offset', 1, true), name .. ': ' .. tostring(message))
-        ",
-    );
-    let blocks = run_native(&runtime, &chunk);
+        ";
+    // Short spans run the IR loops; long ones leave for the bound loops. Both answer the same.
+    let blocks: u64 =
+        ["100", "1000"].iter().map(|n| run_native(&runtime, &per_kind_chunk(&body.replace("{n}", n)))).sum();
     assert!(l3i::data::lowering::lowered_sites() > before, "the annotated receivers' calls were lowered");
     // Eight kinds, each thousands of loop iterations in native blocks (an interpreted run
     // records a few dozen); the slow paths exit to the binder.
@@ -576,7 +576,10 @@ fn strided_layouts_read_one_field_of_packed_records() {
 fn every_receiver_member_lowers_and_agrees_with_the_module_functions() {
     let Some((runtime, _)) = native_runtime() else { return };
     let mut total_blocks = 0;
-    for op in ["sum", "min", "max", "count", "any", "all"] {
+    // Either side of each length where a lowered call leaves for the bound method.
+    let ops = ["sum", "min", "max", "count", "any", "all"];
+    for (n, op) in [127, 1024].into_iter().flat_map(|n| ops.map(|op| (n, op))) {
+        // Both sides of every hand-over length, 128, 512 and 1,024, are covered by these two.
         // The module spells the filtered count countWhere, apart from bytes.count.
         let module = if op == "count" { "countWhere" } else { op };
         let mut checks = String::new();
@@ -595,7 +598,7 @@ fn every_receiver_member_lowers_and_agrees_with_the_module_functions() {
         }
         let chunk = per_kind_chunk(&format!(
             "local name, size = '{{name}}', {{size}}\n\
-             local n = 777\n\
+             local n = {n}\n\
              local buf = buffer.create(n * size + 5)\n\
              local write = buffer['write' .. name]\n\
              for i = 0, n - 1 do\n\
@@ -603,7 +606,7 @@ fn every_receiver_member_lowers_and_agrees_with_the_module_functions() {
                  if name == 'f32' or name == 'f64' then v = v / 3 end\n\
                  write(buf, 5 + i * size, v)\n\
              end\n\
-             if name == 'f64' then write(buf, 5 + 401 * size, nan) end\n\
+             if name == 'f64' then write(buf, 5 + (n // 2) * size, nan) end\n\
              local K: dream_data_Kind_{{name}} = {{ctor}}()\n\
              {checks}\
              local S: dream_data_Kind_{{name}} = {{ctor}}(size * 2)\n\
@@ -641,10 +644,9 @@ fn receiver_selections_match_select_for_every_kind() {
 #[test]
 fn receiver_selections_lower_to_native_loops() {
     let Some((runtime, before)) = native_runtime() else { return };
-    let chunk = per_kind_chunk(
-        r"
+    let body = r"
         local name, size = '{name}', {size}
-        local n = 1500
+        local n = {n}
         local buf = buffer.create(n * size + 3)
         for i = 0, n - 1 do buffer['write' .. name](buf, 3 + i * size, (i * 37) % 13 - (string.sub(name, 1, 1) == 'u' and 0 or 6)) end
         local K: dream_data_Kind_{name} = {ctor}()
@@ -661,9 +663,9 @@ fn receiver_selections_lower_to_native_loops() {
         S:selectNe(buf, 3, n // 2, 1, half)
         data.select(buf, name .. '@' .. (size * 2), 3, n // 2, 'ne', 1, theirs)
         assert(half:len() == n // 2 and half:xor(theirs):count() == 0, name .. ' strided select')
-        ",
-    );
-    let blocks = run_native(&runtime, &chunk);
+        ";
+    let blocks: u64 =
+        ["100", "1500"].iter().map(|n| run_native(&runtime, &per_kind_chunk(&body.replace("{n}", n)))).sum();
     assert!(l3i::data::lowering::lowered_sites() > before, "the select calls were lowered");
     assert!(blocks > 5_000, "native blocks executed: {blocks}");
 }
@@ -731,6 +733,635 @@ fn native_spans_that_overflow_take_the_raising_path() {
             assert(not ok and string.find(message, 'exceeds the buffer length', 1, true), '{name}: ' .. tostring(message))
         end
         assert(plainSum() == 0, '{name}: an ordinary span still sums')
+        ",
+    );
+    run_native(&runtime, &chunk);
+    assert!(l3i::data::lowering::lowered_sites() > before, "the receiver calls were lowered");
+}
+
+/// Every index is checked before anything is written, so nothing written may change an index that
+/// was checked: an output over the index vector must not turn into an unchecked read or write.
+#[test]
+fn an_output_over_the_indices_cannot_reach_outside_the_span() {
+    exec(
+        r"
+        -- gather: position 0 writes a huge value over the index position 1 will use.
+        local source = buffer.create(16)
+        buffer.writeu32(source, 0, 0x7fffffff)
+        buffer.writeu32(source, 4, 11)
+        local order = buffer.create(12)
+        buffer.writeu32(order, 0, 0) buffer.writeu32(order, 4, 1) buffer.writeu32(order, 8, 1)
+        assert(data.gather(source, 'u32', 0, 2, order, order, 4, 2) == 2)
+        assert(buffer.readu32(order, 4) == 0x7fffffff and buffer.readu32(order, 8) == 11, 'the indices as they were checked')
+        -- scatter: the same, except that the unchecked index would have aimed a write.
+        local values = buffer.create(8)
+        buffer.writeu32(values, 0, 0x7fffffff)
+        buffer.writeu32(values, 4, 22)
+        local target = buffer.create(16)
+        buffer.writeu32(target, 0, 1) buffer.writeu32(target, 4, 2)
+        assert(data.scatter(values, 'u32', 0, 2, target, target, 0, 4) == 2)
+        assert(buffer.readu32(target, 4) == 0x7fffffff and buffer.readu32(target, 8) == 22, 'the indices as they were checked')
+    ",
+    );
+}
+
+/// `partition` reads its keys twice. An output over them must not change the answer between the
+/// reads, which would run its slots past the end of the output.
+#[test]
+fn a_partition_over_its_keys_answers_as_if_they_were_separate() {
+    exec(
+        r"
+        for _, n in {1, 2, 5, 9, 64, 65, 130} do
+            for _, kind in {'u32', 'f32'} do
+                local keys = buffer.create(n * 8 + 8)
+                for i = 0, n - 1 do buffer.writeu32(keys, i * 4, (i * 2654435761) % 4294967296) end
+                local want = buffer.create(n * 4)
+                local accepted = data.partition(keys, kind, 0, n, 'gt', 2147483648, want)
+                for _, at in {0, 4, 8, 2} do
+                    local overlapping = buffer.create(buffer.len(keys))
+                    buffer.copy(overlapping, 0, keys)
+                    assert(data.partition(overlapping, kind, 0, n, 'gt', 2147483648, overlapping, at) == accepted, `{kind} {n} at {at}`)
+                    for i = 0, n - 1 do
+                        assert(buffer.readu32(overlapping, at + i * 4) == buffer.readu32(want, i * 4), `{kind} {n} at {at}: slot {i}`)
+                    end
+                end
+            end
+        end
+    ",
+    );
+}
+
+/// A strided span's copy holds only its elements, and answers as the span would.
+#[test]
+fn a_partition_over_strided_keys_answers_as_if_they_were_separate() {
+    exec(
+        r"
+        for _, n in {1, 2, 5, 9, 64} do
+            for _, layout in {{'u32@16', 16}, {'f32@8', 8}, {'u32@4096', 4096}} do
+                local kind, stride = layout[1], layout[2]
+                local keys = buffer.create(n * stride + n * 4 + 8)
+                for i = 0, n - 1 do buffer.writeu32(keys, i * stride, (i * 2654435761) % 4294967296) end
+                local want = buffer.create(n * 4)
+                local accepted = data.partition(keys, kind, 0, n, 'gt', 2147483648, want)
+                for _, at in {0, 2, 4, stride} do
+                    local overlapping = buffer.create(buffer.len(keys))
+                    buffer.copy(overlapping, 0, keys)
+                    assert(data.partition(overlapping, kind, 0, n, 'gt', 2147483648, overlapping, at) == accepted, `{kind} {n} at {at}`)
+                    for i = 0, n - 1 do
+                        assert(buffer.readu32(overlapping, at + i * 4) == buffer.readu32(want, i * 4), `{kind} {n} at {at}`)
+                    end
+                end
+            end
+        end
+    ",
+    );
+}
+
+/// The contiguous f32 corpus: bit patterns chosen for what a vectorized or narrowed loop gets
+/// wrong (both zeros and infinities, quiet and signaling NaNs with payloads, subnormals, values
+/// around rounding boundaries), mixed with deterministic random words.
+const F32_CORPUS: &str = r"
+    local patterns = {
+        0x00000000, 0x80000000, 0x7f800000, 0xff800000,
+        0x7fc00000, 0xffc00000, 0x7fc12345, 0xffc54321, 0x7f800001, 0xff812345,
+        0x00000001, 0x80000001, 0x007fffff, 0x807fffff, 0x00800000,
+        0x7f7fffff, 0xff7fffff, 0x7f000000,
+        0x3f800000, 0x3f800001, 0x3f7fffff, 0xbf800000,
+        0x33800000, 0x33000000, 0x4b800000, 0x4b800001,
+    }
+    local state = 0x2545f491
+    local function word()
+        state = (state * 1664525 + 1013904223) % 4294967296
+        return state
+    end
+    local function corpus(buf, offset, count)
+        for i = 0, count - 1 do
+            local pick = word() % (#patterns * 2)
+            buffer.writeu32(buf, offset + i * 4, if pick < #patterns then patterns[pick + 1] else word())
+        end
+    end
+    local function copy(buf)
+        local twin = buffer.create(buffer.len(buf))
+        buffer.copy(twin, 0, buf)
+        return twin
+    end
+    local function same(actual, expected, what)
+        for i = 0, buffer.len(actual) - 1 do
+            if buffer.readu8(actual, i) ~= buffer.readu8(expected, i) then
+                error(string.format('%s: byte %d is %02x, the loop wrote %02x', what, i, buffer.readu8(actual, i), buffer.readu8(expected, i)), 2)
+            end
+        end
+    end
+    local function bits(value)
+        return if value == nil then 'nil' else string.pack('<d', value)
+    end
+    local function isNaN(word)
+        return bit32.band(word, 0x7f800000) == 0x7f800000 and bit32.band(word, 0x007fffff) ~= 0
+    end
+    -- Which payload survives an operation on two different NaNs is unspecified and has never been
+    -- stable here: the optimizer picks the operand order, so the same loop answers differently in
+    -- debug and release. A finite operand leaves one NaN at most, which determines every result,
+    -- so byte-exact comparisons use one; `f32_operations_on_two_nans_keep_one_of_them` covers
+    -- the rest.
+    local function finite(buf, offset, count)
+        for i = 0, count - 1 do
+            local word = buffer.readu32(buf, offset + i * 4)
+            if bit32.band(word, 0x7f800000) == 0x7f800000 then
+                buffer.writeu32(buf, offset + i * 4, bit32.band(word, 0xbfffffff))
+            end
+        end
+    end
+    -- Lengths around the vector widths and the block sizes a specialization could use.
+    local lengths = {0, 1, 2, 3, 4, 5, 7, 8, 9, 15, 16, 17, 31, 32, 33, 63, 64, 65, 127, 128, 129, 257}
+";
+
+/// The handwritten sequential loops over the `buffer` library that define the expected results.
+const F32_ORACLE: &str = r"
+    local function loopAdd(left, leftAt, right, rightAt, out, outAt, n)
+        for i = 0, n - 1 do
+            buffer.writef32(out, outAt + i * 4, buffer.readf32(left, leftAt + i * 4) + buffer.readf32(right, rightAt + i * 4))
+        end
+    end
+    local function loopScale(source, at, n, factor, out, outAt)
+        for i = 0, n - 1 do
+            buffer.writef32(out, outAt + i * 4, buffer.readf32(source, at + i * 4) * factor)
+        end
+    end
+    local function loopClamp(source, at, n, low, high, out, outAt)
+        for i = 0, n - 1 do
+            local value = buffer.readf32(source, at + i * 4)
+            buffer.writef32(out, outAt + i * 4, if value < low then low elseif value > high then high else value)
+        end
+    end
+";
+
+fn f32_script(body: &str) {
+    exec(&format!("{F32_CORPUS}\n{F32_ORACLE}\n{body}"));
+}
+
+/// Every placement of the output against the inputs: disjoint, identical, shifted either way by
+/// whole elements or by bytes that split an element, within one buffer. The loop writes as it
+/// reads, so a later read sees an earlier write; a load-many-then-store loop would not.
+#[test]
+fn f32_add_matches_the_sequential_loop_at_every_overlap() {
+    f32_script(
+        r"
+        local shifts = {-68, -64, -9, -8, -7, -5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5, 7, 8, 9, 64, 68}
+        for _, n in lengths do
+            local size = 256 + (n * 2 + 40) * 4
+            local base = buffer.create(size)
+            corpus(base, 0, size // 4)
+            local middle = 128
+            -- Past anything the output can reach, the other operand when only one overlaps.
+            local far = size - (n + 1) * 4
+            finite(base, far, n)
+            for _, shift in shifts do
+                for _, placement in {'left', 'right', 'both'} do
+                    local leftAt = if placement == 'right' then far else middle
+                    local rightAt = if placement == 'left' then far else middle
+                    local actual, expected = copy(base), copy(base)
+                    data.add(actual, 'f32', leftAt, actual, rightAt, actual, middle + shift, n)
+                    loopAdd(expected, leftAt, expected, rightAt, expected, middle + shift, n)
+                    same(actual, expected, `add n={n} shift={shift} {placement}`)
+                end
+            end
+            -- Separate buffers, misaligned differently.
+            for _, at in {0, 1, 2, 3} do
+                local inputs = copy(base)
+                finite(inputs, size - n * 4 - 1, n)
+                local actual, expected = buffer.create(size), buffer.create(size)
+                data.add(inputs, 'f32', at, inputs, size - n * 4 - 1, actual, (at + 1) % 4, n)
+                loopAdd(inputs, at, inputs, size - n * 4 - 1, expected, (at + 1) % 4, n)
+                same(actual, expected, `add n={n} separate at={at}`)
+            end
+        end
+    ",
+    );
+}
+
+/// The one freedom the exact tests leave out: with two different NaNs, some build keeps either,
+/// always quieted and never anything else. One NaN and a number always keep that NaN.
+#[test]
+fn f32_operations_on_two_nans_keep_one_of_them() {
+    f32_script(
+        r"
+        local nans = {0x7fc00000, 0xffc00000, 0x7fc12345, 0xffc54321, 0x7f800001, 0xff812345, 0x7fffffff, 0xffffffff}
+        local function quieted(word) return bit32.bor(word, 0x00400000) end
+        for _, n in lengths do
+            local left, right, out = buffer.create(n * 4), buffer.create(n * 4), buffer.create(n * 4)
+            local leftWords, rightWords = {}, {}
+            for i = 0, n - 1 do
+                leftWords[i], rightWords[i] = nans[word() % #nans + 1], nans[word() % #nans + 1]
+                buffer.writeu32(left, i * 4, leftWords[i])
+                buffer.writeu32(right, i * 4, rightWords[i])
+            end
+            data.add(left, 'f32', 0, right, 0, out, 0, n)
+            for i = 0, n - 1 do
+                local got = buffer.readu32(out, i * 4)
+                assert(got == quieted(leftWords[i]) or got == quieted(rightWords[i]), string.format('add n=%d at %d: %08x', n, i, got))
+            end
+            -- A number on either side: that NaN, quieted, whatever the instruction order.
+            local ones = buffer.create(n * 4)
+            data.fill(ones, 'f32', 0, n, 1)
+            data.add(left, 'f32', 0, ones, 0, out, 0, n)
+            for i = 0, n - 1 do assert(buffer.readu32(out, i * 4) == quieted(leftWords[i]), `NaN + 1 at {i}`) end
+            data.add(ones, 'f32', 0, right, 0, out, 0, n)
+            for i = 0, n - 1 do assert(buffer.readu32(out, i * 4) == quieted(rightWords[i]), `1 + NaN at {i}`) end
+            -- A NaN factor: every result is a NaN, quieted, from the element or the factor.
+            data.scale(ones, 'f32', 0, n, 0 / 0, out, 0)
+            for i = 0, n - 1 do assert(isNaN(buffer.readu32(out, i * 4)), `1 * NaN at {i}`) end
+            data.scale(left, 'f32', 0, n, 0 / 0, out, 0)
+            for i = 0, n - 1 do
+                local got = buffer.readu32(out, i * 4)
+                assert(isNaN(got) and bit32.band(got, 0x00400000) ~= 0, `NaN * NaN at {i}`)
+            end
+        end
+    ",
+    );
+}
+
+#[test]
+fn f32_scale_matches_the_sequential_loop_for_inexact_factors_and_every_overlap() {
+    f32_script(
+        r"
+        local factors = {
+            1 / 3, 0.5, 1, -1, 0, -0.0, 0.1, 3.0000000000001, 1 + 2 ^ -40, 1 + 2 ^ -24, 1 + 2 ^ -23,
+            1e300, -1e300, 1e-300, 1e-320, 1e39, 1e-46, math.huge, -math.huge,
+        }
+        for _, n in lengths do
+            local size = 256 + (n + 40) * 4
+            local base = buffer.create(size)
+            corpus(base, 0, size // 4)
+            for _, factor in factors do
+                for _, shift in {-8, -4, -2, -1, 0, 1, 2, 4, 8, 64} do
+                    local actual, expected = copy(base), copy(base)
+                    data.scale(actual, 'f32', 128, n, factor, actual, 128 + shift)
+                    loopScale(expected, 128, n, factor, expected, 128 + shift)
+                    same(actual, expected, `scale n={n} factor={factor} shift={shift}`)
+                end
+                local actual, expected = buffer.create(size), buffer.create(size)
+                data.scale(base, 'f32', 1, n, factor, actual, 2)
+                loopScale(base, 1, n, factor, expected, 2)
+                same(actual, expected, `scale n={n} factor={factor} separate`)
+            end
+        end
+    ",
+    );
+}
+
+#[test]
+fn f32_clamp_matches_the_sequential_loop_for_bounds_between_f32_values() {
+    f32_script(
+        r"
+        local bounds = {
+            {-5, 5}, {0, 0}, {-0.0, 0}, {0, -0.0}, {0.1, 0.2}, {-math.huge, math.huge}, {1, 1},
+            -- Strictly between adjacent f32 values: compared as doubles, rounded on write.
+            {1 + 2 ^ -30, 1 + 2 ^ -29}, {1 - 2 ^ -30, 1 + 2 ^ -30}, {1 + 2 ^ -24, 1 + 2 ^ -24},
+            -- Beyond f32 range: rounds to infinity or zero only when written.
+            {1e39, 1e40}, {-1e40, -1e39}, {-1e-50, 1e-50}, {1e-50, 1e-49},
+            -- A large finite high bound is not an absent one: infinity and values above it clamp.
+            {-1, 3.4028234663852886e38}, {-1, 1e35}, {-1, 1e39}, {0, math.huge}, {-math.huge, 0},
+        }
+        for _, n in lengths do
+            local size = 256 + (n + 40) * 4
+            local base = buffer.create(size)
+            corpus(base, 0, size // 4)
+            for _, pair in bounds do
+                local low, high = pair[1], pair[2]
+                for _, shift in {-8, -4, -2, -1, 0, 1, 2, 4, 8, 64} do
+                    local actual, expected = copy(base), copy(base)
+                    data.clamp(actual, 'f32', 128, n, low, high, actual, 128 + shift)
+                    loopClamp(expected, 128, n, low, high, expected, 128 + shift)
+                    same(actual, expected, `clamp n={n} [{low}, {high}] shift={shift}`)
+                end
+                local actual, expected = buffer.create(size), buffer.create(size)
+                data.clamp(base, 'f32', 3, n, low, high, actual, 1)
+                loopClamp(base, 3, n, low, high, expected, 1)
+                same(actual, expected, `clamp n={n} [{low}, {high}] separate`)
+            end
+        end
+        for _, pair in {{5, 1}, {0 / 0, 1}, {1, 0 / 0}, {0 / 0, 0 / 0}} do
+            local buf = buffer.create(8)
+            local ok, message = pcall(data.clamp, buf, 'f32', 0, 2, pair[1], pair[2], buf, 0)
+            assert(not ok and string.find(message, 'is not at most high', 1, true), message)
+            ok, message = pcall(data.clamp, buf, 'f32', 0, 3, pair[1], pair[2], buf, 0)
+            assert(not ok and string.find(message, 'is not at most high', 1, true), 'bounds are checked before spans: ' .. message)
+        end
+    ",
+    );
+}
+
+#[test]
+fn f32_fill_writes_exactly_the_span_with_the_rounded_value() {
+    f32_script(
+        r"
+        local values = {1.5, 0.1, -0.0, 0 / 0, math.huge, -math.huge, 1e39, -1e39, 1e-46, -1e-46, 1 + 2 ^ -24, 1 + 3 * 2 ^ -25}
+        for _, n in lengths do
+            for _, at in {0, 1, 2, 3, 4} do
+                for _, value in values do
+                    local size = at + n * 4 + 8
+                    local actual, expected = buffer.create(size), buffer.create(size)
+                    buffer.fill(actual, 0, 0xa5) buffer.fill(expected, 0, 0xa5)
+                    data.fill(actual, 'f32', at, n, value)
+                    for i = 0, n - 1 do buffer.writef32(expected, at + i * 4, value) end
+                    same(actual, expected, `fill n={n} at={at} value={value}`)
+                end
+            end
+        end
+    ",
+    );
+}
+
+#[test]
+fn f32_reductions_match_the_sequential_loop_on_adversarial_values() {
+    f32_script(
+        r"
+        local thresholds = {0, -0.0, 1, 0.1, 1 + 2 ^ -30, -1, 1e39, -1e39, 1e-46, math.huge, -math.huge, 0 / 0}
+        local tests = {
+            eq = function(a, b) return a == b end, ne = function(a, b) return a ~= b end,
+            lt = function(a, b) return a < b end, le = function(a, b) return a <= b end,
+            gt = function(a, b) return a > b end, ge = function(a, b) return a >= b end,
+        }
+        local function agreeOn(buf, at, n)
+            local read = function(i) return buffer.readf32(buf, at + i * 4) end
+            -- Unfiltered: NaNs stay when leading and never replace; the first of a tie (either
+            -- zero) wins; the sum runs in element order in doubles.
+            local total, least, greatest, lo, hi = 0, nil, nil, nil, nil
+            for i = 0, n - 1 do
+                local v = read(i)
+                total += v
+                if least == nil or v < least then least, lo = v, i end
+                if greatest == nil or v > greatest then greatest, hi = v, i end
+            end
+            local got = data.sum(buf, 'f32', at, n)
+            assert(bits(got) == bits(total) or (got ~= got and total ~= total), `sum n={n}`)
+            assert(bits(data.min(buf, 'f32', at, n)) == bits(least), `min n={n}`)
+            assert(bits(data.max(buf, 'f32', at, n)) == bits(greatest), `max n={n}`)
+            assert(data.argmin(buf, 'f32', at, n) == lo, `argmin n={n}`)
+            assert(data.argmax(buf, 'f32', at, n) == hi, `argmax n={n}`)
+            for name, test in tests do
+                for _, threshold in thresholds do
+                    local where = `{name} {threshold} n={n}`
+                    local count, sum, low, high, anyOf, allOf = 0, 0, nil, nil, false, true
+                    local selected = data.select(buf, 'f32', at, n, name, threshold)
+                    assert(selected:len() == n, 'select length ' .. where)
+                    for i = 0, n - 1 do
+                        local v = read(i)
+                        local hit = test(v, threshold)
+                        assert(selected:get(i) == hit, `select bit {i} {where}`)
+                        if hit then
+                            count += 1
+                            sum += v
+                            if low == nil or v < low then low = v end
+                            if high == nil or v > high then high = v end
+                            anyOf = true
+                        else
+                            allOf = false
+                        end
+                    end
+                    assert(selected:count() == count, 'select count ' .. where)
+                    assert(data.countWhere(buf, 'f32', at, n, name, threshold) == count, 'countWhere ' .. where)
+                    assert(data.any(buf, 'f32', at, n, name, threshold) == anyOf, 'any ' .. where)
+                    assert(data.all(buf, 'f32', at, n, name, threshold) == allOf, 'all ' .. where)
+                    got = data.sum(buf, 'f32', at, n, name, threshold)
+                    assert(bits(got) == bits(sum) or (got ~= got and sum ~= sum), 'filtered sum ' .. where)
+                    assert(bits(data.min(buf, 'f32', at, n, name, threshold)) == bits(low), 'filtered min ' .. where)
+                    assert(bits(data.max(buf, 'f32', at, n, name, threshold)) == bits(high), 'filtered max ' .. where)
+                end
+            end
+        end
+        for _, n in lengths do
+            for _, at in {0, 1, 2, 3} do
+                local buf = buffer.create(at + n * 4)
+                corpus(buf, at, n)
+                agreeOn(buf, at, n)
+            end
+        end
+        -- The deciding element at each position of a span, so a block-wise scan cannot skip it.
+        for _, n in {63, 64, 65, 129} do
+            for position = 0, n - 1 do
+                local buf = buffer.create(n * 4)
+                for i = 0, n - 1 do buffer.writef32(buf, i * 4, 1) end
+                buffer.writef32(buf, position * 4, -2)
+                assert(data.argmin(buf, 'f32', 0, n) == position, 'argmin finds ' .. position)
+                assert(data.any(buf, 'f32', 0, n, 'lt', 0), 'any finds ' .. position)
+                assert(not data.all(buf, 'f32', 0, n, 'gt', 0), 'all finds ' .. position)
+                assert(data.countWhere(buf, 'f32', 0, n, 'lt', 0) == 1, 'count finds ' .. position)
+                -- Ties: the first of two equal lows, and -0 against +0 keeps whichever came first.
+                buffer.writef32(buf, (n - 1) * 4, -2)
+                assert(data.argmin(buf, 'f32', 0, n) == position, 'the first of a tie at ' .. position)
+                for i = 0, n - 1 do buffer.writef32(buf, i * 4, 0) end
+                buffer.writef32(buf, position * 4, -0.0)
+                assert(data.argmin(buf, 'f32', 0, n) == 0, '-0 is not less than +0')
+                assert((1 / data.min(buf, 'f32', 0, n) > 0) == (position ~= 0), 'the first zero wins at ' .. position)
+                -- A NaN that leads pins the result; one that follows never replaces.
+                buffer.writef32(buf, position * 4, 0 / 0)
+                local least = data.min(buf, 'f32', 0, n)
+                if position == 0 then
+                    assert(least ~= least and data.argmax(buf, 'f32', 0, n) == 0, 'a leading NaN stays')
+                else
+                    assert(least == 0 and data.argmin(buf, 'f32', 0, n) == 0, 'a later NaN never replaces')
+                end
+            end
+        end
+    ",
+    );
+}
+
+/// The specialization runs after the spans are checked, so it cannot change what fails or how.
+#[test]
+fn f32_spans_that_do_not_fit_raise_the_same_errors_before_writing() {
+    f32_script(
+        r"
+        local buf = buffer.create(16)
+        buffer.fill(buf, 0, 0x5a)
+        local before = buffer.tostring(buf)
+        for _, case in {
+            { function() data.add(buf, 'f32', 0, buf, 0, buf, 4, 4) end, 'data.add: span of 4 f32 at offset 4 exceeds the buffer length 16' },
+            { function() data.add(buf, 'f32', 4, buf, 0, buf, 0, 4) end, 'data.add: span of 4 f32 at offset 4 exceeds the buffer length 16' },
+            { function() data.add(buf, 'f32', 0, buf, 4, buf, 0, 4) end, 'data.add: span of 4 f32 at offset 4 exceeds the buffer length 16' },
+            { function() data.add(buf, 'f32', -1, buf, 0, buf, 0, 1) end, 'data.add: negative offset -1' },
+            { function() data.add(buf, 'f32', 0, buf, 0, buf, 0, -1) end, 'data.add: negative count -1' },
+            { function() data.scale(buf, 'f32', 0, 5, 2, buf, 0) end, 'data.scale: span of 5 f32 at offset 0' },
+            { function() data.scale(buf, 'f32', 0, 4, 2, buf, 1) end, 'data.scale: span of 4 f32 at offset 1' },
+            { function() data.clamp(buf, 'f32', 0, 5, 0, 1, buf, 0) end, 'data.clamp: span of 5 f32 at offset 0' },
+            { function() data.fill(buf, 'f32', 13, 1, 1) end, 'data.fill: span of 1 f32 at offset 13' },
+            { function() data.fill(buf, 'f32', 0, 2 ^ 53, 1) end, 'exceeds the buffer length' },
+            { function() data.fill(buf, 'f32', 17, 0, 1) end, 'data.fill: span of 0 f32 at offset 17' },
+            { function() data.sum(buf, 'f32', 0, 5) end, 'data.sum: span of 5 f32' },
+            { function() data.min(buf, 'f32', 0, 5) end, 'data.min: span of 5 f32' },
+            { function() data.argmax(buf, 'f32', 0, 5) end, 'data.argmax: span of 5 f32' },
+            { function() data.countWhere(buf, 'f32', 0, 5, 'gt', 0) end, 'data.countWhere: span of 5 f32' },
+            { function() data.any(buf, 'f32', 0, 5, 'gt', 0) end, 'data.any: span of 5 f32' },
+            { function() data.select(buf, 'f32', 0, 5, 'gt', 0) end, 'data.select: span of 5 f32' },
+        } do
+            local ok, message = pcall(case[1])
+            assert(not ok and string.find(tostring(message), case[2], 1, true), tostring(message))
+        end
+        assert(buffer.tostring(buf) == before, 'nothing was written')
+        -- An empty span at the very end is in bounds and touches nothing, on every operation.
+        data.add(buf, 'f32', 16, buf, 16, buf, 16, 0)
+        data.scale(buf, 'f32', 16, 0, 2, buf, 16)
+        data.clamp(buf, 'f32', 16, 0, 0, 1, buf, 16)
+        data.fill(buf, 'f32', 16, 0, 1)
+        assert(buffer.tostring(buf) == before and data.sum(buf, 'f32', 16, 0) == 0 and data.min(buf, 'f32', 16, 0) == nil)
+        assert(data.countWhere(buf, 'f32', 16, 0, 'eq', 0) == 0 and not data.any(buf, 'f32', 16, 0, 'eq', 0) and data.all(buf, 'f32', 16, 0, 'eq', 0))
+        -- f32@4 is the contiguous layout spelled with a stride, f32@4+0 with a field offset too.
+        local a, b, c = buffer.create(16), buffer.create(16), buffer.create(16)
+        corpus(a, 0, 4)
+        data.scale(a, 'f32@4', 0, 4, 2, b, 0)
+        data.scale(a, 'f32@4+0', 0, 4, 2, c, 0)
+        same(b, c, 'spelled strides')
+        data.scale(a, 'f32', 0, 4, 2, c, 0)
+        same(b, c, 'spelled contiguous')
+    ",
+    );
+}
+
+/// Layouts next to the contiguous one keep the generic path's meaning: strides that leave gaps
+/// write only their field, and other kinds convert as they did, however the output overlaps.
+#[test]
+fn neighbours_of_contiguous_f32_keep_their_results() {
+    f32_script(
+        r"
+        local base = buffer.create(384)
+        corpus(base, 0, 96)
+        for _, layout in {{'f32@8', 8, 0}, {'f32@8+4', 8, 4}, {'f32@5', 5, 0}, {'f32@12+3', 12, 3}} do
+            local name, stride, field = layout[1], layout[2], layout[3]
+            local count = (384 - 16 - field - 4) // stride
+            local actual, expected = copy(base), copy(base)
+            data.scale(actual, name, 0, count, 1 / 3, actual, 8)
+            for i = 0, count - 1 do
+                buffer.writef32(expected, 8 + field + i * stride, buffer.readf32(expected, field + i * stride) * (1 / 3))
+            end
+            same(actual, expected, 'strided scale ' .. name)
+        end
+        local words = buffer.create(384)
+        for i = 0, 95 do buffer.writef64(words, (i // 2) * 8, ((word() % 2000001) - 1000000) / 8) end
+        for _, kind in {{'f64', 8}, {'i32', 4}, {'u32', 4}, {'i16', 2}, {'u16', 2}, {'i8', 1}, {'u8', 1}} do
+            local name, size = kind[1], kind[2]
+            local read, write = buffer['read' .. name], buffer['write' .. name]
+            local actual, expected = copy(words), copy(words)
+            data.add(actual, name, 0, actual, 8, actual, size, 16)
+            for i = 0, 15 do write(expected, size + i * size, read(expected, i * size) + read(expected, 8 + i * size)) end
+            same(actual, expected, 'overlapping add ' .. name)
+        end
+    ",
+    );
+}
+
+/// Every other contiguous kind against handwritten `buffer` loops, overlaps included. Values stay
+/// well inside each kind's conversion range, where the `buffer` library defines its writes; the
+/// unit tests in `src/data` reach the saturating edges against the generic loop.
+#[test]
+fn other_contiguous_kinds_match_the_sequential_loop() {
+    f32_script(
+        r"
+        local kinds = {{'u8', 1}, {'i8', 1}, {'u16', 2}, {'i16', 2}, {'u32', 4}, {'i32', 4}, {'f64', 8}}
+        local thresholds = {0, 1, 1.5, -1, -1.5, 100, 1e300, -1e300, math.huge, -math.huge, 0 / 0}
+        local tests = {
+            eq = function(a, b) return a == b end, ne = function(a, b) return a ~= b end,
+            lt = function(a, b) return a < b end, le = function(a, b) return a <= b end,
+            gt = function(a, b) return a > b end, ge = function(a, b) return a >= b end,
+        }
+        for _, entry in kinds do
+            local name, width = entry[1], entry[2]
+            local read, write = buffer['read' .. name], buffer['write' .. name]
+            for _, n in {0, 1, 3, 8, 9, 33, 63, 64, 65, 129} do
+                local size = 64 + (n + 16) * width
+                local base = buffer.create(size)
+                for i = 0, size // width - 1 do
+                    local value = word() % 201 - 100
+                    if string.sub(name, 1, 1) == 'u' then value = math.abs(value) end
+                    write(base, i * width, if name == 'f64' then value / 8 else value)
+                end
+                local at = 32
+                for _, shift in {-2 * width, -width, 0, width, 2 * width, 16 * width} do
+                    local where = `{name} n={n} shift={shift}`
+                    local actual, expected = copy(base), copy(base)
+                    data.add(actual, name, at, actual, at + width, actual, at + shift, n)
+                    for i = 0, n - 1 do
+                        write(expected, at + shift + i * width, read(expected, at + i * width) + read(expected, at + width + i * width))
+                    end
+                    same(actual, expected, 'add ' .. where)
+                    actual, expected = copy(base), copy(base)
+                    data.scale(actual, name, at, n, 0.5, actual, at + shift)
+                    for i = 0, n - 1 do write(expected, at + shift + i * width, read(expected, at + i * width) * 0.5) end
+                    same(actual, expected, 'scale ' .. where)
+                    actual, expected = copy(base), copy(base)
+                    data.clamp(actual, name, at, n, 2.5, 50.5, actual, at + shift)
+                    for i = 0, n - 1 do
+                        write(expected, at + shift + i * width, math.clamp(read(expected, at + i * width), 2.5, 50.5))
+                    end
+                    same(actual, expected, 'clamp ' .. where)
+                end
+                local actual, expected = copy(base), copy(base)
+                data.fill(actual, name, at, n, 77.5)
+                for i = 0, n - 1 do write(expected, at + i * width, 77.5) end
+                same(actual, expected, `fill {name} n={n}`)
+                local total, low, high, lowAt, highAt = 0, nil, nil, nil, nil
+                for i = 0, n - 1 do
+                    local value = read(base, at + i * width)
+                    total += value
+                    if low == nil or value < low then low, lowAt = value, i end
+                    if high == nil or value > high then high, highAt = value, i end
+                end
+                assert(data.sum(base, name, at, n) == total, `sum {name} n={n}`)
+                assert(data.min(base, name, at, n) == low and data.max(base, name, at, n) == high, `extremes {name} n={n}`)
+                assert(data.argmin(base, name, at, n) == lowAt and data.argmax(base, name, at, n) == highAt, `arg extremes {name} n={n}`)
+                for comparison, test in tests do
+                    for _, threshold in thresholds do
+                        local count = 0
+                        local selected = data.select(base, name, at, n, comparison, threshold)
+                        for i = 0, n - 1 do
+                            local hit = test(read(base, at + i * width), threshold)
+                            assert(selected:get(i) == hit, `select {name} {comparison} {threshold} at {i}`)
+                            if hit then count += 1 end
+                        end
+                        local where = `{name} {comparison} {threshold} n={n}`
+                        assert(data.countWhere(base, name, at, n, comparison, threshold) == count, 'count ' .. where)
+                        assert(data.any(base, name, at, n, comparison, threshold) == (count > 0), 'any ' .. where)
+                        assert(data.all(base, name, at, n, comparison, threshold) == (count == n), 'all ' .. where)
+                    end
+                end
+            end
+        end
+    ",
+    );
+}
+
+/// The lowered receivers are separate code, untouched by the specialization; both must still
+/// return the same bits as the bound functions on the f32 corpus, under native code.
+#[cfg(feature = "jit")]
+#[test]
+fn lowered_f32_receivers_agree_with_the_module_functions_on_adversarial_values() {
+    let Some((runtime, before)) = native_runtime() else { return };
+    let chunk = format!(
+        "--!native\n{F32_CORPUS}\n{}",
+        r"
+        local K: dream_data_Kind_f32 = data.f32()
+        for _, n in lengths do
+            local buf = buffer.create(n * 4 + 3)
+            corpus(buf, 3, n)
+            local got, want = K:sum(buf, 3, n), data.sum(buf, 'f32', 3, n)
+            assert(bits(got) == bits(want) or (got ~= got and want ~= want), `sum n={n}`)
+            got, want = K:min(buf, 3, n), data.min(buf, 'f32', 3, n)
+            assert(bits(got) == bits(want), `min n={n}`)
+            got, want = K:max(buf, 3, n), data.max(buf, 'f32', 3, n)
+            assert(bits(got) == bits(want), `max n={n}`)
+            local count = K:countGt(buf, 3, n, 1)
+            assert(count == data.countWhere(buf, 'f32', 3, n, 'gt', 1), `countGt n={n}`)
+            count = K:countNe(buf, 3, n, 0 / 0)
+            assert(count == data.countWhere(buf, 'f32', 3, n, 'ne', 0 / 0), `countNe n={n}`)
+            local hit = K:anyLt(buf, 3, n, 0)
+            assert(hit == data.any(buf, 'f32', 3, n, 'lt', 0), `anyLt n={n}`)
+            hit = K:allGe(buf, 3, n, 0)
+            assert(hit == data.all(buf, 'f32', 3, n, 'ge', 0), `allGe n={n}`)
+            local mine, theirs = data.selection(1), data.selection(1)
+            local selected = K:selectGt(buf, 3, n, 1, mine)
+            data.select(buf, 'f32', 3, n, 'gt', 1, theirs)
+            assert(selected == mine and mine:xor(theirs):count() == 0, `selectGt n={n}`)
+        end
         ",
     );
     run_native(&runtime, &chunk);

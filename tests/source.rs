@@ -356,7 +356,7 @@ fn hostile_source_is_scanned_in_linear_time() {
         ("unended pattern values", |n| "local {a} = function() ".repeat(n)),
     ];
     let time = |source: &str| {
-        (0..3)
+        (0..2)
             .map(|_| {
                 let start = Instant::now();
                 let _ = lowering_snapshot(source, LoweringMode::Compile);
