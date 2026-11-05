@@ -1,0 +1,15 @@
+int8 rows=1 columns=1024 weight_bytes=1024 f32_weight_bytes=4096
+int8_exact_matvec                              n=1024     median_us=0.211        min_us=0.203        p90_us=0.223        ns_per_element=0.206
+int8_exact_matvec_heap                         allocations_per_run=0.0 bytes_per_run=0
+f32_strict_matvec_program                      n=1024     median_us=1.138        min_us=1.085        p90_us=1.158        ns_per_element=1.111
+int8 rows=64 columns=1024 weight_bytes=65536 f32_weight_bytes=262144
+int8_exact_matvec                              n=65536    median_us=13.773       min_us=12.930       p90_us=14.254       ns_per_element=0.210
+int8_exact_matvec_heap                         allocations_per_run=0.0 bytes_per_run=0
+f32_strict_matvec_program                      n=65536    median_us=16.845       min_us=16.546       p90_us=17.347       ns_per_element=0.257
+int8 rows=1024 columns=1024 weight_bytes=1048576 f32_weight_bytes=4194304
+int8_exact_matvec                              n=1048576  median_us=217.918      min_us=203.548      p90_us=234.578      ns_per_element=0.208
+int8_exact_matvec_heap                         allocations_per_run=0.0 bytes_per_run=0
+f32_strict_matvec_program                      n=1048576  median_us=303.358      min_us=281.679      p90_us=318.187      ns_per_element=0.289
+programs: rebinding, fusion, broadcast, shared views, matrix, borrowed buffers, errors verified
+rebindable graph verified across the reference, chunked and generated native executors
+rows: stages, errors, packed weights, exhaustion and recovery verified

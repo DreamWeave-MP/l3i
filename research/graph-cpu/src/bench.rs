@@ -975,3 +975,44 @@ pub fn reductions() {
         });
     }
 }
+
+pub fn quantized() {
+    use l3i_graph_cpu_research::quantized::matvec;
+    for rows in [1, 64, 1024] {
+        let columns = 1024;
+        let weights: Vec<i8> = (0..rows * columns).map(|i| i8::try_from(i % 15).unwrap() - 7).collect();
+        let input: Vec<i8> = (0..columns).map(|i| i8::try_from(i % 13).unwrap() - 6).collect();
+        let scales = vec![1.0; rows];
+        let mut output = vec![0.0; rows];
+        println!(
+            "int8 rows={rows} columns={columns} weight_bytes={} f32_weight_bytes={}",
+            weights.len(),
+            weights.len() * 4
+        );
+        row("int8_exact_matvec", weights.len(), || {
+            matvec(black_box(&weights), black_box(&input), &scales, 1.0, black_box(&mut output)).unwrap();
+        });
+        heap("int8_exact_matvec_heap", &mut || {
+            matvec(black_box(&weights), black_box(&input), &scales, 1.0, black_box(&mut output)).unwrap();
+        });
+        let budget = Budget::new(64 << 20);
+        let domain = Domain::new(1024, 1024);
+        let bytes = |v: &[i8]| v.iter().flat_map(|v| f32::from(*v).to_le_bytes()).collect::<Vec<_>>();
+        let a = Tensor::import(&bytes(&weights), Shape::Matrix(rows, columns), &budget).unwrap();
+        let b = Tensor::import(&bytes(&input), Shape::Matrix(columns, 1), &budget).unwrap();
+        let program = Expr::slot(0, a.shape(), domain.clone())
+            .unwrap()
+            .matmul(&Expr::slot(1, b.shape(), domain).unwrap())
+            .unwrap()
+            .compile()
+            .unwrap();
+        let mut result = vec![0u8; rows * 4];
+        row("f32_strict_matvec_program", weights.len(), || {
+            program.run_into(black_box(&[a.borrow(), b.borrow()]), black_box(&mut result), &budget).unwrap();
+        });
+        assert_eq!(
+            output.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+            result.as_chunks::<4>().0.iter().map(|v| f32::from_le_bytes(*v).to_bits()).collect::<Vec<_>>()
+        );
+    }
+}

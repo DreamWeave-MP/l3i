@@ -11,6 +11,14 @@ local mutations: { Mutation } = {
 	{ label = "control: comment only, must survive", file = "reduction.rs",
 	  old = "/// Independent f64 accumulators per row.", new = "/// Independent f64 accumulators, per row." },
 
+	-- Exact quantized arithmetic, independent of the f32 graph contract.
+	{ label = "int8: signed values treated as unsigned", file = "quantized.rs",
+	  old = "i32::from(*x) * i32::from(*y)", new = "i32::from(*x as u8) * i32::from(*y as u8)" },
+	{ label = "int8: row scale ignored", file = "quantized.rs",
+	  old = "accumulator as f64 * (*scale * input_scale)", new = "accumulator as f64 * input_scale" },
+	{ label = "int8: final chunk omitted", file = "quantized.rs",
+	  old = "left.chunks(4096)", new = "left.chunks_exact(4096)" },
+
 	-- The accurate exponential.
 	{ label = "exp: drops the low part of ln(2)", file = "reduction.rs",
 	  old = "x - k * LN2_HI - k * LN2_LO", new = "x - k * LN2_HI" },

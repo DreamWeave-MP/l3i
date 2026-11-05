@@ -34,3 +34,6 @@ pub(crate) fn error(message: &str) -> l3i::Error {
 
 /// Experimental allocation-free row reduction kernels.
 pub mod reduction;
+
+/// Experimental exact-accumulation int8 primitives.
+pub mod quantized;

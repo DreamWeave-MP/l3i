@@ -258,6 +258,9 @@ fn run() -> Result<()> {
     runtime.exec("assert(compute.used()==0)")?;
 
     let arguments: Vec<String> = std::env::args().collect();
+    if arguments.iter().any(|arg| arg == "--bench-int8") {
+        bench::quantized();
+    }
     if arguments.iter().any(|arg| arg == "--bench-softmax") {
         bench::softmax_strategies();
     }
