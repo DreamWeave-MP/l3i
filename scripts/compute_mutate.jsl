@@ -49,6 +49,8 @@ local mutations: { Mutation } = {
 	  old = "total += i64::from(nibble::<false>(packed[pairs.len()])) * i64::from(*last);", new = "let _ = last;" },
 	{ label = "int4: the wrong group's scale", file = "quantized.rs",
 	  old = "for (group, (rows, scale)) in weights.chunks(stride * groups.rows).zip(groups.scales).enumerate() {", new = "for (group, (rows, scale)) in weights.chunks(stride * groups.rows).zip(groups.scales.iter().rev()).enumerate() {" },
+	{ label = "matmul: a tiny product allocates for nothing", file = "kernels.rs",
+	  old = "if tiny || m <= MR || n <= 1 {", new = "if m <= MR || n <= 1 {" },
 	{ label = "int4: a group's size overflows", file = "quantized.rs",
 	  old = "let groups = Groups { rows: groups.rows.min(out.len().max(1)), scales: groups.scales };", new = "" },
 	{ label = "int4: no rows at all divide by nothing", file = "quantized.rs",

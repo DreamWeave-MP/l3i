@@ -1,0 +1,20 @@
+# per call, from Rust, program:run_into
+add_1x4          cycles=385      instructions=1236     allocations=0.0
+chain_1x4        cycles=386      instructions=1258     allocations=0.0
+sum_rows_1x4     cycles=114      instructions=447      allocations=0.0
+softmax_1x4      cycles=452      instructions=891      allocations=1.0
+matmul_2x2x2     cycles=333      instructions=1060     allocations=0.0
+# per call, from JSL, including the interpreter's loop
+empty_loop       cycles=43       instructions=89      
+native_noop      cycles=90       instructions=251     
+method 0 args    cycles=140      instructions=387     
+method 1 buffer  cycles=137      instructions=413     
+method 1+call    cycles=136      instructions=413     
+method 4 opts    cycles=144      instructions=457     
+method 4+rest    cycles=151      instructions=485     
+add runInto      cycles=757      instructions=2165    
+chain runInto    cycles=755      instructions=2187    
+sum runInto      cycles=386      instructions=1220    
+softmax runInto  cycles=741      instructions=1664    
+matmul runInto   cycles=675      instructions=1977    
+add run+tensor   cycles=2111     instructions=4833    

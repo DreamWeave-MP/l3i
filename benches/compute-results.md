@@ -3,74 +3,142 @@
 The engine is `src/compute` behind the `compute` feature; `compute-testing` adds its oracle and comparators to tests and benches. This page and `compute-results/` hold the decision record and raw reports: `compute-*.txt` the benchmark runs, `compare-*.txt` CubeCL's, `mutations.txt` the injected-bug record, `kernel-instructions.txt` and `luau-relu-sum-ir-and-x64.txt` the compiled-code evidence, `contract.md` the engine's contract, `matrix-compare.md`, `row-kernels.md` and `int8.md` their kernels. Paths in older entries name `research/`, this work's previous home; the CubeCL bridge experiments' last revision is `9e70c0f`.
 
 - Harnesses, named explicitly: `cargo bench --features compute-testing --bench main -- compute_shapes` (also `compute_native`, `compute_rows`, `compute_softmax`, `compute_int8`).
-- Against competitors: `scripts/compute_compare.sh compute_matrix` (matrixmultiply, and OpenBLAS with `L3I_BENCH_OPENBLAS`) and `scripts/compute_compare.sh compute_cubecl ours` (CubeCL; `scripts/compute_cubecl_container.sh` counts inside a disposable container).
+- Against competitors: `scripts/compute_compare.sh compute_matrix` (matrixmultiply, and any CBLAS library named in `L3I_BENCH_BLAS`) and `scripts/compute_compare.sh compute_cubecl ours` (CubeCL; `scripts/compute_cubecl_container.sh` counts inside a disposable container).
 - Injected bugs: `jess scripts/compute_mutate.jsl`.
 
-## Where it stands (2026-11-05)
+## Where it stands (2026-11-05, at `e9e6799`)
 
-Single thread on an i7-10870H, packing included, in user-space cycles from the CPU's counter:
-`L3I_BENCH_OPENBLAS=/usr/lib64/libopenblaso.so.0 L3I_BENCH_SHAPES=256x256x256 scripts/compute_compare.sh compute_matrix`.
-Fast programs against matrixmultiply and OpenBLAS 0.3.29. Instruction counts repeat to within a few
-parts in a million between runs of one binary. Cycles are stable to a percent or two while a product
-fits the caches, but not past them: one binary read from 1.38M to 1.55M at 256x256x256 across eight
-runs, so compare medians of several runs there. Each cell below is one run.
+These replace every earlier "where it stands" figure. The raw reports are in `compute-results/tournament-e9e6799/`. Single thread on an i7-10870H (AVX2, FMA, no AVX-512), pinned, with packing included unless a row says prepared. All sides ran in one process, at user-space cycles from the CPU's counter, median of five fresh processes unless noted. OpenBLAS is 0.3.29 and BLIS 2.0, each as Fedora 44 builds it, loaded at run time. Each row is validated against an independent f64 bound. Reproduce with:
 
-| Shape | Fast | matrixmultiply | OpenBLAS |
+```sh
+L3I_BENCH_BLAS=openblas=/usr/lib64/libopenblaso.so.0,blis=/path/libblis.so.4 \
+  L3I_BENCH_SHAPES=256x256x256,1024x1024x1024 scripts/compute_compare.sh compute_matrix
+```
+
+### GEMM: Fast against the libraries that fuse
+
+Fast and BLAS both fuse multiply-add, and this table compares nothing else. `prepared` packs `b` once beforehand, a contract the libraries here don't offer through CBLAS, so it isn't a like-for-like win over them.
+
+| Shape | Fast | Prepared | OpenBLAS | BLIS | matrixmultiply |
+|---|---:|---:|---:|---:|---:|
+| 8x8x8 | 1,285 | 630 | 506 | 3,964 | 339 |
+| 16x16x16 | 1,190 | 818 | 1,013 | 4,231 | 1,068 |
+| 32x32x32 | 4,143 | 3,267 | 5,033 | 6,437 | 4,466 |
+| 64x64x64 | 24,507 | 21,105 | 26,233 | 23,446 | 28,332 |
+| 128x128x128 | 173,882 | 161,155 | 173,051 | 167,978 | 197,918 |
+| 256x256x256 | 1.37M | 1.27M | 1.25M | 1.32M | 1.44M |
+| 512x512x512 | 10.44M | 10.41M | 9.75M | 10.16M | 11.30M |
+| 1000x1000x1000 | 83.1M | 82.1M | 71.0M | 76.1M | 91.0M |
+| 1024x1024x1024 | 87.3M | 89.8M | 76.9M | 79.6M | 95.2M |
+| 2048x2048x2048 (one process) | 730M | 778M | 595M | 633M | 759M |
+| 6x128x16 | 1,262 | 1,222 | 2,996 | 4,634 | 3,178 |
+| 12x128x16 | 3,472 | 2,156 | 3,494 | 5,479 | 5,644 |
+| 128x64x512 | 379,303 | 358,793 | 337,151 | 365,743 | 383,899 |
+| 512x64x128 | 353,692 | 350,911 | 338,443 | 352,860 | 385,782 |
+| 1000x16x16 | 33,656 | 32,889 | 41,657 | 26,204 | 45,861 |
+| 16x16x1000 | 36,797 | 29,280 | 33,789 | 28,862 | 33,745 |
+| 31x127x17 | 13,110 | 10,363 | 11,996 | 13,890 | 14,508 |
+| 97x300x80 | 189,127 | 176,597 | 198,410 | 207,497 | 248,579 |
+
+Geometric mean of Fast's cycles over each competitor's, by family (below 1.0 is ours ahead):
+
+| Family | against OpenBLAS | against BLIS | against matrixmultiply |
 |---|---:|---:|---:|
-| 12x128x16 | 3,616 | | 3,738 |
-| 16x16x16 | 1,128 | 1,145 | 1,012 |
-| 64x64x64 | 26,619 | 28,086 | 24,467 |
-| 128x128x128 | 187,381 | 191,385 | 166,458 |
-| 256x256x256 | 1,418,390 | 1,403,887 | 1,241,528 |
-| 1x4096x1, against `sgemv` | 1,494 | | 2,254 |
+| 16 to 64 square | 0.97 | 0.57 | 0.96 |
+| 128 to 512 square | 1.06 | 1.04 | 0.92 |
+| 1000 and 1024 square | 1.15 | 1.09 | 0.91 |
+| Rectangular and irregular, 8 shapes | 0.91 | 0.84 | 0.77 |
 
-Square products are level with matrixmultiply. Against OpenBLAS they are about 10% behind at 64x64x64,
-which fits the caches, and 10 to 20% behind at 256x256x256, depending on the run. Wide and prepared shapes
-lead, as `matrix-compare.md` records. On AArch64 none of this has been measured, and the explicit
-kernel below is x86 only.
+So OpenBLAS still leads square products past the second-level cache, by 15% on average and 23% in the single 2048 run, and it is the row to beat. Below that it's a contest within a few percent. Past the caches, one binary's cycles swing by more than the smaller gaps here: 256x256x256 read 1.28M to 2.14M across these five processes, so treat a difference under about 5% at those sizes as a tie. A vector product's fair competitor is `sgemv`: rows and cycles are in `after.txt`, where Fast at 1x4096x1 takes 1,236 against 2,235 for OpenBLAS and 1,626 for BLIS, while at 256x256x1 it takes 17,601 against 15,862 and 14,608.
 
-Fast dot products reorder additions and OpenBLAS's do too; strict programs do neither and have no
-competitor to compare with here.
+Strict is its own contract with no competitor here: ordered, separately rounded and the same bits everywhere. The same two ports do its multiplies and adds, so 256x256x256 needs at least 2.10M cycles and takes 2.31M.
+
+**Regressions from this round's kernel work.** `1000x16x16` Fast went from 30,453 to 33,656 cycles and `4096x16x1` from 63,341 to 69,017, about 10% each, and strict by similar amounts. An out-of-line kernel costs more per call when `k` is short, and the second of those doesn't reach that kernel, so its cause isn't established. 8x8x8 had also regressed through scratch it never used, which is fixed after these tables were taken: 1,054 now, from 1,115 before this round and still three times matrixmultiply's 339.
 
 ### Against CubeCL 0.11.3
 
-Retired user-space instructions in a disposable container, one thread, our best contract against the
-best of CubeCL's lane widths and FMA settings for each row. Raw: `compute-results/compare-ab36f8c-*.txt`,
-from `scripts/compute_compare.sh compute_cubecl ours|cubecl|model`. Excludes CubeCL's first launch of
-about 100M instructions per kernel, which is what its JIT costs and ours does not have.
+Three rounds in alternating processes, one thread, our Fast against CubeCL's best lanes and FMA, cycles in thousands. Its rows at n=16,384 suggest a launch of about 200,000 cycles per call on top of its loop. It also generated these kernels at first use, which is what ours never does.
 
-| Workload | n | Ours | CubeCL | Lead |
+| Workload | n | Ours | CubeCL | |
+|---|---:|---:|---:|---|
+| workload | 1,048,576 | 1,303 | 1,247 | tie |
+| chain16 | 1,048,576 | 2,303 | 2,044 | CubeCL by 13% |
+| horner | 1,048,576 | 2,435 | 1,391 | CubeCL by 1.75x |
+| residual | 1,048,576 | 2,033 | 1,302 | CubeCL by 1.56x |
+| chain16 | 65,536 | 135 | 291 | ours by 2.2x |
+| horner | 65,536 | 136 | 248 | ours by 1.8x |
+| residual | 65,536 | 109 | 246 | ours by 2.3x |
+
+**Correction.** Commit `7f53a08` says alignment was most of what looked like a fusion gap. Measured beside CubeCL it wasn't: alignment cut our in-cache cycles by 35 to 45%, but CubeCL's numbers from earlier in this file were noisy too, and it still leads large polynomials and DAGs. What remains is fusion, as a JIT compiles a whole expression into one loop, and memory: at this size one binary's cycles still vary by about 30%. Compiled three-step tiles for the common forms were tried and removed: 10 to 15% fewer instructions, at most 5% fewer cycles, for 150 KB of code.
+
+### Threads
+
+Elapsed microseconds, median, with a persistent rayon pool as the host's workers against OpenBLAS's own threads, because cycles on one thread can't show this. Both are at the same thread count on eight physical cores, with a browser and a desktop running. The Fedora BLIS loaded here is its serial build, so it isn't in this table.
+
+| Shape | Threads | Fast | Prepared | OpenBLAS |
 |---|---:|---:|---:|---:|
-| workload | 16 | 1,629 | 111,231 | 68x |
-| workload | 65,536 | 64,652 | 173,321 | 2.7x |
-| workload | 1,048,576 | 1,012,173 | 1,023,501 | 1.0x |
-| matmul | 13,824,000 | 4,316,362 | 4,639,492 | 1.1x |
-| matmul | 56,623,104 | 17,566,472 | 18,570,291 | 1.1x |
-| mlp2 | 27,648,000 | 8,675,373 | 10,783,304 | 1.2x |
-| chain16 | 16,384 | 82,007 | 162,380 | 2.0x |
-| chain16 | 1,048,576 | 5,045,381 | 2,848,473 | **0.6x** |
-| horner | 1,048,576 | 3,455,791 | 1,691,125 | **0.5x** |
-| residual | 1,048,576 | 3,201,673 | 1,827,691 | **0.6x** |
+| 128x128x128 | 4 | 35 | 15 | 15 |
+| 256x256x256 | 4 | 122 | 99 | 95 |
+| 512x512x512 | 4 | 850 | 766 | 680 |
+| 1024x1024x1024 | 4 | 6,028 | 5,540 | 5,620 |
+| 128x128x128 | 8 | 47 | 30 | 17 |
+| 256x256x256 | 8 | 183 | 101 | 92 |
+| 512x512x512 | 8 | 950 | 806 | 396 |
+| 1024x1024x1024 | 8 | 6,322 | 5,919 | 4,994 |
 
-Long elementwise chains over large arrays are the one place CubeCL still leads, and these rows are
-memory-bound, so cycles tell it more fairly at 1M elements: chain16 3.52M to its 3.25M, horner 3.41M to
-2.44M, residual 2.83M to 1.97M, while the plain workload leads 1.78M to 2.03M. A JIT compiles a whole
-chain into one loop; precompiled tiles pass values through memory every two fused steps. Three-step
-fused tiles would be about 2,000 kernels per instruction set instead of about 200, some 10 MB of code
-rather than 1 MB, for a family that is about 3% of a transformer-style pass whose matmul is 84%. So
-this is deliberate, and a mandatory JIT is out of scope. Instruction counts cannot see stalls, copies
-or parallel speedup, and CubeCL's GPU backends are not compared at all.
+At four threads prepared weights are level with OpenBLAS up to 256x256x256 and past 1024, and 13% behind at 512. Without them each worker packing its own copy costs 2.3x at 128x128x128, and less as sizes grow. At eight, OpenBLAS is ahead by up to 2x. Part of that is wake-up latency in a pool that sleeps, which is the host's choice, and part is sharing no packed work between workers, which is ours. Row stages aren't shared at all.
+
+### AArch64 and another x86
+
+Native CI runners at `866413e`, elapsed microseconds, one thread, with OpenBLAS 0.3.26 and BLIS as Ubuntu 24.04 builds them: `tournament-ubuntu-24.04-arm.txt` (Neoverse-N2) and `tournament-ubuntu-24.04.txt` (EPYC 7763). There are no counters there and these are shared machines, so this shows the shape and not a lead. No kernel here is specific to AArch64 yet.
+
+| Shape on Neoverse-N2 | Fast | Strict | OpenBLAS | BLIS | matrixmultiply |
+|---|---:|---:|---:|---:|---:|
+| 64x64x64 | 11.5 | 33.8 | 19.3 | 16.3 | 11.4 |
+| 128x128x128 | 84.9 | 269 | 99.8 | 95.5 | 84.2 |
+| 256x256x256 | 682 | 2,159 | 725 | 712 | 660 |
+| 512x512x512 | 5,490 | 17,444 | 5,759 | 5,341 | 5,332 |
+| 1024x1024x1024 | 44,375 | 140,414 | 42,010 | 42,876 | 42,650 |
+
+Fast is level with all of them from LLVM's code alone. Strict being more than 3x Fast there is more than the port count explains, and it is AArch64's most obvious target. Int8 dots use `sdot`: 0.025 us per 1,024 elements against 0.070 for the baseline.
+
+### Quantized
+
+Exact against an independent i128 oracle, at the extremes and past where a partial sum could overflow. There is no competing library in this table, so this compares our own contracts: `compute_int8`, elapsed, 1024x1024 on the i7.
+
+| Kernel | us | Weight memory |
+|---|---:|---:|
+| int8 matvec, AVX2 | 47.8 | 1 MiB |
+| int8 matvec, baseline | 206 | 1 MiB |
+| int4 matvec with group scales | 68.0 | 512 KiB |
+| f32 strict matvec | about 280 | 4 MiB |
+| f32 strict matvec, prepared | about 83 | 4 MiB, plus the packing |
+
+None of this says how well a real model survives quantizing, which isn't tested.
+
+### What preparing costs
+
+`graph_Fast_prepare_once` against what a prepared call saves, worked out from those rows rather than measured as a sequence. At 64x64x64 and 128x128x128 packing costs under one call's savings, so it pays by the second call. At 512x512x512 and up the saving is smaller than the noise, and repeated products should expect little. A left-prepared `k=256` matvec costs 191,543 cycles and saves 51,042 per strict call, so it pays from the fourth, but saves nothing under Fast with a long inner dimension, whose reordered dot is already as fast.
+
+### Memory and code
+
+The engine allocates through 64-byte aligned, budget-charged blocks, and no row of the tables allocates more than once per call: `allocations=` in the raw reports. Peak budget per shape is `graph_budget_peak_bytes`. `compute` symbols in the bench binary take 1.44 MB of text, from 1.39 MB at the start of this round.
 
 ### What moved these
 
-- **LLVM left a row of the 6x16 block on the stack**, written in pieces and read back whole, stalling
-  on failed store-forwards at every kernel call. `fused_6x16` names its twelve accumulators. Three
-  plausible explanations came first and the counters refused each: rename width (13% fewer
-  instructions moved no cycles), second-level streaming of `b`, and runtime-length copies.
-- **Packing all of `a` is not worth it.** It gained less than the kernel alone, cost scratch that
-  prepared weights had run without, and slowed small products by half.
-- `K_BLOCK` and `N_BLOCK` are still right for this kernel: nothing tried from 96 to 256 and at 128
-  or 256 columns beats 128 and 256 overall.
+- **LLVM rebuilt six addresses per iteration.** Inlined, the 6x16 kernel's six runs of `a` are visibly a fixed distance apart, so loop strength reduction kept one base: 30 instructions per iteration, against 4 a cycle of rename, or 7.5 cycles where the fused multiply-adds need 6. Out of line it's 23 instructions. The earlier note here that rename width wasn't the limit was wrong for this loop.
+- **malloc's large blocks start 16 bytes into a page**, so vector accesses straddled lines and buffers shared page offsets. Aligning everything the engine owns cut chains' in-cache cycles by 35 to 45%. Caller's buffers can't be aligned for them, so a `runInto` over Luau buffers doesn't get all of this.
+- Tried and dropped, none clearly better than noise: block sizes other than 128 and 256, including 256 and 128 the other way round, and a prefetch of factors in the kernel loop. Packing all of `a` wasn't retried, though 1024 square's L1 misses (13.8M against BLIS's 6.2M) suggest its 4 KiB stride aliases in the first-level cache, and that's the next thing to try.
+
+### Remaining gaps, by what they could buy
+
+1. **Square products past the caches**, 15 to 23% behind OpenBLAS, and matmul is 84 to 90% of a transformer-style pass. Packing `a` when its stride aliases, and a cache-aware row block.
+2. **AArch64 strict**, more than 3x Fast on Neoverse-N2. Read LLVM's code, then an explicit kernel if it is the cause.
+3. **Eight threads**, up to 2x behind OpenBLAS. Sharing packed `b` among workers, and row stages.
+4. **Short `k` and tiny products**: 8x8x8 is 3x matrixmultiply, and prepared beats the unprepared textbook path there, so the tiny threshold looks wrong; and the 10% regressions above.
+5. **Long expressions over a million elements**, 1.5 to 1.75x behind CubeCL. Worth least: elementwise is about 3% of that pass, and a mandatory JIT stays out of scope.
+
+Not measured: tail latency beyond `p90_us` in the raw reports, memory bandwidth, cold start other than CubeCL's launch, JSL end to end for large products, Rook or JessQL workloads.
 
 ### What a small call costs
 
@@ -82,13 +150,14 @@ loop in JSL that costs 45:
 | a native function | 47 | |
 | a method, no arguments | 89 | |
 | a method, a buffer and optional and variadic arguments | 111 | |
-| `sum:runInto`, 1x4 | 352 | was 642 |
-| `add:runInto`, 1x4 | 818 | was 1,208 |
-| `matmul:runInto`, 2x2x2 | 677 | was 1,159 |
+| `sum:runInto`, 1x4 | 386 | was 642 |
+| `add:runInto`, 1x4 | 757 | was 1,208, and 872 at the start of this round |
+| `matmul:runInto`, 2x2x2 | 675 | was 1,159 |
 
 So L3i's binder costs about 110 cycles of these, and rewriting it would gain little. Most of the rest
-is planning work per call: a 1x4 `add` from Rust is still 549 cycles and 1,447 instructions with no
-allocations, against 109 for a row sum.
+is planning work per call: a 1x4 `add` from Rust is still 385 cycles and 1,236 instructions with no
+allocations, against 114 for a row sum. Stepping one call shows it spread over binding sources and
+operands rather than in any one place, so further work here gains little per change.
 
 ### What applications spend
 
