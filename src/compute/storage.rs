@@ -234,11 +234,13 @@ pub(crate) enum PreparedSide {
 #[derive(Debug)]
 pub struct Prepared {
     pack: Allocation,
+    /// Where the elements start: a cache line, so that no vector load of them straddles two.
+    start: usize,
     side: PreparedSide,
 }
 impl Prepared {
     pub(crate) fn elements(&self, side: PreparedSide) -> Option<&[[u8; 4]]> {
-        (self.side == side).then(|| self.pack.bytes.as_chunks::<4>().0)
+        (self.side == side).then(|| self.pack.bytes[self.start..].as_chunks::<4>().0)
     }
 }
 
@@ -400,7 +402,9 @@ impl Tensor {
             PreparedSide::Right => crate::compute::kernels::prepared_right_elements(rows, cols),
             PreparedSide::Left => crate::compute::kernels::prepared_left_elements(rows, cols),
         };
-        let mut pack = budget.allocate(elements * 4)?;
+        let padding = if elements == 0 { 0 } else { crate::compute::kernels::CACHE_LINE };
+        let mut pack = budget.allocate(elements * 4 + padding)?;
+        let start = pack.bytes.as_ptr().align_offset(crate::compute::kernels::CACHE_LINE).min(pack.bytes.len());
         let source = crate::compute::kernels::Source::bind(self.borrow(), self.shape);
         let walked;
         let contiguous = if let crate::compute::kernels::Source::Direct(contiguous) = source {
@@ -413,12 +417,12 @@ impl Tensor {
             };
             walked.bytes.as_chunks::<4>().0
         };
-        let target = pack.bytes.as_chunks_mut::<4>().0;
+        let target = pack.bytes[start..].as_chunks_mut::<4>().0;
         match side {
             PreparedSide::Right => crate::compute::kernels::prepare_right(contiguous, rows, cols, target),
             PreparedSide::Left => crate::compute::kernels::prepare_left(contiguous, rows, cols, target),
         }
-        Ok(Self { prepared: Some(Arc::new(Prepared { pack, side })), ..self.clone() })
+        Ok(Self { prepared: Some(Arc::new(Prepared { pack, start, side })), ..self.clone() })
     }
     /// Budgeted bytes this tensor's [`Prepared`] weights hold, shared with whatever else holds them.
     #[must_use]

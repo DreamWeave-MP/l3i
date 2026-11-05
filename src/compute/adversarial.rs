@@ -875,7 +875,7 @@ fn prepared_weights_are_charged_while_they_live_and_refused_past_the_budget() {
     let held = setup.used();
 
     // The exact size is refused one byte short, cleanly, and the charge is exact when it fits.
-    let size = crate::compute::kernels::prepared_right_elements(k, n) * 4;
+    let size = crate::compute::kernels::prepared_right_elements(k, n) * 4 + crate::compute::kernels::CACHE_LINE;
     let tight = Budget::new(size - 1);
     assert!(weights.prepare_right(&tight).is_err());
     assert_eq!(tight.used(), 0);

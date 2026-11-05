@@ -779,75 +779,119 @@ fn micro<const FUSED: bool, const ROWS: usize, const WIDTH: usize>(
     }
 }
 
-/// The full-size kernel with fused arithmetic, its twelve accumulators named. LLVM kept one row of
-/// [`micro`]'s block on the stack, reading it back through failed store-forwards on every call.
+/// The full-size kernels, their twelve accumulators named. LLVM kept one row of [`micro`]'s block on
+/// the stack, reading it back through failed store-forwards on every call.
 #[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "avx2,fma")]
-#[allow(clippy::cast_ptr_alignment)] // Every access below tolerates any alignment.
-fn fused_6x16(scales: [&[Element]; 6], factors: &[[Element; 16]], out: &mut [Element], at: Block) {
-    use std::arch::x86_64::{_mm256_fmadd_ps, _mm256_loadu_ps, _mm256_set1_ps, _mm256_storeu_ps};
-    for run in scales {
-        assert_eq!(run.len(), factors.len());
-    }
-    assert!(at.cols == 16 && at.base + 5 * at.stride + 16 <= out.len());
-    let base = out[at.base..].as_mut_ptr().cast::<f32>();
-    let [s0, s1, s2, s3, s4, s5] = scales.map(|run| run.as_ptr().cast::<f32>());
-    // SAFETY: the assertions put six rows of 16 elements, `stride` apart, inside `out`, and a scale
-    // in each run for every row of factors. Every access tolerates any alignment, and x86 is
-    // little-endian, so these are the f32s `read` would give.
-    unsafe {
-        let row = |r: usize| base.add(r * at.stride);
-        let (mut a0, mut b0) = (_mm256_loadu_ps(row(0)), _mm256_loadu_ps(row(0).add(8)));
-        let (mut a1, mut b1) = (_mm256_loadu_ps(row(1)), _mm256_loadu_ps(row(1).add(8)));
-        let (mut a2, mut b2) = (_mm256_loadu_ps(row(2)), _mm256_loadu_ps(row(2).add(8)));
-        let (mut a3, mut b3) = (_mm256_loadu_ps(row(3)), _mm256_loadu_ps(row(3).add(8)));
-        let (mut a4, mut b4) = (_mm256_loadu_ps(row(4)), _mm256_loadu_ps(row(4).add(8)));
-        let (mut a5, mut b5) = (_mm256_loadu_ps(row(5)), _mm256_loadu_ps(row(5).add(8)));
-        let mut f = factors.as_ptr().cast::<f32>();
-        for p in 0..factors.len() {
-            let (lo, hi) = (_mm256_loadu_ps(f), _mm256_loadu_ps(f.add(8)));
-            let x = _mm256_set1_ps(s0.add(p).read_unaligned());
-            a0 = _mm256_fmadd_ps(x, lo, a0);
-            b0 = _mm256_fmadd_ps(x, hi, b0);
-            let x = _mm256_set1_ps(s1.add(p).read_unaligned());
-            a1 = _mm256_fmadd_ps(x, lo, a1);
-            b1 = _mm256_fmadd_ps(x, hi, b1);
-            let x = _mm256_set1_ps(s2.add(p).read_unaligned());
-            a2 = _mm256_fmadd_ps(x, lo, a2);
-            b2 = _mm256_fmadd_ps(x, hi, b2);
-            let x = _mm256_set1_ps(s3.add(p).read_unaligned());
-            a3 = _mm256_fmadd_ps(x, lo, a3);
-            b3 = _mm256_fmadd_ps(x, hi, b3);
-            let x = _mm256_set1_ps(s4.add(p).read_unaligned());
-            a4 = _mm256_fmadd_ps(x, lo, a4);
-            b4 = _mm256_fmadd_ps(x, hi, b4);
-            let x = _mm256_set1_ps(s5.add(p).read_unaligned());
-            a5 = _mm256_fmadd_ps(x, lo, a5);
-            b5 = _mm256_fmadd_ps(x, hi, b5);
-            f = f.add(16);
+macro_rules! kernel_6x16 {
+    ($name:ident, $features:literal, $step:path) => {
+        // Never inlined, so that LLVM can't see how the six runs relate and rebuild their addresses
+        // from one register each iteration.
+        #[inline(never)]
+        #[target_feature(enable = $features)]
+        #[allow(clippy::cast_ptr_alignment)] // Every access below tolerates any alignment.
+        fn $name(scales: [&[Element]; 6], factors: Rows16<'_>, out: &mut [Element], at: Block) {
+            use std::arch::x86_64::{_mm256_loadu_ps, _mm256_set1_ps, _mm256_storeu_ps};
+            let rows = scales[0].len();
+            for run in scales {
+                assert_eq!(run.len(), rows);
+            }
+            assert!(rows == 0 || (rows - 1) * factors.step + 16 <= factors.elements.len());
+            assert!(at.cols == 16 && at.base + 5 * at.stride + 16 <= out.len());
+            let base = out[at.base..].as_mut_ptr().cast::<f32>();
+            let [s0, s1, s2, s3, s4, s5] = scales.map(|run| run.as_ptr().cast::<f32>());
+            // SAFETY: the assertions put six rows of 16 elements, `stride` apart, inside `out`, `rows`
+            // rows of 16 factors, `step` apart, inside `elements`, and a scale in each run for every
+            // one of them. Every access tolerates any alignment, and x86 is little-endian, so these
+            // are the f32s `read` would give. `f` only leaves `elements` after the last of them.
+            unsafe {
+                let row = |r: usize| base.add(r * at.stride);
+                let (mut a0, mut b0) = (_mm256_loadu_ps(row(0)), _mm256_loadu_ps(row(0).add(8)));
+                let (mut a1, mut b1) = (_mm256_loadu_ps(row(1)), _mm256_loadu_ps(row(1).add(8)));
+                let (mut a2, mut b2) = (_mm256_loadu_ps(row(2)), _mm256_loadu_ps(row(2).add(8)));
+                let (mut a3, mut b3) = (_mm256_loadu_ps(row(3)), _mm256_loadu_ps(row(3).add(8)));
+                let (mut a4, mut b4) = (_mm256_loadu_ps(row(4)), _mm256_loadu_ps(row(4).add(8)));
+                let (mut a5, mut b5) = (_mm256_loadu_ps(row(5)), _mm256_loadu_ps(row(5).add(8)));
+                let mut f = factors.elements.as_ptr().cast::<f32>();
+                for p in 0..rows {
+                    let (lo, hi) = (_mm256_loadu_ps(f), _mm256_loadu_ps(f.add(8)));
+                    let x = _mm256_set1_ps(s0.add(p).read_unaligned());
+                    a0 = $step(x, lo, a0);
+                    b0 = $step(x, hi, b0);
+                    let x = _mm256_set1_ps(s1.add(p).read_unaligned());
+                    a1 = $step(x, lo, a1);
+                    b1 = $step(x, hi, b1);
+                    let x = _mm256_set1_ps(s2.add(p).read_unaligned());
+                    a2 = $step(x, lo, a2);
+                    b2 = $step(x, hi, b2);
+                    let x = _mm256_set1_ps(s3.add(p).read_unaligned());
+                    a3 = $step(x, lo, a3);
+                    b3 = $step(x, hi, b3);
+                    let x = _mm256_set1_ps(s4.add(p).read_unaligned());
+                    a4 = $step(x, lo, a4);
+                    b4 = $step(x, hi, b4);
+                    let x = _mm256_set1_ps(s5.add(p).read_unaligned());
+                    a5 = $step(x, lo, a5);
+                    b5 = $step(x, hi, b5);
+                    f = f.wrapping_add(factors.step);
+                }
+                _mm256_storeu_ps(row(0), a0);
+                _mm256_storeu_ps(row(0).add(8), b0);
+                _mm256_storeu_ps(row(1), a1);
+                _mm256_storeu_ps(row(1).add(8), b1);
+                _mm256_storeu_ps(row(2), a2);
+                _mm256_storeu_ps(row(2).add(8), b2);
+                _mm256_storeu_ps(row(3), a3);
+                _mm256_storeu_ps(row(3).add(8), b3);
+                _mm256_storeu_ps(row(4), a4);
+                _mm256_storeu_ps(row(4).add(8), b4);
+                _mm256_storeu_ps(row(5), a5);
+                _mm256_storeu_ps(row(5).add(8), b5);
+            }
         }
-        _mm256_storeu_ps(row(0), a0);
-        _mm256_storeu_ps(row(0).add(8), b0);
-        _mm256_storeu_ps(row(1), a1);
-        _mm256_storeu_ps(row(1).add(8), b1);
-        _mm256_storeu_ps(row(2), a2);
-        _mm256_storeu_ps(row(2).add(8), b2);
-        _mm256_storeu_ps(row(3), a3);
-        _mm256_storeu_ps(row(3).add(8), b3);
-        _mm256_storeu_ps(row(4), a4);
-        _mm256_storeu_ps(row(4).add(8), b4);
-        _mm256_storeu_ps(row(5), a5);
-        _mm256_storeu_ps(row(5).add(8), b5);
-    }
+    };
 }
+/// Rows of 16 factors, `step` elements apart: adjacent when packed, a column block of `b` when not.
+#[cfg(target_arch = "x86_64")]
+#[derive(Clone, Copy)]
+struct Rows16<'a> {
+    elements: &'a [Element],
+    step: usize,
+}
+/// One rounding per product and sum.
+#[cfg(target_arch = "x86_64")]
+#[inline]
+#[target_feature(enable = "avx2,fma")]
+fn fused_step(
+    scale: std::arch::x86_64::__m256,
+    factor: std::arch::x86_64::__m256,
+    sum: std::arch::x86_64::__m256,
+) -> std::arch::x86_64::__m256 {
+    std::arch::x86_64::_mm256_fmadd_ps(scale, factor, sum)
+}
+/// A rounding for the product and another for the sum, with no contraction: intrinsics are exact.
+#[cfg(target_arch = "x86_64")]
+#[inline]
+#[target_feature(enable = "avx2")]
+fn strict_step(
+    scale: std::arch::x86_64::__m256,
+    factor: std::arch::x86_64::__m256,
+    sum: std::arch::x86_64::__m256,
+) -> std::arch::x86_64::__m256 {
+    use std::arch::x86_64::{_mm256_add_ps, _mm256_mul_ps};
+    _mm256_add_ps(sum, _mm256_mul_ps(scale, factor))
+}
+#[cfg(target_arch = "x86_64")]
+kernel_6x16!(fused_6x16, "avx2,fma", fused_step);
+#[cfg(target_arch = "x86_64")]
+kernel_6x16!(strict_6x16, "avx2", strict_step);
 
 /// One pass's view of `b`: `WIDTH` elements per row of `b`, from column `column` of the pass, padded
 /// with zeros past `cols`.
 trait Factors: Copy {
     fn column<const WIDTH: usize>(self, column: usize, cols: usize) -> impl Iterator<Item = [Element; WIDTH]>;
-    /// The same elements as adjacent rows, when they already are.
+    /// The rows of the 16 columns from column `column`, as they lie in memory.
     #[cfg(target_arch = "x86_64")]
-    fn packed(&self, column: usize, width: usize) -> Option<&[Element]>;
+    fn rows16(&self, column: usize) -> Rows16<'_>;
 }
 /// Rows of `b` read in place: no copy, for the products too short to repay one.
 #[derive(Clone, Copy)]
@@ -861,8 +905,8 @@ struct InPlace<'a> {
 impl Factors for InPlace<'_> {
     #[cfg(target_arch = "x86_64")]
     #[inline(always)]
-    fn packed(&self, _column: usize, _width: usize) -> Option<&[Element]> {
-        None
+    fn rows16(&self, column: usize) -> Rows16<'_> {
+        Rows16 { elements: &self.b[self.start * self.n + self.first_column + column..], step: self.n }
     }
     #[inline(always)]
     fn column<const WIDTH: usize>(self, column: usize, cols: usize) -> impl Iterator<Item = [Element; WIDTH]> {
@@ -883,8 +927,8 @@ struct Packed<'a> {
 impl Factors for Packed<'_> {
     #[cfg(target_arch = "x86_64")]
     #[inline(always)]
-    fn packed(&self, column: usize, width: usize) -> Option<&[Element]> {
-        Some(&self.pack[column * self.rows..][..self.rows * width])
+    fn rows16(&self, column: usize) -> Rows16<'_> {
+        Rows16 { elements: &self.pack[column * self.rows..][..self.rows * 16], step: 16 }
     }
     #[inline(always)]
     fn column<const WIDTH: usize>(self, column: usize, _cols: usize) -> impl Iterator<Item = [Element; WIDTH]> {
@@ -919,6 +963,9 @@ struct Pass<'a> {
     rows: usize,
     first: usize,
     n: usize,
+    /// Whether this instantiation may call the explicit x86 kernels.
+    #[cfg_attr(not(target_arch = "x86_64"), allow(dead_code))]
+    vectors: bool,
 }
 /// One `ROWS x WIDTH` block of the output.
 #[inline(always)]
@@ -929,20 +976,22 @@ fn group<const FUSED: bool, const ROWS: usize, const WIDTH: usize>(
     row: usize,
     (column, cols): (usize, usize),
 ) {
-    let Pass { a, k, start, rows, first, n } = pass;
+    let Pass { a, k, start, rows, first, n, .. } = pass;
     let scales: [&[Element]; ROWS] = std::array::from_fn(|r| &a[(row + r) * k + start..][..rows]);
     let at = Block { base: row * n + first + column, stride: n, cols };
     #[cfg(target_arch = "x86_64")]
-    if FUSED
-        && ROWS == 6
-        && WIDTH == 16
-        && cols == 16
-        && let Some(packed) = factors.packed(column, 16)
-    {
+    if pass.vectors && ROWS == 6 && WIDTH == 16 && cols == 16 {
         let six: [&[Element]; 6] = scales[..].try_into().expect("six rows");
-        // SAFETY: on x86, only `matmul_fma` instantiates this with `FUSED`, and `matmul` reaches
-        // that only after `Isa::available` confirms the features.
-        unsafe { fused_6x16(six, packed.as_chunks::<16>().0, out, at) };
+        let factors = factors.rows16(column);
+        // SAFETY: `vectors` is only set by `matmul_avx2` and `matmul_fma`, which `matmul` reaches only
+        // after `Isa::available` confirms their features, and only `matmul_fma` sets `FUSED`.
+        unsafe {
+            if FUSED {
+                fused_6x16(six, factors, out, at);
+            } else {
+                strict_6x16(six, factors, out, at);
+            }
+        }
         return;
     }
     micro::<FUSED, ROWS, WIDTH>(scales, rows, factors.column::<WIDTH>(column, cols), out, at);
@@ -1177,8 +1226,10 @@ pub(crate) fn matmul_scratch(m: usize, k: usize, n: usize) -> usize {
         return 0;
     }
     let widest = if n >= N_BLOCK { N_BLOCK } else { n / NR * NR + remainder_width(n % NR) };
-    k.min(K_BLOCK) * widest * 4
+    k.min(K_BLOCK) * widest * 4 + CACHE_LINE
 }
+/// A cache line. Packed factors start on one, so no 256-bit load of them straddles two.
+pub(crate) const CACHE_LINE: usize = 64;
 
 /// Most scalar products a plain loop beats the block machinery at, whose setup and partial blocks
 /// cost more than this many multiply-adds.
@@ -1201,7 +1252,12 @@ fn tiny_product<const FUSED: bool>(a: &[Element], b: &[Element], k: usize, n: us
 /// The row-major `a @ b` kernel. Each pass of `b` covers ascending `k`, so each output element sees
 /// its products in increasing `k` whichever order its neighbours are computed in.
 #[inline(always)]
-fn matmul_body<const FUSED: bool>(operands: &Operands<'_>, out: &mut [Element], scratch: &mut [Element]) {
+fn matmul_body<const FUSED: bool>(
+    operands: &Operands<'_>,
+    out: &mut [Element],
+    scratch: &mut [Element],
+    vectors: bool,
+) {
     let &Operands { a, b, k, n, left, right } = operands;
     let m = out.len() / n;
     if m * k * n <= TINY_PRODUCT && k < RELAXED_FROM && left.is_none() && right.is_none() {
@@ -1218,7 +1274,7 @@ fn matmul_body<const FUSED: bool>(operands: &Operands<'_>, out: &mut [Element], 
     }
     let mut prepared = right;
     for (start, end, first, cols) in passes(k, n) {
-        let pass = Pass { a, k, start, rows: end - start, first, n };
+        let pass = Pass { a, k, start, rows: end - start, first, n, vectors };
         // A single row group would read a packing once, which a copy cannot repay.
         if m <= MR && prepared.is_none() {
             let factors = InPlace { b, n, first_column: first, start, end };
@@ -1248,22 +1304,22 @@ pub(crate) struct Operands<'a> {
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
 fn matmul_avx2(operands: &Operands<'_>, out: &mut [Element], scratch: &mut [Element]) {
-    matmul_body::<false>(operands, out, scratch);
+    matmul_body::<false>(operands, out, scratch, true);
 }
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2,fma")]
 fn matmul_fma(operands: &Operands<'_>, out: &mut [Element], scratch: &mut [Element]) {
-    matmul_body::<true>(operands, out, scratch);
+    matmul_body::<true>(operands, out, scratch, true);
 }
 /// `aarch64` always has the fused instruction, so its fused instantiation needs no target feature.
 #[cfg(target_arch = "aarch64")]
 #[inline(never)]
 fn matmul_fma(operands: &Operands<'_>, out: &mut [Element], scratch: &mut [Element]) {
-    matmul_body::<true>(operands, out, scratch);
+    matmul_body::<true>(operands, out, scratch, false);
 }
 #[inline(never)]
 fn matmul_baseline(operands: &Operands<'_>, out: &mut [Element], scratch: &mut [Element]) {
-    matmul_body::<false>(operands, out, scratch);
+    matmul_body::<false>(operands, out, scratch, false);
 }
 
 /// `a @ b` into row-major `out`, which holds at least one element and for which `k` is not zero:
@@ -1273,7 +1329,8 @@ fn matmul_baseline(operands: &Operands<'_>, out: &mut [Element], scratch: &mut [
 pub(crate) fn matmul(operands: &Operands<'_>, out: &mut [u8], scratch: &mut [u8], isa: Isa) {
     out.fill(0);
     let (out, _) = out.as_chunks_mut::<4>();
-    let (scratch, _) = scratch.as_chunks_mut::<4>();
+    let shift = scratch.as_ptr().align_offset(CACHE_LINE).min(scratch.len());
+    let (scratch, _) = scratch[shift..].as_chunks_mut::<4>();
     assert!(isa.available(), "{isa:?} is not available on this host");
     match isa {
         #[cfg(target_arch = "x86_64")]
