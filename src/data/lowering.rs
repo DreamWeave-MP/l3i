@@ -21,9 +21,8 @@
 //!
 //! A contiguous span (the common case, and the only one the JSL bridge emits) gets loops with
 //! compile-time steps, unrolled eight elements per pass with one cursor round trip; a strided
-//! span gets the simple loop whose step is the payload's stride. Past a measured length a
-//! contiguous span leaves for the bound method instead, whose vectorized loops win once the span
-//! pays for the call ([`longest_inline_span`]).
+//! span gets the simple loop whose step is the payload's stride. Past a measured length a span
+//! leaves for the bound method instead, whose loops win once the span pays for the call.
 
 use std::ffi::c_int;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -99,16 +98,31 @@ fn reduction_of(name: &str) -> Option<Reduction> {
 
 /// The contiguous span length from which a lowered call hands over to the bound method, or `None`
 /// to stay in this IR at any length. A bound call costs about 300 cycles more to reach, then runs
-/// the vectorized loops in `super::contiguous`, which these IR loops cannot be. The lengths are
-/// measured crossovers across kinds (`cargo bench -- data_receivers`). Filtered `sum`, `min` and
-/// `max` stay: bound, their loops are still scalar and the gain is not reliably there.
-fn longest_inline_span(member: Member) -> Option<i64> {
+/// the vectorized loops in `super::kind_loops`, which these IR loops cannot be. The lengths are
+/// measured crossovers across kinds (`cargo bench -- data_receivers`). A filtered integer `sum` is
+/// the one member that stays at any length: its comparison table costs more than the IR's branch.
+fn longest_inline_span(member: Member, kind: Kind) -> Option<i64> {
     match member {
         Member::Select(_) => Some(128),
         Member::Reduce(Reduction { op: ReductionOp::Sum, filter: None }) => Some(1024),
+        Member::Reduce(Reduction { op: ReductionOp::Sum, filter: Some(_) }) => {
+            matches!(kind, Kind::F32 | Kind::F64).then_some(512)
+        }
         Member::Reduce(Reduction { op: ReductionOp::Min | ReductionOp::Max, filter: None }) => Some(128),
+        Member::Reduce(Reduction { op: ReductionOp::Min | ReductionOp::Max, filter: Some(_) }) => Some(512),
         Member::Reduce(Reduction { op: ReductionOp::Count | ReductionOp::Any | ReductionOp::All, .. }) => Some(128),
-        Member::Reduce(Reduction { op: ReductionOp::Sum | ReductionOp::Min | ReductionOp::Max, .. }) => None,
+    }
+}
+
+/// The same for a strided span, where the IR steps by a run-time stride through scratch and costs
+/// about ten cycles an element. Bound loops pay for their call within about 64 elements, or more
+/// where a filter keeps them scalar too.
+fn longest_inline_strided_span(member: Member) -> i64 {
+    match member {
+        Member::Reduce(Reduction { op: ReductionOp::Sum | ReductionOp::Min | ReductionOp::Max, filter: Some(_) }) => {
+            256
+        }
+        _ => 64,
     }
 }
 
@@ -401,6 +415,62 @@ impl Emit<'_, '_> {
         }
     }
 
+    /// Leaves for `slow`, the bound method, when the span is at least the member's length.
+    fn guard_length(&mut self, longest: i64, count_reg: c_int, slow: IrOp) {
+        let count = self.int64_of(count_reg);
+        let limit = self.b.const_int64(longest);
+        let shorter = self.b.cond(IrCondition::Less);
+        self.b.inst(IrCmd::CHECK_CMP_INT64, &[count, limit, shorter, slow]);
+    }
+
+    /// From the block already begun, on to the IR loop if the span is short enough for it, and
+    /// otherwise to `slow`, the bound method.
+    fn hand_over_long_spans(&mut self, member: Member, kind: Kind, step: Option<i64>, count_reg: c_int, slow: IrOp) {
+        let Some(size) = step else {
+            self.guard_length(longest_inline_strided_span(member), count_reg, slow);
+            return;
+        };
+        let Some(longest) = longest_inline_span(member, kind) else { return };
+        let Member::Reduce(reduction @ Reduction { op: ReductionOp::Any | ReductionOp::All, .. }) = member else {
+            self.guard_length(longest, count_reg, slow);
+            return;
+        };
+        // A long span that its first few elements decide has no need of the bound call.
+        let inline = self.block();
+        let first = self.block();
+        let hand_over = self.block();
+        let count = self.int64_of(count_reg);
+        let limit = self.b.const_int64(longest);
+        let shorter = self.b.cond(IrCondition::Less);
+        self.b.inst(IrCmd::JUMP_CMP_INT64, &[count, limit, shorter, inline, first]);
+        self.b.begin_block(first);
+        self.first_elements(reduction, kind, size, hand_over);
+        // A fallback block must not be a block's only successor, or Luau's liveness analysis goes
+        // wrong: so a guard, which at this length always leaves.
+        self.b.begin_block(hand_over);
+        self.guard_length(longest, count_reg, slow);
+        self.jump(inline);
+        self.b.begin_block(inline);
+    }
+
+    /// The first `UNROLL` elements of a long contiguous span, then on to `next`: enough for an `any`
+    /// or `all` that its first elements decide to answer without a call. `next` reads them again.
+    fn first_elements(&mut self, member: Reduction, kind: Kind, size: i64, next: IrOp) {
+        let chain: Vec<IrOp> = (0..UNROLL).map(|_| self.block()).collect();
+        self.jump(chain[0]);
+        for k in 0..UNROLL {
+            let after = if k + 1 < UNROLL { chain[k + 1] } else { next };
+            self.b.begin_block(chain[k]);
+            self.visit(member, after, move |emit| {
+                let cursor = emit.get_num(S_CURSOR);
+                let base = emit.b.inst(IrCmd::NUM_TO_INT, &[cursor]);
+                let at = emit.b.const_int((k as i64 * size) as i32);
+                let offset = emit.b.inst(IrCmd::ADD_INT, &[base, at]);
+                emit.element_at(kind, offset)
+            });
+        }
+    }
+
     /// The loop for one member over one kind, from the block already begun: the seed for
     /// unfiltered extrema, the unrolled pass (contiguous spans only), the single-step tail,
     /// the result. The cursor and end are set; every block reloads what it uses.
@@ -636,12 +706,7 @@ impl NativeCodeHooks for KindLowering {
 
         for (variant, step) in [(contiguous, Some(size)), (strided, None)] {
             emit.b.begin_block(variant);
-            if let (Some(_), Some(longest)) = (step, longest_inline_span(member)) {
-                let count = emit.int64_of(count_reg);
-                let limit = emit.b.const_int64(longest);
-                let shorter = emit.b.cond(IrCondition::Less);
-                emit.b.inst(IrCmd::CHECK_CMP_INT64, &[count, limit, shorter, slow]);
-            }
+            emit.hand_over_long_spans(member, kind, step, count_reg, slow);
             match member {
                 Member::Reduce(reduction) => emit.reduction_loop(reduction, kind, step, count_reg),
                 Member::Select(comparison) => emit.select_loop(comparison, kind, step, count_reg, selection_reg),
@@ -878,8 +943,8 @@ mod tests {
         BOUND_RECEIVER_CALLS.get() - before
     }
 
-    /// Past its length a contiguous span leaves for the bound loops. Below it, on a strided span,
-    /// and for a member with no length, the IR loop runs.
+    /// Past its length a span leaves for the bound loops. Below it, and for a member with no length,
+    /// the IR loop runs.
     #[test]
     fn calls_leave_the_ir_only_on_long_contiguous_spans() {
         let policy = RuntimePolicy::new()
@@ -904,10 +969,25 @@ mod tests {
             for (call, length) in guarded {
                 assert_eq!(bound_calls(&runtime, kind, size, call, length - 1), 0, "{kind} {call} below {length}");
                 assert_eq!(bound_calls(&runtime, kind, size, call, length), 1, "{kind} {call} at {length}");
-                assert_eq!(bound_calls(&runtime, kind, size * 2, call, 4096), 0, "{kind} {call} strided");
+                assert_eq!(bound_calls(&runtime, kind, size * 2, call, 63), 0, "{kind} {call} strided below 64");
+                assert_eq!(bound_calls(&runtime, kind, size * 2, call, 64), 1, "{kind} {call} strided at 64");
             }
             for call in ["sumGt(buf, 0, {n}, 1)", "minGt(buf, 0, {n}, -1)", "maxLt(buf, 0, {n}, 1)"] {
-                assert_eq!(bound_calls(&runtime, kind, size, call, 4096), 0, "{kind} {call}");
+                assert_eq!(bound_calls(&runtime, kind, size * 2, call, 255), 0, "{kind} {call} strided below 256");
+                assert_eq!(bound_calls(&runtime, kind, size * 2, call, 256), 1, "{kind} {call} strided at 256");
+            }
+            for call in ["minGt(buf, 0, {n}, -1)", "maxLt(buf, 0, {n}, 1)"] {
+                assert_eq!(bound_calls(&runtime, kind, size, call, 511), 0, "{kind} {call} below 512");
+                assert_eq!(bound_calls(&runtime, kind, size, call, 512), 1, "{kind} {call} at 512");
+            }
+            // A filtered sum hands over for floats and stays for integers.
+            let float = matches!(kind, "f32" | "f64");
+            let call = "sumGt(buf, 0, {n}, 1)";
+            assert_eq!(bound_calls(&runtime, kind, size, call, 511), 0, "{kind} {call} below 512");
+            assert_eq!(bound_calls(&runtime, kind, size, call, 4096), usize::from(float), "{kind} {call} long");
+            // The buffer is zeros, so these answer at the first element: a long span needs no call.
+            for call in ["anyGt(buf, 0, {n}, -1)", "allLt(buf, 0, {n}, -1)"] {
+                assert_eq!(bound_calls(&runtime, kind, size, call, 4096), 0, "{kind} {call} decided first");
             }
         }
     }

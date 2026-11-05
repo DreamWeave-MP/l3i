@@ -579,6 +579,7 @@ fn every_receiver_member_lowers_and_agrees_with_the_module_functions() {
     // Either side of each length where a lowered call leaves for the bound method.
     let ops = ["sum", "min", "max", "count", "any", "all"];
     for (n, op) in [127, 1024].into_iter().flat_map(|n| ops.map(|op| (n, op))) {
+        // Both sides of every hand-over length, 128, 512 and 1,024, are covered by these two.
         // The module spells the filtered count countWhere, apart from bytes.count.
         let module = if op == "count" { "countWhere" } else { op };
         let mut checks = String::new();
