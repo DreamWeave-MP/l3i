@@ -92,7 +92,7 @@ Instructions are the median of nine rounds. Cycles and time are the best round o
 | `scatter` f32 | 2,033,314 | 1,148,522 | 605,007 [607,615] | 297,197 [301,645] | 2.0× | 136.9 µs | 70.4 µs |
 | `partition` f32 | 2,136,656 | 908,957 | 990,567 [993,741] | 291,883 [296,612] | 3.4× | 222.1 µs | 69.1 µs |
 | `partition` i32 | 2,136,389 | 1,959,593 | 892,398 [896,840] | 734,669 [741,058] | 1.2× | 200.3 µs | 173.6 µs |
-| `argsort` f32 | 16,064,958 | 7,281,443 | 5,798,669 [5,879,004] | 3,105,108 [3,136,222] | 1.9× | 1.64 ms | 757.1 µs |
+| `argsort` f32 | 16,064,958 | 7,691,021 | 5,798,669 [5,879,004] | 2,473,430 [2,488,869] | 2.3× | 1.64 ms | 565.7 µs |
 | `argsort` f64 | 15,999,425 | 10,792,137 | 5,786,842 [5,862,835] | 4,241,611 [4,310,584] | 1.4× | 1.63 ms | 1.33 ms |
 | `argsort` f32, caller scratch | 28,484,092 | 8,460,005 | 9,273,530 [9,418,497] | 3,182,563 [3,229,820] | 2.9× | 2.18 ms | 759.2 µs |
 | `argsort` i32, caller scratch | 27,987,788 | 5,641,961 | 9,826,372 [9,867,174] | 2,577,442 [2,696,014] | 3.8× | 2.21 ms | 605.4 µs |
@@ -113,6 +113,14 @@ Instructions are the median of nine rounds. Cycles and time are the best round o
 | JSL filtered count, f32 slice | 922,358 | 24,588 | 342,987 [345,831] | 15,860 [16,572] | 21.6× | 75.7 µs | 4.7 µs |
 | JSL `any`, f32 slice | 795,918 | 89,275 | 267,318 [267,938] | 31,828 [32,400] | 8.4× | 59.2 µs | 8.3 µs |
 | JSL filtered count, u8 slice | 920,213 | 272,268 | 346,093 [347,571] | 178,744 [178,973] | 1.9× | 76.3 µs | 41.6 µs |
+
+## `argsort` f32 at large sizes
+
+The sweep first showed this row at 0.78× at 1,048,576 keys, slower than before: 161–177M cycles against 126M, on fewer than half the instructions. Each radix pass looked up an 8 MB key snapshot by position, in a random order. At 262,144 keys it took 13M cycles and at 1,048,576 it took 198M on Luau 0.745, so 4× the keys cost 15× the cycles.
+
+Keys now travel with their positions, so each pass reads and writes in sequence. 1,048,576 keys take 46M cycles, 3–4× better than the same code before the change, and 65,536 take 2.5M rather than 3.1M. It costs about 10% at 512 keys and uses more temporary memory: 16 bytes per key rather than 12.
+
+The `argsort` f32 rows above and in "Every size" use this code, measured on Luau 0.745 in two processes (`data-results/argsort-packed.txt`). "Before" stays the original sweep on the older Luau, and every other table and row was measured before both changes, including the `argsort` f32 rows under "Small spans" and "AVX2".
 
 ## Every size
 
@@ -167,7 +175,7 @@ Best-round cycles before divided by after, so above 1 is faster. Below about 64 
 | `scatter` f32 | 0.97 | 1 | 1 | 1.1 | 1.3 | 1.5 | 1.6 | 1.8 | 2 | 2.1 | 2 | 2 | 2 | 2 |
 | `partition` f32 | 0.98 | 0.99 | 1 | 1.2 | 1.8 | 2.2 | 2.6 | 3 | 3.2 | 3.4 | 3.5 | 3.4 | 3.3 | 3.3 |
 | `partition` i32 | 0.98 | 0.95 | 0.96 | 1 | 1.1 | 1.1 | 1.2 | 1.2 | 1.2 | 1.2 | 1.2 | 1.2 | 1.2 | 1.2 |
-| `argsort` f32 | 1 | 1 | 1 | 1.2 | 2 | 2 | 2.3 | 2 | 2.1 | 2.6 | 2 | 1.9 | 1.9 | 0.78 |
+| `argsort` f32 | 1 | 1 | 1 | 1.2 | 2 | 2 | 2.3 | 1.8 | 2.1 | 2.6 | 2.2 | 2.3 | 2.2 | 2.8 |
 | `argsort` f64 | 1 | 1 | 1 | 1.1 | 1.4 | 1.3 | 1.4 | 1.6 | 1.5 | 1.5 | 1.5 | 1.4 | 1.3 | 1.2 |
 | `argsort` f32, caller scratch | 1 | 1 | 1 | 1 | 1 | 1 | 1.1 | 1.9 | 1.9 | 2.6 | 2.8 | 2.9 | 3 | 3.3 |
 | `argsort` i32, caller scratch | 1 | 1 | 1 | 1 | 1 | 0.99 | 1 | 2.4 | 2.8 | 3.9 | 4 | 3.8 | 3.5 | 3.8 |
@@ -417,4 +425,3 @@ The same build with run-time dispatch disabled, so x86-64's SSE2 baseline runs. 
 | `minGt` | 441 / 858 | 583 / 1,123 | 859 / 1,668 | 1,571 / 2,808 | 2,678 / 3,970 | 6,135 / 6,154 | 10,542 / 10,476 | 36,608 / 36,482 | 555,362 / 555,249 |
 | `maxLt` | 351 / 628 | 420 / 700 | 541 / 884 | 853 / 1,176 | 1,367 / 1,756 | 2,868 / 3,050 | 5,178 / 5,500 | 18,766 / 20,322 | 288,192 / 289,162 |
 | `selectGt` | 588 / 649 | 930 / 691 | 675 / 784 | 1,016 / 986 | 1,391 / 1,373 | 2,185 / 2,155 | 3,654 / 3,716 | 12,964 / 12,987 | 198,929 / 199,029 |
-
