@@ -937,7 +937,7 @@ fn group<const FUSED: bool, const ROWS: usize, const WIDTH: usize>(
         && cols == 16
         && let Some(packed) = factors.packed(column, 16)
     {
-        let six = std::array::from_fn(|r| &a[(row + r) * k + start..][..rows]);
+        let six: [&[Element]; 6] = scales[..].try_into().expect("six rows");
         // SAFETY: on x86, only `matmul_fma` instantiates this with `FUSED`, and `matmul` reaches
         // that only after `Isa::available` confirms the features.
         unsafe { fused_6x16(six, packed.as_chunks::<16>().0, out, at) };
