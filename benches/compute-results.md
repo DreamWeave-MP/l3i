@@ -11,7 +11,9 @@ The engine is `src/compute` behind the `compute` feature; `compute-testing` adds
 Single thread on an i7-10870H, packing included, in user-space cycles from the CPU's counter:
 `L3I_BENCH_OPENBLAS=/usr/lib64/libopenblaso.so.0 L3I_BENCH_SHAPES=256x256x256 scripts/compute_compare.sh compute_matrix`.
 Fast programs against matrixmultiply and OpenBLAS 0.3.29. Instruction counts repeat to within a few
-parts in a million between runs of one binary; cycles move by a percent or two.
+parts in a million between runs of one binary. Cycles are stable to a percent or two while a product
+fits the caches, but not past them: one binary read from 1.38M to 1.55M at 256x256x256 across eight
+runs, so compare medians of several runs there. Each cell below is one run.
 
 | Shape | Fast | matrixmultiply | OpenBLAS |
 |---|---:|---:|---:|
@@ -22,7 +24,8 @@ parts in a million between runs of one binary; cycles move by a percent or two.
 | 256x256x256 | 1,418,390 | 1,403,887 | 1,241,528 |
 | 1x4096x1, against `sgemv` | 1,494 | | 2,254 |
 
-Square products are level with matrixmultiply and 3 to 14% behind OpenBLAS. Wide and prepared shapes
+Square products are level with matrixmultiply. Against OpenBLAS they are about 10% behind at 64x64x64,
+which fits the caches, and 10 to 20% behind at 256x256x256, depending on the run. Wide and prepared shapes
 lead, as `matrix-compare.md` records. On AArch64 none of this has been measured, and the explicit
 kernel below is x86 only.
 
