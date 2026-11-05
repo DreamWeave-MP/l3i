@@ -949,3 +949,129 @@ fn prepared_weights_serve_concurrent_runs() {
     drop(prepared);
     assert_eq!(budget.used(), 0);
 }
+
+/// Valid views with no elements, over storage they cannot index into: every stride here would
+/// land outside it, and none of it may be read. The second owner has bytes the view never names.
+fn empty_views(rows: usize, cols: usize) -> Vec<Tensor> {
+    let shape = Shape::Matrix(rows, cols);
+    let mut views = Vec::new();
+    for strides in [[0, 0], [0, 4], [4, 0], [8, 4], [7, 3], [1000, 1], [usize::MAX, usize::MAX]] {
+        for (bytes, offset) in [(0, 0), (16, 8), (16, 16)] {
+            let owner = Arc::new(Vector(vec![0x55; bytes]));
+            views.push(Tensor::from_storage(owner, shape, offset, strides).unwrap());
+        }
+    }
+    views
+}
+
+fn assert_positive_zeros(out: &[u8], context: &str) {
+    assert!(out.iter().all(|byte| *byte == 0), "{context}: {out:?}");
+}
+
+#[test]
+fn zero_width_row_sums_read_nothing_at_the_kernel() {
+    for isa in strict_isas() {
+        for rows in [0, 1, 2, 7, 8, 9, 17] {
+            for stride in [0, 1, 2, 1000] {
+                let mut out = vec![[0x55; 4]; rows];
+                crate::compute::reduction::sum_rows(&[], stride, 0, &mut out, isa);
+                assert!(out.iter().all(|sum| *sum == [0; 4]), "{isa:?} {rows} rows, stride {stride}");
+            }
+        }
+    }
+}
+
+#[test]
+fn empty_inputs_spend_nothing_and_answer_identically_every_way() {
+    let domain = Domain::new(1 << 12, 1 << 12);
+    let exhausted = Budget::new(0);
+    let funded = Budget::new(1 << 16);
+    for (rows, cols) in [(2, 0), (9, 0), (17, 0), (0, 3), (0, 0), (1, 0), (0, 1)] {
+        let x = Expr::slot(0, Shape::Matrix(rows, cols), domain.clone()).unwrap();
+        let sum = x.sum_rows().unwrap();
+        let programs = [
+            sum.compile().unwrap(),
+            sum.compile_with(Numeric::Fast).unwrap(),
+            x.relu().unwrap().compile().unwrap(),
+            x.softmax().unwrap().compile().unwrap(),
+            x.normalize(1.0, true).unwrap().compile().unwrap(),
+            x.transpose().unwrap().compile().unwrap(),
+            x.softmax().unwrap().sum_rows().unwrap().compile().unwrap(),
+            x.normalize(1.0, false).unwrap().sum_rows().unwrap().compile().unwrap(),
+            x.transpose().unwrap().sum_rows().unwrap().compile().unwrap(),
+        ];
+        for view in empty_views(rows, cols) {
+            for program in &programs {
+                let context = format!("{rows}x{cols} {:?}", view.borrow());
+                for isa in strict_isas() {
+                    let mut out = vec![0x55; program.output_shape().elements().unwrap() * 4];
+                    program.run_with(&[view.borrow()], &mut out, &exhausted, isa, CHUNK).unwrap();
+                    assert_positive_zeros(&out, &context);
+                }
+                let reference = program.run_reference(&[view.borrow()], &funded).unwrap();
+                assert_positive_zeros(&reference.readback().unwrap(), &context);
+            }
+            assert_eq!(view.readback().unwrap(), Vec::<u8>::new());
+        }
+    }
+    assert_eq!((exhausted.used(), exhausted.allocations(), funded.used()), (0, 0, 0));
+}
+
+#[test]
+fn empty_matrix_products_read_no_operand_however_it_is_laid_out() {
+    let domain = Domain::new(1 << 12, 1 << 12);
+    let exhausted = Budget::new(0);
+    // A spread operand would need packing if it were read at all.
+    let spread = laid_out(&[1.0; 12], 4, 3, 3, true);
+    let (slot_a, slot_b) = (Shape::Matrix(4, 0), Shape::Matrix(0, 5));
+    let inner = Expr::slot(0, slot_a, domain.clone())
+        .unwrap()
+        .matmul(&Expr::slot(1, slot_b, domain.clone()).unwrap())
+        .unwrap()
+        .compile()
+        .unwrap();
+    for (a, b) in empty_views(4, 0).iter().zip(empty_views(0, 5).iter()) {
+        let mut out = vec![0x55; 4 * 5 * 4];
+        inner.run_into(&[a.borrow(), b.borrow()], &mut out, &exhausted).unwrap();
+        assert_positive_zeros(&out, "no inner dimension");
+    }
+    let no_columns = Expr::slot(0, Shape::Matrix(4, 3), domain.clone())
+        .unwrap()
+        .matmul(&Expr::slot(1, Shape::Matrix(3, 0), domain.clone()).unwrap())
+        .unwrap()
+        .compile()
+        .unwrap();
+    for b in empty_views(3, 0) {
+        no_columns.run_into(&[spread.borrow(), b.borrow()], &mut [], &exhausted).unwrap();
+    }
+    let no_rows = Expr::slot(0, Shape::Matrix(0, 4), domain.clone())
+        .unwrap()
+        .matmul(&Expr::slot(1, Shape::Matrix(4, 3), domain).unwrap())
+        .unwrap()
+        .compile()
+        .unwrap();
+    for a in empty_views(0, 4) {
+        no_rows.run_into(&[a.borrow(), spread.borrow()], &mut [], &exhausted).unwrap();
+    }
+    assert_eq!((exhausted.used(), exhausted.allocations()), (0, 0));
+}
+
+#[test]
+fn preparing_empty_weights_holds_nothing_and_still_multiplies() {
+    let domain = Domain::new(1 << 12, 1 << 12);
+    let exhausted = Budget::new(0);
+    let product = Expr::slot(0, Shape::Matrix(3, 0), domain.clone())
+        .unwrap()
+        .matmul(&Expr::slot(1, Shape::Matrix(0, 2), domain).unwrap())
+        .unwrap()
+        .compile()
+        .unwrap();
+    for (a, b) in empty_views(3, 0).iter().zip(empty_views(0, 2).iter()) {
+        let (left, right) = (a.prepare_left(&exhausted).unwrap(), b.prepare_right(&exhausted).unwrap());
+        assert_eq!((left.prepared_bytes(), right.prepared_bytes()), (0, 0));
+        let mut out = vec![0x55; 3 * 2 * 4];
+        product.run_into(&[left.borrow(), right.borrow()], &mut out, &exhausted).unwrap();
+        assert_positive_zeros(&out, "prepared, no inner dimension");
+    }
+    assert_eq!((exhausted.used(), exhausted.allocations()), (0, 0));
+}

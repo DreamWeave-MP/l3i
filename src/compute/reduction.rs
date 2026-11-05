@@ -210,6 +210,11 @@ const SUM_ROWS: usize = 8;
 /// Writes the ordered sum of each `cols`-wide row of `rows` to `out`, rows `stride` elements apart.
 #[inline(always)]
 fn sum_rows_body(rows: &[Element], stride: usize, cols: usize, out: &mut [Element]) {
+    // No columns reads nothing, and an empty view's stride names rows that need not exist.
+    if cols == 0 {
+        out.fill(0.0f32.to_le_bytes());
+        return;
+    }
     let row = |index: usize| &rows[index * stride..][..cols];
     let (groups, rest) = out.as_chunks_mut::<SUM_ROWS>();
     let mut first = 0;
