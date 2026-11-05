@@ -1272,7 +1272,9 @@ fn panels_times_column<const FUSED: bool>(panels: &[Element], b: &[Element], k: 
 /// does no packing, which includes every product with no elements or no inner dimension and every
 /// product with a single row group to read the packing.
 pub(crate) fn matmul_scratch(m: usize, k: usize, n: usize) -> usize {
-    if m <= MR || n <= 1 {
+    // The textbook loop packs nothing, and allocating for it would cost more than it does.
+    let tiny = m.saturating_mul(k).saturating_mul(n) <= TINY_PRODUCT && k < RELAXED_FROM;
+    if tiny || m <= MR || n <= 1 {
         return 0;
     }
     let widest = if n >= N_BLOCK { N_BLOCK } else { n / NR * NR + remainder_width(n % NR) };

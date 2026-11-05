@@ -220,6 +220,25 @@ fn the_work_limit_counts_what_each_stage_executes() {
     assert!(!rows(limited(64 * 64 * 6 - 1)));
 }
 
+/// A product the textbook loop answers asks the budget for nothing and allocates nothing.
+#[test]
+fn a_tiny_product_needs_no_scratch() {
+    let domain = Domain::new(16, 16);
+    let shape = Shape::Matrix(8, 8);
+    let values: Vec<f32> = (0..64).map(|i| i as f32).collect();
+    let tensor = laid_out(&values, 8, 8, 1, false);
+    let slot = Expr::slot(0, shape, domain).unwrap();
+    let program = slot.matmul(&slot).unwrap().compile().unwrap();
+    let mut out = vec![0u8; 64 * 4];
+    let nothing = Budget::new(0);
+    with_allocation_hook(
+        |bytes| panic!("{bytes} bytes for a product that packs nothing"),
+        || program.run_into(&[tensor.borrow()], &mut out, &nothing),
+    )
+    .unwrap();
+    assert_eq!(floats(&out)[0], (0..8).map(|p| (p * p * 8) as f32).sum::<f32>());
+}
+
 /// Everything the engine allocates starts on a cache line, at any size and when empty.
 #[test]
 fn engine_buffers_start_on_a_cache_line() {
