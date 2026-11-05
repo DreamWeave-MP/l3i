@@ -625,6 +625,9 @@ impl Program {
 
     /// Runs against borrowed views into caller storage of exactly the output's size. The
     /// caller guarantees `out` overlaps no input, which `&mut` already proves in safe code.
+    ///
+    /// An `Err` leaves `out` as it was: only the last stage writes to it, and that stage has its
+    /// operands, its charge and its scratch before its kernel starts, which cannot fail.
     pub fn run_into(&self, inputs: &[View<'_>], out: &mut [u8], budget: &Arc<Budget>) -> Result<()> {
         self.check(inputs)?;
         if out.len() != self.output_shape().elements()? * 4 {

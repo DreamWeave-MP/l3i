@@ -324,22 +324,29 @@ fn describe_program(d: &mut ExtensionDescriptor) {
             },
         )
         .signature("(self, out: buffer, ...: buffer)")
-        .doc("Runs on buffers of little-endian f32, one per slot in order, writing to out. Nothing is retained. Raises if out overlaps an input.");
+        .doc("Runs on buffers of little-endian f32, one per slot in order, writing to out. Nothing is retained. Raises if out overlaps an input. A call that raises leaves out as it was.");
     program
         .method(
             "runTensorsInto",
             |p: &ScriptProgram, call: &Call<'_>, mut out: BufferView<'_>, tensors: VarArgs<&ScriptTensor>| {
                 let views: Inline<View<'_>, 8> = tensors.values.iter().map(|t| t.tensor.borrow()).collect();
                 collecting(call, &p.budget, || {
-                    // SAFETY: a tensor's bytes are native, never a Luau buffer, so this exclusive
-                    // slice overlaps no input, and no Lua runs while it is alive.
-                    let target = unsafe { out.bytes_mut_unchecked() };
+                    // SAFETY: the exclusive slice is only made once every tensor's bytes are shown
+                    // disjoint from it. `Storage` is the host's and can hold any bytes, so that isn't
+                    // assumed. No Lua runs while it is alive.
+                    let target = unsafe {
+                        let target = out.bytes_unchecked();
+                        if views.iter().any(|view| overlaps(view.bytes, target)) {
+                            return Err(Error::runtime("output buffer aliases an input"));
+                        }
+                        out.bytes_mut_unchecked()
+                    };
                     p.program.run_into(&views, target, &p.budget)
                 })
             },
         )
         .signature("(self, out: buffer, ...: dream_compute_Tensor)")
-        .doc("Runs on tensors, writing to out.");
+        .doc("Runs on tensors, writing to out. A call that raises leaves out as it was.");
 }
 
 impl Extension for ComputeExtension {

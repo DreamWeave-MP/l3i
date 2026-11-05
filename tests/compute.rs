@@ -318,6 +318,142 @@ fn building_graphs_in_a_loop_never_runs_out_of_what_it_no_longer_holds() {
         .unwrap();
 }
 
+/// Refused for real, refused by garbage that gives way, and every kind of stage: `out` holds what it
+/// held until a call succeeds. The scratch sizes are chosen so the output itself would have fitted.
+#[test]
+fn a_call_that_raises_leaves_its_output_as_it_was() {
+    let runtime = Runtime::from_plan(&limited(16 * 16 * 4 * 3, 64, 8)).unwrap();
+    runtime
+        .exec(
+            "local size = 16 * 16 * 4
+             local a, b = buffer.create(size), buffer.create(size)
+             for i = 0, 255 do buffer.writef32(a, i * 4, (i % 7) * 0.5) buffer.writef32(b, i * 4, (i % 5) * 0.25) end
+             local x, y = compute.slot(0, 16, 16), compute.slot(1, 16, 16)
+             local programs = {
+                 x:matmul(y):compile(), x:matmul(y):compileFast(),
+                 x:matmul(y):add(x):relu():compile(), x:matmul(y):matmul(y):softmax():compile(),
+             }
+             local out = buffer.create(size)
+             local function untouched()
+                 for i = 0, size - 1 do if buffer.readu8(out, i) ~= 0x5a then return false end end
+                 return true
+             end
+             local stages = x:add(y):relu():transpose():softmax():compile()
+             table.insert(programs, stages)
+             for index, program in programs do
+                 buffer.fill(out, 0, 0x5a)
+                 -- Everything live, so that garbage collection has nothing to give back.
+                 local held = {}
+                 repeat
+                     local ok, tensor = pcall(compute.f32, buffer.create(64), 4, 4)
+                     if ok then table.insert(held, tensor) end
+                 until not ok
+                 local ok, message = pcall(function() program:runInto(out, a, b) end)
+                 assert(index == 5 or not ok, 'program ' .. index .. ' should need more than is left')
+                 if not ok then
+                     assert(string.find(message, 'budget', 1, true), message)
+                     assert(untouched(), 'program ' .. index .. ' wrote before raising')
+                 end
+                 -- The same call with only garbage in the way succeeds, and retries from clean.
+                 held = nil
+                 buffer.fill(out, 0, 0x5a)
+                 for _ = 1, 8 do compute.f32(buffer.create(size), 16, 16) end
+                 program:runInto(out, a, b)
+                 assert(not untouched(), 'program ' .. index .. ' wrote nothing')
+             end",
+        )
+        .unwrap();
+}
+
+/// Each way a call can name the same bytes twice, in each position an input can take.
+#[test]
+fn inputs_may_share_bytes_with_each_other_and_never_with_the_output() {
+    let runtime = Runtime::from_plan(&limited(1 << 20, 64, 8)).unwrap();
+    runtime
+        .exec(
+            "local function one(v) local b = buffer.create(4) buffer.writef32(b, 0, v) return b end
+             local function sum(count)
+                 local total = compute.slot(0, 1, 1)
+                 for slot = 1, count - 1 do total = total:add(compute.slot(slot, 1, 1)) end
+                 return total:compile()
+             end
+             local out = buffer.create(4)
+             local shared = one(2)
+             sum(2):runInto(out, shared, shared)
+             assert(buffer.readf32(out, 0) == 4, 'twice in the fixed parameters')
+             sum(5):runInto(out, shared, shared, shared, shared, shared)
+             assert(buffer.readf32(out, 0) == 10, 'past them too')
+             for count = 1, 5 do
+                 for position = 1, count do
+                     local inputs = {}
+                     for slot = 1, count do inputs[slot] = if slot == position then out else one(1) end
+                     buffer.writef32(out, 0, 99)
+                     local program = sum(count)
+                     assert(not pcall(function() program:runInto(out, table.unpack(inputs)) end),
+                         'out as input ' .. position .. ' of ' .. count)
+                     assert(buffer.readf32(out, 0) == 99, 'wrote while refusing')
+                 end
+             end
+             -- No bytes means nothing to share: one empty buffer may be every operand.
+             local none = buffer.create(0)
+             compute.slot(0, 0, 3):relu():compile():runInto(none, none)
+             compute.slot(0, 3, 0):add(compute.slot(1, 3, 0)):compile():runInto(none, none, none)
+             -- An empty product of nonempty operands reads neither, and still can't alias them.
+             local operand = buffer.create(12)
+             local empty = compute.slot(0, 0, 3):matmul(compute.slot(1, 3, 2)):compile()
+             empty:runInto(none, none, buffer.create(24))
+             assert(not pcall(function() empty:runInto(none, operand, buffer.create(24)) end), 'wrong input size')
+             -- Tensors cannot be the output's bytes, and buffers they came from are not them.
+             local source = one(5)
+             local tensor = compute.f32(source, 1, 1)
+             local relu = compute.slot(0, 1, 1):relu():compile()
+             relu:runTensorsInto(source, tensor)
+             assert(buffer.readf32(source, 0) == 5, 'a tensor owns a copy')",
+        )
+        .unwrap();
+}
+
+/// A host's storage is its own business, even bytes it shares with a buffer: this checks them anyway.
+#[test]
+fn run_tensors_into_refuses_a_host_tensor_over_the_output() {
+    #[derive(Debug)]
+    struct Borrowed(*const u8, usize);
+    // SAFETY: the test holds the buffer alive and writes it only through the refused call.
+    unsafe impl Send for Borrowed {}
+    // SAFETY: as above.
+    unsafe impl Sync for Borrowed {}
+    impl Storage for Borrowed {
+        fn bytes(&self) -> &[u8] {
+            // SAFETY: as above.
+            unsafe { std::slice::from_raw_parts(self.0, self.1) }
+        }
+    }
+    let plan = plan(ComputeExtension::default());
+    let runtime = Runtime::from_plan(&plan).unwrap();
+    let budget = Budget::new(1 << 20);
+    let host_budget = budget.clone();
+    let over_buffer = runtime
+        .bind_function("dream.test.overBuffer", move |bytes: l3i::convert::BufferView<'_>| {
+            // SAFETY: only this function's own test reads through it, while the buffer lives.
+            let pointer = unsafe { bytes.bytes_unchecked() };
+            let storage = Arc::new(Borrowed(pointer.as_ptr(), pointer.len()));
+            let tensor = Tensor::from_storage(storage, Shape::Matrix(1, 1), 0, [4, 4])?;
+            Ok::<_, l3i::Error>(Owned(ScriptTensor::new(tensor, host_budget.clone())))
+        })
+        .unwrap();
+    runtime.set_global("overBuffer", &over_buffer).unwrap();
+    runtime
+        .exec(
+            "local out = buffer.create(4)
+             buffer.writef32(out, 0, -1)
+             local tensor = overBuffer(out)
+             local relu = compute.slot(0, 1, 1):relu():compile()
+             assert(not pcall(function() relu:runTensorsInto(out, tensor) end), 'the output is an input')
+             assert(buffer.readf32(out, 0) == -1, 'wrote while refusing')",
+        )
+        .unwrap();
+}
+
 #[test]
 fn run_into_takes_any_number_of_inputs_in_order_and_refuses_gaps() {
     let runtime = Runtime::from_plan(&limited(1 << 20, 64, 8)).unwrap();
