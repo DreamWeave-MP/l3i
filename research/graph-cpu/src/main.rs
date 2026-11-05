@@ -2,12 +2,13 @@
 mod bench;
 
 use l3i::source::LoadScope;
+#[cfg(feature = "luau-jit")]
+use l3i::stack::Scope;
 use l3i::{
     Result, Runtime,
     bind::{Call, VarArgs},
     convert::{BufferView, Exact, NewBuffer},
     module::{LuauModule, ModuleBuilder},
-    stack::Scope,
     userdata::{Owned, Userdata},
 };
 use l3i_graph_cpu_research::{Budget, Domain, Expr, Numeric, Program, Shape, Tensor, View};
@@ -28,24 +29,13 @@ unsafe impl Userdata for CompiledProgram {
     const NAME: &'static str = "dream.research.Program";
 }
 
-unsafe extern "C" {
-    fn lua_gc(state: *mut std::ffi::c_void, what: std::ffi::c_int, data: std::ffi::c_int) -> std::ffi::c_int;
-}
-/// `LUA_GCCOLLECT`. L3i has this collection inside `Call`, private and behind its `tcp` feature;
-/// production would make that public instead of declaring the symbol.
-const LUA_GCCOLLECT: std::ffi::c_int = 2;
-fn collect(call: &Call<'_>) {
-    // SAFETY: the state is live for the call, a full collection is permitted from a C function,
-    // and no userdata destructor here calls the Lua API.
-    unsafe { lua_gc(Scope::state(call).cast(), LUA_GCCOLLECT, 0) };
-}
 /// Native tensors look small to Luau's collector, so results can be garbage that holds the budget
 /// without ever triggering a cycle. When the budget refuses `body`, collect once and retry.
 fn collecting<R>(call: &Call<'_>, budget: &Budget, mut body: impl FnMut() -> Result<R>) -> Result<R> {
     let denials = budget.denials();
     let first = body();
     if first.is_err() && budget.denials() != denials {
-        collect(call);
+        call.collect_garbage();
         return body();
     }
     first
@@ -201,7 +191,7 @@ impl LuauModule for Research {
             collecting(call, &budget, || Tensor::import_view(&bytes, Shape::Matrix(r.0, c.0), &budget))
                 .map(|t| Owned(TensorValue(t)))
         })?;
-        module.function("collect", |call: &Call<'_>| collect(call))?;
+        module.function("collect", |call: &Call<'_>| call.collect_garbage())?;
         #[cfg(feature = "luau-jit")]
         module.function("setNative", |call: &Call<'_>, enabled: bool| {
             if let Some(generator) = l3i::native_code::NativeCodeGen::for_scope(call) {
@@ -253,6 +243,7 @@ fn run() -> Result<()> {
     let runtime = runtime()?;
     runtime.exec(include_str!("../example.jsl"))?;
     runtime.exec(include_str!("../slots.jsl"))?;
+    runtime.exec(include_str!("../rows.jsl"))?;
     #[cfg(all(test, feature = "luau-jit"))]
     assert!(runtime.native_code().unwrap().execution_stats(&runtime.stack()).regular_blocks_executed > 0);
     runtime.collect_garbage();
