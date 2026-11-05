@@ -351,6 +351,10 @@ pub fn matvec_i4_with(
         return Err(error("invalid int4 matrix-vector dimensions or scales"));
     }
     assert!(isa.available());
+    // A group longer than the output is one whole group, however long it claims to be. Past here its
+    // bytes are at most `weights.len()`, which the check above has shown is a real length, or one
+    // stride when there are no rows at all, so they can't overflow or come to nothing.
+    let groups = Groups { rows: groups.rows.min(out.len().max(1)), scales: groups.scales };
     dispatch!(
         isa,
         matvec_i4_native(weights, input, groups, input_scale, out),
@@ -521,6 +525,34 @@ mod tests {
                     assert_eq!(actual.to_bits(), expected.to_bits(), "{rows}x{columns}, row {row} {isa:?}");
                 }
             }
+        }
+    }
+    /// One scale for everything is a real request however large the group is said to be, and a size
+    /// whose bytes overflow must not become a panic or a wrong group.
+    #[test]
+    fn a_group_longer_than_the_output_is_one_group() {
+        let (weights, input) = ([0x21u8, 0x43, 0x65, 0x07], [1i8, 1, 1, 1]);
+        for isa in isas() {
+            for rows in [2, 3, 1 << 62, 1 << 63, usize::MAX] {
+                let mut out = [f32::NAN; 2];
+                let groups = Groups { rows, scales: &[0.5] };
+                matvec_i4_with(&weights, &input, groups, 1.0, &mut out, isa).unwrap();
+                assert_eq!(out, [5.0, 9.0], "{rows} {isa:?}");
+            }
+            // The size reported first: two bytes a row, wrapping to no bytes at all.
+            let mut one = [f32::NAN];
+            matvec_i4_with(&[0x11; 2], &input, Groups { rows: 1 << 63, scales: &[1.0] }, 1.0, &mut one, isa).unwrap();
+            assert_eq!(one, [4.0]);
+            // No rows need no scales, whatever size their groups would have been.
+            for rows in [1, 1 << 63, usize::MAX] {
+                let none = Groups { rows, scales: &[] };
+                matvec_i4_with(&[], &input, none, 1.0, &mut [], isa).unwrap();
+            }
+            // A size can't excuse the wrong number of scales.
+            let mut out = [f32::NAN; 2];
+            let extra = Groups { rows: 1 << 63, scales: &[1.0, 1.0] };
+            assert!(matvec_i4_with(&weights, &input, extra, 1.0, &mut out, isa).is_err());
+            assert!(out.iter().all(|value| value.is_nan()));
         }
     }
     #[test]
