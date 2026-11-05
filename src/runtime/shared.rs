@@ -290,7 +290,7 @@ impl Shared {
 
     /// Records a live resource for [`Shared::close_resources`]. Dead entries go once the list has
     /// doubled since the last sweep, so registering stays amortized O(1).
-    #[cfg(feature = "fs")]
+    #[cfg(any(feature = "fs", feature = "process"))]
     pub(crate) fn register_resource(&self, resource: Weak<dyn Resource>) {
         let mut resources = self.resources.borrow_mut();
         if resources.len() == resources.capacity() {

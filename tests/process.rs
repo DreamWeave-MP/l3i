@@ -236,6 +236,46 @@ fn stdin_child() {
         drop(runtime);
         return;
     }
+    if mode == "shutdown" {
+        // The script keeps its handle; only the shutdown can free the claim for the next runtime.
+        runtime.exec("held = assert(process.openStdin())").unwrap();
+        runtime.shutdown();
+        let next = runtime_granting(&[STDIO_CAPABILITY], Limits::default());
+        next.exec("assert(process.openStdin()):close()").unwrap();
+        runtime
+            .exec(
+                r"
+            local value, message, kind = held:read(1)
+            assert(value == nil and message:find('closed', 1, true), message)
+            ",
+            )
+            .unwrap();
+        return;
+    }
+    if mode == "oversized" {
+        runtime
+            .exec(
+                r"
+            local input = assert(process.openStdin())
+            local function line()
+                while true do
+                    local value, message, kind = input:readLine(4)
+                    if kind == 'wouldBlock' then input:wait(1000)
+                    else return value, kind end
+                end
+            end
+            -- Ten bytes: two refusals of five each, then the empty tail ends the skip.
+            local value, kind = line()
+            assert(value == nil and kind == 'invalidInput', kind)
+            value, kind = line()
+            assert(value == nil and kind == 'invalidInput', kind)
+            assert(line() == '')
+            assert(line() == 'next')
+            ",
+            )
+            .unwrap();
+        return;
+    }
     if mode == "deadline" {
         drop(runtime);
         let runtime = runtime_granting(
@@ -281,7 +321,7 @@ fn stdin_child() {
 fn stdin_through_luau_handles_pipes_eof_and_blocked_teardown() {
     use std::io::Write;
     use std::process::{Command, Stdio};
-    for mode in ["lines", "blocked", "deadline"] {
+    for mode in ["lines", "blocked", "deadline", "shutdown", "oversized"] {
         let mut child = Command::new(std::env::current_exe().unwrap())
             .args(["--exact", "process::stdin_child", "--nocapture"])
             .env("L3I_STDIN_TEST_MODE", mode)
@@ -291,6 +331,10 @@ fn stdin_through_luau_handles_pipes_eof_and_blocked_teardown() {
         let mut pipe = child.stdin.take();
         if mode == "lines" {
             pipe.as_mut().unwrap().write_all(b"hello\r\n\n\xff\0\nlast").unwrap();
+            drop(pipe.take());
+        }
+        if mode == "oversized" {
+            pipe.as_mut().unwrap().write_all(b"aaaaaaaaaa\nnext\n").unwrap();
             drop(pipe.take());
         }
         let until = Instant::now() + Duration::from_secs(10);
@@ -319,4 +363,96 @@ fn stdin_claim_requires_stdio_before_touching_the_stream() {
     ",
         )
         .unwrap();
+}
+
+/// Refuses waits, the way a frame-driven host refuses what would stall it, and
+/// counts what it was asked: the first operation must reach it before the stream is touched.
+struct Refusing(std::rc::Rc<std::cell::RefCell<Vec<l3i::process::input::Operation>>>);
+
+impl l3i::process::input::Policy for Refusing {
+    fn check(&self, operation: l3i::process::input::Operation) -> l3i::Result<()> {
+        use l3i::process::input::Operation;
+        self.0.borrow_mut().push(operation);
+        match operation {
+            Operation::Open => Ok(()),
+            Operation::Wait => Err(l3i::Error::permission("this host does not wait")),
+        }
+    }
+}
+
+fn runtime_with_policy(granted: bool, policy: std::rc::Rc<dyn l3i::process::input::Policy>) -> Runtime {
+    let mut runtime_policy = RuntimePolicy::new().compat_global("@dream/process", "process");
+    if granted {
+        runtime_policy = runtime_policy.capability(STDIO_CAPABILITY);
+    }
+    let plan = RuntimePlan::builder()
+        .policy(runtime_policy)
+        .extension(ProcessExtension.with_input_policy(policy))
+        .finalize()
+        .unwrap();
+    Runtime::from_plan(&plan).unwrap()
+}
+
+#[test]
+fn stdin_policy_child() {
+    use l3i::process::input::Operation;
+    if std::env::var_os("L3I_STDIN_POLICY_TEST").is_none() {
+        return;
+    }
+    let seen = std::rc::Rc::default();
+    let runtime = runtime_with_policy(true, std::rc::Rc::new(Refusing(std::rc::Rc::clone(&seen))));
+    runtime
+        .exec(
+            r"
+        local input = assert(process.openStdin())
+        local ok, message = pcall(input.wait, input, 0)
+        assert(not ok and message:find('this host does not wait', 1, true), message)
+        local line, problem, kind = input:readLine()
+        assert(line == nil and kind == 'wouldBlock', problem)
+        input:close()
+        input:close()
+        ",
+        )
+        .unwrap();
+    assert_eq!(*seen.borrow(), [Operation::Open, Operation::Wait]);
+}
+
+#[test]
+fn stdin_policy_judges_every_operation_and_never_blocks_close() {
+    use std::process::{Command, Stdio};
+    let mut child = Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "process::stdin_policy_child", "--nocapture"])
+        .env("L3I_STDIN_POLICY_TEST", "1")
+        .stdin(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let pipe = child.stdin.take();
+    let until = Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            assert!(status.success(), "stdin policy child: {status}");
+            break;
+        }
+        if Instant::now() >= until {
+            child.kill().unwrap();
+            child.wait().unwrap();
+            panic!("stdin policy child hung");
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    drop(pipe);
+}
+
+#[test]
+fn stdin_policy_cannot_grant_what_the_runtime_withheld() {
+    let seen = std::rc::Rc::default();
+    runtime_with_policy(false, std::rc::Rc::new(Refusing(std::rc::Rc::clone(&seen))))
+        .exec(
+            r"
+        local ok, message = pcall(process.openStdin)
+        assert(not ok and message:find('process.stdio', 1, true), message)
+        ",
+        )
+        .unwrap();
+    assert!(seen.borrow().is_empty());
 }

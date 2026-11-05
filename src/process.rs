@@ -550,24 +550,54 @@ impl Extension for ProcessExtension {
     }
 
     fn install(&self, cx: &mut InstallContext<'_>) -> Result<()> {
-        let granted = cx.has_capability(SPAWN_CAPABILITY)?;
-        let environment = cx.has_capability(ENVIRONMENT_CAPABILITY)?;
-        let stdio = cx.has_capability(STDIO_CAPABILITY)?;
-        let module = cx.module(MODULE)?;
-        module.gated("env", ENVIRONMENT_CAPABILITY, environment, |name: &[u8]| -> Result<Option<Vec<u8>>> {
-            Ok(std::env::var_os(os_string("a variable name", name)?).map(|value| value.as_encoded_bytes().to_vec()))
-        })?;
-        module.gated("knownFolder", ENVIRONMENT_CAPABILITY, environment, known_folder)?;
-        module.gated("write", STDIO_CAPABILITY, stdio, write)?;
-        module.gated("openStdin", STDIO_CAPABILITY, stdio, input::open)?;
-        module.gated(
-            "run",
-            SPAWN_CAPABILITY,
-            granted,
-            move |call: &Call<'_>, program: &[u8], args: Option<ValueView<'_>>, options: Option<ValueView<'_>>| {
-                run(call, program, args, options, environment)
-            },
-        )?;
-        Ok(())
+        install(cx, None)
     }
+}
+
+impl ProcessExtension {
+    /// This extension with a host's [`input::Policy`] checked at every stdin operation, on top of
+    /// the `process.stdio` capability gate.
+    #[must_use]
+    pub fn with_input_policy(self, policy: std::rc::Rc<dyn input::Policy>) -> impl Extension {
+        InputProcessExtension { policy }
+    }
+}
+
+struct InputProcessExtension {
+    policy: std::rc::Rc<dyn input::Policy>,
+}
+
+impl Extension for InputProcessExtension {
+    fn id(&self) -> &'static str {
+        EXTENSION_ID
+    }
+    fn describe(&self, d: &mut ExtensionDescriptor) -> Result<()> {
+        ProcessExtension.describe(d)
+    }
+    fn install(&self, cx: &mut InstallContext<'_>) -> Result<()> {
+        install(cx, Some(std::rc::Rc::clone(&self.policy)))
+    }
+}
+
+fn install(cx: &mut InstallContext<'_>, input_policy: Option<std::rc::Rc<dyn input::Policy>>) -> Result<()> {
+    let granted = cx.has_capability(SPAWN_CAPABILITY)?;
+    let environment = cx.has_capability(ENVIRONMENT_CAPABILITY)?;
+    let stdio = cx.has_capability(STDIO_CAPABILITY)?;
+    let module = cx.module(MODULE)?;
+    module.gated("env", ENVIRONMENT_CAPABILITY, environment, |name: &[u8]| -> Result<Option<Vec<u8>>> {
+        Ok(std::env::var_os(os_string("a variable name", name)?).map(|value| value.as_encoded_bytes().to_vec()))
+    })?;
+    module.gated("knownFolder", ENVIRONMENT_CAPABILITY, environment, known_folder)?;
+    module.gated("write", STDIO_CAPABILITY, stdio, write)?;
+    module
+        .gated("openStdin", STDIO_CAPABILITY, stdio, move |call: &Call<'_>| input::open(call, input_policy.as_ref()))?;
+    module.gated(
+        "run",
+        SPAWN_CAPABILITY,
+        granted,
+        move |call: &Call<'_>, program: &[u8], args: Option<ValueView<'_>>, options: Option<ValueView<'_>>| {
+            run(call, program, args, options, environment)
+        },
+    )?;
+    Ok(())
 }

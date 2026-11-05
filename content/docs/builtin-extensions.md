@@ -1839,8 +1839,9 @@ context or generation ends; runtime destruction also releases it through userdat
   OS failures return `nil, message, kind`, as other process operations do.
 - A pending line must be retried with the same bound before switching to raw reads.
   An oversized line returns `invalidInput`, consuming the prefix through the first excess
-  byte. Close the handle or deliberately recover the remainder; it does not drain an
-  arbitrarily long line. A bound includes CR before LF.
+  byte. It does not drain an arbitrarily long line: the next `readLine` carries on with what
+  is left of it, so to skip the line, call again until one comes back instead of
+  `invalidInput` (that one is its tail). Or close the handle. A bound includes CR before LF.
 - `wait(timeoutMs)` waits up to 60,000 milliseconds, capped by the execution time limit.
   It returns whether input, EOF, or an error is available, and does not initiate a read.
 - `close()` is idempotent and immediately releases ownership. A pending partial line is
@@ -1850,7 +1851,18 @@ One lazy OS-reader thread serves the process, with at most 8 KiB of shared buffe
 one bounded partial line for the owner. It reads only on demand. Closing or destroying a
 runtime never joins a thread blocked in terminal input. That single thread may remain
 blocked until input arrives or the process exits; a new consumer can use its eventual
-result. No new thread is created on restart. Windows console reads use Rust's standard
+result. No new thread is created on restart.
+
+`process.stdio` is checked when stdin is opened. The handle is then the authority to read:
+passing it to less privileged code delegates reading. `Runtime::shutdown()` releases the claim
+even while a script still holds the handle, whose reads then report a closed consumer.
+
+A host can add its own check with `ProcessExtension.with_input_policy(policy)`, an
+`Rc<dyn process::input::Policy>` asked about `Open` and `Wait` at every such call. What it
+refuses raises in the caller. It runs after the `process.stdio` gate, which it cannot bypass;
+reads and `close()` are never checked.
+
+Windows console reads use Rust's standard
 input behavior (Unicode console input); redirected pipes preserve binary bytes on all
 platforms. No terminal, raw terminal mode, or network capability is required.
 

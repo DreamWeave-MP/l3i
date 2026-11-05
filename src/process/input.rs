@@ -229,8 +229,52 @@ impl Drop for Input {
 }
 
 use std::cell::RefCell;
+use std::rc::Rc;
 
-struct Stdin(RefCell<Input>);
+/// What a host [`Policy`] is admitting. Reads are never checked: the handle is the authority to
+/// read, so passing one to less privileged code delegates that. Nor is closing: cleanup stays
+/// available.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Operation {
+    /// Claiming stdin, checked before the process stream is touched.
+    Open,
+    /// An explicit blocking wait, which a frame-driven host can refuse outright.
+    Wait,
+}
+
+/// A host's own check on stdin, on top of the runtime's `process.stdio` grant, which it cannot
+/// bypass. A failure raises in the caller.
+pub trait Policy {
+    /// Admits `operation` for the code calling now, or says why not.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the host wants raised instead of the operation.
+    fn check(&self, operation: Operation) -> Result<()>;
+}
+
+/// The consumer, shared with the runtime's resource list so [`Runtime::shutdown`] releases the
+/// claim even while Luau still references the handle.
+///
+/// [`Runtime::shutdown`]: crate::Runtime::shutdown
+struct Consumer(RefCell<Input>);
+
+impl crate::runtime::shared::Resource for Consumer {
+    fn close_for_shutdown(&self) {
+        self.0.borrow_mut().close();
+    }
+}
+
+struct Stdin {
+    input: Rc<Consumer>,
+    policy: Option<Rc<dyn Policy>>,
+}
+
+impl Stdin {
+    fn check(&self, operation: Operation) -> Result<()> {
+        self.policy.as_ref().map_or(Ok(()), |policy| policy.check(operation))
+    }
+}
 
 // SAFETY: contains only Rust-owned I/O state; destruction never touches Luau.
 unsafe impl Userdata for Stdin {
@@ -244,10 +288,16 @@ fn outcome<T>(result: std::io::Result<T>) -> Outcome<T> {
     }
 }
 
-pub(super) fn open(call: &Call<'_>) -> Result<Outcome<StackResults>> {
+pub(super) fn open(call: &Call<'_>, policy: Option<&Rc<dyn Policy>>) -> Result<Outcome<StackResults>> {
+    if let Some(policy) = policy {
+        policy.check(Operation::Open)?;
+    }
     match Input::open() {
         Ok(input) => {
-            crate::userdata::push_owned(call, Stdin(RefCell::new(input)))?;
+            let input = Rc::new(Consumer(RefCell::new(input)));
+            let resource: Rc<dyn crate::runtime::shared::Resource> = input.clone();
+            crate::runtime::register_resource(call, Rc::downgrade(&resource));
+            crate::userdata::push_owned(call, Stdin { input, policy: policy.map(Rc::clone) })?;
             Ok(Outcome::Done(StackResults))
         }
         Err(error) => Ok(Outcome::Failed(Failure::message(format!("dream.process.openStdin: {error}"), &error))),
@@ -268,25 +318,26 @@ pub(super) fn describe(d: &mut ExtensionDescriptor) {
         .tag(TagPolicy::Preferred)
         .doc("Exclusive stdin consumer. Read methods never block; close explicitly when finished.");
     input.method("read", |input: &Stdin, count: f64| -> Result<Outcome<Option<Vec<u8>>>> {
-        Ok(outcome(input.0.borrow_mut().read(limit(count)?)))
+        Ok(outcome(input.input.0.borrow_mut().read(limit(count)?)))
     }).signature("(self, maxBytes: number): (string?, string?, dream_process_ErrorKind?)")
       .doc("Reads at most maxBytes (1..1048576) unchanged bytes into a binary Luau string. Nil alone is EOF; nil, message, wouldBlock means retry later. Cannot interrupt a pending line.");
     input.method("readLine", |input: &Stdin, count: Option<f64>| -> Result<Outcome<Option<Vec<u8>>>> {
-        Ok(outcome(input.0.borrow_mut().read_line(limit(count.unwrap_or(65536.0))?)))
+        Ok(outcome(input.input.0.borrow_mut().read_line(limit(count.unwrap_or(65536.0))?)))
     }).signature("(self, maxBytes: number?): (string?, string?, dream_process_ErrorKind?)")
-      .doc("Nonblocking bounded line read (default 65536, maximum 1048576 bytes before LF). Strips LF and a preceding CR; preserves other bytes including invalid UTF-8. Empty string is an empty line, nil alone is EOF. Retry wouldBlock with the same limit. An oversized line returns invalidInput after consuming its prefix; close or deliberately recover the remainder.");
+      .doc("Nonblocking bounded line read (default 65536, maximum 1048576 bytes before LF). Strips LF and a preceding CR; preserves other bytes including invalid UTF-8. Empty string is an empty line, nil alone is EOF. Retry wouldBlock with the same limit. An oversized line returns invalidInput after consuming its prefix; the next readLine returns what is left of it, so call again until a line comes back to skip the rest.");
     input.method("wait", |input: &Stdin, call: &Call<'_>, ms: f64| -> Result<bool> {
+        input.check(Operation::Wait)?;
         if !(0.0..=60000.0).contains(&ms) {
             return Err(Error::runtime("dream.process.stdin.wait: timeout must be in 0..60000 milliseconds"));
         }
         let mut timeout = Duration::from_secs_f64(ms / 1000.0);
         if let Some(remaining) = crate::runtime::watchdog_remaining(call) { timeout = timeout.min(remaining); }
-        let ready = input.0.borrow().wait(timeout);
+        let ready = input.input.0.borrow().wait(timeout);
         crate::runtime::expire_if_due(call);
         Ok(ready)
     }).signature("(self, timeoutMs: number): boolean")
       .doc("Explicitly waits for a requested read, EOF or error, at most timeoutMs and the runtime execution limit. Does not initiate a read. Hosted frame handlers should poll read/readLine instead of waiting.");
-    input.method("close", |input: &Stdin| input.0.borrow_mut().close())
+    input.method("close", |input: &Stdin| input.input.0.borrow_mut().close())
         .signature("(self)").doc("Releases stdin immediately, even with a pending terminal read; idempotent. Partial line bytes consumed by this owner are discarded. Unconsumed process buffer bytes remain for the next owner.");
 }
 
