@@ -44,6 +44,9 @@ impl<'v> FromView<'v> for &'v [u8] {
     }
 }
 
+/// Longest argument string that takes the ASCII shortcut in `&str`'s conversion.
+const SHORT_ASCII: usize = 16;
+
 impl<'v> FromView<'v> for &'v str {
     const EXPECTED: &'static str = "string";
 
@@ -55,8 +58,14 @@ impl<'v> FromView<'v> for &'v str {
 
     #[inline(always)]
     fn from_raw_arg(raw: &RawValue, view: impl FnOnce() -> ValueView<'v>) -> Result<Self> {
-        std::str::from_utf8(<&[u8]>::from_raw_arg(raw, view)?)
-            .map_err(|_| Error::runtime("Lua string is not valid UTF-8"))
+        let bytes = <&[u8]>::from_raw_arg(raw, view)?;
+        // A short ASCII name, a kind or a mode or a key, is what most string arguments are, and the
+        // general validator costs tens of instructions to find that out.
+        if bytes.len() <= SHORT_ASCII && bytes.iter().fold(0, |seen, byte| seen | byte) < 0x80 {
+            // SAFETY: every byte is ASCII, which is valid UTF-8.
+            return Ok(unsafe { std::str::from_utf8_unchecked(bytes) });
+        }
+        std::str::from_utf8(bytes).map_err(|_| Error::runtime("Lua string is not valid UTF-8"))
     }
 
     #[inline]

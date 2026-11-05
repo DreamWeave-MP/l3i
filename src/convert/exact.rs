@@ -29,19 +29,15 @@ pub struct Bits64(pub u64);
 /// The integer value of `number` when it is finite, integral, and inside `T`'s range.
 #[inline]
 fn exact_from_number<T: TryFrom<i64> + TryFrom<u64>>(number: f64, signed: bool) -> Option<T> {
-    if !number.is_finite() || number.fract() != 0.0 {
-        return None;
-    }
+    // The saturating cast and the round trip reject a fraction, NaN and infinity without a call to
+    // `trunc`, on a path every integer argument takes. Saturation lands on exactly 2^63 or 2^64, so
+    // those need the range check.
     if signed {
-        if (-9_223_372_036_854_775_808.0..9_223_372_036_854_775_808.0).contains(&number) {
-            T::try_from(number as i64).ok()
-        } else {
-            None
-        }
-    } else if (0.0..18_446_744_073_709_551_616.0).contains(&number) {
-        T::try_from(number as u64).ok()
+        let whole = number as i64;
+        if whole as f64 == number && number < 9_223_372_036_854_775_808.0 { T::try_from(whole).ok() } else { None }
     } else {
-        None
+        let whole = number as u64;
+        if whole as f64 == number && number < 18_446_744_073_709_551_616.0 { T::try_from(whole).ok() } else { None }
     }
 }
 
