@@ -28,7 +28,7 @@ crate = "l3i"
 [[requires]]
 id = "f82752ac-e7f6-43c0-8c2f-d91b7f6b3dda"
 name = "dream-net"
-version = "=1.1.0"
+version = "=1.1.1"
 url = "https://DreamWeave-MP.github.io/dream-net/"
 reason = "Runtime infrastructure: the @dream/udp module is in every plan, and l3i owns the bridge."
 
@@ -36,7 +36,7 @@ reason = "Runtime infrastructure: the @dream/udp module is in every plan, and l3
 [[recommends]]
 id = "f7b9633b-b7cb-4db9-a19f-63556586a81d"
 name = "dream-soft-render"
-version = "=1.0.0"
+version = "=2.0.0"
 url = "https://DreamWeave-MP.github.io/dream-soft-render/"
 reason = "The @dream/soft-render module, when the soft-render feature is on."
 
@@ -396,4 +396,31 @@ migration = """
 Nothing to change. Take 2.6.0 in place of 2.5.0.
 
 Check an ECDSA signature by verifying it, never by comparing its bytes with another: two signatures of the same data by the same key differ. A key on the other curve, an RSA key, or anything else is refused with a message that never quotes the key, as `rsaSign` refuses one.
+"""
+
+[[releases]]
+version = "2.7.0"
+date = 2026-11-05
+summary = "Luau 0.745; durable filesystem operations and authenticated ranged reads; optional script garbage collection; bounded nonblocking standard input; public userdata payload access; and faster typed data operations."
+added = [
+    "Durable filesystem creation, replacement, synchronization and retained-file operations, with recovery and failure handling across supported operating systems.",
+    "Authenticated ranged reads against a trusted file commitment, with bounded verification caches and native memory use.",
+    "An opt-in collectgarbage global for scripts, and a public host API for garbage collection.",
+    "Bounded nonblocking standard input consumers with host-controlled access and runtime shutdown cleanup.",
+    "Public userdata payload offset access for native lowering and shared-buffer integrations.",
+]
+changed = [
+    "Update the bundled Luau runtime to 0.745, including its native-code fixes and updated syntax support.",
+    "Improve typed data loops, overlapping span operations, contiguous-array kernels and native execution performance.",
+    "Require dream-net 1.1.1 and update the optional dream-soft-render integration to 2.0.0.",
+    "Raise the minimum supported Rust version to 1.95.",
+]
+migration = """
+Take 2.7.0 in place of 2.6.0.
+
+The optional soft-render integration now uses dream-soft-render 2.0.0. Applications enabling that feature should check the renderer's 2.0.0 compatibility requirements.
+
+The collectgarbage global remains opt-in. Standard input access remains controlled by host capabilities and policies.
+
+Review any existing application-specific assumptions about filesystem durability and retained file handles before adopting the new APIs.
 """
