@@ -27,6 +27,8 @@ mod adversarial;
 #[cfg(all(test, feature = "compute-testing"))]
 mod audit;
 #[cfg(all(test, feature = "compute-testing"))]
+mod parallel;
+#[cfg(all(test, feature = "compute-testing"))]
 mod tests;
 
 pub use graph::{Domain, Expr, Instruction, Step};
@@ -53,6 +55,17 @@ impl Default for Limits {
     fn default() -> Self {
         Self { elements: 1 << 20, work: 1 << 26 }
     }
+}
+
+/// A host's workers, lent to a run. The engine keeps no threads of its own: scheduling, priorities and
+/// how many workers a call may have are the host's, and a host that lends none gets one thread.
+pub trait Executor: Send + Sync + std::fmt::Debug {
+    /// How many tasks can usefully run at once. A run asks for no more than this.
+    fn workers(&self) -> usize;
+    /// Calls `task(i)` once for each `i` in `0..tasks`, on whatever threads it likes, and returns when
+    /// every call has returned. Tasks run no Lua and don't block on each other. A task skipped, or
+    /// `run` returning early, is reported as an error rather than a wrong result.
+    fn run(&self, tasks: usize, task: &(dyn Fn(usize) + Sync));
 }
 
 pub(crate) fn error(message: &str) -> crate::Error {

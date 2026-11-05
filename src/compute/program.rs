@@ -7,10 +7,18 @@
 use crate::Result;
 use crate::compute::graph::{Instruction, Lease, Step};
 use crate::compute::kernels::{self, CHUNK, Element, Isa, Rows, Source};
+use crate::compute::storage::Aligned;
 use crate::compute::storage::{Allocation, PreparedSide};
-use crate::compute::{Budget, Shape, Tensor, View, error, reduction};
+use crate::compute::{Budget, Executor, Shape, Tensor, View, error, reduction};
 use std::fmt::Write;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+
+/// Fewest multiply-adds worth sharing with another worker: below it, handing work over costs more than
+/// the work. Benches `compute_matrix` with `L3I_BENCH_THREADS` hold the measurements.
+const PARALLEL_FROM: usize = 1 << 19;
+/// Fewest elements per worker for elementwise work, whose every chunk costs little and whose limit is
+/// memory rather than arithmetic.
+const PARALLEL_ELEMENTS: usize = 1 << 17;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Kind {
@@ -615,11 +623,20 @@ impl Program {
 
     /// Runs against `inputs` by position, into a fresh immutable result charged to `budget`.
     pub fn run(&self, inputs: &[&Tensor], budget: &Arc<Budget>) -> Result<Tensor> {
+        self.run_on(inputs, budget, None)
+    }
+
+    /// [`Self::run`] sharing work among a host's workers, as [`Self::run_into_parallel`] does.
+    pub fn run_parallel(&self, inputs: &[&Tensor], budget: &Arc<Budget>, executor: &dyn Executor) -> Result<Tensor> {
+        self.run_on(inputs, budget, Some(executor))
+    }
+
+    fn run_on(&self, inputs: &[&Tensor], budget: &Arc<Budget>, executor: Option<&dyn Executor>) -> Result<Tensor> {
         let views: kernels::Inline<View<'_>, 8> = inputs.iter().map(|t| t.borrow()).collect();
         self.check(&views)?;
         let shape = self.output_shape();
         let mut output = budget.allocate(shape.elements()? * 4)?;
-        self.execute(&views, &mut output.bytes, budget, self.isa(), CHUNK)?;
+        self.execute(&views, &mut output.bytes, budget, self.isa(), CHUNK, executor)?;
         Tensor::contiguous(output, shape)
     }
 
@@ -633,7 +650,25 @@ impl Program {
         if out.len() != self.output_shape().elements()? * 4 {
             return Err(error("output byte size mismatch"));
         }
-        self.execute(inputs, out, budget, self.isa(), CHUNK)
+        self.execute(inputs, out, budget, self.isa(), CHUNK, None)
+    }
+
+    /// [`Self::run_into`] sharing work among a host's workers where that pays, with the same result to
+    /// the bit: only how the rows and elements are divided changes, never how one is computed. Each
+    /// worker's scratch is charged and held before the first of them starts, so an `Err` still leaves
+    /// `out` as it was.
+    pub fn run_into_parallel(
+        &self,
+        inputs: &[View<'_>],
+        out: &mut [u8],
+        budget: &Arc<Budget>,
+        executor: &dyn Executor,
+    ) -> Result<()> {
+        self.check(inputs)?;
+        if out.len() != self.output_shape().elements()? * 4 {
+            return Err(error("output byte size mismatch"));
+        }
+        self.execute(inputs, out, budget, self.isa(), CHUNK, Some(executor))
     }
 
     /// `run_into` with the kernel instantiation and chunk chosen: tests and sweeps only.
@@ -650,11 +685,20 @@ impl Program {
             return Err(error("output byte size mismatch"));
         }
         assert!(chunk > 0);
-        self.execute(inputs, out, budget, isa, chunk)
+        self.execute(inputs, out, budget, isa, chunk, None)
     }
 
     #[allow(clippy::many_single_char_names)] // The matmul names are the mathematics'.
-    fn execute(&self, inputs: &[View<'_>], out: &mut [u8], budget: &Arc<Budget>, isa: Isa, chunk: usize) -> Result<()> {
+    #[allow(clippy::too_many_lines)] // One match, one arm per kind of stage, around their common setup.
+    fn execute(
+        &self,
+        inputs: &[View<'_>],
+        out: &mut [u8],
+        budget: &Arc<Budget>,
+        isa: Isa,
+        chunk: usize,
+        executor: Option<&dyn Executor>,
+    ) -> Result<()> {
         // A strict program never fuses, whatever it is asked to run with.
         let isa = if isa == Isa::Fma && self.numeric == Numeric::Strict { Isa::detect() } else { isa };
         // Only a multi-stage program has temporaries; a single stage performs no heap work here.
@@ -684,11 +728,25 @@ impl Program {
                 work if !work.reads_inputs() => target.fill(0),
                 Work::Elementwise(e) => {
                     let sources = kernels::bind_sources(e.sources.iter().map(|v| view_of(*v)), e.shape);
-                    let needed = kernels::scratch_elements(e, &sources, target.len() / 4, chunk) * 4;
-                    let _charge = charge(budget, needed)?;
-                    kernels::with_scratch(needed, |scratch| {
-                        kernels::elementwise(e, &sources, scratch, target, isa, chunk);
-                    })?;
+                    let elements = target.len() / 4;
+                    let workers =
+                        executor.map_or(1, |executor| executor.workers().min(elements / PARALLEL_ELEMENTS).max(1));
+                    let needed = kernels::scratch_elements(e, &sources, elements / workers + chunk, chunk) * 4;
+                    if let (true, Some(executor)) = (workers > 1, executor) {
+                        // Whole chunks to each, so every chunk is the one a single thread would run.
+                        let share = (elements / workers).next_multiple_of(chunk);
+                        let pieces =
+                            target.chunks_mut(share * 4).enumerate().map(|(index, piece)| (index * share, piece));
+                        shared(budget, executor, needed, pieces, |first, piece, scratch| {
+                            kernels::elementwise(e, &sources, scratch, piece, isa, (first, chunk));
+                        })?;
+                    } else {
+                        let needed = kernels::scratch_elements(e, &sources, elements, chunk) * 4;
+                        let _charge = charge(budget, needed)?;
+                        kernels::with_scratch(needed, |scratch| {
+                            kernels::elementwise(e, &sources, scratch, target, isa, (0, chunk));
+                        })?;
+                    }
                 }
                 Work::RowMap { source, shape, operation } => {
                     // Outputs are written in place, and inputs read in place when their columns are
@@ -741,11 +799,36 @@ impl Program {
                         if n > 1 && m > 1 { b.prepared.and_then(|p| p.elements(PreparedSide::Right)) } else { None };
                     let a_elements = if left.is_some() { Packed::Borrowed(&[]) } else { contiguous(a, budget)? };
                     let b_elements = if right.is_some() { Packed::Borrowed(&[]) } else { contiguous(b, budget)? };
-                    let needed = if right.is_some() { 0 } else { kernels::matmul_scratch(m, k, n) };
-                    let _charge = charge(budget, needed)?;
-                    let operands =
-                        kernels::Operands { a: a_elements.elements(), b: b_elements.elements(), k, n, left, right };
-                    kernels::with_scratch(needed, |scratch| kernels::matmul(&operands, target, scratch, isa))?;
+                    let work = m.saturating_mul(k).saturating_mul(n);
+                    let group = if left.is_some() { kernels::PANEL } else { kernels::ROW_GROUP };
+                    let workers = executor.map_or(1, |executor| {
+                        executor.workers().min(work / PARALLEL_FROM).min(m.div_ceil(group)).max(1)
+                    });
+                    if let (true, Some(executor)) = (workers > 1, executor) {
+                        let rows = m.div_ceil(workers).next_multiple_of(group);
+                        let needed = if right.is_some() { 0 } else { kernels::matmul_scratch(rows, k, n) };
+                        let (a_elements, b_elements) = (a_elements.elements(), b_elements.elements());
+                        let pieces =
+                            target.chunks_mut(rows * n * 4).enumerate().map(|(index, piece)| (index * rows, piece));
+                        shared(budget, executor, needed, pieces, |row, piece, scratch| {
+                            let operands = kernels::Operands {
+                                // A row's elements, or its panels: only the side in use is read.
+                                a: if left.is_some() { a_elements } else { &a_elements[row * k..] },
+                                b: b_elements,
+                                k,
+                                n,
+                                left: left.map(|panels| &panels[row * k..]),
+                                right,
+                            };
+                            kernels::matmul(&operands, piece, scratch, isa);
+                        })?;
+                    } else {
+                        let needed = if right.is_some() { 0 } else { kernels::matmul_scratch(m, k, n) };
+                        let _charge = charge(budget, needed)?;
+                        let operands =
+                            kernels::Operands { a: a_elements.elements(), b: b_elements.elements(), k, n, left, right };
+                        kernels::with_scratch(needed, |scratch| kernels::matmul(&operands, target, scratch, isa))?;
+                    }
                 }
             }
             if let Some(allocation) = allocation {
@@ -757,6 +840,40 @@ impl Program {
         }
         Ok(())
     }
+}
+
+/// Runs `work` on disjoint `pieces` of a stage's output among `executor`'s workers, each piece with
+/// its own `scratch` bytes. Everything that can fail happens before any piece starts, except a host
+/// that doesn't run a task, which then has only itself to blame for a partly written temporary or
+/// output: that one is reported rather than returned as a result.
+fn shared<'p>(
+    budget: &Budget,
+    executor: &dyn Executor,
+    scratch: usize,
+    pieces: impl Iterator<Item = (usize, &'p mut [u8])>,
+    work: impl Fn(usize, &mut [u8], &mut [u8]) + Sync,
+) -> Result<()> {
+    let pieces: Vec<(usize, &'p mut [u8])> = pieces.collect();
+    // One block for all of it, freed where it was allocated: blocks a worker frees go to that thread's
+    // arena, and the next run then pays page faults for new ones. Each share starts on a cache line.
+    let share = scratch.next_multiple_of(64);
+    let total = share.checked_mul(pieces.len()).ok_or_else(|| error("scratch allocation failed"))?;
+    let _charge = charge(budget, total)?;
+    if total > 0 && !crate::compute::may_allocate(total) {
+        return Err(error("scratch allocation failed"));
+    }
+    let mut block = Aligned::zeroed(total).ok_or_else(|| error("scratch allocation failed"))?;
+    let shares = block.chunks_mut(share.max(1)).map(Some).chain(std::iter::repeat_with(|| None));
+    let tasks: Vec<_> =
+        pieces.into_iter().zip(shares).map(|((first, piece), bytes)| Mutex::new(Some((first, piece, bytes)))).collect();
+    executor.run(tasks.len(), &|index| {
+        let task = tasks.get(index).and_then(|task| task.lock().ok()?.take());
+        if let Some((first, piece, bytes)) = task {
+            work(first, piece, bytes.unwrap_or_default());
+        }
+    });
+    let finished = tasks.iter().all(|task| task.lock().is_ok_and(|task| task.is_none()));
+    if finished { Ok(()) } else { Err(error("the host's executor skipped a task")) }
 }
 
 /// A charge for what a stage needs beyond its output, which small stages often don't: then the

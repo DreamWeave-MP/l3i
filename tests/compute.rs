@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use l3i::Runtime;
 use l3i::compute::script::{ComputeExtension, ComputeLimits, ScriptTensor};
-use l3i::compute::{Budget, Domain, Limits, Shape, Storage, Tensor};
+use l3i::compute::{Budget, Domain, Executor, Limits, Shape, Storage, Tensor};
 use l3i::extension::{RuntimePlan, RuntimePolicy};
 use l3i::userdata::Owned;
 
@@ -411,6 +411,53 @@ fn inputs_may_share_bytes_with_each_other_and_never_with_the_output() {
              assert(buffer.readf32(source, 0) == 5, 'a tensor owns a copy')",
         )
         .unwrap();
+}
+
+/// Workers a host lends reach large runs and leave small ones alone, and the answer doesn't change.
+#[test]
+fn a_host_can_lend_workers_to_what_scripts_run() {
+    #[derive(Debug, Default)]
+    struct Counting(std::sync::atomic::AtomicUsize);
+    impl Executor for Counting {
+        fn workers(&self) -> usize {
+            4
+        }
+        fn run(&self, tasks: usize, task: &(dyn Fn(usize) + Sync)) {
+            self.0.fetch_add(tasks, std::sync::atomic::Ordering::Relaxed);
+            std::thread::scope(|scope| {
+                for index in 0..tasks {
+                    scope.spawn(move || task(index));
+                }
+            });
+        }
+    }
+    let script = "local n = 256
+         local bytes = buffer.create(n * n * 4)
+         for i = 0, n * n - 1 do buffer.writef32(bytes, i * 4, (i % 17) * 0.25) end
+         local x, y = compute.slot(0, n, n), compute.slot(1, n, n)
+         local out = buffer.create(n * n * 4)
+         x:matmul(y):compile():runInto(out, bytes, bytes)
+         local tensor = compute.f32(bytes, n, n)
+         local out2 = buffer.create(n * n * 4)
+         x:matmul(y):compileFast():runTensorsInto(out2, tensor, tensor)
+         local result = x:matmul(y):compile():run(tensor, tensor):read()
+         assert(buffer.readf32(result, 0) == buffer.readf32(out, 0), 'the same from a tensor')
+         local small = compute.slot(0, 2, 2):relu():compile()
+         small:runInto(buffer.create(16), buffer.create(16))
+         return buffer.readf32(out, 0) + buffer.readf32(out, n * n * 4 - 4)";
+    let limits = ComputeLimits {
+        memory_bytes: 1 << 26,
+        graph: Limits { elements: 1 << 20, work: 1 << 28 },
+        ..ComputeLimits::default()
+    };
+    let alone = Runtime::from_plan(&plan(ComputeExtension::new(limits))).unwrap();
+    let want: f64 = alone.eval(script).unwrap();
+    let counting = Arc::new(Counting::default());
+    let shared = ComputeExtension::new(limits).with_executor(counting.clone());
+    let lent = Runtime::from_plan(&plan(shared)).unwrap();
+    let got: f64 = lent.eval(script).unwrap();
+    assert_eq!(got.to_bits(), want.to_bits());
+    assert_eq!(counting.0.load(std::sync::atomic::Ordering::Relaxed), 12, "three products of four shares each");
 }
 
 /// A host's storage is its own business, even bytes it shares with a buffer: this checks them anyway.

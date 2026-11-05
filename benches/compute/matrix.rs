@@ -10,8 +10,24 @@ use crate::counter::{
     PERF_COUNT_HW_INSTRUCTIONS, PERF_TYPE_HARDWARE, PERF_TYPE_HW_CACHE,
 };
 use crate::counting_alloc::ALLOCATIONS;
-use l3i::compute::{Budget, Domain, Expr, Limits, Numeric, Shape, Tensor};
+use l3i::compute::{Budget, Domain, Executor, Expr, Limits, Numeric, Shape, Tensor};
 use std::{hint::black_box, sync::atomic::Ordering, time::Instant};
+
+/// A host's persistent workers, the same on every side's terms: threads stay alive between calls.
+#[derive(Debug)]
+struct Pool(rayon::ThreadPool);
+impl Executor for Pool {
+    fn workers(&self) -> usize {
+        self.0.current_num_threads()
+    }
+    fn run(&self, tasks: usize, task: &(dyn Fn(usize) + Sync)) {
+        self.0.scope(|scope| {
+            for index in 0..tasks {
+                scope.spawn(move |_| task(index));
+            }
+        });
+    }
+}
 
 fn wanted(label: &str) -> bool {
     std::env::var("L3I_BENCH_ONLY").map_or(true, |only| only.split(',').any(|piece| label.contains(piece)))
@@ -112,6 +128,9 @@ impl Validation {
 
 pub fn main() {
     let libraries = blas::load();
+    // With `L3I_BENCH_THREADS`, cycles only count the calling thread: read these rows' elapsed times.
+    let threads: usize = std::env::var("L3I_BENCH_THREADS").map_or(1, |n| n.parse().expect("a thread count"));
+    let pool = (threads > 1).then(|| Pool(rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap()));
     println!(
         "prepared contiguous inputs; preallocated outputs; packing included; one thread; no cached packed weights"
     );
@@ -172,6 +191,19 @@ pub fn main() {
             }) {
                 validation.check(&read(&output));
             }
+            if let Some(pool) = &pool
+                && timing(&format!("graph_{mode:?}_threads{threads}"), || {
+                    plan.run_into_parallel(
+                        black_box(&[ta.borrow(), tb.borrow()]),
+                        black_box(&mut output),
+                        &budget,
+                        pool,
+                    )
+                    .unwrap();
+                })
+            {
+                validation.check(&read(&output));
+            }
             // Weights packed once beforehand, the packing charged and not counted per call. Only
             // shapes with a kernel that reads a packing have this row.
             if m > 1 {
@@ -184,6 +216,19 @@ pub fn main() {
                     plan.run_into(black_box(&[left.borrow(), right.borrow()]), black_box(&mut output), &budget)
                         .unwrap();
                 }) {
+                    validation.check(&read(&output));
+                }
+                if let Some(pool) = &pool
+                    && timing(&format!("graph_{mode:?}_prepared_threads{threads}"), || {
+                        plan.run_into_parallel(
+                            black_box(&[left.borrow(), right.borrow()]),
+                            black_box(&mut output),
+                            &budget,
+                            pool,
+                        )
+                        .unwrap();
+                    })
+                {
                     validation.check(&read(&output));
                 }
             }
@@ -287,6 +332,7 @@ mod blas {
             return Vec::new();
         };
         let threads: c_int = std::env::var("L3I_BENCH_THREADS").map_or(1, |n| n.parse().expect("a thread count"));
+        // BLIS reads this for each call's thread count, and rayon isn't involved on that side.
         list.split(',')
             .map(|entry| {
                 let (name, path) = entry.split_once('=').expect("name=path");

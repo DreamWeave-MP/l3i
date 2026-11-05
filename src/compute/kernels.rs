@@ -521,7 +521,7 @@ fn elementwise_loop(
     sources: &[Source<'_>],
     scratch: &mut [Element],
     out: &mut [Element],
-    chunk: usize,
+    (first, chunk): (usize, usize),
     select: impl Fn(bool, [Form; TILE_STEPS]) -> KernelFn,
 ) {
     let bound = |operand: Operand| match operand {
@@ -562,13 +562,13 @@ fn elementwise_loop(
         if any_walk {
             for source in sources {
                 if let Source::Walk(walk) = source {
-                    walk.fill(0, &mut walked[walk.register * width..][..width]);
+                    walk.fill(first, &mut walked[walk.register * width..][..width]);
                 }
             }
         }
         for tile in tiles {
             let (kernel, binding) = bind(tile);
-            run_tile(kernel, tile.dst, &binding, (registers, registers_used, width), walked, 0, out);
+            run_tile(kernel, tile.dst, &binding, (registers, registers_used, width), walked, first, out);
         }
         return;
     }
@@ -579,7 +579,7 @@ fn elementwise_loop(
             (kernel, tile.dst, binding)
         })
         .collect();
-    let mut start = 0;
+    let mut start = first;
     for out_chunk in out.chunks_mut(chunk) {
         let len = out_chunk.len();
         if any_walk {
@@ -711,14 +711,15 @@ pub(crate) fn bind_sources<'a>(views: impl Iterator<Item = View<'a>>, shape: Sha
         .collect()
 }
 
-/// Runs one elementwise stage into row-major `out`, with kernels of `isa`.
+/// Runs one elementwise stage into row-major `out`, which holds the output from element `first` on,
+/// with kernels of `isa`.
 pub(crate) fn elementwise(
     stage: &Elementwise,
     sources: &[Source<'_>],
     scratch: &mut [u8],
     out: &mut [u8],
     isa: Isa,
-    chunk: usize,
+    (first, chunk): (usize, usize),
 ) {
     let (out, _) = out.as_chunks_mut::<4>();
     let (scratch, _) = scratch.as_chunks_mut::<4>();
@@ -729,15 +730,19 @@ pub(crate) fn elementwise(
     let r = stage.registers;
     match (isa, stage.fast.is_empty()) {
         #[cfg(target_arch = "x86_64")]
-        (Isa::Fma, false) => elementwise_loop(&stage.fast, r, sources, scratch, out, chunk, select_fast::<x86::Fma>),
+        (Isa::Fma, false) => {
+            elementwise_loop(&stage.fast, r, sources, scratch, out, (first, chunk), select_fast::<x86::Fma>);
+        }
         // AArch64's baseline already has the instruction `mul_add` compiles to.
         #[cfg(target_arch = "aarch64")]
-        (Isa::Fma, false) => elementwise_loop(&stage.fast, r, sources, scratch, out, chunk, select_fast::<Base>),
+        (Isa::Fma, false) => {
+            elementwise_loop(&stage.fast, r, sources, scratch, out, (first, chunk), select_fast::<Base>);
+        }
         #[cfg(target_arch = "x86_64")]
         (Isa::Avx2 | Isa::Fma, _) => {
-            elementwise_loop(&stage.tiles, r, sources, scratch, out, chunk, select_strict::<x86::Avx2>);
+            elementwise_loop(&stage.tiles, r, sources, scratch, out, (first, chunk), select_strict::<x86::Avx2>);
         }
-        _ => elementwise_loop(&stage.tiles, r, sources, scratch, out, chunk, select_strict::<Base>),
+        _ => elementwise_loop(&stage.tiles, r, sources, scratch, out, (first, chunk), select_strict::<Base>),
     }
 }
 
@@ -1203,7 +1208,10 @@ pub(crate) fn prepare_right(b: &[Element], k: usize, n: usize, mut pack: &mut [E
     }
 }
 /// Rows of `a` per column panel, one lane each.
-const PANEL: usize = NR;
+pub(crate) const PANEL: usize = NR;
+/// Rows of `a` per row group of the block kernels. Sharing a product out at a multiple of this, or of
+/// [`PANEL`] for prepared panels, gives each worker the same kernels a single thread would run.
+pub(crate) const ROW_GROUP: usize = MR;
 /// Elements [`prepare_left`] writes for an `m x k` operand.
 pub(crate) const fn prepared_left_elements(m: usize, k: usize) -> usize {
     (m / PANEL * PANEL + remainder_width(m % PANEL)) * k
@@ -1309,7 +1317,8 @@ fn matmul_body<const FUSED: bool>(
         }
         return column_rows::<FUSED>(a, b, k, out);
     }
-    if m == 1 {
+    // Prepared weights only reach a single row here as the last piece of work shared out.
+    if m == 1 && right.is_none() {
         return stream_row::<FUSED>(a, b, n, out);
     }
     let mut prepared = right;

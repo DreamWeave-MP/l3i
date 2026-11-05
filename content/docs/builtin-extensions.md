@@ -1013,6 +1013,9 @@ host holds. A call the budget refuses collects garbage once and retries, then ra
 error, and the runtime stays usable; `runInto` leaves its output as it was. A size or work limit
 raises at once, since collecting cannot help. `compute.used()` and `compute.limit()` report the domain's bytes.
 
+`ComputeExtension::with_executor` lends a host's workers to large matrix products and elementwise
+stages, with the same result to the bit and no threads of the engine's own.
+
 Scratch, temporaries and results all count. Memory returns when its tensor is collected or its
 runtime closes.
 

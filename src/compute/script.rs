@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use crate::bind::{Call, VarArgs};
 use crate::compute::kernels::Inline;
-use crate::compute::{Budget, Domain, Expr, Limits, Numeric, Program, Shape, Tensor, View};
+use crate::compute::{Budget, Domain, Executor, Expr, Limits, Numeric, Program, Shape, Tensor, View};
 use crate::convert::{BufferView, Exact, NewBuffer};
 use crate::error::{Error, Result};
 use crate::extension::{Extension, ExtensionDescriptor, InstallContext, TagPolicy};
@@ -50,6 +50,7 @@ enum Resources {
 #[derive(Clone, Debug)]
 pub struct ComputeExtension {
     resources: Resources,
+    executor: Option<Arc<dyn Executor>>,
 }
 
 impl Default for ComputeExtension {
@@ -62,14 +63,23 @@ impl ComputeExtension {
     /// Every runtime from the plan gets its own domain with these limits.
     #[must_use]
     pub fn new(limits: ComputeLimits) -> Self {
-        Self { resources: Resources::PerRuntime(limits) }
+        Self { resources: Resources::PerRuntime(limits), executor: None }
     }
 
     /// Every runtime from the plan charges this one domain, which the host can also read and share
     /// with its own work.
     #[must_use]
     pub fn shared(budget: Arc<Budget>, domain: Arc<Domain>) -> Self {
-        Self { resources: Resources::Shared(budget, domain) }
+        Self { resources: Resources::Shared(budget, domain), executor: None }
+    }
+
+    /// Lends these workers to every program scripts run, where sharing the work pays. Each worker's
+    /// scratch counts against the domain's memory, and results are the same to the bit. Without this a
+    /// run stays on the thread that called it.
+    #[must_use]
+    pub fn with_executor(mut self, executor: Arc<dyn Executor>) -> Self {
+        self.executor = Some(executor);
+        self
     }
 }
 
@@ -86,12 +96,14 @@ pub struct ScriptExpression {
     expression: Expr,
     budget: Arc<Budget>,
     domain: Arc<Domain>,
+    executor: Option<Arc<dyn Executor>>,
 }
 /// A compiled program as scripts hold it.
 #[derive(Debug)]
 pub struct ScriptProgram {
     program: Program,
     budget: Arc<Budget>,
+    executor: Option<Arc<dyn Executor>>,
 }
 
 // SAFETY: these own native payloads with no Lua references, and their destructors only release
@@ -124,17 +136,18 @@ impl ScriptExpression {
         call: &Call<'_>,
         budget: &Arc<Budget>,
         domain: &Arc<Domain>,
+        executor: Option<&Arc<dyn Executor>>,
         build: impl FnMut() -> Result<Expr>,
     ) -> Result<Owned<Self>> {
         let expression = retrying(call, || domain.denials(), build)?;
-        Ok(Owned(Self { expression, budget: budget.clone(), domain: domain.clone() }))
+        Ok(Owned(Self { expression, budget: budget.clone(), domain: domain.clone(), executor: executor.cloned() }))
     }
     fn derive(&self, call: &Call<'_>, build: impl FnMut() -> Result<Expr>) -> Result<Owned<Self>> {
-        Self::new(call, &self.budget, &self.domain, build)
+        Self::new(call, &self.budget, &self.domain, self.executor.as_ref(), build)
     }
     fn compile(&self, call: &Call<'_>, numeric: Numeric) -> Result<Owned<ScriptProgram>> {
         let program = retrying(call, || self.domain.denials(), || self.expression.compile_with(numeric))?;
-        Ok(Owned(ScriptProgram { program, budget: self.budget.clone() }))
+        Ok(Owned(ScriptProgram { program, budget: self.budget.clone(), executor: self.executor.clone() }))
     }
 }
 impl ScriptProgram {
@@ -145,6 +158,13 @@ impl ScriptProgram {
     #[must_use]
     pub fn budget(&self) -> &Arc<Budget> {
         &self.budget
+    }
+    /// Into `out`, on the host's workers if it lent any.
+    fn run_into(&self, inputs: &[View<'_>], out: &mut [u8]) -> Result<()> {
+        match &self.executor {
+            Some(executor) => self.program.run_into_parallel(inputs, out, &self.budget, executor.as_ref()),
+            None => self.program.run_into(inputs, out, &self.budget),
+        }
     }
 }
 
@@ -174,15 +194,15 @@ fn overlaps(a: &[u8], b: &[u8]) -> bool {
 /// `program:runInto(out, a, b, ...)`: Luau buffers, borrowed for this call and never retained. The
 /// first few arrive as separate parameters so that the usual call collects nothing.
 fn run_buffers_into(
-    program: &Program,
+    program: &ScriptProgram,
     out: &mut BufferView<'_>,
     first: [Option<&BufferView<'_>>; 3],
     rest: &[BufferView<'_>],
-    budget: &Arc<Budget>,
 ) -> Result<()> {
+    let signature = program.program.signature();
     let given = first.iter().take_while(|input| input.is_some()).count();
     let contiguous = first[given..].iter().all(Option::is_none) && (given == first.len() || rest.is_empty());
-    if !contiguous || given + rest.len() != program.signature().len() {
+    if !contiguous || given + rest.len() != signature.len() {
         return Err(Error::runtime("input slot set mismatch"));
     }
     let inputs = first.iter().flatten().copied().chain(rest);
@@ -193,7 +213,7 @@ fn run_buffers_into(
     // they may overlap each other.
     let out_bytes = unsafe {
         let target = out.bytes_unchecked();
-        for (input, shape) in inputs.zip(program.signature()) {
+        for (input, shape) in inputs.zip(signature) {
             let bytes = input.bytes_unchecked();
             if overlaps(bytes, target) {
                 return Err(Error::runtime("output buffer aliases an input"));
@@ -202,7 +222,7 @@ fn run_buffers_into(
         }
         out.bytes_mut_unchecked()
     };
-    program.run_into(&views, out_bytes, budget)
+    program.run_into(&views, out_bytes)
 }
 
 fn describe_tensor(d: &mut ExtensionDescriptor) {
@@ -309,7 +329,10 @@ fn describe_program(d: &mut ExtensionDescriptor) {
     program
         .method("run", |p: &ScriptProgram, call: &Call<'_>, tensors: VarArgs<&ScriptTensor>| {
             let tensors: Inline<&Tensor, 8> = tensors.values.iter().map(|t| &t.tensor).collect();
-            let result = collecting(call, &p.budget, || p.program.run(&tensors, &p.budget))?;
+            let result = collecting(call, &p.budget, || match &p.executor {
+                Some(executor) => p.program.run_parallel(&tensors, &p.budget, executor.as_ref()),
+                None => p.program.run(&tensors, &p.budget),
+            })?;
             Ok::<_, Error>(Owned(ScriptTensor { tensor: result, budget: p.budget.clone() }))
         })
         .signature("(self, ...: dream_compute_Tensor): dream_compute_Tensor")
@@ -325,7 +348,7 @@ fn describe_program(d: &mut ExtensionDescriptor) {
              third: Option<BufferView<'_>>,
              rest: VarArgs<BufferView<'_>>| {
                 let given = [first.as_ref(), second.as_ref(), third.as_ref()];
-                collecting(call, &p.budget, || run_buffers_into(&p.program, &mut out, given, &rest.values, &p.budget))
+                collecting(call, &p.budget, || run_buffers_into(p, &mut out, given, &rest.values))
             },
         )
         .signature("(self, out: buffer, ...: buffer)")
@@ -346,7 +369,7 @@ fn describe_program(d: &mut ExtensionDescriptor) {
                         }
                         out.bytes_mut_unchecked()
                     };
-                    p.program.run_into(&views, target, &p.budget)
+                    p.run_into(&views, target)
                 })
             },
         )
@@ -385,6 +408,7 @@ impl Extension for ComputeExtension {
     }
 
     fn install(&self, context: &mut InstallContext<'_>) -> Result<()> {
+        let executor = self.executor.clone();
         let (budget, domain) = match &self.resources {
             Resources::PerRuntime(limits) => (
                 Budget::with_elements(limits.memory_bytes, limits.graph.elements),
@@ -393,18 +417,20 @@ impl Extension for ComputeExtension {
             Resources::Shared(budget, domain) => (budget.clone(), domain.clone()),
         };
         let module = context.module(MODULE)?;
-        let (slot_budget, slot_domain) = (budget.clone(), domain.clone());
+        let (slot_budget, slot_domain, slot_executor) = (budget.clone(), domain.clone(), executor.clone());
         module.function(
             "slot",
             move |call: &Call<'_>, slot: Exact<usize>, rows: Exact<usize>, cols: Exact<usize>| {
-                ScriptExpression::new(call, &slot_budget, &slot_domain, || {
+                ScriptExpression::new(call, &slot_budget, &slot_domain, slot_executor.as_ref(), || {
                     Expr::slot(slot.0, Shape::Matrix(rows.0, cols.0), slot_domain.clone())
                 })
             },
         )?;
         let constant_budget = budget.clone();
         module.function("constant", move |call: &Call<'_>, value: f32| {
-            ScriptExpression::new(call, &constant_budget, &domain, || Expr::constant(value, domain.clone()))
+            ScriptExpression::new(call, &constant_budget, &domain, executor.as_ref(), || {
+                Expr::constant(value, domain.clone())
+            })
         })?;
         let import_budget = budget.clone();
         module.function(
