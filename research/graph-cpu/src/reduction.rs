@@ -149,8 +149,8 @@ fn softmax_body<L: Lane>(values: &[L], out: &mut [L], exponentials: &mut [f64]) 
     };
     // Plain loops, because each one vectorizes alone and a loop doing all of it does not. Padding
     // to whole vectors means no element takes the scalar remainder, which short rows would feel.
+    // Whatever the padding holds is exponentiated and never read.
     let padded = &mut exponentials[..softmax_scratch(values.len())];
-    padded[values.len()..].fill(0.0);
     for (value, target) in values.iter().zip(padded.iter_mut()) {
         *target = f64::from(value.get()) - max;
     }

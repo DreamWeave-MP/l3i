@@ -1,0 +1,153 @@
+-- Injects one bug at a time into the research library and asks its release tests to catch it.
+-- Run from the repository root with a clean research/graph-cpu/src: jess run research/mutate.jsl
+-- Each bug is one exact, unique replacement in one source file, restored before the next. A bug no
+-- test notices is a gap in the tests, reported as SURVIVED; only the control should survive.
+local fs = require("@dream/fs")
+local process = require("@dream/process")
+
+local SRC = "research/graph-cpu/src/"
+type Mutation = { label: string, file: string, old: string, new: string }
+local mutations: { Mutation } = {
+	{ label = "control: comment only, must survive", file = "reduction.rs",
+	  old = "/// Independent f64 accumulators per row.", new = "/// Independent f64 accumulators, per row." },
+
+	-- The accurate exponential.
+	{ label = "exp: drops the low part of ln(2)", file = "reduction.rs",
+	  old = "x - k * LN2_HI - k * LN2_LO", new = "x - k * LN2_HI" },
+	{ label = "exp: wrong sixth-order coefficient", file = "reduction.rs",
+	  old = "(1.0 / 720.0 + r", new = "(1.0 / 721.0 + r" },
+	{ label = "exp: truncated top term", file = "reduction.rs",
+	  old = "r * (1.0 / 6_227_020_800.0)", new = "r * 0.0" },
+	{ label = "exp: cutoff too low", file = "reduction.rs",
+	  old = "pub(crate) const EXP_CUTOFF: f64 = -104.0;", new = "pub(crate) const EXP_CUTOFF: f64 = -80.0;" },
+
+	-- Softmax.
+	{ label = "softmax: ignores positive infinity", file = "reduction.rs",
+	  old = "} else if max.contains(&f32::INFINITY) {", new = "} else if false {" },
+	{ label = "softmax: NaN goes unnoticed", file = "reduction.rs",
+	  old = "if any_nan != 0 {", new = "if any_nan == 2 {" },
+	{ label = "softmax: signed NaN goes unnoticed", file = "reduction.rs",
+	  old = "value.get().to_bits() << 1 > 0xff00_0000", new = "value.get().to_bits() > 0x7f80_0000 && value.get().to_bits() < 0x8000_0000" },
+	{ label = "softmax: all-masked row not recognized", file = "reduction.rs",
+	  old = "RowClass::AllMasked } else {", new = "RowClass::Finite(0.0) } else {" },
+	{ label = "softmax: no maximum subtraction", file = "reduction.rs",
+	  old = "*target = f64::from(value.get()) - max;", new = "*target = f64::from(value.get()).min(0.0);" },
+	{ label = "softmax: f32 intermediate subtraction", file = "reduction.rs",
+	  old = "*target = f64::from(value.get()) - max;", new = "*target = f64::from(value.get() - max as f32);" },
+	{ label = "softmax: f32 intermediate rounding of probabilities", file = "reduction.rs",
+	  old = "L::put((*exponential * inverse) as f32)", new = "L::put(((*exponential as f32) * (inverse as f32)))" },
+	{ label = "softmax: maximum skips the last partial block", file = "reduction.rs",
+	  old = "for (i, value) in rest.iter().enumerate() {\n        let value = value.get();\n        max[i]", new = "for (i, value) in rest.iter().take(0).enumerate() {\n        let value = value.get();\n        max[i]" },
+	{ label = "softmax: total skips the tail", file = "reduction.rs",
+	  old = "for (lane, value) in rest.iter().enumerate() {\n        totals[lane] += *value;", new = "for (lane, value) in rest.iter().take(0).enumerate() {\n        totals[lane] += *value;" },
+	{ label = "softmax: total includes padding", file = "reduction.rs",
+	  old = "let total = lane_total(exponentials);", new = "let total = lane_total(&padded[..softmax_scratch(values.len())]);" },
+	{ label = "softmax: scratch one element short", file = "reduction.rs",
+	  old = "len.next_multiple_of(LANES)", new = "len" },
+
+	-- Normalization.
+	{ label = "normalize: population denominator becomes n-1", file = "reduction.rs",
+	  old = "let variance = (totals[0] + totals[1] + totals[2] + totals[3]) / count;", new = "let variance = (totals[0] + totals[1] + totals[2] + totals[3]) / (count - 1.0).max(1.0);" },
+	{ label = "normalize: mean skips the tail", file = "reduction.rs",
+	  old = "totals[lane] += f64::from(value.get());", new = "totals[lane] += 0.0 * f64::from(value.get());" },
+	{ label = "normalize: variance skips the tail", file = "reduction.rs",
+	  old = "let deviation = f64::from(value.get()) - mean;\n        totals[lane] += deviation * deviation;", new = "let deviation = f64::from(value.get()) - mean;\n        totals[lane] += 0.0 * deviation * deviation;" },
+	{ label = "normalize: epsilon outside the root", file = "reduction.rs",
+	  old = "let divisor = (variance + epsilon).sqrt();", new = "let divisor = variance.sqrt() + epsilon;" },
+	{ label = "normalize: epsilon ignored", file = "reduction.rs",
+	  old = "let divisor = (variance + epsilon).sqrt();", new = "let divisor = (variance + 1e-5).sqrt();" },
+	{ label = "normalize: f32 statistics", file = "reduction.rs",
+	  old = "let deviation = f64::from(block[lane].get()) - mean;", new = "let deviation = f64::from(block[lane].get() - mean as f32);" },
+	{ label = "normalize: RMS still centers", file = "reduction.rs",
+	  old = "(totals[0] + totals[1] + totals[2] + totals[3]) / count\n    } else {\n        0.0", new = "(totals[0] + totals[1] + totals[2] + totals[3]) / count\n    } else {\n        values.iter().map(|v| f64::from(v.get())).sum::<f64>() / count" },
+	{ label = "normalize: output not centered", file = "reduction.rs",
+	  old = "L::put(((f64::from(value.get()) - mean) / divisor) as f32)", new = "L::put((f64::from(value.get()) / divisor) as f32)" },
+	{ label = "normalize: epsilon accepted when zero", file = "graph.rs",
+	  old = "if !epsilon.is_finite() || epsilon <= 0.0 {", new = "if !epsilon.is_finite() || epsilon < 0.0 {" },
+
+	-- Ordered sums.
+	{ label = "sum: remainder rows reversed", file = "reduction.rs",
+	  old = "values.iter().fold(0.0, |acc, value| acc + value.get())", new = "values.iter().rev().fold(0.0, |acc, value| acc + value.get())" },
+	{ label = "sum: grouped rows reversed", file = "reduction.rs",
+	  old = "for col in 0..cols {\n            for lane in 0..SUM_ROWS {", new = "for col in (0..cols).rev() {\n            for lane in 0..SUM_ROWS {" },
+	{ label = "sum: starts at negative zero", file = "reduction.rs",
+	  old = "let mut sums = [0.0f32; SUM_ROWS];", new = "let mut sums = [-0.0f32; SUM_ROWS];" },
+	{ label = "sum: group reads a neighbouring lane", file = "reduction.rs",
+	  old = "sums[lane] += f32::from_le_bytes(lanes[lane][col]);", new = "sums[lane] += f32::from_le_bytes(lanes[lane.min(6)][col]);" },
+	{ label = "sum: first remainder row skipped", file = "reduction.rs",
+	  old = "for (slot, index) in rest.iter_mut().zip(first..) {", new = "for (slot, index) in rest.iter_mut().zip(first + 1..) {" },
+	{ label = "sum: strided rows skip the last column", file = "program.rs",
+	  old = "(0..*columns).fold(0.0f32, |sum, col| sum + input.at(row, col))", new = "(0..columns.saturating_sub(1)).fold(0.0f32, |sum, col| sum + input.at(row, col))" },
+
+	-- The row stage.
+	{ label = "stage: row offset ignores the stride", file = "kernels.rs",
+	  old = "let at = offset + row * row_stride;", new = "let at = offset + row * cols * 4;" },
+	{ label = "stage: copied rows always start at the first", file = "kernels.rs",
+	  old = "self.walk.fill(row * cols, scratch);", new = "self.walk.fill(0, scratch);" },
+	{ label = "stage: spread columns read as adjacent", file = "kernels.rs",
+	  old = "Self { walk, adjacent: col_stride == 4 }", new = "Self { walk, adjacent: col_stride != 0 }" },
+	{ label = "stage: sums treat unaligned rows as whole elements", file = "kernels.rs",
+	  old = "(self.adjacent && row_stride.is_multiple_of(4))", new = "self.adjacent" },
+	{ label = "stage: scratch released before it is used", file = "program.rs",
+	  old = "let _charge = budget.charge(copied * 4 + exponentials * 8)?;", new = "budget.charge(copied * 4 + exponentials * 8)?;" },
+	{ label = "stage: copied rows not charged", file = "program.rs",
+	  old = "budget.charge(copied * 4 + exponentials * 8)?", new = "budget.charge(exponentials * 8)?" },
+	{ label = "stage: exponentials not charged", file = "program.rs",
+	  old = "budget.charge(copied * 4 + exponentials * 8)?", new = "budget.charge(copied * 4)?" },
+	{ label = "stage: partial output writes", file = "program.rs",
+	  old = "for (row, output) in outputs.chunks_exact_mut(cols).enumerate() {", new = "for (row, output) in outputs.chunks_exact_mut(cols).enumerate().skip(1) {" },
+	{ label = "stage: strided softmax reads the wrong row", file = "program.rs",
+	  old = "let values = rows.row(row, &mut copy);", new = "let values = rows.row(row / 2, &mut copy);" },
+
+	-- Stages that read nothing, and transposition.
+	{ label = "dead: an empty matmul still reads its operands", file = "program.rs",
+	  old = "rows != 0 && cols != 0 && !matches!(self, Self::MatMul { inner: 0, .. })", new = "true" },
+	{ label = "dead: an inner-zero product leaves stale output", file = "program.rs",
+	  old = "work if !work.reads_inputs() => target.fill(0),", new = "work if !work.reads_inputs() => (),"},
+	{ label = "dead: every stage is executed", file = "program.rs",
+	  old = "if !stage.live {\n                continue;\n            }", new = "" },
+	{ label = "transpose: strides not exchanged", file = "program.rs",
+	  old = "strides: [input.strides[1], input.strides[0]]", new = "strides: input.strides" },
+}
+
+local function run(): (boolean, string)
+	local result, message = process.run("cargo", {
+		"test", "--locked", "--release", "--manifest-path", "research/graph-cpu/Cargo.toml", "--lib", "-j", "4",
+	}, { stdout = "capture", stderr = "capture" })
+	assert(result, message)
+	return result.success, (result.stdout or "") .. "\n" .. (result.stderr or "")
+end
+
+local caught, survived = 0, 0
+for index, mutation in mutations do
+	local path = SRC .. mutation.file
+	local original, message = fs.readFileString(path)
+	assert(original, message)
+	local first, last = string.find(original :: string, mutation.old, 1, true)
+	assert(first, "not found: " .. mutation.label)
+	assert(not string.find(original :: string, mutation.old, (last :: number) + 1, true), "not unique: " .. mutation.label)
+	local changed = string.sub(original :: string, 1, (first :: number) - 1) .. mutation.new .. string.sub(original :: string, (last :: number) + 1)
+	local function write(text: string)
+		local written, why = fs.writeFile(path, text)
+		assert(written, why)
+	end
+	write(changed)
+	local ok, output = run()
+	write(original :: string)
+	local failures = {}
+	for name in string.gmatch(output, "test ([%w_:]+) %.%.%. FAILED") do
+		table.insert(failures, (string.gsub(name, "^.*::", "")))
+	end
+	if ok then
+		survived += 1
+		print(string.format("%d [%s] SURVIVED", index, mutation.label))
+	elseif #failures == 0 then
+		caught += 1
+		local reason = string.match(output, "error[^\n]*") or "unknown failure"
+		print(string.format("%d [%s] NOT COMPILED OR CRASHED: %s", index, mutation.label, reason))
+	else
+		caught += 1
+		print(string.format("%d [%s] caught: %s", index, mutation.label, table.concat(failures, " ")))
+	end
+end
+print(string.format("caught %d, survived %d, of %d", caught, survived, #mutations))

@@ -293,7 +293,7 @@ fn run_every_way(program: &Program, values: &[f32], rows: usize, cols: usize) ->
 }
 
 #[test]
-fn deterministic_exponential_is_within_two_ulps_of_an_independent_oracle() {
+fn deterministic_exponential_is_within_one_ulp_of_an_independent_oracle() {
     use crate::reduction::{EXP_CUTOFF, exp_nonpositive};
     let mut rng = Rng(0x9e37_79b9_7f4a_7c15);
     let mut worst = 0;
@@ -302,7 +302,7 @@ fn deterministic_exponential_is_within_two_ulps_of_an_independent_oracle() {
         let expected = dd_exp(Dd::from(x)).value();
         let distance = ulps64(actual, expected);
         worst = worst.max(distance);
-        assert!(distance <= 2, "{x}: {actual:e} vs {expected:e}, {distance} ulps");
+        assert!(distance <= 1, "{x}: {actual:e} vs {expected:e}, {distance} ulps");
         assert!(ulps64(actual, x.exp()) <= 3, "{x}: {actual:e} vs the platform's {:e}", x.exp());
     };
     for _ in 0..200_000 {
@@ -561,4 +561,74 @@ fn zero_budget_runs_what_needs_no_scratch_and_refuses_what_does() {
     let spread_needed = needed + 8 * 4;
     assert!(softmax.run_into(&[spread.borrow()], &mut untouched, &Budget::new(spread_needed - 1)).is_err());
     softmax.run_into(&[spread.borrow()], &mut untouched, &Budget::new(spread_needed)).unwrap();
+}
+
+#[test]
+fn a_nan_of_either_sign_and_any_payload_poisons_softmax() {
+    let domain = Domain::new(16, 16);
+    let program = Expr::slot(0, Shape::Matrix(1, 5), domain).unwrap().softmax().unwrap().compile().unwrap();
+    for bits in [0x7fc0_0000u32, 0xffc0_0000, 0x7f80_0001, 0xff80_0001, 0x7fff_ffff, 0xffff_ffff] {
+        let values = [1.0, f32::from_bits(bits), 3.0, 4.0, 5.0];
+        assert!(run_every_way(&program, &values, 1, 5).iter().all(|v| v.is_nan()), "{bits:#x}");
+    }
+}
+
+#[test]
+fn softmax_scratch_pads_to_whole_vectors() {
+    use crate::reduction::softmax_scratch;
+    assert_eq!([0, 1, 4, 5, 7, 8, 9].map(softmax_scratch), [0, 4, 4, 8, 8, 8, 12]);
+}
+
+/// Rows a whole number of bytes apart that is not a whole number of elements still address exactly
+/// the bytes they say. Sums must not treat them as evenly spaced elements.
+#[test]
+fn row_strides_that_split_elements_read_the_addressed_bytes() {
+    let domain = Domain::new(64, 64);
+    let budget = Budget::new(1 << 16);
+    let bytes: Vec<u8> = (0..64u8).map(|i| i.wrapping_mul(37) | 0x40).collect();
+    let tensor = Tensor::from_storage(Arc::new(Vector(bytes.clone())), Shape::Matrix(5, 3), 1, [6, 4]).unwrap();
+    let element = |row: usize, col: usize| {
+        let at = 1 + row * 6 + col * 4;
+        f32::from_le_bytes(bytes[at..at + 4].try_into().unwrap())
+    };
+    let x = Expr::slot(0, Shape::Matrix(5, 3), domain).unwrap();
+    let sums = floats(&x.sum_rows().unwrap().compile().unwrap().run(&[&tensor], &budget).unwrap().readback().unwrap());
+    let normalized = floats(
+        &x.normalize(1e-5, true).unwrap().compile().unwrap().run(&[&tensor], &budget).unwrap().readback().unwrap(),
+    );
+    for row in 0..5 {
+        let logical = [element(row, 0), element(row, 1), element(row, 2)];
+        assert_eq!(sums[row].to_bits(), (0..3).fold(0.0f32, |s, c| s + logical[c]).to_bits(), "{row}");
+        for (a, e) in normalized[row * 3..][..3].iter().zip(normalize_oracle(&logical, 1e-5, true)) {
+            assert!(ulps32(*a, e) <= 1, "{row}: {a:e} vs {e:e}");
+        }
+    }
+}
+
+/// Scratch stays charged for as long as it lives. A guard dropped early would still pass every
+/// single-threaded check, so this makes concurrent runs race for exactly one stage's worth.
+#[test]
+fn row_scratch_stays_charged_while_other_threads_contend_for_the_budget() {
+    let width = 1 << 16;
+    let domain = Domain::new(64, 64);
+    let values: Vec<f32> = (0..width).map(|i| (i % 97) as f32 * 0.25).collect();
+    let input = laid_out(&values, 1, width, 1, false);
+    let program = Expr::slot(0, Shape::Matrix(1, width), domain).unwrap().softmax().unwrap().compile().unwrap();
+    let budget = Budget::new(crate::reduction::softmax_scratch(width) * 8);
+    let barrier = std::sync::Barrier::new(4);
+    std::thread::scope(|scope| {
+        for _ in 0..4 {
+            scope.spawn(|| {
+                let mut out = vec![0u8; width * 4];
+                barrier.wait();
+                for _ in 0..200 {
+                    // Either it fails cleanly, or it succeeded alone with the whole budget.
+                    let _ = program.run_into(&[input.borrow()], &mut out, &budget);
+                }
+            });
+        }
+    });
+    assert_eq!(budget.used(), 0);
+    assert!(budget.denials() > 0, "four threads never overlapped on one stage's budget");
+    assert!(budget.peak() <= crate::reduction::softmax_scratch(width) * 8);
 }

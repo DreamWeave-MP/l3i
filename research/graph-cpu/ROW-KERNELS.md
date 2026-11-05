@@ -1,35 +1,87 @@
-# Experimental row kernels
+# Row kernels
 
-`reduction` contains allocation-free primitives, not yet graph instructions or JSL operations. They are a correctness foundation, not a supported tensor API.
+Ordered sums, accurate softmax and accurate normalization all run as graph stages, from Rust as `Expr::sum_rows`, `Expr::softmax` and `Expr::normalize`, and from JSL as `sumRows`, `softmax`, `rmsNorm` and `layerNorm`. The primitives in `reduction.rs` are the kernels those stages call. They are research APIs, not a supported tensor API.
 
-- `sum`: starts at positive zero, adds in increasing index order with f32 rounding. No reassociation or FMA.
-- `softmax`: subtracts the row maximum, uses standard f64 exponential and f64 accumulation, rounds final probabilities to f32. This accurate contract differs from strict-f32 elementary arithmetic. Any NaN poisons the row; positive infinities split probability equally; an all-negative-infinity row produces zeros. Empty rows are accepted. Equal input/output lengths are required; Rust borrows prevent overlap.
-- `normalize`: population layer normalization when centered, RMS normalization otherwise; f64 mean and squared deviations, f64 square root, final f32 output. Finite positive epsilon and matching lengths are checked before output writes. No affine weights yet. Finite f32 extremes do not overflow f64 statistics. Nonfinite inputs follow IEEE arithmetic.
+## Numerical contracts
 
-Tests cover analytic normalization, independent unshifted softmax probabilities, translation invariance, long rows, infinities, NaNs, extreme logits, zero dimensions, cancellation, subnormals and validation before mutation. More randomized validation, mutation testing, graph integration and JSL measurements remain outstanding.
+These hold in both `Numeric` modes. No row kernel uses a fused multiply-add, and every kernel instantiation returns the same bits, so results do not vary between x86-64 instantiations or, by construction, between architectures. AArch64 agreement with x86-64 has not been compared directly: CI runs the same oracle tests natively on each.
 
-Kernel-only baseline: results/l3i-row-baseline.txt and l3i-row-rss.txt in the parent research directory. Preallocated outputs, single thread, standard repository release/LTO configuration; 31 timed samples per row on the same i7-10870H host. At n=1024: ordered sum 0.997 us, softmax 14.176 us, RMS norm 1.767 us, layer norm 2.714 us. These are initial observations under variable load, not improvements or end-to-end claims. Later portions of the mixed report overlap verification compilation; use the initial row-kernel section for these observations.
+- **Ordered sum.** Starts at +0 and adds columns in increasing order, rounding to f32 after every addition. Empty rows produce +0.
+- **Softmax.** Subtracts the row's maximum in f64, takes one exponential per element in f64, accumulates in f64, and rounds each probability to f32.
+  - Any NaN poisons the row.
+  - Positive infinities share probability equally.
+  - An all-negative-infinity row (all masked) produces zeros.
+- **Normalization.** Computes the population mean (when centered) and squared deviations in f64, then writes `(x - mean) / sqrt(variance + epsilon)` rounded to f32. RMS normalization is the same with no mean. Nonfinite inputs follow IEEE arithmetic. Epsilon must be finite and strictly positive and is checked when the expression is built. There are no affine weights; gain and bias are ordinary graph arithmetic.
 
-Softmax currently recomputes exponentials to avoid scratch and intermediate f32 rounding. Compare a charged f64 workspace before changing this accuracy/storage tradeoff. Normalization deliberately uses two-pass centered variance rather than subtracting nearly equal second moments.
+F64 sums accumulate into four totals by index modulo four, then add the totals in order. That order is part of the contract: it is what lets the loops vectorize without reassociating anything, and every instantiation follows it.
 
-## Ordered sum graph integration
+### Why the exponential is ours
 
-`Expr::sum_rows()` / JSL `expression:sumRows()` is now a materialized typed stage. It produces `(rows, 1)`, starts each sum at +0 and visits columns in order in both numerical modes. Empty rows produce +0. Input views remain borrowed, including strided views; stages participate in existing work bounds and temporary lifetime accounting. The reference interpreter evaluates its own ordered loop. GPU and generated-Luau lowering reject this new stage explicitly.
+The first kernel called the platform's `f64::exp` twice per element. That cost about 13 ns per element, and its bits depended on the host's math library, so "accurate softmax" was not one result across platforms.
 
-`--bench-rows` measures ordered sums at kernel, program and actual JSL borrowed-buffer levels. The initial full-invocation JSL medians were 1.271 us at 1,024 elements, 71.858 us at 65,536, and 1,149.856 us at 1,048,576. Raw results: ../results/l3i-sum-levels*.txt. Normalization and softmax remain standalone primitives pending stage integration; the introductory limitation applies to those operations.
+`reduction::exp_nonpositive` replaces it for `x <= 0`, the only range softmax needs after subtracting the maximum:
 
-## Accurate softmax graph integration
+- Cody-Waite reduction, a degree-13 Taylor polynomial evaluated by Estrin's scheme, and a scale assembled from the bits of the rounded quotient.
+- Branchless and built only from IEEE operations, so it vectorizes at any width and returns the same bits everywhere.
+- Inputs below -104 return +0. `exp(-104)` is under half the smallest f32 subnormal and every denominator is at least 1, so such a probability rounds to +0 regardless, and a million such terms cannot move a denominator.
 
-`Expr::softmax()` / JSL `expression:softmax()` now preserves shape and normalizes each row. Its accurate f64-statistics contract applies in both graph numerical modes. The stage shares the standalone kernel, accepts strided views, and charges two f32 conversion rows (8 bytes per column) before allocation. Zero-row inputs require no scratch. Storage is reused across rows within the call and released before its budget charge. Allocation failure occurs before final output writes.
+Tests hold it within 1 f64 ulp of an independent double-double oracle on 200,000 random points and at every reduction boundary, and within 3 ulps of the platform's `exp`. Softmax results stay within 1 f32 ulp of the oracle, and fewer than 1 in 1,000 differ from the correctly rounded value.
 
-The reference interpreter computes each result independently from the row, without calling the production kernel. Tests include transposed random inputs, NaNs, positive infinities, all-masked rows, extreme finite logits, empty dimensions, composition with ordered sums, JSL invocation and insufficient scratch budgets. Reference execution is intentionally quadratic in row width and is not a performance path. GPU/generated-Luau lowering rejects softmax rather than silently changing semantics.
+## Stage execution and resources
 
-Initial program-versus-kernel medians: 13.427 versus 11.282 us at 1,024 elements, 891.255 versus 772.061 us at 65,536. See ../results/l3i-softmax-levels*.txt. This report includes sum JSL timings, not softmax JSL timings; no softmax end-to-end claim follows. Softmax is not yet optimized: two exponential evaluations per element and conversion-row allocation remain visible costs. Normalization is still standalone pending graph integration.
+Inputs are read in place when a row's columns are adjacent in memory, even if the rows themselves are spread apart. Outputs are always written in place.
 
-## Normalization graph integration
+| Stage | Scratch charged to the budget | Scratch when columns are spread apart |
+| --- | --- | --- |
+| Sum rows | None | None (reads through the checked per-element path) |
+| Normalize | None | One f32 row |
+| Softmax | One f64 row, rounded up to a multiple of 4 elements | Also one f32 row |
 
-`Expr::normalize(epsilon, center)` and JSL `rmsNorm(epsilon)` / `layerNorm(epsilon)` now preserve shape and normalize each row. Epsilon is validated when constructing the expression, before graph execution. Both numerical modes use the documented accurate f64 statistics and final f32 rounding. Affine gain/bias remain explicit graph arithmetic.
+Scratch is acquired once per stage, reused across its rows, and released before its charge. A failed charge happens before any write to the final output. A stage whose result has no elements reads nothing, charges nothing, and does not run the stages only it reads.
 
-Softmax and normalization share one row-map execution stage and its budgeted conversion storage; they do not introduce separate executors. Reference normalization uses its own scalar mean/deviation loops. Tests cover composition with ReLU and reductions, extreme finite values, nonfinite values, epsilon rejection and actual JSL calls.
+## Softmax strategies measured
 
-Initial 1,024-element timings: RMS program 2.579 us versus kernel 1.494 us; layer normalization program 3.456 us versus kernel 2.455 us. Raw reports: ../results/l3i-norm-levels*.txt. Conversion and allocation costs are significant for small rows and remain optimization candidates. These are program/kernel measurements, not normalization JSL timings.
+Single row, one thread, preallocated output, on an i7-10870H under mixed load. Run `--bench-softmax` to reproduce; raw reports are in `../results/l3i-softmax-strategies*.txt`.
+
+| Strategy | ns per element at 4,096 | Contract |
+| --- | ---: | --- |
+| A. Platform `exp` twice, no scratch (original) | 10.8 | Accurate, host-dependent bits |
+| B. Platform `exp` once, f64 scratch | 5.9 | Accurate, host-dependent bits |
+| C. Deterministic `exp` once, f64 scratch, whole program (**kept**) | 2.7 | Accurate, identical bits |
+| D. Deterministic `exp` twice, no scratch | 11.6 | Accurate, identical bits |
+| E. f32 approximation with FMA | 0.8 | Approximate (below) |
+
+Strategy D was slow because a loop that accumulates while it computes the exponential did not vectorize, so it ran scalar. Strategy C uses separate loops, each of which does.
+
+Strategy E is about 3.4x faster than C, and it stays an experiment in `bench.rs` with no way to reach it from a program:
+
+- Against the f64 oracle, its maximum absolute error is about 3e-7 and its normalization error is about 1e-7.
+- Its maximum relative error reaches 1.0: logits more than about 87 below the maximum flush to zero where the accurate result is still nonzero, including the wide and extreme rows measured.
+- The large-offset row also reaches relative error 1.0, because the subtraction happens in f32.
+
+That is the failure mode the earlier synthetic transformer experiment found, so a fast path of this kind would need its own contract and a reason. Workspace reuse (the review's strategy C) is covered in the graph-cpu README under resources.
+
+## Testing
+
+`adversarial.rs` compares every stage in four memory layouts and every available instantiation, which must agree to the bit, against double-double oracles that share no code with the kernels. It uses row widths from 1 to 257 and 8 families of adversarial values: moderate, wide, nearly constant, large finite, subnormal, signed zero, large offset and near the cutoff.
+
+Other tests cover special rows sharing a matrix, repeated rows and elements through zero strides, exact budget boundaries and recovery. `research/mutate.jsl` injects bugs one at a time and is the evidence that these tests detect them; its record is `../results/mutations.txt`.
+
+The reference interpreter computes each element independently through `View::at`, but it follows the same contracts and shares `exp_nonpositive`, so it is a check on layouts and row handling and not on the exponential itself. GPU and generated-Luau lowering reject these stages explicitly rather than change their meaning.
+
+## Measurements
+
+Whole program invocations with preallocated output, one thread, median of 31 samples, on the same host under mixed load. Treat differences under about 10% as noise. Before is `0b95ca3`; after is `f8342b3`.
+
+| Stage and shape | Before (us) | After (us) | Ratio |
+| --- | ---: | ---: | ---: |
+| Softmax 64x128 | 106 (JSL) | 21 | 5.1x |
+| Softmax 128x128 | 206 | 42 | 4.9x |
+| Softmax 1x4096 | 53 | 11 | 4.8x |
+| Layer normalization 64x128 | 27 | 8.1 | 3.4x |
+| Sum rows 64x128 | 7.0 | 1.8 | 4.0x |
+| Sum rows 1x4096 | 3.9 | 3.7 | 1.0x |
+
+A single long row sum does not improve, and cannot under this contract: one ordered sum waits for each addition's latency. The gain comes from running independent rows side by side.
+
+Very short rows pay a fixed cost per row of about 50 ns, so softmax at 1000x7 costs about 7.7 ns per element against 2.5 for long rows. Single-column rows pay the same fixed cost, though their result is trivial. Nothing here has been measured on AArch64 unless the PR's tables say so.
