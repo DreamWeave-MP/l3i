@@ -50,11 +50,14 @@ jobs:
           clang --version
           lscpu
       - name: Debug no-JIT correctness
-        run: cargo test --features compute-testing compute::
+        run: |
+          cargo test --features compute-testing compute::
       - name: Release no-JIT numerical correctness
-        run: cargo test --release --features compute-testing compute::
+        run: |
+          cargo test --release --features compute-testing compute::
       - name: Release optional Luau JIT correctness
-        run: cargo test --release --features compute-testing,jit compute::
+        run: |
+          cargo test --release --features compute-testing,jit compute::
       - name: Pedantic Clippy, engine alone and with its test support
         run: |
           cargo clippy --features compute -- -W clippy::pedantic -D warnings
