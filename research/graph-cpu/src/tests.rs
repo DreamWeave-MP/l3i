@@ -711,7 +711,7 @@ fn fast_mode_fuses_multiply_adds_and_nothing_else() {
     assert_same(&read(&graph.compile().unwrap().run(&[&ta, &tb], &budget).unwrap()), &strict, "strict");
     // On an instantiation without FMA, a fast program runs its strict tiles.
     let mut out = vec![0u8; n * 4];
-    fast.run_with(&[ta.borrow(), tb.borrow()], &mut out, &budget, Isa::Avx2, CHUNK).unwrap();
+    fast.run_with(&[ta.borrow(), tb.borrow()], &mut out, &budget, Isa::detect(), CHUNK).unwrap();
     assert_same(&floats(&out), &strict, "fast program on AVX2");
     // A product read twice is not fused: p = x*y; p + p.
     let product = x.mul(&y).unwrap();
