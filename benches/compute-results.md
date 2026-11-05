@@ -27,7 +27,36 @@ lead, as `matrix-compare.md` records. On AArch64 none of this has been measured,
 kernel below is x86 only.
 
 Fast dot products reorder additions and OpenBLAS's do too; strict programs do neither and have no
-competitor to compare with here. CubeCL's side has not been rerun since these changes.
+competitor to compare with here.
+
+### Against CubeCL 0.11.3
+
+Retired user-space instructions in a disposable container, one thread, our best contract against the
+best of CubeCL's lane widths and FMA settings for each row. Raw: `compute-results/compare-ab36f8c-*.txt`,
+from `scripts/compute_compare.sh compute_cubecl ours|cubecl|model`. Excludes CubeCL's first launch of
+about 100M instructions per kernel, which is what its JIT costs and ours does not have.
+
+| Workload | n | Ours | CubeCL | Lead |
+|---|---:|---:|---:|---:|
+| workload | 16 | 1,629 | 111,231 | 68x |
+| workload | 65,536 | 64,652 | 173,321 | 2.7x |
+| workload | 1,048,576 | 1,012,173 | 1,023,501 | 1.0x |
+| matmul | 13,824,000 | 4,316,362 | 4,639,492 | 1.1x |
+| matmul | 56,623,104 | 17,566,472 | 18,570,291 | 1.1x |
+| mlp2 | 27,648,000 | 8,675,373 | 10,783,304 | 1.2x |
+| chain16 | 16,384 | 82,007 | 162,380 | 2.0x |
+| chain16 | 1,048,576 | 5,045,381 | 2,848,473 | **0.6x** |
+| horner | 1,048,576 | 3,455,791 | 1,691,125 | **0.5x** |
+| residual | 1,048,576 | 3,201,673 | 1,827,691 | **0.6x** |
+
+Long elementwise chains over large arrays are the one place CubeCL still leads, and these rows are
+memory-bound, so cycles tell it more fairly at 1M elements: chain16 3.52M to its 3.25M, horner 3.41M to
+2.44M, residual 2.83M to 1.97M, while the plain workload leads 1.78M to 2.03M. A JIT compiles a whole
+chain into one loop; precompiled tiles pass values through memory every two fused steps. Three-step
+fused tiles would be about 2,000 kernels per instruction set instead of about 200, some 10 MB of code
+rather than 1 MB, for a family that is about 3% of a transformer-style pass whose matmul is 84%. So
+this is deliberate, and a mandatory JIT is out of scope. Instruction counts cannot see stalls, copies
+or parallel speedup, and CubeCL's GPU backends are not compared at all.
 
 ### What moved these
 

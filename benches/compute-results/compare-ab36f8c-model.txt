@@ -1,0 +1,20 @@
+# model sequence=64 width=128 blocks=2 passes=7 (median pass)
+model_plan_strict_matmul instructions=7005512 cycles=2365587 l1d_misses=226569 llc_misses=1 share_of_instructions=96.3% share_of_cycles=88.2%
+model_plan_strict_elementwise instructions=50234 cycles=64042 l1d_misses=9799 llc_misses=0 share_of_instructions=0.7% share_of_cycles=2.4%
+model_plan_strict_normalization_native instructions=111410 cycles=130386 l1d_misses=2083 llc_misses=0 share_of_instructions=1.5% share_of_cycles=4.9%
+model_plan_strict_softmax_native instructions=59946 cycles=78313 l1d_misses=404 llc_misses=0 share_of_instructions=0.8% share_of_cycles=2.9%
+model_plan_strict_transpose_native instructions=45382 cycles=44310 l1d_misses=3410 llc_misses=0 share_of_instructions=0.6% share_of_cycles=1.7%
+model_plan_strict_total instructions=7272484 cycles=2682638
+model_plan_fast_matmul instructions=4791300 cycles=1603719 l1d_misses=224859 llc_misses=11 share_of_instructions=94.7% share_of_cycles=84.0%
+model_plan_fast_elementwise instructions=50348 cycles=59593 l1d_misses=10194 llc_misses=0 share_of_instructions=1.0% share_of_cycles=3.1%
+model_plan_fast_normalization_native instructions=111410 cycles=129504 l1d_misses=2085 llc_misses=0 share_of_instructions=2.2% share_of_cycles=6.8%
+model_plan_fast_softmax_native instructions=59946 cycles=78241 l1d_misses=388 llc_misses=0 share_of_instructions=1.2% share_of_cycles=4.1%
+model_plan_fast_transpose_native instructions=45376 cycles=38807 l1d_misses=3178 llc_misses=0 share_of_instructions=0.9% share_of_cycles=2.0%
+model_plan_fast_total instructions=5058380 cycles=1909864
+model_baseline_matmul instructions=4150774 cycles=1635149 l1d_misses=183494 llc_misses=76 share_of_instructions=94.4% share_of_cycles=84.5%
+model_baseline_elementwise instructions=29270 cycles=45943 l1d_misses=9318 llc_misses=3 share_of_instructions=0.7% share_of_cycles=2.4%
+model_baseline_normalization_native instructions=111410 cycles=128552 l1d_misses=2088 llc_misses=0 share_of_instructions=2.5% share_of_cycles=6.6%
+model_baseline_softmax_native instructions=59946 cycles=85145 l1d_misses=464 llc_misses=1 share_of_instructions=1.4% share_of_cycles=4.4%
+model_baseline_transpose_native instructions=45376 cycles=39558 l1d_misses=3486 llc_misses=0 share_of_instructions=1.0% share_of_cycles=2.0%
+model_baseline_total instructions=4396776 cycles=1934347
+model_agreement strict_vs_fast=8.64e-6 strict_vs_baseline=8.64e-6
