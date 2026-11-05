@@ -108,6 +108,18 @@ local mutations: { Mutation } = {
 	  old = "let values = rows.row(row, &mut copy);", new = "let values = rows.row(row / 2, &mut copy);" },
 
 	-- Matmul kernels.
+	{ label = "fused 6x16: a row reads another row's scale", file = "kernels.rs",
+	  old = "let x = _mm256_set1_ps(s3.add(p).read_unaligned());", new = "let x = _mm256_set1_ps(s2.add(p).read_unaligned());" },
+	{ label = "fused 6x16: scale from the wrong row of b", file = "kernels.rs",
+	  old = "let x = _mm256_set1_ps(s5.add(p).read_unaligned());", new = "let x = _mm256_set1_ps(s5.add(p.saturating_sub(1)).read_unaligned());" },
+	{ label = "fused 6x16: high lanes use the low factor", file = "kernels.rs",
+	  old = "b4 = _mm256_fmadd_ps(x, hi, b4);", new = "b4 = _mm256_fmadd_ps(x, lo, b4);" },
+	{ label = "fused 6x16: an accumulator is not written back", file = "kernels.rs",
+	  old = "_mm256_storeu_ps(row(2).add(8), b2);", new = "" },
+	{ label = "fused 6x16: ignores what the previous pass left", file = "kernels.rs",
+	  old = "let (mut a1, mut b1) = (_mm256_loadu_ps(row(1)), _mm256_loadu_ps(row(1).add(8)));", new = "let (mut a1, mut b1) = (_mm256_set1_ps(0.0), _mm256_set1_ps(0.0));" },
+	{ label = "fused 6x16: skips a row of factors", file = "kernels.rs",
+	  old = "            f = f.add(16);\n", new = "            f = f.add(if p == 3 { 32 } else { 16 });\n" },
 	{ label = "matmul: strict kernel fuses", file = "kernels.rs",
 	  old = "*value = if FUSED { scale.mul_add(*f, *value) } else { *value + scale * *f };", new = "*value = scale.mul_add(*f, *value);" },
 	{ label = "matmul: microkernel ignores what the previous pass left", file = "kernels.rs",

@@ -686,8 +686,9 @@ struct Block {
 /// so strict results are bit-identical to the triple loop. With `FUSED`, each product and add round
 /// once instead, which only `Numeric::Fast` asks for.
 ///
-/// Only fixed-size arrays touch the block between its load and its store, which is what keeps it in
-/// registers: LLVM cannot split an array that a variable index reaches.
+/// Only fixed-size arrays touch the block between its load and its store, which keeps most of it in
+/// registers: LLVM cannot split an array that a variable index reaches. The largest block still
+/// leaves a row on the stack, so [`fused_6x16`] takes that size on the path that has to be fastest.
 #[inline(always)]
 fn at_unchecked(run: &[Element], p: usize) -> f32 {
     debug_assert!(p < run.len());
@@ -728,10 +729,74 @@ fn micro<const FUSED: bool, const ROWS: usize, const WIDTH: usize>(
     }
 }
 
+/// The full-size kernel with fused arithmetic, its twelve accumulators named. LLVM kept one row of
+/// [`micro`]'s block on the stack, reading it back through failed store-forwards on every call.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2,fma")]
+#[allow(clippy::cast_ptr_alignment)] // Every access below tolerates any alignment.
+fn fused_6x16(scales: [&[Element]; 6], factors: &[[Element; 16]], out: &mut [Element], at: Block) {
+    use std::arch::x86_64::{_mm256_fmadd_ps, _mm256_loadu_ps, _mm256_set1_ps, _mm256_storeu_ps};
+    for run in scales {
+        assert_eq!(run.len(), factors.len());
+    }
+    assert!(at.cols == 16 && at.base + 5 * at.stride + 16 <= out.len());
+    let base = out[at.base..].as_mut_ptr().cast::<f32>();
+    let [s0, s1, s2, s3, s4, s5] = scales.map(|run| run.as_ptr().cast::<f32>());
+    // SAFETY: the assertions put six rows of 16 elements, `stride` apart, inside `out`, and a scale
+    // in each run for every row of factors. Every access tolerates any alignment, and x86 is
+    // little-endian, so these are the f32s `read` would give.
+    unsafe {
+        let row = |r: usize| base.add(r * at.stride);
+        let (mut a0, mut b0) = (_mm256_loadu_ps(row(0)), _mm256_loadu_ps(row(0).add(8)));
+        let (mut a1, mut b1) = (_mm256_loadu_ps(row(1)), _mm256_loadu_ps(row(1).add(8)));
+        let (mut a2, mut b2) = (_mm256_loadu_ps(row(2)), _mm256_loadu_ps(row(2).add(8)));
+        let (mut a3, mut b3) = (_mm256_loadu_ps(row(3)), _mm256_loadu_ps(row(3).add(8)));
+        let (mut a4, mut b4) = (_mm256_loadu_ps(row(4)), _mm256_loadu_ps(row(4).add(8)));
+        let (mut a5, mut b5) = (_mm256_loadu_ps(row(5)), _mm256_loadu_ps(row(5).add(8)));
+        let mut f = factors.as_ptr().cast::<f32>();
+        for p in 0..factors.len() {
+            let (lo, hi) = (_mm256_loadu_ps(f), _mm256_loadu_ps(f.add(8)));
+            let x = _mm256_set1_ps(s0.add(p).read_unaligned());
+            a0 = _mm256_fmadd_ps(x, lo, a0);
+            b0 = _mm256_fmadd_ps(x, hi, b0);
+            let x = _mm256_set1_ps(s1.add(p).read_unaligned());
+            a1 = _mm256_fmadd_ps(x, lo, a1);
+            b1 = _mm256_fmadd_ps(x, hi, b1);
+            let x = _mm256_set1_ps(s2.add(p).read_unaligned());
+            a2 = _mm256_fmadd_ps(x, lo, a2);
+            b2 = _mm256_fmadd_ps(x, hi, b2);
+            let x = _mm256_set1_ps(s3.add(p).read_unaligned());
+            a3 = _mm256_fmadd_ps(x, lo, a3);
+            b3 = _mm256_fmadd_ps(x, hi, b3);
+            let x = _mm256_set1_ps(s4.add(p).read_unaligned());
+            a4 = _mm256_fmadd_ps(x, lo, a4);
+            b4 = _mm256_fmadd_ps(x, hi, b4);
+            let x = _mm256_set1_ps(s5.add(p).read_unaligned());
+            a5 = _mm256_fmadd_ps(x, lo, a5);
+            b5 = _mm256_fmadd_ps(x, hi, b5);
+            f = f.add(16);
+        }
+        _mm256_storeu_ps(row(0), a0);
+        _mm256_storeu_ps(row(0).add(8), b0);
+        _mm256_storeu_ps(row(1), a1);
+        _mm256_storeu_ps(row(1).add(8), b1);
+        _mm256_storeu_ps(row(2), a2);
+        _mm256_storeu_ps(row(2).add(8), b2);
+        _mm256_storeu_ps(row(3), a3);
+        _mm256_storeu_ps(row(3).add(8), b3);
+        _mm256_storeu_ps(row(4), a4);
+        _mm256_storeu_ps(row(4).add(8), b4);
+        _mm256_storeu_ps(row(5), a5);
+        _mm256_storeu_ps(row(5).add(8), b5);
+    }
+}
+
 /// One pass's view of `b`: `WIDTH` elements per row of `b`, from column `column` of the pass, padded
 /// with zeros past `cols`.
 trait Factors: Copy {
     fn column<const WIDTH: usize>(self, column: usize, cols: usize) -> impl Iterator<Item = [Element; WIDTH]>;
+    /// The same elements as adjacent rows, when they already are.
+    fn packed(&self, column: usize, width: usize) -> Option<&[Element]>;
 }
 /// Rows of `b` read in place: no copy, for the products too short to repay one.
 #[derive(Clone, Copy)]
@@ -743,6 +808,10 @@ struct InPlace<'a> {
     end: usize,
 }
 impl Factors for InPlace<'_> {
+    #[inline(always)]
+    fn packed(&self, _column: usize, _width: usize) -> Option<&[Element]> {
+        None
+    }
     #[inline(always)]
     fn column<const WIDTH: usize>(self, column: usize, cols: usize) -> impl Iterator<Item = [Element; WIDTH]> {
         (self.start..self.end).map(move |p| {
@@ -760,6 +829,10 @@ struct Packed<'a> {
     rows: usize,
 }
 impl Factors for Packed<'_> {
+    #[inline(always)]
+    fn packed(&self, column: usize, width: usize) -> Option<&[Element]> {
+        Some(&self.pack[column * self.rows..][..self.rows * width])
+    }
     #[inline(always)]
     fn column<const WIDTH: usize>(self, column: usize, _cols: usize) -> impl Iterator<Item = [Element; WIDTH]> {
         self.pack[column * self.rows..][..self.rows * WIDTH].as_chunks::<WIDTH>().0.iter().copied()
@@ -807,6 +880,19 @@ fn group<const FUSED: bool, const ROWS: usize, const WIDTH: usize>(
     let Pass { a, k, start, rows, first, n } = pass;
     let scales: [&[Element]; ROWS] = std::array::from_fn(|r| &a[(row + r) * k + start..][..rows]);
     let at = Block { base: row * n + first + column, stride: n, cols };
+    #[cfg(target_arch = "x86_64")]
+    if FUSED
+        && ROWS == 6
+        && WIDTH == 16
+        && cols == 16
+        && let Some(packed) = factors.packed(column, 16)
+    {
+        let six = std::array::from_fn(|r| &a[(row + r) * k + start..][..rows]);
+        // SAFETY: on x86, only `matmul_fma` instantiates this with `FUSED`, and `matmul` reaches
+        // that only after `Isa::available` confirms the features.
+        unsafe { fused_6x16(six, packed.as_chunks::<16>().0, out, at) };
+        return;
+    }
     micro::<FUSED, ROWS, WIDTH>(scales, rows, factors.column::<WIDTH>(column, cols), out, at);
 }
 /// One row group, across every column block of the pass. This order keeps the group's runs of `a`
