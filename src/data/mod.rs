@@ -330,18 +330,24 @@ impl Span {
         self.stride == self.kind.size()
     }
 
-    /// This span, safe from writes to `out`: copied if `out` overlaps it, the copy kept alive by the
-    /// first value returned.
+    /// This span, safe from writes to `out`: its elements copied with no gaps if `out` overlaps it,
+    /// the copy kept alive by the first value returned. Only the elements are copied, so a wide
+    /// stride costs nothing extra.
     fn kept_from(self, out: &Indices) -> (Option<Vec<u8>>, Span) {
-        let (begin, end) = byte_range(self.base, self.count, self.stride, self.kind.size());
-        if !overlaps((begin, end), byte_range(out.base, out.count, 4, 4)) {
+        let span = byte_range(self.base, self.count, self.stride, self.kind.size());
+        if !overlaps(span, byte_range(out.base, out.count, 4, 4)) {
             return (None, self);
         }
-        // SAFETY: the span was bounds-checked at construction, and nothing else touches the buffer
-        // during this copy.
-        let mut copy = unsafe { std::slice::from_raw_parts(self.base, end - begin) }.to_vec();
+        let size = self.kind.size();
+        // The stride is at least the size, so these bytes fit inside the checked span.
+        let mut copy = Vec::with_capacity(self.count * size);
+        for index in 0..self.count {
+            // SAFETY: the span was bounds-checked at construction, and nothing else touches the
+            // buffer during this copy.
+            copy.extend_from_slice(unsafe { std::slice::from_raw_parts(self.base.add(index * self.stride), size) });
+        }
         let base = copy.as_mut_ptr();
-        (Some(copy), Span { base, ..self })
+        (Some(copy), Span { base, stride: size, ..self })
     }
 }
 
@@ -1738,6 +1744,25 @@ mod loop_paths {
         key_order, kind_loops, scale_elements,
     };
     use std::hint::black_box;
+
+    /// A wide stride must not cost a copy of everything between its elements.
+    #[test]
+    fn a_kept_span_holds_only_its_elements() {
+        const STRIDE: usize = 4096;
+        let mut storage = vec![0u8; STRIDE * 2 + 4];
+        storage[..4].copy_from_slice(&7u32.to_le_bytes());
+        storage[STRIDE..STRIDE + 4].copy_from_slice(&8u32.to_le_bytes());
+        storage[STRIDE * 2..].copy_from_slice(&9u32.to_le_bytes());
+        let base = storage.as_mut_ptr();
+        let keys = Span { base, kind: Kind::U32, stride: STRIDE, count: 3 };
+        let (copy, kept) = keys.kept_from(&Indices { base, count: 3 });
+        // Held for the reads below: the span points into it.
+        let copy = copy.expect("the output overlaps");
+        assert_eq!(copy.len(), 12);
+        assert_eq!(kept.base, copy.as_ptr().cast_mut());
+        assert_eq!(kept.stride, 4);
+        assert_eq!((kept.get(0), kept.get(1), kept.get(2)), (7.0, 8.0, 9.0));
+    }
 
     // The oracle: plain loops whose kind stays a run-time value, so `get` and `set` really dispatch
     // per element. `black_box` keeps LLVM from specializing them on what a test passes.

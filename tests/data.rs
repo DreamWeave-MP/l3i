@@ -791,6 +791,32 @@ fn a_partition_over_its_keys_answers_as_if_they_were_separate() {
     );
 }
 
+/// A strided span's copy holds only its elements, and answers as the span would.
+#[test]
+fn a_partition_over_strided_keys_answers_as_if_they_were_separate() {
+    exec(
+        r"
+        for _, n in {1, 2, 5, 9, 64} do
+            for _, layout in {{'u32@16', 16}, {'f32@8', 8}, {'u32@4096', 4096}} do
+                local kind, stride = layout[1], layout[2]
+                local keys = buffer.create(n * stride + n * 4 + 8)
+                for i = 0, n - 1 do buffer.writeu32(keys, i * stride, (i * 2654435761) % 4294967296) end
+                local want = buffer.create(n * 4)
+                local accepted = data.partition(keys, kind, 0, n, 'gt', 2147483648, want)
+                for _, at in {0, 2, 4, stride} do
+                    local overlapping = buffer.create(buffer.len(keys))
+                    buffer.copy(overlapping, 0, keys)
+                    assert(data.partition(overlapping, kind, 0, n, 'gt', 2147483648, overlapping, at) == accepted, `{kind} {n} at {at}`)
+                    for i = 0, n - 1 do
+                        assert(buffer.readu32(overlapping, at + i * 4) == buffer.readu32(want, i * 4), `{kind} {n} at {at}`)
+                    end
+                end
+            end
+        end
+    ",
+    );
+}
+
 /// The contiguous f32 corpus: bit patterns chosen for what a vectorized or narrowed loop gets
 /// wrong (both zeros and infinities, quiet and signaling NaNs with payloads, subnormals, values
 /// around rounding boundaries), mixed with deterministic random words.
