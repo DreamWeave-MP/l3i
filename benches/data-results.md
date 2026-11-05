@@ -1,33 +1,42 @@
-# Contiguous `dream.data` loops: before and after
+# `dream.data` loops: before and after
 
-"Before" is `dream.data` at `424abc1`, built with the benches from this branch so both sides run the same invocations. "After" is this branch: constant-kind loops with AVX2 dispatch, and lowered receivers handing long spans over to them.
+"Before" is `dream.data` at `424abc1`, built with the benches from this branch so both sides run the same invocations. "After" is this branch: every loop with its element kind constant, AVX2 dispatch on contiguous spans, constant strides for `f32` reads, and lowered receivers handing long spans over.
 
 Measured on an i7-10870H under Linux, one thread, with rustc 1.99.1 at its release profile, the verified toolchain (clang, lld, cross-language thin LTO) and `data,jit`, every chunk compiled natively and globals sandboxed. The machine was not idle: other builds ran during these rows. Before and after alternated, two processes each.
 
 ## Reproducing it
 
 ```sh
-cargo bench --features data,jit --bench main -- data_f32 --noplot \
-  --sample-size 10 --measurement-time 0.01 --warm-up-time 0.01 --nresamples 10
+L3I_ROW= cargo bench --features data,jit --bench main -- data_f32 --noplot
 ```
 
-The counter rows are the `f32row|` lines on stderr: operation, size, variant, then min, median and max of nine rounds for instructions, cycles, nanoseconds and branch misses, per call, user space only. The rows behind this page are in `benches/data-results/`. A plain `cargo bench` runs three sizes and no counters; naming `data_f32` or `data_receivers` asks for all of it.
+The counter rows are the `f32row|` lines on stderr: operation, size, variant, then min, median and max of nine rounds for instructions, cycles, nanoseconds and branch misses, per call, user space only. `L3I_ROW=<text>` keeps the rows whose name contains it and skips Criterion; `L3I_RAW=<hex,hex>` adds raw PMU events. The rows behind this page are in `benches/data-results/`. A plain `cargo bench` runs three sizes and no counters; naming `data_f32` or `data_receivers` asks for all of it.
 
 To build "before", check out `src/data/mod.rs` and `src/data/lowering.rs` from `9010765`, whose bench and tests already run against the old loops.
 
 ## The target
 
-`relu(a + b + 2)` as three separate `dream.data` passes at 65,536 elements: **about 415 µs before and 31 µs after in this sweep, 13–14×.** The best single run, on a quieter machine, was 28.8 µs. A benchmark-only AVX2 Rust kernel doing the same three passes with no binder takes 25–27 µs on this machine, so little is left for separate passes on this memory system. The compute research's 16.7× and 23.5 µs came from a different run and were not reached; a fused loop is a different contract.
+`relu(a + b + 2)` as three separate `dream.data` passes at 65,536 elements: **415–465 µs before and about 32 µs after, 13–15×**, depending on how busy the machine was. The best single run, on a quieter machine, was 28.8 µs. A benchmark-only AVX2 Rust kernel doing the same three passes with no binder takes 25–31 µs on this machine, so little is left for separate passes on this memory system. Below that size the buffers fit in cache and the gain is larger: 22× at 16,384 elements. The compute research's 16.7× and 23.5 µs came from a different run and were not reached; a fused loop is a different contract.
+
+## Why the old loops' speed moved around
+
+The old strided and non-`f32` rows varied by up to 50% between runs, which was worth understanding before believing any of them. There were two separate causes.
+
+**Code layout, about 15%.** In cache, the old `scale f32@8` measured 29.7k cycles in one build and 25.6k in another with no change to its code, steady to 1% within each. The loop made three indirect jumps per element, and how fast those run depends on where they land. Branch misses do not change, and LLVM's JCC-erratum mitigation does not remove it, so this is the front end and not one specific erratum. **It is gone.** The dispatch is gone, and those rows now agree across differently laid-out builds to about 1%.
+
+**The memory system, up to 50%.** Outside cache the same binary read 595k and then 915k cycles for `add f32@8`, in different processes, with reference-clock time doubling too. Inside cache those rows are steady. That is page placement or contention for L3 and the sibling hyperthread, it has nothing to do with the code, and it still applies to any row whose buffers exceed L2. So compare instruction counts, or several processes, on rows that size.
 
 ## Reading these numbers
 
-- **Instructions are the steady evidence.** They repeat to within a few parts per thousand. Cycles and time vary with load and between processes; the brackets below show by how much.
-- **The generic loops are sensitive to code layout.** Strided rows here land on whole cycles per element, and they move both ways between builds with no change to their code: baseline `add i32` moved from 462k to 431k cycles from padding alone. LLVM's JCC-erratum mitigation did not remove this and branch misses do not change, so the cause is not pinned down. Treat a 20–30% cycle difference on a strided row as a difference between builds.
-- **At 65,536 elements, `add` and `scale` are memory-bound.** The three buffers exceed L2: about 0.5 instructions per element, about 0.9 cycles.
-- **`sum` gains nothing from vectors.** In-order `f64` accumulation is a latency chain, and changing the order would change the result.
-- **What gets slower.** An `any` or `all` that decides on its first element pays for a block of 64 instead of one, about 70 cycles. Through a lowered receiver on a long span it also pays for the bound call, about 350 cycles. Short spans gain a few instructions per call.
-- **Code size.** About 116 KB of text in the bench binary, 8.66 MB to 8.77 MB.
-- **Not measured.** Performance on AArch64: the loops run correctly there, but nothing here says how fast. Build-time cost of the extra instantiations.
+- **Instructions are the steady evidence.** They repeat to within a few parts per thousand. The brackets below show how far cycles stray.
+- **`add` and `scale` at 65,536 elements are memory-bound.** The three buffers exceed L2: about 0.5 instructions per element, about 0.9 cycles.
+- **`sum` gains no cycles from vectors.** In-order `f64` accumulation is a latency chain, and changing the order would change the result. It runs at four cycles an element, which is that chain.
+- **Strided writes stay scalar.** AVX2 has no scatter store, so a constant stride made them slower in a separate experiment, and only reads have one.
+- **What gets slower.** An `any` or `all` decided by its first element costs about 30 cycles more through a module function. Nothing else in the table is slower beyond noise.
+- **Binder cost.** A bound call takes 3–6% fewer instructions at no elements: a plain kind name no longer searches for a stride, a short ASCII string skips the UTF-8 validator, and an integer argument avoids a call to `trunc`. Most of what remains is Luau's call into native code and reading arguments, which are shared with every other binding.
+- **Code size.** About 370 KB of text in the bench binary, 8.67 MB to 9.04 MB. Nearly all of it is the kernels' instantiations per kind, compiled twice. This is the price of everything above, and it is larger than it was before the strided and filtered loops were added.
+- **One change since these rows.** A lowered `any` or `all` on a long contiguous span gained one always-failing guard, to keep Luau's control-flow analysis correct, after this sweep. It costs a few instructions on a path that goes on to make a bound call.
+- **Not measured.** Performance on AArch64: the loops pass their byte-exact comparisons in an optimized build under emulation, but nothing here says how fast they run. Build-time cost of the extra instantiations.
 
 
 ## At 65,536 elements
@@ -36,50 +45,74 @@ Instructions are the median of nine rounds. Cycles and time are the best round o
 
 | Operation | Instructions, before | after | Cycles, before | after | Ratio | Time, before | after |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| `relu`, three passes | 5,196,674 | 128,572 | 1,895,360 [1,921,412] | 134,566 [144,668] | 14.1× | 415.3 µs | 30.9 µs |
-| `add` f32 | 1,836,701 | 32,497 | 595,125 [596,892] | 63,025 [70,805] | 9.4× | 128.4 µs | 14.4 µs |
-| `scale` f32, factor 1/3 | 1,377,828 | 73,329 | 461,309 [463,956] | 60,196 [86,133] | 7.7× | 95.2 µs | 14.7 µs |
-| `scale` f32, factor 0.5 | 1,377,828 | 73,329 | 461,345 [715,484] | 61,535 [89,826] | 7.5× | 95.3 µs | 15.0 µs |
-| `clamp` f32 | 1,595,608 | 87,715 | 636,597 [637,584] | 61,058 [83,608] | 10.4× | 131.7 µs | 14.9 µs |
-| `fill` f32 | 132,520 | 15,813 | 74,601 [95,683] | 25,893 [36,284] | 2.9× | 16.8 µs | 6.6 µs |
-| `min` f32 | 1,508,910 | 87,745 | 415,235 [417,641] | 30,160 [33,491] | 13.8× | 89.5 µs | 7.3 µs |
-| `argmax` f32 | 1,050,060 | 81,162 | 267,440 [273,653] | 29,212 [31,824] | 9.2× | 57.9 µs | 7.8 µs |
-| `countWhere` f32 | 1,181,305 | 24,301 | 395,014 [400,759] | 15,782 [16,056] | 25.0× | 85.2 µs | 4.4 µs |
-| `any` f32, full scan | 1,050,292 | 88,851 | 265,312 [270,382] | 32,633 [36,444] | 8.1× | 57.5 µs | 8.0 µs |
-| `all` f32, full scan | 919,217 | 97,043 | 394,697 [398,952] | 33,835 [35,476] | 11.7× | 81.6 µs | 8.5 µs |
-| `select` f32 | 1,408,884 | 175,057 | 485,886 [487,097] | 55,222 [58,114] | 8.8× | 100.4 µs | 13.9 µs |
-| `sum` f32 | 788,040 | 657,020 | 263,821 [373,250] | 263,727 [268,528] | 1.0× | 54.8 µs | 60.0 µs |
-| `sum` f32, filtered | 1,181,387 | 853,763 | 661,381 [667,109] | 419,097 [428,730] | 1.6× | 136.6 µs | 90.3 µs |
-| `add` f64 | 1,574,560 | 63,220 | 657,245 [657,737] | 112,649 [113,893] | 5.8× | 147.6 µs | 24.9 µs |
-| `add` i32 | 1,640,088 | 591,596 | 526,331 [529,289] | 311,928 [313,656] | 1.7× | 113.8 µs | 68.0 µs |
-| `scale` i32 | 1,246,751 | 575,084 | 395,911 [397,347] | 282,292 [302,911] | 1.4× | 85.4 µs | 62.7 µs |
-| `min` f64 | 1,443,378 | 134,828 | 461,300 [466,362] | 53,503 [55,431] | 8.6× | 103.7 µs | 12.7 µs |
-| `countWhere` i32 | 1,181,300 | 255,741 | 394,813 [395,651] | 126,707 [131,452] | 3.1× | 93.0 µs | 28.0 µs |
-| `sum` i32 | 788,035 | 657,015 | 264,091 [406,029] | 263,419 [264,510] | 1.0× | 57.2 µs | 58.3 µs |
-| `fill` u8 | 11,651 | 1,448 | 7,108 [9,686] | 6,319 [6,387] | 1.1× | 2.4 µs | 2.2 µs |
-| `add` f32, in place | 1,836,701 | 32,496 | 593,185 [599,625] | 43,159 [44,645] | 13.7× | 139.6 µs | 10.4 µs |
-| `scale` f32, in place | 1,377,828 | 73,325 | 461,443 [464,791] | 40,058 [41,377] | 11.5× | 98.4 µs | 9.5 µs |
-| `clamp` f32, in place | 1,640,001 | 87,710 | 526,883 [839,923] | 49,820 [51,558] | 10.6× | 113.3 µs | 11.8 µs |
-| `add` f32, out one element before left | 1,836,701 | 32,497 | 594,088 [594,751] | 44,608 [45,421] | 13.3× | 130.5 µs | 10.4 µs |
-| `add` f32, out one element past left | 1,836,702 | 296,690 | 1,310,826 [1,318,276] | 593,841 [595,241] | 2.2× | 293.6 µs | 127.6 µs |
-| `add` f32, out one element past both inputs | 1,836,702 | 296,690 | 1,377,257 [1,389,521] | 591,374 [593,168] | 2.3× | 309.1 µs | 132.7 µs |
-| `add` f32@8, strided | 1,836,773 | 1,836,812 | 595,835 [599,175] | 594,182 [596,994] | 1.0× | 128.4 µs | 130.9 µs |
-| `scale` f32@8, strided | 1,377,900 | 1,377,932 | 462,465 [465,293] | 398,290 [426,862] | 1.2× | 99.6 µs | 87.7 µs |
-| `sum` f32@8, strided | 788,112 | 788,132 | 264,697 [382,387] | 264,852 [267,536] | 1.0× | 61.3 µs | 57.4 µs |
-| `min` f32, strictly falling (block scan's worst case) | 1,377,840 | 454,337 | 381,471 [384,510] | 271,910 [273,977] | 1.4× | 86.0 µs | 57.7 µs |
-| `argmin` f32, strictly falling | 1,050,060 | 454,197 | 265,063 [270,713] | 270,956 [271,225] | 1.0× | 59.4 µs | 58.7 µs |
-| `any` f32, first element decides | 1,724 | 1,897 | 690 [724] | 783 [836] | 0.9× | 1.0 µs | 1.0 µs |
-| `all` f32, first element decides | 1,729 | 1,897 | 696 [718] | 785 [837] | 0.9× | 1.0 µs | 1.0 µs |
-| lowered `K:sum` f32 | 385,892 | 656,920 | 303,984 [304,933] | 263,540 [264,138] | 1.2× | 65.8 µs | 57.1 µs |
-| lowered `K:countGt` f32 | 921,946 | 24,203 | 329,922 [345,245] | 16,897 [23,733] | 19.5× | 74.5 µs | 4.6 µs |
-| lowered `K:min` f32 | 787,408 | 88,038 | 262,457 [268,908] | 29,946 [31,255] | 8.8× | 58.1 µs | 7.0 µs |
-| lowered `K:selectGt` f32 | 863,726 | 174,838 | 306,489 [309,304] | 57,460 [59,654] | 5.3× | 69.2 µs | 13.7 µs |
-| lowered `K:min` f64 | 721,865 | 134,760 | 241,823 [244,979] | 52,171 [55,674] | 4.6× | 54.1 µs | 12.4 µs |
-| lowered `K:countGt` i32 | 941,187 | 255,648 | 363,824 [370,929] | 110,562 [113,232] | 3.3× | 82.0 µs | 25.0 µs |
-| JSL `sum` over an f32 slice | 788,443 | 657,423 | 264,395 [264,897] | 263,783 [264,183] | 1.0× | 57.3 µs | 59.8 µs |
-| JSL filtered count, f32 slice | 922,362 | 24,619 | 330,464 [332,081] | 15,824 [16,117] | 20.9× | 73.0 µs | 4.3 µs |
-| JSL `any`, f32 slice | 795,918 | 89,106 | 267,189 [268,489] | 33,015 [36,055] | 8.1× | 57.9 µs | 7.9 µs |
-| JSL filtered count, u8 slice | 920,213 | 272,309 | 345,877 [348,000] | 178,826 [180,326] | 1.9× | 78.0 µs | 39.8 µs |
+| `relu`, three passes | 5,196,385 | 127,920 | 2,060,231 [2,111,110] | 134,009 [143,530] | 15.4× | 465.0 µs | 32.2 µs |
+| `add` f32 | 1,836,601 | 32,274 | 593,885 [596,778] | 58,019 [63,756] | 10.2× | 136.8 µs | 14.5 µs |
+| `scale` f32, factor 1/3 | 1,377,740 | 73,118 | 461,575 [465,129] | 59,944 [63,670] | 7.7× | 103.8 µs | 15.0 µs |
+| `scale` f32, factor 0.5 | 1,377,740 | 73,118 | 461,596 [464,537] | 60,364 [63,858] | 7.6× | 103.8 µs | 15.1 µs |
+| `clamp` f32 | 1,595,519 | 87,503 | 636,370 [638,104] | 59,281 [61,742] | 10.7× | 146.6 µs | 14.8 µs |
+| `fill` f32 | 132,444 | 15,616 | 76,042 [77,020] | 26,759 [27,194] | 2.8× | 18.3 µs | 7.2 µs |
+| `min` f32 | 1,508,844 | 87,537 | 413,781 [416,496] | 29,139 [30,199] | 14.2× | 95.7 µs | 7.8 µs |
+| `argmax` f32 | 1,049,987 | 80,997 | 265,129 [267,356] | 29,228 [29,948] | 9.1× | 61.4 µs | 7.8 µs |
+| `countWhere` f32 | 1,181,180 | 24,067 | 394,948 [397,969] | 14,624 [16,398] | 27.0× | 90.9 µs | 4.4 µs |
+| `any` f32, full scan | 1,050,167 | 88,703 | 264,261 [265,587] | 31,258 [32,180] | 8.5× | 61.2 µs | 8.2 µs |
+| `all` f32, full scan | 919,092 | 96,893 | 394,783 [430,688] | 31,086 [32,016] | 12.7× | 90.9 µs | 8.2 µs |
+| `select` f32 | 1,408,760 | 174,804 | 482,482 [484,505] | 55,227 [57,917] | 8.7× | 108.4 µs | 13.9 µs |
+| `sum` f32 | 787,974 | 247,210 | 264,011 [266,869] | 263,467 [267,604] | 1.0× | 61.1 µs | 62.4 µs |
+| `sum` f32, filtered | 1,181,274 | 545,303 | 658,538 [661,497] | 264,350 [265,934] | 2.5× | 155.1 µs | 62.6 µs |
+| `add` f64 | 1,574,460 | 62,996 | 657,214 [658,514] | 122,527 [159,519] | 5.4× | 147.9 µs | 28.9 µs |
+| `add` i32 | 1,639,988 | 591,383 | 526,379 [527,060] | 306,088 [313,065] | 1.7× | 118.2 µs | 72.6 µs |
+| `scale` i32 | 1,246,663 | 574,883 | 395,909 [397,643] | 281,682 [299,906] | 1.4× | 89.2 µs | 65.2 µs |
+| `min` f64 | 1,443,312 | 134,619 | 461,246 [464,484] | 51,297 [56,095] | 9.0× | 101.5 µs | 13.0 µs |
+| `countWhere` i32 | 1,181,175 | 255,507 | 394,649 [396,712] | 113,736 [114,750] | 3.5× | 87.0 µs | 26.9 µs |
+| `sum` i32 | 787,969 | 247,216 | 263,945 [264,317] | 263,315 [264,595] | 1.0× | 58.4 µs | 61.0 µs |
+| `fill` u8 | 11,576 | 1,286 | 7,700 [7,993] | 6,064 [6,322] | 1.3× | 2.6 µs | 2.3 µs |
+| `add` f32, in place | 1,836,601 | 32,273 | 593,506 [593,999] | 44,784 [46,317] | 13.3× | 133.6 µs | 11.4 µs |
+| `scale` f32, in place | 1,377,740 | 73,114 | 461,001 [463,115] | 38,144 [40,867] | 12.1× | 103.7 µs | 10.2 µs |
+| `clamp` f32, in place | 1,639,912 | 87,498 | 526,548 [532,436] | 50,738 [51,361] | 10.4× | 120.9 µs | 12.6 µs |
+| `add` f32, out one element before left | 1,836,601 | 32,274 | 593,388 [593,927] | 44,961 [45,507] | 13.2× | 133.6 µs | 11.4 µs |
+| `add` f32, out one element past left | 1,836,602 | 296,467 | 1,310,339 [1,312,196] | 593,930 [595,275] | 2.2× | 293.8 µs | 137.0 µs |
+| `add` f32, out one element past both inputs | 1,836,602 | 296,467 | 1,379,555 [1,382,835] | 591,530 [594,249] | 2.3× | 309.6 µs | 136.3 µs |
+| `add` f32@8, strided | 1,836,669 | 394,940 | 594,092 [594,848] | 146,835 [213,715] | 4.0× | 133.3 µs | 34.5 µs |
+| `scale` f32@8, strided | 1,377,808 | 493,125 | 462,778 [464,411] | 192,481 [195,575] | 2.4× | 104.0 µs | 45.9 µs |
+| `clamp` f32@8, strided | 1,595,587 | 874,605 | 636,795 [654,180] | 260,686 [263,191] | 2.4× | 143.3 µs | 61.8 µs |
+| `fill` f32@8, strided | 132,512 | 132,532 | 82,530 [83,462] | 82,915 [83,355] | 1.0× | 19.3 µs | 20.3 µs |
+| `sum` f32@8, strided | 788,042 | 280,172 | 264,703 [265,995] | 263,808 [265,794] | 1.0× | 58.6 µs | 61.2 µs |
+| `min` f32@8, strided | 1,508,912 | 172,658 | 416,137 [419,039] | 65,143 [78,062] | 6.4× | 93.7 µs | 16.2 µs |
+| `countWhere` f32@8, strided | 1,181,249 | 48,900 | 395,172 [397,824] | 41,016 [43,616] | 9.6× | 89.0 µs | 10.5 µs |
+| `any` f32@8, full scan | 1,050,236 | 195,488 | 265,431 [266,557] | 79,598 [81,209] | 3.3× | 60.1 µs | 19.5 µs |
+| `select` f32@8, strided | 1,408,828 | 247,688 | 483,278 [486,498] | 87,619 [91,427] | 5.5× | 108.6 µs | 21.4 µs |
+| `min` f32, filtered | 2,031,620 | 104,832 | 616,283 [620,925] | 35,830 [36,442] | 17.2× | 138.7 µs | 9.3 µs |
+| `max` f32, filtered | 1,795,109 | 105,572 | 583,663 [589,534] | 36,553 [37,519] | 16.0× | 133.2 µs | 9.5 µs |
+| `min` f32, sparse filter | 1,337,118 | 104,156 | 373,139 [373,927] | 35,955 [37,115] | 10.4× | 84.1 µs | 9.3 µs |
+| `sum` f32, sparse filter | 1,181,274 | 508,751 | 560,528 [566,841] | 265,692 [266,069] | 2.1× | 125.8 µs | 62.9 µs |
+| `sum` i32, filtered | 1,181,269 | 1,802,816 | 663,944 [676,718] | 503,923 [508,610] | 1.3× | 150.8 µs | 118.5 µs |
+| `gather` f32 | 2,098,888 | 1,148,572 | 609,431 [620,378] | 296,616 [300,206] | 2.1× | 137.1 µs | 70.3 µs |
+| `gather` f32@8, strided source | 2,098,956 | 1,214,284 | 616,009 [620,579] | 331,051 [335,546] | 1.9× | 138.7 µs | 78.2 µs |
+| `gather` i32 | 2,033,347 | 820,897 | 572,705 [574,418] | 255,535 [258,311] | 2.2× | 128.6 µs | 60.6 µs |
+| `scatter` f32 | 2,033,314 | 1,148,522 | 605,007 [607,615] | 297,197 [301,645] | 2.0× | 136.9 µs | 70.4 µs |
+| `partition` f32 | 2,136,656 | 908,957 | 990,567 [993,741] | 291,883 [296,612] | 3.4× | 222.1 µs | 69.1 µs |
+| `partition` i32 | 2,136,389 | 1,959,593 | 892,398 [896,840] | 734,669 [741,058] | 1.2× | 200.3 µs | 173.6 µs |
+| `argsort` f32 | 16,064,958 | 7,281,443 | 5,798,669 [5,879,004] | 3,105,108 [3,136,222] | 1.9× | 1.64 ms | 757.1 µs |
+| `argsort` f64 | 15,999,425 | 10,792,137 | 5,786,842 [5,862,835] | 4,241,611 [4,310,584] | 1.4× | 1.63 ms | 1.33 ms |
+| `argsort` f32, caller scratch | 28,484,092 | 8,460,005 | 9,273,530 [9,418,497] | 3,182,563 [3,229,820] | 2.9× | 2.18 ms | 759.2 µs |
+| `argsort` i32, caller scratch | 27,987,788 | 5,641,961 | 9,826,372 [9,867,174] | 2,577,442 [2,696,014] | 3.8× | 2.21 ms | 605.4 µs |
+| lowered `K:countGt` f32@8 | 1,425,160 | 48,812 | 648,877 [650,637] | 41,030 [43,779] | 15.8× | 146.1 µs | 10.5 µs |
+| lowered `K:min` f32@8 | 1,246,049 | 172,577 | 611,336 [614,996] | 65,205 [77,448] | 9.4× | 143.8 µs | 16.2 µs |
+| lowered `K:sum` f32@8 | 1,246,045 | 280,056 | 623,664 [626,574] | 263,964 [265,733] | 2.4× | 140.3 µs | 62.6 µs |
+| `min` f32, strictly falling (block scan's worst case) | 1,377,774 | 454,129 | 380,977 [382,359] | 272,451 [290,542] | 1.4× | 84.0 µs | 63.1 µs |
+| `argmin` f32, strictly falling | 1,049,987 | 454,032 | 264,717 [265,683] | 272,006 [283,115] | 1.0× | 58.6 µs | 63.1 µs |
+| `any` f32, first element decides | 1,599 | 1,583 | 630 [675] | 654 [690] | 1.0× | 957 ns | 1.0 µs |
+| `all` f32, first element decides | 1,604 | 1,588 | 641 [680] | 657 [688] | 1.0× | 960 ns | 1.0 µs |
+| lowered `K:sum` f32 | 385,892 | 247,283 | 304,072 [307,249] | 263,857 [265,752] | 1.2× | 68.7 µs | 61.2 µs |
+| lowered `K:countGt` f32 | 921,942 | 24,172 | 342,674 [344,564] | 15,673 [16,331] | 21.9× | 77.1 µs | 4.6 µs |
+| lowered `K:min` f32 | 787,401 | 87,645 | 261,320 [266,098] | 29,919 [30,361] | 8.7× | 57.9 µs | 7.8 µs |
+| lowered `K:selectGt` f32 | 863,723 | 174,806 | 306,381 [310,907] | 55,474 [58,334] | 5.5× | 67.7 µs | 13.6 µs |
+| lowered `K:min` f64 | 721,865 | 134,725 | 242,143 [243,944] | 51,958 [57,986] | 4.7× | 53.7 µs | 13.1 µs |
+| lowered `K:countGt` i32 | 941,187 | 255,607 | 363,806 [365,035] | 113,139 [115,125] | 3.2× | 80.3 µs | 26.9 µs |
+| JSL `sum` over an f32 slice | 788,377 | 247,613 | 264,365 [265,584] | 263,943 [266,372] | 1.0× | 58.5 µs | 61.1 µs |
+| JSL filtered count, f32 slice | 922,358 | 24,588 | 342,987 [345,831] | 15,860 [16,572] | 21.6× | 75.7 µs | 4.7 µs |
+| JSL `any`, f32 slice | 795,918 | 89,275 | 267,318 [267,938] | 31,828 [32,400] | 8.4× | 59.2 µs | 8.3 µs |
+| JSL filtered count, u8 slice | 920,213 | 272,268 | 346,093 [347,571] | 178,744 [178,973] | 1.9× | 76.3 µs | 41.6 µs |
 
 ## Every size
 
@@ -87,50 +120,74 @@ Best-round cycles before divided by after, so above 1 is faster. Below about 64 
 
 | Operation | 0 | 1 | 4 | 16 | 64 | 128 | 256 | 512 | 1,024 | 4,096 | 16,384 | 65,536 | 262,144 | 1,048,576 |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| `relu`, three passes | 0.89 | 0.94 | 1 | 1.2 | 2.1 | 3.3 | 5.4 | 8.8 | 13 | 19 | 19 | 14 | 14 | 12 |
-| `add` f32 | 0.91 | 0.96 | 1 | 1.2 | 1.8 | 2.7 | 4.1 | 7 | 10 | 15 | 16 | 9.4 | 11 | 9.9 |
-| `scale` f32, factor 1/3 | 0.95 | 0.98 | 1 | 1.2 | 1.6 | 2.3 | 3.4 | 5.1 | 7.4 | 7.2 | 8.3 | 7.7 | 8.1 | 7 |
-| `scale` f32, factor 0.5 | 0.95 | 0.98 | 1 | 1.2 | 1.7 | 2.3 | 3.4 | 5.1 | 7.4 | 9.1 | 8.3 | 7.5 | 8.4 | 7 |
-| `clamp` f32 | 0.94 | 0.97 | 1 | 1.2 | 1.8 | 2.7 | 4.1 | 6.2 | 8.8 | 12 | 12 | 10 | 11 | 11 |
-| `fill` f32 | 0.97 | 0.99 | 0.99 | 1 | 1.1 | 1.2 | 1.4 | 1.7 | 2.2 | 3.4 | 3.1 | 2.9 | 2.7 | 2.7 |
-| `min` f32 | 0.97 | 0.97 | 1 | 1.1 | 1.6 | 2.2 | 3.2 | 4.8 | 7.3 | 13 | 15 | 14 | 13 | 14 |
-| `argmax` f32 | 0.98 | 0.99 | 0.98 | 0.99 | 1 | 1.3 | 1.4 | 2.1 | 3.3 | 6.8 | 9.1 | 9.2 | 8.8 | 9 |
-| `countWhere` f32 | 0.94 | 0.94 | 0.98 | 1.1 | 1.6 | 2.1 | 3.2 | 5.2 | 8.9 | 21 | 32 | 25 | 21 | 20 |
-| `any` f32, full scan | 0.97 | 0.97 | 0.99 | 1.1 | 1.4 | 1.7 | 2.3 | 3.2 | 4.5 | 7.5 | 8 | 8.1 | 8 | 7.9 |
-| `all` f32, full scan | 0.98 | 0.98 | 0.98 | 1.1 | 1.5 | 2 | 2.9 | 4.4 | 6.6 | 11 | 12 | 12 | 11 | 11 |
-| `select` f32 | 0.95 | 0.97 | 0.99 | 1.1 | 1.5 | 2 | 2.8 | 4 | 5.7 | 8.4 | 8.7 | 8.8 | 8.6 | 8.9 |
-| `sum` f32 | 0.99 | 0.98 | 0.98 | 0.98 | 1 | 1 | 1 | 1 | 1 | 1 | 1 | 1 | 1 | 1 |
-| `sum` f32, filtered | 1 | 1 | 1 | 1 | 1.3 | 1.4 | 1.5 | 1.6 | 1.6 | 1.6 | 1.7 | 1.6 | 1.7 | 1.6 |
-| `add` f64 | 0.92 | 0.95 | 0.99 | 1.2 | 1.9 | 2.7 | 4.2 | 5.7 | 8.9 | 8.3 | 6.5 | 5.8 | 5.7 | 3.7 |
-| `add` i32 | 0.92 | 0.95 | 0.97 | 1 | 1.3 | 1.4 | 1.5 | 1.6 | 1.7 | 1.8 | 1.8 | 1.7 | 1.6 | 1.7 |
-| `scale` i32 | 0.95 | 0.97 | 0.98 | 1 | 1.1 | 1.2 | 1.3 | 1.3 | 1.4 | 1.4 | 1.4 | 1.4 | 1.4 | 1.4 |
-| `min` f64 | 0.96 | 0.96 | 1 | 1.1 | 1.6 | 2.2 | 3.2 | 4.7 | 6.5 | 9.5 | 11 | 8.6 | 9.6 | 8.7 |
-| `countWhere` i32 | 0.95 | 0.93 | 0.95 | 1 | 1.4 | 1.7 | 2.1 | 2.5 | 3 | 3.5 | 3.5 | 3.1 | 3.1 | 3.6 |
-| `sum` i32 | 0.99 | 0.99 | 0.99 | 0.99 | 1 | 1 | 1 | 1 | 1 | 1 | 1 | 1 | 1 | 1 |
-| `fill` u8 | 0.98 | 1 | 1 | 1 | 1 | 1 | 1 | 1 | 1 | 1.2 | 1.4 | 1.1 | 1.5 | 1.6 |
-| `add` f32, in place | 0.91 | 0.95 | 1 | 1.2 | 1.8 | 2.6 | 4.2 | 6.8 | 11 | 20 | 24 | 14 | 13 | 14 |
-| `scale` f32, in place | 0.95 | 0.98 | 1 | 1.1 | 1.6 | 2.2 | 3.3 | 5 | 7.4 | 12 | 12 | 12 | 11 | 12 |
-| `clamp` f32, in place | 0.94 | 0.97 | 1 | 1.2 | 1.7 | 2.4 | 3.5 | 5.2 | 7.4 | 11 | 11 | 11 | 11 | 11 |
-| `add` f32, out one element before left | 0.91 | 0.96 | 1 | 1.1 | 1.8 | 2.6 | 4.2 | 6.9 | 11 | 21 | 24 | 13 | 13 | 14 |
-| `add` f32, out one element past left | 0.91 | 0.96 | 0.99 | 1.2 | 1.5 | 1.8 | 1.9 | 2.1 | 2.1 | 2.2 | 2.2 | 2.2 | 2.2 | 2.2 |
-| `add` f32, out one element past both inputs | 0.88 | 0.95 | 0.99 | 1.2 | 1.6 | 1.8 | 2 | 2.2 | 2.3 | 2.3 | 2.3 | 2.3 | 2.3 | 2.3 |
-| `add` f32@8, strided | 0.94 | 0.97 | 0.98 | 0.99 | 0.99 | 0.99 | 1 | 1 | 1 | 1 | 1 | 1 | 1 | 1 |
-| `scale` f32@8, strided | 1 | 1 | 1 | 1 | 1.1 | 1.1 | 1.1 | 1.1 | 1.2 | 1.2 | 1.2 | 1.2 | 1.2 | 1.2 |
-| `sum` f32@8, strided | 1 | 1 | 1 | 1 | 1 | 1 | 1 | 1 | 1 | 1 | 1 | 1 | 1 | 1 |
-| `min` f32, strictly falling (block scan's worst case) | 0.96 | 0.97 | 0.98 | 1 | 1.2 | 1.2 | 1.3 | 1.3 | 1.4 | 1.4 | 1.4 | 1.4 | 1.4 | 1.4 |
-| `argmin` f32, strictly falling | 0.97 | 0.98 | 0.98 | 1 | 1 | 1 | 0.99 | 0.98 | 0.98 | 0.98 | 0.97 | 0.98 | 0.98 | 0.99 |
-| `any` f32, first element decides | 0.97 | 0.97 | 0.96 | 0.96 | 0.93 | 0.93 | 0.93 | 0.93 | 0.93 | 0.92 | 0.92 | 0.88 | 0.73 | 0.69 |
-| `all` f32, first element decides | 0.98 | 0.97 | 0.96 | 0.95 | 0.93 | 0.93 | 0.93 | 0.93 | 0.93 | 0.93 | 0.92 | 0.89 | 0.71 | 0.75 |
-| lowered `K:sum` f32 | 1 | 1 | 1 | 1 | 1 | 1 | 1 | 1 | 1.1 | 1.1 | 1.1 | 1.2 | 1.2 | 1.2 |
-| lowered `K:countGt` f32 | 1 | 1 | 1 | 1 | 1 | 1.5 | 2.5 | 4.5 | 7.5 | 18 | 27 | 20 | 18 | 18 |
-| lowered `K:min` f32 | 1 | 1 | 1 | 1 | 0.99 | 1.4 | 1.5 | 3.1 | 4.7 | 8.3 | 9.4 | 8.8 | 8.6 | 8.8 |
-| lowered `K:selectGt` f32 | 1 | 1 | 0.99 | 0.98 | 0.99 | 1.2 | 1.8 | 2.6 | 3.5 | 5.2 | 5.4 | 5.3 | 5.3 | 5.5 |
-| lowered `K:min` f64 | 0.96 | 1 | 1 | 1 | 1 | 1.3 | 1.8 | 2.5 | 3.3 | 4.8 | 5.4 | 4.6 | 5 | 4.4 |
-| lowered `K:countGt` i32 | 0.95 | 1 | 1 | 1 | 1 | 1.2 | 1.6 | 2.1 | 2.7 | 3.1 | 3.2 | 3.3 | 3.3 | 3.3 |
-| JSL `sum` over an f32 slice | 1 | 1 | 0.99 | 1 | 1 | 0.99 | 1 | 1 | 1.1 | 1.1 | 1 | 1 | 1 | 1 |
-| JSL filtered count, f32 slice | 1 | 0.99 | 1 | 1 | 1 | 1.4 | 2.2 | 3.7 | 6.2 | 16 | 25 | 21 | 17 | 18 |
-| JSL `any`, f32 slice | 1 | 1 | 1 | 1 | 1 | 1.3 | 1.7 | 2.6 | 3.8 | 7.2 | 8 | 8.1 | 7.7 | 7.7 |
-| JSL filtered count, u8 slice | 1 | 1 | 1 | 1 | 0.81 | 0.98 | 1.2 | 1.4 | 1.7 | 1.8 | 1.9 | 1.9 | 2 | 2 |
+| `relu`, three passes | 0.95 | 1 | 1.1 | 1.3 | 2.5 | 3.8 | 6.4 | 11 | 16 | 19 | 22 | 15 | 14 | 11 |
+| `add` f32 | 0.97 | 1 | 1.1 | 1.3 | 2 | 3 | 4.8 | 7.5 | 12 | 15 | 18 | 10 | 9.9 | 8.3 |
+| `scale` f32, factor 1/3 | 0.98 | 1 | 1 | 1.2 | 1.8 | 2.5 | 3.7 | 5.5 | 7.9 | 9.2 | 9.3 | 7.7 | 5 | 7.4 |
+| `scale` f32, factor 0.5 | 0.98 | 1 | 1.1 | 1.2 | 1.8 | 2.5 | 3.7 | 5.5 | 7.9 | 9.1 | 8.8 | 7.6 | 7.4 | 7.4 |
+| `clamp` f32 | 0.96 | 1 | 1 | 1.2 | 2 | 3 | 4.4 | 6.6 | 9.2 | 13 | 15 | 11 | 11 | 8.2 |
+| `fill` f32 | 1 | 1.1 | 1.1 | 1.1 | 1.2 | 1.3 | 1.4 | 1.8 | 2.3 | 3.5 | 3.3 | 2.8 | 2.6 | 2.7 |
+| `min` f32 | 1 | 1 | 1.1 | 1.2 | 1.7 | 2.4 | 3.4 | 5.2 | 7.8 | 13 | 15 | 14 | 13 | 14 |
+| `argmax` f32 | 1 | 1 | 1.1 | 1.1 | 1.1 | 1.4 | 1.5 | 2.2 | 3.5 | 7 | 9.4 | 9.1 | 8.3 | 8.3 |
+| `countWhere` f32 | 1 | 1 | 1 | 1.2 | 1.7 | 2.4 | 3.7 | 6 | 10 | 24 | 33 | 27 | 20 | 20 |
+| `any` f32, full scan | 1 | 1 | 1 | 1.1 | 1.5 | 1.8 | 2.5 | 3.5 | 4.9 | 7.8 | 8.7 | 8.5 | 7.9 | 7.8 |
+| `all` f32, full scan | 1 | 1 | 1 | 1.1 | 1.6 | 2.1 | 3.1 | 4.8 | 7.1 | 12 | 13 | 13 | 12 | 12 |
+| `select` f32 | 0.99 | 1 | 1 | 1.2 | 1.6 | 2.2 | 3.1 | 4.3 | 6.1 | 8.6 | 9.1 | 8.7 | 8.6 | 8.5 |
+| `sum` f32 | 1.1 | 1.1 | 1.1 | 1.1 | 1.1 | 1.1 | 1 | 1 | 1 | 1 | 1 | 1 | 1 | 1 |
+| `sum` f32, filtered | 1 | 1 | 1 | 1.1 | 1.5 | 1.8 | 2 | 2.2 | 2.3 | 2.5 | 2.5 | 2.5 | 2.5 | 2.5 |
+| `add` f64 | 0.97 | 1 | 1.1 | 1.3 | 2.1 | 3 | 4.8 | 7.1 | 9.7 | 7.9 | 6.6 | 5.4 | 5.3 | 2.3 |
+| `add` i32 | 0.97 | 1 | 1 | 1.1 | 1.3 | 1.5 | 1.6 | 1.7 | 1.8 | 1.8 | 1.7 | 1.7 | 1.7 | 1.6 |
+| `scale` i32 | 0.97 | 0.99 | 1 | 1.1 | 1.2 | 1.3 | 1.3 | 1.4 | 1.4 | 1.5 | 1.4 | 1.4 | 1.4 | 1.4 |
+| `min` f64 | 1 | 1 | 1.1 | 1.2 | 1.8 | 2.4 | 3.4 | 4.9 | 6.7 | 9.5 | 10 | 9 | 9 | 8.4 |
+| `countWhere` i32 | 1 | 0.99 | 1 | 1.1 | 1.5 | 1.8 | 2.2 | 2.6 | 3.1 | 3.5 | 3.6 | 3.5 | 3.5 | 3.6 |
+| `sum` i32 | 1.1 | 1.1 | 1.1 | 1.1 | 1.1 | 1.1 | 1 | 1 | 1 | 1 | 1 | 1 | 1 | 1 |
+| `fill` u8 | 1 | 1 | 1 | 1 | 1 | 1 | 1 | 1 | 1.1 | 1.2 | 1.4 | 1.3 | 1.4 | 1.6 |
+| `add` f32, in place | 0.97 | 1 | 1.1 | 1.3 | 2 | 2.9 | 4.7 | 7.7 | 13 | 20 | 24 | 13 | 13 | 13 |
+| `scale` f32, in place | 0.97 | 1 | 1.1 | 1.2 | 1.7 | 2.4 | 3.6 | 5.4 | 7.7 | 12 | 13 | 12 | 11 | 11 |
+| `clamp` f32, in place | 0.96 | 1 | 1 | 1.2 | 1.8 | 2.6 | 3.8 | 5.6 | 7.9 | 11 | 12 | 10 | 9.9 | 11 |
+| `add` f32, out one element before left | 0.98 | 1 | 1.1 | 1.2 | 2 | 3 | 4.8 | 7.7 | 12 | 20 | 24 | 13 | 13 | 13 |
+| `add` f32, out one element past left | 0.97 | 1 | 1.1 | 1.2 | 1.6 | 1.8 | 2 | 2.1 | 2.2 | 2.2 | 2.2 | 2.2 | 2.2 | 2.2 |
+| `add` f32, out one element past both inputs | 0.97 | 1 | 1.1 | 1.3 | 1.7 | 1.9 | 2.1 | 2.2 | 2.3 | 2.3 | 2.3 | 2.3 | 2.3 | 2.3 |
+| `add` f32@8, strided | 0.93 | 0.97 | 1 | 1.2 | 1.7 | 2.2 | 2.9 | 3.8 | 4.8 | 4.3 | 4.2 | 4 | 4.7 | 2.7 |
+| `scale` f32@8, strided | 0.92 | 0.96 | 0.99 | 1.1 | 1.4 | 1.7 | 2 | 2.3 | 2.6 | 2.5 | 2.4 | 2.4 | 2.9 | 2.3 |
+| `clamp` f32@8, strided | 0.93 | 0.96 | 0.99 | 1.1 | 1.4 | 1.7 | 1.9 | 2.1 | 2.3 | 2.4 | 2.5 | 2.4 | 2.5 | 2.3 |
+| `fill` f32@8, strided | 0.98 | 1 | 0.99 | 1 | 0.97 | 0.96 | 0.96 | 0.97 | 0.98 | 0.99 | 1 | 1 | 1 | 1 |
+| `sum` f32@8, strided | 0.98 | 0.98 | 0.99 | 1 | 1 | 1 | 1 | 1 | 1 | 1 | 1 | 1 | 1 | 1 |
+| `min` f32@8, strided | 0.95 | 0.95 | 1 | 1.1 | 1.6 | 2.1 | 2.9 | 4 | 5.2 | 6.6 | 7.4 | 6.4 | 6.5 | 4.2 |
+| `countWhere` f32@8, strided | 0.91 | 0.91 | 0.93 | 1 | 1.5 | 2 | 3 | 4.7 | 7.5 | 11 | 14 | 9.6 | 9.7 | 9.4 |
+| `any` f32@8, full scan | 0.96 | 0.95 | 0.97 | 1 | 1.2 | 1.5 | 1.8 | 2.4 | 2.9 | 3.7 | 4 | 3.3 | 3.4 | 3.3 |
+| `select` f32@8, strided | 0.94 | 0.96 | 0.98 | 1.1 | 1.5 | 1.9 | 2.5 | 3.4 | 4.4 | 5.6 | 6 | 5.5 | 5.6 | 3.6 |
+| `min` f32, filtered | 1 | 1 | 1 | 1.2 | 1.4 | 2.1 | 3.3 | 5.2 | 8 | 14 | 17 | 17 | 17 | 16 |
+| `max` f32, filtered | 1 | 1 | 1 | 1 | 1.3 | 1.6 | 2.6 | 4.2 | 6.7 | 13 | 16 | 16 | 16 | 17 |
+| `min` f32, sparse filter | 1 | 1 | 1 | 1.1 | 1.4 | 1.9 | 2.7 | 4 | 5.7 | 9.3 | 11 | 10 | 9.9 | 9.6 |
+| `sum` f32, sparse filter | 1 | 1 | 1 | 1.2 | 1.4 | 1.6 | 1.8 | 1.9 | 2 | 2.1 | 2.1 | 2.1 | 2.1 | 2.1 |
+| `sum` i32, filtered | 1 | 1 | 0.97 | 0.98 | 1.1 | 1.2 | 1.2 | 1.3 | 1.3 | 1.3 | 1.3 | 1.3 | 1.3 | 1.3 |
+| `gather` f32 | 0.98 | 1 | 1 | 1.1 | 1.3 | 1.5 | 1.7 | 1.9 | 2 | 2 | 2.1 | 2.1 | 2.1 | 2 |
+| `gather` f32@8, strided source | 0.94 | 0.95 | 0.98 | 1.1 | 1.3 | 1.4 | 1.5 | 1.7 | 1.8 | 1.9 | 1.9 | 1.9 | 1.8 | 1.6 |
+| `gather` i32 | 0.98 | 1 | 1 | 1.1 | 1.4 | 1.5 | 1.8 | 2 | 2.2 | 2.3 | 2.3 | 2.2 | 2.3 | 2 |
+| `scatter` f32 | 0.97 | 1 | 1 | 1.1 | 1.3 | 1.5 | 1.6 | 1.8 | 2 | 2.1 | 2 | 2 | 2 | 2 |
+| `partition` f32 | 0.98 | 0.99 | 1 | 1.2 | 1.8 | 2.2 | 2.6 | 3 | 3.2 | 3.4 | 3.5 | 3.4 | 3.3 | 3.3 |
+| `partition` i32 | 0.98 | 0.95 | 0.96 | 1 | 1.1 | 1.1 | 1.2 | 1.2 | 1.2 | 1.2 | 1.2 | 1.2 | 1.2 | 1.2 |
+| `argsort` f32 | 1 | 1 | 1 | 1.2 | 2 | 2 | 2.3 | 2 | 2.1 | 2.6 | 2 | 1.9 | 1.9 | 0.78 |
+| `argsort` f64 | 1 | 1 | 1 | 1.1 | 1.4 | 1.3 | 1.4 | 1.6 | 1.5 | 1.5 | 1.5 | 1.4 | 1.3 | 1.2 |
+| `argsort` f32, caller scratch | 1 | 1 | 1 | 1 | 1 | 1 | 1.1 | 1.9 | 1.9 | 2.6 | 2.8 | 2.9 | 3 | 3.3 |
+| `argsort` i32, caller scratch | 1 | 1 | 1 | 1 | 1 | 0.99 | 1 | 2.4 | 2.8 | 3.9 | 4 | 3.8 | 3.5 | 3.8 |
+| lowered `K:countGt` f32@8 | 1 | 1 | 1 | 1 | 1.4 | 2.5 | 4.3 | 7.3 | 12 | 19 | 22 | 16 | 16 | 14 |
+| lowered `K:min` f32@8 | 1 | 0.99 | 0.98 | 0.99 | 1.5 | 2.3 | 3.6 | 5.4 | 7.3 | 9.4 | 11 | 9.4 | 9.5 | 8.5 |
+| lowered `K:sum` f32@8 | 0.99 | 1 | 1 | 1 | 1.2 | 1.5 | 1.8 | 2 | 2.2 | 2.3 | 2.3 | 2.4 | 2.4 | 2.4 |
+| `min` f32, strictly falling (block scan's worst case) | 1 | 1 | 1 | 1.1 | 1.2 | 1.3 | 1.3 | 1.3 | 1.4 | 1.4 | 1.4 | 1.4 | 1.4 | 1.4 |
+| `argmin` f32, strictly falling | 1 | 1 | 1 | 1.1 | 1.1 | 1.1 | 1 | 1 | 0.99 | 0.98 | 0.98 | 0.97 | 0.98 | 0.98 |
+| `any` f32, first element decides | 1 | 1 | 1 | 1 | 1 | 1 | 1 | 1 | 1 | 1 | 1 | 0.96 | 0.81 | 0.84 |
+| `all` f32, first element decides | 1 | 1 | 1 | 1 | 1 | 1 | 1 | 1 | 1 | 1 | 1 | 0.98 | 0.9 | 0.79 |
+| lowered `K:sum` f32 | 1 | 0.99 | 1 | 0.99 | 1 | 0.99 | 1 | 1 | 1.1 | 1.1 | 1.1 | 1.2 | 1.2 | 1.2 |
+| lowered `K:countGt` f32 | 1 | 1 | 1 | 0.97 | 0.99 | 1.5 | 2.5 | 4.3 | 7.5 | 18 | 26 | 22 | 17 | 16 |
+| lowered `K:min` f32 | 1 | 0.99 | 1 | 1 | 0.99 | 1 | 2.1 | 2.4 | 3.8 | 7.3 | 9.4 | 8.7 | 8.4 | 8.9 |
+| lowered `K:selectGt` f32 | 0.98 | 0.97 | 0.96 | 0.98 | 0.99 | 1.2 | 1.8 | 2.6 | 3.5 | 5.2 | 5.6 | 5.5 | 5.6 | 5.6 |
+| lowered `K:min` f64 | 0.92 | 0.99 | 0.98 | 0.98 | 0.99 | 1.2 | 1.7 | 2.4 | 3.2 | 4.7 | 5.2 | 4.7 | 4.7 | 4.4 |
+| lowered `K:countGt` i32 | 0.91 | 1 | 1 | 0.97 | 1 | 1.2 | 1.6 | 2.1 | 2.6 | 3.1 | 3.3 | 3.2 | 3.2 | 3.3 |
+| JSL `sum` over an f32 slice | 1 | 0.99 | 0.99 | 0.98 | 1 | 1 | 1 | 1 | 1.1 | 1.1 | 1 | 1 | 1 | 1 |
+| JSL filtered count, f32 slice | 1 | 0.99 | 1 | 0.99 | 1 | 1.4 | 2.1 | 3.6 | 6.1 | 16 | 25 | 22 | 17 | 17 |
+| JSL `any`, f32 slice | 0.99 | 0.99 | 0.98 | 0.99 | 1 | 1.2 | 1.7 | 2.5 | 3.8 | 6.9 | 8.6 | 8.4 | 7.9 | 7.9 |
+| JSL filtered count, u8 slice | 0.99 | 0.99 | 0.99 | 0.99 | 0.99 | 0.97 | 1.2 | 1.4 | 1.7 | 1.8 | 1.9 | 1.9 | 1.9 | 1.9 |
 
 ## Small spans in instructions
 
@@ -138,50 +195,74 @@ Retired instructions per call, before → after, including about 800 for the cal
 
 | Operation | 0 | 1 | 4 | 16 | 64 |
 |---|---:|---:|---:|---:|---:|
-| `relu`, three passes | 3,249 → 3,490 | 3,457 → 3,627 | 3,692 → 3,690 | 4,644 → 3,707 | 8,456 → 3,753 |
-| `add` f32 | 1,633 → 1,713 | 1,708 → 1,761 | 1,792 → 1,772 | 2,128 → 1,790 | 3,472 → 1,794 |
-| `scale` f32, factor 1/3 | 1,524 → 1,597 | 1,580 → 1,640 | 1,643 → 1,645 | 1,895 → 1,666 | 2,903 → 1,706 |
-| `scale` f32, factor 0.5 | 1,524 → 1,597 | 1,580 → 1,640 | 1,643 → 1,645 | 1,895 → 1,666 | 2,903 → 1,706 |
-| `clamp` f32 | 1,551 → 1,641 | 1,609 → 1,683 | 1,680 → 1,702 | 1,970 → 1,707 | 3,139 → 1,770 |
-| `fill` f32 | 1,396 → 1,439 | 1,437 → 1,462 | 1,443 → 1,471 | 1,467 → 1,483 | 1,563 → 1,478 |
-| `min` f32 | 1,552 → 1,628 | 1,584 → 1,656 | 1,661 → 1,697 | 1,937 → 1,743 | 3,041 → 1,800 |
-| `argmax` f32 | 1,452 → 1,498 | 1,476 → 1,516 | 1,535 → 1,586 | 1,727 → 1,704 | 2,495 → 2,020 |
-| `countWhere` f32 | 1,622 → 1,703 | 1,662 → 1,746 | 1,716 → 1,760 | 1,932 → 1,775 | 2,796 → 1,782 |
-| `any` f32, full scan | 1,681 → 1,780 | 1,719 → 1,828 | 1,767 → 1,852 | 1,959 → 1,849 | 2,727 → 1,883 |
-| `all` f32, full scan | 1,678 → 1,780 | 1,714 → 1,827 | 1,756 → 1,848 | 1,924 → 1,851 | 2,596 → 1,891 |
-| `select` f32 | 1,806 → 1,906 | 1,914 → 1,988 | 1,977 → 2,008 | 2,229 → 2,032 | 3,237 → 2,125 |
-| `sum` f32 | 1,580 → 1,631 | 1,607 → 1,657 | 1,643 → 1,687 | 1,787 → 1,807 | 2,363 → 2,287 |
-| `sum` f32, filtered | 1,711 → 1,766 | 1,744 → 1,795 | 1,798 → 1,834 | 2,014 → 1,990 | 2,878 → 2,614 |
-| `add` f64 | 1,636 → 1,716 | 1,707 → 1,764 | 1,779 → 1,775 | 2,067 → 1,782 | 3,219 → 1,827 |
-| `add` i32 | 1,628 → 1,702 | 1,700 → 1,758 | 1,775 → 1,793 | 2,075 → 1,903 | 3,275 → 2,335 |
-| `scale` i32 | 1,519 → 1,589 | 1,573 → 1,639 | 1,630 → 1,671 | 1,858 → 1,771 | 2,770 → 2,191 |
-| `min` f64 | 1,555 → 1,631 | 1,587 → 1,659 | 1,661 → 1,700 | 1,925 → 1,738 | 2,981 → 1,825 |
-| `countWhere` i32 | 1,617 → 1,695 | 1,657 → 1,775 | 1,711 → 1,791 | 1,927 → 1,838 | 2,791 → 2,024 |
-| `sum` i32 | 1,575 → 1,626 | 1,602 → 1,652 | 1,638 → 1,682 | 1,782 → 1,802 | 2,358 → 2,282 |
-| `fill` u8 | 1,354 → 1,397 | 1,408 → 1,433 | 1,403 → 1,431 | 1,415 → 1,427 | 1,408 → 1,428 |
-| `add` f32, in place | 1,633 → 1,710 | 1,708 → 1,758 | 1,792 → 1,771 | 2,128 → 1,789 | 3,472 → 1,793 |
-| `scale` f32, in place | 1,524 → 1,597 | 1,580 → 1,634 | 1,643 → 1,641 | 1,895 → 1,662 | 2,903 → 1,702 |
-| `clamp` f32, in place | 1,551 → 1,641 | 1,613 → 1,685 | 1,688 → 1,696 | 1,988 → 1,702 | 3,188 → 1,765 |
-| `add` f32, out one element before left | 1,633 → 1,713 | 1,708 → 1,761 | 1,792 → 1,783 | 2,128 → 1,837 | 3,472 → 1,794 |
-| `add` f32, out one element past left | 1,633 → 1,713 | 1,708 → 1,761 | 1,792 → 1,783 | 2,128 → 1,837 | 3,472 → 2,053 |
-| `add` f32, out one element past both inputs | 1,633 → 1,713 | 1,708 → 1,761 | 1,792 → 1,783 | 2,128 → 1,837 | 3,472 → 2,053 |
-| `add` f32@8, strided | 1,705 → 1,738 | 1,780 → 1,819 | 1,864 → 1,903 | 2,200 → 2,239 | 3,544 → 3,583 |
-| `scale` f32@8, strided | 1,596 → 1,625 | 1,652 → 1,684 | 1,715 → 1,747 | 1,967 → 1,999 | 2,975 → 3,007 |
-| `sum` f32@8, strided | 1,652 → 1,674 | 1,679 → 1,699 | 1,715 → 1,735 | 1,859 → 1,879 | 2,435 → 2,455 |
-| `min` f32, strictly falling (block scan's worst case) | 1,552 → 1,628 | 1,584 → 1,656 | 1,655 → 1,723 | 1,907 → 1,837 | 2,915 → 2,158 |
-| `argmin` f32, strictly falling | 1,452 → 1,498 | 1,476 → 1,516 | 1,535 → 1,583 | 1,727 → 1,697 | 2,495 → 2,018 |
-| `any` f32, first element decides | 1,677 → 1,776 | 1,711 → 1,820 | 1,711 → 1,841 | 1,711 → 1,844 | 1,711 → 1,884 |
-| `all` f32, first element decides | 1,682 → 1,784 | 1,716 → 1,829 | 1,716 → 1,853 | 1,716 → 1,850 | 1,716 → 1,884 |
-| lowered `K:sum` f32 | 855 → 862 | 880 → 887 | 955 → 962 | 949 → 956 | 1,231 → 1,238 |
-| lowered `K:countGt` f32 | 860 → 867 | 886 → 893 | 967 → 974 | 1,081 → 1,088 | 1,764 → 1,771 |
-| lowered `K:min` f32 | 851 → 856 | 877 → 882 | 952 → 957 | 1,148 → 1,153 | 1,724 → 1,729 |
-| lowered `K:selectGt` f32 | 889 → 896 | 937 → 944 | 1,054 → 1,061 | 1,582 → 1,589 | 1,735 → 1,742 |
-| lowered `K:min` f64 | 1,474 → 1,544 | 876 → 881 | 948 → 953 | 1,132 → 1,137 | 1,660 → 1,665 |
-| lowered `K:countGt` i32 | 1,500 → 1,583 | 886 → 893 | 967 → 974 | 1,086 → 1,093 | 1,773 → 1,780 |
-| JSL `sum` over an f32 slice | 1,175 → 1,178 | 1,304 → 1,311 | 1,379 → 1,386 | 1,373 → 1,380 | 1,655 → 1,662 |
-| JSL filtered count, f32 slice | 1,175 → 1,178 | 1,302 → 1,309 | 1,383 → 1,390 | 1,497 → 1,504 | 2,180 → 2,187 |
-| JSL `any`, f32 slice | 1,183 → 1,186 | 1,307 → 1,314 | 1,385 → 1,392 | 1,475 → 1,482 | 2,057 → 2,064 |
-| JSL filtered count, u8 slice | 1,037 → 1,040 | 1,163 → 1,170 | 1,241 → 1,248 | 1,355 → 1,362 | 2,030 → 2,037 |
+| `relu`, three passes | 2,960 → 2,838 | 3,168 → 2,975 | 3,403 → 3,038 | 4,355 → 3,055 | 8,167 → 3,101 |
+| `add` f32 | 1,533 → 1,490 | 1,608 → 1,538 | 1,692 → 1,549 | 2,028 → 1,567 | 3,372 → 1,571 |
+| `scale` f32, factor 1/3 | 1,436 → 1,386 | 1,492 → 1,429 | 1,555 → 1,434 | 1,807 → 1,455 | 2,815 → 1,495 |
+| `scale` f32, factor 0.5 | 1,436 → 1,386 | 1,492 → 1,429 | 1,555 → 1,434 | 1,807 → 1,455 | 2,815 → 1,495 |
+| `clamp` f32 | 1,462 → 1,429 | 1,520 → 1,470 | 1,591 → 1,490 | 1,881 → 1,495 | 3,050 → 1,558 |
+| `fill` f32 | 1,320 → 1,242 | 1,361 → 1,265 | 1,367 → 1,274 | 1,391 → 1,286 | 1,487 → 1,281 |
+| `min` f32 | 1,486 → 1,420 | 1,518 → 1,448 | 1,595 → 1,489 | 1,871 → 1,535 | 2,975 → 1,592 |
+| `argmax` f32 | 1,379 → 1,333 | 1,403 → 1,351 | 1,462 → 1,421 | 1,654 → 1,539 | 2,422 → 1,855 |
+| `countWhere` f32 | 1,497 → 1,469 | 1,537 → 1,512 | 1,591 → 1,526 | 1,807 → 1,541 | 2,671 → 1,548 |
+| `any` f32, full scan | 1,556 → 1,516 | 1,594 → 1,566 | 1,642 → 1,590 | 1,834 → 1,622 | 2,602 → 1,735 |
+| `all` f32, full scan | 1,553 → 1,514 | 1,589 → 1,563 | 1,631 → 1,584 | 1,799 → 1,622 | 2,471 → 1,741 |
+| `select` f32 | 1,682 → 1,654 | 1,790 → 1,735 | 1,853 → 1,755 | 2,105 → 1,779 | 3,113 → 1,872 |
+| `sum` f32 | 1,514 → 1,416 | 1,541 → 1,444 | 1,577 → 1,452 | 1,721 → 1,497 | 2,297 → 1,677 |
+| `sum` f32, filtered | 1,598 → 1,558 | 1,631 → 1,600 | 1,685 → 1,654 | 1,901 → 1,737 | 2,765 → 2,106 |
+| `add` f64 | 1,536 → 1,492 | 1,607 → 1,540 | 1,679 → 1,551 | 1,967 → 1,558 | 3,119 → 1,603 |
+| `add` i32 | 1,528 → 1,489 | 1,600 → 1,545 | 1,675 → 1,580 | 1,975 → 1,690 | 3,175 → 2,122 |
+| `scale` i32 | 1,431 → 1,388 | 1,485 → 1,438 | 1,542 → 1,470 | 1,770 → 1,570 | 2,682 → 1,990 |
+| `min` f64 | 1,489 → 1,422 | 1,521 → 1,450 | 1,595 → 1,491 | 1,859 → 1,529 | 2,915 → 1,616 |
+| `countWhere` i32 | 1,492 → 1,470 | 1,532 → 1,538 | 1,586 → 1,556 | 1,802 → 1,604 | 2,666 → 1,790 |
+| `sum` i32 | 1,509 → 1,421 | 1,536 → 1,450 | 1,572 → 1,458 | 1,716 → 1,503 | 2,292 → 1,683 |
+| `fill` u8 | 1,279 → 1,235 | 1,333 → 1,271 | 1,328 → 1,269 | 1,340 → 1,265 | 1,333 → 1,266 |
+| `add` f32, in place | 1,533 → 1,487 | 1,608 → 1,535 | 1,692 → 1,548 | 2,028 → 1,566 | 3,372 → 1,570 |
+| `scale` f32, in place | 1,436 → 1,386 | 1,492 → 1,423 | 1,555 → 1,430 | 1,807 → 1,451 | 2,815 → 1,491 |
+| `clamp` f32, in place | 1,462 → 1,429 | 1,524 → 1,473 | 1,599 → 1,484 | 1,899 → 1,490 | 3,099 → 1,553 |
+| `add` f32, out one element before left | 1,533 → 1,490 | 1,608 → 1,538 | 1,692 → 1,560 | 2,028 → 1,614 | 3,372 → 1,571 |
+| `add` f32, out one element past left | 1,533 → 1,490 | 1,608 → 1,538 | 1,692 → 1,560 | 2,028 → 1,614 | 3,372 → 1,830 |
+| `add` f32, out one element past both inputs | 1,533 → 1,490 | 1,608 → 1,538 | 1,692 → 1,560 | 2,028 → 1,614 | 3,372 → 1,830 |
+| `add` f32@8, strided | 1,601 → 1,661 | 1,676 → 1,707 | 1,760 → 1,735 | 2,096 → 1,807 | 3,440 → 2,095 |
+| `scale` f32@8, strided | 1,504 → 1,557 | 1,560 → 1,592 | 1,623 → 1,622 | 1,875 → 1,712 | 2,883 → 2,072 |
+| `clamp` f32@8, strided | 1,530 → 1,575 | 1,588 → 1,611 | 1,659 → 1,659 | 1,949 → 1,818 | 3,118 → 2,459 |
+| `fill` f32@8, strided | 1,388 → 1,421 | 1,429 → 1,449 | 1,435 → 1,455 | 1,459 → 1,479 | 1,555 → 1,575 |
+| `sum` f32@8, strided | 1,582 → 1,606 | 1,609 → 1,634 | 1,645 → 1,648 | 1,789 → 1,699 | 2,365 → 1,903 |
+| `min` f32@8, strided | 1,554 → 1,611 | 1,586 → 1,638 | 1,663 → 1,680 | 1,939 → 1,732 | 3,043 → 1,804 |
+| `countWhere` f32@8, strided | 1,566 → 1,647 | 1,606 → 1,690 | 1,660 → 1,714 | 1,876 → 1,755 | 2,740 → 1,829 |
+| `any` f32@8, full scan | 1,625 → 1,695 | 1,663 → 1,744 | 1,711 → 1,768 | 1,903 → 1,884 | 2,671 → 2,128 |
+| `select` f32@8, strided | 1,750 → 1,835 | 1,858 → 1,915 | 1,921 → 1,942 | 2,173 → 1,996 | 3,181 → 2,123 |
+| `min` f32, filtered | 1,569 → 1,533 | 1,618 → 1,579 | 1,686 → 1,635 | 2,062 → 1,707 | 3,552 → 2,473 |
+| `max` f32, filtered | 1,565 → 1,529 | 1,622 → 1,591 | 1,718 → 1,690 | 2,041 → 1,887 | 3,347 → 2,506 |
+| `min` f32, sparse filter | 1,569 → 1,533 | 1,618 → 1,579 | 1,678 → 1,600 | 1,918 → 1,635 | 2,908 → 1,843 |
+| `sum` f32, sparse filter | 1,598 → 1,558 | 1,631 → 1,600 | 1,685 → 1,621 | 1,901 → 1,620 | 2,765 → 2,074 |
+| `sum` i32, filtered | 1,593 → 1,559 | 1,626 → 1,626 | 1,680 → 1,734 | 1,896 → 2,059 | 2,760 → 3,346 |
+| `gather` f32 | 1,689 → 1,636 | 1,755 → 1,689 | 1,851 → 1,747 | 2,235 → 1,957 | 3,771 → 2,797 |
+| `gather` f32@8, strided source | 1,757 → 1,811 | 1,823 → 1,866 | 1,919 → 1,927 | 2,303 → 2,149 | 3,839 → 3,037 |
+| `gather` i32 | 1,684 → 1,641 | 1,749 → 1,689 | 1,842 → 1,732 | 2,214 → 1,882 | 3,702 → 2,482 |
+| `scatter` f32 | 1,651 → 1,586 | 1,716 → 1,639 | 1,809 → 1,697 | 2,181 → 1,907 | 3,669 → 2,747 |
+| `partition` f32 | 1,600 → 1,606 | 1,665 → 1,665 | 1,761 → 1,732 | 2,153 → 1,909 | 3,717 → 2,564 |
+| `partition` i32 | 1,595 → 1,607 | 1,660 → 1,714 | 1,756 → 1,810 | 2,148 → 2,168 | 3,711 → 3,602 |
+| `argsort` f32 | 1,604 → 1,509 | 1,739 → 1,658 | 1,886 → 1,800 | 3,204 → 2,622 | 12,503 → 7,437 |
+| `argsort` f64 | 1,607 → 1,515 | 1,741 → 1,672 | 1,885 → 1,830 | 3,191 → 2,816 | 12,442 → 10,068 |
+| `argsort` f32, caller scratch | 1,667 → 1,563 | 1,695 → 1,593 | 1,972 → 1,905 | 3,524 → 3,604 | 12,305 → 12,979 |
+| `argsort` i32, caller scratch | 1,662 → 1,568 | 1,690 → 1,598 | 1,967 → 1,910 | 3,534 → 3,609 | 12,354 → 12,984 |
+| lowered `K:countGt` f32@8 | 853 → 857 | 873 → 877 | 936 → 940 | 1,197 → 1,201 | 2,241 → 1,741 |
+| lowered `K:min` f32@8 | 852 → 854 | 871 → 873 | 928 → 930 | 1,156 → 1,158 | 2,068 → 1,723 |
+| lowered `K:sum` f32@8 | 848 → 852 | 867 → 871 | 924 → 928 | 1,152 → 1,156 | 2,064 → 1,787 |
+| `min` f32, strictly falling (block scan's worst case) | 1,486 → 1,420 | 1,518 → 1,448 | 1,589 → 1,515 | 1,841 → 1,629 | 2,849 → 1,950 |
+| `argmin` f32, strictly falling | 1,379 → 1,333 | 1,403 → 1,351 | 1,462 → 1,418 | 1,654 → 1,532 | 2,422 → 1,853 |
+| `any` f32, first element decides | 1,552 → 1,512 | 1,586 → 1,555 | 1,586 → 1,576 | 1,586 → 1,570 | 1,586 → 1,570 |
+| `all` f32, first element decides | 1,557 → 1,518 | 1,591 → 1,562 | 1,591 → 1,586 | 1,591 → 1,575 | 1,591 → 1,575 |
+| lowered `K:sum` f32 | 855 → 859 | 880 → 884 | 955 → 959 | 949 → 953 | 1,231 → 1,235 |
+| lowered `K:countGt` f32 | 860 → 864 | 889 → 893 | 973 → 977 | 1,089 → 1,093 | 1,756 → 1,760 |
+| lowered `K:min` f32 | 851 → 853 | 877 → 879 | 960 → 962 | 1,155 → 1,157 | 1,731 → 1,733 |
+| lowered `K:selectGt` f32 | 889 → 893 | 967 → 971 | 1,114 → 1,118 | 1,642 → 1,646 | 1,729 → 1,733 |
+| lowered `K:min` f64 | 1,447 → 1,509 | 876 → 878 | 948 → 950 | 1,132 → 1,134 | 1,660 → 1,662 |
+| lowered `K:countGt` i32 | 1,473 → 1,551 | 886 → 890 | 967 → 971 | 1,086 → 1,090 | 1,773 → 1,777 |
+| JSL `sum` over an f32 slice | 1,175 → 1,175 | 1,304 → 1,308 | 1,379 → 1,383 | 1,373 → 1,377 | 1,655 → 1,659 |
+| JSL filtered count, f32 slice | 1,175 → 1,175 | 1,305 → 1,309 | 1,389 → 1,393 | 1,505 → 1,509 | 2,172 → 2,176 |
+| JSL `any`, f32 slice | 1,183 → 1,183 | 1,307 → 1,311 | 1,385 → 1,389 | 1,475 → 1,479 | 2,057 → 2,061 |
+| JSL filtered count, u8 slice | 1,037 → 1,037 | 1,163 → 1,167 | 1,241 → 1,245 | 1,355 → 1,359 | 2,030 → 2,034 |
 
 ## AVX2 against the baseline target
 
@@ -189,117 +270,151 @@ The same build with run-time dispatch disabled, so x86-64's SSE2 baseline runs. 
 
 | Operation | 16, SSE2 | 16, AVX2 | 1,024, SSE2 | 1,024, AVX2 | 65,536, SSE2 | 65,536, AVX2 |
 |---|---:|---:|---:|---:|---:|---:|
-| `relu`, three passes | 1,331 (3,653) | 1,356 (3,707) | 3,421 (10,331) | 2,310 (5,583) | 190,561 (437,736) | 147,670 (128,572) |
-| `add` f32 | 730 (1,757) | 646 (1,790) | 1,198 (3,143) | 884 (2,244) | 67,813 (91,860) | 57,928 (32,497) |
-| `scale` f32, factor 1/3 | 572 (1,644) | 592 (1,666) | 1,520 (4,038) | 1,078 (2,756) | 78,966 (157,267) | 62,349 (73,329) |
-| `scale` f32, factor 0.5 | 572 (1,644) | 591 (1,666) | 1,501 (4,038) | 1,067 (2,756) | 68,803 (157,267) | 116,597 (73,329) |
-| `clamp` f32 | 596 (1,737) | 601 (1,707) | 1,870 (6,651) | 1,204 (3,030) | 108,310 (321,160) | 57,689 (87,715) |
-| `fill` f32 | 494 (1,462) | 516 (1,483) | 850 (2,092) | 728 (1,688) | 31,404 (42,425) | 26,617 (15,813) |
-| `min` f32 | 604 (1,725) | 619 (1,743) | 1,015 (3,339) | 965 (3,060) | 30,218 (108,184) | 28,859 (87,745) |
-| `argmax` f32 | 594 (1,706) | 612 (1,704) | 1,479 (4,372) | 1,418 (3,533) | 31,884 (125,345) | 29,214 (81,162) |
-| `countWhere` f32 | 611 (1,751) | 641 (1,775) | 962 (3,137) | 774 (2,112) | 24,603 (91,854) | 15,178 (24,301) |
-| `any` f32, full scan | 639 (1,832) | 651 (1,849) | 1,178 (3,965) | 1,057 (3,158) | 37,245 (142,074) | 32,388 (88,851) |
-| `all` f32, full scan | 629 (1,828) | 652 (1,851) | 1,114 (3,709) | 1,043 (3,286) | 36,522 (125,690) | 32,776 (97,043) |
-| `select` f32 | 744 (2,074) | 745 (2,032) | 3,312 (9,702) | 1,473 (4,692) | 167,570 (497,587) | 57,698 (175,057) |
-| `sum` f32 | 636 (1,807) | 642 (1,807) | 4,648 (11,887) | 4,652 (11,887) | 263,951 (657,020) | 263,605 (657,020) |
-| `sum` f32, filtered | 715 (1,990) | 719 (1,990) | 6,918 (15,094) | 6,278 (15,094) | 406,445 (853,763) | 359,905 (853,763) |
-| `add` f64 | 624 (1,783) | 659 (1,782) | 1,714 (4,555) | 1,215 (2,727) | 138,212 (181,976) | 111,736 (63,220) |
-| `add` i32 | 679 (1,922) | 701 (1,903) | 4,824 (14,522) | 5,200 (10,975) | 288,710 (820,935) | 289,492 (591,596) |
-| `scale` i32 | 611 (1,763) | 641 (1,771) | 4,445 (12,347) | 5,058 (10,591) | 270,159 (689,736) | 290,524 (575,084) |
-| `min` f64 | 595 (1,721) | 613 (1,738) | 1,275 (4,469) | 1,246 (3,775) | 58,364 (181,890) | 55,889 (134,828) |
-| `countWhere` i32 | 652 (1,872) | 663 (1,838) | 3,020 (9,936) | 2,302 (5,744) | 170,571 (526,045) | 113,101 (255,741) |
-| `sum` i32 | 624 (1,802) | 635 (1,802) | 4,645 (11,882) | 4,648 (11,882) | 264,021 (657,015) | 263,728 (657,015) |
-| `fill` u8 | 479 (1,416) | 495 (1,427) | 521 (1,483) | 530 (1,494) | 6,320 (1,437) | 6,206 (1,448) |
-| `add` f32, in place | 731 (1,757) | 646 (1,789) | 1,053 (3,143) | 875 (2,243) | 49,467 (91,860) | 45,959 (32,496) |
-| `scale` f32, in place | 575 (1,641) | 593 (1,662) | 1,507 (4,035) | 1,064 (2,752) | 69,951 (157,264) | 40,255 (73,325) |
-| `clamp` f32, in place | 606 (1,732) | 600 (1,702) | 1,895 (6,646) | 1,192 (3,025) | 102,883 (321,155) | 52,890 (87,710) |
-| `add` f32, out one element before left | 622 (1,757) | 667 (1,837) | 1,038 (3,143) | 879 (2,244) | 50,541 (91,860) | 43,435 (32,497) |
-| `add` f32, out one element past left | 822 (1,810) | 761 (1,837) | 9,832 (6,346) | 9,838 (6,373) | 592,592 (296,663) | 594,121 (296,690) |
-| `add` f32, out one element past both inputs | 746 (1,810) | 762 (1,837) | 9,852 (6,346) | 9,846 (6,373) | 591,380 (296,663) | 591,495 (296,690) |
-| `add` f32@8, strided | 774 (2,239) | 791 (2,239) | 8,982 (30,463) | 10,031 (30,463) | 532,024 (1,836,812) | 594,828 (1,836,812) |
-| `scale` f32@8, strided | 687 (1,999) | 703 (1,999) | 7,852 (23,167) | 6,571 (23,167) | 463,288 (1,377,932) | 392,109 (1,377,932) |
-| `sum` f32@8, strided | 660 (1,879) | 664 (1,879) | 4,714 (13,975) | 4,718 (13,975) | 265,534 (788,132) | 265,037 (788,132) |
-| `min` f32, strictly falling (block scan's worst case) | 944 (1,838) | 655 (1,837) | 4,872 (10,643) | 4,817 (8,788) | 277,168 (576,144) | 272,190 (454,337) |
-| `argmin` f32, strictly falling | 600 (1,698) | 605 (1,697) | 4,840 (10,503) | 4,781 (8,648) | 276,938 (576,004) | 271,379 (454,197) |
-| `any` f32, first element decides | 637 (1,821) | 650 (1,844) | 653 (1,887) | 666 (1,884) | 729 (1,900) | 775 (1,897) |
-| `all` f32, first element decides | 952 (1,833) | 655 (1,850) | 657 (1,911) | 673 (1,884) | 749 (1,924) | 785 (1,897) |
-| lowered `K:sum` f32 | 332 (956) | 343 (956) | 4,595 (11,787) | 4,626 (11,787) | 264,075 (656,920) | 263,684 (656,920) |
-| lowered `K:countGt` f32 | 338 (1,088) | 352 (1,088) | 914 (3,039) | 722 (2,014) | 24,829 (91,756) | 15,339 (24,203) |
-| lowered `K:min` f32 | 390 (1,153) | 402 (1,153) | 993 (3,274) | 959 (2,995) | 30,588 (108,576) | 29,240 (88,038) |
-| lowered `K:selectGt` f32 | 506 (1,589) | 524 (1,589) | 3,217 (9,483) | 1,376 (4,473) | 167,590 (497,368) | 57,579 (174,838) |
-| lowered `K:min` f64 | 380 (1,137) | 395 (1,137) | 1,234 (4,401) | 1,221 (3,707) | 58,734 (181,822) | 54,186 (134,760) |
-| lowered `K:countGt` i32 | 342 (1,093) | 354 (1,093) | 3,024 (9,843) | 2,260 (5,651) | 170,896 (525,952) | 111,512 (255,648) |
-| JSL `sum` over an f32 slice | 525 (1,380) | 541 (1,380) | 4,805 (12,211) | 4,839 (12,211) | 264,357 (657,423) | 263,754 (657,423) |
-| JSL filtered count, f32 slice | 561 (1,504) | 583 (1,504) | 1,130 (3,455) | 932 (2,430) | 25,033 (92,172) | 15,862 (24,619) |
-| JSL `any`, f32 slice | 567 (1,482) | 577 (1,482) | 1,319 (4,220) | 1,203 (3,413) | 37,702 (142,329) | 32,341 (89,106) |
-| JSL filtered count, u8 slice | 457 (1,362) | 473 (1,362) | 3,497 (10,888) | 3,472 (6,184) | 178,209 (575,381) | 178,775 (272,309) |
+| `relu`, three passes | 1,142 (3,001) | 1,130 (3,055) | 3,208 (9,679) | 2,075 (4,931) | 180,871 (437,084) | 137,885 (127,920) |
+| `add` f32 | 557 (1,534) | 562 (1,567) | 1,151 (2,920) | 786 (2,021) | 63,021 (91,637) | 57,823 (32,274) |
+| `scale` f32, factor 1/3 | 497 (1,433) | 510 (1,455) | 1,434 (3,827) | 987 (2,545) | 67,552 (157,056) | 62,470 (73,118) |
+| `scale` f32, factor 0.5 | 498 (1,433) | 511 (1,455) | 1,429 (3,827) | 987 (2,545) | 68,295 (157,056) | 62,126 (73,118) |
+| `clamp` f32 | 542 (1,525) | 528 (1,495) | 1,829 (6,439) | 1,127 (2,818) | 93,780 (320,948) | 58,925 (87,503) |
+| `fill` f32 | 431 (1,265) | 431 (1,286) | 774 (1,895) | 614 (1,491) | 33,554 (42,228) | 25,945 (15,616) |
+| `min` f32 | 542 (1,517) | 546 (1,535) | 968 (3,131) | 904 (2,852) | 31,401 (107,976) | 30,142 (87,537) |
+| `argmax` f32 | 511 (1,541) | 516 (1,539) | 1,402 (4,207) | 1,333 (3,368) | 32,316 (125,180) | 29,933 (80,997) |
+| `countWhere` f32 | 535 (1,516) | 534 (1,541) | 883 (2,902) | 660 (1,878) | 24,930 (91,619) | 14,985 (24,067) |
+| `any` f32, full scan | 558 (1,605) | 556 (1,622) | 1,092 (3,804) | 965 (3,010) | 36,772 (141,913) | 31,762 (88,703) |
+| `all` f32, full scan | 548 (1,599) | 558 (1,622) | 1,036 (3,546) | 964 (3,136) | 35,075 (125,527) | 31,055 (96,893) |
+| `select` f32 | 637 (1,816) | 642 (1,779) | 3,201 (9,444) | 1,380 (4,439) | 168,043 (497,329) | 54,782 (174,804) |
+| `sum` f32 | 564 (1,497) | 551 (1,497) | 4,597 (5,277) | 4,587 (5,277) | 263,508 (247,210) | 263,616 (247,210) |
+| `sum` f32, filtered | 630 (1,723) | 614 (1,737) | 4,642 (11,047) | 4,638 (10,072) | 264,177 (609,263) | 264,425 (545,303) |
+| `add` f64 | 566 (1,559) | 569 (1,558) | 1,858 (4,331) | 1,677 (2,503) | 130,651 (181,752) | 113,607 (62,996) |
+| `add` i32 | 620 (1,709) | 619 (1,690) | 4,896 (14,309) | 5,259 (10,762) | 290,715 (820,722) | 309,900 (591,383) |
+| `scale` i32 | 545 (1,562) | 561 (1,570) | 4,485 (12,146) | 4,847 (10,390) | 279,226 (689,535) | 282,547 (574,883) |
+| `min` f64 | 531 (1,512) | 541 (1,529) | 1,211 (4,260) | 1,173 (3,566) | 57,359 (181,681) | 52,343 (134,619) |
+| `countWhere` i32 | 571 (1,634) | 557 (1,604) | 3,283 (9,320) | 2,233 (5,510) | 161,472 (501,237) | 113,048 (255,507) |
+| `sum` i32 | 553 (1,503) | 553 (1,503) | 4,588 (5,283) | 4,580 (5,283) | 263,368 (247,216) | 263,377 (247,216) |
+| `fill` u8 | 430 (1,254) | 432 (1,265) | 473 (1,321) | 475 (1,332) | 5,897 (1,275) | 5,910 (1,286) |
+| `add` f32, in place | 559 (1,534) | 562 (1,566) | 994 (2,920) | 812 (2,020) | 46,966 (91,637) | 43,967 (32,273) |
+| `scale` f32, in place | 510 (1,430) | 516 (1,451) | 1,458 (3,824) | 1,013 (2,541) | 61,394 (157,053) | 37,409 (73,114) |
+| `clamp` f32, in place | 550 (1,520) | 536 (1,490) | 1,850 (6,434) | 1,131 (2,813) | 83,708 (320,943) | 50,919 (87,498) |
+| `add` f32, out one element before left | 557 (1,534) | 580 (1,614) | 980 (2,920) | 809 (2,021) | 46,904 (91,637) | 43,928 (32,274) |
+| `add` f32, out one element past left | 683 (1,587) | 675 (1,614) | 9,762 (6,123) | 9,751 (6,150) | 593,749 (296,440) | 593,795 (296,467) |
+| `add` f32, out one element past both inputs | 686 (1,587) | 673 (1,614) | 9,767 (6,123) | 9,749 (6,150) | 591,749 (296,440) | 592,932 (296,467) |
+| `add` f32@8, strided | 643 (1,807) | 634 (1,807) | 2,461 (7,855) | 2,067 (7,855) | 144,959 (394,940) | 146,213 (394,940) |
+| `scale` f32@8, strided | 671 (1,712) | 600 (1,712) | 3,439 (9,272) | 2,966 (9,272) | 189,205 (493,125) | 192,242 (493,125) |
+| `clamp` f32@8, strided | 628 (1,818) | 631 (1,818) | 4,741 (15,249) | 4,568 (15,249) | 262,837 (874,605) | 260,444 (874,605) |
+| `fill` f32@8, strided | 514 (1,479) | 498 (1,479) | 1,565 (3,495) | 1,558 (3,495) | 82,833 (132,532) | 82,630 (132,532) |
+| `sum` f32@8, strided | 598 (1,699) | 596 (1,699) | 4,631 (5,983) | 4,633 (5,983) | 263,726 (280,172) | 263,909 (280,172) |
+| `min` f32@8, strided | 596 (1,705) | 609 (1,732) | 1,328 (4,378) | 1,427 (4,309) | 65,865 (178,775) | 64,352 (172,658) |
+| `countWhere` f32@8, strided | 623 (1,749) | 640 (1,755) | 1,097 (3,639) | 916 (2,519) | 49,064 (124,612) | 40,313 (48,900) |
+| `any` f32@8, full scan | 641 (1,861) | 651 (1,884) | 1,550 (5,380) | 1,630 (4,963) | 78,281 (224,129) | 78,863 (195,488) |
+| `select` f32@8, strided | 730 (2,019) | 730 (1,996) | 3,751 (10,256) | 1,899 (5,755) | 198,204 (537,453) | 86,327 (247,688) |
+| `min` f32, filtered | 600 (1,694) | 613 (1,707) | 1,427 (4,947) | 1,281 (4,019) | 41,571 (159,184) | 35,553 (104,832) |
+| `max` f32, filtered | 670 (1,903) | 662 (1,887) | 1,732 (5,814) | 1,456 (4,759) | 43,156 (160,051) | 37,115 (105,572) |
+| `min` f32, sparse filter | 560 (1,615) | 582 (1,635) | 1,225 (4,168) | 1,116 (3,343) | 42,430 (158,405) | 36,471 (104,156) |
+| `sum` f32, sparse filter | 567 (1,602) | 576 (1,620) | 4,626 (10,189) | 4,647 (9,500) | 265,769 (554,435) | 265,648 (508,751) |
+| `sum` i32, filtered | 734 (2,233) | 714 (2,059) | 10,248 (42,256) | 8,461 (29,731) | 610,538 (2,605,613) | 503,831 (1,802,816) |
+| `gather` f32 | 685 (1,941) | 704 (1,957) | 5,082 (19,583) | 5,166 (19,597) | 298,330 (1,148,556) | 297,192 (1,148,572) |
+| `gather` f32@8, strided source | 742 (2,149) | 751 (2,149) | 5,601 (20,799) | 5,652 (20,797) | 329,889 (1,214,284) | 331,227 (1,214,284) |
+| `gather` i32 | 664 (1,866) | 687 (1,882) | 4,292 (14,468) | 4,353 (14,482) | 255,113 (820,881) | 255,411 (820,897) |
+| `scatter` f32 | 664 (1,894) | 674 (1,907) | 5,065 (19,536) | 5,145 (19,547) | 295,886 (1,148,509) | 304,406 (1,148,522) |
+| `partition` f32 | 662 (1,880) | 681 (1,909) | 5,250 (16,876) | 5,041 (15,856) | 302,042 (976,505) | 294,284 (908,957) |
+| `partition` i32 | 787 (2,196) | 787 (2,168) | 12,920 (36,218) | 12,090 (32,284) | 788,175 (2,213,511) | 737,867 (1,959,593) |
+| `argsort` f32 | 864 (2,622) | 818 (2,622) | 47,381 (120,565) | 41,959 (120,576) | 3,078,469 (7,281,443) | 3,066,688 (7,281,443) |
+| `argsort` f64 | 942 (2,816) | 947 (2,816) | 58,982 (204,325) | 59,523 (204,347) | 4,095,304 (10,792,137) | 4,197,677 (10,792,137) |
+| `argsort` f32, caller scratch | 1,141 (3,604) | 1,085 (3,604) | 45,107 (137,943) | 45,243 (137,943) | 3,190,970 (8,460,005) | 3,071,937 (8,460,005) |
+| `argsort` i32, caller scratch | 1,109 (3,609) | 1,101 (3,609) | 35,589 (93,915) | 35,054 (93,915) | 2,560,758 (5,641,961) | 2,524,804 (5,641,961) |
+| lowered `K:countGt` f32@8 | 422 (1,201) | 432 (1,201) | 1,059 (3,551) | 872 (2,431) | 48,044 (124,524) | 40,297 (48,812) |
+| lowered `K:min` f32@8 | 428 (1,158) | 444 (1,158) | 1,316 (4,297) | 1,396 (4,228) | 66,184 (178,694) | 64,464 (172,577) |
+| lowered `K:sum` f32@8 | 424 (1,156) | 437 (1,156) | 4,616 (5,867) | 4,624 (5,867) | 263,776 (280,056) | 263,961 (280,056) |
+| `min` f32, strictly falling (block scan's worst case) | 582 (1,630) | 584 (1,629) | 4,825 (10,435) | 4,756 (8,580) | 276,801 (575,936) | 271,900 (454,129) |
+| `argmin` f32, strictly falling | 504 (1,533) | 521 (1,532) | 4,725 (10,338) | 4,688 (8,483) | 276,775 (575,839) | 271,808 (454,032) |
+| `any` f32, first element decides | 534 (1,547) | 544 (1,570) | 531 (1,547) | 543 (1,570) | 611 (1,560) | 659 (1,583) |
+| `all` f32, first element decides | 542 (1,555) | 546 (1,575) | 543 (1,555) | 547 (1,575) | 608 (1,568) | 663 (1,588) |
+| lowered `K:sum` f32 | 354 (953) | 364 (953) | 4,631 (5,350) | 4,618 (5,350) | 263,814 (247,283) | 263,889 (247,283) |
+| lowered `K:countGt` f32 | 362 (1,093) | 373 (1,093) | 923 (3,007) | 726 (1,983) | 24,883 (91,724) | 15,275 (24,172) |
+| lowered `K:min` f32 | 412 (1,157) | 420 (1,157) | 1,233 (3,696) | 1,188 (3,318) | 30,682 (108,084) | 30,122 (87,645) |
+| lowered `K:selectGt` f32 | 678 (1,646) | 585 (1,646) | 3,197 (9,444) | 1,377 (4,441) | 167,572 (497,329) | 54,996 (174,806) |
+| lowered `K:min` f64 | 393 (1,134) | 400 (1,134) | 1,244 (4,366) | 1,227 (3,672) | 57,434 (181,787) | 52,520 (134,725) |
+| lowered `K:countGt` i32 | 351 (1,090) | 363 (1,090) | 3,320 (9,420) | 2,288 (5,610) | 161,018 (501,337) | 113,346 (255,607) |
+| JSL `sum` over an f32 slice | 535 (1,377) | 540 (1,377) | 4,818 (5,774) | 4,828 (5,774) | 263,808 (247,613) | 263,841 (247,613) |
+| JSL filtered count, f32 slice | 582 (1,509) | 583 (1,509) | 1,130 (3,423) | 920 (2,399) | 25,155 (92,140) | 15,986 (24,588) |
+| JSL `any`, f32 slice | 576 (1,479) | 578 (1,479) | 1,377 (4,376) | 1,247 (3,582) | 37,277 (142,485) | 32,433 (89,275) |
+| JSL filtered count, u8 slice | 472 (1,359) | 473 (1,359) | 3,484 (10,593) | 3,464 (6,143) | 177,127 (558,958) | 178,804 (272,268) |
 
 ## Lowered against bound, by kind and member
 
-`cargo bench -- data_receivers`, measured before the hand-over existed: best-round cycles for the IR loop against the bound method. This is what chose 128 and 1,024 as the hand-over lengths.
+`cargo bench -- data_receivers`: best-round cycles for a lowered call against the bound method, on contiguous spans. A lowered call's cycles flatten past its hand-over length, because by then it is the bound method. Before each length is the comparison that chose it.
 
 ### f32
 
 | Member | 16 | 32 | 64 | 128 | 256 | 512 | 1,024 | 4,096 | 65,536 |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| `sum` | 345 / 577 | 419 / 628 | 560 / 752 | 858 / 1,005 | 1,454 / 1,515 | 2,645 / 2,541 | 5,012 / 4,588 | 19,283 / 17,084 | 304,017 / 264,130 |
-| `min` | 407 / 570 | 467 / 575 | 597 / 589 | 889 / 616 | 1,403 / 661 | 2,434 / 750 | 4,451 / 926 | 16,886 / 2,044 | 266,696 / 30,873 |
-| `max` | 424 / 604 | 504 / 660 | 634 / 798 | 890 / 847 | 1,495 / 1,142 | 2,525 / 1,240 | 4,585 / 1,427 | 16,891 / 2,491 | 267,712 / 30,763 |
-| `countGt` | 354 / 568 | 440 / 570 | 613 / 576 | 957 / 587 | 1,628 / 608 | 3,047 / 650 | 5,991 / 713 | 23,073 / 1,119 | 367,381 / 17,524 |
-| `anyGt` | 345 / 570 | 408 / 578 | 537 / 582 | 832 / 613 | 1,365 / 666 | 2,389 / 768 | 4,465 / 972 | 16,945 / 2,221 | 269,030 / 33,582 |
-| `allLt` | 351 / 572 | 422 / 574 | 587 / 583 | 876 / 608 | 1,441 / 657 | 2,598 / 758 | 4,887 / 962 | 18,941 / 2,233 | 283,346 / 33,560 |
-| `sumGt` | 378 / 613 | 486 / 695 | 682 / 882 | 1,090 / 1,273 | 1,864 / 2,062 | 3,609 / 3,640 | 7,110 / 6,788 | 27,633 / 26,550 | 436,514 / 408,494 |
-| `selectGt` | 523 / 620 | 827 / 632 | 633 / 657 | 957 / 732 | 1,551 / 825 | 2,721 / 1,002 | 5,040 / 1,363 | 19,034 / 3,567 | 321,073 / 55,490 |
+| `sum` | 346 / 562 | 420 / 623 | 568 / 745 | 873 / 1,013 | 1,467 / 1,522 | 2,660 / 2,558 | 4,638 / 4,628 | 16,964 / 16,970 | 264,101 / 264,193 |
+| `min` | 401 / 576 | 469 / 571 | 595 / 588 | 638 / 615 | 687 / 657 | 776 / 744 | 948 / 1,117 | 2,062 / 2,035 | 30,512 / 30,555 |
+| `max` | 421 / 609 | 498 / 661 | 630 / 804 | 875 / 852 | 1,173 / 1,140 | 1,254 / 1,236 | 1,442 / 1,417 | 2,527 / 2,545 | 30,525 / 30,535 |
+| `countGt` | 362 / 563 | 448 / 565 | 620 / 572 | 599 / 582 | 617 / 602 | 656 / 636 | 727 / 700 | 1,136 / 1,117 | 16,550 / 16,394 |
+| `anyGt` | 347 / 568 | 413 / 589 | 541 / 602 | 695 / 637 | 742 / 681 | 839 / 793 | 1,053 / 986 | 2,283 / 2,232 | 31,020 / 31,410 |
+| `allLt` | 352 / 573 | 426 / 594 | 605 / 607 | 701 / 637 | 756 / 682 | 852 / 789 | 1,051 / 982 | 2,306 / 2,246 | 31,645 / 32,802 |
+| `sumGt` | 380 / 590 | 485 / 642 | 688 / 782 | 1,101 / 1,046 | 1,901 / 1,567 | 2,608 / 2,595 | 4,701 / 4,649 | 17,080 / 17,026 | 266,309 / 266,369 |
+| `minGt` | 404 / 611 | 522 / 701 | 732 / 815 | 1,167 / 851 | 2,036 / 917 | 1,054 / 1,029 | 1,283 / 1,260 | 2,778 / 2,741 | 37,595 / 36,645 |
+| `maxLt` | 413 / 662 | 519 / 717 | 713 / 827 | 1,100 / 1,052 | 1,864 / 1,105 | 1,248 / 1,221 | 1,481 / 1,454 | 2,971 / 2,949 | 38,303 / 38,214 |
+| `selectGt` | 541 / 623 | 847 / 635 | 628 / 657 | 739 / 717 | 1,048 / 817 | 1,012 / 989 | 1,382 / 1,358 | 3,629 / 3,598 | 57,015 / 57,015 |
 
 ### f64
 
 | Member | 16 | 32 | 64 | 128 | 256 | 512 | 1,024 | 4,096 | 65,536 |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| `sum` | 332 / 577 | 408 / 628 | 555 / 747 | 854 / 1,000 | 1,443 / 1,512 | 2,640 / 2,541 | 5,006 / 4,586 | 19,298 / 17,106 | 306,243 / 264,582 |
-| `min` | 397 / 565 | 443 / 580 | 560 / 598 | 820 / 637 | 1,268 / 710 | 2,167 / 859 | 3,981 / 1,203 | 14,963 / 3,171 | 245,487 / 55,461 |
-| `max` | 407 / 600 | 478 / 662 | 591 / 806 | 820 / 881 | 1,345 / 1,207 | 2,246 / 1,365 | 4,043 / 1,670 | 15,124 / 3,670 | 243,708 / 55,630 |
-| `countGt` | 347 / 582 | 436 / 590 | 611 / 606 | 959 / 632 | 1,643 / 692 | 3,084 / 826 | 6,040 / 1,077 | 23,349 / 2,795 | 368,532 / 51,362 |
-| `anyGt` | 331 / 572 | 388 / 580 | 497 / 598 | 763 / 643 | 1,203 / 726 | 2,077 / 896 | 3,846 / 1,253 | 14,713 / 3,668 | 236,506 / 62,498 |
-| `allLt` | 334 / 572 | 404 / 580 | 591 / 598 | 882 / 635 | 1,438 / 721 | 2,598 / 900 | 4,937 / 1,237 | 18,834 / 3,657 | 287,382 / 62,861 |
-| `sumGt` | 363 / 612 | 464 / 692 | 645 / 867 | 1,029 / 1,268 | 1,799 / 2,029 | 3,355 / 3,584 | 6,589 / 6,641 | 25,708 / 25,246 | 408,296 / 398,643 |
-| `selectGt` | 515 / 614 | 804 / 622 | 597 / 639 | 907 / 691 | 1,446 / 767 | 2,519 / 932 | 4,719 / 1,226 | 18,330 / 3,414 | 314,327 / 58,863 |
+| `sum` | 344 / 553 | 415 / 621 | 566 / 742 | 861 / 1,011 | 1,459 / 1,537 | 2,646 / 2,563 | 4,655 / 4,621 | 17,074 / 17,098 | 264,121 / 265,158 |
+| `min` | 388 / 562 | 447 / 582 | 563 / 595 | 666 / 647 | 741 / 721 | 890 / 864 | 1,233 / 1,211 | 3,338 / 3,312 | 54,360 / 54,875 |
+| `max` | 405 / 600 | 474 / 656 | 593 / 808 | 925 / 887 | 1,237 / 1,214 | 1,386 / 1,363 | 1,715 / 1,698 | 3,782 / 3,774 | 54,463 / 54,198 |
+| `countGt` | 357 / 563 | 445 / 571 | 617 / 587 | 643 / 629 | 706 / 687 | 833 / 810 | 1,090 / 1,068 | 2,848 / 2,913 | 52,578 / 51,563 |
+| `anyGt` | 336 / 578 | 393 / 602 | 513 / 628 | 732 / 673 | 813 / 753 | 968 / 912 | 1,315 / 1,257 | 3,857 / 3,813 | 64,028 / 64,690 |
+| `allLt` | 345 / 576 | 410 / 596 | 575 / 620 | 756 / 668 | 836 / 745 | 997 / 912 | 1,317 / 1,256 | 3,841 / 3,783 | 64,301 / 65,673 |
+| `sumGt` | 370 / 590 | 468 / 667 | 657 / 808 | 1,039 / 1,079 | 1,774 / 1,592 | 2,666 / 2,632 | 4,774 / 4,732 | 17,280 / 17,248 | 268,134 / 268,751 |
+| `minGt` | 391 / 711 | 506 / 1,061 | 692 / 1,580 | 1,084 / 2,098 | 1,864 / 3,123 | 5,044 / 5,034 | 8,888 / 8,974 | 31,921 / 31,952 | 493,303 / 491,713 |
+| `maxLt` | 400 / 836 | 494 / 1,099 | 674 / 1,562 | 1,004 / 2,672 | 1,700 / 3,829 | 5,985 / 5,925 | 10,292 / 10,442 | 36,370 / 36,459 | 553,263 / 553,667 |
+| `selectGt` | 526 / 606 | 824 / 615 | 597 / 633 | 705 / 683 | 773 / 755 | 925 / 902 | 1,247 / 1,215 | 3,550 / 3,503 | 59,881 / 59,904 |
 
 ### i32
 
 | Member | 16 | 32 | 64 | 128 | 256 | 512 | 1,024 | 4,096 | 65,536 |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| `sum` | 343 / 570 | 421 / 617 | 568 / 753 | 865 / 1,005 | 1,453 / 1,524 | 2,645 / 2,543 | 5,021 / 4,599 | 19,277 / 17,009 | 304,489 / 264,220 |
-| `min` | 404 / 567 | 465 / 584 | 594 / 598 | 888 / 639 | 1,401 / 719 | 2,432 / 879 | 4,514 / 1,203 | 16,941 / 3,175 | 265,555 / 45,274 |
-| `max` | 424 / 601 | 501 / 667 | 631 / 818 | 893 / 879 | 1,474 / 1,210 | 2,523 / 1,384 | 4,605 / 1,711 | 17,038 / 3,680 | 265,708 / 46,285 |
-| `countGt` | 354 / 595 | 436 / 617 | 604 / 672 | 948 / 776 | 1,620 / 985 | 3,063 / 1,419 | 6,066 / 2,257 | 23,072 / 7,338 | 364,921 / 115,536 |
-| `anyGt` | 344 / 593 | 413 / 615 | 538 / 666 | 835 / 778 | 1,349 / 986 | 2,384 / 1,428 | 4,514 / 2,304 | 16,731 / 7,301 | 266,485 / 119,631 |
-| `allLt` | 349 / 597 | 423 / 616 | 591 / 666 | 873 / 777 | 1,430 / 992 | 2,565 / 1,427 | 4,801 / 2,284 | 18,340 / 7,336 | 281,277 / 119,336 |
-| `sumGt` | 377 / 617 | 481 / 695 | 680 / 852 | 1,088 / 1,255 | 1,879 / 2,052 | 3,563 / 3,575 | 7,136 / 6,813 | 27,417 / 26,031 | 433,754 / 405,736 |
-| `selectGt` | 526 / 647 | 822 / 677 | 611 / 749 | 936 / 919 | 1,521 / 1,219 | 2,681 / 1,792 | 5,025 / 3,063 | 18,855 / 10,433 | 331,269 / 159,040 |
+| `sum` | 351 / 554 | 427 / 619 | 576 / 742 | 873 / 1,005 | 1,473 / 1,520 | 2,658 / 2,560 | 4,621 / 4,590 | 16,950 / 16,922 | 264,485 / 265,566 |
+| `min` | 402 / 561 | 471 / 570 | 594 / 597 | 662 / 645 | 742 / 711 | 919 / 882 | 1,224 / 1,195 | 3,211 / 3,322 | 46,047 / 44,948 |
+| `max` | 422 / 599 | 499 / 662 | 629 / 826 | 910 / 881 | 1,243 / 1,211 | 1,405 / 1,383 | 1,726 / 1,707 | 3,711 / 3,706 | 45,503 / 45,783 |
+| `countGt` | 362 / 585 | 442 / 613 | 610 / 672 | 797 / 784 | 1,012 / 985 | 1,427 / 1,422 | 2,268 / 2,238 | 7,363 / 7,386 | 111,274 / 112,030 |
+| `anyGt` | 348 / 604 | 411 / 645 | 535 / 706 | 882 / 823 | 1,116 / 1,046 | 1,557 / 1,484 | 2,454 / 2,389 | 7,802 / 7,727 | 121,082 / 124,349 |
+| `allLt` | 361 / 607 | 426 / 647 | 607 / 709 | 884 / 821 | 1,109 / 1,518 | 1,553 / 1,500 | 2,452 / 3,549 | 7,781 / 7,897 | 120,917 / 119,209 |
+| `sumGt` | 381 / 689 | 485 / 810 | 680 / 1,059 | 1,080 / 1,548 | 3,230 / 2,572 | 3,585 / 4,544 | 7,181 / 8,472 | 27,532 / 32,128 | 436,759 / 504,448 |
+| `minGt` | 399 / 725 | 508 / 874 | 721 / 1,131 | 1,154 / 2,692 | 2,017 / 3,928 | 6,112 / 6,091 | 10,484 / 10,502 | 36,853 / 36,870 | 552,831 / 553,607 |
+| `maxLt` | 407 / 853 | 512 / 1,133 | 705 / 1,643 | 1,083 / 2,230 | 1,850 / 3,902 | 6,086 / 6,087 | 10,460 / 10,505 | 36,533 / 36,651 | 551,732 / 551,720 |
+| `selectGt` | 535 / 645 | 830 / 677 | 619 / 749 | 938 / 925 | 1,228 / 1,222 | 1,844 / 1,825 | 3,157 / 3,135 | 10,705 / 10,609 | 159,609 / 166,103 |
 
 ### i16
 
 | Member | 16 | 32 | 64 | 128 | 256 | 512 | 1,024 | 4,096 | 65,536 |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| `sum` | 343 / 573 | 418 / 623 | 565 / 754 | 868 / 1,009 | 1,454 / 1,520 | 2,651 / 2,542 | 5,048 / 4,604 | 19,315 / 17,186 | 303,905 / 263,491 |
-| `min` | 400 / 575 | 465 / 586 | 595 / 618 | 881 / 679 | 1,403 / 814 | 2,411 / 1,084 | 4,488 / 1,623 | 16,903 / 4,827 | 265,079 / 69,738 |
-| `max` | 430 / 620 | 504 / 683 | 632 / 849 | 892 / 915 | 1,487 / 1,281 | 2,492 / 1,544 | 4,585 / 2,074 | 17,062 / 5,308 | 265,623 / 70,303 |
-| `countGt` | 352 / 601 | 436 / 641 | 604 / 729 | 951 / 904 | 1,617 / 1,251 | 3,067 / 1,956 | 6,062 / 3,352 | 23,224 / 11,703 | 364,829 / 178,949 |
-| `anyGt` | 345 / 593 | 412 / 626 | 538 / 706 | 842 / 868 | 1,352 / 1,180 | 2,362 / 1,816 | 4,458 / 3,074 | 16,863 / 10,690 | 263,904 / 163,153 |
-| `allLt` | 349 / 597 | 418 / 625 | 583 / 705 | 874 / 863 | 1,426 / 1,180 | 2,560 / 1,815 | 4,785 / 3,012 | 18,129 / 10,561 | 279,911 / 162,690 |
-| `sumGt` | 378 / 637 | 486 / 742 | 679 / 925 | 1,077 / 1,386 | 1,886 / 2,346 | 3,557 / 4,155 | 7,144 / 7,772 | 27,362 / 30,443 | 436,036 / 480,695 |
-| `selectGt` | 520 / 648 | 823 / 696 | 617 / 789 | 934 / 989 | 1,526 / 1,365 | 2,668 / 2,127 | 5,437 / 3,664 | 18,807 / 12,766 | 328,902 / 186,899 |
+| `sum` | 351 / 554 | 425 / 623 | 574 / 747 | 874 / 1,002 | 1,469 / 1,518 | 2,657 / 2,587 | 4,621 / 4,594 | 17,010 / 16,958 | 265,146 / 264,582 |
+| `min` | 403 / 565 | 464 / 577 | 595 / 612 | 698 / 678 | 834 / 814 | 1,119 / 1,108 | 1,644 / 1,622 | 4,827 / 4,794 | 71,581 / 69,878 |
+| `max` | 422 / 612 | 499 / 675 | 629 / 858 | 950 / 917 | 1,313 / 1,280 | 1,593 / 1,573 | 2,101 / 2,057 | 5,304 / 5,313 | 69,431 / 69,456 |
+| `countGt` | 364 / 597 | 445 / 640 | 616 / 732 | 932 / 905 | 1,286 / 1,262 | 1,998 / 1,994 | 3,377 / 3,353 | 11,775 / 11,743 | 180,194 / 179,933 |
+| `anyGt` | 346 / 600 | 411 / 640 | 540 / 725 | 946 / 883 | 1,243 / 1,198 | 1,918 / 1,863 | 3,160 / 3,099 | 10,746 / 10,652 | 160,465 / 164,928 |
+| `allLt` | 357 / 600 | 423 / 641 | 601 / 724 | 936 / 882 | 1,265 / 1,203 | 1,917 / 1,859 | 3,158 / 3,098 | 10,720 / 10,733 | 163,595 / 164,329 |
+| `sumGt` | 382 / 697 | 481 / 825 | 678 / 1,102 | 1,089 / 1,647 | 1,890 / 2,794 | 3,595 / 5,078 | 7,090 / 9,445 | 27,325 / 36,028 | 440,914 / 572,431 |
+| `minGt` | 404 / 736 | 508 / 885 | 721 / 1,141 | 1,165 / 2,694 | 2,021 / 3,918 | 6,186 / 6,102 | 10,473 / 10,613 | 36,586 / 36,591 | 556,208 / 554,848 |
+| `maxLt` | 408 / 840 | 516 / 1,105 | 711 / 1,585 | 1,110 / 2,148 | 1,862 / 3,819 | 6,012 / 5,981 | 10,316 / 10,438 | 36,652 / 36,421 | 554,392 / 561,127 |
+| `selectGt` | 535 / 634 | 828 / 683 | 619 / 781 | 1,008 / 982 | 1,398 / 1,382 | 2,189 / 2,151 | 3,772 / 3,745 | 13,095 / 13,080 | 202,669 / 201,574 |
 
 ### u8
 
 | Member | 16 | 32 | 64 | 128 | 256 | 512 | 1,024 | 4,096 | 65,536 |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| `sum` | 347 / 567 | 420 / 617 | 571 / 750 | 868 / 1,014 | 1,458 / 1,515 | 2,647 / 2,547 | 5,018 / 4,597 | 19,268 / 17,110 | 305,224 / 264,521 |
-| `min` | 403 / 567 | 468 / 580 | 594 / 615 | 889 / 699 | 1,404 / 819 | 2,424 / 1,079 | 4,495 / 1,624 | 16,881 / 4,839 | 264,986 / 68,606 |
-| `max` | 424 / 608 | 504 / 682 | 633 / 846 | 889 / 932 | 1,466 / 1,285 | 2,523 / 1,544 | 4,617 / 2,084 | 17,044 / 5,305 | 263,890 / 69,218 |
-| `countGt` | 402 / 605 | 548 / 646 | 845 / 733 | 1,430 / 914 | 2,572 / 1,256 | 4,886 / 1,962 | 9,916 / 3,355 | 37,321 / 11,714 | 590,112 / 178,640 |
-| `anyGt` | 345 / 607 | 411 / 624 | 540 / 687 | 825 / 816 | 1,352 / 1,072 | 2,373 / 1,583 | 4,432 / 2,619 | 16,820 / 8,721 | 267,389 / 130,616 |
-| `allLt` | 350 / 609 | 422 / 620 | 583 / 683 | 868 / 816 | 1,427 / 1,069 | 2,541 / 1,585 | 4,806 / 2,606 | 18,135 / 8,740 | 282,960 / 130,710 |
-| `sumGt` | 424 / 643 | 573 / 728 | 886 / 909 | 1,465 / 1,230 | 2,618 / 1,878 | 4,999 / 3,225 | 11,848 / 5,852 | 37,815 / 21,764 | 599,005 / 337,287 |
-| `selectGt` | 574 / 648 | 922 / 693 | 675 / 786 | 1,062 / 991 | 1,857 / 1,368 | 3,373 / 2,144 | 8,849 / 3,714 | 24,813 / 12,951 | 391,509 / 197,215 |
+| `sum` | 353 / 566 | 425 / 631 | 577 / 750 | 872 / 1,026 | 1,465 / 1,526 | 2,673 / 2,557 | 4,658 / 4,601 | 17,522 / 16,955 | 264,395 / 264,475 |
+| `min` | 401 / 580 | 465 / 589 | 593 / 622 | 735 / 712 | 859 / 830 | 1,118 / 1,089 | 1,657 / 1,632 | 4,843 / 4,817 | 69,490 / 69,513 |
+| `max` | 423 / 624 | 498 / 688 | 628 / 856 | 973 / 960 | 1,322 / 1,290 | 1,580 / 1,552 | 2,120 / 2,090 | 5,296 / 5,279 | 70,005 / 69,296 |
+| `countGt` | 406 / 604 | 553 / 646 | 867 / 736 | 936 / 922 | 1,284 / 1,265 | 1,983 / 1,948 | 3,367 / 3,344 | 11,721 / 11,705 | 178,542 / 179,081 |
+| `anyGt` | 346 / 606 | 413 / 667 | 542 / 727 | 927 / 867 | 1,172 / 1,113 | 1,670 / 1,637 | 2,677 / 2,623 | 8,761 / 8,694 | 130,522 / 130,529 |
+| `allLt` | 354 / 608 | 422 / 663 | 598 / 728 | 920 / 855 | 1,186 / 1,123 | 1,678 / 1,614 | 2,682 / 2,632 | 8,758 / 8,689 | 130,428 / 130,356 |
+| `sumGt` | 427 / 721 | 573 / 834 | 895 / 1,120 | 1,492 / 1,741 | 2,654 / 2,833 | 4,990 / 5,065 | 9,708 / 9,477 | 37,819 / 36,037 | 601,984 / 567,676 |
+| `minGt` | 441 / 858 | 583 / 1,123 | 859 / 1,668 | 1,571 / 2,808 | 2,678 / 3,970 | 6,135 / 6,154 | 10,542 / 10,476 | 36,608 / 36,482 | 555,362 / 555,249 |
+| `maxLt` | 351 / 628 | 420 / 700 | 541 / 884 | 853 / 1,176 | 1,367 / 1,756 | 2,868 / 3,050 | 5,178 / 5,500 | 18,766 / 20,322 | 288,192 / 289,162 |
+| `selectGt` | 588 / 649 | 930 / 691 | 675 / 784 | 1,016 / 986 | 1,391 / 1,373 | 2,185 / 2,155 | 3,654 / 3,716 | 12,964 / 12,987 | 198,929 / 199,029 |
 

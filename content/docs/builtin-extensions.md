@@ -753,8 +753,8 @@ operation that produces output takes the storage from the caller, `into` for sel
 | `Selection:complement` | selection | selection | | | `into` may be the source | |
 | `Selection:count/len/get/any/all/clear` | selection | number, boolean, nothing | `all` of nothing is true | | | |
 | `Selection:indices` | selection | u32 index vector and count, into `out` from `offset` or a new exact buffer | empty buffer, 0 | | | `out` too small |
-| `gather` | source span, index vector | `destination[i] = source[idx[i]]`; count written | 0 | copied bit-exact | sequential, read then write per element, in index order | bounds, any index ≥ source count |
-| `scatter` | source span, index vector | `destination[idx[i]] = source[i]`; count written | 0 | copied bit-exact | sequential; a repeated index keeps the last write | bounds, any index ≥ destination count |
+| `gather` | source span, index vector | `destination[i] = source[idx[i]]`; count written | 0 | copied, quieted if `f32` | sequential, read then write per element, in index order; an output over the indices does not change them | bounds, any index ≥ source count |
+| `scatter` | source span, index vector | `destination[idx[i]] = source[i]`; count written | 0 | copied, quieted if `f32` | sequential; a repeated index keeps the last write; an output over the indices does not change them | bounds, any index ≥ destination count |
 | `fill` | | every element of the span | | writes zero for integer kinds | | bounds |
 | `add` | two spans | `out[i] = l[i] + r[i]` | | Luau `+`; of two different NaNs, either survives, quieted | `out` may be either input | bounds, all three spans |
 | `scale` | span | `out[i] = s[i] × factor` | | Luau `*`; a NaN element with a NaN factor gives a quiet NaN | `out` may be the source | bounds |
@@ -769,12 +769,11 @@ case. Out-of-range indices raise before anything is written.
 
 `argsort` is stable: equal keys keep their position order. Without scratch it sorts a copy of
 the keys paired with positions, so the buffer is read once and `out` may overlap the keys. With a
-caller scratch of `count × 4` bytes it is a bottom-up merge of the index vector between `out` and
-the scratch, reading keys from the span as it compares, so nothing is allocated in steady state.
-That is the shape a spatial-index builder otherwise hand-rolls in Luau. Keys, `out` and scratch
-must then not overlap, and the call refuses them if they do. The scratch form reads keys on every
-compare and runs about 25 percent slower than the allocating form at 65,536 elements; use it where
-allocation, not latency, is the cost.
+caller scratch of `count × 4` bytes the index vector moves between `out` and the scratch, by a radix
+sort from 512 keys and a merge below that, reading keys from the span as it goes, so nothing is
+allocated in steady state. That is the shape a spatial-index builder otherwise hand-rolls in Luau.
+Keys, `out` and scratch must then not overlap, and the call refuses them if they do. At 65,536 `f32`
+keys the two forms cost about the same.
 
 ### Typed receivers
 
@@ -782,11 +781,13 @@ Every module function is a bound Rust function invoked once per bulk operation: 
 crossing amortized over the span, element loops in Rust over raw pointers after the single bounds
 check. That is the portable path and the correctness oracle for everything else.
 
-Contiguous spans get loops of their own, picked once per call after the spans are checked:
-ordinary Rust with the element kind constant, which LLVM vectorizes where it can, compiled for
-AVX2 behind a run-time check on x86-64 and for the baseline target everywhere, with no intrinsics
-and no JIT. Results match the generic loops bit for bit, overlaps included. Strided layouts run
-the generic loop.
+The loops are ordinary Rust with the element kind constant, picked once per call after the spans
+are checked, with no intrinsics and no JIT. On a contiguous span LLVM vectorizes what it can, and
+each loop is compiled for AVX2 behind a run-time check on x86-64 and for the baseline target
+everywhere. A strided span keeps a run-time stride and stays scalar, except that `f32` reads at 8,
+12 and 16 bytes, the common record sizes, have the stride constant too: AVX2 can read those in
+vectors. Writes do not get that, since AVX2 has no scatter store. Results match plain loops that
+dispatch on the kind per element, bit for bit, overlaps included.
 
 Which NaN comes out of arithmetic on two different NaNs is **unspecified**: `add`, `scale` and
 `sum` give a quiet copy of one of them, but which one depends on how the loop was compiled, and
@@ -822,12 +823,15 @@ enough to push a function with a hundred sites past Luau's 32K-block limit, whic
 the whole function interpreted. Loop state lives in the receiver's scratch words, since Luau IR
 has no loop-carried values and the VM's registers are memory on the Lua stack anyway.
 
-IR loops are cheap to enter and cannot vectorize, so a long contiguous span leaves them for the
-bound method's loops, which cost more to reach and much less per element. `count`, `any`, `all`,
-`select` and an unfiltered `min` or `max` hand over at 128 elements, an unfiltered `sum` at 1,024;
-those are measured crossovers (`cargo bench -- data_receivers`). Strided spans and a filtered
-`sum`, `min` or `max` stay in IR at any length. The dialect's recognized pipelines go through the
-same sites, so they get the same hand-over, and the answer is the same on both sides of it.
+IR loops are cheap to enter and cannot vectorize, so a long span leaves them for the bound method's
+loops, which cost more to reach and much less per element. On a contiguous span, `count`, `any`,
+`all`, `select` and an unfiltered `min` or `max` hand over at 128 elements, a filtered `min` or
+`max` and a filtered floating-point `sum` at 512, and an unfiltered `sum` at 1,024. A filtered
+integer `sum` stays in IR. A strided span hands over at 64 elements, or 256 when filtered. Those
+are measured crossovers (`cargo bench -- data_receivers`). A contiguous `any` or `all` first tests
+its first eight elements in IR, so a span they decide never pays for the call. The dialect's
+recognized pipelines go through the same sites, so they get the same hand-over, and the answer is
+the same on both sides of it.
 
 Three things the lowering needs from you: the receiver annotated as a local, a local buffer, and
 exactly one result. `return K:sum(..)` in tail position compiles with a multi-value result count,
@@ -870,14 +874,14 @@ Interpreter:
 
 | n | dialect, recognized | dialect, scalar fallback | explicit `data.sum` / `data.countWhere` | handwritten `readu8` loop |
 |---:|---:|---:|---:|---:|
-| sum 16 | 2,631 (242 ns) | 4,284 (359 ns) | 1,825 (139 ns) | 2,894 (188 ns) |
-| sum 256 | 5,271 (463 ns) | 43,644 (3.08 µs) | 4,465 (402 ns) | 32,894 (1.89 µs) |
-| sum 4,096 | 47,511 (4.33 µs) | 673,404 (48.4 µs) | 46,705 (4.24 µs) | 512,894 (31.0 µs) |
-| sum 65,536 | 723,499 (68.6 µs) | 10,749,565 (822 µs) | 722,545 (73.3 µs) | 8,192,895 (471 µs) |
-| count 16 | 2,628 (233 ns) | 4,448 (485 ns) | 1,870 (160 ns) | 3,218 (289 ns) |
-| count 256 | 3,618 (398 ns) | 47,332 (5.52 µs) | 2,860 (304 ns) | 38,694 (3.70 µs) |
-| count 4,096 | 19,458 (2.95 µs) | 733,210 (90.1 µs) | 18,700 (2.79 µs) | 606,156 (60.0 µs) |
-| count 65,536 | 272,898 (42.6 µs) | 11,707,716 (1.47 ms) | 272,140 (40.9 µs) | 9,685,813 (975 µs) |
+| sum 16 | 2,490 (263 ns) | 4,276 (388 ns) | 1,546 (146 ns) | 2,886 (210 ns) |
+| sum 256 | 3,630 (474 ns) | 43,636 (3.37 µs) | 2,686 (374 ns) | 32,886 (2.05 µs) |
+| sum 4,096 | 21,870 (4.16 µs) | 673,396 (50.5 µs) | 20,926 (4.02 µs) | 512,886 (31.5 µs) |
+| sum 65,536 | 313,720 (64.5 µs) | 10,749,557 (824 µs) | 312,766 (63.0 µs) | 8,192,887 (532 µs) |
+| count 16 | 2,582 (268 ns) | 4,440 (569 ns) | 1,656 (151 ns) | 3,210 (366 ns) |
+| count 256 | 3,572 (441 ns) | 47,324 (6.29 µs) | 2,646 (407 ns) | 38,686 (4.13 µs) |
+| count 4,096 | 19,412 (3.24 µs) | 733,202 (98.9 µs) | 18,486 (3.12 µs) | 606,148 (67.2 µs) |
+| count 65,536 | 272,852 (45.1 µs) | 11,707,707 (1.51 ms) | 271,926 (49.1 µs) | 9,685,806 (1.36 ms) |
 
 There is no small-n crossover when interpreted: at 16 elements the recognized pipeline is already
 ahead of the handwritten loop, and the explicit call at about two thirds of its instructions. The
@@ -885,9 +889,9 @@ dialect form carries about 800 instructions of prologue over the explicit call, 
 
 | n | explicit `data.sum` f32 | handwritten `readf32` loop | `data.gather` f32 | handwritten indexed copy | stable `data.argsort` f32 | `table.sort` index table with a comparator (unstable) |
 |---:|---:|---:|---:|---:|---:|---:|
-| 256 | 4,251 (377 ns) | 40,318 (2.50 µs) | 10,054 (752 ns) | 86,192 (6.32 µs) | 61,364 (4.87 µs) | 1,236,677 (111 µs) |
-| 4,096 |  |  |  |  | 1,234,542 (92.5 µs) | 31,287,208 (2.23 ms) |
-| 65,536 | 657,051 (67.3 µs) | 10,093,439 (679 µs) | 2,099,014 (141 µs) | 21,824,434 (1.41 ms) | 15,742,670 (1.39 ms) | 666,274,762 (55.4 ms) |
+| 256 | 2,436 (365 ns) | 40,310 (2.52 µs) | 6,206 (476 ns) | 86,184 (6.63 µs) | 29,800 (2.16 µs) | 1,236,623 (109 µs) |
+| 4,096 |  |  |  |  | 461,684 (45.5 µs) | 31,285,064 (3.06 ms) |
+| 65,536 | 247,236 (61.7 µs) | 10,093,431 (616 µs) | 1,148,606 (93.0 µs) | 21,824,426 (1.57 ms) | 7,281,545 (788 µs) | 666,317,445 (55.3 ms) |
 
 Native code (`jit`): a recognized pipeline runs the receiver's unrolled IR loop until its span is
 long enough to hand over to the bound loops, and the handwritten and fallback loops are Luau CodeGen
@@ -895,16 +899,16 @@ loops.
 
 | n | dialect, recognized | dialect, scalar fallback (CodeGen loop) | explicit `data.sum` (bound) | handwritten `readu8` (CodeGen loop) |
 |---:|---:|---:|---:|---:|
-| sum 16 | 1,231 (103 ns) | 1,573 (126 ns) | 1,771 (146 ns) | 1,313 (97 ns) |
-| sum 256 | 2,641 (355 ns) | 9,493 (782 ns) | 4,411 (345 ns) | 8,993 (735 ns) |
-| sum 4,096 | 46,878 (3.80 µs) | 136,213 (11.7 µs) | 46,651 (3.79 µs) | 131,873 (11.1 µs) |
-| sum 65,536 | 722,755 (60.7 µs) | 2,163,733 (179 µs) | 722,491 (58.4 µs) | 2,097,953 (171 µs) |
-| count 16 | 1,075 (77 ns) ¹ | 1,603 (126 ns) | 1,795 (146 ns) | 1,311 (96 ns) |
-| count 256 | 2,729 (287 ns) ¹ | 10,113 (869 ns) | 2,785 (292 ns) | 9,101 (824 ns) |
-| count 4,096 | 18,569 (2.62 µs) ¹ | 146,238 (13.1 µs) | 18,625 (2.60 µs) | 133,706 (12.3 µs) |
-| count 65,536 | 272,009 (39.5 µs) ¹ | 2,324,298 (209 µs) | 272,065 (40.2 µs) | 2,127,446 (194 µs) |
-| min 256 | 2,136 (198 ns) ¹ |  | 2,194 (193 ns) | 10,268 (828 ns) |
-| min 65,536 | 129,636 (15.3 µs) ¹ |  | 129,694 (15.2 µs) | 2,425,628 (198 µs) |
+| sum 16 | 1,236 (113 ns) | 1,578 (139 ns) | 1,505 (138 ns) | 1,318 (109 ns) |
+| sum 256 | 2,646 (385 ns) | 9,498 (882 ns) | 2,645 (388 ns) | 8,998 (823 ns) |
+| sum 4,096 | 21,250 (4.30 µs) | 136,218 (12.9 µs) | 20,885 (4.18 µs) | 131,878 (12.3 µs) |
+| sum 65,536 | 312,989 (66.3 µs) | 2,163,738 (206 µs) | 312,725 (66.6 µs) | 2,097,958 (195 µs) |
+| count 16 | 1,080 (88 ns) ¹ | 1,608 (141 ns) | 1,594 (141 ns) | 1,316 (117 ns) |
+| count 256 | 2,696 (332 ns) ¹ | 10,118 (1.01 µs) | 2,584 (303 ns) | 9,106 (910 ns) |
+| count 4,096 | 18,536 (2.90 µs) ¹ | 146,243 (15.1 µs) | 18,424 (2.93 µs) | 133,711 (14.2 µs) |
+| count 65,536 | 271,976 (44.4 µs) ¹ | 2,324,304 (232 µs) | 271,864 (44.4 µs) | 2,127,451 (217 µs) |
+| min 256 | 2,109 (211 ns) ¹ |  | 2,029 (205 ns) | 10,273 (908 ns) |
+| min 65,536 | 129,609 (17.2 µs) ¹ |  | 129,529 (16.8 µs) | 2,425,633 (219 µs) |
 
 ¹ The receiver called directly (`K:countGt`, `K:min` on an annotated local), which is what the
 bridge emits; the rows above it carry the slice prologue on top. Its IR loop runs at 16 elements;
@@ -912,21 +916,21 @@ from 256 it has handed over, which is why it tracks the bound column.
 
 | n | explicit `data.sum` f32 | `readf32` CodeGen loop | `data.gather` f32 | indexed copy, CodeGen | stable `data.argsort` | `table.sort` comparator, CodeGen (unstable) |
 |---:|---:|---:|---:|---:|---:|---:|
-| 256 | 4,197 (353 ns) | 9,761 (779 ns) | 9,956 (697 ns) | 13,102 (1.24 µs) | 62,399 (4.51 µs) | 818,154 (69.6 µs) |
-| 4,096 |  |  |  |  | 1,259,669 (92.2 µs) | 20,713,929 (1.70 ms) |
-| 65,536 | 656,997 (58.5 µs) | 2,294,561 (187 µs) | 2,098,916 (140 µs) | 3,146,542 (295 µs) | 16,064,579 (1.24 ms) | 441,793,423 (37.9 ms) |
+| 256 | 2,395 (380 ns) | 9,766 (894 ns) | 6,121 (442 ns) | 13,107 (1.35 µs) | 29,672 (2.20 µs) | 818,140 (81.7 µs) |
+| 4,096 |  |  |  |  | 461,626 (40.8 µs) | 20,712,116 (1.95 ms) |
+| 65,536 | 247,195 (66.0 µs) | 2,294,566 (206 µs) | 1,148,521 (74.6 µs) | 3,146,547 (343 µs) | 7,281,487 (728 µs) | 441,798,844 (41.2 ms) |
 
 What the machine shape says:
 
 - Luau's own CodeGen loop costs about 32 instructions per byte: `FORNLOOP`, the `readu8`
-  fastcall with its checks, the add through a VM register. The bound Rust loop costs about 11
+  fastcall with its checks, the add through a VM register. The bound Rust loop costs about 5
   including its once-per-call argument parsing, and wins in time from 256 elements up.
 - A loop that dispatches on the element kind per element cannot vectorize, so contiguous spans
   run loops with the kind constant, compiled again for AVX2 behind a run-time check. Three
-  separate `f32` passes of `relu(a + b + 2)` at 65,536 elements took about 415 µs through the old
-  loops and take about 31 µs, 13 to 14 times less, against about 26 µs for the same passes with no
-  binder at all. Without AVX2 they take about 42 µs. `benches/data-results.md` has every
-  operation, kind and size, with the raw rows and how to reproduce them.
+  separate `f32` passes of `relu(a + b + 2)` at 65,536 elements took 415 to 465 µs through the old
+  loops and take about 32 µs, against 25 to 31 µs for the same passes with no binder at all, and
+  in cache the gain reaches 22 times. Without AVX2 they take about 42 µs. `benches/data-results.md`
+  has every operation, kind and size, with the raw rows and how to reproduce them.
 - The first IR loop kept its cursor and accumulator in the receiver's scratch, so every element
   paid three memory round trips: fewer instructions than the bound call but slower at 65,536,
   latency bound on store-to-load forwarding. Unrolling the pure-add `sum` body to eight elements
@@ -951,9 +955,9 @@ What the machine shape says:
   for the direct count.
 
 Interpreter and native agree on the ordering of everything else: from 256 elements up the bound
-operations beat the best obvious Luau by 2× (gather, native) to about 30× (stable argsort against a
-comparator sort, native). At 16 elements a native handwritten loop can still win, because a bound
-call's fixed cost has not been paid off: 97 ns against 146 ns for a `u8` sum.
+operations beat the best obvious Luau by 2× (`f32` sum, native) to about 55× (stable argsort against
+a comparator sort, native). At 16 elements a native handwritten loop can still win, because a bound
+call's fixed cost has not been paid off: 109 ns against 138 ns for a `u8` sum.
 
 ### What real workloads asked for
 
