@@ -287,7 +287,8 @@ fn generated_shader_is_current() {
     runtime.exec(include_str!("compute/example.jsl")).unwrap();
     runtime.exec(include_str!("compute/slots.jsl")).unwrap();
     let source: String = runtime.eval("return shared.state.shader_artifact").unwrap();
-    assert_eq!(source, include_str!("compute/generated-shader.jsl"));
+    // A Windows checkout may have converted the file's line endings.
+    assert_eq!(source, include_str!("compute/generated-shader.jsl").replace("\r\n", "\n"));
 }
 
 /// Without the code generator, a whole program maps no executable memory at runtime.

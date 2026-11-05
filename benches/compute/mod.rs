@@ -1017,6 +1017,7 @@ pub fn main(filter: &str) {
             jsl(include_str!("rows.jsl"));
         }
         "compute_softmax" => softmax_strategies(),
+        #[cfg(target_os = "linux")]
         "compute_overhead" => overhead(),
         "compute_int8" => quantized(),
         #[cfg(feature = "jit")]
@@ -1060,6 +1061,7 @@ fn luau_assembly(path: &str) {
 
 /// What one call costs beyond its arithmetic, for operations small enough that the arithmetic is
 /// nearly nothing: cycles, instructions and allocations per call, from Rust and from JSL.
+#[cfg(target_os = "linux")]
 fn overhead() {
     use crate::counter::{Counter, PERF_COUNT_HW_CPU_CYCLES, PERF_COUNT_HW_INSTRUCTIONS, PERF_TYPE_HARDWARE};
     const CALLS: usize = 2000;
@@ -1148,6 +1150,7 @@ fn overhead() {
     }
 }
 
+#[cfg(target_os = "linux")]
 fn bytes_of_floats(values: &[f32]) -> Vec<u8> {
     values.iter().flat_map(|v| v.to_le_bytes()).collect()
 }
