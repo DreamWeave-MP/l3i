@@ -422,4 +422,4 @@ collection, and a retained program survives collection and runs on new inputs.
 - **A packed matmul microkernel.** Both engines here are unpacked.
 - **CubeCL on GPU and CubeK**, if a workload makes them relevant.
 
-The MSRV stays at 1.99.1, by decision, independent of CubeCL.
+The research crates share L3i's minimum supported Rust, 1.95, by decision. Measurements above name the rustc they ran on.
