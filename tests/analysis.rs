@@ -1730,3 +1730,33 @@ fn while_local_diagnostics_keep_original_coordinates_after_lowering() {
     assert_eq!(error.span.end_line, 5, "{error:?}");
     assert_eq!(error.span.end_column, 31, "{error:?}");
 }
+
+#[cfg(feature = "process")]
+#[test]
+fn stdin_types_describe_optional_data_and_error_results() {
+    use l3i::extension::RuntimePlan;
+    let plan = RuntimePlan::builder().extension(l3i::process::ProcessExtension).finalize().unwrap();
+    plan.check_definitions().unwrap();
+    let definitions = plan.type_definitions();
+    let main = r"
+        local process = require('@dream/process')
+        local input, message, kind = process.openStdin()
+        if input then
+            local line: string?, problem: string?, reason: dream_process_ErrorKind? = input:readLine(64)
+            local bytes: string? = input:read(8)
+            local ready: boolean = input:wait(0)
+            print(line, problem, reason, bytes, ready)
+            input:close()
+        else
+            print(message, kind)
+        end
+    ";
+    let scripts = plan.analysis_sources(Sources { modules: HashMap::from([("main", main)]) });
+    let options = AnalysisOptions {
+        definitions: vec![analysis::Definitions { name: "stdin.d.luau".to_owned(), source: definitions.clone() }],
+        ..AnalysisOptions::default()
+    };
+    let analysis = Analysis::new(scripts, options).unwrap_or_else(|e| panic!("{e}\n{definitions}"));
+    let report = analysis.check("main", false);
+    assert!(report.is_clean(), "{report:#?}\n{definitions}");
+}

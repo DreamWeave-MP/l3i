@@ -34,6 +34,8 @@
 //! The program is found the way the OS finds one (`PATH`), and the arguments go to it as they
 //! are, with no shell in between: nothing is split, quoted or expanded.
 
+pub mod input;
+
 use std::process::{Command, Stdio};
 
 use crate::bind::{Call, StackResults};
@@ -52,7 +54,7 @@ pub const MODULE: &str = "@dream/process";
 pub const SPAWN_CAPABILITY: &str = "process.spawn";
 /// The capability `process.env` needs.
 pub const ENVIRONMENT_CAPABILITY: &str = "process.environment";
-/// The capability `process.write` needs: the host's standard streams.
+/// The capability `process.write` and `process.openStdin` need: the host's standard streams.
 pub const STDIO_CAPABILITY: &str = "process.stdio";
 
 const RUN_SIGNATURE: &str = "(program: string, args: { string }?, options: dream_process_RunOptions?) -> (dream_process_Result?, string?, dream_process_ErrorKind?)";
@@ -511,6 +513,7 @@ impl Extension for ProcessExtension {
     }
 
     fn describe(&self, d: &mut ExtensionDescriptor) -> Result<()> {
+        input::describe(d);
         d.type_alias("dream_process_RunOptions", OPTIONS_TYPE);
         d.type_alias("dream_process_Result", RESULT_TYPE);
         d.type_alias("dream_process_ErrorKind", crate::outcome::ERROR_KIND_TYPE);
@@ -531,6 +534,9 @@ impl Extension for ProcessExtension {
             .function("platform", platform)
             .signature("() -> string")
             .doc("The OS the host was built for, as Rust names it: windows, macos, linux, android, and so on.")
+            .installed("openStdin")
+            .signature("() -> (dream_process_Stdin?, string?, dream_process_ErrorKind?)")
+            .doc("Claims the process stdin stream exclusively; needs process.stdio. Returns wouldBlock if another runtime, worker or handle owns it. Read methods are nonblocking; wait is explicit. Close releases ownership without waiting for the OS reader. Host code must not concurrently read stdin outside this API.")
             .installed("write")
             .signature("(stream: \"stdout\" | \"stderr\", data: buffer | string) -> (boolean?, string?, dream_process_ErrorKind?)")
             .doc("Writes data to the host's standard output or error, without the newline print adds; needs the process.stdio capability.")
@@ -553,6 +559,7 @@ impl Extension for ProcessExtension {
         })?;
         module.gated("knownFolder", ENVIRONMENT_CAPABILITY, environment, known_folder)?;
         module.gated("write", STDIO_CAPABILITY, stdio, write)?;
+        module.gated("openStdin", STDIO_CAPABILITY, stdio, input::open)?;
         module.gated(
             "run",
             SPAWN_CAPABILITY,

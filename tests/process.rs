@@ -226,3 +226,97 @@ fn a_capture_a_grandchild_holds_open_ends_at_the_time_limit() {
         assert!(started.elapsed() < Duration::from_secs(2), "{script}: waited {:?}", started.elapsed());
     }
 }
+
+#[test]
+fn stdin_child() {
+    let Ok(mode) = std::env::var("L3I_STDIN_TEST_MODE") else { return };
+    let runtime = runtime_granting(&[STDIO_CAPABILITY], Limits::default());
+    if mode == "blocked" {
+        runtime.exec("local input = assert(process.openStdin()) local v, m, k = input:readLine() assert(v == nil and k == 'wouldBlock', m)").unwrap();
+        drop(runtime);
+        return;
+    }
+    if mode == "deadline" {
+        drop(runtime);
+        let runtime = runtime_granting(
+            &[STDIO_CAPABILITY],
+            Limits { execution_time: Duration::from_millis(50), memory_bytes: 0 },
+        );
+        let error =
+            runtime.exec("local input = assert(process.openStdin()) input:read(1) input:wait(60000)").unwrap_err();
+        assert!(matches!(error, l3i::Error::ExecutionTimeLimit(_)), "{error:?}");
+        return;
+    }
+    runtime
+        .exec(
+            r"
+        local input = assert(process.openStdin())
+        local other, message, kind = process.openStdin()
+        assert(other == nil and kind == 'wouldBlock', message)
+        local function line()
+            while true do
+                local value, message, kind = input:readLine(64)
+                if kind == 'wouldBlock' then input:wait(1000)
+                else assert(message == nil, message) return value end
+            end
+        end
+        assert(line() == 'hello')
+        assert(line() == '')
+        assert(line() == string.char(255, 0))
+        assert(line() == 'last')
+        assert(line() == nil)
+        input:close()
+        input:close()
+        local next = assert(process.openStdin())
+        assert(next:read(1) == nil)
+        next:close()
+    ",
+        )
+        .unwrap();
+}
+
+/// The child alone reads controlled stdin; a deadline kills any hung child. In blocked cases
+/// the parent deliberately holds the pipe open until the child has destroyed its runtime.
+#[test]
+fn stdin_through_luau_handles_pipes_eof_and_blocked_teardown() {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    for mode in ["lines", "blocked", "deadline"] {
+        let mut child = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "process::stdin_child", "--nocapture"])
+            .env("L3I_STDIN_TEST_MODE", mode)
+            .stdin(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut pipe = child.stdin.take();
+        if mode == "lines" {
+            pipe.as_mut().unwrap().write_all(b"hello\r\n\n\xff\0\nlast").unwrap();
+            drop(pipe.take());
+        }
+        let until = Instant::now() + Duration::from_secs(10);
+        loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                assert!(status.success(), "stdin child {mode}: {status}");
+                break;
+            }
+            if Instant::now() >= until {
+                child.kill().unwrap();
+                child.wait().unwrap();
+                panic!("stdin child {mode} hung");
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+}
+
+#[test]
+fn stdin_claim_requires_stdio_before_touching_the_stream() {
+    runtime_with(false)
+        .exec(
+            r"
+        local ok, message = pcall(process.openStdin)
+        assert(not ok and message:find('process.stdio', 1, true), message)
+    ",
+        )
+        .unwrap();
+}
