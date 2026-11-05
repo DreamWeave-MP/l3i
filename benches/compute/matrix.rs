@@ -1,23 +1,45 @@
-//! Single-thread, packing-inclusive comparison; matrixmultiply may contract/reassociate.
+//! The matrix tournament: one thread by default, packing included, every side validated against an
+//! independent f64 bound. `L3I_BENCH_SHAPES=256x256x256,6x128x16` chooses shapes, `L3I_BENCH_ONLY`
+//! keeps rows whose label holds one of its comma-separated pieces, and `L3I_BENCH_BLAS` loads CBLAS
+//! libraries by name, for example `openblas=/usr/lib64/libopenblaso.so.0,blis=/path/libblis.so.4`.
+//! They load in the same process with their symbols kept apart, so every side runs under the same
+//! conditions. Libraries differ in what they promise: the labels say which rows are which contract.
 #![allow(clippy::cast_precision_loss, clippy::cast_possible_wrap, clippy::too_many_lines)]
-use crate::counter::{Counter, PERF_COUNT_HW_CPU_CYCLES, PERF_COUNT_HW_INSTRUCTIONS, PERF_TYPE_HARDWARE};
-use l3i::compute::{Budget, Domain, Expr, Numeric, Shape, Tensor};
-use std::{hint::black_box, time::Instant};
+use crate::counter::{
+    CACHE_READ_MISS, Counter, PERF_COUNT_HW_CACHE_L1D, PERF_COUNT_HW_CACHE_LL, PERF_COUNT_HW_CPU_CYCLES,
+    PERF_COUNT_HW_INSTRUCTIONS, PERF_TYPE_HARDWARE, PERF_TYPE_HW_CACHE,
+};
+use crate::counting_alloc::ALLOCATIONS;
+use l3i::compute::{Budget, Domain, Expr, Limits, Numeric, Shape, Tensor};
+use std::{hint::black_box, sync::atomic::Ordering, time::Instant};
 
-fn timing(label: &str, mut run: impl FnMut()) {
+fn wanted(label: &str) -> bool {
+    std::env::var("L3I_BENCH_ONLY").map_or(true, |only| only.split(',').any(|piece| label.contains(piece)))
+}
+
+/// Reports `run` under `label`, unless `L3I_BENCH_ONLY` leaves it out: then it says it didn't run.
+fn timing(label: &str, mut run: impl FnMut()) -> bool {
+    if !wanted(label) {
+        return false;
+    }
+    let before = ALLOCATIONS.load(Ordering::Relaxed);
     run();
+    let allocations = ALLOCATIONS.load(Ordering::Relaxed) - before;
     let mut repetitions = 1;
-    loop {
+    let once = loop {
         let start = Instant::now();
         for _ in 0..repetitions {
             run();
         }
-        if start.elapsed().as_secs_f64() >= 0.003 {
-            break;
+        let elapsed = start.elapsed().as_secs_f64();
+        if elapsed >= 0.003 {
+            break elapsed / f64::from(repetitions);
         }
         repetitions *= 2;
-    }
-    let mut samples: Vec<f64> = (0..31)
+    };
+    // Past the caches a run is long and these only have to find a median.
+    let (samples, counted_runs) = if once > 0.02 { (9usize, 5usize) } else { (31, 15) };
+    let mut elapsed: Vec<f64> = (0..samples)
         .map(|_| {
             let start = Instant::now();
             for _ in 0..repetitions {
@@ -26,13 +48,11 @@ fn timing(label: &str, mut run: impl FnMut()) {
             start.elapsed().as_secs_f64() * 1e6 / f64::from(repetitions)
         })
         .collect();
-    samples.sort_by(f64::total_cmp);
+    elapsed.sort_by(f64::total_cmp);
     // Cycles are what a change to a kernel moves: frequency and machine load don't touch them.
-    let cycles = Counter::open(PERF_TYPE_HARDWARE, PERF_COUNT_HW_CPU_CYCLES);
-    let instructions = Counter::open(PERF_TYPE_HARDWARE, PERF_COUNT_HW_INSTRUCTIONS);
-    let counted = |counter: Option<&Counter>, run: &mut dyn FnMut()| {
-        counter.map_or(0.0, |counter| {
-            let mut counts: Vec<u64> = (0..15)
+    let mut counted = |kind: u32, config: u64| {
+        Counter::open(kind, config).map_or(0.0, |counter| {
+            let mut counts: Vec<u64> = (0..counted_runs)
                 .map(|_| {
                     counter.measure(&mut || {
                         for _ in 0..repetitions {
@@ -42,25 +62,60 @@ fn timing(label: &str, mut run: impl FnMut()) {
                 })
                 .collect();
             counts.sort_unstable();
-            counts[7] as f64 / f64::from(repetitions)
+            counts[counted_runs / 2] as f64 / f64::from(repetitions)
         })
     };
-    let per_run_cycles = counted(cycles.as_ref(), &mut run);
-    let per_run_instructions = counted(instructions.as_ref(), &mut run);
+    let cycles = counted(PERF_TYPE_HARDWARE, PERF_COUNT_HW_CPU_CYCLES);
+    let instructions = counted(PERF_TYPE_HARDWARE, PERF_COUNT_HW_INSTRUCTIONS);
+    let l1_misses = counted(PERF_TYPE_HW_CACHE, PERF_COUNT_HW_CACHE_L1D | CACHE_READ_MISS);
+    let last_misses = counted(PERF_TYPE_HW_CACHE, PERF_COUNT_HW_CACHE_LL | CACHE_READ_MISS);
     println!(
-        "{label} median_us={:.3} min_us={:.3} p90_us={:.3} cycles={per_run_cycles:.0} instructions={per_run_instructions:.0}",
-        samples[15], samples[0], samples[27]
+        "{label} median_us={:.3} min_us={:.3} p90_us={:.3} cycles={cycles:.0} instructions={instructions:.0} l1_read_misses={l1_misses:.0} ll_read_misses={last_misses:.0} allocations={allocations}",
+        elapsed[samples / 2],
+        elapsed[0],
+        elapsed[samples * 9 / 10],
     );
+    true
+}
+
+/// `4 k eps sum(|a b|)` and the exact-enough answer, from f64 arithmetic that shares nothing with any
+/// side. A wrong kernel can't get a flattering number.
+struct Validation {
+    expected: Vec<f64>,
+    magnitude: Vec<f64>,
+    k: usize,
+}
+impl Validation {
+    fn new(a: &[f32], b: &[f32], m: usize, k: usize, n: usize) -> Self {
+        let mut expected = vec![0.0f64; m * n];
+        let mut magnitude = vec![0.0f64; m * n];
+        for i in 0..m {
+            let (sums, sizes) = (&mut expected[i * n..(i + 1) * n], &mut magnitude[i * n..(i + 1) * n]);
+            for p in 0..k {
+                let scale = f64::from(a[i * k + p]);
+                for ((sum, size), factor) in sums.iter_mut().zip(sizes.iter_mut()).zip(&b[p * n..(p + 1) * n]) {
+                    let term = scale * f64::from(*factor);
+                    *sum += term;
+                    *size += term.abs();
+                }
+            }
+        }
+        Self { expected, magnitude, k }
+    }
+    fn check(&self, result: &[f32]) {
+        for ((actual, want), scale) in result.iter().zip(&self.expected).zip(&self.magnitude) {
+            let bound = 4.0 * self.k as f64 * f64::from(f32::EPSILON) * scale + 1e-10;
+            assert!((f64::from(*actual) - want).abs() <= bound, "independent f64 error bound");
+        }
+    }
 }
 
 pub fn main() {
-    #[cfg(l3i_openblas)]
-    blas::initialize();
+    let libraries = blas::load();
     println!(
         "prepared contiguous inputs; preallocated outputs; packing included; one thread; no cached packed weights"
     );
     println!("strict: ordered f32; fast: ordered FMA where available; matrixmultiply: library-selected arithmetic");
-    // `L3I_BENCH_SHAPES=256x256x256,6x128x16` runs these instead.
     let shapes = std::env::var("L3I_BENCH_SHAPES").map_or_else(
         |_| {
             vec![
@@ -96,25 +151,11 @@ pub fn main() {
         println!("shape m={m} k={k} n={n}");
         let a: Vec<f32> = (0..m * k).map(|i| (i % 29) as f32 * 0.013 - 0.17).collect();
         let b: Vec<f32> = (0..k * n).map(|i| (i % 31) as f32 * 0.017 - 0.21).collect();
-        let mut expected = vec![0.0f64; m * n];
-        let mut magnitude = vec![0.0f64; m * n];
-        for i in 0..m {
-            for j in 0..n {
-                for p in 0..k {
-                    let v = f64::from(a[i * k + p]) * f64::from(b[p * n + j]);
-                    expected[i * n + j] += v;
-                    magnitude[i * n + j] += v.abs();
-                }
-            }
-        }
-        let validate = |result: &[f32]| {
-            for ((actual, want), scale) in result.iter().zip(&expected).zip(&magnitude) {
-                let bound = 4.0 * k as f64 * f64::from(f32::EPSILON) * scale + 1e-10;
-                assert!((f64::from(*actual) - want).abs() <= bound, "independent f64 error bound");
-            }
-        };
-        let budget = Budget::new(64 << 20);
-        let domain = Domain::new(1024, 1024);
+        let validation = Validation::new(&a, &b, m, k, n);
+        // Limits a trusted host would raise; these shapes are this bench's own.
+        let limits = Limits { elements: 1 << 28, work: 1 << 40 };
+        let budget = Budget::with_elements(8 << 30, limits.elements);
+        let domain = Domain::with_limits(1024, 1024, limits);
         let bytes = |values: &[f32]| values.iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<u8>>();
         let ta = Tensor::import(&bytes(&a), Shape::Matrix(m, k), &budget).unwrap();
         let tb = Tensor::import(&bytes(&b), Shape::Matrix(k, n), &budget).unwrap();
@@ -123,12 +164,14 @@ pub fn main() {
             .matmul(&Expr::slot(1, tb.shape(), domain).unwrap())
             .unwrap();
         let mut output = vec![0u8; m * n * 4];
+        let read = |bytes: &[u8]| bytes.as_chunks::<4>().0.iter().map(|v| f32::from_le_bytes(*v)).collect::<Vec<_>>();
         for mode in [Numeric::Strict, Numeric::Fast] {
             let plan = graph.compile_with(mode).unwrap();
-            timing(&format!("graph_{mode:?}"), || {
+            if timing(&format!("graph_{mode:?}"), || {
                 plan.run_into(black_box(&[ta.borrow(), tb.borrow()]), black_box(&mut output), &budget).unwrap();
-            });
-            validate(&output.as_chunks::<4>().0.iter().map(|v| f32::from_le_bytes(*v)).collect::<Vec<_>>());
+            }) {
+                validation.check(&read(&output));
+            }
             // Weights packed once beforehand, the packing charged and not counted per call. Only
             // shapes with a kernel that reads a packing have this row.
             if m > 1 {
@@ -137,15 +180,16 @@ pub fn main() {
                 } else {
                     (ta.clone(), tb.prepare_right(&budget).unwrap())
                 };
-                timing(&format!("graph_{mode:?}_prepared"), || {
+                if timing(&format!("graph_{mode:?}_prepared"), || {
                     plan.run_into(black_box(&[left.borrow(), right.borrow()]), black_box(&mut output), &budget)
                         .unwrap();
-                });
-                validate(&output.as_chunks::<4>().0.iter().map(|v| f32::from_le_bytes(*v)).collect::<Vec<_>>());
+                }) {
+                    validation.check(&read(&output));
+                }
             }
         }
         let mut output = vec![0.0f32; m * n];
-        timing("matrixmultiply", || {
+        let ran = timing("matrixmultiply", || {
             // SAFETY: nonoverlapping live arrays have exactly the row-major extents and strides supplied.
             unsafe {
                 matrixmultiply::sgemm(
@@ -166,104 +210,158 @@ pub fn main() {
                 );
             }
         });
-        validate(&output);
-        #[cfg(l3i_openblas)]
-        {
-            timing("openblas_sgemm", || blas::multiply(m, k, n, &a, &b, &mut output));
-            validate(&output);
+        if ran {
+            validation.check(&output);
+        }
+        for library in &libraries {
+            if timing(&format!("{}_sgemm", library.name), || library.multiply(m, k, n, &a, &b, &mut output)) {
+                validation.check(&output);
+            }
             // A vector product has its own tuned BLAS routine, which is the fair comparison.
-            if n == 1 {
-                timing("openblas_sgemv", || blas::matrix_vector(m, k, &a, &b, &mut output));
-                validate(&output);
+            let vector = if n == 1 {
+                timing(&format!("{}_sgemv", library.name), || library.matrix_vector(m, k, &a, &b, &mut output))
             } else if m == 1 {
-                timing("openblas_sgemv_transposed", || blas::vector_matrix(k, n, &a, &b, &mut output));
-                validate(&output);
+                timing(&format!("{}_sgemv_transposed", library.name), || {
+                    library.vector_matrix(k, n, &a, &b, &mut output);
+                })
+            } else {
+                false
+            };
+            if vector {
+                validation.check(&output);
             }
         }
         println!("graph_budget_peak_bytes={}", budget.peak());
     }
 }
 
-#[cfg(l3i_openblas)]
 mod blas {
-    use std::ffi::{CStr, c_char, c_int};
+    use std::ffi::{CStr, CString, c_char, c_int, c_void};
     unsafe extern "C" {
-        fn cblas_sgemv(
-            order: c_int,
-            trans: c_int,
-            m: c_int,
-            n: c_int,
-            alpha: f32,
-            a: *const f32,
-            lda: c_int,
-            x: *const f32,
-            incx: c_int,
-            beta: f32,
-            y: *mut f32,
-            incy: c_int,
-        );
-        fn openblas_set_num_threads(count: c_int);
-        fn openblas_get_config() -> *const c_char;
-        fn cblas_sgemm(
-            order: c_int,
-            trans_a: c_int,
-            trans_b: c_int,
-            m: c_int,
-            n: c_int,
-            k: c_int,
-            alpha: f32,
-            a: *const f32,
-            lda: c_int,
-            b: *const f32,
-            ldb: c_int,
-            beta: f32,
-            c: *mut f32,
-            ldc: c_int,
-        );
+        fn dlopen(path: *const c_char, flags: c_int) -> *mut c_void;
+        fn dlsym(library: *mut c_void, name: *const c_char) -> *mut c_void;
     }
-    pub fn initialize() {
-        // SAFETY: OpenBLAS returns a process-lifetime NUL-terminated configuration string.
-        let config = unsafe { CStr::from_ptr(openblas_get_config()) }.to_string_lossy();
-        assert!(!config.contains("USE64BITINT"), "this benchmark requires the LP64 CBLAS ABI");
-        if config.contains("USE_OPENMP") {
-            assert_eq!(
-                std::env::var("OMP_NUM_THREADS").as_deref(),
-                Ok("1"),
-                "set OMP_NUM_THREADS=1 before launching an OpenMP OpenBLAS benchmark"
-            );
+    /// Resolve everything now, and keep this library's symbols out of the global scope.
+    const RTLD_NOW_LOCAL: c_int = 2;
+    type Sgemv = unsafe extern "C" fn(
+        c_int,
+        c_int,
+        c_int,
+        c_int,
+        f32,
+        *const f32,
+        c_int,
+        *const f32,
+        c_int,
+        f32,
+        *mut f32,
+        c_int,
+    );
+    type Sgemm = unsafe extern "C" fn(
+        c_int,
+        c_int,
+        c_int,
+        c_int,
+        c_int,
+        c_int,
+        f32,
+        *const f32,
+        c_int,
+        *const f32,
+        c_int,
+        f32,
+        *mut f32,
+        c_int,
+    );
+    pub struct Library {
+        pub name: String,
+        sgemv: Sgemv,
+        sgemm: Sgemm,
+    }
+    fn symbol(library: *mut c_void, name: &CStr) -> *mut c_void {
+        // SAFETY: a live handle from `dlopen` and a NUL-terminated name.
+        unsafe { dlsym(library, name.as_ptr()) }
+    }
+    pub fn load() -> Vec<Library> {
+        let Ok(list) = std::env::var("L3I_BENCH_BLAS") else {
+            return Vec::new();
+        };
+        let threads: c_int = std::env::var("L3I_BENCH_THREADS").map_or(1, |n| n.parse().expect("a thread count"));
+        list.split(',')
+            .map(|entry| {
+                let (name, path) = entry.split_once('=').expect("name=path");
+                let path = CString::new(path).unwrap();
+                // SAFETY: a NUL-terminated path; the library stays loaded for the process's life.
+                let library = unsafe { dlopen(path.as_ptr(), RTLD_NOW_LOCAL) };
+                assert!(!library.is_null(), "could not load {path:?}");
+                let (vector, product) = (symbol(library, c"cblas_sgemv"), symbol(library, c"cblas_sgemm"));
+                assert!(!vector.is_null() && !product.is_null(), "{path:?} has no CBLAS");
+                // Each library's own way to choose a thread count, where it has one.
+                let openblas = symbol(library, c"openblas_set_num_threads");
+                if !openblas.is_null() {
+                    // SAFETY: this symbol is OpenBLAS's `void (int)`, called before any work.
+                    unsafe { std::mem::transmute::<*mut c_void, unsafe extern "C" fn(c_int)>(openblas)(threads) };
+                    let config = symbol(library, c"openblas_get_config");
+                    // SAFETY: `char *(void)` returning a process-lifetime string.
+                    let config = unsafe {
+                        CStr::from_ptr(std::mem::transmute::<*mut c_void, unsafe extern "C" fn() -> *const c_char>(
+                            config,
+                        )())
+                    }
+                    .to_string_lossy();
+                    assert!(!config.contains("USE64BITINT"), "this benchmark requires the LP64 CBLAS ABI");
+                    if config.contains("USE_OPENMP") {
+                        assert_eq!(
+                            std::env::var("OMP_NUM_THREADS").ok(),
+                            Some(threads.to_string()),
+                            "set OMP_NUM_THREADS to L3I_BENCH_THREADS for an OpenMP OpenBLAS"
+                        );
+                    }
+                    println!("{name}: OpenBLAS {config}; threads={threads}");
+                }
+                let blis = symbol(library, c"bli_thread_set_num_threads");
+                if !blis.is_null() {
+                    // SAFETY: this symbol is BLIS's `void (dim_t)`, with `dim_t` an i64 on LP64.
+                    unsafe { std::mem::transmute::<*mut c_void, unsafe extern "C" fn(i64)>(blis)(threads.into()) };
+                    println!("{name}: BLIS; threads={threads}");
+                }
+                Library {
+                    name: name.to_owned(),
+                    // SAFETY: both symbols are CBLAS functions of exactly these signatures.
+                    sgemv: unsafe { std::mem::transmute::<*mut c_void, Sgemv>(vector) },
+                    // SAFETY: as above.
+                    sgemm: unsafe { std::mem::transmute::<*mut c_void, Sgemm>(product) },
+                }
+            })
+            .collect()
+    }
+    impl Library {
+        /// `out = a x`, with `a` `m` by `k`.
+        pub fn matrix_vector(&self, m: usize, k: usize, a: &[f32], x: &[f32], out: &mut [f32]) {
+            assert_eq!((a.len(), x.len(), out.len()), (m * k, k, m));
+            let (m, k) = (c_int::try_from(m).unwrap(), c_int::try_from(k).unwrap());
+            // SAFETY: LP64 checked at load; 101 is row-major, 111 is no transpose. The disjoint slices
+            // have exactly these extents.
+            unsafe { (self.sgemv)(101, 111, m, k, 1.0, a.as_ptr(), k, x.as_ptr(), 1, 0.0, out.as_mut_ptr(), 1) };
         }
-
-        // SAFETY: initialize the process-wide library before any work; one is a valid thread count.
-        unsafe {
-            openblas_set_num_threads(1);
+        /// `out = x b`, with `b` `k` by `n`, as the transposed product.
+        pub fn vector_matrix(&self, k: usize, n: usize, x: &[f32], b: &[f32], out: &mut [f32]) {
+            assert_eq!((b.len(), x.len(), out.len()), (k * n, k, n));
+            let (k, n) = (c_int::try_from(k).unwrap(), c_int::try_from(n).unwrap());
+            // SAFETY: as for `matrix_vector`, with 112 the transpose.
+            unsafe { (self.sgemv)(101, 112, k, n, 1.0, b.as_ptr(), n, x.as_ptr(), 1, 0.0, out.as_mut_ptr(), 1) };
         }
-        println!("OpenBLAS {config}; threads=1");
-    }
-    /// `out = a x`, with `a` `m` by `k`.
-    pub fn matrix_vector(m: usize, k: usize, a: &[f32], x: &[f32], out: &mut [f32]) {
-        assert_eq!((a.len(), x.len(), out.len()), (m * k, k, m));
-        let (m, k) = (c_int::try_from(m).unwrap(), c_int::try_from(k).unwrap());
-        // SAFETY: LP64 checked at initialization; 101 is row-major, 111 is no transpose. The disjoint
-        // slices have exactly these extents.
-        unsafe { cblas_sgemv(101, 111, m, k, 1.0, a.as_ptr(), k, x.as_ptr(), 1, 0.0, out.as_mut_ptr(), 1) };
-    }
-    /// `out = x b`, with `b` `k` by `n`, as the transposed product.
-    pub fn vector_matrix(k: usize, n: usize, x: &[f32], b: &[f32], out: &mut [f32]) {
-        assert_eq!((b.len(), x.len(), out.len()), (k * n, k, n));
-        let (k, n) = (c_int::try_from(k).unwrap(), c_int::try_from(n).unwrap());
-        // SAFETY: as for `matrix_vector`, with 112 the transpose.
-        unsafe { cblas_sgemv(101, 112, k, n, 1.0, b.as_ptr(), n, x.as_ptr(), 1, 0.0, out.as_mut_ptr(), 1) };
-    }
-    #[allow(clippy::many_single_char_names)]
-    pub fn multiply(m: usize, k: usize, n: usize, a: &[f32], b: &[f32], out: &mut [f32]) {
-        assert_eq!(a.len(), m * k);
-        assert_eq!(b.len(), k * n);
-        assert_eq!(out.len(), m * n);
-        let (m, k, n) = (c_int::try_from(m).unwrap(), c_int::try_from(k).unwrap(), c_int::try_from(n).unwrap());
-        // SAFETY: LP64 checked at initialization; 101 is row-major, 111 is no transpose.
-        // The disjoint slices cover all row-major dimensions; leading dimensions match their rows.
-        unsafe {
-            cblas_sgemm(101, 111, 111, m, n, k, 1.0, a.as_ptr(), k, b.as_ptr(), n, 0.0, out.as_mut_ptr(), n);
+        #[allow(clippy::many_single_char_names)]
+        pub fn multiply(&self, m: usize, k: usize, n: usize, a: &[f32], b: &[f32], out: &mut [f32]) {
+            assert_eq!(a.len(), m * k);
+            assert_eq!(b.len(), k * n);
+            assert_eq!(out.len(), m * n);
+            let (m, k, n) = (c_int::try_from(m).unwrap(), c_int::try_from(k).unwrap(), c_int::try_from(n).unwrap());
+            // SAFETY: LP64 checked at load; 101 is row-major, 111 is no transpose. The disjoint slices
+            // cover all row-major dimensions; leading dimensions match their rows.
+            unsafe {
+                (self.sgemm)(101, 111, 111, m, n, k, 1.0, a.as_ptr(), k, b.as_ptr(), n, 0.0, out.as_mut_ptr(), n);
+            }
         }
     }
 }

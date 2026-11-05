@@ -83,14 +83,6 @@ fn sources(dir: &Path) -> Vec<PathBuf> {
 fn main() {
     println!("cargo:rerun-if-env-changed=LUAU_CXXFLAGS");
     println!("cargo:rustc-check-cfg=cfg(l3i_compare)");
-    println!("cargo:rustc-check-cfg=cfg(l3i_openblas)");
-    println!("cargo:rerun-if-env-changed=L3I_BENCH_OPENBLAS");
-    if std::env::var_os("CARGO_CFG_L3I_OPENBLAS").is_some() {
-        let library =
-            std::env::var("L3I_BENCH_OPENBLAS").expect("set L3I_BENCH_OPENBLAS to an OpenBLAS shared library");
-        assert!(Path::new(&library).is_absolute(), "L3I_BENCH_OPENBLAS must be an absolute path");
-        println!("cargo:rustc-link-arg-benches={library}");
-    }
     println!("cargo:rerun-if-changed=luau");
     println!("cargo:rerun-if-changed=csrc");
     println!("cargo:rustc-env=L3I_TAG_LIMIT={TAG_LIMIT}");
