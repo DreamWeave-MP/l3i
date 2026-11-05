@@ -99,6 +99,86 @@ local mutations: { Mutation } = {
 	{ label = "stage: strided softmax reads the wrong row", file = "program.rs",
 	  old = "let values = rows.row(row, &mut copy);", new = "let values = rows.row(row / 2, &mut copy);" },
 
+	-- Matmul kernels.
+	{ label = "matmul: strict kernel fuses", file = "kernels.rs",
+	  old = "*value = if FUSED { scale.mul_add(*f, *value) } else { *value + scale * *f };", new = "*value = scale.mul_add(*f, *value);" },
+	{ label = "matmul: microkernel ignores what the previous pass left", file = "kernels.rs",
+	  old = "source[..at.cols].copy_from_slice(&out[at.base + r * at.stride..][..at.cols]);", new = "" },
+	{ label = "matmul: remainder writes its padding lanes", file = "kernels.rs",
+	  old = "out[at.base + r * at.stride..][..at.cols].copy_from_slice(&target[..at.cols]);", new = "let end = (at.base + r * at.stride + WIDTH).min(out.len()); let start = at.base + r * at.stride; out[start..end].copy_from_slice(&target[..end - start]);" },
+	{ label = "matmul: remainder width too narrow", file = "kernels.rs",
+	  old = "} else if columns <= NR_NARROW {", new = "} else if columns <= NR_NARROW + 1 {" },
+	{ label = "matmul: padding keeps stale bytes", file = "kernels.rs",
+	  old = "padding.fill([0; 4]);", new = "" },
+	{ label = "matmul: pack reads the wrong column", file = "kernels.rs",
+	  old = "row.copy_from_slice(&b[p * n + first + block * NR..][..NR]);", new = "row.copy_from_slice(&b[p * n + block * NR..][..NR]);" },
+	{ label = "matmul: in-place reads the wrong column", file = "kernels.rs",
+	  old = "row[..cols].copy_from_slice(&self.b[p * self.n + self.first_column + column..][..cols]);", new = "row[..cols].copy_from_slice(&self.b[p * self.n + column..][..cols]);" },
+	{ label = "matmul: k blocks run in reverse", file = "kernels.rs",
+	  old = "(0..k).step_by(K_BLOCK).map(move |start| (start, (start + K_BLOCK).min(k), first, cols))", new = "(0..k).step_by(K_BLOCK).rev().map(move |start| (start, (start + K_BLOCK).min(k), first, cols))" },
+	{ label = "matmul: column passes overlap", file = "kernels.rs",
+	  old = "let cols = (n - first).min(N_BLOCK);\n        (0..k)", new = "let cols = (n - first).min(N_BLOCK + 1);\n        (0..k)" },
+	{ label = "matmul: scales read the wrong row", file = "kernels.rs",
+	  old = "std::array::from_fn(|r| &a[(row + r) * k + start..][..rows]);", new = "std::array::from_fn(|r| &a[row * k + start..][..rows + r * 0]);" },
+	{ label = "matmul: remainder rows dropped", file = "kernels.rs",
+	  old = "1 => row_block::<FUSED, 1>(pass, factors, out, whole, cols),", new = "1 => {}" },
+	{ label = "matmul: stream drops the fourth row's term", file = "kernels.rs",
+	  old = "sums[l] = term(term(term(term(sums[l], s[0], x0[l]), s[1], x1[l]), s[2], x2[l]), s[3], x3[l]);", new = "sums[l] = term(term(term(sums[l], s[0], x0[l]), s[1], x1[l]), s[2], x2[l]);" },
+	{ label = "matmul: stream terms out of order", file = "kernels.rs",
+	  old = "sums[l] = term(term(term(term(sums[l], s[0], x0[l]), s[1], x1[l]), s[2], x2[l]), s[3], x3[l]);", new = "sums[l] = term(term(term(term(sums[l], s[1], x1[l]), s[0], x0[l]), s[2], x2[l]), s[3], x3[l]);" },
+	{ label = "matmul: stream tail ignores the output", file = "kernels.rs",
+	  old = "*slot = term(term(term(term(read(*slot), s[0], *x0), s[1], *x1), s[2], *x2), s[3], *x3).to_le_bytes();", new = "*slot = term(term(term(term(0.0, s[0], *x0), s[1], *x1), s[2], *x2), s[3], *x3).to_le_bytes();" },
+	{ label = "matmul: fused on the strict stream", file = "kernels.rs",
+	  old = "if FUSED { scale.mul_add(read(factor), sum) } else { sum + scale * read(factor) }", new = "scale.mul_add(read(factor), sum)" },
+	{ label = "matmul: fused on the strict column", file = "kernels.rs",
+	  old = "if FUSED { read(left).mul_add(right, sum) } else { sum + read(left) * right }", new = "read(left).mul_add(right, sum)" },
+	{ label = "matmul: scratch one pass too small", file = "kernels.rs",
+	  old = "let widest = if n >= N_BLOCK { N_BLOCK } else { n / NR * NR + remainder_width(n % NR) };", new = "let widest = if n >= N_BLOCK { N_BLOCK } else { n / NR * NR };" },
+	{ label = "matmul: scratch never charged", file = "program.rs",
+	  old = "let needed = if right.is_some() { 0 } else { kernels::matmul_scratch(m, k, n) };\n                    let _charge = budget.charge(needed)?;", new = "let needed = if right.is_some() { 0 } else { kernels::matmul_scratch(m, k, n) };" },
+	{ label = "matmul: strict program runs fused", file = "program.rs",
+	  old = "let isa = if isa == Isa::Fma && self.numeric == Numeric::Strict { Isa::detect() } else { isa };", new = "" },
+
+	-- Packed weights.
+	{ label = "prepared: panel column misplaced", file = "kernels.rs",
+	  old = "*slot = if row + lane < m { a[(row + lane) * k + p] } else { [0; 4] };", new = "*slot = if row + lane < m { a[(row + lane) * k + p.saturating_sub(1)] } else { [0; 4] };" },
+	{ label = "prepared: panel padding reads out of the row", file = "kernels.rs",
+	  old = "*slot = if row + lane < m { a[(row + lane) * k + p] } else { [0; 4] };", new = "*slot = if row + lane < m { a[(row + lane) * k + p] } else { [255; 4] };" },
+	{ label = "prepared: panel tail width", file = "kernels.rs",
+	  old = "let last = &panels[whole * k..];", new = "let last = &panels[whole * k + 1..];" },
+	{ label = "prepared: pass cursor stays put", file = "kernels.rs",
+	  old = "prepared = Some(rest);", new = "prepared = Some(weights); let _ = rest;" },
+	{ label = "prepared: left packing used for a product it doesn't suit", file = "program.rs",
+	  old = "let left = if n == 1 && m > 1 {", new = "let left = if m > 1 {" },
+	{ label = "prepared: right packing used by the wrong side", file = "storage.rs",
+	  old = "(self.side == side).then(|| self.pack.bytes.as_chunks::<4>().0)", new = "Some(self.pack.bytes.as_chunks::<4>().0)" },
+	{ label = "prepared: derived views keep the packing", file = "storage.rs",
+	  old = "if !self.covers(&view)? {\n            return Err(error(\"view reaches outside parent elements\"));\n        }\n        Ok(view)", new = "if !self.covers(&view)? {\n            return Err(error(\"view reaches outside parent elements\"));\n        }\n        Ok(Self { prepared: self.prepared.clone(), ..view })" },
+	{ label = "prepared: transposition keeps the packing", file = "program.rs",
+	  old = "prepared: None,", new = "" },
+	{ label = "prepared: a strided tensor packs its storage instead of its elements", file = "storage.rs",
+	  old = "walked.bytes.as_chunks::<4>().0", new = "self.owner.bytes()[..self.shape.elements()? * 4].as_chunks::<4>().0" },
+
+	-- View authority.
+	{ label = "views: byte interval only", file = "storage.rs",
+	  old = "if !self.covers(&view)? {", new = "if false && !self.covers(&view)? {" },
+	{ label = "views: colliding parents accepted", file = "storage.rs",
+	  old = "if partial || (inner.0 > 1 && (inner.0 - 1) * inner.1 + 4 > outer.1) {", new = "if partial {" },
+	{ label = "views: partly overlapping parents accepted", file = "storage.rs",
+	  old = "let partial = (inner.0 > 1 && inner.1 < 4) || (outer.0 > 1 && outer.1 < 4);", new = "let partial = false;" },
+	{ label = "views: inner run unbounded", file = "storage.rs",
+	  old = "inner.is_multiple_of(self.inner.1) && inner / self.inner.1 < self.inner.0", new = "inner.is_multiple_of(self.inner.1)" },
+	{ label = "views: outer count unbounded", file = "storage.rs",
+	  old = "outer < self.outer.0\n", new = "(outer < self.outer.0 || self.outer.0 > 1)\n" },
+	{ label = "views: unaligned steps in a contiguous parent", file = "storage.rs",
+	  old = "let step = |count: usize, stride: usize| count == 1 || stride.is_multiple_of(4);", new = "let step = |_count: usize, _stride: usize| true;" },
+	{ label = "views: unaligned start in a contiguous parent", file = "storage.rs",
+	  old = "&& (child.offset - lattice.origin).is_multiple_of(4)\n", new = "\n" },
+	{ label = "views: a gapped parent counts as contiguous", file = "storage.rs",
+	  old = "self.inner.1 == 4 && self.outer.1 == self.inner.0 * 4", new = "self.inner.1 == 4" },
+	{ label = "views: re-deriving itself refused", file = "storage.rs",
+	  old = "if self.shape == child.shape && self.offset == child.offset && self.strides == child.strides {", new = "if false {" },
+
 	-- Stages that read nothing, and transposition.
 	{ label = "dead: an empty matmul still reads its operands", file = "program.rs",
 	  old = "rows != 0 && cols != 0 && !matches!(self, Self::MatMul { inner: 0, .. })", new = "true" },
@@ -116,6 +196,30 @@ local function run(): (boolean, string)
 	}, { stdout = "capture", stderr = "capture" })
 	assert(result, message)
 	return result.success, (result.stdout or "") .. "\n" .. (result.stderr or "")
+end
+
+-- Optional arguments keep only the bugs whose label contains one of them; the control always runs.
+local filters = { ... }
+if #filters > 0 then
+	local kept = {}
+	for index, mutation in mutations do
+		local wanted = index == 1
+		for _, filter in filters do
+			wanted = wanted or string.find(mutation.label, filter :: string, 1, true) ~= nil
+		end
+		if wanted then
+			table.insert(kept, mutation)
+		end
+	end
+	mutations = kept
+end
+-- A bug that no longer applies is a stale list, found before any of the long builds.
+for _, mutation in mutations do
+	local source, message = fs.readFileString(SRC .. mutation.file)
+	assert(source, message)
+	local _, last = string.find(source :: string, mutation.old, 1, true)
+	assert(last, "not found: " .. mutation.label)
+	assert(not string.find(source :: string, mutation.old, (last :: number) + 1, true), "not unique: " .. mutation.label)
 end
 
 local caught, survived = 0, 0

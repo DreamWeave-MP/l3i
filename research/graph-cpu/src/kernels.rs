@@ -1057,7 +1057,7 @@ fn matmul_avx2(operands: &Operands<'_>, out: &mut [Element], scratch: &mut [Elem
 fn matmul_fma(operands: &Operands<'_>, out: &mut [Element], scratch: &mut [Element]) {
     matmul_body::<true>(operands, out, scratch);
 }
-/// AArch64 always has the fused instruction, so its fused instantiation needs no target feature.
+/// `aarch64` always has the fused instruction, so its fused instantiation needs no target feature.
 #[cfg(target_arch = "aarch64")]
 #[inline(never)]
 fn matmul_fma(operands: &Operands<'_>, out: &mut [Element], scratch: &mut [Element]) {
