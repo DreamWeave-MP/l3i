@@ -1,0 +1,118 @@
+-- Row stages, transposition and packed weights through whole JSL invocations, including what
+-- happens to their native memory under budget exhaustion and garbage collection.
+local function buffer_of(values)
+ local bytes=buffer.create(#values*4)
+ for i,v in values do buffer.writef32(bytes,(i-1)*4,v) end
+ return bytes
+end
+local function floats(bytes)
+ local values={}
+ for i=0,buffer.len(bytes)/4-1 do values[i+1]=buffer.readf32(bytes,i*4) end
+ return values
+end
+local function near(a,b) return math.abs(a-b)<=1e-6*math.max(1,math.abs(b)) end
+
+testing.collect()
+local base=compute.used()
+local input=buffer_of({1,2,3,4,5,6})
+local x=compute.slot(0,2,3)
+
+-- Each stage against an answer worked out by hand, through both invocation paths.
+local out=buffer.create(24)
+x:softmax():compile():runInto(out,input)
+local s=floats(out)
+local denominator=1+math.exp(1)+math.exp(2)
+for row=0,1 do
+ for col=0,2 do assert(near(s[row*3+col+1],math.exp(col)/denominator)) end
+end
+x:layerNorm(1e-5):compile():runInto(out,input)
+s=floats(out)
+local deviation=math.sqrt(2/3+1e-5)
+assert(near(s[1],-1/deviation) and s[2]==0 and near(s[3],1/deviation))
+x:rmsNorm(3):compile():runInto(out,buffer_of({0,0,3,4,0,0}))
+s=floats(out)
+assert(near(s[3],3/math.sqrt(3+3)) and near(s[4],4/math.sqrt(16/3+3)))
+local sums=buffer.create(8)
+x:sumRows():compile():runInto(sums,input)
+assert(buffer.readf32(sums,0)==6 and buffer.readf32(sums,4)==15)
+local transposed=x:transpose():compile():run(compute.f32(input,2,3)):read()
+s=floats(transposed)
+assert(s[1]==1 and s[2]==4 and s[3]==2 and s[4]==5 and s[5]==3 and s[6]==6)
+
+-- Bad requests fail as errors, and leave the module usable.
+assert(not pcall(function() x:layerNorm(0) end))
+assert(not pcall(function() x:rmsNorm(-1) end))
+assert(not pcall(function() x:rmsNorm(0/0) end))
+assert(not pcall(function() x:softmax():compile():runInto(buffer.create(23),input) end))
+assert(not pcall(function() x:softmax():compile():runInto(input,input) end),'output aliases input')
+-- A view can't reach what its parent stepped over.
+local parent=compute.f32(buffer.create(48),2,6)
+local gapped=parent:view(2,3,0,24,8)
+assert(not pcall(function() gapped:view(1,2,0,0,4) end))
+gapped:view(1,2,0,0,8)
+parent,gapped=nil,nil
+
+-- Empty results spend nothing and read nothing.
+local empty=compute.slot(0,0,128):matmul(compute.slot(1,128,16)):compile()
+empty:runInto(buffer.create(0),buffer.create(0),buffer.create(128*16*4))
+
+-- Packed weights give the bits a plain tensor does, and go when their tensors do.
+local m,k,n=33,129,1
+local a,b=buffer.create(m*k*4),buffer.create(k*n*4)
+for i=0,m*k-1 do buffer.writef32(a,i*4,((i*37)%101)*0.125-6) end
+for i=0,k*n-1 do buffer.writef32(b,i*4,((i*13)%53)*0.25-6) end
+local program=compute.slot(0,m,k):matmul(compute.slot(1,k,n)):compile()
+local plain,packed=buffer.create(m*n*4),buffer.create(m*n*4)
+local ta,tb=compute.f32(a,m,k),compute.f32(b,k,n)
+program:runInto(plain,a,b)
+testing.collect()
+local before=compute.used()
+local left=ta:prepareLeft()
+assert(compute.used()>before,'a packing is charged')
+assert(left:shares(ta),'a packing does not copy the tensor')
+program:runTensorsInto(packed,left,tb)
+for i=0,m*n-1 do assert(buffer.readu32(plain,i*4)==buffer.readu32(packed,i*4)) end
+assert(program:runReference(left,tb):read()~=nil)
+left=nil
+testing.collect()
+assert(compute.used()==before,'a dead packing is uncharged by collection')
+ta,tb=nil,nil
+testing.collect()
+
+-- A row sum over no columns is +0 per row, however the empty view says its rows are spaced.
+do
+ local empty=compute.f32(buffer.create(0),2,0):view(2,0,0,8,4)
+ local program=compute.slot(0,2,0):sumRows():compile()
+ local sums=floats(program:run(empty):read())
+ assert(#sums==2 and sums[1]==0 and sums[2]==0 and 1/sums[1]>0 and 1/sums[2]>0)
+ local out=buffer.create(8)
+ buffer.fill(out,0,0x55)
+ program:runTensorsInto(out,empty)
+ assert(buffer.readu32(out,0)==0 and buffer.readu32(out,4)==0)
+ local reference=floats(program:runReference(empty):read())
+ assert(#reference==2 and reference[1]==0 and reference[2]==0)
+ assert(#floats(compute.slot(0,2,0):softmax():compile():run(empty):read())==0)
+end
+testing.collect()
+
+-- Hold results until the budget refuses, recover, and see every byte come back.
+local held={}
+local megabyte=buffer.create(1048576)
+local refused=false
+for _=1,128 do
+ local ok,tensor=pcall(function() return compute.f32(megabyte,1,262144) end)
+ if not ok then refused=true break end
+ table.insert(held,tensor)
+end
+assert(refused,'a 64 MiB budget refuses 128 MiB')
+held=nil
+testing.collect()
+assert(compute.used()==base)
+-- Unreferenced results that would exhaust it instead are collected on the way, with no error.
+local noise=compute.slot(0,1,262144):relu():compile()
+local logits=compute.f32(megabyte,1,262144)
+for _=1,128 do noise:run(logits) end
+logits=nil
+testing.collect()
+assert(compute.used()==base)
+print('rows: stages, errors, packed weights, exhaustion and recovery verified')

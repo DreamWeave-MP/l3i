@@ -1,0 +1,225 @@
+; function relu_sum($arg0, $arg1, $arg2, $arg3) line 5
+; align 32 using ud2
+# bb_0:                                                       ; useCount: 0
+; successors: bb_6
+; in regs: R0, R1, R2, R3
+; out regs: R0, R1, R2, R3
+.L11:
+#   CHECK_TAG R0, tbuffer, exit(entry)                        ; %1
+ cmp         dword ptr [r14+0Ch],Bh
+ jne         .L12
+#   CHECK_TAG R1, tbuffer, exit(entry)                        ; %3
+ cmp         dword ptr [r14+01Ch],Bh
+ jne         .L12
+#   CHECK_TAG R2, tbuffer, exit(entry)                        ; %5
+ cmp         dword ptr [r14+02Ch],Bh
+ jne         .L12
+#   CHECK_TAG R3, tnumber, exit(entry)                        ; %7
+ cmp         dword ptr [r14+03Ch],3
+ jne         .L12
+#   JUMP bb_6                                                 ; %8
+#
+# bb_6:                                                       ; useCount: 1
+; predecessors: bb_0
+; successors: bb_bytecode_1
+; in regs: R0, R1, R2, R3
+; out regs: R0, R1, R2, R3
+.L13:
+#   JUMP bb_bytecode_1                                        ; %9
+#
+# bb_bytecode_1:                                              ; useCount: 1
+; predecessors: bb_6
+; successors: bb_bytecode_5, bb_bytecode_2
+; in regs: R0, R1, R2, R3
+; out regs: R0, R1, R2, R4, R5, R6
+.L14:
+#   STORE_DOUBLE R6, 0                                        ; %10
+ vmovsd      xmm0,qword ptr [.start-8]
+ vmovsd      qword ptr [r14+060h],xmm0
+#   STORE_TAG R6, tnumber                                     ; %11
+ mov         dword ptr [r14+06Ch],3
+.L15:
+#   %14 = LOAD_DOUBLE R3                                      ; useCount: 1, lastUse: %15
+ vmovsd      xmm0,qword ptr [r14+030h]
+#   %15 = SUB_NUM %14, 1                                      ; useCount: 1, lastUse: %21
+ vsubsd      xmm0,xmm0,qword ptr [.start-16]
+.L16:
+#   %21 = MUL_NUM %15, 4                                      ; useCount: 2, lastUse: %32
+ vmulsd      xmm0,xmm0,qword ptr [.start-24]
+#   STORE_DOUBLE R4, %21                                      ; %22
+ vmovsd      qword ptr [r14+040h],xmm0
+#   STORE_TAG R4, tnumber                                     ; %23
+ mov         dword ptr [r14+04Ch],3
+.L17:
+#   STORE_DOUBLE R5, 4                                        ; %24
+ vmovsd      xmm1,qword ptr [.start-24]
+ vmovsd      qword ptr [r14+050h],xmm1
+#   STORE_TAG R5, tnumber                                     ; %25
+ mov         dword ptr [r14+05Ch],3
+.L18:
+#   JUMP_CMP_NUM 0, %21, not_le, bb_bytecode_5, bb_bytecode_2 ; %32
+ vucomisd    xmm0,qword ptr [.start-8]
+ jnae        .L19
+#
+# bb_bytecode_2:                                              ; useCount: 2
+; predecessors: bb_bytecode_1, bb_bytecode_4
+; successors: bb_exit_12, bb_bytecode_3, bb_9
+; in regs: R0, R1, R2, R4, R5, R6
+; out regs: R0, R1, R2, R4, R5, R6, R7
+.L20:
+#   implicit CHECK_SAFE_ENV exit(5)
+ mov         rax,qword ptr [rsp+030h]
+ mov         rax,qword ptr [rax+010h]
+ cmp         byte ptr [rax+5],0
+ je          .L21
+#   INTERRUPT 5u                                              ; %33
+ mov         rax,qword ptr [r15+018h]
+ cmp         qword ptr [rax+0670h],0
+ jne         .L22
+.L23:
+#   CHECK_TAG R6, tnumber, exit(7)                            ; %38
+ cmp         dword ptr [r14+06Ch],3
+ jne         .L24
+#   %39 = LOAD_POINTER R0                                     ; useCount: 2, lastUse: %43
+ mov         rax,qword ptr [r14]
+#   %40 = LOAD_DOUBLE R6                                      ; useCount: 1, lastUse: %41
+ vmovsd      xmm0,qword ptr [r14+060h]
+#   %41 = NUM_TO_INT %40                                      ; useCount: 4, lastUse: %57
+ vcvttsd2si  edx,xmm0
+#   CHECK_BUFFER_LEN %39, %41, 0i, 4i, undef, exit(7)         ; %42
+ lea         rcx,[rdx+4]
+ mov         ebx,dword ptr [rax+4]
+ cmp         rbx,rcx
+ jb          .L24
+#   %43 = BUFFER_READF32 %39, %41, tbuffer                    ; useCount: 1, lastUse: %44
+ vmovss      xmm0,dword ptr [rax+rdx+8]
+#   %44 = FLOAT_TO_NUM %43                                    ; useCount: 2, lastUse: %68
+ vcvtss2sd   xmm0,xmm0,xmm0
+.L25:
+#   %53 = LOAD_POINTER R1                                     ; useCount: 2, lastUse: %57
+ mov         rax,qword ptr [r14+010h]
+#   CHECK_BUFFER_LEN %53, %41, 0i, 4i, undef, bb_exit_12      ; %56
+   ; exit sync: R9, {%44}
+ lea         rcx,[rdx+4]
+ mov         ebx,dword ptr [rax+4]
+ cmp         rbx,rcx
+ jb          .L26
+#   %57 = BUFFER_READF32 %53, %41, tbuffer                    ; useCount: 1, lastUse: %58
+ vmovss      xmm1,dword ptr [rax+rdx+8]
+#   %58 = FLOAT_TO_NUM %57                                    ; useCount: 1, lastUse: %68
+ vcvtss2sd   xmm1,xmm1,xmm1
+.L27:
+#   %68 = ADD_NUM %44, %58                                    ; useCount: 1, lastUse: %74
+ vaddsd      xmm0,xmm0,xmm1
+.L28:
+#   %74 = ADD_NUM %68, 2                                      ; useCount: 2, lastUse: %85
+ vaddsd      xmm0,xmm0,qword ptr [.start-32]
+#   STORE_DOUBLE R7, %74                                      ; %75
+ vmovsd      qword ptr [r14+070h],xmm0
+#   STORE_TAG R7, tnumber                                     ; %76
+ mov         dword ptr [r14+07Ch],3
+.L29:
+.L30:
+#   JUMP_CMP_NUM %74, 0, not_le, bb_bytecode_3, bb_9          ; %85
+ vmovsd      xmm1,qword ptr [.start-8]
+ vucomisd    xmm1,xmm0
+ jnae        .L31
+#
+# bb_9:                                                       ; useCount: 1
+; predecessors: bb_bytecode_2
+; successors: bb_bytecode_4
+; in regs: R0, R1, R2, R4, R5, R6
+; out regs: R0, R1, R2, R4, R5, R6, R11
+.L32:
+#   STORE_DOUBLE R11, 0                                       ; %89
+ vmovsd      xmm0,qword ptr [.start-8]
+ vmovsd      qword ptr [r14+0B0h],xmm0
+#   STORE_TAG R11, tnumber                                    ; %90
+ mov         dword ptr [r14+0BCh],3
+.L33:
+#   JUMP bb_bytecode_4                                        ; %91
+ jmp         .L34
+#
+# bb_bytecode_3:                                              ; useCount: 1
+; predecessors: bb_bytecode_2
+; successors: bb_bytecode_4
+; in regs: R0, R1, R2, R4, R5, R6, R7
+; out regs: R0, R1, R2, R4, R5, R6, R11
+.L31:
+#   %92 = LOAD_TVALUE R7, 0i, tnumber                         ; useCount: 1, lastUse: %93
+ vmovups     xmm0,xmmword ptr [r14+070h]
+#   STORE_TVALUE R11, %92                                     ; %93
+ vmovups     xmmword ptr [r14+0B0h],xmm0
+#   JUMP bb_bytecode_4                                        ; %94
+#
+# bb_bytecode_4:                                              ; useCount: 2
+; predecessors: bb_bytecode_3, bb_9
+; successors: bb_bytecode_2, bb_bytecode_5
+; in regs: R0, R1, R2, R4, R5, R6, R11
+; out regs: R0, R1, R2, R4, R5, R6
+.L34:
+#   implicit CHECK_SAFE_ENV exit(27)
+ mov         rax,qword ptr [rsp+030h]
+ mov         rax,qword ptr [rax+010h]
+ cmp         byte ptr [rax+5],0
+ je          .L35
+#   CHECK_TAG R6, tnumber, exit(29)                           ; %99
+ cmp         dword ptr [r14+06Ch],3
+ jne         .L36
+#   CHECK_TAG R11, tnumber, exit(29)                          ; %101
+ cmp         dword ptr [r14+0BCh],3
+ jne         .L36
+#   %102 = LOAD_POINTER R2                                    ; useCount: 2, lastUse: %108
+ mov         rax,qword ptr [r14+020h]
+#   %103 = LOAD_DOUBLE R6                                     ; useCount: 2, lastUse: %113
+ vmovsd      xmm0,qword ptr [r14+060h]
+#   %104 = NUM_TO_INT %103                                    ; useCount: 2, lastUse: %108
+ vcvttsd2si  edx,xmm0
+#   CHECK_BUFFER_LEN %102, %104, 0i, 4i, undef, exit(29)      ; %105
+ lea         rcx,[rdx+4]
+ mov         ebx,dword ptr [rax+4]
+ cmp         rbx,rcx
+ jb          .L36
+#   %106 = LOAD_DOUBLE R11                                    ; useCount: 1, lastUse: %107
+ vmovsd      xmm1,qword ptr [r14+0B0h]
+#   %107 = NUM_TO_FLOAT %106                                  ; useCount: 1, lastUse: %108
+ vcvtsd2ss   xmm1,xmm1,xmm1
+#   BUFFER_WRITEF32 %102, %104, %107, tbuffer                 ; %108
+ vmovss      dword ptr [rax+rdx+8],xmm1
+.L37:
+#   CHECK_GC                                                  ; %110
+ mov         rax,qword ptr [r15+018h]
+ mov         rdx,qword ptr [rax+048h]
+ cmp         rdx,qword ptr [rax+040h]
+ jb          .L38
+ mov         rdi,r15
+ mov         esi,1
+ call        qword ptr [r13+0C8h]
+ mov         r14,qword ptr [r15+010h]
+ vmovsd      xmm0,qword ptr [r14+060h]
+.L38:
+#   %111 = LOAD_DOUBLE R4                                     ; useCount: 1, lastUse: %116
+ vmovsd      xmm1,qword ptr [r14+040h]
+#   %113 = ADD_NUM %103, 4                                    ; useCount: 2, lastUse: %116
+ vaddsd      xmm0,xmm0,qword ptr [.start-24]
+#   STORE_DOUBLE R6, %113                                     ; %114
+ vmovsd      qword ptr [r14+060h],xmm0
+#   JUMP_CMP_NUM %113, %111, le, bb_bytecode_2, bb_bytecode_5 ; %116
+ vucomisd    xmm1,xmm0
+ jae         .L20
+#
+# bb_bytecode_5:                                              ; useCount: 2
+; predecessors: bb_bytecode_1, bb_bytecode_4
+.L19:
+#   INTERRUPT 35u                                             ; %117
+ mov         rax,qword ptr [r15+018h]
+ cmp         qword ptr [rax+0670h],0
+ jne         .L39
+.L40:
+#   RETURN R0, 0i                                             ; %118
+ lea         rdi,[r14-010h]
+ xor         ecx,ecx
+ jmp         .L7
+#
+; skipping 116 bytes of outlined code
+

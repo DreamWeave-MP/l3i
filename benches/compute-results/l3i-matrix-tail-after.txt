@@ -1,0 +1,57 @@
+OpenBLAS OpenBLAS 0.3.29 DYNAMIC_ARCH NO_AFFINITY USE_OPENMP Haswell MAX_THREADS=128; threads=1
+prepared contiguous inputs; preallocated outputs; packing included; one thread; no cached packed weights
+strict: ordered f32; fast: ordered FMA where available; matrixmultiply: library-selected arithmetic
+shape m=1 k=256 n=256
+graph_Strict median_us=4.890 min_us=4.495 p90_us=5.886
+graph_Fast median_us=4.724 min_us=4.564 p90_us=5.274
+matrixmultiply median_us=28.271 min_us=27.750 p90_us=29.226
+openblas median_us=19.709 min_us=19.373 p90_us=20.571
+graph_budget_peak_bytes=263168
+shape m=1 k=1024 n=1024
+graph_Strict median_us=102.299 min_us=99.805 p90_us=105.794
+graph_Fast median_us=98.126 min_us=93.886 p90_us=101.998
+matrixmultiply median_us=543.075 min_us=523.940 p90_us=559.900
+openblas median_us=313.667 min_us=303.023 p90_us=325.106
+graph_budget_peak_bytes=4198400
+shape m=4 k=1024 n=1024
+graph_Strict median_us=619.224 min_us=595.168 p90_us=644.749
+graph_Fast median_us=624.161 min_us=603.513 p90_us=636.028
+matrixmultiply median_us=553.163 min_us=534.548 p90_us=564.546
+openblas median_us=282.057 min_us=275.119 p90_us=289.595
+graph_budget_peak_bytes=4734976
+shape m=16 k=16 n=16
+graph_Strict median_us=0.450 min_us=0.444 p90_us=0.461
+graph_Fast median_us=0.401 min_us=0.389 p90_us=0.413
+matrixmultiply median_us=0.237 min_us=0.231 p90_us=0.244
+openblas median_us=0.251 min_us=0.242 p90_us=0.258
+graph_budget_peak_bytes=3072
+shape m=64 k=64 n=64
+graph_Strict median_us=10.980 min_us=10.547 p90_us=11.213
+graph_Fast median_us=7.408 min_us=7.184 p90_us=7.458
+matrixmultiply median_us=7.010 min_us=6.820 p90_us=7.093
+openblas median_us=6.217 min_us=6.015 p90_us=6.299
+graph_budget_peak_bytes=49152
+shape m=256 k=256 n=256
+graph_Strict median_us=600.951 min_us=588.163 p90_us=610.313
+graph_Fast median_us=367.676 min_us=363.204 p90_us=372.068
+matrixmultiply median_us=366.138 min_us=364.379 p90_us=370.213
+openblas median_us=319.596 min_us=314.476 p90_us=321.526
+graph_budget_peak_bytes=655360
+shape m=31 k=127 n=17
+graph_Strict median_us=6.799 min_us=6.677 p90_us=7.052
+graph_Fast median_us=5.905 min_us=5.743 p90_us=5.980
+matrixmultiply median_us=3.474 min_us=3.377 p90_us=3.526
+openblas median_us=2.924 min_us=2.838 p90_us=2.975
+graph_budget_peak_bytes=32512
+shape m=256 k=256 n=1
+graph_Strict median_us=63.261 min_us=61.549 p90_us=64.164
+graph_Fast median_us=61.789 min_us=60.220 p90_us=63.630
+matrixmultiply median_us=30.750 min_us=29.839 p90_us=31.465
+openblas median_us=14.692 min_us=14.316 p90_us=15.155
+graph_budget_peak_bytes=263168
+shape m=128 k=64 n=512
+graph_Strict median_us=152.782 min_us=147.876 p90_us=155.230
+graph_Fast median_us=95.261 min_us=93.674 p90_us=96.499
+matrixmultiply median_us=100.116 min_us=97.469 p90_us=101.610
+openblas median_us=89.199 min_us=87.367 p90_us=89.553
+graph_budget_peak_bytes=294912

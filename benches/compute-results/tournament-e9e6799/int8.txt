@@ -1,0 +1,27 @@
+int8 rows=1 columns=1024 weight_bytes=1024 f32_weight_bytes=4096
+int8_exact_matvec                              n=1024     median_us=0.048        min_us=0.046        p90_us=0.049        ns_per_element=0.046
+int8_exact_matvec_heap                         allocations_per_run=0.0 bytes_per_run=0
+int8_exact_matvec_baseline                     n=1024     median_us=0.206        min_us=0.197        p90_us=0.232        ns_per_element=0.201
+int8_exact_dot                                 n=1024     median_us=0.040        min_us=0.038        p90_us=0.043        ns_per_element=0.039
+int8_exact_dot_baseline                        n=1024     median_us=0.200        min_us=0.181        p90_us=0.216        ns_per_element=0.195
+int4_exact_matvec                              n=1024     median_us=0.096        min_us=0.089        p90_us=0.108        ns_per_element=0.094
+f32_strict_matvec_program                      n=1024     median_us=1.002        min_us=0.954        p90_us=1.052        ns_per_element=0.979
+f32_strict_matvec_prepared                     n=1024     median_us=1.061        min_us=0.955        p90_us=1.165        ns_per_element=1.036
+int8 rows=64 columns=1024 weight_bytes=65536 f32_weight_bytes=262144
+int8_exact_matvec                              n=65536    median_us=2.768        min_us=2.499        p90_us=3.097        ns_per_element=0.042
+int8_exact_matvec_heap                         allocations_per_run=0.0 bytes_per_run=0
+int8_exact_matvec_baseline                     n=65536    median_us=12.590       min_us=11.675       p90_us=15.220       ns_per_element=0.192
+int8_exact_dot                                 n=1024     median_us=0.043        min_us=0.037        p90_us=0.048        ns_per_element=0.042
+int8_exact_dot_baseline                        n=1024     median_us=0.191        min_us=0.183        p90_us=0.203        ns_per_element=0.187
+int4_exact_matvec                              n=65536    median_us=4.463        min_us=4.144        p90_us=5.065        ns_per_element=0.068
+f32_strict_matvec_program                      n=65536    median_us=15.992       min_us=15.349       p90_us=17.443       ns_per_element=0.244
+f32_strict_matvec_prepared                     n=65536    median_us=4.107        min_us=3.959        p90_us=5.120        ns_per_element=0.063
+int8 rows=1024 columns=1024 weight_bytes=1048576 f32_weight_bytes=4194304
+int8_exact_matvec                              n=1048576  median_us=47.815       min_us=42.282       p90_us=51.644       ns_per_element=0.046
+int8_exact_matvec_heap                         allocations_per_run=0.0 bytes_per_run=0
+int8_exact_matvec_baseline                     n=1048576  median_us=206.195      min_us=191.446      p90_us=223.601      ns_per_element=0.197
+int8_exact_dot                                 n=1024     median_us=0.040        min_us=0.037        p90_us=0.042        ns_per_element=0.039
+int8_exact_dot_baseline                        n=1024     median_us=0.206        min_us=0.182        p90_us=0.247        ns_per_element=0.201
+int4_exact_matvec                              n=1048576  median_us=68.031       min_us=64.993       p90_us=74.093       ns_per_element=0.065
+f32_strict_matvec_program                      n=1048576  median_us=254.258      min_us=241.986      p90_us=273.708      ns_per_element=0.242
+f32_strict_matvec_prepared                     n=1048576  median_us=83.571       min_us=72.750       p90_us=97.085       ns_per_element=0.080

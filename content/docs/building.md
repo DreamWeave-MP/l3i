@@ -87,6 +87,8 @@ l3i = { version = "2", features = ["jit"] }
 | `bytes-crypto` | off | `ring` and `zeroize`: `bytes.random` from the OS CSPRNG, `bytes.hmac`, `bytes.hmacVerify`, `bytes.rsaSign` and `bytes.ecdsaSign` |
 | `bytes-text` | off | `encoding_rs`: text decoding and encoding for every WHATWG label |
 | `bytes-regex` | off | `regex`: `bytes.regex`, regular expressions over bytes, many ranges of a buffer in one call |
+| `compute` | off | The `dream.compute` extension (`l3i::compute`); no dependencies |
+| `compute-testing` | off | `compute` and `data` plus the engine's reference oracle, generated-code comparators and shared workloads, for its tests and benches |
 | `intern` | off | The `dream.intern` extension (`l3i::intern`); no dependencies |
 | `intl` | off | The `dream.intl` extension (`l3i::intl`) with ICU4X's `icu_locale_core`, `icu_plurals` and `icu_decimal` and their compiled CLDR data, `fixed_decimal` and `writeable`: BCP 47 locales, plural rules, decimal formatting |
 | `syntax` | off | The `dream.luau` extension (`l3i::syntax`) and `csrc/syntax.cpp`, which builds Luau's parse tree as tables; Luau's Ast library is in every build, so no dependencies |

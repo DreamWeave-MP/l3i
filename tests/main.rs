@@ -70,6 +70,8 @@ mod audio;
 mod bytes;
 mod call;
 mod comprehension;
+#[cfg(feature = "compute")]
+mod compute;
 #[cfg(feature = "data")]
 mod data;
 mod debug;

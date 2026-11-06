@@ -1,0 +1,115 @@
+-- End-to-end from JSL. Each row reports median/min/p90 microseconds of timed samples.
+local SAMPLES = 31
+local function sample(n, body)
+    local iterations = 1
+    while true do
+        local start = testing.clock()
+        for _ = 1, iterations do body() end
+        if testing.clock() - start >= 0.002 or iterations >= 4096 then break end
+        iterations *= 2
+    end
+    local times = {}
+    for s = 1, SAMPLES do
+        local start = testing.clock()
+        for _ = 1, iterations do body() end
+        times[s] = (testing.clock() - start) * 1e6 / iterations
+    end
+    table.sort(times)
+    return times[(SAMPLES + 1) // 2], times[1], times[math.ceil(SAMPLES * 0.9)]
+end
+local function row(label, n, body)
+    local median, min, p90 = sample(n, body)
+    print(string.format('%-46s n=%-8d median_us=%-12.3f min_us=%-12.3f p90_us=%-12.3f ns_per_element=%.3f',
+        label, n, median, min, p90, if n > 0 then median * 1000 / n else 0))
+    return median
+end
+
+print('\n# JSL end to end: relu(a+b+2)')
+for _, n in { 0, 1, 16, 1024, 65536, 1048576 } do
+    local a, b, out, two = buffer.create(n * 4), buffer.create(n * 4), buffer.create(n * 4), buffer.create(n * 4)
+    for i = 0, n - 1 do
+        buffer.writef32(a, i * 4, i % 101 - 50)
+        buffer.writef32(b, i * 4, i % 13 - 6)
+        buffer.writef32(two, i * 4, 2)
+    end
+    local start = testing.clock()
+    local x, y = compute.slot(0, 1, n), compute.slot(1, 1, n)
+    local graph = x:add(y):add(compute.constant(2)):relu()
+    local built = (testing.clock() - start) * 1e6
+    start = testing.clock()
+    local program = graph:compile()
+    local compiled = (testing.clock() - start) * 1e6
+    start = testing.clock()
+    local ta, tb = compute.f32(a, 1, n), compute.f32(b, 1, n)
+    local imported = (testing.clock() - start) * 1e6
+    print(string.format('phases n=%d graph_build_us=%.3f plan_compile_us=%.3f import_both_inputs_us=%.3f', n, built, compiled, imported))
+
+    start = testing.clock()
+    program:runInto(out, a, b)
+    print(string.format('first_runInto n=%d us=%.3f', n, (testing.clock() - start) * 1e6))
+    row('jsl_chunked_runInto_borrowed_buffers', n, function() program:runInto(out, a, b) end)
+    for i = 0, n - 1 do
+        assert(buffer.readf32(out, i * 4) == math.max(i % 101 - 50 + i % 13 - 6 + 2, 0))
+    end
+
+    local allocated = testing.allocations()
+    local result = program:run(ta, tb)
+    print(string.format('run_payload_allocations n=%d count=%d', n, testing.allocations() - allocated))
+    row('jsl_chunked_run_fresh_tensor', n, function() result = program:run(ta, tb) end)
+    if n < 1048576 then
+        row('jsl_reference_run_fresh_tensor', n, function() result = program:runReference(ta, tb) end)
+    end
+    row('jsl_readback_new_buffer', n, function() return result:read() end)
+
+    row('jsl_data_three_pass', n, function()
+        data.add(a, 'f32', 0, b, 0, out, 0, n)
+        data.add(out, 'f32', 0, two, 0, out, 0, n)
+        data.clamp(out, 'f32', 0, n, 0, math.huge, out, 0)
+    end)
+    for i = 0, n - 1 do
+        assert(buffer.readf32(out, i * 4) == math.max(i % 101 - 50 + i % 13 - 6 + 2, 0))
+    end
+
+    start = testing.clock()
+    local native = program:native()
+    print(string.format('luau_native_load_and_jit n=%d us=%.3f', n, (testing.clock() - start) * 1e6))
+    local inputs = { a, b }
+    if n <= 65536 then
+        row('jsl_generated_luau_native_strict', n, function() native(inputs, out) end)
+    end
+    for i = 0, n - 1 do
+        assert(buffer.readf32(out, i * 4) == math.max(i % 101 - 50 + i % 13 - 6 + 2, 0))
+    end
+    if n <= 65536 then
+        row('jsl_handwritten_luau_native_f64', n, function() kernels.relu_sum(a, b, out, n) end)
+        for i = 0, n - 1 do
+            assert(buffer.readf32(out, i * 4) == math.max(i % 101 - 50 + i % 13 - 6 + 2, 0))
+        end
+        testing.setNative(false)
+        row('jsl_handwritten_luau_interpreted_f64', n, function() kernels.relu_sum(a, b, out, n) end)
+        testing.setNative(true)
+    end
+
+    result, ta, tb, program, graph, x, y, native = nil, nil, nil, nil, nil, nil, nil, nil
+    testing.collect()
+end
+
+print('\n# JSL matrix multiplication, fresh tensor')
+for _, side in { 16, 64, 256 } do
+    local a, b = buffer.create(side * side * 4), buffer.create(side * side * 4)
+    for i = 0, side * side - 1 do
+        buffer.writef32(a, i * 4, i % 17 * 0.25 - 2)
+        buffer.writef32(b, i * 4, i % 23 * 0.125 - 1)
+    end
+    local ta, tb = compute.f32(a, side, side), compute.f32(b, side, side)
+    local program = compute.slot(0, side, side):matmul(compute.slot(1, side, side)):compile()
+    local out = buffer.create(side * side * 4)
+    row('jsl_matmul_chunked_runInto', side * side * side, function() program:runInto(out, a, b) end)
+    row('jsl_matmul_reference', side * side * side, function() return program:runReference(ta, tb) end)
+    row('jsl_matmul_handwritten_luau_native_f64', side * side * side, function() kernels.matmul(a, b, out, side) end)
+end
+
+local start = testing.clock()
+for _ = 1, 100000 do testing.noop() end
+print(string.format('noop_plus_jsl_loop_us=%.4f', (testing.clock() - start) * 1e6 / 100000))
+print(string.format('budget_peak_bytes=%d', testing.peak()))
