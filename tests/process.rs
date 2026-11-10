@@ -456,3 +456,116 @@ fn stdin_policy_cannot_grant_what_the_runtime_withheld() {
         .unwrap();
     assert!(seen.borrow().is_empty());
 }
+
+/// `timeoutMs` ends a child that would run longer, reports `timeout`, and leaves nothing running:
+/// the child writes its own pid first, then becomes the sleep.
+#[cfg(unix)]
+#[test]
+fn a_timeout_kills_and_reaps_the_child() {
+    let pid_file = std::env::temp_dir().join(format!("l3i-process-timeout-{}", std::process::id()));
+    let pid_file_text = pid_file.to_string_lossy().into_owned();
+    let runtime = runtime_granting(&[SPAWN_CAPABILITY], Limits::default());
+    let started = Instant::now();
+    runtime
+        .exec(&format!(
+            r#"local result, message, kind = process.run('sh', {{ '-c', 'echo $$ > "$1"; exec sleep 5', 'sh', '{pid_file_text}' }}, {{ timeoutMs = 200 }})
+               assert(result == nil and kind == 'timeout', tostring(kind))
+               assert(message:find('timeoutMs', 1, true), message)"#
+        ))
+        .unwrap();
+    assert!(started.elapsed() < Duration::from_secs(3), "waited {:?}", started.elapsed());
+    let pid: libc::pid_t = std::fs::read_to_string(&pid_file).unwrap().trim().parse().unwrap();
+    std::fs::remove_file(&pid_file).unwrap();
+    // SAFETY: signal 0 only checks that the pid names a process this test may signal.
+    let alive = unsafe { libc::kill(pid, 0) } == 0;
+    assert!(!alive, "the timed out child {pid} is still running");
+}
+
+/// A captured stream past its ceiling ends the run at once as `outputLimit`, and nothing of the
+/// stream is returned.
+#[cfg(unix)]
+#[test]
+fn a_captured_stream_past_its_ceiling_fails_as_output_limit() {
+    let runtime = runtime_granting(&[SPAWN_CAPABILITY], Limits::default());
+    let started = Instant::now();
+    runtime
+        .exec(
+            r"local result, message, kind = process.run('head', { '-c', '10000000', '/dev/zero' }, { stdout = 'capture', maxStdoutBytes = 1000 })
+              assert(result == nil and kind == 'outputLimit', tostring(kind))
+              assert(message:find('byte limit', 1, true), message)",
+        )
+        .unwrap();
+    assert!(started.elapsed() < Duration::from_secs(3), "waited {:?}", started.elapsed());
+}
+
+/// Each ceiling is for its own stream: stderr over its ceiling fails the run even when stdout is
+/// well under its own, and stdout over its ceiling fails it even when stderr is well under.
+#[cfg(unix)]
+#[test]
+fn stdout_and_stderr_ceilings_are_separate() {
+    let runtime = runtime_granting(&[SPAWN_CAPABILITY], Limits::default());
+    runtime
+        .exec(
+            r"local result, _, kind = process.run('sh', { '-c', 'printf ok; head -c 10000000 /dev/zero >&2' },
+                  { stdout = 'capture', stderr = 'capture', maxStdoutBytes = 1000, maxStderrBytes = 1000 })
+              assert(result == nil and kind == 'outputLimit', tostring(kind))
+              result, _, kind = process.run('sh', { '-c', 'head -c 10000000 /dev/zero; printf err >&2' },
+                  { stdout = 'capture', stderr = 'capture', maxStdoutBytes = 1000, maxStderrBytes = 1000 })
+              assert(result == nil and kind == 'outputLimit', tostring(kind))",
+        )
+        .unwrap();
+}
+
+/// Output under both ceilings, and a run under its timeout, succeeds with exactly what was written.
+/// A stream may write exactly its ceiling.
+#[cfg(unix)]
+#[test]
+fn output_within_its_ceilings_and_time_is_returned_whole() {
+    let runtime = runtime_granting(&[SPAWN_CAPABILITY], Limits::default());
+    runtime
+        .exec(
+            r"local result = assert(process.run('sh', { '-c', 'printf abc; printf de >&2' },
+                  { stdout = 'capture', stderr = 'capture', timeoutMs = 5000, maxStdoutBytes = 3, maxStderrBytes = 2 }))
+              assert(result.success and result.stdout == 'abc' and result.stderr == 'de', tostring(result.stdout))
+              result = assert(process.run('head', { '-c', '5000', '/dev/zero' }, { stdout = 'capture', maxStdoutBytes = 6000 }))
+              assert(result.success and #result.stdout == 5000)",
+        )
+        .unwrap();
+}
+
+/// A grandchild that holds the captured pipe open does not hold the call past its timeout: the
+/// whole process group is killed at the deadline.
+#[cfg(unix)]
+#[test]
+fn a_descendant_holding_the_pipe_does_not_stall_a_timed_run() {
+    let runtime = runtime_granting(&[SPAWN_CAPABILITY], Limits::default());
+    let started = Instant::now();
+    runtime
+        .exec(
+            r"local result, _, kind = process.run('sh', { '-c', 'sleep 30 & echo started; wait' },
+                  { stdout = 'capture', timeoutMs = 300 })
+              assert(result == nil and kind == 'timeout', tostring(kind))",
+        )
+        .unwrap();
+    assert!(started.elapsed() < Duration::from_secs(10), "waited {:?}", started.elapsed());
+}
+
+/// The new options are validated the way the others are: a bad number, or a ceiling on a stream
+/// that is not captured, raises before anything starts.
+#[test]
+fn bounds_options_are_validated() {
+    let runtime = runtime_granting(&[SPAWN_CAPABILITY], Limits::default());
+    runtime
+        .exec(
+            r"local bad = {
+                { timeoutMs = 0 }, { timeoutMs = -1 }, { timeoutMs = 1.5 }, { timeoutMs = math.huge },
+                { timeoutMs = 0 / 0 }, { maxStdoutBytes = 10 }, { maxStderrBytes = 10, stderr = 'null' },
+                { maxStdoutBytes = -1, stdout = 'capture' }, { maxStderrBytes = 2.5, stderr = 'capture' },
+              }
+              for index = 1, #bad do
+                  local ok, err = pcall(process.run, 'sh', { '-c', 'exit 0' }, bad[index])
+                  assert(not ok, 'option ' .. index .. ' was accepted')
+              end",
+        )
+        .unwrap();
+}

@@ -1773,7 +1773,7 @@ if not result.success then error(`tes3cmd exited with {result.code}`) end
 
 | Function | Returns |
 |---|---|
-| `run(program, args?, { cwd?, env?, clearEnv?, stdin?, stdout?, stderr? }?)` | `{ success, code?, signal?, stdout?, stderr? }`; `stdout` and `stderr` are `"inherit"` (the default), `"capture"` or `"null"` |
+| `run(program, args?, { cwd?, env?, clearEnv?, stdin?, stdout?, stderr?, timeoutMs?, maxStdoutBytes?, maxStderrBytes? }?)` | `{ success, code?, signal?, stdout?, stderr? }`; `stdout` and `stderr` are `"inherit"` (the default), `"capture"` or `"null"`. A limit that passes answers `nil, message, "timeout"` or `"outputLimit"` (see below) |
 | `env(name)` | An environment variable, or nil |
 | `knownFolder(name)` | A folder the OS defines for the user, or nil when it can't name it. `"home"`: `HOME`, or on Windows `USERPROFILE`, then `HOMEDRIVE` with `HOMEPATH`, then `HOME`. `"documents"`: the Windows Documents known folder from `SHGetKnownFolderPath`, wherever the user (or OneDrive) moved it; nil on every other platform. What an application keeps there is its own business |
 | `platform()` | The OS the host was built for, as Rust's `std::env::consts::OS` names it: `"windows"`, `"macos"`, `"linux"`, `"android"`, and so on. A call, not a constant, so compiled code never carries another platform's answer |
@@ -1797,6 +1797,24 @@ running a program that prints it. `clearEnv = true` clears `PATH` too.
 `run` waits no longer than the runtime's execution time limit: a child still running at the
 deadline is killed and reaped, a capture still open then (a process the child started can hold
 the pipe after the child is gone) is abandoned, and the script stops with the time limit.
+
+Three optional limits bound a run further. Each one that passes kills the child and reaps it,
+discards whatever it wrote, and answers `nil, message, kind`:
+
+| Option | Limit | Kind on failure |
+|---|---|---|
+| `timeoutMs` | A whole number of at least 1: the child may run this many milliseconds | `"timeout"` |
+| `maxStdoutBytes` | A whole number of at least 0: the most bytes a captured `stdout` may produce | `"outputLimit"` |
+| `maxStderrBytes` | A whole number of at least 0: the most bytes a captured `stderr` may produce | `"outputLimit"` |
+
+A non-finite, fractional or negative value raises, as does a ceiling for a stream that is not
+`"capture"`. The ceilings are separate: each applies to its own stream only. Reading stops as soon
+as a ceiling is crossed, so memory stays within the ceiling however much the child writes. Without
+any of these options `run` behaves as before.
+
+On Unix a bounded child starts in a process group of its own, and a limit kills the whole group, so
+a process it started cannot hold the pipes open past the limit. Elsewhere only the child is killed.
+An unbounded run does not get a group of its own, so it keeps receiving the terminal's signals.
 
 ### Reading standard input
 
