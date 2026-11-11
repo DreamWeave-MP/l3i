@@ -292,13 +292,20 @@ fn read_secret(frame: &crate::stack::Frame<'_>, table: crate::stack::TableView<'
     if !named {
         return Err(Error::runtime("env is a variable name of capitals, digits and underscores, at most 64 bytes"));
     }
-    // A number in one of these would not carry a secret, it would break how the child finds and
-    // loads programs; and `PATH` is set for the child by this module itself.
+    // `PATH` is set for the child by this module itself, and a number in a loader variable does
+    // harm at once. This is a courtesy, not a boundary: plenty of other names mean something to
+    // some program, and `env` can set any of them.
     if env == b"PATH" || env.starts_with(b"LD_") || env.starts_with(b"DYLD_") {
         return Err(Error::runtime("env cannot be PATH or a loader variable (LD_*, DYLD_*)"));
     }
     held.env = os_string("secret.env", &env)?;
     Ok(held)
+}
+
+/// Whether two names are one environment variable: by their bytes, and on Windows whatever their
+/// case, since names there differ only in case name one variable.
+fn same_variable(left: &[u8], right: &[u8]) -> bool {
+    if cfg!(windows) { left.eq_ignore_ascii_case(right) } else { left == right }
 }
 
 /// A secret that could not be attached. The message says why and never what: nothing of the
@@ -365,7 +372,7 @@ impl SpawnOptions {
             }
             spawn.secret = o.optional_table("secret", read_secret)?;
             if let Some(secret) = &spawn.secret
-                && spawn.env.iter().any(|(key, _)| os_string("an env name", key).is_ok_and(|key| key == secret.env))
+                && spawn.env.iter().any(|(key, _)| same_variable(key, secret.env.as_encoded_bytes()))
             {
                 // One of them would silently win; the caller meant something else by one of them.
                 return Err(Error::runtime(format!("{context}: env sets the variable secret.env names")));

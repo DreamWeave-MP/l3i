@@ -34,8 +34,15 @@
 //! * Windows. A handle is inherited by any child started while it is marked inheritable, and the
 //!   standard library offers no stable way to name the handles one child gets. So every child this
 //!   module's caller starts is started under one lock, and the read handle is inheritable only
-//!   inside it: no other child of this library can inherit it. A child the host application starts
-//!   by other means in that moment can.
+//!   inside it: no other child of this library can inherit it. A child anything else in the host
+//!   starts in that moment can, an ordinary `std::process::Command` in another crate included:
+//!   the standard library's own lock does not know about this handle. The lock also means this
+//!   library starts one child at a time on Windows, so a start that the system holds up (a
+//!   program on a stalled share, a scanner) holds up the others until it returns. The pipe is
+//!   made and filled before the lock is taken, and the write cannot wait.
+//!
+//! On every system a process of the same user can take the secret before the child does: through
+//! `/proc/<child>/fd/<n>` on Linux, by duplicating the handle out of the child on Windows.
 //!
 //! The parent's copy of the read end is closed as soon as the child has been started, and its copy
 //! of the bytes is overwritten when it is dropped. The secret must fit the pipe without waiting,
@@ -70,7 +77,7 @@ pub(super) struct Starting {
     #[cfg(unix)]
     _read: Option<std::os::fd::OwnedFd>,
     #[cfg(windows)]
-    inner: windows::Starting,
+    _inner: windows::Starting,
 }
 
 /// Prepares `command` to be started, with `secret` for the child to inherit when there is one.
@@ -88,7 +95,7 @@ pub(super) fn prepare(command: &mut Command, secret: Option<&Secret>) -> std::io
     }
     #[cfg(windows)]
     {
-        Ok(Starting { inner: windows::prepare(command, secret)? })
+        Ok(Starting { _inner: windows::prepare(command, secret)? })
     }
     #[cfg(not(any(unix, windows)))]
     {
@@ -234,12 +241,20 @@ mod windows {
     use super::Secret;
 
     const HANDLE_FLAG_INHERIT: u32 = 1;
-    /// The pipe's buffer: the largest secret twice over, so the one write into it cannot wait.
+    const PIPE_NOWAIT: u32 = 1;
+    /// The pipe's buffer: the largest secret twice over, so the one write into it fits.
     const PIPE_BYTES: u32 = 8192;
 
+    #[link(name = "kernel32")]
     unsafe extern "system" {
         fn CreatePipe(read: *mut RawHandle, write: *mut RawHandle, attributes: *const c_void, size: u32) -> i32;
         fn SetHandleInformation(handle: RawHandle, mask: u32, flags: u32) -> i32;
+        fn SetNamedPipeHandleState(
+            handle: RawHandle,
+            mode: *const u32,
+            collection: *const u32,
+            timeout: *const u32,
+        ) -> i32;
         fn WriteFile(
             handle: RawHandle,
             buffer: *const u8,
@@ -270,11 +285,10 @@ mod windows {
         }
     }
 
-    pub(super) fn prepare(command: &mut Command, secret: Option<&Secret>) -> std::io::Result<Starting> {
-        let lock = STARTS.lock().unwrap_or_else(PoisonError::into_inner);
-        let Some(secret) = secret else {
-            return Ok(Starting { read: None, _lock: lock });
-        };
+    /// A pipe holding `secret`, its write end closed, and the read end, which is not inheritable
+    /// yet. Names the read end's value in `command`'s environment.
+    fn filled(command: &mut Command, secret: &Secret) -> std::io::Result<OwnedHandle> {
+        let too_large = || std::io::Error::new(std::io::ErrorKind::InvalidInput, "the secret does not fit a pipe");
         let (mut read, mut write): (RawHandle, RawHandle) = (std::ptr::null_mut(), std::ptr::null_mut());
         // SAFETY: CreatePipe writes two new handles through the pointers it is given; with no
         // security attributes neither is inheritable.
@@ -283,8 +297,16 @@ mod windows {
         }
         // SAFETY: both handles were just created and belong to nothing else.
         let (read, write) = unsafe { (OwnedHandle::from_raw_handle(read), OwnedHandle::from_raw_handle(write)) };
-        let length = u32::try_from(secret.data.len())
-            .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidInput, "the secret does not fit a pipe"))?;
+        // Nothing reads the pipe yet, so a write that would wait must fail instead.
+        let mode = PIPE_NOWAIT;
+        // SAFETY: `write` is an open pipe handle; the mode is read through a pointer to a local.
+        if unsafe {
+            SetNamedPipeHandleState(write.as_raw_handle(), &raw const mode, std::ptr::null(), std::ptr::null())
+        } == 0
+        {
+            return Err(std::io::Error::last_os_error());
+        }
+        let length = u32::try_from(secret.data.len()).map_err(|_| too_large())?;
         let mut taken: u32 = 0;
         // SAFETY: the pointer and length are those of a live slice of at most MAX_BYTES; `write` is
         // open; no overlapped structure is used.
@@ -295,16 +317,27 @@ mod windows {
             return Err(std::io::Error::last_os_error());
         }
         if taken != length {
-            return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "the secret does not fit a pipe"));
+            // Whatever part was written goes with the pipe, which nothing else has.
+            return Err(too_large());
         }
         // Closed before the child exists: the reader meets end of file after the last byte.
         drop(write);
         // A handle's value is what the child opens it by; it is the same number in the child.
         command.env(&secret.env, (read.as_raw_handle() as usize).to_string());
-        // SAFETY: `read` is an open handle this function owns.
-        if unsafe { SetHandleInformation(read.as_raw_handle(), HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT) } == 0 {
-            return Err(std::io::Error::last_os_error());
+        Ok(read)
+    }
+
+    pub(super) fn prepare(command: &mut Command, secret: Option<&Secret>) -> std::io::Result<Starting> {
+        // Made and filled before the lock is taken: the handles are not inheritable yet, so no
+        // child can inherit them, and a slow call here holds up no other start.
+        let read = secret.map(|secret| filled(command, secret)).transpose()?;
+        let lock = STARTS.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(read) = &read {
+            // SAFETY: `read` is an open handle this function owns.
+            if unsafe { SetHandleInformation(read.as_raw_handle(), HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT) } == 0 {
+                return Err(std::io::Error::last_os_error());
+            }
         }
-        Ok(Starting { read: Some(read), _lock: lock })
+        Ok(Starting { read, _lock: lock })
     }
 }

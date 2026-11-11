@@ -1931,12 +1931,21 @@ A reader takes the number from the variable and reads until end of file: on Unix
 shell cannot open a handle by its value, so a Windows credential helper has to be a native
 program.
 
+Whether a helper **the child starts** gets the descriptor is the child's decision, not this
+module's. Git for Windows, by default, starts its own children with only their standard streams
+(`core.restrictInheritedHandles`, on by default since Windows 7), so a credential helper it runs
+does not receive the handle unless that is turned off for the call
+(`git -c core.restrictInheritedHandles=false ...`), which lets Git's children inherit every
+inheritable handle Git has. Other launchers restrict inheritance the same way. Where that is not
+wanted, make the program that needs the secret the direct child.
+
 What this does **not** do:
 
 - **It does not hide the secret from other processes of the same user.** On Linux such a process
   can open `/proc/<child>/fd/<n>` and read the pipe before the child does, or hold it open for
-  writing so that the child never meets end of file. That is no worse than the environment, which
-  the same process could read, but it is not secrecy from the user's own processes. Read the
+  writing so that the child never meets end of file; on Windows it can duplicate the handle out
+  of the child, whose value is in the child's environment. That is no worse than the environment,
+  which the same process could read, but it is not secrecy from the user's own processes. Read the
   secret first thing, treat an empty read as a secret that was taken, and give the call a
   `timeoutMs`.
 - **It does not overwrite the script's copy.** The host overwrites the copy it made; the Luau
@@ -1957,7 +1966,10 @@ Keeping it to the one child:
 - **Windows**: a handle is inherited by any child started while it is marked inheritable, and
   there is no stable way to name the handles one child gets. Every child this module starts is
   started under one lock and the handle is inheritable only inside it, so no other child of this
-  library inherits it. A child the host application starts by other means in that moment can.
+  library inherits it. A child anything else in the host starts in that moment can: an ordinary
+  `std::process::Command` in another crate is enough, since the standard library's own lock does
+  not cover this handle. The lock also means this module starts one child at a time on Windows:
+  a start the system holds up (a program on a stalled share, a scanner) holds up the others.
 - The number is never 0, 1 or 2, even in a host that has closed its own standard streams: those
   are the child's own input and outputs.
 

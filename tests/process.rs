@@ -1485,10 +1485,18 @@ fn a_secret_reaches_a_windows_child_through_an_inherited_handle() {
             assert(first == secret, 'the child did not read the secret: ' .. result.stdout)
             assert(again == '-1', 'the handle was not at end of file after the secret: ' .. tostring(again))
             assert(not string.find(environment, 'ZZ-SECRET-ZZ', 1, true), 'the secret is in the child\'s environment')
-            -- A child without a secret inherits no such handle: the same value is not a pipe it can read.
+            -- The variable holds a number, and a child that never reads the handle takes the secret with it.
             local handle = assert(process.run('powershell', { '-NoProfile', '-NonInteractive', '-Command', '[Console]::Out.Write($env:L3I_SECRET_HANDLE)' },
               { secret = { env = 'L3I_SECRET_HANDLE', data = secret }, stdout = 'capture', timeoutMs = 120000 })).stdout
             assert(tonumber(handle), 'the variable does not hold a number: ' .. tostring(handle))
+            -- A child WITHOUT a secret, told the same handle value: whatever that value is in it, it
+            -- is not the secret's pipe. Reading it fails, or reads something that is not the secret.
+            local stranger = 'try { ' .. string.gsub(reader, '%[Console%]::Out%.Write%(%(%(Get%-ChildItem.*$', '') .. ' } catch { [Console]::Out.Write("refused") }'
+            local other = assert(process.run('powershell', { '-NoProfile', '-NonInteractive', '-Command', stranger },
+              { env = { L3I_SECRET_HANDLE = handle }, stdout = 'capture', stderr = 'null', timeoutMs = 120000 }))
+            assert(not string.find(other.stdout, 'ZZ-SECRET-ZZ', 1, true), 'a child without a secret read one: ' .. other.stdout)
+            -- Names that differ only in case are one variable here: the collision is refused.
+            assert(not pcall(process.run, 'cmd', { '/c', 'exit' }, { env = { l3i_secret_handle = '1' }, secret = { env = 'L3I_SECRET_HANDLE', data = 'x' } }))
             -- Malformed secrets raise here as everywhere.
             assert(not pcall(process.run, 'cmd', { '/c', 'exit' }, { secret = { env = 'lower', data = 'x' } }))
             assert(not pcall(process.start, 'cmd', { '/c', 'exit' }, { secret = { env = 'PATH', data = 'x' } }))
