@@ -42,8 +42,8 @@ macro_rules! pollable {
 
 pollable!(std::process::ChildStdout, std::process::ChildStderr, std::process::ChildStdin);
 
-// Off Unix there is nothing to wait on, so these methods do not touch `self`.
-#[cfg_attr(not(unix), allow(clippy::unused_self))]
+// Off Unix there is nothing to wait on, so these methods neither touch `self` nor fail.
+#[cfg_attr(not(unix), allow(clippy::unused_self, clippy::unnecessary_wraps))]
 impl Cancel {
     /// A new, uncancelled one. On Unix this is a pipe of its own, so it can fail as opening one can.
     pub(super) fn new() -> std::io::Result<Self> {
