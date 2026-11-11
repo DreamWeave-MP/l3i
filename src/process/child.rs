@@ -187,11 +187,19 @@ impl State {
     fn kill(&mut self) {
         // Asked first, so that a child the host reaped behind this handle's back is found out
         // before a signal goes to whatever has its pid now.
-        if self.reaped || self.exited().is_err() {
+        if self.reaped {
             return;
         }
+        let asked = self.exited();
         // Asking may have found the child reaped elsewhere, which marks it reaped.
         if self.reaped {
+            return;
+        }
+        if asked.is_err() {
+            // Not reaped elsewhere, so the child is still ours, though whether it has exited could
+            // not be learned. The child itself is killed, so that the reap after this cannot wait
+            // on a child still running; its group is left alone on an answer that was no answer.
+            let _ = self.child.kill();
             return;
         }
         kill_group(&self.child);

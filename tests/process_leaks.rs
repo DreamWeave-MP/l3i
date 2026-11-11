@@ -87,10 +87,12 @@ fn a_descendant_that_left_the_group_holding_a_pipe_costs_no_thread_and_no_descri
 
     // Input the stray holds and never reads: the child exits, nothing is captured, so the run
     // answers at once, with its feeder still blocked on a full pipe. The feeder goes with the run.
+    // The stray takes the pipe through descriptor 3: a shell gives a background command
+    // /dev/null for its input before its own redirections, and some then make `<&0` a copy of that.
     runtime
         .exec(&format!(
             r"for _ = 1, 6 do
-                  local result = assert(process.run('sh', {{ '-c', 'setsid sleep {STRAY} <&0 & exit 0' }},
+                  local result = assert(process.run('sh', {{ '-c', 'exec 3<&0; setsid sleep {STRAY} 0<&3 & exit 0' }},
                       {{ stdin = string.rep('x', 4 * 1024 * 1024), timeoutMs = 5000 }}))
                   assert(result.success)
               end"
@@ -102,7 +104,7 @@ fn a_descendant_that_left_the_group_holding_a_pipe_costs_no_thread_and_no_descri
     runtime
         .exec(&format!(
             r"for _ = 1, 12 do
-                  local child = assert(process.start('sh', {{ '-c', 'setsid sleep {STRAY} <&0 & exit 0' }},
+                  local child = assert(process.start('sh', {{ '-c', 'exec 3<&0; setsid sleep {STRAY} 0<&3 & exit 0' }},
                       {{ stdin = 'pipe', stdout = 'pipe', stderr = 'pipe' }}))
                   assert(assert(child:wait(5000)).success)
                   assert(child:write(string.rep('x', 1024 * 1024)))

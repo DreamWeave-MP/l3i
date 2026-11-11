@@ -1819,8 +1819,10 @@ a limit signals that whole group, so a process it started and kept in the group 
 pipes open past the limit; on other systems only the child is killed. Termination covers the child's
 process group and nothing more: a descendant that left the group (with `setsid` or `setpgid`) is
 not stopped, and may hold an inherited pipe open; the call stops waiting for that pipe at its
-limit, and answers `"timeout"` even if the child itself had exited. Whatever holds a pipe, the call
-leaves no thread and no descriptor behind when it returns. A bounded run whose child exits normally
+limit, and answers `"timeout"` even if the child itself had exited. On Unix, whatever holds a
+pipe, the call leaves no thread and no descriptor behind when it returns. On Windows a thread
+blocked on a pipe that something else holds cannot be ended: the call still returns at its limit,
+and that thread stays until the pipe closes. A bounded run whose child exits normally
 does not signal the group: what the child left running in it keeps running. An unbounded run does
 not get a group of its own, so it keeps receiving the terminal's signals; a bounded one does not
 receive them, and a child that reads the terminal from its own group is stopped by it. A run holds

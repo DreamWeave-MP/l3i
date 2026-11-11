@@ -605,16 +605,24 @@ fn run(
     };
     let mut capture = capture;
     let ended = wait(call, &mut child, &bounds, &mut capture, group);
-    // Nothing of this call outlives it. A pipe that a process outside the child's group still
-    // holds would otherwise keep its thread, its descriptor and what it buffered for as long as
-    // that process liked; cancelling ends the thread whoever holds the pipe.
+    // On Unix nothing of this call outlives it. A pipe that a process outside the child's group
+    // still holds would otherwise keep its thread, its descriptor and what it buffered for as long
+    // as that process liked; cancelling ends the thread whoever holds the pipe, so joining it
+    // cannot wait. Elsewhere a thread cannot be cancelled: one still blocked on a pipe something
+    // else holds is left to end with that pipe, because joining it would hold this call past
+    // every limit it was given.
     cancel.cancel();
-    for thread in [capture.stdout.take(), capture.stderr.take()].into_iter().flatten() {
-        let _ = thread.join();
+    #[cfg(unix)]
+    {
+        for thread in [capture.stdout.take(), capture.stderr.take()].into_iter().flatten() {
+            let _ = thread.join();
+        }
+        if let Some(feeder) = feeder {
+            let _ = feeder.join();
+        }
     }
-    if let Some(feeder) = feeder {
-        let _ = feeder.join();
-    }
+    #[cfg(not(unix))]
+    drop((capture, feeder));
     let output = done!(match ended {
         Ok(Ended::Exited(output)) => Outcome::Done(output),
         Ok(Ended::TimedOut) => Outcome::Failed(Failure {
@@ -1037,7 +1045,7 @@ impl Extension for ProcessExtension {
             .doc("The script's process and the ones it starts: run a program and wait for its exit code, environment variables, and the standard streams.")
             .installed("run")
             .signature(RUN_SIGNATURE)
-            .doc("Runs program with args (no shell), waits for it, and returns how it ended; needs the process.spawn capability. stdout and stderr are inherited unless captured or discarded; stdin is empty unless given. timeoutMs (1 to 86400000, a day) stops the child after that many milliseconds, and maxStdoutBytes or maxStderrBytes (0 to 2^53 - 1, each for a captured stream) stops it once that stream passes its ceiling: the child is killed and reaped, its output discarded, and the failure is timeout or outputLimit. On Unix a bounded child runs in a process group of its own, which a limit signals whole on Linux, Android, macOS and FreeBSD (a descendant that left the group is not stopped); elsewhere only the child is killed. The call leaves no thread behind when it returns. A run counts against the live-child limit while it runs.")
+            .doc("Runs program with args (no shell), waits for it, and returns how it ended; needs the process.spawn capability. stdout and stderr are inherited unless captured or discarded; stdin is empty unless given. timeoutMs (1 to 86400000, a day) stops the child after that many milliseconds, and maxStdoutBytes or maxStderrBytes (0 to 2^53 - 1, each for a captured stream) stops it once that stream passes its ceiling: the child is killed and reaped, its output discarded, and the failure is timeout or outputLimit. On Unix a bounded child runs in a process group of its own, which a limit signals whole on Linux, Android, macOS and FreeBSD (a descendant that left the group is not stopped); elsewhere only the child is killed. On Unix the call leaves no thread behind when it returns; on Windows a thread blocked on a pipe that something else holds stays until that pipe closes. A run counts against the live-child limit while it runs.")
             .installed("start")
             .signature(START_SIGNATURE)
             .doc("Starts program with args (no shell) without waiting, and returns a process handle; needs the process.spawn capability, and fails like run for a program that cannot start. stdin is null unless \"pipe\", stdout and stderr are inherited unless \"pipe\" or \"null\". Reads, writes and wait never block except wait with a timeout. timeoutMs, maxStdoutBytes and maxStderrBytes are lifetime limits, as on run: passing one kills the child and, on Linux, Android, macOS and FreeBSD, its process group, and later reads answer with the limit's kind. Closing the handle kills and reaps the child. A started child counts against the live-child limit until its handle is closed or a limit stops it, so close handles: an unclosed one holds its slot until it is collected.")

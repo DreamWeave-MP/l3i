@@ -42,6 +42,8 @@ macro_rules! pollable {
 
 pollable!(std::process::ChildStdout, std::process::ChildStderr, std::process::ChildStdin);
 
+// Off Unix there is nothing to wait on, so these methods do not touch `self`.
+#[cfg_attr(not(unix), allow(clippy::unused_self))]
 impl Cancel {
     /// A new, uncancelled one. On Unix this is a pipe of its own, so it can fail as opening one can.
     pub(super) fn new() -> std::io::Result<Self> {
@@ -133,15 +135,23 @@ mod unix {
     impl Pair {
         pub(super) fn new() -> std::io::Result<Self> {
             let mut fds: [libc::c_int; 2] = [0; 2];
+            // Close-on-exec from the start where the system can: a child another thread starts
+            // must not inherit either end.
+            #[cfg(any(target_os = "linux", target_os = "android", target_os = "freebsd"))]
+            // SAFETY: pipe2 writes two new descriptors into the array it is given.
+            let made = unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) };
+            #[cfg(not(any(target_os = "linux", target_os = "android", target_os = "freebsd")))]
             // SAFETY: pipe writes two new descriptors into the array it is given.
-            if unsafe { libc::pipe(fds.as_mut_ptr()) } != 0 {
+            let made = unsafe { libc::pipe(fds.as_mut_ptr()) };
+            if made != 0 {
                 return Err(std::io::Error::last_os_error());
             }
             // SAFETY: both descriptors were just created and belong to nothing else.
             let (read, write) = unsafe { (OwnedFd::from_raw_fd(fds[0]), OwnedFd::from_raw_fd(fds[1])) };
-            // A child started in the meantime must not inherit either end. Cancelling writes a
-            // byte rather than closing the write end, so a copy a child did inherit in the gap
-            // between `pipe` and here could not hold a cancellation back.
+            // Where there is no pipe2, a child started between `pipe` and here inherits both ends
+            // and keeps them while it lives. That cannot hold a cancellation back, because
+            // cancelling writes a byte rather than waiting for the last write end to close.
+            #[cfg(not(any(target_os = "linux", target_os = "android", target_os = "freebsd")))]
             for end in [&read, &write] {
                 flag(end.as_raw_fd(), libc::F_GETFD, libc::F_SETFD, libc::FD_CLOEXEC)?;
             }
