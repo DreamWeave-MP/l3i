@@ -1773,7 +1773,8 @@ if not result.success then error(`tes3cmd exited with {result.code}`) end
 
 | Function | Returns |
 |---|---|
-| `run(program, args?, { cwd?, env?, clearEnv?, stdin?, stdout?, stderr? }?)` | `{ success, code?, signal?, stdout?, stderr? }`; `stdout` and `stderr` are `"inherit"` (the default), `"capture"` or `"null"` |
+| `run(program, args?, { cwd?, env?, clearEnv?, stdin?, stdout?, stderr?, timeoutMs?, maxStdoutBytes?, maxStderrBytes? }?)` | `{ success, code?, signal?, stdout?, stderr? }`; `stdout` and `stderr` are `"inherit"` (the default), `"capture"` or `"null"`. A limit that passes answers `nil, message, "timeout"` or `"outputLimit"` (see below) |
+| `start(program, args?, { cwd?, env?, clearEnv?, stdin?, stdout?, stderr?, timeoutMs?, maxStdoutBytes?, maxStderrBytes? }?)` | A process handle (see below), or `nil, message, kind` when the program can't start |
 | `env(name)` | An environment variable, or nil |
 | `knownFolder(name)` | A folder the OS defines for the user, or nil when it can't name it. `"home"`: `HOME`, or on Windows `USERPROFILE`, then `HOMEDRIVE` with `HOMEPATH`, then `HOME`. `"documents"`: the Windows Documents known folder from `SHGetKnownFolderPath`, wherever the user (or OneDrive) moved it; nil on every other platform. What an application keeps there is its own business |
 | `platform()` | The OS the host was built for, as Rust's `std::env::consts::OS` names it: `"windows"`, `"macos"`, `"linux"`, `"android"`, and so on. A call, not a constant, so compiled code never carries another platform's answer |
@@ -1797,6 +1798,124 @@ running a program that prints it. `clearEnv = true` clears `PATH` too.
 `run` waits no longer than the runtime's execution time limit: a child still running at the
 deadline is killed and reaped, a capture still open then (a process the child started can hold
 the pipe after the child is gone) is abandoned, and the script stops with the time limit.
+
+Three optional limits bound a run further. Each one that passes kills the child and reaps it,
+discards whatever it wrote, and answers `nil, message, kind`:
+
+| Option | Limit | Kind on failure |
+|---|---|---|
+| `timeoutMs` | A whole number from 1 to 86,400,000 (a day): the child may run this many milliseconds | `"timeout"` |
+| `maxStdoutBytes` | A whole number from 0 to 2^53 - 1: the most bytes a captured `stdout` may produce | `"outputLimit"` |
+| `maxStderrBytes` | A whole number from 0 to 2^53 - 1: the most bytes a captured `stderr` may produce | `"outputLimit"` |
+
+A value that is not a finite whole number in its range raises, as does a ceiling for a stream that
+is not `"capture"`. The raise comes before the child starts, so a refused call starts nothing. The
+ceilings are separate: each applies to its own stream only. Reading stops as soon as a ceiling is
+crossed, so memory stays within the ceiling however much the child writes. Without any of these
+options `run` behaves as before, except that it now holds a live-child slot while it runs.
+
+On Unix a bounded child starts in a process group of its own. On Linux, Android, macOS and FreeBSD
+a limit signals that whole group, so a process it started and kept in the group cannot hold the
+pipes open past the limit; on other systems only the child is killed. Termination covers the child's
+process group and nothing more: a descendant that left the group (with `setsid` or `setpgid`) is
+not stopped, and may hold an inherited pipe open; the call stops waiting for that pipe at its
+limit, and answers `"timeout"` even if the child itself had exited. On Unix, whatever holds a
+pipe, the call leaves no thread and no descriptor behind when it returns. On Windows a thread
+blocked on a pipe that something else holds cannot be ended: the call still returns at its limit,
+and that thread stays until the pipe closes. A bounded run whose child exits normally
+does not signal the group: what the child left running in it keeps running. An unbounded run does
+not get a group of its own, so it keeps receiving the terminal's signals; a bounded one does not
+receive them, and a child that reads the terminal from its own group is stopped by it. A run holds
+one of the runtime's live-child slots while it runs (see [Started processes](#started-processes)).
+
+A host that ignores `SIGCHLD`, or reaps children itself, takes the child's exit status before this
+module can read it. The call then fails, saying the child was reaped by the host, and signals
+nothing: the child's pid, and the group it led, may belong to another process by then.
+
+### Started processes
+
+`start` launches a child and returns at once, with a handle to it. It needs `process.spawn`, as
+`run` does, and takes `run`'s `cwd`, `env` and `clearEnv`, with its own stream options:
+
+| Option | Meaning |
+|---|---|
+| `stdin` | `"pipe"` to write to the child, or `"null"` (the default) |
+| `stdout`, `stderr` | `"inherit"` (the default), `"pipe"` to read, or `"null"` |
+| `timeoutMs`, `maxStdoutBytes`, `maxStderrBytes` | The limits of `run`, checked the same way. A ceiling is a lifetime total for a piped stream |
+
+| Method | Answers |
+|---|---|
+| `readStdout(maxBytes)`, `readStderr(maxBytes)` | Between 1 and `maxBytes` bytes that are buffered now. `nil, message, "wouldBlock"` when none are yet; `nil` alone at end of stream |
+| `write(data)` | The number of bytes queued for the child's stdin, or `nil, message, "wouldBlock"` when the queue is full |
+| `closeStdin()` | Closes the child's stdin once the queued bytes are written |
+| `wait(timeoutMs?)` | `{ success, code?, signal? }` once the child has exited; `nil, message, "wouldBlock"` while it runs. It waits up to `timeoutMs` (at most 60,000, and never past the execution time limit); omitted or `0` only looks |
+| `kill()` | Kills the process group, or the child where groups are unavailable. Idempotent; returns `true`. It does not reap: `close` does |
+| `close()` | Kills the child if it still runs, reaps it and releases its pipes. Idempotent; every other method raises afterwards |
+
+Reads and writes never block. `wait` is the only method that can wait, and only when given a
+timeout. A `wait` with a timeout blocks the calling thread for up to that long, so a cooperative
+caller, such as a frame-driven host, polls with `wait()` or `wait(0)` instead. Each piped output
+keeps at most 64 KiB buffered: when that is full its reader stops, so an unread child blocks on its
+own pipe instead of growing the host's memory. The stdin queue holds 1 MiB of bytes not yet written,
+and `write` answers `wouldBlock` beyond that.
+
+When a limit passes, the child is killed and reaped, its buffered output is discarded, and later
+reads or writes answer with the limit's kind: `"timeout"` or `"outputLimit"`. `wait` then reports the
+child as ended by signal, unless it had already exited on its own, whose status it keeps. The
+handle's threads end with the limit, and its slot is free from then. Killing the process group reaches what the child started too, on Linux,
+Android, macOS and FreeBSD, and only while the child is unreaped: the group is signalled before the
+child is reaped, and never after. On those systems `wait` answers the child's status without reaping
+it, so a `kill` or `close` after a `wait` still stops what the child left in its group, such as a
+process holding one of its pipes open; `close`, a limit, collection of the handle and runtime
+shutdown are what reap. Once the handle is closed nothing signals that group again. A descendant
+that left the group is never stopped. On other systems only the child itself is killed, and `wait`
+reaps it. Closing the handle, collecting it, or shutting the runtime down does what `close` does, so
+no direct child outlives its handle. A handle with no `close` still runs its child until it is
+collected, and holds an exited child's process table entry until then.
+
+Each started child, and each `run` while it runs, holds one of the runtime's live-child slots. The
+default is 32. A host sets it with `ProcessExtension::with_max_children(n)` (1 to 1024), and a
+script cannot change it. A started child holds its slot until its handle is closed, a limit stops
+it, its handle is collected or the runtime shuts down. An exited child that has been waited for
+still holds its slot until then, because the handle can still stop what it left behind. So close a
+handle when you are done with it: the collector does not know what an unclosed handle costs, and a
+script that starts children without closing them meets the limit before any is collected. A start
+past the limit raises, and a start that fails to spawn holds no slot. The limit is per runtime:
+each runtime has its own.
+
+The reader and writer threads of a handle are an interim design, pending the readiness substrate of
+RFC #11. On Unix they end the moment the handle is closed or a limit stops the child, whoever holds
+their pipes, so the live-child limit bounds them: at most four threads a slot. On Windows a thread
+blocked on a pipe that something still holds stays until that pipe closes. `close`, and a `kill` or
+read that meets a limit's kill in progress, wait for the child to be reaped; that is brief after a
+`SIGKILL`, and is the one way a call here other than `wait` can take time.
+
+A started child is always in a process group of its own, so the terminal's signals do not reach it
+and a child that reads the terminal is stopped by it; start what needs the terminal with `run`.
+
+A host that ignores `SIGCHLD`, or reaps children itself, takes a child's exit status first. `wait`
+then fails, saying so, and `kill`, `close` and the timer signal nothing.
+
+Nothing here passes a secret or credential to a child: stdin carries only what the script writes,
+and no inherited file descriptor is used for that. A child started without the environment
+capability gets the same environment `run` gives it.
+
+```luau
+local process = require('@dream/process')
+local child = assert(process.start('sort', nil, { stdin = 'pipe', stdout = 'pipe', timeoutMs = 10000 }))
+assert(child:write('pear\napple\n'))
+child:closeStdin()
+local lines = ''
+while true do
+    local chunk, message, kind = child:readStdout(4096)
+    if chunk then lines = lines .. chunk
+    elseif kind == 'wouldBlock' then process.sleep(0.01)
+    elseif message then error(message)
+    else break end -- end of stream
+end
+local status = assert(child:wait(5000))
+child:close()
+```
 
 ### Reading standard input
 
@@ -1860,7 +1979,9 @@ even while a script still holds the handle, whose reads then report a closed con
 A host can add its own check with `ProcessExtension.with_input_policy(policy)`, an
 `Rc<dyn process::input::Policy>` asked about `Open` and `Wait` at every such call. What it
 refuses raises in the caller. It runs after the `process.stdio` gate, which it cannot bypass;
-reads and `close()` are never checked.
+reads and `close()` are never checked. The live-child limit is set the same way, and the two
+combine: `ProcessExtension.with_max_children(8).with_input_policy(policy)`. Both return a
+`process::ProcessConfig`, which is itself an extension.
 
 Windows console reads use Rust's standard
 input behavior (Unicode console input); redirected pipes preserve binary bytes on all
