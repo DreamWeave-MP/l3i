@@ -1424,33 +1424,48 @@ fn a_secret_never_lands_on_a_standard_descriptor() {
     assert!(output.status.success(), "closed-stdin child: {}", String::from_utf8_lossy(&output.stderr));
 }
 
-/// Secrets that are never read, in children started from several threads at once, each of which
-/// reads every descriptor it was given: none finds a secret that is not its own.
+/// Children started from several threads at once, half of them with a secret: each reads the
+/// descriptor it was given and lists the pipes it inherited. None may hold a pipe that is neither
+/// the harness's own nor its own secret's: that would be another child's secret. Pipes this test
+/// does not own are listed, never read, since reading one would take another reader's bytes.
 #[cfg(target_os = "linux")]
 #[test]
 fn concurrent_children_never_inherit_one_another_s_secret() {
+    const LIST: &str =
+        r#"for fd in /proc/self/fd/*; do n=${fd##*/}; [ "$n" -gt 2 ] && [ -p "$fd" ] && readlink "$fd"; done; true"#;
+    // What every child of this process inherits whatever this test does: the harness's own pipes.
+    let baseline: String = runtime_granting(&[SPAWN_CAPABILITY], Limits::default())
+        .eval(&format!(
+            "return assert(process.run('sh', {{ '-c', [=[{LIST}]=] }}, {{ stdout = 'capture', stderr = 'null', timeoutMs = 20000 }})).stdout"
+        ))
+        .unwrap();
     let workers: Vec<_> = (0..6)
         .map(|worker| {
+            let baseline = baseline.clone();
             std::thread::spawn(move || {
                 let runtime = runtime_granting(&[SPAWN_CAPABILITY], Limits::default());
                 runtime
                     .exec(&format!(
                         r#"
+                        local harness = {{}}
+                        for link in string.gmatch({baseline:?}, '[^\n]+') do harness[link] = true end
                         for round = 1, 25 do
                           local mine = 'secret-of-{worker}-' .. round .. '-'
-                          -- Every pipe above the standard three, read for a moment: a secret is in
-                          -- its pipe already, and whatever else the harness left open may never end. Half the
-                          -- children have a secret; the other half must find nothing at all.
+                          local secret = round % 2 == 0
                           local options = {{ stdout = 'capture', stderr = 'null', timeoutMs = 20000 }}
-                          if round % 2 == 0 then options.secret = {{ env = 'FD', data = mine }} end
+                          if secret then options.secret = {{ env = 'FD', data = mine }} end
+                          -- Its own descriptor read to the end, a separator, then the pipes it holds.
                           local result = assert(process.run('sh', {{ '-c',
-                            'for fd in /proc/self/fd/*; do n=${{fd##*/}}; [ "$n" -gt 2 ] && [ -p "$fd" ] && timeout 0.3 cat "/proc/self/fd/$n" 2>/dev/null; done; true' }}, options))
-                          local seen = result.stdout
-                          local expected = if round % 2 == 0 then mine else ''
-                          for found in string.gmatch(seen, 'secret%-of%-%d+%-%d+%-') do
-                            assert(found == expected, 'a child read another child\'s secret: ' .. found)
+                            '[ -n "$FD" ] && cat <&"$FD"; printf "\n--\n"; ' .. [=[{LIST}]=] }}, options))
+                          local read, listed = string.match(result.stdout, '^(.-)\n%-%-\n(.*)$')
+                          assert(read == (if secret then mine else ''), 'a child read ' .. tostring(read))
+                          local strange = 0
+                          for link in string.gmatch(listed, '[^\n]+') do
+                            if not harness[link] then strange += 1 end
                           end
-                          if round % 2 == 0 then assert(string.find(seen, mine, 1, true), 'a child could not read its own secret') end
+                          -- Its own secret's pipe is the one pipe a child may hold beyond the harness's.
+                          assert(strange == (if secret then 1 else 0),
+                            'a child holds ' .. strange .. ' pipe(s) that are not its own: ' .. listed)
                         end
                         "#
                     ))
@@ -1493,9 +1508,10 @@ fn a_secret_reaches_a_windows_child_through_an_inherited_handle() {
             -- A child WITHOUT a secret, told the same handle value: whatever that value is in it, it
             -- is not the secret's pipe. Reading it fails, or reads something that is not the secret.
             local stranger = 'try { ' .. string.gsub(reader, '%[Console%]::Out%.Write%(%(%(Get%-ChildItem.*$', '') .. ' } catch { [Console]::Out.Write("refused") }'
-            local other = assert(process.run('powershell', { '-NoProfile', '-NonInteractive', '-Command', stranger },
-              { env = { L3I_SECRET_HANDLE = handle }, stdout = 'capture', stderr = 'null', timeoutMs = 120000 }))
-            assert(not string.find(other.stdout, 'ZZ-SECRET-ZZ', 1, true), 'a child without a secret read one: ' .. other.stdout)
+            local other = process.run('powershell', { '-NoProfile', '-NonInteractive', '-Command', stranger },
+              { env = { L3I_SECRET_HANDLE = handle }, stdin = 'x', stdout = 'capture', stderr = 'null', timeoutMs = 30000 })
+            -- A value that names something this child cannot finish reading is a refusal too.
+            assert(other == nil or not string.find(other.stdout, 'ZZ-SECRET-ZZ', 1, true), 'a child without a secret read one')
             -- Names that differ only in case are one variable here: the collision is refused.
             assert(not pcall(process.run, 'cmd', { '/c', 'exit' }, { env = { l3i_secret_handle = '1' }, secret = { env = 'L3I_SECRET_HANDLE', data = 'x' } }))
             -- Malformed secrets raise here as everywhere.

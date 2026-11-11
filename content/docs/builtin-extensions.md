@@ -1932,8 +1932,9 @@ shell cannot open a handle by its value, so a Windows credential helper has to b
 program.
 
 Whether a helper **the child starts** gets the descriptor is the child's decision, not this
-module's. Git for Windows, by default, starts its own children with only their standard streams
-(`core.restrictInheritedHandles`, on by default since Windows 7), so a credential helper it runs
+module's. Git for Windows starts its own children with only their standard streams (its
+`core.restrictInheritedHandles` setting, which by default restricts on Windows 7 and later; see
+Git for Windows' own documentation), so a credential helper it runs
 does not receive the handle unless that is turned off for the call
 (`git -c core.restrictInheritedHandles=false ...`), which lets Git's children inherit every
 inheritable handle Git has. Other launchers restrict inheritance the same way. Where that is not
