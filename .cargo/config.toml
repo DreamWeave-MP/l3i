@@ -30,8 +30,13 @@ rustflags = ["-Clinker=clang", "-Clink-arg=-fuse-ld=lld"]
 [target.aarch64-apple-darwin]
 rustflags = ["-Clinker=clang", "-Clink-arg=-fuse-ld=lld"]
 
+# `linker` as well as -Clinker: rustdoc never sees rustflags, but Cargo hands it this key, and
+# without it a doctest links with MSVC's link.exe, which cannot read the bitcode in libl3i.rlib
+# (LNK1136). build.rs checks the rustflags, so they keep -Clinker.
 [target.x86_64-pc-windows-msvc]
+linker = "lld-link"
 rustflags = ["-Clinker-plugin-lto", "-Clinker=lld-link"]
 
 [target.aarch64-pc-windows-msvc]
+linker = "lld-link"
 rustflags = ["-Clinker-plugin-lto", "-Clinker=lld-link"]
