@@ -569,3 +569,303 @@ fn bounds_options_are_validated() {
         )
         .unwrap();
 }
+
+/// Luau helpers the handle tests share: drain a stream to its end, failing on any real error, and
+/// pause between polls without waiting on the child.
+#[cfg(unix)]
+const DRAIN: &str = r"
+local function drain(child, which)
+    local out = ''
+    while true do
+        local chunk, message, kind = child[which](child, 4096)
+        if chunk then out = out .. chunk
+        elseif kind == 'wouldBlock' then process.sleep(0.002)
+        elseif message then error(message .. ' ' .. tostring(kind))
+        else return out end
+    end
+end
+";
+
+#[cfg(unix)]
+#[test]
+fn a_started_child_round_trips_its_input_and_output() {
+    let runtime = runtime_granting(&[SPAWN_CAPABILITY], Limits::default());
+    runtime
+        .exec(&format!(
+            r"{DRAIN}
+            local child = assert(process.start('cat', nil, {{ stdin = 'pipe', stdout = 'pipe' }}))
+            local written, message, kind = child:write('hello\0world\n')
+            assert(written == 12 and kind == nil, message)
+            assert(child:closeStdin() == nil)
+            assert(drain(child, 'readStdout') == 'hello\0world\n')
+            local status = assert(child:wait(5000))
+            assert(status.success and status.code == 0 and status.signal == nil)
+            child:close()"
+        ))
+        .unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn reads_answer_wouldblock_instead_of_blocking() {
+    let runtime = runtime_granting(&[SPAWN_CAPABILITY], Limits::default());
+    let started = Instant::now();
+    runtime
+        .exec(
+            r"local child = assert(process.start('sleep', { '5' }, { stdout = 'pipe' }))
+              local value, message, kind = child:readStdout(10)
+              assert(value == nil and kind == 'wouldBlock', tostring(kind))
+              assert(child:wait() == nil, 'poll of a running child must not block')
+              child:close()",
+        )
+        .unwrap();
+    assert!(started.elapsed() < Duration::from_secs(3), "waited {:?}", started.elapsed());
+}
+
+#[cfg(unix)]
+#[test]
+fn reads_never_return_more_than_asked() {
+    let runtime = runtime_granting(&[SPAWN_CAPABILITY], Limits::default());
+    runtime
+        .exec(&format!(
+            r"{DRAIN}
+            local child = assert(process.start('head', {{ '-c', '100000', '/dev/zero' }}, {{ stdout = 'pipe' }}))
+            local total = 0
+            while true do
+                local chunk, message, kind = child:readStdout(1000)
+                if chunk then assert(#chunk >= 1 and #chunk <= 1000, #chunk) total = total + #chunk
+                elseif kind == 'wouldBlock' then process.sleep(0.002)
+                else assert(message == nil, message) break end
+            end
+            assert(total == 100000, total)
+            assert(child:wait(5000).success)
+            child:close()"
+        ))
+        .unwrap();
+}
+
+/// A child that writes far more than its pipe holds, and is not read, stays blocked on the pipe:
+/// the handle buffers a bounded amount, so the child is still running after a while, and it
+/// finishes once everything is read.
+#[cfg(unix)]
+#[test]
+fn an_unread_child_blocks_on_its_pipe_and_finishes_once_read() {
+    let runtime = runtime_granting(&[SPAWN_CAPABILITY], Limits::default());
+    runtime
+        .exec(&format!(
+            r"{DRAIN}
+            local child = assert(process.start('head', {{ '-c', '10000000', '/dev/zero' }}, {{ stdout = 'pipe' }}))
+            process.sleep(0.3)
+            assert(child:wait() == nil, 'an unread child finished: its output is not bounded')
+            assert(#drain(child, 'readStdout') == 10000000)
+            assert(child:wait(5000).success)
+            child:close()"
+        ))
+        .unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn stdin_backpressure_answers_wouldblock_when_the_queue_is_full() {
+    let runtime = runtime_granting(&[SPAWN_CAPABILITY], Limits::default());
+    runtime
+        .exec(
+            r"local child = assert(process.start('sleep', { '5' }, { stdin = 'pipe' }))
+              local big = string.rep('x', 1024 * 1024)
+              local accepted, message, kind = child:write(big)
+              assert(accepted == 1024 * 1024 and kind == nil, tostring(message))
+              -- The queue holds 1 MiB not yet written; the kernel pipe takes more, and then writes block.
+              local total, blocked = accepted, false
+              for _ = 1, 64 do
+                  local count, message2, kind2 = child:write(big)
+                  if count then total = total + count
+                  else assert(count == nil and kind2 == 'wouldBlock', tostring(message2)) blocked = true break end
+              end
+              assert(blocked, 'writes to a child that never reads never blocked')
+              assert(total >= 1024 * 1024 and total <= 2 * 1024 * 1024, total)
+              child:close()",
+        )
+        .unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn stdout_and_stderr_are_drained_together() {
+    let runtime = runtime_granting(&[SPAWN_CAPABILITY], Limits::default());
+    runtime
+        .exec(&format!(
+            r"{DRAIN}
+            local script ='i=0; while [ $i -lt 100 ]; do head -c 10000 /dev/zero; head -c 10000 /dev/zero >&2; i=$((i+1)); done'
+            local child = assert(process.start('sh', {{ '-c', script }}, {{ stdout = 'pipe', stderr = 'pipe' }}))
+            local out, err = '', ''
+            local finished_out, finished_err = false, false
+            while not (finished_out and finished_err) do
+                if not finished_out then
+                    local chunk, message, kind = child:readStdout(8192)
+                    if chunk then out = out .. chunk elseif kind == 'wouldBlock' then else finished_out = true end
+                end
+                if not finished_err then
+                    local chunk, message, kind = child:readStderr(8192)
+                    if chunk then err = err .. chunk elseif kind == 'wouldBlock' then else finished_err = true end
+                end
+                process.sleep(0.001)
+            end
+            assert(#out == 1000000 and #err == 1000000, #out .. ' ' .. #err)
+            assert(child:wait(5000).success)
+            child:close()"
+        ))
+        .unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn a_timeout_kills_the_child_and_reads_report_it() {
+    let runtime = runtime_granting(&[SPAWN_CAPABILITY], Limits::default());
+    let started = Instant::now();
+    runtime
+        .exec(
+            r"local child = assert(process.start('sleep', { '10' }, { stdout = 'pipe', timeoutMs = 200 }))
+              local status = assert(child:wait(5000))
+              assert(not status.success and status.signal == 9, tostring(status.signal))
+              local value, message, kind = child:readStdout(10)
+              assert(value == nil and kind == 'timeout', tostring(kind))
+              child:close()",
+        )
+        .unwrap();
+    assert!(started.elapsed() < Duration::from_secs(3), "waited {:?}", started.elapsed());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_captured_stream_past_its_ceiling_kills_the_child_and_reads_report_it() {
+    let runtime = runtime_granting(&[SPAWN_CAPABILITY], Limits::default());
+    runtime
+        .exec(
+            r"local child = assert(process.start('head', { '-c', '10000000', '/dev/zero' }, { stdout = 'pipe', maxStdoutBytes = 1000 }))
+              local kind
+              for _ = 1, 2000 do
+                  local value, message
+                  value, message, kind = child:readStdout(100)
+                  if kind ~= 'wouldBlock' then break end
+                  process.sleep(0.002)
+              end
+              assert(kind == 'outputLimit', tostring(kind))
+              local status = assert(child:wait(5000))
+              assert(status.signal == 9)
+              local _, _, again = child:readStdout(100)
+              assert(again == 'outputLimit', tostring(again))
+              child:close()",
+        )
+        .unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn kill_and_close_are_idempotent_and_methods_after_close_raise() {
+    let runtime = runtime_granting(&[SPAWN_CAPABILITY], Limits::default());
+    runtime
+        .exec(
+            r"local child = assert(process.start('sleep', { '10' }))
+              assert(child:kill() == true and child:kill() == true)
+              child:close()
+              child:close()
+              local ok, err = pcall(child.kill, child)
+              assert(not ok and err:find('closed', 1, true), err)
+              ok, err = pcall(child.readStdout, child, 1)
+              assert(not ok and err:find('closed', 1, true), err)
+              ok, err = pcall(child.wait, child)
+              assert(not ok and err:find('closed', 1, true), err)",
+        )
+        .unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn a_started_program_that_does_not_exist_answers_without_a_handle() {
+    let runtime = runtime_granting(&[SPAWN_CAPABILITY], Limits::default());
+    runtime
+        .exec(
+            r"local child, message, kind = process.start('dream-process-no-such-program')
+              assert(child == nil and kind == 'notFound' and message:find('dream.process.start', 1, true), message)
+              local ok, err = pcall(process.start, 'sh', { '-c', 'exit 0' }, { stdin = 'maybe' })
+              assert(not ok and err:find('stdin must be', 1, true), err)",
+        )
+        .unwrap();
+}
+
+/// A grandchild holding the pipes does not keep `close` waiting after `kill`: the group is killed,
+/// and the pipes end with it.
+#[cfg(unix)]
+#[test]
+fn a_descendant_holding_pipes_does_not_hold_close() {
+    let runtime = runtime_granting(&[SPAWN_CAPABILITY], Limits::default());
+    let started = Instant::now();
+    runtime
+        .exec(
+            r"local child = assert(process.start('sh', { '-c', 'sleep 30 & echo started; wait' }, { stdout = 'pipe' }))
+              local text = ''
+              while not text:find('started', 1, true) do
+                  local chunk, _, kind = child:readStdout(100)
+                  if chunk then text = text .. chunk else assert(kind == 'wouldBlock') process.sleep(0.002) end
+              end
+              assert(child:kill())
+              child:close()",
+        )
+        .unwrap();
+    assert!(started.elapsed() < Duration::from_secs(5), "close waited {:?}", started.elapsed());
+}
+
+/// Reads the pid a shell wrote to `path`, waiting for it to appear.
+#[cfg(unix)]
+fn pid_written_to(path: &std::path::Path) -> libc::pid_t {
+    let until = Instant::now() + Duration::from_secs(5);
+    loop {
+        if let Some(pid) = std::fs::read_to_string(path).ok().and_then(|text| text.trim().parse().ok()) {
+            return pid;
+        }
+        assert!(Instant::now() < until, "no pid was written to {}", path.display());
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+#[cfg(unix)]
+fn process_exists(pid: libc::pid_t) -> bool {
+    // SAFETY: signal 0 only checks that the pid names a process this test may signal.
+    unsafe { libc::kill(pid, 0) == 0 }
+}
+
+/// Dropping the runtime (and so collecting the handle) kills and reaps a child still running.
+#[cfg(unix)]
+#[test]
+fn dropping_a_handle_kills_its_child() {
+    let path = std::env::temp_dir().join(format!("l3i-process-drop-{}", std::process::id()));
+    let runtime = runtime_granting(&[SPAWN_CAPABILITY], Limits::default());
+    runtime
+        .exec(&format!(
+            r#"held = assert(process.start('sh', {{ '-c', 'echo $$ > "$1"; exec sleep 30', 'sh', '{}' }}))"#,
+            path.display()
+        ))
+        .unwrap();
+    let pid = pid_written_to(&path);
+    drop(runtime);
+    std::fs::remove_file(&path).unwrap();
+    assert!(!process_exists(pid), "the child {pid} outlived its handle");
+}
+
+/// Shutdown does what close does, while the script still holds the handle.
+#[cfg(unix)]
+#[test]
+fn shutdown_kills_a_started_child() {
+    let path = std::env::temp_dir().join(format!("l3i-process-shutdown-{}", std::process::id()));
+    let runtime = runtime_granting(&[SPAWN_CAPABILITY], Limits::default());
+    runtime
+        .exec(&format!(
+            r#"held = assert(process.start('sh', {{ '-c', 'echo $$ > "$1"; exec sleep 30', 'sh', '{}' }}))"#,
+            path.display()
+        ))
+        .unwrap();
+    let pid = pid_written_to(&path);
+    runtime.shutdown();
+    std::fs::remove_file(&path).unwrap();
+    assert!(!process_exists(pid), "the child {pid} outlived shutdown");
+}

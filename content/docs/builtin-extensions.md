@@ -1774,6 +1774,7 @@ if not result.success then error(`tes3cmd exited with {result.code}`) end
 | Function | Returns |
 |---|---|
 | `run(program, args?, { cwd?, env?, clearEnv?, stdin?, stdout?, stderr?, timeoutMs?, maxStdoutBytes?, maxStderrBytes? }?)` | `{ success, code?, signal?, stdout?, stderr? }`; `stdout` and `stderr` are `"inherit"` (the default), `"capture"` or `"null"`. A limit that passes answers `nil, message, "timeout"` or `"outputLimit"` (see below) |
+| `start(program, args?, { cwd?, env?, clearEnv?, stdin?, stdout?, stderr?, timeoutMs?, maxStdoutBytes?, maxStderrBytes? }?)` | A process handle (see below), or `nil, message, kind` when the program can't start |
 | `env(name)` | An environment variable, or nil |
 | `knownFolder(name)` | A folder the OS defines for the user, or nil when it can't name it. `"home"`: `HOME`, or on Windows `USERPROFILE`, then `HOMEDRIVE` with `HOMEPATH`, then `HOME`. `"documents"`: the Windows Documents known folder from `SHGetKnownFolderPath`, wherever the user (or OneDrive) moved it; nil on every other platform. What an application keeps there is its own business |
 | `platform()` | The OS the host was built for, as Rust's `std::env::consts::OS` names it: `"windows"`, `"macos"`, `"linux"`, `"android"`, and so on. A call, not a constant, so compiled code never carries another platform's answer |
@@ -1815,6 +1816,59 @@ any of these options `run` behaves as before.
 On Unix a bounded child starts in a process group of its own, and a limit kills the whole group, so
 a process it started cannot hold the pipes open past the limit. Elsewhere only the child is killed.
 An unbounded run does not get a group of its own, so it keeps receiving the terminal's signals.
+
+### Started processes
+
+`start` launches a child and returns at once, with a handle to it. It needs `process.spawn`, as
+`run` does, and takes `run`'s `cwd`, `env` and `clearEnv`, with its own stream options:
+
+| Option | Meaning |
+|---|---|
+| `stdin` | `"pipe"` to write to the child, or `"null"` (the default) |
+| `stdout`, `stderr` | `"inherit"` (the default), `"pipe"` to read, or `"null"` |
+| `timeoutMs`, `maxStdoutBytes`, `maxStderrBytes` | The limits of `run`, checked the same way. A ceiling is a lifetime total for a piped stream |
+
+| Method | Answers |
+|---|---|
+| `readStdout(maxBytes)`, `readStderr(maxBytes)` | Between 1 and `maxBytes` bytes that are buffered now. `nil, message, "wouldBlock"` when none are yet; `nil` alone at end of stream |
+| `write(data)` | The number of bytes queued for the child's stdin, or `nil, message, "wouldBlock"` when the queue is full |
+| `closeStdin()` | Closes the child's stdin once the queued bytes are written |
+| `wait(timeoutMs?)` | `{ success, code?, signal? }` once the child has exited; `nil, message, "wouldBlock"` while it runs. It waits up to `timeoutMs` (at most 60,000, and never past the execution time limit); omitted or `0` only looks |
+| `kill()` | Kills the process group, or the child where groups are unavailable. Idempotent; returns `true`. It does not reap: `wait` or `close` does |
+| `close()` | Kills the child if it still runs, reaps it and releases its pipes. Idempotent; every other method raises afterwards |
+
+Reads and writes never block. `wait` is the only method that can wait, and only when given a
+timeout. Each piped output keeps at most 64 KiB buffered: when that is full its reader stops, so
+an unread child blocks on its own pipe instead of growing the host's memory. The stdin queue holds
+1 MiB of bytes not yet written, and `write` answers `wouldBlock` beyond that.
+
+When a limit passes, the child is killed and reaped, its buffered output is discarded, and later
+reads or writes answer with the limit's kind: `"timeout"` or `"outputLimit"`. `wait` then reports the
+child as ended by signal. Killing the process group reaches what the child started too, on Unix
+only; elsewhere only the child is killed. Closing the handle, collecting it, or shutting the runtime
+down does what `close` does, so no child outlives its handle. A handle with no `close` still runs
+its child until it is collected.
+
+Nothing here passes a secret or credential to a child: stdin carries only what the script writes,
+and no inherited file descriptor is used for that. A child started without the environment
+capability gets the same environment `run` gives it.
+
+```luau
+local process = require('@dream/process')
+local child = assert(process.start('sort', nil, { stdin = 'pipe', stdout = 'pipe', timeoutMs = 10000 }))
+assert(child:write('pear\napple\n'))
+child:closeStdin()
+local lines = ''
+while true do
+    local chunk, message, kind = child:readStdout(4096)
+    if chunk then lines = lines .. chunk
+    elseif kind == 'wouldBlock' then process.sleep(0.01)
+    elseif message then error(message)
+    else break end -- end of stream
+end
+local status = assert(child:wait(5000))
+child:close()
+```
 
 ### Reading standard input
 

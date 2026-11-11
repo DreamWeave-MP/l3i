@@ -38,6 +38,8 @@
 
 pub mod input;
 
+mod child;
+
 use std::borrow::Cow;
 use std::io::Read;
 use std::process::{Child, Command, Stdio};
@@ -69,6 +71,10 @@ const RUN_SIGNATURE: &str = "(program: string, args: { string }?, options: dream
 const OPTIONS_TYPE: &str = "{ cwd: string?, env: { [string]: string }?, clearEnv: boolean?, stdin: (buffer | string)?, \
     stdout: (\"inherit\" | \"capture\" | \"null\")?, stderr: (\"inherit\" | \"capture\" | \"null\")?, \
     timeoutMs: number?, maxStdoutBytes: number?, maxStderrBytes: number? }";
+const START_SIGNATURE: &str = "(program: string, args: { string }?, options: dream_process_StartOptions?) -> (dream_process_Child?, string?, dream_process_ErrorKind?)";
+const START_OPTIONS_TYPE: &str = "{ cwd: string?, env: { [string]: string }?, clearEnv: boolean?, stdin: (\"pipe\" | \"null\")?, \
+    stdout: (\"inherit\" | \"pipe\" | \"null\")?, stderr: (\"inherit\" | \"pipe\" | \"null\")?, \
+    timeoutMs: number?, maxStdoutBytes: number?, maxStderrBytes: number? }";
 const RESULT_TYPE: &str = "{ success: boolean, code: number?, signal: number?, stdout: string?, stderr: string? }";
 /// `dream_process_ErrorKind`: the OS kinds, and the two limits a bounded process answers with.
 const PROCESS_ERROR_KIND_TYPE: &str = "\"notFound\" | \"permissionDenied\" | \"alreadyExists\" | \"isADirectory\" \
@@ -81,20 +87,31 @@ const PROCESS_ERROR_KIND_TYPE: &str = "\"notFound\" | \"permissionDenied\" | \"a
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Mode {
     Run,
+    Start,
 }
 
 impl Mode {
     fn context(self) -> &'static str {
         match self {
             Mode::Run => "dream.process.run",
+            Mode::Start => "dream.process.start",
         }
     }
 
     fn captured(self) -> &'static str {
         match self {
             Mode::Run => "capture",
+            Mode::Start => "pipe",
         }
     }
+}
+
+/// What a child's stdin is: nothing, bytes given up front (`run`), or a pipe the script writes
+/// to (`start`).
+enum Feed {
+    Null,
+    Bytes(Vec<u8>),
+    Pipe,
 }
 
 /// Where a child's output goes.
@@ -159,7 +176,7 @@ struct SpawnOptions {
     cwd: Option<Vec<u8>>,
     env: Vec<(Vec<u8>, Vec<u8>)>,
     clear_env: bool,
-    stdin: Option<Vec<u8>>,
+    stdin: Feed,
     stdout: Output,
     stderr: Output,
     bounds: Bounds,
@@ -171,7 +188,7 @@ impl SpawnOptions {
             cwd: None,
             env: Vec::new(),
             clear_env: false,
-            stdin: None,
+            stdin: Feed::Null,
             stdout: Output::Inherit,
             stderr: Output::Inherit,
             bounds: Bounds::default(),
@@ -183,11 +200,24 @@ impl SpawnOptions {
         Options::read(scope, options, context, |o| {
             spawn.cwd = o.optional_bytes("cwd", |bytes| Ok(bytes.to_vec()))?;
             spawn.clear_env = o.or("clearEnv", false)?;
-            spawn.stdin = o.with_optional("stdin", |value| {
-                let data = BytesView::from_view(value)?;
-                // SAFETY: copied out at once, with no call into Lua while the slice lives.
-                Ok(unsafe { data.bytes_unchecked() }.to_vec())
-            })?;
+            spawn.stdin = match mode {
+                Mode::Run => o
+                    .with_optional("stdin", |value| {
+                        let data = BytesView::from_view(value)?;
+                        // SAFETY: copied out at once, with no call into Lua while the slice lives.
+                        Ok(unsafe { data.bytes_unchecked() }.to_vec())
+                    })?
+                    .map_or(Feed::Null, Feed::Bytes),
+                Mode::Start => o
+                    .optional_str("stdin", |text| match text {
+                        "pipe" => Ok(Feed::Pipe),
+                        "null" => Ok(Feed::Null),
+                        other => {
+                            Err(Error::runtime(format!("{context}: stdin must be 'pipe' or 'null', got '{other}'")))
+                        }
+                    })?
+                    .unwrap_or(Feed::Null),
+            };
             if let Some(stdout) = o.optional_str("stdout", |text| Output::parse(mode, "stdout", text))? {
                 spawn.stdout = stdout;
             }
@@ -356,7 +386,7 @@ fn run(
     let name = String::from_utf8_lossy(program).into_owned();
     let group = spawn.bounds.is_bounded();
     let mut command = build_command(program, &arguments, &spawn, inherit_environment, group)?;
-    let stdin = if spawn.stdin.is_some() { Stdio::piped() } else { Stdio::null() };
+    let stdin = if matches!(spawn.stdin, Feed::Bytes(_)) { Stdio::piped() } else { Stdio::null() };
     command.stdin(stdin).stdout(spawn.stdout.stdio()).stderr(spawn.stderr.stdio());
     let SpawnOptions { stdin, stdout, stderr, bounds, .. } = spawn;
     let failed = |error: std::io::Error| Failure::message(format!("dream.process.run: {name}: {error}"), &error);
@@ -367,7 +397,7 @@ fn run(
     // The input goes in on its own thread, so a child that fills its output pipe before it has
     // read all of its input cannot deadlock against this one.
     let feeder = match (stdin, child.stdin.take()) {
-        (Some(input), Some(mut pipe)) => Some(std::thread::spawn(move || {
+        (Feed::Bytes(input), Some(mut pipe)) => Some(std::thread::spawn(move || {
             #[cfg(unix)]
             block_sigpipe();
             std::io::Write::write_all(&mut pipe, &input)
@@ -742,7 +772,9 @@ impl Extension for ProcessExtension {
 
     fn describe(&self, d: &mut ExtensionDescriptor) -> Result<()> {
         input::describe(d);
+        child::describe(d);
         d.type_alias("dream_process_RunOptions", OPTIONS_TYPE);
+        d.type_alias("dream_process_StartOptions", START_OPTIONS_TYPE);
         d.type_alias("dream_process_Result", RESULT_TYPE);
         d.type_alias("dream_process_ErrorKind", PROCESS_ERROR_KIND_TYPE);
         d.optional_capability(SPAWN_CAPABILITY);
@@ -753,6 +785,9 @@ impl Extension for ProcessExtension {
             .installed("run")
             .signature(RUN_SIGNATURE)
             .doc("Runs program with args (no shell), waits for it, and returns how it ended; needs the process.spawn capability. stdout and stderr are inherited unless captured or discarded; stdin is empty unless given. timeoutMs (at least 1) stops the child after that many milliseconds, and maxStdoutBytes or maxStderrBytes (at least 0, each for a captured stream) stops it once that stream passes its ceiling: the child is killed and reaped, its output discarded, and the failure is timeout or outputLimit. On Unix a bounded child runs in a process group of its own, which a limit kills whole; elsewhere only the child is killed.")
+            .installed("start")
+            .signature(START_SIGNATURE)
+            .doc("Starts program with args (no shell) without waiting, and returns a process handle; needs the process.spawn capability, and fails like run for a program that cannot start. stdin is null unless \"pipe\", stdout and stderr are inherited unless \"pipe\" or \"null\". Reads, writes and wait never block except wait with a timeout. timeoutMs, maxStdoutBytes and maxStderrBytes are lifetime limits, as on run: passing one kills the child's process group (Unix) and later reads answer with the limit's kind. Closing the handle kills and reaps the child.")
             .installed("env")
             .signature("(name: string) -> string?")
             .doc("The environment variable name, or nil when it is unset; needs the process.environment capability.")
@@ -825,6 +860,14 @@ fn install(cx: &mut InstallContext<'_>, input_policy: Option<std::rc::Rc<dyn inp
         granted,
         move |call: &Call<'_>, program: &[u8], args: Option<ValueView<'_>>, options: Option<ValueView<'_>>| {
             run(call, program, args, options, environment)
+        },
+    )?;
+    module.gated(
+        "start",
+        SPAWN_CAPABILITY,
+        granted,
+        move |call: &Call<'_>, program: &[u8], args: Option<ValueView<'_>>, options: Option<ValueView<'_>>| {
+            child::start(call, program, args, options, environment)
         },
     )?;
     Ok(())
