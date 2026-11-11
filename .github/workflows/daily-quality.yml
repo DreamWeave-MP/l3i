@@ -24,7 +24,7 @@ jobs:
         with:
           submodules: true
       - uses: dtolnay/rust-toolchain@stable
-      - uses: DreamWeave-MP/StroggForge/.github/actions/setup-llvm@v71
+      - uses: DreamWeave-MP/StroggForge/.github/actions/setup-llvm@v72
       - name: Run Clippy
         run: cargo clippy --workspace --all-targets --all-features -- -W clippy::pedantic -D warnings
 
