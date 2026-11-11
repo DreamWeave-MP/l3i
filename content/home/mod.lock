@@ -1,5 +1,5 @@
 {
-  "schema_version": "2",
+  "schema_version": "4",
   "document": "lock",
   "project": "2198fb51-71ba-4695-8e1f-26b55144c4fd",
   "note": "Written by CI when a release tag is pushed: what each published release's archive contains. Do not edit.",
@@ -1004,6 +1004,58 @@
           "size": 3625546,
           "digests": {
             "sha256": "bda61d2912b49c56e59d9291c871badc47e9caa08c6c4fd659f340d7a94bf6cf"
+          }
+        }
+      ],
+      "runtimes": {},
+      "platforms": [],
+      "provides": [],
+      "relationships": [
+        {
+          "kind": "requires",
+          "project": "f82752ac-e7f6-43c0-8c2f-d91b7f6b3dda",
+          "name": "dream-net",
+          "version": "=1.1.1",
+          "url": "https://DreamWeave-MP.github.io/dream-net/",
+          "reason": "Runtime infrastructure: the @dream/udp module is in every plan, and l3i owns the bridge."
+        },
+        {
+          "kind": "recommends",
+          "project": "f7b9633b-b7cb-4db9-a19f-63556586a81d",
+          "name": "dream-soft-render",
+          "version": "=2.0.0",
+          "url": "https://DreamWeave-MP.github.io/dream-soft-render/",
+          "reason": "The @dream/soft-render module, when the soft-render feature is on."
+        }
+      ],
+      "components": [
+        {
+          "id": "main",
+          "name": "l3i",
+          "path": ".",
+          "required": true,
+          "default": true,
+          "requires": [],
+          "conflicts": [],
+          "suggested_with": []
+        }
+      ],
+      "groups": [],
+      "extensions": {},
+      "critical_extensions": []
+    },
+    {
+      "version": "2.9.0",
+      "locked_from": "66ee3f34d393dcd3d88f1c99520cee7f7101f69c",
+      "artifacts": [
+        {
+          "id": "crate",
+          "format": "crate",
+          "filename": "l3i-2.9.0.crate",
+          "media_type": "application/gzip",
+          "size": 3638145,
+          "digests": {
+            "sha256": "9c323790d81a2c06c539bcc2beb80aad89af97f3f6f29f0df9d7a05cd1c66816"
           }
         }
       ],
