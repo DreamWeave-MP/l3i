@@ -1229,7 +1229,7 @@ fn a_secret_reaches_a_child_through_an_inherited_descriptor_and_nowhere_else() {
             local secret = 'tok-' .. string.rep('s3cr3t', 20)
             -- The child reads the descriptor named in the variable, then reads it again.
             local result = assert(process.run('sh', { '-c',
-              'printf "%s|" "$ROOK_SECRET_FD"; cat <&"$ROOK_SECRET_FD"; printf "|"; cat <&"$ROOK_SECRET_FD"; printf "|end"' },
+              'printf "%s|" "$ROOK_SECRET_FD"; cat "/dev/fd/$ROOK_SECRET_FD"; printf "|"; cat "/dev/fd/$ROOK_SECRET_FD"; printf "|end"' },
               { secret = { env = 'ROOK_SECRET_FD', data = secret }, stdout = 'capture', timeoutMs = 10000 }))
             assert(result.success, tostring(result.code))
             local number, first, second = string.match(result.stdout, '^(%d+)|(.*)|(.*)|end$')
@@ -1239,7 +1239,7 @@ fn a_secret_reaches_a_child_through_an_inherited_descriptor_and_nowhere_else() {
 
             -- Bytes that are not text, from a buffer.
             local binary = buffer.fromstring('a\0b\255c')
-            local echoed = assert(process.run('sh', { '-c', 'cat <&"$FD"' },
+            local echoed = assert(process.run('sh', { '-c', 'cat "/dev/fd/$FD"' },
               { secret = { env = 'FD', data = binary }, stdout = 'capture', timeoutMs = 10000 }))
             assert(echoed.stdout == 'a\0b\255c')
 
@@ -1250,12 +1250,12 @@ fn a_secret_reaches_a_child_through_an_inherited_descriptor_and_nowhere_else() {
             assert(not string.find(seen.stdout, 's3cr3t', 1, true), 'the secret is in the child\'s arguments or environment')
 
             -- A helper the child starts inherits the descriptor: this is how a credential helper reads it.
-            local helped = assert(process.run('sh', { '-c', 'sh -c \'sh -c "cat <&$ROOK_SECRET_FD"\'' },
+            local helped = assert(process.run('sh', { '-c', 'sh -c \'sh -c "cat /dev/fd/$ROOK_SECRET_FD"\'' },
               { secret = { env = 'ROOK_SECRET_FD', data = secret }, stdout = 'capture', timeoutMs = 10000 }))
             assert(helped.stdout == secret, 'a grandchild could not read the secret')
 
             -- A child without a secret has no such descriptor: the one a sibling was given is not left open.
-            local sibling = assert(process.run('sh', { '-c', 'cat <&' .. number .. ' 2>/dev/null; echo "rc=$?"' },
+            local sibling = assert(process.run('sh', { '-c', 'cat /dev/fd/' .. number .. ' 2>/dev/null; echo "rc=$?"' },
               { stdout = 'capture', timeoutMs = 10000 }))
             assert(string.find(sibling.stdout, 'rc=', 1, true) and not string.find(sibling.stdout, 's3cr3t', 1, true), sibling.stdout)
             "#,
@@ -1271,7 +1271,7 @@ fn a_started_child_takes_a_secret_and_malformed_ones_start_nothing() {
     runtime
         .exec(
             r#"
-            local child = assert(process.start('sh', { '-c', 'cat <&"$TOKEN_FD"' },
+            local child = assert(process.start('sh', { '-c', 'cat "/dev/fd/$TOKEN_FD"' },
               { secret = { env = 'TOKEN_FD', data = 'handle-secret' }, stdout = 'pipe', timeoutMs = 10000 }))
             local text = ''
             while true do
@@ -1324,12 +1324,12 @@ fn a_started_child_takes_a_secret_and_malformed_ones_start_nothing() {
             local missing, missingMessage = process.start('l3i-no-such-program', {}, { secret = { env = 'TOKEN_FD', data = Marked } })
             assert(missing == nil and not string.find(tostring(missingMessage), 'ZZ', 1, true), tostring(missingMessage))
             -- A cleared environment still carries the variable, and the secret behind it.
-            local cleared = assert(process.run('/bin/sh', { '-c', 'cat <&"$TOKEN_FD"' },
+            local cleared = assert(process.run('/bin/sh', { '-c', 'cat "/dev/fd/$TOKEN_FD"' },
               { clearEnv = true, secret = { env = 'TOKEN_FD', data = Marked }, stdout = 'capture', timeoutMs = 10000 }))
             assert(cleared.stdout == Marked, cleared.stdout)
             -- The largest secret fits.
             local largest = string.rep('k', 4096)
-            local fits = assert(process.run('sh', { '-c', 'cat <&"$FD" | wc -c' },
+            local fits = assert(process.run('sh', { '-c', 'cat "/dev/fd/$FD" | wc -c' },
               { secret = { env = 'FD', data = largest }, stdout = 'capture', timeoutMs = 10000 }))
             assert(tonumber((string.gsub(fits.stdout, '%s', ''))) == 4096, fits.stdout)
             -- Nothing a refusal named was started.
@@ -1381,7 +1381,7 @@ fn secret_with_closed_stdin_child() {
     runtime
         .exec(
             r#"
-            local result = assert(process.run('sh', { '-c', 'printf "%s|" "$FD"; cat <&"$FD"; printf "|"; cat' },
+            local result = assert(process.run('sh', { '-c', 'printf "%s|" "$FD"; cat "/dev/fd/$FD"; printf "|"; cat' },
               { secret = { env = 'FD', data = 'THE-SECRET' }, stdin = 'SCRIPT-STDIN', stdout = 'capture', timeoutMs = 10000 }))
             local number, secret, input = string.match(result.stdout, '^(%d+)|(.*)|(.*)$')
             assert(tonumber(number) >= 3, 'the secret was put on a standard descriptor: ' .. result.stdout)
@@ -1391,7 +1391,7 @@ fn secret_with_closed_stdin_child() {
             local plain = assert(process.run('sh', { '-c', 'cat' }, { stdin = 'SCRIPT-STDIN', stdout = 'capture', timeoutMs = 10000 }))
             assert(input == plain.stdout, 'a secret changed what the child read on its own input: ' .. result.stdout)
             -- With the child's output inherited (and closed in the host), the secret is not its output.
-            local started = assert(process.start('sh', { '-c', 'cat <&"$FD" >&2' },
+            local started = assert(process.start('sh', { '-c', 'cat "/dev/fd/$FD" >&2' },
               { secret = { env = 'FD', data = 'SECOND-SECRET' }, stderr = 'pipe', timeoutMs = 10000 }))
             local text = ''
             while true do
@@ -1456,7 +1456,7 @@ fn concurrent_children_never_inherit_one_another_s_secret() {
                           if secret then options.secret = {{ env = 'FD', data = mine }} end
                           -- Its own descriptor read to the end, a separator, then the pipes it holds.
                           local result = assert(process.run('sh', {{ '-c',
-                            '[ -n "$FD" ] && cat <&"$FD"; printf "\n--\n"; ' .. [=[{LIST}]=] }}, options))
+                            '[ -n "$FD" ] && cat "/dev/fd/$FD"; printf "\n--\n"; ' .. [=[{LIST}]=] }}, options))
                           local read, listed = string.match(result.stdout, '^(.-)\n%-%-\n(.*)$')
                           assert(read == (if secret then mine else ''), 'a child read ' .. tostring(read))
                           local strange = 0

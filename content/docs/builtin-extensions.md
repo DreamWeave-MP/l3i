@@ -1925,8 +1925,10 @@ secret is in no argument, no environment value and no file, and once read it is 
 Anything else raises before the child starts, and no refusal repeats the bytes. On a system that
 is neither Unix nor Windows a call with `secret` answers `nil, message, "unsupported"`.
 
-A reader takes the number from the variable and reads until end of file: on Unix
-`cat <&"$APP_TOKEN_FD"` or `read(fd)`; on Windows a native program calls `ReadFile` on the handle
+A reader takes the number from the variable and reads until end of file: on Unix `read(fd)`, or
+from a shell `cat "/dev/fd/$APP_TOKEN_FD"`. Read it by that path, not by a redirection such as
+`<&"$APP_TOKEN_FD"`: the number can be 10 or more, and a POSIX shell is only required to accept
+a single digit there (dash, the `sh` of Debian and Ubuntu, refuses more). On Windows a native program calls `ReadFile` on the handle
 (or wraps it, as .NET's `SafeFileHandle` does). A shell script run by Git for Windows' bundled
 shell cannot open a handle by its value, so a Windows credential helper has to be a native
 program.
