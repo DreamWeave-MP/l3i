@@ -4,9 +4,9 @@
 //! timeout waits, and never past the runtime's execution time limit. That wait blocks the calling
 //! thread, so a cooperative caller, such as a frame-driven host, polls with `wait(0)` instead.
 //!
-//! The child's live slot is held until it is reaped (see `State::mark_reaped`), and the threads
-//! are bounded by the live-child limit only as far as that goes: a descendant that outlives its
-//! child and keeps a pipe open keeps one reader thread until the pipe closes.
+//! A child holds its live-child slot until it is reaped (see `State::mark_reaped`), so the limit
+//! bounds the threads of live children. A descendant that outlives a reaped child and keeps a pipe
+//! open keeps that pipe's reader thread until the pipe closes, outside the limit.
 //!
 //! This plumbing is meant to move onto the common I/O readiness substrate of RFC #11 later. RFC #11
 //! is not implemented here, and nothing above this file depends on threads being how it is done.
