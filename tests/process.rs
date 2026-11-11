@@ -617,6 +617,121 @@ fn the_longest_timeout_is_accepted() {
         .unwrap();
 }
 
+/// A runtime whose process extension allows `max` live children, with the spawn capability.
+#[cfg(unix)]
+fn runtime_limiting_children(max: u32) -> Runtime {
+    let policy = RuntimePolicy::new().compat_global("@dream/process", "process").capability(SPAWN_CAPABILITY);
+    let plan =
+        RuntimePlan::builder().policy(policy).extension(ProcessExtension.with_max_children(max)).finalize().unwrap();
+    Runtime::from_plan(&plan).unwrap()
+}
+
+/// A live child is one not yet reaped. At the limit a start raises, and `run` counts too; a closed
+/// child frees its slot at once, so the next start succeeds straight away.
+#[cfg(unix)]
+#[test]
+fn the_live_child_limit_refuses_the_next_start_and_a_closed_child_frees_its_slot() {
+    let runtime = runtime_limiting_children(2);
+    runtime
+        .exec(
+            r"local first = assert(process.start('sleep', { '30' }))
+              local second = assert(process.start('sleep', { '30' }))
+              local ok, err = pcall(process.start, 'sleep', { '30' })
+              assert(not ok and err:find('at most 2 child processes', 1, true), tostring(err))
+              ok, err = pcall(process.run, 'true', {})
+              assert(not ok and err:find('dream.process.run', 1, true), tostring(err))
+              first:close()
+              local third = assert(process.start('sleep', { '30' }))
+              second:close()
+              third:close()
+              assert(process.run('true', {}).success)",
+        )
+        .unwrap();
+}
+
+/// A failed spawn holds no slot: ten programs that do not exist leave the whole limit for later.
+#[cfg(unix)]
+#[test]
+fn a_failed_spawn_does_not_hold_a_slot() {
+    let runtime = runtime_limiting_children(2);
+    runtime
+        .exec(
+            r"for _ = 1, 10 do
+                  local child, _, kind = process.start('dream-process-no-such-program')
+                  assert(child == nil and kind == 'notFound', tostring(kind))
+              end
+              local first = assert(process.start('sleep', { '30' }))
+              local second = assert(process.start('sleep', { '30' }))
+              first:close()
+              second:close()",
+        )
+        .unwrap();
+}
+
+/// Start and close cycles far past the limit all succeed, since each close frees its slot.
+#[cfg(unix)]
+#[test]
+fn repeated_start_and_close_cycles_stay_within_the_limit() {
+    let runtime = runtime_limiting_children(2);
+    runtime
+        .exec(
+            r"for _ = 1, 200 do
+                  local child = assert(process.start('sleep', { '30' }))
+                  child:close()
+              end",
+        )
+        .unwrap();
+}
+
+/// A child a timeout kills frees its slot without a wait or a close: the timer reaps it.
+#[cfg(unix)]
+#[test]
+fn a_timeout_frees_the_slot_of_a_child_nobody_waits_for() {
+    let runtime = runtime_limiting_children(1);
+    runtime
+        .exec(
+            r"local held = assert(process.start('sleep', { '30' }, { timeoutMs = 50 }))
+              process.sleep(0.5)
+              local next = assert(process.start('sleep', { '30' }))
+              next:close()
+              held:close()",
+        )
+        .unwrap();
+}
+
+/// A child that exited still holds its slot until something reaps it; a wait does, and then the
+/// slot is free.
+#[cfg(unix)]
+#[test]
+fn a_child_that_exited_holds_its_slot_until_it_is_waited_for() {
+    let runtime = runtime_limiting_children(1);
+    runtime
+        .exec(
+            r"local done = assert(process.start('true', {}))
+              local ok = pcall(process.start, 'sleep', { '30' })
+              assert(not ok, 'an unreaped child freed its slot')
+              assert(assert(done:wait(5000)).success)
+              local next = assert(process.start('sleep', { '30' }))
+              next:close()",
+        )
+        .unwrap();
+}
+
+/// A limit of 0 is raised to 1: one child may run at a time, never none.
+#[cfg(unix)]
+#[test]
+fn a_limit_below_one_is_raised_to_one() {
+    let runtime = runtime_limiting_children(0);
+    runtime
+        .exec(
+            r"local only = assert(process.start('sleep', { '30' }))
+              local ok = pcall(process.start, 'sleep', { '30' })
+              assert(not ok)
+              only:close()",
+        )
+        .unwrap();
+}
+
 /// Kills the sentinel on drop, so a failing assertion does not leave it running.
 #[cfg(unix)]
 struct Sentinel(std::process::Child);

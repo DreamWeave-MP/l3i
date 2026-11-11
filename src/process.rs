@@ -44,7 +44,7 @@ use std::borrow::Cow;
 use std::io::Read;
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -72,6 +72,11 @@ pub const MAX_TIMEOUT_MS: u64 = 24 * 60 * 60 * 1000;
 /// The largest byte count an option may name: 2^53 - 1, the last whole number every Luau number
 /// holds exactly. A captured stream is held in memory, so no ceiling past that is ever reached.
 const MAX_BYTES: f64 = 9_007_199_254_740_991.0;
+/// The live children a runtime may hold at once, unless its host sets another limit.
+pub const DEFAULT_MAX_CHILDREN: u32 = 32;
+/// The most live children a host may allow a runtime: each started child holds up to four
+/// threads, so this bounds them at 4096.
+pub const MAX_CHILDREN_LIMIT: u32 = 1024;
 
 const RUN_SIGNATURE: &str = "(program: string, args: { string }?, options: dream_process_RunOptions?) -> (dream_process_Result?, string?, dream_process_ErrorKind?)";
 const OPTIONS_TYPE: &str = "{ cwd: string?, env: { [string]: string }?, clearEnv: boolean?, stdin: (buffer | string)?, \
@@ -176,6 +181,47 @@ pub(super) fn bounded(context: &str, key: &str, value: f64, least: f64, most: f6
     }
     #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss, reason = "checked whole and in range above")]
     Ok(value as u64)
+}
+
+/// The live children one runtime may hold. A child is live from its spawn until it is reaped, and a
+/// `process.run` child holds its slot for the call. Scripts cannot change the limit: only the host's
+/// extension sets it.
+pub(super) struct ChildQuota {
+    max: usize,
+    live: AtomicUsize,
+}
+
+/// One live child's slot. Dropping it releases the slot, and the owner drops it once: when the
+/// child is reaped, or when the owner that holds the child goes away, whichever comes first.
+pub(super) struct Reservation(Arc<ChildQuota>);
+
+impl ChildQuota {
+    pub(super) fn new(max: u32) -> Arc<ChildQuota> {
+        Arc::new(ChildQuota { max: max as usize, live: AtomicUsize::new(0) })
+    }
+
+    /// Takes a slot before a child is spawned, or refuses when the runtime's children are all live.
+    pub(super) fn reserve(quota: &Arc<ChildQuota>, context: &str) -> Result<Reservation> {
+        let mut live = quota.live.load(Ordering::SeqCst);
+        loop {
+            if live >= quota.max {
+                return Err(Error::runtime(format!(
+                    "{context}: at most {} child processes may be live at once",
+                    quota.max
+                )));
+            }
+            match quota.live.compare_exchange_weak(live, live + 1, Ordering::SeqCst, Ordering::SeqCst) {
+                Ok(_) => return Ok(Reservation(Arc::clone(quota))),
+                Err(now) => live = now,
+            }
+        }
+    }
+}
+
+impl Drop for Reservation {
+    fn drop(&mut self) {
+        self.0.live.fetch_sub(1, Ordering::SeqCst);
+    }
 }
 
 /// An optional whole-number option, bounded as [`bounded`] bounds it.
@@ -451,9 +497,13 @@ fn run(
     args: Option<ValueView<'_>>,
     options: Option<ValueView<'_>>,
     inherit_environment: bool,
+    quota: &Arc<ChildQuota>,
 ) -> Result<Outcome<StackResults>> {
     let arguments = arguments(call, args)?;
     let spawn = SpawnOptions::read(call, options, Mode::Run)?;
+    // Counted like a started child, since it is live until it is reaped; the slot is released when
+    // this call returns, after the reap, on every path.
+    let _slot = ChildQuota::reserve(quota, "dream.process.run")?;
     let name = String::from_utf8_lossy(program).into_owned();
     let group = spawn.bounds.is_bounded();
     let mut command = build_command(program, &arguments, &spawn, inherit_environment, group)?;
@@ -892,24 +942,58 @@ impl Extension for ProcessExtension {
     }
 
     fn install(&self, cx: &mut InstallContext<'_>) -> Result<()> {
-        install(cx, None)
+        install(cx, None, DEFAULT_MAX_CHILDREN)
     }
 }
 
 impl ProcessExtension {
+    /// This extension with at most `max` child processes live per runtime at once (1 to
+    /// [`MAX_CHILDREN_LIMIT`]; default [`DEFAULT_MAX_CHILDREN`]). Scripts cannot change it.
+    #[must_use]
+    pub fn with_max_children(self, max: u32) -> ProcessConfig {
+        ProcessConfig::default().with_max_children(max)
+    }
+
     /// This extension with a host's [`input::Policy`] checked at every stdin operation, on top of
     /// the `process.stdio` capability gate.
     #[must_use]
-    pub fn with_input_policy(self, policy: std::rc::Rc<dyn input::Policy>) -> impl Extension {
-        InputProcessExtension { policy }
+    pub fn with_input_policy(self, policy: std::rc::Rc<dyn input::Policy>) -> ProcessConfig {
+        ProcessConfig::default().with_input_policy(policy)
     }
 }
 
-struct InputProcessExtension {
-    policy: std::rc::Rc<dyn input::Policy>,
+/// The `dream.process` extension with a host's settings: the live-child limit, and optionally a
+/// [`input::Policy`] for stdin. Built from [`ProcessExtension`].
+pub struct ProcessConfig {
+    max_children: u32,
+    input_policy: Option<std::rc::Rc<dyn input::Policy>>,
 }
 
-impl Extension for InputProcessExtension {
+impl Default for ProcessConfig {
+    fn default() -> Self {
+        ProcessConfig { max_children: DEFAULT_MAX_CHILDREN, input_policy: None }
+    }
+}
+
+impl ProcessConfig {
+    /// At most `max` child processes live per runtime at once (1 to [`MAX_CHILDREN_LIMIT`]). A child
+    /// is live from its spawn until it is reaped, and a `process.run` child holds its slot for the
+    /// call; a start past the limit raises.
+    #[must_use]
+    pub fn with_max_children(mut self, max: u32) -> ProcessConfig {
+        self.max_children = max.clamp(1, MAX_CHILDREN_LIMIT);
+        self
+    }
+
+    /// Checks every stdin operation against `policy`, on top of the `process.stdio` capability.
+    #[must_use]
+    pub fn with_input_policy(mut self, policy: std::rc::Rc<dyn input::Policy>) -> ProcessConfig {
+        self.input_policy = Some(policy);
+        self
+    }
+}
+
+impl Extension for ProcessConfig {
     fn id(&self) -> &'static str {
         EXTENSION_ID
     }
@@ -917,14 +1001,21 @@ impl Extension for InputProcessExtension {
         ProcessExtension.describe(d)
     }
     fn install(&self, cx: &mut InstallContext<'_>) -> Result<()> {
-        install(cx, Some(std::rc::Rc::clone(&self.policy)))
+        install(cx, self.input_policy.clone(), self.max_children)
     }
 }
 
-fn install(cx: &mut InstallContext<'_>, input_policy: Option<std::rc::Rc<dyn input::Policy>>) -> Result<()> {
+fn install(
+    cx: &mut InstallContext<'_>,
+    input_policy: Option<std::rc::Rc<dyn input::Policy>>,
+    max_children: u32,
+) -> Result<()> {
     let granted = cx.has_capability(SPAWN_CAPABILITY)?;
     let environment = cx.has_capability(ENVIRONMENT_CAPABILITY)?;
     let stdio = cx.has_capability(STDIO_CAPABILITY)?;
+    // One quota per runtime: this install is that runtime's, and the closures below share it.
+    let quota = ChildQuota::new(max_children);
+    let started_quota = Arc::clone(&quota);
     let module = cx.module(MODULE)?;
     module.gated("env", ENVIRONMENT_CAPABILITY, environment, |name: &[u8]| -> Result<Option<Vec<u8>>> {
         Ok(std::env::var_os(os_string("a variable name", name)?).map(|value| value.as_encoded_bytes().to_vec()))
@@ -938,7 +1029,7 @@ fn install(cx: &mut InstallContext<'_>, input_policy: Option<std::rc::Rc<dyn inp
         SPAWN_CAPABILITY,
         granted,
         move |call: &Call<'_>, program: &[u8], args: Option<ValueView<'_>>, options: Option<ValueView<'_>>| {
-            run(call, program, args, options, environment)
+            run(call, program, args, options, environment, &quota)
         },
     )?;
     module.gated(
@@ -946,7 +1037,7 @@ fn install(cx: &mut InstallContext<'_>, input_policy: Option<std::rc::Rc<dyn inp
         SPAWN_CAPABILITY,
         granted,
         move |call: &Call<'_>, program: &[u8], args: Option<ValueView<'_>>, options: Option<ValueView<'_>>| {
-            child::start(call, program, args, options, environment)
+            child::start(call, program, args, options, environment, &started_quota)
         },
     )?;
     Ok(())

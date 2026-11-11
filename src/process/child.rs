@@ -23,7 +23,10 @@ use crate::runtime::shared::Resource;
 use crate::stack::{Scope, ValueView};
 use crate::userdata::Userdata;
 
-use super::{Feed, MAX_BYTES, Mode, SpawnOptions, arguments, bounded, build_command, has_exited, kill_group};
+use super::{
+    ChildQuota, Feed, MAX_BYTES, Mode, Reservation, SpawnOptions, arguments, bounded, build_command, has_exited,
+    kill_group,
+};
 
 /// Bytes a stream's buffer holds before its reader stops reading, so the child blocks on its pipe.
 pub const PIPE_BUFFER: usize = 64 * 1024;
@@ -68,6 +71,8 @@ struct State {
     /// none follows a reap: the pid, which is the group id, may be reused from then on.
     reaped: bool,
     status: Option<ExitStatus>,
+    /// The child's live-child slot, released by the reap: a reaped child is no longer live.
+    reservation: Option<Reservation>,
     stdout: Pipe,
     stderr: Pipe,
     stdin: Queue,
@@ -99,7 +104,7 @@ impl State {
             && let Ok(Some(status)) = self.child.try_wait()
         {
             self.status = Some(status);
-            self.reaped = true;
+            self.mark_reaped();
         }
         self.status
     }
@@ -108,8 +113,15 @@ impl State {
     fn reap_now(&mut self) {
         if !self.reaped {
             self.status = self.child.wait().ok();
-            self.reaped = true;
+            self.mark_reaped();
         }
+    }
+
+    /// Records the reap, and with it releases the child's live slot. Only the reap paths call this,
+    /// once: the `reaped` check above it makes a second reap a no-op, so the slot is released once.
+    fn mark_reaped(&mut self) {
+        self.reaped = true;
+        self.reservation = None;
     }
 
     /// Kills the child's process group, then the child. The group is the child's own (see
@@ -434,9 +446,12 @@ pub(super) fn start(
     args: Option<ValueView<'_>>,
     options: Option<ValueView<'_>>,
     inherit_environment: bool,
+    quota: &Arc<ChildQuota>,
 ) -> Result<Outcome<StackResults>> {
     let arguments = arguments(call, args)?;
     let spawn = SpawnOptions::read(call, options, Mode::Start)?;
+    // Reserved before anything is spawned. A spawn that fails drops the slot with the error.
+    let reservation = ChildQuota::reserve(quota, "dream.process.start")?;
     let name = String::from_utf8_lossy(program).into_owned();
     let mut command = build_command(program, &arguments, &spawn, inherit_environment, true)?;
     let stdin = if matches!(spawn.stdin, Feed::Pipe) { Stdio::piped() } else { Stdio::null() };
@@ -458,6 +473,7 @@ pub(super) fn start(
             child,
             reaped: false,
             status: None,
+            reservation: Some(reservation),
             stdout: pipe(stdout_pipe.is_some(), bounds.stdout),
             stderr: pipe(stderr_pipe.is_some(), bounds.stderr),
             stdin: Queue { piped: stdin_pipe.is_some(), ..Queue::default() },
@@ -632,11 +648,17 @@ mod tests {
 
     /// Owns `child` as a started handle does, with no pipes.
     fn own(child: Child) -> Arc<Shared> {
+        own_holding(child, None)
+    }
+
+    /// Owns `child` as a started handle does, holding `slot` until it is reaped.
+    fn own_holding(child: Child, slot: Option<Reservation>) -> Arc<Shared> {
         Arc::new(Shared {
             state: Mutex::new(State {
                 child,
                 reaped: false,
                 status: None,
+                reservation: slot,
                 stdout: Pipe::default(),
                 stderr: Pipe::default(),
                 stdin: Queue::default(),
@@ -698,6 +720,40 @@ mod tests {
         let state = shared.lock();
         assert_eq!(state.killed_by, Some("timeout"));
         assert!(state.reaped);
+    }
+
+    #[test]
+    fn a_slot_is_released_once_when_its_child_is_reaped() {
+        let quota = ChildQuota::new(1);
+        let shared = own_holding(leader("true", &[]), Some(ChildQuota::reserve(&quota, "test").unwrap()));
+        assert!(ChildQuota::reserve(&quota, "test").is_err(), "the held slot was handed out again");
+        assert!(shared.wait(Duration::from_secs(10)).is_some());
+        assert!(ChildQuota::reserve(&quota, "test").is_ok(), "the reaped child still holds its slot");
+        // A second reap, from the timer or close, releases nothing more.
+        timer_loop(&shared, Instant::now(), Duration::ZERO);
+        shared.close();
+        let second = ChildQuota::reserve(&quota, "test").unwrap();
+        assert!(ChildQuota::reserve(&quota, "test").is_err(), "a second reap released a slot it did not hold");
+        drop(second);
+    }
+
+    #[test]
+    fn a_handle_collected_before_its_reap_releases_its_slot() {
+        let quota = ChildQuota::new(1);
+        let shared = own_holding(leader("sleep", &["30"]), Some(ChildQuota::reserve(&quota, "test").unwrap()));
+        drop(Owner(shared));
+        assert!(ChildQuota::reserve(&quota, "test").is_ok(), "the collected handle kept its slot");
+    }
+
+    #[test]
+    fn a_slot_is_released_when_its_scope_unwinds() {
+        let quota = ChildQuota::new(1);
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _slot = ChildQuota::reserve(&quota, "test").unwrap();
+            panic!("unwinding while a slot is held");
+        }));
+        assert!(outcome.is_err());
+        assert!(ChildQuota::reserve(&quota, "test").is_ok(), "the unwound slot was not released");
     }
 
     #[test]
