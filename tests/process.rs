@@ -1537,12 +1537,13 @@ fn git_is_installed() -> bool {
 /// description of the credential it is asked for. The helper is a shell function, as Git's
 /// documentation describes one; Git starts it, so it is a grandchild of this process. It answers
 /// `get` with what it reads from the descriptor named in `L3I_GIT_TOKEN_FD`, and nothing when
-/// that is empty. On its standard error it then lists what a credential must not be in: its own
+/// that is empty, and only when Git asks for `https` and the one host it is for: a request for
+/// any other is not answered and leaves the token unread. On its standard error it then lists what a credential must not be in: its own
 /// environment, and its own and Git's command lines.
 #[cfg(unix)]
 const GIT_FIXTURE: &str = r#"
 local Token = 'ghs_SYNTHETIC0TOKEN0FOR0TESTS0ONLY0ZZ9'
-local Helper = [=[!f() { test "$1" = get || exit 0; token=$(cat "/dev/fd/$L3I_GIT_TOKEN_FD"); test -n "$token" || exit 1; printf 'username=x-access-token\npassword=%s\n' "$token"; { env; cat /proc/$$/cmdline /proc/$PPID/cmdline 2>/dev/null | tr '\0' ' '; } >&2; }; f]=]
+local Helper = [=[!f() { test "$1" = get || exit 0; while IFS='=' read -r key value; do case $key in protocol) protocol=$value;; host) host=$value;; esac; done; test "$protocol" = https && test "$host" = example.invalid || exit 0; token=$(cat "/dev/fd/$L3I_GIT_TOKEN_FD"); test -n "$token" || exit 1; printf 'username=x-access-token\npassword=%s\n' "$token"; { env; cat /proc/$$/cmdline /proc/$PPID/cmdline 2>/dev/null | tr '\0' ' '; } >&2; }; f]=]
 local Environment = { GIT_CONFIG_NOSYSTEM = '1', GIT_CONFIG_GLOBAL = '/dev/null', GIT_TERMINAL_PROMPT = '0', HOME = '/nonexistent' }
 local Asked = 'protocol=https\nhost=example.invalid\n\n'
 local function arguments(helper)
@@ -1597,6 +1598,23 @@ fn git_reads_a_token_through_its_credential_helper_and_only_once() {
               secret = {{ env = 'L3I_GIT_TOKEN_FD', data = Token .. '-second' }},
             }}))
             assert(string.find(again.stdout, 'password=' .. Token .. '-second', 1, true), again.stdout)
+
+            -- The token is for one host over https. Asked for another host, or for the same one over
+            -- http (as a redirect or a rewritten remote would ask), the helper gives nothing: the
+            -- token is offered to neither, and is still unread for the request it is meant for.
+            local elsewhere = assert(process.run('sh', {{ '-c',
+              'printf "protocol=https\nhost=evil.invalid\n\n" | git "$@"; echo "other=$?"; '
+                .. 'printf "protocol=http\nhost=example.invalid\n\n" | git "$@"; echo "clear=$?"; '
+                .. 'printf "protocol=https\nhost=example.invalid\n\n" | git "$@"; echo "meant=$?"',
+              'sh', table.unpack(arguments(Helper)) }}, {{
+              stdout = 'capture', stderr = 'null', env = Environment, timeoutMs = 30000,
+              secret = {{ env = 'L3I_GIT_TOKEN_FD', data = Token }},
+            }}))
+            local _, given = string.gsub(elsewhere.stdout, 'password=' .. Token, '')
+            assert(given == 1, 'the token was given out ' .. given .. ' times: ' .. elsewhere.stdout)
+            assert(not string.find(elsewhere.stdout, 'other=0', 1, true) and not string.find(elsewhere.stdout, 'clear=0', 1, true),
+              'a host the token is not for was answered: ' .. elsewhere.stdout)
+            assert(string.find(elsewhere.stdout, 'meant=0', 1, true), elsewhere.stdout)
 
             -- Without a secret the same helper has nothing to read and Git gets no credential.
             local without = assert(process.run('git', arguments(Helper), {{

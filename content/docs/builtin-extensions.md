@@ -1928,7 +1928,10 @@ is neither Unix nor Windows a call with `secret` answers `nil, message, "unsuppo
 A reader takes the number from the variable and reads until end of file: on Unix `read(fd)`, or
 from a shell `cat "/dev/fd/$APP_TOKEN_FD"`. Read it by that path, not by a redirection such as
 `<&"$APP_TOKEN_FD"`: the number can be 10 or more, and a POSIX shell is only required to accept
-a single digit there (dash, the `sh` of Debian and Ubuntu, refuses more). On Windows a native program calls `ReadFile` on the handle
+a single digit there (dash, the `sh` of Debian and Ubuntu, refuses more). `/dev/fd` reaches every
+descriptor on Linux, Android and macOS; on FreeBSD it holds only 0 to 2 unless `fdescfs` is
+mounted, and other BSDs provide a fixed range, so there read the descriptor from a program, or
+from a shell that accepts any number after `<&` (bash, ksh, zsh). On Windows a native program calls `ReadFile` on the handle
 (or wraps it, as .NET's `SafeFileHandle` does). A shell script run by Git for Windows' bundled
 shell cannot open a handle by its value, so a Windows credential helper has to be a native
 program.
@@ -1948,7 +1951,8 @@ changes, and a child is given no more of the host's environment for having a sec
 
 **One secret, one read, one attempt.** The descriptor gives the bytes to its first reader and end
 of file to every later one, so a program that asks for the credential a second time in the same
-call (after a redirect, or because the first answer was rejected) gets nothing. A helper must
+call (after a redirect, or because the first answer was rejected) gets nothing, provided the
+first reader read to end of file: a reader that stops early leaves the rest for the next. A helper must
 treat an empty read as "no credential" and say so, never invent or cache one; the program then
 fails, and the caller sees that as an ordinary failed call. **A retry is a new call with a new
 `secret`**: the caller, which holds the credential, decides whether to try again, and it can
@@ -1958,9 +1962,13 @@ between calls.
 With Git, the helper is a credential helper, which Git starts itself:
 
 ```luau
--- The helper answers `get` from the descriptor and nothing else. No part of this is the token.
-local helper = [[!f() { test "$1" = get || exit 0; token=$(cat "/dev/fd/$APP_TOKEN_FD"); ]]
-    .. [[test -n "$token" || exit 1; printf 'username=x-access-token\npassword=%s\n' "$token"; }; f]]
+-- The helper answers `get`, for https and the one host the token is for, from the descriptor.
+-- No part of this is the token.
+local helper = [[!f() { test "$1" = get || exit 0; ]]
+    .. [[while IFS='=' read -r key value; do case $key in protocol) protocol=$value;; host) host=$value;; esac; done; ]]
+    .. [[test "$protocol" = https && test "$host" = github.com || exit 0; ]]
+    .. [[token=$(cat "/dev/fd/$APP_TOKEN_FD"); test -n "$token" || exit 1; ]]
+    .. [[printf 'username=x-access-token\npassword=%s\n' "$token"; }; f]]
 local result, message, kind = process.run('git',
     { '-c', 'credential.helper=', '-c', 'credential.helper=' .. helper, 'fetch', '--quiet', 'origin' },
     { secret = { env = 'APP_TOKEN_FD', data = token }, timeoutMs = 60000,
@@ -1971,6 +1979,18 @@ The first `credential.helper=` clears any helper configured elsewhere, so the to
 this one only and stored by none; `GIT_TERMINAL_PROMPT=0` makes a missing credential a failure
 instead of a prompt. If the helper hangs, `timeoutMs` ends the call and the process group, the
 helper with it.
+
+**The helper must check what it is asked for.** Git tells a helper the protocol and host it wants
+a credential for, on the helper's standard input, and it asks for whatever host it ends up
+talking to: the one in the remote's URL, the one a `url.<base>.insteadOf` in the repository's own
+configuration rewrites that to, or the one a redirect sends the first request to. A helper that
+answers every request hands the token to any of them, and over `http` in clear text. So the
+helper above answers only for `https` and one host, and reads the descriptor only then. The
+recipe still trusts the repository's own configuration for everything else (`http.proxy`,
+`http.sslVerify`): run it on repositories whose configuration you wrote, or pass the settings
+that matter with `-c`. And do not give a child with a secret the host's environment unless you
+know what is in it: Git's tracing variables (`GIT_TRACE_CURL` with `GIT_TRACE_REDACT=0`) print
+request headers.
 
 What this does **not** do:
 
