@@ -1212,3 +1212,461 @@ fn shutdown_kills_a_started_child() {
     std::fs::remove_file(&path).unwrap();
     assert!(!process_exists(pid), "the child {pid} outlived shutdown");
 }
+
+/// A secret reaches a child through a descriptor it inherits and nowhere else: the variable holds
+/// the descriptor's number, the bytes are read once and then the pipe is at end of file, and
+/// neither the child's arguments nor its environment contains them.
+#[cfg(unix)]
+#[test]
+fn a_secret_reaches_a_child_through_an_inherited_descriptor_and_nowhere_else() {
+    runtime_with(false)
+        .exec("assert(not pcall(process.run, 'true', {}, { secret = { env = 'ROOK_SECRET_FD', data = 'x' } }))")
+        .unwrap();
+    let runtime = runtime_granting(&[SPAWN_CAPABILITY], Limits::default());
+    runtime
+        .exec(
+            r#"
+            local secret = 'tok-' .. string.rep('s3cr3t', 20)
+            -- The child reads the descriptor named in the variable, then reads it again.
+            local result = assert(process.run('sh', { '-c',
+              'printf "%s|" "$ROOK_SECRET_FD"; cat "/dev/fd/$ROOK_SECRET_FD"; printf "|"; cat "/dev/fd/$ROOK_SECRET_FD"; printf "|end"' },
+              { secret = { env = 'ROOK_SECRET_FD', data = secret }, stdout = 'capture', timeoutMs = 10000 }))
+            assert(result.success, tostring(result.code))
+            local number, first, second = string.match(result.stdout, '^(%d+)|(.*)|(.*)|end$')
+            assert(tonumber(number) >= 3, result.stdout)
+            assert(first == secret, 'the child did not read the secret')
+            assert(second == '', 'the secret could be read twice')
+
+            -- Bytes that are not text, from a buffer.
+            local binary = buffer.fromstring('a\0b\255c')
+            local echoed = assert(process.run('sh', { '-c', 'cat "/dev/fd/$FD"' },
+              { secret = { env = 'FD', data = binary }, stdout = 'capture', timeoutMs = 10000 }))
+            assert(echoed.stdout == 'a\0b\255c')
+
+            -- What the child can see of itself holds the descriptor's number and not the secret.
+            local seen = assert(process.run('sh', { '-c', 'env; echo "$0" "$@"; cat /proc/$$/cmdline 2>/dev/null; cat /proc/$$/environ 2>/dev/null' },
+              { secret = { env = 'ROOK_SECRET_FD', data = secret }, stdout = 'capture', timeoutMs = 10000 }))
+            assert(string.find(seen.stdout, 'ROOK_SECRET_FD=', 1, true), seen.stdout)
+            assert(not string.find(seen.stdout, 's3cr3t', 1, true), 'the secret is in the child\'s arguments or environment')
+
+            -- A helper the child starts inherits the descriptor: this is how a credential helper reads it.
+            local helped = assert(process.run('sh', { '-c', 'sh -c \'sh -c "cat /dev/fd/$ROOK_SECRET_FD"\'' },
+              { secret = { env = 'ROOK_SECRET_FD', data = secret }, stdout = 'capture', timeoutMs = 10000 }))
+            assert(helped.stdout == secret, 'a grandchild could not read the secret')
+
+            -- A child without a secret has no such descriptor: the one a sibling was given is not left open.
+            local sibling = assert(process.run('sh', { '-c', 'cat /dev/fd/' .. number .. ' 2>/dev/null; echo "rc=$?"' },
+              { stdout = 'capture', timeoutMs = 10000 }))
+            assert(string.find(sibling.stdout, 'rc=', 1, true) and not string.find(sibling.stdout, 's3cr3t', 1, true), sibling.stdout)
+            "#,
+        )
+        .unwrap();
+}
+
+/// The same through a started child, and the refusals: every one is raised before anything starts.
+#[cfg(unix)]
+#[test]
+fn a_started_child_takes_a_secret_and_malformed_ones_start_nothing() {
+    let runtime = runtime_granting(&[SPAWN_CAPABILITY], Limits::default());
+    runtime
+        .exec(
+            r#"
+            local child = assert(process.start('sh', { '-c', 'cat "/dev/fd/$TOKEN_FD"' },
+              { secret = { env = 'TOKEN_FD', data = 'handle-secret' }, stdout = 'pipe', timeoutMs = 10000 }))
+            local text = ''
+            while true do
+              local chunk, message, kind = child:readStdout(4096)
+              if chunk then text = text .. chunk
+              elseif kind == 'wouldBlock' then process.sleep(0.005)
+              elseif message then error(message)
+              else break end
+            end
+            assert(text == 'handle-secret', text)
+            assert(assert(child:wait(5000)).success)
+            child:close()
+
+            local marker = '/tmp/l3i-secret-test-must-not-exist-' .. tostring(os.clock())
+            -- A value that appears in no message this library writes, so that finding it in one
+            -- would mean a refusal repeated the secret.
+            local Marked = 'ZZ-SECRET-ZZ'
+            local refused = {
+              { env = 'TOKEN_FD' },
+              { data = Marked },
+              { env = 'lower', data = Marked },
+              { env = '1FD', data = Marked },
+              { env = 'A=B', data = Marked },
+              { env = '', data = Marked },
+              { env = string.rep('A', 65), data = Marked },
+              { env = 'TOKEN_FD', data = '' },
+              { env = 'TOKEN_FD', data = string.rep(Marked, 400) },
+              { env = 'TOKEN_FD', data = Marked, extra = true },
+              { env = 'TOKEN_FD', data = 7 },
+              -- A number in one of these would break how the child finds and loads programs.
+              { env = 'PATH', data = Marked },
+              { env = 'LD_PRELOAD', data = Marked },
+              { env = 'DYLD_INSERT_LIBRARIES', data = Marked },
+              'not a table',
+            }
+            for index, secret in refused do
+              for _, start in { process.run, process.start } do
+                local ok, problem = pcall(start, 'sh', { '-c', 'touch ' .. marker }, { secret = secret, timeoutMs = 5000 })
+                assert(not ok, 'malformed secret ' .. index .. ' was accepted')
+                assert(not string.find(tostring(problem), 'ZZ', 1, true), 'a refusal repeated the secret: ' .. tostring(problem))
+                assert(string.find(tostring(problem), 'secret', 1, true), tostring(problem))
+              end
+            end
+            -- The variable the secret names cannot also be set by env, through either call.
+            for _, start in { process.run, process.start } do
+              local ok, problem = pcall(start, 'true', {}, { env = { TOKEN_FD = '9' }, secret = { env = 'TOKEN_FD', data = Marked } })
+              assert(not ok and not string.find(tostring(problem), 'ZZ', 1, true), tostring(problem))
+            end
+            -- A program that cannot be started is an answer, with a secret as without one.
+            local missing, missingMessage = process.start('l3i-no-such-program', {}, { secret = { env = 'TOKEN_FD', data = Marked } })
+            assert(missing == nil and not string.find(tostring(missingMessage), 'ZZ', 1, true), tostring(missingMessage))
+            -- A cleared environment still carries the variable, and the secret behind it.
+            local cleared = assert(process.run('/bin/sh', { '-c', 'cat "/dev/fd/$TOKEN_FD"' },
+              { clearEnv = true, secret = { env = 'TOKEN_FD', data = Marked }, stdout = 'capture', timeoutMs = 10000 }))
+            assert(cleared.stdout == Marked, cleared.stdout)
+            -- The largest secret fits.
+            local largest = string.rep('k', 4096)
+            local fits = assert(process.run('sh', { '-c', 'cat "/dev/fd/$FD" | wc -c' },
+              { secret = { env = 'FD', data = largest }, stdout = 'capture', timeoutMs = 10000 }))
+            assert(tonumber((string.gsub(fits.stdout, '%s', ''))) == 4096, fits.stdout)
+            -- Nothing a refusal named was started.
+            local probe = assert(process.run('sh', { '-c', 'test -e ' .. marker .. ' && echo there || echo absent' }, { stdout = 'capture' }))
+            assert(probe.stdout == 'absent\n', probe.stdout)
+            "#,
+        )
+        .unwrap();
+}
+
+/// A secret costs no descriptor once the child is started: a hundred of them leave none behind.
+#[cfg(target_os = "linux")]
+#[test]
+fn secrets_leave_no_descriptor_in_the_host() {
+    let runtime = runtime_granting(&[SPAWN_CAPABILITY], Limits::default());
+    let open = || std::fs::read_dir("/proc/self/fd").map_or(0, Iterator::count);
+    runtime
+        .exec("assert(process.run('true', {}, { secret = { env = 'FD', data = 'warm' }, timeoutMs = 5000 }).success)")
+        .unwrap();
+    let before = open();
+    runtime
+        .exec(
+            "for index = 1, 100 do \
+               assert(process.run('true', {}, { secret = { env = 'FD', data = 'secret' .. index }, timeoutMs = 5000 }).success) \
+               local missing = process.run('l3i-no-such-program', {}, { secret = { env = 'FD', data = 'x' }, timeoutMs = 5000 }) \
+               assert(missing == nil) \
+             end",
+        )
+        .unwrap();
+    // Other tests of this binary start children meanwhile, so allow for theirs: a leak would be 100.
+    assert!(open() < before + 50, "secrets left descriptors behind: {} against {before}", open());
+}
+
+/// The half of the next test that runs with its standard input closed: the pipe the secret is
+/// written into would be given descriptor 0, which the child's own input is then put on.
+#[cfg(unix)]
+#[test]
+fn secret_with_closed_stdin_child() {
+    if std::env::var_os("L3I_SECRET_CLOSED_STDIN_TEST").is_none() {
+        return;
+    }
+    // SAFETY: closing this process's own standard input and output; nothing else here uses them
+    // (the test harness's capture is in-process and the result goes to stderr).
+    unsafe {
+        libc::close(0);
+        libc::close(1);
+    }
+    let runtime = runtime_granting(&[SPAWN_CAPABILITY], Limits::default());
+    runtime
+        .exec(
+            r#"
+            local result = assert(process.run('sh', { '-c', 'printf "%s|" "$FD"; cat "/dev/fd/$FD"; printf "|"; cat' },
+              { secret = { env = 'FD', data = 'THE-SECRET' }, stdin = 'SCRIPT-STDIN', stdout = 'capture', timeoutMs = 10000 }))
+            local number, secret, input = string.match(result.stdout, '^(%d+)|(.*)|(.*)$')
+            assert(tonumber(number) >= 3, 'the secret was put on a standard descriptor: ' .. result.stdout)
+            assert(secret == 'THE-SECRET', 'the secret was lost: ' .. result.stdout)
+            -- Whether the child's own input arrives in a host without standard descriptors is the
+            -- standard library's business, with a secret or without one; see the comparison below.
+            local plain = assert(process.run('sh', { '-c', 'cat' }, { stdin = 'SCRIPT-STDIN', stdout = 'capture', timeoutMs = 10000 }))
+            assert(input == plain.stdout, 'a secret changed what the child read on its own input: ' .. result.stdout)
+            -- With the child's output inherited (and closed in the host), the secret is not its output.
+            local started = assert(process.start('sh', { '-c', 'cat "/dev/fd/$FD" >&2' },
+              { secret = { env = 'FD', data = 'SECOND-SECRET' }, stderr = 'pipe', timeoutMs = 10000 }))
+            local text = ''
+            while true do
+              local chunk, message, kind = started:readStderr(4096)
+              if chunk then text = text .. chunk
+              elseif kind == 'wouldBlock' then process.sleep(0.005)
+              elseif message then error(message)
+              else break end
+            end
+            started:close()
+            assert(text == 'SECOND-SECRET', text)
+            "#,
+        )
+        .unwrap();
+}
+
+/// A host that has closed its own standard streams: the secret still reaches the child on a
+/// descriptor of its own, and the child's standard streams are still its own.
+#[cfg(unix)]
+#[test]
+fn a_secret_never_lands_on_a_standard_descriptor() {
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "process::secret_with_closed_stdin_child", "--nocapture"])
+        .env("L3I_SECRET_CLOSED_STDIN_TEST", "1")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "closed-stdin child: {}", String::from_utf8_lossy(&output.stderr));
+}
+
+/// Children started from several threads at once, half of them with a secret: each reads the
+/// descriptor it was given and lists the pipes it inherited. None may hold a pipe that is neither
+/// the harness's own nor its own secret's: that would be another child's secret. Pipes this test
+/// does not own are listed, never read, since reading one would take another reader's bytes.
+#[cfg(target_os = "linux")]
+#[test]
+fn concurrent_children_never_inherit_one_another_s_secret() {
+    const LIST: &str =
+        r#"for fd in /proc/self/fd/*; do n=${fd##*/}; [ "$n" -gt 2 ] && [ -p "$fd" ] && readlink "$fd"; done; true"#;
+    // What every child of this process inherits whatever this test does: the harness's own pipes.
+    let baseline: String = runtime_granting(&[SPAWN_CAPABILITY], Limits::default())
+        .eval(&format!(
+            "return assert(process.run('sh', {{ '-c', [=[{LIST}]=] }}, {{ stdout = 'capture', stderr = 'null', timeoutMs = 20000 }})).stdout"
+        ))
+        .unwrap();
+    let workers: Vec<_> = (0..6)
+        .map(|worker| {
+            let baseline = baseline.clone();
+            std::thread::spawn(move || {
+                let runtime = runtime_granting(&[SPAWN_CAPABILITY], Limits::default());
+                runtime
+                    .exec(&format!(
+                        r#"
+                        local harness = {{}}
+                        for link in string.gmatch({baseline:?}, '[^\n]+') do harness[link] = true end
+                        for round = 1, 25 do
+                          local mine = 'secret-of-{worker}-' .. round .. '-'
+                          local secret = round % 2 == 0
+                          local options = {{ stdout = 'capture', stderr = 'null', timeoutMs = 20000 }}
+                          if secret then options.secret = {{ env = 'FD', data = mine }} end
+                          -- Its own descriptor read to the end, a separator, then the pipes it holds.
+                          local result = assert(process.run('sh', {{ '-c',
+                            '[ -n "$FD" ] && cat "/dev/fd/$FD"; printf "\n--\n"; ' .. [=[{LIST}]=] }}, options))
+                          local read, listed = string.match(result.stdout, '^(.-)\n%-%-\n(.*)$')
+                          assert(read == (if secret then mine else ''), 'a child read ' .. tostring(read))
+                          local strange = 0
+                          for link in string.gmatch(listed, '[^\n]+') do
+                            if not harness[link] then strange += 1 end
+                          end
+                          -- Its own secret's pipe is the one pipe a child may hold beyond the harness's.
+                          assert(strange == (if secret then 1 else 0),
+                            'a child holds ' .. strange .. ' pipe(s) that are not its own: ' .. listed)
+                        end
+                        "#
+                    ))
+                    .unwrap();
+            })
+        })
+        .collect();
+    for worker in workers {
+        worker.join().unwrap();
+    }
+}
+
+/// On Windows the child inherits a handle and the variable holds its value: read once, then end of
+/// file, and neither the environment nor the command line holds the bytes.
+#[cfg(windows)]
+#[test]
+fn a_secret_reaches_a_windows_child_through_an_inherited_handle() {
+    let runtime = runtime_granting(&[SPAWN_CAPABILITY, ENVIRONMENT_CAPABILITY], Limits::default());
+    runtime
+        .exec(
+            r#"
+            local reader = '$h=[IntPtr][Int64]$env:L3I_SECRET_HANDLE; '
+              .. '$s=New-Object System.IO.FileStream((New-Object Microsoft.Win32.SafeHandles.SafeFileHandle($h,$false)),[System.IO.FileAccess]::Read); '
+              .. '$r=New-Object System.IO.StreamReader($s); [Console]::Out.Write($r.ReadToEnd()); [Console]::Out.Write("|"); '
+              .. '[Console]::Out.Write(($s.ReadByte())); [Console]::Out.Write("|"); '
+              .. '[Console]::Out.Write(((Get-ChildItem env: | ForEach-Object { $_.Value }) -join ","))'
+            local secret = 'windows-ZZ-SECRET-ZZ'
+            local result, message = process.run('powershell', { '-NoProfile', '-NonInteractive', '-Command', reader },
+              { secret = { env = 'L3I_SECRET_HANDLE', data = secret }, stdout = 'capture', stderr = 'capture', timeoutMs = 120000 })
+            assert(result, message)
+            assert(result.success, tostring(result.code) .. ': ' .. tostring(result.stderr))
+            local first, again, environment = string.match(result.stdout, '^(.-)|(.-)|(.*)$')
+            assert(first == secret, 'the child did not read the secret: ' .. result.stdout)
+            assert(again == '-1', 'the handle was not at end of file after the secret: ' .. tostring(again))
+            assert(not string.find(environment, 'ZZ-SECRET-ZZ', 1, true), 'the secret is in the child\'s environment')
+            -- The variable holds a number, and a child that never reads the handle takes the secret with it.
+            local handle = assert(process.run('powershell', { '-NoProfile', '-NonInteractive', '-Command', '[Console]::Out.Write($env:L3I_SECRET_HANDLE)' },
+              { secret = { env = 'L3I_SECRET_HANDLE', data = secret }, stdout = 'capture', timeoutMs = 120000 })).stdout
+            assert(tonumber(handle), 'the variable does not hold a number: ' .. tostring(handle))
+            -- A child WITHOUT a secret, told the same handle value: whatever that value is in it, it
+            -- is not the secret's pipe. Reading it fails, or reads something that is not the secret.
+            local stranger = 'try { ' .. string.gsub(reader, '%[Console%]::Out%.Write%(%(%(Get%-ChildItem.*$', '') .. ' } catch { [Console]::Out.Write("refused") }'
+            local other = process.run('powershell', { '-NoProfile', '-NonInteractive', '-Command', stranger },
+              { env = { L3I_SECRET_HANDLE = handle }, stdin = 'x', stdout = 'capture', stderr = 'null', timeoutMs = 30000 })
+            -- A value that names something this child cannot finish reading is a refusal too.
+            assert(other == nil or not string.find(other.stdout, 'ZZ-SECRET-ZZ', 1, true), 'a child without a secret read one')
+            -- Names that differ only in case are one variable here: the collision is refused.
+            assert(not pcall(process.run, 'cmd', { '/c', 'exit' }, { env = { l3i_secret_handle = '1' }, secret = { env = 'L3I_SECRET_HANDLE', data = 'x' } }))
+            -- Malformed secrets raise here as everywhere.
+            assert(not pcall(process.run, 'cmd', { '/c', 'exit' }, { secret = { env = 'lower', data = 'x' } }))
+            assert(not pcall(process.start, 'cmd', { '/c', 'exit' }, { secret = { env = 'PATH', data = 'x' } }))
+            "#,
+        )
+        .unwrap();
+}
+
+/// Git's own answer to "is there a git here": the tests below are skipped without one.
+#[cfg(unix)]
+fn git_is_installed() -> bool {
+    std::process::Command::new("git")
+        .arg("--version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+/// What the Git tests share: the helper Git is told to run, the environment it runs in, and the
+/// description of the credential it is asked for. The helper is a shell function, as Git's
+/// documentation describes one; Git starts it, so it is a grandchild of this process. It answers
+/// `get` with what it reads from the descriptor named in `L3I_GIT_TOKEN_FD`, and nothing when
+/// that is empty, and only when Git asks for `https` and the one host it is for: a request for
+/// any other is not answered and leaves the token unread. On its standard error it then lists what a credential must not be in: its own
+/// environment, and its own and Git's command lines.
+#[cfg(unix)]
+const GIT_FIXTURE: &str = r#"
+local Token = 'ghs_SYNTHETIC0TOKEN0FOR0TESTS0ONLY0ZZ9'
+local Helper = [=[!f() { test "$1" = get || exit 0; while IFS='=' read -r key value; do case $key in protocol) protocol=$value;; host) host=$value;; esac; done; test "$protocol" = https && test "$host" = example.invalid || exit 0; token=$(cat "/dev/fd/$L3I_GIT_TOKEN_FD"); test -n "$token" || exit 1; printf 'username=x-access-token\npassword=%s\n' "$token"; { env; cat /proc/$$/cmdline /proc/$PPID/cmdline 2>/dev/null | tr '\0' ' '; } >&2; }; f]=]
+local Environment = { GIT_CONFIG_NOSYSTEM = '1', GIT_CONFIG_GLOBAL = '/dev/null', GIT_TERMINAL_PROMPT = '0', HOME = '/nonexistent' }
+local Asked = 'protocol=https\nhost=example.invalid\n\n'
+local function arguments(helper)
+  -- The first clears any helper configured elsewhere; nothing in these arguments is the token.
+  return { '-c', 'credential.helper=', '-c', 'credential.helper=' .. helper, 'credential', 'fill' }
+end
+"#;
+
+/// A real Git, asked for a credential, gets the token from a helper it starts itself: through
+/// `process.run`, with the token in no argument and no environment, once.
+#[cfg(unix)]
+#[test]
+fn git_reads_a_token_through_its_credential_helper_and_only_once() {
+    if !git_is_installed() {
+        eprintln!("skipped: no git");
+        return;
+    }
+    // The spawn capability and nothing else: a secret needs no grant of its own.
+    let runtime = runtime_granting(&[SPAWN_CAPABILITY], Limits::default());
+    runtime
+        .exec(&format!(
+            r#"{GIT_FIXTURE}
+            local result = assert(process.run('git', arguments(Helper), {{
+              stdin = Asked, stdout = 'capture', stderr = 'capture', env = Environment, timeoutMs = 30000,
+              secret = {{ env = 'L3I_GIT_TOKEN_FD', data = Token }},
+            }}))
+            assert(result.success, 'git credential fill failed: ' .. tostring(result.stderr))
+            -- Git prints the credential it was given: that it holds the token proves the helper read it.
+            assert(string.find(result.stdout, 'password=' .. Token, 1, true), result.stdout)
+            assert(string.find(result.stdout, 'username=x-access-token', 1, true), result.stdout)
+            -- The helper's environment, its command line and Git's: the variable is there, the token is not.
+            assert(string.find(result.stderr, 'L3I_GIT_TOKEN_FD=', 1, true), 'the helper did not report its environment')
+            assert(not string.find(result.stderr, 'SYNTHETIC', 1, true), 'the token is in an environment or a command line')
+
+            -- One secret is one read. A second request in the same call finds the descriptor at end
+            -- of file: the helper answers nothing, Git may not prompt, and the request fails.
+            local twice = assert(process.run('sh', {{ '-c',
+              'printf "protocol=https\nhost=example.invalid\n\n" | git "$@"; echo "first=$?"; '
+                .. 'printf "protocol=https\nhost=example.invalid\n\n" | git "$@"; echo "second=$?"',
+              'sh', table.unpack(arguments(Helper)) }}, {{
+              stdout = 'capture', stderr = 'null', env = Environment, timeoutMs = 30000,
+              secret = {{ env = 'L3I_GIT_TOKEN_FD', data = Token }},
+            }}))
+            local _, passwords = string.gsub(twice.stdout, 'password=' .. Token, '')
+            assert(passwords == 1, 'the token was given out ' .. passwords .. ' times: ' .. twice.stdout)
+            assert(string.find(twice.stdout, 'first=0', 1, true), twice.stdout)
+            assert(string.find(twice.stdout, 'second=', 1, true) and not string.find(twice.stdout, 'second=0', 1, true), twice.stdout)
+
+            -- A retry is a new call with a new secret, and it is served.
+            local again = assert(process.run('git', arguments(Helper), {{
+              stdin = Asked, stdout = 'capture', stderr = 'null', env = Environment, timeoutMs = 30000,
+              secret = {{ env = 'L3I_GIT_TOKEN_FD', data = Token .. '-second' }},
+            }}))
+            assert(string.find(again.stdout, 'password=' .. Token .. '-second', 1, true), again.stdout)
+
+            -- The token is for one host over https. Asked for another host, or for the same one over
+            -- http (as a redirect or a rewritten remote would ask), the helper gives nothing: the
+            -- token is offered to neither, and is still unread for the request it is meant for.
+            local elsewhere = assert(process.run('sh', {{ '-c',
+              'printf "protocol=https\nhost=evil.invalid\n\n" | git "$@"; echo "other=$?"; '
+                .. 'printf "protocol=http\nhost=example.invalid\n\n" | git "$@"; echo "clear=$?"; '
+                .. 'printf "protocol=https\nhost=example.invalid\n\n" | git "$@"; echo "meant=$?"',
+              'sh', table.unpack(arguments(Helper)) }}, {{
+              stdout = 'capture', stderr = 'null', env = Environment, timeoutMs = 30000,
+              secret = {{ env = 'L3I_GIT_TOKEN_FD', data = Token }},
+            }}))
+            local _, given = string.gsub(elsewhere.stdout, 'password=' .. Token, '')
+            assert(given == 1, 'the token was given out ' .. given .. ' times: ' .. elsewhere.stdout)
+            assert(not string.find(elsewhere.stdout, 'other=0', 1, true) and not string.find(elsewhere.stdout, 'clear=0', 1, true),
+              'a host the token is not for was answered: ' .. elsewhere.stdout)
+            assert(string.find(elsewhere.stdout, 'meant=0', 1, true), elsewhere.stdout)
+
+            -- Without a secret the same helper has nothing to read and Git gets no credential.
+            local without = assert(process.run('git', arguments(Helper), {{
+              stdin = Asked, stdout = 'capture', stderr = 'null', env = Environment, timeoutMs = 30000,
+            }}))
+            assert(not without.success and not string.find(tostring(without.stdout), 'password=', 1, true))
+            "#
+        ))
+        .unwrap();
+}
+
+/// The same through a started Git, fed and read without blocking.
+#[cfg(unix)]
+#[test]
+fn a_started_git_reads_a_token_through_its_credential_helper() {
+    if !git_is_installed() {
+        eprintln!("skipped: no git");
+        return;
+    }
+    let runtime = runtime_granting(&[SPAWN_CAPABILITY], Limits::default());
+    runtime
+        .exec(&format!(
+            r"{GIT_FIXTURE}
+            local child = assert(process.start('git', arguments(Helper), {{
+              stdin = 'pipe', stdout = 'pipe', stderr = 'pipe', env = Environment, timeoutMs = 30000,
+              secret = {{ env = 'L3I_GIT_TOKEN_FD', data = Token }},
+            }}))
+            assert(child:write(Asked) == #Asked)
+            child:closeStdin()
+            local output, errors = '', ''
+            local open = 2
+            while open > 0 do
+              open = 0
+              for _, stream in {{ 'readStdout', 'readStderr' }} do
+                local chunk, message, kind = child[stream](child, 4096)
+                if chunk then
+                  if stream == 'readStdout' then output = output .. chunk else errors = errors .. chunk end
+                  open += 1
+                elseif kind == 'wouldBlock' then
+                  open += 1
+                elseif message then
+                  error(message)
+                end
+              end
+              process.sleep(0.002)
+            end
+            local status = assert(child:wait(10000))
+            child:close()
+            assert(status.success, errors)
+            assert(string.find(output, 'password=' .. Token, 1, true), output)
+            assert(not string.find(errors, 'SYNTHETIC', 1, true), 'the token is in an environment or a command line')
+            "
+        ))
+        .unwrap();
+}

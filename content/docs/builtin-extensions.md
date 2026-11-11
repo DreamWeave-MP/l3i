@@ -1896,26 +1896,138 @@ and a child that reads the terminal is stopped by it; start what needs the termi
 A host that ignores `SIGCHLD`, or reaps children itself, takes a child's exit status first. `wait`
 then fails, saying so, and `kill`, `close` and the timer signal nothing.
 
-Nothing here passes a secret or credential to a child: stdin carries only what the script writes,
-and no inherited file descriptor is used for that. A child started without the environment
-capability gets the same environment `run` gives it.
+A child started without the environment capability gets the same environment `run` gives it.
+
+### A secret for a child
+
+A child's arguments are in every process listing, its environment is copied to everything it
+starts, and a file is a file: none of them is a place for a credential. `run` and `start` take
+`secret = { env = NAME, data = bytes }` instead:
 
 ```luau
-local process = require('@dream/process')
-local child = assert(process.start('sort', nil, { stdin = 'pipe', stdout = 'pipe', timeoutMs = 10000 }))
-assert(child:write('pear\napple\n'))
-child:closeStdin()
-local lines = ''
-while true do
-    local chunk, message, kind = child:readStdout(4096)
-    if chunk then lines = lines .. chunk
-    elseif kind == 'wouldBlock' then process.sleep(0.01)
-    elseif message then error(message)
-    else break end -- end of stream
-end
-local status = assert(child:wait(5000))
-child:close()
+local result = process.run('git', { 'fetch', '--quiet', 'origin' }, {
+    secret = { env = 'APP_TOKEN_FD', data = token },
+    timeoutMs = 60000,
+})
 ```
+
+The bytes are written into a new pipe and its write end is closed. The child inherits the read
+end; the variable named by `env` holds its **number**, never the bytes: a file descriptor on Unix,
+a handle's value on Windows. Whoever reads it first gets the secret and then end of file: the
+child, or a helper it starts (a credential helper, say), which inherits it in its turn. So the
+secret is in no argument, no environment value and no file, and once read it is in no pipe.
+
+| | |
+|---|---|
+| `env` | A variable name of capitals, digits and underscores, at most 64 bytes, not starting with a digit; not `PATH`, and not a loader variable (`LD_*`, `DYLD_*`). Naming one that `env` also sets raises |
+| `data` | A string or a buffer of 1 to 4096 bytes: what every supported system's pipe takes in one write that cannot wait |
+
+Anything else raises before the child starts, and no refusal repeats the bytes. On a system that
+is neither Unix nor Windows a call with `secret` answers `nil, message, "unsupported"`.
+
+A reader takes the number from the variable and reads until end of file: on Unix `read(fd)`, or
+from a shell `cat "/dev/fd/$APP_TOKEN_FD"`. Read it by that path, not by a redirection such as
+`<&"$APP_TOKEN_FD"`: the number can be 10 or more, and a POSIX shell is only required to accept
+a single digit there (dash, the `sh` of Debian and Ubuntu, refuses more). `/dev/fd` reaches every
+descriptor on Linux, Android and macOS; on FreeBSD it holds only 0 to 2 unless `fdescfs` is
+mounted, and other BSDs provide a fixed range, so there read the descriptor from a program, or
+from a shell that accepts any number after `<&` (bash, ksh, zsh). On Windows a native program calls `ReadFile` on the handle
+(or wraps it, as .NET's `SafeFileHandle` does). A shell script run by Git for Windows' bundled
+shell cannot open a handle by its value, so a Windows credential helper has to be a native
+program.
+
+Whether a helper **the child starts** gets the descriptor is the child's decision, not this
+module's. Git for Windows starts its own children with only their standard streams (its
+`core.restrictInheritedHandles` setting, which by default restricts on Windows 7 and later; see
+Git for Windows' own documentation), so a credential helper it runs
+does not receive the handle unless that is turned off for the call
+(`git -c core.restrictInheritedHandles=false ...`), which lets Git's children inherit every
+inheritable handle Git has. Other launchers restrict inheritance the same way. Where that is not
+wanted, make the program that needs the secret the direct child.
+
+A secret needs no capability of its own: `process.spawn` is what starts a child, with a secret
+or without one, and a runtime without it can pass none. Nothing about the existing capabilities
+changes, and a child is given no more of the host's environment for having a secret.
+
+**One secret, one read, one attempt.** The descriptor gives the bytes to its first reader and end
+of file to every later one, so a program that asks for the credential a second time in the same
+call (after a redirect, or because the first answer was rejected) gets nothing, provided the
+first reader read to end of file: a reader that stops early leaves the rest for the next. A helper must
+treat an empty read as "no credential" and say so, never invent or cache one; the program then
+fails, and the caller sees that as an ordinary failed call. **A retry is a new call with a new
+`secret`**: the caller, which holds the credential, decides whether to try again, and it can
+mint a fresh token for it. Nothing here retries on its own, and nothing remembers a secret
+between calls.
+
+With Git, the helper is a credential helper, which Git starts itself:
+
+```luau
+-- The helper answers `get`, for https and the one host the token is for, from the descriptor.
+-- No part of this is the token.
+local helper = [[!f() { test "$1" = get || exit 0; ]]
+    .. [[while IFS='=' read -r key value; do case $key in protocol) protocol=$value;; host) host=$value;; esac; done; ]]
+    .. [[test "$protocol" = https && test "$host" = github.com || exit 0; ]]
+    .. [[token=$(cat "/dev/fd/$APP_TOKEN_FD"); test -n "$token" || exit 1; ]]
+    .. [[printf 'username=x-access-token\npassword=%s\n' "$token"; }; f]]
+local result, message, kind = process.run('git',
+    { '-c', 'credential.helper=', '-c', 'credential.helper=' .. helper, 'fetch', '--quiet', 'origin' },
+    { secret = { env = 'APP_TOKEN_FD', data = token }, timeoutMs = 60000,
+      env = { GIT_TERMINAL_PROMPT = '0', GIT_CONFIG_NOSYSTEM = '1', GIT_CONFIG_GLOBAL = '/dev/null' } })
+```
+
+The first `credential.helper=` clears any helper configured elsewhere, so the token is offered to
+this one only and stored by none; `GIT_TERMINAL_PROMPT=0` makes a missing credential a failure
+instead of a prompt. If the helper hangs, `timeoutMs` ends the call and the process group, the
+helper with it.
+
+**The helper must check what it is asked for.** Git tells a helper the protocol and host it wants
+a credential for, on the helper's standard input, and it asks for whatever host it ends up
+talking to: the one in the remote's URL, the one a `url.<base>.insteadOf` in the repository's own
+configuration rewrites that to, or the one a redirect sends the first request to. A helper that
+answers every request hands the token to any of them, and over `http` in clear text. So the
+helper above answers only for `https` and one host, and reads the descriptor only then. The
+recipe still trusts the repository's own configuration for everything else (`http.proxy`,
+`http.sslVerify`): run it on repositories whose configuration you wrote, or pass the settings
+that matter with `-c`. And do not give a child with a secret the host's environment unless you
+know what is in it: Git's tracing variables (`GIT_TRACE_CURL` with `GIT_TRACE_REDACT=0`) print
+request headers.
+
+What this does **not** do:
+
+- **It does not hide the secret from other processes of the same user.** On Linux such a process
+  can open `/proc/<child>/fd/<n>` and read the pipe before the child does, or hold it open for
+  writing so that the child never meets end of file; on Windows it can duplicate the handle out
+  of the child, whose value is in the child's environment. That is no worse than the environment,
+  which the same process could read, but it is not secrecy from the user's own processes. Read the
+  secret first thing, treat an empty read as a secret that was taken, and give the call a
+  `timeoutMs`.
+- **It does not overwrite the script's copy.** The host overwrites the copy it made; the Luau
+  string or buffer the secret came from lives until it is collected.
+- **It does not stop the child passing it on.** Everything the child starts inherits the
+  descriptor unless the child closes it, including a process that outlives the child (Git's
+  credential cache daemon is one). A helper should close it after reading, and a secret should go
+  only to a program whose children you would also give it to.
+
+Keeping it to the one child:
+
+- **Linux, Android and the BSDs**: both ends are close-on-exec from the moment they exist, so a
+  child another thread starts inherits neither; the flag is cleared in this child alone.
+- **macOS**: there is no call that makes the pipe close-on-exec in one step. A child another
+  thread starts in the moment between making the pipe and marking it inherits both ends: it could
+  read the secret later, and while it lives the intended reader never meets end of file, so it
+  waits until its `timeoutMs`.
+- **Windows**: a handle is inherited by any child started while it is marked inheritable, and
+  there is no stable way to name the handles one child gets. Every child this module starts is
+  started under one lock and the handle is inheritable only inside it, so no other child of this
+  library inherits it. A child anything else in the host starts in that moment can: an ordinary
+  `std::process::Command` in another crate is enough, since the standard library's own lock does
+  not cover this handle. The lock also means this module starts one child at a time on Windows:
+  a start the system holds up (a program on a stalled share, a scanner) holds up the others.
+- The number is never 0, 1 or 2, even in a host that has closed its own standard streams: those
+  are the child's own input and outputs.
+
+The host closes its end as soon as the child has been started, or has failed to start. A child
+that never reads the descriptor takes the secret with it when it and what it started have exited.
 
 ### Reading standard input
 

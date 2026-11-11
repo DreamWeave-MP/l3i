@@ -47,6 +47,7 @@ pub mod input;
 
 mod cancel;
 mod child;
+mod secret;
 
 use cancel::{Cancel, Pollable};
 
@@ -91,11 +92,13 @@ pub const MAX_CHILDREN_LIMIT: u32 = 1024;
 const RUN_SIGNATURE: &str = "(program: string, args: { string }?, options: dream_process_RunOptions?) -> (dream_process_Result?, string?, dream_process_ErrorKind?)";
 const OPTIONS_TYPE: &str = "{ cwd: string?, env: { [string]: string }?, clearEnv: boolean?, stdin: (buffer | string)?, \
     stdout: (\"inherit\" | \"capture\" | \"null\")?, stderr: (\"inherit\" | \"capture\" | \"null\")?, \
-    timeoutMs: number?, maxStdoutBytes: number?, maxStderrBytes: number? }";
+    timeoutMs: number?, maxStdoutBytes: number?, maxStderrBytes: number?, \
+    secret: { env: string, data: buffer | string }? }";
 const START_SIGNATURE: &str = "(program: string, args: { string }?, options: dream_process_StartOptions?) -> (dream_process_Child?, string?, dream_process_ErrorKind?)";
 const START_OPTIONS_TYPE: &str = "{ cwd: string?, env: { [string]: string }?, clearEnv: boolean?, stdin: (\"pipe\" | \"null\")?, \
     stdout: (\"inherit\" | \"pipe\" | \"null\")?, stderr: (\"inherit\" | \"pipe\" | \"null\")?, \
-    timeoutMs: number?, maxStdoutBytes: number?, maxStderrBytes: number? }";
+    timeoutMs: number?, maxStdoutBytes: number?, maxStderrBytes: number?, \
+    secret: { env: string, data: buffer | string }? }";
 const RESULT_TYPE: &str = "{ success: boolean, code: number?, signal: number?, stdout: string?, stderr: string? }";
 /// `dream_process_ErrorKind`: the OS kinds, and the two limits a bounded process answers with.
 const PROCESS_ERROR_KIND_TYPE: &str = "\"notFound\" | \"permissionDenied\" | \"alreadyExists\" | \"isADirectory\" \
@@ -247,6 +250,68 @@ struct SpawnOptions {
     stdout: Output,
     stderr: Output,
     bounds: Bounds,
+    secret: Option<secret::Secret>,
+}
+
+/// Reads the `secret` option: `{ env = <variable name>, data = <string or buffer> }`. The option
+/// reader names the option in front of whatever this says.
+fn read_secret(frame: &crate::stack::Frame<'_>, table: crate::stack::TableView<'_>) -> Result<secret::Secret> {
+    let mut env: Option<Vec<u8>> = None;
+    // Held from the moment it is copied by the type that overwrites it when dropped, whatever is
+    // refused below.
+    let mut held = secret::Secret { env: std::ffi::OsString::new(), data: Vec::new() };
+    let mut given = false;
+    table.for_each(frame, |_, key, value| {
+        match key.read::<&[u8]>() {
+            Ok(b"env") => {
+                let name = value.read::<&[u8]>().map_err(|_| Error::runtime("env is a string"))?;
+                env = Some(name.to_vec());
+            }
+            Ok(b"data") => {
+                let data = BytesView::from_view(value).map_err(|_| Error::runtime("data is a string or a buffer"))?;
+                // SAFETY: looked at and copied at once, with no call into Lua while the slice lives.
+                let bytes = unsafe { data.bytes_unchecked() };
+                // Judged before it is copied: a secret that is refused for its size is never held.
+                if bytes.is_empty() || bytes.len() > secret::MAX_BYTES {
+                    return Err(Error::runtime(format!("data is 1 to {} bytes", secret::MAX_BYTES)));
+                }
+                held.data = bytes.to_vec();
+                given = true;
+            }
+            _ => return Err(Error::runtime("only env and data are known")),
+        }
+        Ok(())
+    })?;
+    let Some(env) = env.filter(|_| given) else {
+        return Err(Error::runtime("env and data are both needed"));
+    };
+    let named = !env.is_empty()
+        && env.len() <= 64
+        && !env[0].is_ascii_digit()
+        && env.iter().all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || *byte == b'_');
+    if !named {
+        return Err(Error::runtime("env is a variable name of capitals, digits and underscores, at most 64 bytes"));
+    }
+    // `PATH` is set for the child by this module itself, and a number in a loader variable does
+    // harm at once. This is a courtesy, not a boundary: plenty of other names mean something to
+    // some program, and `env` can set any of them.
+    if env == b"PATH" || env.starts_with(b"LD_") || env.starts_with(b"DYLD_") {
+        return Err(Error::runtime("env cannot be PATH or a loader variable (LD_*, DYLD_*)"));
+    }
+    held.env = os_string("secret.env", &env)?;
+    Ok(held)
+}
+
+/// Whether two names are one environment variable: by their bytes, and on Windows whatever their
+/// case, since names there differ only in case name one variable.
+fn same_variable(left: &[u8], right: &[u8]) -> bool {
+    if cfg!(windows) { left.eq_ignore_ascii_case(right) } else { left == right }
+}
+
+/// A secret that could not be attached. The message says why and never what: nothing of the
+/// secret is in the error an attach returns.
+fn secret_failed(context: &str, error: &std::io::Error) -> Failure {
+    Failure::message(format!("{context}: secret: {error}"), error)
 }
 
 impl SpawnOptions {
@@ -259,6 +324,7 @@ impl SpawnOptions {
             stdout: Output::Inherit,
             stderr: Output::Inherit,
             bounds: Bounds::default(),
+            secret: None,
         };
         let Some(options) = options.filter(|view| !view.is_nil()) else {
             return Ok(spawn);
@@ -303,6 +369,13 @@ impl SpawnOptions {
                 Ok(env)
             })? {
                 spawn.env = env;
+            }
+            spawn.secret = o.optional_table("secret", read_secret)?;
+            if let Some(secret) = &spawn.secret
+                && spawn.env.iter().any(|(key, _)| same_variable(key, secret.env.as_encoded_bytes()))
+            {
+                // One of them would silently win; the caller meant something else by one of them.
+                return Err(Error::runtime(format!("{context}: env sets the variable secret.env names")));
             }
             let timeout = whole_number(context, "timeoutMs", o.optional("timeoutMs")?, 1.0, MAX_TIMEOUT_MS as f64)?;
             spawn.bounds = Bounds {
@@ -567,9 +640,17 @@ fn run(
     let mut command = build_command(program, &arguments, &spawn, inherit_environment, group)?;
     let stdin = if matches!(spawn.stdin, Feed::Bytes(_)) { Stdio::piped() } else { Stdio::null() };
     command.stdin(stdin).stdout(spawn.stdout.stdio()).stderr(spawn.stderr.stdio());
-    let SpawnOptions { stdin, stdout, stderr, bounds, .. } = spawn;
+    let SpawnOptions { stdin, stdout, stderr, bounds, secret, .. } = spawn;
     let failed = |error: std::io::Error| Failure::message(format!("dream.process.run: {name}: {error}"), &error);
-    let mut child = match command.spawn() {
+    // Held only until the child has been started: the parent's end of the secret's pipe, and
+    // what keeps another child from inheriting it.
+    let starting = match secret::prepare(&mut command, secret.as_ref()) {
+        Ok(starting) => starting,
+        Err(error) => return Ok(Outcome::Failed(secret_failed("dream.process.run", &error))),
+    };
+    let spawned = command.spawn();
+    drop((starting, secret));
+    let mut child = match spawned {
         Ok(child) => child,
         Err(error) => return Ok(Outcome::Failed(failed(error))),
     };
