@@ -1812,15 +1812,23 @@ A value that is not a finite whole number in its range raises, as does a ceiling
 is not `"capture"`. The raise comes before the child starts, so a refused call starts nothing. The
 ceilings are separate: each applies to its own stream only. Reading stops as soon as a ceiling is
 crossed, so memory stays within the ceiling however much the child writes. Without any of these
-options `run` behaves as before.
+options `run` behaves as before, except that it now holds a live-child slot while it runs.
 
-On Unix a bounded child starts in a process group of its own, and a limit signals that whole group,
-so a process it started and kept in the group cannot hold the pipes open past the limit. Termination
-covers the child's process group and nothing more: a descendant that left the group (with `setsid`
-or `setpgid`) is not stopped, and may hold an inherited pipe open; the call stops waiting for that
-pipe at its limit. Elsewhere only the child is killed. An unbounded run does not get a group of its
-own, so it keeps receiving the terminal's signals. A run holds one of the runtime's live-child
-slots while it runs (see [Started processes](#started-processes)).
+On Unix a bounded child starts in a process group of its own. On Linux, Android, macOS and FreeBSD
+a limit signals that whole group, so a process it started and kept in the group cannot hold the
+pipes open past the limit; on other systems only the child is killed. Termination covers the child's
+process group and nothing more: a descendant that left the group (with `setsid` or `setpgid`) is
+not stopped, and may hold an inherited pipe open; the call stops waiting for that pipe at its
+limit, and answers `"timeout"` even if the child itself had exited. Whatever holds a pipe, the call
+leaves no thread and no descriptor behind when it returns. A bounded run whose child exits normally
+does not signal the group: what the child left running in it keeps running. An unbounded run does
+not get a group of its own, so it keeps receiving the terminal's signals; a bounded one does not
+receive them, and a child that reads the terminal from its own group is stopped by it. A run holds
+one of the runtime's live-child slots while it runs (see [Started processes](#started-processes)).
+
+A host that ignores `SIGCHLD`, or reaps children itself, takes the child's exit status before this
+module can read it. The call then fails, saying the child was reaped by the host, and signals
+nothing: the child's pid, and the group it led, may belong to another process by then.
 
 ### Started processes
 
@@ -1851,7 +1859,8 @@ and `write` answers `wouldBlock` beyond that.
 
 When a limit passes, the child is killed and reaped, its buffered output is discarded, and later
 reads or writes answer with the limit's kind: `"timeout"` or `"outputLimit"`. `wait` then reports the
-child as ended by signal. Killing the process group reaches what the child started too, on Linux,
+child as ended by signal, unless it had already exited on its own, whose status it keeps. The
+handle's threads end with the limit, and its slot is free from then. Killing the process group reaches what the child started too, on Linux,
 Android, macOS and FreeBSD, and only while the child is unreaped: the group is signalled before the
 child is reaped, and never after. On those systems `wait` answers the child's status without reaping
 it, so a `kill` or `close` after a `wait` still stops what the child left in its group, such as a
@@ -1864,14 +1873,26 @@ collected, and holds an exited child's process table entry until then.
 
 Each started child, and each `run` while it runs, holds one of the runtime's live-child slots. The
 default is 32. A host sets it with `ProcessExtension::with_max_children(n)` (1 to 1024), and a
-script cannot change it. A child is live from its spawn until it is reaped: by a limit that kills
-it, by `close`, or when its handle is collected or the runtime shuts down. An exited child that has
-been waited for still holds its slot until its handle is closed, because the handle can still stop
-what it left behind. A start past the limit raises, and a start that fails to spawn holds no slot.
-The limit is per runtime: each runtime has its own. The reader and writer threads of a handle are an
-interim design, pending the readiness substrate of RFC #11; concurrency is bounded by the
-live-child limit. A reader that a descendant outside the group keeps on a pipe after the handle is
-closed stays until that pipe closes.
+script cannot change it. A started child holds its slot until its handle is closed, a limit stops
+it, its handle is collected or the runtime shuts down. An exited child that has been waited for
+still holds its slot until then, because the handle can still stop what it left behind. So close a
+handle when you are done with it: the collector does not know what an unclosed handle costs, and a
+script that starts children without closing them meets the limit before any is collected. A start
+past the limit raises, and a start that fails to spawn holds no slot. The limit is per runtime:
+each runtime has its own.
+
+The reader and writer threads of a handle are an interim design, pending the readiness substrate of
+RFC #11. On Unix they end the moment the handle is closed or a limit stops the child, whoever holds
+their pipes, so the live-child limit bounds them: at most four threads a slot. On Windows a thread
+blocked on a pipe that something still holds stays until that pipe closes. `close`, and a `kill` or
+read that meets a limit's kill in progress, wait for the child to be reaped; that is brief after a
+`SIGKILL`, and is the one way a call here other than `wait` can take time.
+
+A started child is always in a process group of its own, so the terminal's signals do not reach it
+and a child that reads the terminal is stopped by it; start what needs the terminal with `run`.
+
+A host that ignores `SIGCHLD`, or reaps children itself, takes a child's exit status first. `wait`
+then fails, saying so, and `kill`, `close` and the timer signal nothing.
 
 Nothing here passes a secret or credential to a child: stdin carries only what the script writes,
 and no inherited file descriptor is used for that. A child started without the environment

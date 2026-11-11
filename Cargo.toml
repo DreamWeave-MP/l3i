@@ -140,6 +140,12 @@ libc = "0.2"
 name = "integration"
 path = "tests/main.rs"
 
+# On its own: it counts this process's threads and descriptors, so nothing else may run beside it.
+[[test]]
+name = "process_leaks"
+path = "tests/process_leaks.rs"
+required-features = ["process"]
+
 [[example]]
 name = "tcp_http_server"
 required-features = ["tcp"]

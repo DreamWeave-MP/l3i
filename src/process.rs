@@ -8,7 +8,8 @@
 //!   variables `env` names. The wait never outlasts the runtime's execution time limit: a child
 //!   still running at the deadline is killed and reaped. `timeoutMs` bounds the child's run, and
 //!   `maxStdoutBytes` and `maxStderrBytes` bound what a captured stream may produce; passing either
-//!   kills the child and, on Unix, its process group, and discards what it wrote. Termination covers
+//!   kills the child and, on Linux, Android, macOS and FreeBSD, its process group, and discards what
+//!   it wrote. Termination covers
 //!   that group only: a descendant that left it (`setsid`, `setpgid`) is not stopped, and may hold a
 //!   captured pipe open until the call stops waiting for the pipe at the limit.
 //! - `process.start(program, args, options)`: the same program and options, without waiting: a handle
@@ -44,7 +45,10 @@
 
 pub mod input;
 
+mod cancel;
 mod child;
+
+use cancel::{Cancel, Pollable};
 
 use std::borrow::Cow;
 use std::io::Read;
@@ -494,6 +498,10 @@ pub(super) fn exit_status_unreaped(child: &mut Child) -> std::io::Result<Option<
 
 /// Kills the child, and with `group` every process in its group, without reaping it.
 fn kill_tree(child: &mut Child, group: bool) {
+    // Asked first: a child the host reaped behind our back must not be signalled, nor its group.
+    if matches!(has_exited(child), Err(ref error) if reaped_elsewhere(error)) {
+        return;
+    }
     if group {
         kill_group(child);
     }
@@ -565,23 +573,49 @@ fn run(
         Ok(child) => child,
         Err(error) => return Ok(Outcome::Failed(failed(error))),
     };
-    // The input goes in on its own thread, so a child that fills its output pipe before it has
-    // read all of its input cannot deadlock against this one.
-    let feeder = match (stdin, child.stdin.take()) {
-        (Feed::Bytes(input), Some(mut pipe)) => Some(std::thread::spawn(move || {
-            #[cfg(unix)]
-            block_sigpipe();
-            std::io::Write::write_all(&mut pipe, &input)
-        })),
-        _ => None,
-    };
+    // The threads of this call: the input on its own, so a child that fills its output pipe before
+    // it has read all of its input cannot deadlock against this one, and a reader per capture.
+    // None of them can be started without the others being stopped: a thread the OS refuses is an
+    // answer, with the child killed, not a panic in a native call.
+    let cancel = Arc::new(match Cancel::new() {
+        Ok(cancel) => cancel,
+        Err(error) => {
+            stop(&mut child, group);
+            return Ok(Outcome::Failed(failed(error)));
+        }
+    });
     let exceeded = Arc::new(AtomicBool::new(false));
-    let capture = Capture {
-        stdout: drain(child.stdout.take(), bounds.stdout, Arc::clone(&exceeded)),
-        stderr: drain(child.stderr.take(), bounds.stderr, Arc::clone(&exceeded)),
-        exceeded,
+    let threads = (|| -> std::io::Result<(Option<JoinHandle<()>>, Capture)> {
+        let feeder = match (stdin, child.stdin.take()) {
+            (Feed::Bytes(input), Some(pipe)) => Some(feed(pipe, input, &cancel)?),
+            _ => None,
+        };
+        let stdout = drain(child.stdout.take(), bounds.stdout, &exceeded, &cancel)?;
+        let stderr = drain(child.stderr.take(), bounds.stderr, &exceeded, &cancel)?;
+        Ok((feeder, Capture { stdout, stderr, exceeded: Arc::clone(&exceeded) }))
+    })();
+    let (feeder, capture) = match threads {
+        Ok(threads) => threads,
+        Err(error) => {
+            stop(&mut child, group);
+            // Whichever threads did start end here; they hold nothing the call still needs.
+            cancel.cancel();
+            return Ok(Outcome::Failed(failed(error)));
+        }
     };
-    let output = done!(match wait(call, &mut child, &bounds, capture, group) {
+    let mut capture = capture;
+    let ended = wait(call, &mut child, &bounds, &mut capture, group);
+    // Nothing of this call outlives it. A pipe that a process outside the child's group still
+    // holds would otherwise keep its thread, its descriptor and what it buffered for as long as
+    // that process liked; cancelling ends the thread whoever holds the pipe.
+    cancel.cancel();
+    for thread in [capture.stdout.take(), capture.stderr.take()].into_iter().flatten() {
+        let _ = thread.join();
+    }
+    if let Some(feeder) = feeder {
+        let _ = feeder.join();
+    }
+    let output = done!(match ended {
         Ok(Ended::Exited(output)) => Outcome::Done(output),
         Ok(Ended::TimedOut) => Outcome::Failed(Failure {
             message: Cow::Owned(format!("dream.process.run: {name}: stopped at its timeoutMs limit")),
@@ -597,10 +631,6 @@ fn run(
         }
         Err(error) => Outcome::Failed(failed(error)),
     });
-    // The input thread is left to finish on its own: a child that exits without reading all of
-    // its input closes the pipe, which is its business, and one it started may hold the pipe
-    // open past the time limit, which joining would wait out.
-    drop(feeder);
     let status = output.status;
     #[cfg(unix)]
     let signal = std::os::unix::process::ExitStatusExt::signal(&status);
@@ -640,38 +670,56 @@ struct Capture {
     exceeded: Arc<AtomicBool>,
 }
 
-/// Reads `pipe` to its end on its own thread. Past `ceiling` bytes the reader stops, keeps nothing
-/// more, and raises `exceeded`, so memory stays within the ceiling however much the child writes.
-fn drain(
-    pipe: Option<impl Read + Send + 'static>,
-    ceiling: Option<u64>,
-    exceeded: Arc<AtomicBool>,
-) -> Option<JoinHandle<Vec<u8>>> {
-    pipe.map(|mut pipe| {
-        std::thread::spawn(move || {
-            let mut bytes = Vec::new();
-            let mut chunk = [0_u8; 8192];
-            let mut total = 0_u64;
-            loop {
-                match pipe.read(&mut chunk) {
-                    Ok(0) => break,
-                    Ok(count) => {
-                        total = total.saturating_add(count as u64);
-                        if ceiling.is_some_and(|ceiling| total > ceiling) {
-                            exceeded.store(true, Ordering::SeqCst);
-                            break;
-                        }
-                        bytes.extend_from_slice(&chunk[..count]);
-                    }
-                    Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
-                    // A read error ends the capture where it stopped, as wait_with_output would
-                    // surface; the exit status still says how the child ended.
-                    Err(_) => break,
-                }
-            }
-            bytes
-        })
+/// Writes `input` to the child's stdin on its own thread, until it is all written, the child
+/// stops reading, or the call is cancelled.
+fn feed(mut pipe: std::process::ChildStdin, input: Vec<u8>, cancel: &Arc<Cancel>) -> std::io::Result<JoinHandle<()>> {
+    let cancel = Arc::clone(cancel);
+    std::thread::Builder::new().name("l3i-process-input".into()).spawn(move || {
+        #[cfg(unix)]
+        block_sigpipe();
+        // A child that exits without reading all of its input closes the pipe, which is its
+        // business: the write then fails, and that is the end of this thread.
+        if Cancel::prepare_writer(&pipe).is_ok() {
+            let _ = cancel.write_all(&mut pipe, &input);
+        }
     })
+}
+
+/// Reads `pipe` to its end on its own thread, or until the call is cancelled. Past `ceiling` bytes
+/// the reader stops, keeps nothing more, and raises `exceeded`, so memory stays within the ceiling
+/// however much the child writes.
+fn drain<P: Read + Pollable + Send + 'static>(
+    pipe: Option<P>,
+    ceiling: Option<u64>,
+    exceeded: &Arc<AtomicBool>,
+    cancel: &Arc<Cancel>,
+) -> std::io::Result<Option<JoinHandle<Vec<u8>>>> {
+    let Some(mut pipe) = pipe else { return Ok(None) };
+    let (exceeded, cancel) = (Arc::clone(exceeded), Arc::clone(cancel));
+    let reader = std::thread::Builder::new().name("l3i-process-capture".into()).spawn(move || {
+        let mut bytes = Vec::new();
+        let mut chunk = [0_u8; 8192];
+        let mut total = 0_u64;
+        loop {
+            match cancel.read(&mut pipe, &mut chunk) {
+                // The end of the stream, or of the call.
+                Ok(Some(0) | None) => break,
+                Ok(Some(count)) => {
+                    total = total.saturating_add(count as u64);
+                    if ceiling.is_some_and(|ceiling| total > ceiling) {
+                        exceeded.store(true, Ordering::SeqCst);
+                        break;
+                    }
+                    bytes.extend_from_slice(&chunk[..count]);
+                }
+                // A read error ends the capture where it stopped, as wait_with_output would
+                // surface; the exit status still says how the child ended.
+                Err(_) => break,
+            }
+        }
+        bytes
+    })?;
+    Ok(Some(reader))
 }
 
 /// Waits for `child` and collects what it was asked to capture, as `wait_with_output` does, but
@@ -681,7 +729,13 @@ fn drain(
 /// stream passing its ceiling kills the child at once. A capture still open after the child exited
 /// can be held by a process it started; the deadline or a ceiling ends that too, and with
 /// `group` the kill reaches it.
-fn wait(call: &Call<'_>, child: &mut Child, bounds: &Bounds, capture: Capture, group: bool) -> std::io::Result<Ended> {
+fn wait(
+    call: &Call<'_>,
+    child: &mut Child,
+    bounds: &Bounds,
+    capture: &mut Capture,
+    group: bool,
+) -> std::io::Result<Ended> {
     let started = Instant::now();
     // The span that ends first, measured from `started`, and whether the child's own limit is the
     // one it is. Spans are compared with elapsed time, never added to an instant, so no limit can
@@ -692,7 +746,7 @@ fn wait(call: &Call<'_>, child: &mut Child, bounds: &Bounds, capture: Capture, g
         (Some(runtime), Some(own)) => Some(if own.0 < runtime.0 { own } else { runtime }),
         (runtime, own) => runtime.or(own),
     };
-    let Capture { stdout, stderr, exceeded } = capture;
+    let exceeded = Arc::clone(&capture.exceeded);
     let mut pause = Duration::from_millis(1);
     // The leader first. Its exit is seen without reaping it, so the group it leads stays ours to
     // signal while its captures are still open (see `has_exited`).
@@ -705,6 +759,13 @@ fn wait(call: &Call<'_>, child: &mut Child, bounds: &Bounds, capture: Capture, g
             Ok(true) => break,
             Ok(false) => {}
             Err(error) => {
+                // A child something else reaped is not ours to signal: its pid may be another
+                // process's by now. Its status is lost; say so and send nothing.
+                if reaped_elsewhere(&error) {
+                    return Err(std::io::Error::other(
+                        "the child was reaped by the host process, so how it ended is unknown",
+                    ));
+                }
                 stop(child, group);
                 return Err(error);
             }
@@ -719,13 +780,12 @@ fn wait(call: &Call<'_>, child: &mut Child, bounds: &Bounds, capture: Capture, g
         std::thread::sleep(nap);
         pause = (pause * 2).min(Duration::from_millis(20));
     }
-    let readers = [&stdout, &stderr];
     loop {
         if exceeded.load(Ordering::SeqCst) {
             stop(child, group);
             return Ok(Ended::OutputLimit);
         }
-        if readers.iter().all(|reader| reader.as_ref().is_none_or(JoinHandle::is_finished)) {
+        if [&capture.stdout, &capture.stderr].iter().all(|reader| reader.as_ref().is_none_or(JoinHandle::is_finished)) {
             break;
         }
         let elapsed = started.elapsed();
@@ -748,7 +808,21 @@ fn wait(call: &Call<'_>, child: &mut Child, bounds: &Bounds, capture: Capture, g
     let collect = |reader: Option<JoinHandle<Vec<u8>>>| {
         reader.map(|reader| reader.join().unwrap_or_default()).unwrap_or_default()
     };
-    Ok(Ended::Exited(std::process::Output { status, stdout: collect(stdout), stderr: collect(stderr) }))
+    let (stdout, stderr) = (collect(capture.stdout.take()), collect(capture.stderr.take()));
+    Ok(Ended::Exited(std::process::Output { status, stdout, stderr }))
+}
+
+/// Whether `error`, from asking after a child, says the child is no longer ours to ask after: the
+/// host ignores `SIGCHLD`, or reaps children itself, and this one is gone. Its pid, and the group
+/// it led, may be anyone's from then on.
+fn reaped_elsewhere(error: &std::io::Error) -> bool {
+    #[cfg(unix)]
+    return error.raw_os_error() == Some(libc::ECHILD);
+    #[cfg(not(unix))]
+    {
+        let _ = error;
+        false
+    }
 }
 
 /// Kills and reaps the child at a limit: its own timeout, or the runtime's execution time limit.
@@ -963,10 +1037,10 @@ impl Extension for ProcessExtension {
             .doc("The script's process and the ones it starts: run a program and wait for its exit code, environment variables, and the standard streams.")
             .installed("run")
             .signature(RUN_SIGNATURE)
-            .doc("Runs program with args (no shell), waits for it, and returns how it ended; needs the process.spawn capability. stdout and stderr are inherited unless captured or discarded; stdin is empty unless given. timeoutMs (1 to 86400000, a day) stops the child after that many milliseconds, and maxStdoutBytes or maxStderrBytes (0 to 2^53 - 1, each for a captured stream) stops it once that stream passes its ceiling: the child is killed and reaped, its output discarded, and the failure is timeout or outputLimit. On Unix a bounded child runs in a process group of its own, which a limit signals whole (a descendant that left the group is not stopped); elsewhere only the child is killed. A run counts against the live-child limit while it runs.")
+            .doc("Runs program with args (no shell), waits for it, and returns how it ended; needs the process.spawn capability. stdout and stderr are inherited unless captured or discarded; stdin is empty unless given. timeoutMs (1 to 86400000, a day) stops the child after that many milliseconds, and maxStdoutBytes or maxStderrBytes (0 to 2^53 - 1, each for a captured stream) stops it once that stream passes its ceiling: the child is killed and reaped, its output discarded, and the failure is timeout or outputLimit. On Unix a bounded child runs in a process group of its own, which a limit signals whole on Linux, Android, macOS and FreeBSD (a descendant that left the group is not stopped); elsewhere only the child is killed. The call leaves no thread behind when it returns. A run counts against the live-child limit while it runs.")
             .installed("start")
             .signature(START_SIGNATURE)
-            .doc("Starts program with args (no shell) without waiting, and returns a process handle; needs the process.spawn capability, and fails like run for a program that cannot start. stdin is null unless \"pipe\", stdout and stderr are inherited unless \"pipe\" or \"null\". Reads, writes and wait never block except wait with a timeout. timeoutMs, maxStdoutBytes and maxStderrBytes are lifetime limits, as on run: passing one kills the child's process group (Unix) and later reads answer with the limit's kind. Closing the handle kills and reaps the child. A started child counts against the live-child limit until it is reaped.")
+            .doc("Starts program with args (no shell) without waiting, and returns a process handle; needs the process.spawn capability, and fails like run for a program that cannot start. stdin is null unless \"pipe\", stdout and stderr are inherited unless \"pipe\" or \"null\". Reads, writes and wait never block except wait with a timeout. timeoutMs, maxStdoutBytes and maxStderrBytes are lifetime limits, as on run: passing one kills the child and, on Linux, Android, macOS and FreeBSD, its process group, and later reads answer with the limit's kind. Closing the handle kills and reaps the child. A started child counts against the live-child limit until its handle is closed or a limit stops it, so close handles: an unclosed one holds its slot until it is collected.")
             .installed("env")
             .signature("(name: string) -> string?")
             .doc("The environment variable name, or nil when it is unset; needs the process.environment capability.")

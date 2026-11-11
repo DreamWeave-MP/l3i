@@ -430,10 +430,11 @@ version = "2.8.0"
 date = 2026-11-10
 summary = "Bounded process.run by time and captured output; process.start, a nonblocking process handle with bounded standard streams and a bounded stdin queue."
 added = [
-    "process.run accepts timeoutMs, maxStdoutBytes and maxStderrBytes. A limit that passes kills the child and, on Unix, the process group it leads, and fails with timeout or outputLimit. Termination covers that group only: a descendant that left it is not stopped.",
+    "process.run accepts timeoutMs, maxStdoutBytes and maxStderrBytes. A limit that passes kills the child and, on Linux, Android, macOS and FreeBSD, the process group it leads, and fails with timeout or outputLimit. Termination covers that group only: a descendant that left it is not stopped, but on Unix it cannot keep a thread or a descriptor of the host: every thread of a run or a handle ends with it, whoever holds its pipe.",
     "process.start launches a child without waiting and returns a handle: nonblocking stdout and stderr reads, a 1 MiB stdin queue, wait with an optional timeout, kill and close, with the same limits as run. On Linux, Android, macOS and FreeBSD wait answers without reaping, so kill or close after it still stops what the child left in its process group; the child's slot and process table entry are held until the handle is closed.",
     "Live child processes are bounded per runtime: ProcessExtension::with_max_children sets the limit (default 32, at most 1024; scripts cannot change it). A start past the limit raises, and a run counts while it runs. ProcessExtension::with_input_policy now returns a ProcessConfig, which carries both settings.",
     "timeoutMs is refused above 86400000 (a day), and byte ceilings above 2^53 - 1, before the child starts.",
+    "A child that the host reaped itself (SIGCHLD ignored, or a reaper of its own) is reported as lost and never signalled, nor is the group it led. A started child's stdin writer no longer raises SIGPIPE when the child exits without reading. A run that cannot start one of its threads fails instead of aborting the host.",
 ]
 migration = """
 Take 2.8.0 in place of 2.7.0.

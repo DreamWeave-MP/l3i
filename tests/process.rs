@@ -73,10 +73,27 @@ fn a_child_that_ignores_its_input_raises_no_sigpipe() {
         "local result = process.run('sh', { '-c', 'exit 0' }, { stdin = string.rep('x', 4 * 1024 * 1024) }) \
          assert(result.success, tostring(result.code))",
     );
+    let fed = RAISED.load(Ordering::SeqCst);
+    // The same for a started child: the handle's writer thread meets a pipe nobody reads.
+    let started = runtime_with(true).exec(
+        "local child = assert(process.start('sh', { '-c', 'exit 0' }, { stdin = 'pipe' })) \
+         assert(assert(child:wait(5000)).success) \
+         assert(child:write(string.rep('x', 200000))) \
+         local polls = 0 \
+         repeat \
+             process.sleep(0.01) \
+             polls = polls + 1 \
+             local written, _, kind = child:write('x') \
+         until (not written and kind ~= 'wouldBlock') or polls > 300 \
+         assert(polls <= 300, 'the writer never met the closed pipe') \
+         child:close()",
+    );
     // SAFETY: `previous` is the action sigaction reported above.
     unsafe { libc::sigaction(libc::SIGPIPE, &raw const previous, std::ptr::null_mut()) };
     result.unwrap();
-    assert_eq!(RAISED.load(Ordering::SeqCst), 0, "feeding the child raised SIGPIPE");
+    started.unwrap();
+    assert_eq!(fed, 0, "feeding the child raised SIGPIPE");
+    assert_eq!(RAISED.load(Ordering::SeqCst), 0, "writing to a started child that had exited raised SIGPIPE");
 }
 
 #[test]

@@ -16,7 +16,7 @@
 
 use std::borrow::Cow;
 use std::collections::VecDeque;
-use std::io::{Read, Write};
+use std::io::Read;
 use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, ExitStatus, Stdio};
 use std::rc::Rc;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
@@ -31,9 +31,10 @@ use crate::runtime::shared::Resource;
 use crate::stack::{Scope, ValueView};
 use crate::userdata::Userdata;
 
+use super::cancel::{Cancel, Pollable};
 use super::{
     ChildQuota, Feed, MAX_BYTES, Mode, Reservation, SpawnOptions, arguments, bounded, build_command, has_exited,
-    kill_group,
+    kill_group, reaped_elsewhere,
 };
 
 /// Bytes a stream's buffer holds before its reader stops reading, so the child blocks on its pipe.
@@ -79,8 +80,16 @@ struct State {
     /// none follows a reap: the pid, which is the group id, may be reused from then on.
     reaped: bool,
     status: Option<ExitStatus>,
-    /// The child's live-child slot, released by the reap: a reaped child is no longer live.
+    /// Whether something other than this handle reaped the child: a host that ignores `SIGCHLD`,
+    /// or reaps children itself. How the child ended is then unknown, and nothing is signalled.
+    lost: bool,
+    /// The child's live-child slot. It is held for as long as this handle has threads or a
+    /// process table entry: until `close`, or a limit that stops the child, whichever is first.
     reservation: Option<Reservation>,
+    /// Ends the handle's reader and writer threads, whoever holds their pipes. Each thread holds
+    /// its own reference, and this one is dropped when it is used, so the descriptors behind it
+    /// close with the last thread and not when the handle is collected.
+    cancel: Option<Arc<Cancel>>,
     stdout: Pipe,
     stderr: Pipe,
     stdin: Queue,
@@ -103,7 +112,20 @@ impl State {
         if self.reaped {
             return Ok(true);
         }
-        has_exited(&mut self.child)
+        match has_exited(&mut self.child) {
+            Err(error) if reaped_elsewhere(&error) => {
+                self.lose();
+                Ok(true)
+            }
+            answer => answer,
+        }
+    }
+
+    /// Records that the child was reaped by something else. From here it is treated as reaped:
+    /// its pid, and the group it led, may belong to another process, so nothing is signalled.
+    fn lose(&mut self) {
+        self.lost = true;
+        self.reaped = true;
     }
 
     /// The child's exit status if it has exited, without waiting for it. Where the platform can
@@ -114,13 +136,19 @@ impl State {
     fn observe(&mut self) -> Option<ExitStatus> {
         if self.status.is_none() && !self.reaped {
             #[cfg(any(target_os = "linux", target_os = "android", target_os = "macos", target_os = "freebsd"))]
-            if let Ok(Some(status)) = super::exit_status_unreaped(&mut self.child) {
-                self.status = Some(status);
+            match super::exit_status_unreaped(&mut self.child) {
+                Ok(Some(status)) => self.status = Some(status),
+                Err(error) if reaped_elsewhere(&error) => self.lose(),
+                _ => {}
             }
             #[cfg(not(any(target_os = "linux", target_os = "android", target_os = "macos", target_os = "freebsd")))]
-            if let Ok(Some(status)) = self.child.try_wait() {
-                self.status = Some(status);
-                self.mark_reaped();
+            match self.child.try_wait() {
+                Ok(Some(status)) => {
+                    self.status = Some(status);
+                    self.mark_reaped();
+                }
+                Err(error) if reaped_elsewhere(&error) => self.lose(),
+                _ => {}
             }
         }
         self.status
@@ -138,10 +166,18 @@ impl State {
         }
     }
 
-    /// Records the reap, and with it releases the child's live slot. Only the reap paths call this,
-    /// once: the `reaped` check above it makes a second reap a no-op, so the slot is released once.
+    /// Records the reap. Nothing is signalled after it.
     fn mark_reaped(&mut self) {
         self.reaped = true;
+    }
+
+    /// Ends this handle's threads and gives its live slot back. Called where the handle is done
+    /// with the child: at `close`, and when a limit stops the child. The threads end whoever holds
+    /// their pipes, so a slot given back is never still paying for a thread.
+    fn release(&mut self) {
+        if let Some(cancel) = self.cancel.take() {
+            cancel.cancel();
+        }
         self.reservation = None;
     }
 
@@ -149,6 +185,12 @@ impl State {
     /// `process::isolate`), so this reaches what the child started too, while the child is unreaped.
     /// Once reaped it sends nothing: the pid, and with it the group id, may belong to another process.
     fn kill(&mut self) {
+        // Asked first, so that a child the host reaped behind this handle's back is found out
+        // before a signal goes to whatever has its pid now.
+        if self.reaped || self.exited().is_err() {
+            return;
+        }
+        // Asking may have found the child reaped elsewhere, which marks it reaped.
         if self.reaped {
             return;
         }
@@ -170,6 +212,7 @@ impl State {
         self.stdout.bytes.clear();
         self.stderr.bytes.clear();
         self.kill_and_reap();
+        self.release();
     }
 }
 
@@ -283,31 +326,38 @@ impl Shared {
 
     /// Waits for the child to exit, for at most `timeout`. Answers its status, or nothing if it is
     /// still running.
-    fn wait(&self, timeout: Duration) -> Option<ExitStatus> {
+    fn wait(&self, timeout: Duration) -> Answer<Option<ExitStatus>> {
         let started = Instant::now();
         let mut state = self.lock();
         loop {
             if let Some(status) = state.observe() {
                 self.changed.notify_all();
-                return Some(status);
+                return Ok(Some(status));
+            }
+            if state.lost {
+                return Err(failure(
+                    "dream.process.Child:wait: the child was reaped by the host process, so how it ended is unknown",
+                    "other",
+                ));
             }
             let elapsed = started.elapsed();
             if elapsed >= timeout {
-                return None;
+                return Ok(None);
             }
             state = self.sleep(state, timeout.saturating_sub(elapsed).min(POLL));
         }
     }
 
     /// Kills and reaps the child, releases its pipes and ends every thread of this handle. A
-    /// second call does nothing. The wait after a SIGKILL is brief; the threads blocked in a pipe
-    /// end with the pipe, and are not joined.
+    /// second call does nothing. The wait after a SIGKILL is brief. The threads are cancelled, not
+    /// joined: each ends at once, whether or not something still holds its pipe.
     fn close(&self) {
         let mut state = self.lock();
         if state.closed {
             return;
         }
         state.kill_and_reap();
+        state.release();
         state.closed = true;
         state.stdout.bytes.clear();
         state.stderr.bytes.clear();
@@ -317,7 +367,7 @@ impl Shared {
 
 /// Reads `pipe` into the buffer of `which` on this thread, stopping when the buffer is full, so
 /// the child blocks on its pipe. Past the stream's ceiling the child is killed at once.
-fn read_loop(shared: &Shared, which: Stream, mut pipe: impl Read) {
+fn read_loop(shared: &Shared, cancel: &Cancel, which: Stream, mut pipe: impl Read + Pollable) {
     let mut chunk = [0_u8; CHUNK];
     loop {
         let room = {
@@ -333,11 +383,12 @@ fn read_loop(shared: &Shared, which: Stream, mut pipe: impl Read) {
                 state = shared.wait_change(state);
             }
         };
-        let result = loop {
-            match pipe.read(&mut chunk[..room]) {
-                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
-                result => break result,
-            }
+        // Blocked here on the pipe and on the handle's cancellation, never on the pipe alone.
+        let result = match cancel.read(&mut pipe, &mut chunk[..room]) {
+            Ok(Some(count)) => Ok(count),
+            // The handle is done with the child: closed, or stopped at a limit.
+            Ok(None) => return,
+            Err(error) => Err(error),
         };
         let mut state = shared.lock();
         if state.closed {
@@ -373,7 +424,16 @@ fn read_loop(shared: &Shared, which: Stream, mut pipe: impl Read) {
 
 /// Writes the stdin queue to the child's stdin, and drops the pipe (ending the child's input) once
 /// the queue is closed and empty, or the handle is.
-fn write_loop(shared: &Shared, mut pipe: ChildStdin) {
+fn write_loop(shared: &Shared, cancel: &Cancel, mut pipe: ChildStdin) {
+    // A child that exits without reading leaves this thread writing to a pipe nobody reads. That
+    // must be an error on the write, not a SIGPIPE: the signal's default action ends the host.
+    #[cfg(unix)]
+    super::block_sigpipe();
+    if let Err(error) = Cancel::prepare_writer(&pipe) {
+        shared.lock().stdin.error = Some(error);
+        shared.changed.notify_all();
+        return;
+    }
     loop {
         let chunk: Vec<u8> = {
             let mut state = shared.lock();
@@ -394,13 +454,18 @@ fn write_loop(shared: &Shared, mut pipe: ChildStdin) {
             state.stdin.writing = chunk.len();
             chunk
         };
-        let result = pipe.write_all(&chunk);
+        let result = cancel.write_all(&mut pipe, &chunk);
         let mut state = shared.lock();
         state.stdin.writing = 0;
-        if let Err(error) = result {
-            state.stdin.error = Some(error);
-            shared.changed.notify_all();
-            return;
+        match result {
+            Ok(true) => {}
+            // Cancelled with the chunk part written: the handle is done with the child.
+            Ok(false) => return,
+            Err(error) => {
+                state.stdin.error = Some(error);
+                shared.changed.notify_all();
+                return;
+            }
         }
         shared.changed.notify_all();
     }
@@ -438,18 +503,22 @@ fn spawn_thread(name: &str, shared: &Arc<Shared>, body: impl FnOnce(&Shared) + S
 /// Starts the threads a child's pipes and limits need. A failure leaves the child to be closed.
 fn launch(
     shared: &Arc<Shared>,
+    cancel: &Arc<Cancel>,
     streams: (Option<ChildStdout>, Option<ChildStderr>),
     stdin: Option<ChildStdin>,
     timeout: Option<Duration>,
 ) -> std::io::Result<()> {
     if let Some(pipe) = streams.0 {
-        spawn_thread("l3i-process-stdout", shared, move |shared| read_loop(shared, Stream::Stdout, pipe))?;
+        let cancel = Arc::clone(cancel);
+        spawn_thread("l3i-process-stdout", shared, move |shared| read_loop(shared, &cancel, Stream::Stdout, pipe))?;
     }
     if let Some(pipe) = streams.1 {
-        spawn_thread("l3i-process-stderr", shared, move |shared| read_loop(shared, Stream::Stderr, pipe))?;
+        let cancel = Arc::clone(cancel);
+        spawn_thread("l3i-process-stderr", shared, move |shared| read_loop(shared, &cancel, Stream::Stderr, pipe))?;
     }
     if let Some(pipe) = stdin {
-        spawn_thread("l3i-process-stdin", shared, move |shared| write_loop(shared, pipe))?;
+        let cancel = Arc::clone(cancel);
+        spawn_thread("l3i-process-stdin", shared, move |shared| write_loop(shared, &cancel, pipe))?;
     }
     if let Some(timeout) = timeout {
         let started = Instant::now();
@@ -488,12 +557,23 @@ pub(super) fn start(
     let stdout_pipe = child.stdout.take();
     let stderr_pipe = child.stderr.take();
     let pipe = |piped: bool, ceiling: Option<u64>| Pipe { piped, ceiling, ..Pipe::default() };
+    let cancel = match Cancel::new() {
+        Ok(cancel) => Arc::new(cancel),
+        Err(error) => {
+            // Nothing owns the child yet: stop it here, as a handle would have.
+            super::stop(&mut child, true);
+            let message = format!("dream.process.start: {name}: {error}");
+            return Ok(Outcome::Failed(Failure::message(message, &error)));
+        }
+    };
     let shared = Arc::new(Shared {
         state: Mutex::new(State {
             child,
             reaped: false,
             status: None,
+            lost: false,
             reservation: Some(reservation),
+            cancel: Some(Arc::clone(&cancel)),
             stdout: pipe(stdout_pipe.is_some(), bounds.stdout),
             stderr: pipe(stderr_pipe.is_some(), bounds.stderr),
             stdin: Queue { piped: stdin_pipe.is_some(), ..Queue::default() },
@@ -502,7 +582,10 @@ pub(super) fn start(
         }),
         changed: Condvar::new(),
     });
-    if let Err(error) = launch(&shared, (stdout_pipe, stderr_pipe), stdin_pipe, bounds.timeout) {
+    let launched = launch(&shared, &cancel, (stdout_pipe, stderr_pipe), stdin_pipe, bounds.timeout);
+    // The threads and the state hold the cancellation now; this reference must not outlive them.
+    drop(cancel);
+    if let Err(error) = launched {
         shared.close();
         let message = format!("dream.process.start: {name}: {error}");
         return Ok(Outcome::Failed(Failure::message(message, &error)));
@@ -617,11 +700,14 @@ pub(super) fn describe(d: &mut ExtensionDescriptor) {
             let status = shared.wait(timeout);
             crate::runtime::expire_if_due(call);
             match status {
-                Some(status) => {
+                Ok(Some(status)) => {
                     push_status(call, status)?;
                     Ok(Outcome::Done(StackResults))
                 }
-                None => Ok(Outcome::Failed(failure("dream.process.Child:wait: the child is still running", "wouldBlock"))),
+                Ok(None) => {
+                    Ok(Outcome::Failed(failure("dream.process.Child:wait: the child is still running", "wouldBlock")))
+                }
+                Err(lost) => Ok(Outcome::Failed(lost)),
             }
         })
         .signature("(self, timeoutMs: number?): ({ success: boolean, code: number?, signal: number? }?, string?, dream_process_ErrorKind?)")
@@ -632,7 +718,7 @@ pub(super) fn describe(d: &mut ExtensionDescriptor) {
             Ok(true)
         })
         .signature("(self): boolean")
-        .doc("Kills the child's process group (Unix) or the child, without waiting; idempotent. It does not reap: close does. Once the handle is closed nothing is signalled.");
+        .doc("Kills the child's process group (Linux, Android, macOS, FreeBSD) or the child, without waiting; idempotent. It does not reap: close does. Once the handle is closed nothing is signalled.");
     handle
         .method("close", |process: &Process| -> Result<()> {
             process.0.0.close();
@@ -678,7 +764,9 @@ mod tests {
                 child,
                 reaped: false,
                 status: None,
+                lost: false,
                 reservation: slot,
+                cancel: Some(Arc::new(Cancel::new().unwrap())),
                 stdout: Pipe::default(),
                 stderr: Pipe::default(),
                 stdin: Queue::default(),
@@ -698,10 +786,86 @@ mod tests {
         }
     }
 
+    /// Reaps the child of `shared` behind its back, once it has exited, as a host that waits for
+    /// any child of its own would.
+    fn reap_behind(shared: &Shared) {
+        until_exited(shared);
+        let pid = libc::pid_t::try_from(shared.lock().child.id()).unwrap();
+        let mut status = 0;
+        // SAFETY: waitpid on a child of this process, with a status it may write.
+        assert_eq!(unsafe { libc::waitpid(pid, &raw mut status, 0) }, pid, "the child was already reaped");
+    }
+
+    #[test]
+    fn a_child_the_host_reaped_is_never_signalled_and_its_wait_says_its_status_is_lost() {
+        let shared = own(leader("true", &[]));
+        reap_behind(&shared);
+        let before = signals();
+        assert!(shared.wait(Duration::from_secs(1)).is_err(), "a lost child was reported as running or as exited");
+        shared.kill();
+        timer_loop(&shared, Instant::now(), Duration::ZERO);
+        shared.close();
+        assert_eq!(signals(), before, "the group of a child the host reaped was signalled");
+        assert!(shared.lock().lost);
+    }
+
+    #[test]
+    fn a_kill_a_close_and_a_timer_each_find_out_the_host_reaped_the_child_before_signalling() {
+        let acts: [fn(&Shared); 3] =
+            [Shared::kill, Shared::close, |shared| timer_loop(shared, Instant::now(), Duration::ZERO)];
+        for act in acts {
+            let shared = own(leader("true", &[]));
+            reap_behind(&shared);
+            let before = signals();
+            act(&shared);
+            assert_eq!(signals(), before, "a signal went to a pid this handle no longer owns");
+        }
+    }
+
+    #[test]
+    fn stopping_a_run_whose_child_the_host_reaped_signals_nothing() {
+        let shared = own(leader("true", &[]));
+        reap_behind(&shared);
+        let before = signals();
+        super::super::stop(&mut shared.lock().child, true);
+        assert_eq!(signals(), before, "a run signalled the group of a child the host had reaped");
+    }
+
+    #[test]
+    fn a_limit_ends_the_handles_threads_and_gives_its_slot_back_without_a_close() {
+        let quota = ChildQuota::new(1);
+        let shared = own_holding(leader("sleep", &["30"]), Some(ChildQuota::reserve(&quota, "test").unwrap()));
+        // What a reader or writer thread of this handle holds.
+        let cancel = Arc::clone(shared.lock().cancel.as_ref().unwrap());
+        shared.lock().stop_for("timeout");
+        assert!(ChildQuota::reserve(&quota, "test").is_ok(), "a child stopped at its limit still holds its slot");
+        assert!(shared.lock().cancel.is_none(), "the handle kept its cancellation, and its descriptors, after use");
+        // The cancellation is what a blocked reader or writer of this handle waits on: a read of a
+        // pipe that something still holds open, and never writes to, now returns instead of blocking.
+        let (read, _held_open) = std::io::pipe().unwrap();
+        let mut held = HeldPipe(read);
+        assert_eq!(cancel.read(&mut held, &mut [0_u8; 8]).unwrap(), None, "a read was not cancelled");
+    }
+
+    /// A pipe whose write end stays open and silent: a read of it blocks until something else ends it.
+    struct HeldPipe(std::io::PipeReader);
+
+    impl Read for HeldPipe {
+        fn read(&mut self, chunk: &mut [u8]) -> std::io::Result<usize> {
+            self.0.read(chunk)
+        }
+    }
+
+    impl Pollable for HeldPipe {
+        fn descriptor(&self) -> std::os::fd::RawFd {
+            std::os::fd::AsRawFd::as_raw_fd(&self.0)
+        }
+    }
+
     #[test]
     fn a_wait_answers_without_reaping_and_the_close_after_it_signals_the_group_once() {
         let shared = own(leader("true", &[]));
-        let status = shared.wait(Duration::from_secs(10)).expect("the child did not exit");
+        let status = shared.wait(Duration::from_secs(10)).ok().flatten().expect("the child did not exit");
         assert!(status.success());
         assert!(!shared.lock().reaped, "a wait reaped the child, so its group can no longer be signalled");
         let before = signals();
@@ -716,10 +880,10 @@ mod tests {
     fn a_wait_reports_an_exit_code_and_a_signal_as_a_reap_would() {
         use std::os::unix::process::ExitStatusExt as _;
         let coded = own(leader("sh", &["-c", "exit 7"]));
-        assert_eq!(coded.wait(Duration::from_secs(10)).and_then(|status| status.code()), Some(7));
+        assert_eq!(coded.wait(Duration::from_secs(10)).ok().flatten().and_then(|status| status.code()), Some(7));
         coded.close();
         let signalled = own(leader("sh", &["-c", "kill -TERM $$"]));
-        let status = signalled.wait(Duration::from_secs(10)).expect("the child did not end");
+        let status = signalled.wait(Duration::from_secs(10)).ok().flatten().expect("the child did not end");
         assert_eq!((status.code(), status.signal()), (None, Some(libc::SIGTERM)));
         signalled.close();
     }
@@ -727,7 +891,7 @@ mod tests {
     #[test]
     fn a_closed_child_is_never_signalled_again() {
         let shared = own(leader("true", &[]));
-        assert!(shared.wait(Duration::from_secs(10)).is_some());
+        assert!(shared.wait(Duration::from_secs(10)).ok().flatten().is_some());
         shared.close();
         let before = signals();
         shared.kill();
@@ -739,7 +903,7 @@ mod tests {
     #[test]
     fn a_closed_child_releases_its_timer_before_the_deadline() {
         let shared = own(leader("true", &[]));
-        assert!(shared.wait(Duration::from_secs(10)).is_some());
+        assert!(shared.wait(Duration::from_secs(10)).ok().flatten().is_some());
         shared.close();
         let started = Instant::now();
         timer_loop(&shared, Instant::now(), Duration::from_secs(3600));
@@ -774,7 +938,7 @@ mod tests {
         let quota = ChildQuota::new(1);
         let shared = own_holding(leader("true", &[]), Some(ChildQuota::reserve(&quota, "test").unwrap()));
         assert!(ChildQuota::reserve(&quota, "test").is_err(), "the held slot was handed out again");
-        assert!(shared.wait(Duration::from_secs(10)).is_some());
+        assert!(shared.wait(Duration::from_secs(10)).ok().flatten().is_some());
         assert!(ChildQuota::reserve(&quota, "test").is_err(), "a wait freed the slot of an open handle");
         shared.close();
         assert!(ChildQuota::reserve(&quota, "test").is_ok(), "the reaped child still holds its slot");
