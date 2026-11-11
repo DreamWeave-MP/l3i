@@ -1438,12 +1438,13 @@ fn concurrent_children_never_inherit_one_another_s_secret() {
                         r#"
                         for round = 1, 25 do
                           local mine = 'secret-of-{worker}-' .. round .. '-'
-                          -- Every descriptor above the standard three, read to its end. Half the
+                          -- Every pipe above the standard three, read for a moment: a secret is in
+                          -- its pipe already, and whatever else the harness left open may never end. Half the
                           -- children have a secret; the other half must find nothing at all.
                           local options = {{ stdout = 'capture', stderr = 'null', timeoutMs = 20000 }}
                           if round % 2 == 0 then options.secret = {{ env = 'FD', data = mine }} end
                           local result = assert(process.run('sh', {{ '-c',
-                            'for fd in /proc/self/fd/*; do n=${{fd##*/}}; [ "$n" -gt 2 ] && cat "/proc/self/fd/$n" 2>/dev/null; done; true' }}, options))
+                            'for fd in /proc/self/fd/*; do n=${{fd##*/}}; [ "$n" -gt 2 ] && [ -p "$fd" ] && timeout 0.3 cat "/proc/self/fd/$n" 2>/dev/null; done; true' }}, options))
                           local seen = result.stdout
                           local expected = if round % 2 == 0 then mine else ''
                           for found in string.gmatch(seen, 'secret%-of%-%d+%-%d+%-') do
