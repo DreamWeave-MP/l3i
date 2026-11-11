@@ -699,11 +699,12 @@ fn a_timeout_frees_the_slot_of_a_child_nobody_waits_for() {
         .unwrap();
 }
 
-/// A child that exited still holds its slot until something reaps it; a wait does, and then the
-/// slot is free.
-#[cfg(unix)]
+/// A child that exited still holds its slot until its handle is closed. A wait answers its status
+/// and does not free the slot: the handle can still stop what the child left behind, so the child
+/// is still counted.
+#[cfg(any(target_os = "linux", target_os = "android", target_os = "macos", target_os = "freebsd"))]
 #[test]
-fn a_child_that_exited_holds_its_slot_until_it_is_waited_for() {
+fn a_child_that_exited_holds_its_slot_until_its_handle_is_closed() {
     let runtime = runtime_limiting_children(1);
     runtime
         .exec(
@@ -711,10 +712,89 @@ fn a_child_that_exited_holds_its_slot_until_it_is_waited_for() {
               local ok = pcall(process.start, 'sleep', { '30' })
               assert(not ok, 'an unreaped child freed its slot')
               assert(assert(done:wait(5000)).success)
+              assert(assert(done:wait(0)).success, 'a second wait lost the status')
+              ok = pcall(process.start, 'sleep', { '30' })
+              assert(not ok, 'a wait freed the slot of a handle that is still open')
+              done:close()
               local next = assert(process.start('sleep', { '30' }))
               next:close()",
         )
         .unwrap();
+}
+
+/// Whether process `pid` still exists, to this user.
+#[cfg(unix)]
+fn alive(pid: i32) -> bool {
+    std::process::Command::new("kill")
+        .args(["-0", &pid.to_string()])
+        .stderr(std::process::Stdio::null())
+        .status()
+        .unwrap()
+        .success()
+}
+
+/// Runs `script`, which leaves a background process whose pid it returns, and asserts that process
+/// is gone soon afterwards.
+#[cfg(any(target_os = "linux", target_os = "android", target_os = "macos", target_os = "freebsd"))]
+fn assert_descendant_stopped(script: &str) {
+    let runtime = runtime_granting(&[SPAWN_CAPABILITY], Limits::default());
+    let pid: f64 = runtime.eval(script).unwrap();
+    // A script that left its handle open has it closed by the runtime's shutdown.
+    drop(runtime);
+    #[allow(clippy::cast_possible_truncation)]
+    let pid = pid as i32;
+    assert!(pid > 1, "the fixture did not report its background process");
+    let started = Instant::now();
+    while alive(pid) {
+        if started.elapsed() > Duration::from_secs(5) {
+            // Do not leave a thirty-second sleep behind a failed assertion.
+            let _ = std::process::Command::new("kill").args(["-9", &pid.to_string()]).status();
+            panic!("the descendant outlived the handle that should have stopped it");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// The fixture the descendant tests share: a shell that starts a long sleep holding its stdout,
+/// prints that sleep's pid and exits. `after` runs once the shell's exit has been waited for.
+#[cfg(any(target_os = "linux", target_os = "android", target_os = "macos", target_os = "freebsd"))]
+fn left_behind(after: &str) -> String {
+    format!(
+        r"local child = assert(process.start('sh', {{ '-c', 'sleep 30 & echo $!; exit 0' }}, {{ stdout = 'pipe' }}))
+          local text, ticks = '', 0
+          while not text:find('\n', 1, true) do
+              local chunk, _, kind = child:readStdout(64)
+              if chunk then text = text .. chunk
+              else
+                  assert(kind == 'wouldBlock', tostring(kind))
+                  process.sleep(0.005)
+                  ticks = ticks + 1
+                  assert(ticks < 2000, 'the shell never reported its background process')
+              end
+          end
+          assert(assert(child:wait(5000)).success)
+          {after}
+          return tonumber(text:match('%d+'))"
+    )
+}
+
+/// `close` after `wait` still stops a process the child started: the child that `wait` answered
+/// for is not reaped until the close, so the group it led can still be signalled. Before this, a
+/// wait reaped the child and the close that followed could reach nothing, leaving the process and
+/// the pipe it held.
+#[cfg(any(target_os = "linux", target_os = "android", target_os = "macos", target_os = "freebsd"))]
+#[test]
+fn close_after_wait_stops_what_the_child_left_in_its_group() {
+    assert_descendant_stopped(&left_behind("child:close()"));
+}
+
+/// `kill` after `wait` reaches it too, and so does the shutdown of a runtime whose script waited
+/// and never closed its handle.
+#[cfg(any(target_os = "linux", target_os = "android", target_os = "macos", target_os = "freebsd"))]
+#[test]
+fn kill_after_wait_and_a_runtime_shutdown_stop_what_the_child_left_too() {
+    assert_descendant_stopped(&left_behind("assert(child:kill())"));
+    assert_descendant_stopped(&left_behind(""));
 }
 
 /// A limit of 0 is raised to 1: one child may run at a time, never none.
@@ -744,12 +824,14 @@ impl Drop for Sentinel {
     }
 }
 
-/// A handle whose child was reaped by `wait` never signals a group again: not by its timer after
-/// the deadline, not by kill or close. The sentinel is a process of our own in a group of its own;
-/// churning through short processes keeps the pids moving, though pid reuse itself is not forced.
+/// A handle that was closed, which is what reaps its child, never signals a group again: not by its
+/// timer after the deadline, not by a second close. The sentinel is a process of our own in a group
+/// of its own; churning through short processes keeps the pids moving, though pid reuse itself is
+/// not forced, so this cannot fail on the reuse it guards against: the unit tests that count the
+/// signals sent are what hold that.
 #[cfg(unix)]
 #[test]
-fn a_reaped_handle_never_signals_its_group_again() {
+fn a_closed_handle_never_signals_its_group_again() {
     use std::os::unix::process::CommandExt as _;
     let mut sentinel = Sentinel(std::process::Command::new("sleep").arg("600").process_group(0).spawn().unwrap());
     let runtime = runtime_granting(&[SPAWN_CAPABILITY], Limits::default());
@@ -757,14 +839,14 @@ fn a_reaped_handle_never_signals_its_group_again() {
         .exec(
             r"local old = assert(process.start('true', {}, { timeoutMs = 50 }))
               assert(assert(old:wait(5000)).success)
-              for _ = 1, 300 do assert(process.run('true', {}).success) end
-              assert(old:kill())
               old:close()
+              for _ = 1, 300 do assert(process.run('true', {}).success) end
+              assert(not pcall(function() return old:kill() end), 'a closed handle answered kill')
               old:close()
               process.sleep(0.2)",
         )
         .unwrap();
-    assert!(sentinel.0.try_wait().unwrap().is_none(), "the sentinel was signalled through a reaped handle");
+    assert!(sentinel.0.try_wait().unwrap().is_none(), "the sentinel was signalled through a closed handle");
 }
 
 /// A bounded run whose leader exits while a process it started holds the captured pipe open ends

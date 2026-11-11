@@ -448,6 +448,50 @@ pub(super) fn has_exited(child: &mut Child) -> std::io::Result<bool> {
     Ok(child.try_wait()?.is_some())
 }
 
+/// The exit status of `child` if it has exited, read without reaping it, so that a handle can answer
+/// `wait` and still signal the group the child led until the handle is closed. `None` while it runs.
+/// Only where [`GROUP_KILLS`] holds; elsewhere the caller reaps to learn the status.
+#[cfg(any(target_os = "linux", target_os = "android", target_os = "macos", target_os = "freebsd"))]
+pub(super) fn exit_status_unreaped(child: &mut Child) -> std::io::Result<Option<std::process::ExitStatus>> {
+    use std::os::unix::process::ExitStatusExt as _;
+    loop {
+        let mut info = std::mem::MaybeUninit::<libc::siginfo_t>::zeroed();
+        // SAFETY: `info` is writable and sized for a siginfo_t, which waitid fills; WNOHANG returns at
+        // once, and WEXITED with WNOWAIT reports an exit without reaping the child.
+        let status = unsafe {
+            libc::waitid(
+                libc::P_PID,
+                child.id() as libc::id_t,
+                info.as_mut_ptr(),
+                libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+            )
+        };
+        if status == 0 {
+            // SAFETY: waitid returned 0, so it has written `info`; its pid is zero when no child
+            // changed state, and otherwise its code and status describe how this child ended.
+            let (pid, code, value) = unsafe {
+                let info = info.assume_init();
+                (info.si_pid(), info.si_code, info.si_status())
+            };
+            if pid == 0 {
+                return Ok(None);
+            }
+            // The wait status `waitpid` would have reported: an exit code in the second byte, or a
+            // terminating signal in the low seven bits with the core-dump flag above them.
+            let raw = match code {
+                libc::CLD_EXITED => (value & 0xff) << 8,
+                libc::CLD_DUMPED => (value & 0x7f) | 0x80,
+                _ => value & 0x7f,
+            };
+            return Ok(Some(std::process::ExitStatus::from_raw(raw)));
+        }
+        let error = std::io::Error::last_os_error();
+        if error.kind() != std::io::ErrorKind::Interrupted {
+            return Err(error);
+        }
+    }
+}
+
 /// Kills the child, and with `group` every process in its group, without reaping it.
 fn kill_tree(child: &mut Child, group: bool) {
     if group {

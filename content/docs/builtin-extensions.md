@@ -1839,7 +1839,7 @@ slots while it runs (see [Started processes](#started-processes)).
 | `write(data)` | The number of bytes queued for the child's stdin, or `nil, message, "wouldBlock"` when the queue is full |
 | `closeStdin()` | Closes the child's stdin once the queued bytes are written |
 | `wait(timeoutMs?)` | `{ success, code?, signal? }` once the child has exited; `nil, message, "wouldBlock"` while it runs. It waits up to `timeoutMs` (at most 60,000, and never past the execution time limit); omitted or `0` only looks |
-| `kill()` | Kills the process group, or the child where groups are unavailable. Idempotent; returns `true`. It does not reap: `wait` or `close` does |
+| `kill()` | Kills the process group, or the child where groups are unavailable. Idempotent; returns `true`. It does not reap: `close` does |
 | `close()` | Kills the child if it still runs, reaps it and releases its pipes. Idempotent; every other method raises afterwards |
 
 Reads and writes never block. `wait` is the only method that can wait, and only when given a
@@ -1851,22 +1851,27 @@ and `write` answers `wouldBlock` beyond that.
 
 When a limit passes, the child is killed and reaped, its buffered output is discarded, and later
 reads or writes answer with the limit's kind: `"timeout"` or `"outputLimit"`. `wait` then reports the
-child as ended by signal. Killing the process group reaches what the child started too, on Unix
-only, and only while the child is unreaped: the group is signalled before the child is reaped, and
-once `wait` has reaped the child, no timer, `kill` or `close` signals that group again. A descendant
-that outlived a reaped child is therefore not stopped by a later `close`, and one that left the
-group is never stopped. Closing the handle, collecting it, or shutting the runtime down does what
-`close` does, so no direct child outlives its handle. A handle with no `close` still runs
-its child until it is collected.
+child as ended by signal. Killing the process group reaches what the child started too, on Linux,
+Android, macOS and FreeBSD, and only while the child is unreaped: the group is signalled before the
+child is reaped, and never after. On those systems `wait` answers the child's status without reaping
+it, so a `kill` or `close` after a `wait` still stops what the child left in its group, such as a
+process holding one of its pipes open; `close`, a limit, collection of the handle and runtime
+shutdown are what reap. Once the handle is closed nothing signals that group again. A descendant
+that left the group is never stopped. On other systems only the child itself is killed, and `wait`
+reaps it. Closing the handle, collecting it, or shutting the runtime down does what `close` does, so
+no direct child outlives its handle. A handle with no `close` still runs its child until it is
+collected, and holds an exited child's process table entry until then.
 
 Each started child, and each `run` while it runs, holds one of the runtime's live-child slots. The
 default is 32. A host sets it with `ProcessExtension::with_max_children(n)` (1 to 1024), and a
-script cannot change it. A child is live from its spawn until it is reaped: by `wait` once it has
-exited, by a limit that kills it, by `close`, or when its handle is collected or the runtime shuts
-down. A start past the limit raises, and a start that fails to spawn holds no slot. The limit is per
-runtime: each runtime has its own. The reader and writer threads of a handle are an interim design,
-pending the readiness substrate of RFC #11; concurrency is bounded by the live-child limit, and a
-reader that a descendant keeps on a pipe after its child is reaped stays until that pipe closes.
+script cannot change it. A child is live from its spawn until it is reaped: by a limit that kills
+it, by `close`, or when its handle is collected or the runtime shuts down. An exited child that has
+been waited for still holds its slot until its handle is closed, because the handle can still stop
+what it left behind. A start past the limit raises, and a start that fails to spawn holds no slot.
+The limit is per runtime: each runtime has its own. The reader and writer threads of a handle are an
+interim design, pending the readiness substrate of RFC #11; concurrency is bounded by the
+live-child limit. A reader that a descendant outside the group keeps on a pipe after the handle is
+closed stays until that pipe closes.
 
 Nothing here passes a secret or credential to a child: stdin carries only what the script writes,
 and no inherited file descriptor is used for that. A child started without the environment

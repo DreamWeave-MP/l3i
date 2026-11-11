@@ -5,8 +5,11 @@
 //! thread, so a cooperative caller, such as a frame-driven host, polls with `wait(0)` instead.
 //!
 //! A child holds its live-child slot until it is reaped (see `State::mark_reaped`), so the limit
-//! bounds the threads of live children. A descendant that outlives a reaped child and keeps a pipe
-//! open keeps that pipe's reader thread until the pipe closes, outside the limit.
+//! bounds the threads of live children. Where a status can be read without reaping, `wait` does
+//! not reap: the child stays ours, and with it the group it led, until `close`, a limit, or the
+//! handle's collection, each of which kills that group before the reap. A descendant that left the
+//! group and keeps a pipe open keeps that pipe's reader thread until the pipe closes, outside the
+//! limit.
 //!
 //! This plumbing is meant to move onto the common I/O readiness substrate of RFC #11 later. RFC #11
 //! is not implemented here, and nothing above this file depends on threads being how it is done.
@@ -103,21 +106,34 @@ impl State {
         has_exited(&mut self.child)
     }
 
-    /// Collects the child's exit status if it has exited, without waiting for it, and reaps it.
-    fn reap(&mut self) -> Option<ExitStatus> {
-        if !self.reaped
-            && let Ok(Some(status)) = self.child.try_wait()
-        {
-            self.status = Some(status);
-            self.mark_reaped();
+    /// The child's exit status if it has exited, without waiting for it. Where the platform can
+    /// read a status without reaping, the child stays unreaped: the handle then still holds its
+    /// live slot and can still kill what the child left in its group, until `close` reaps it. A
+    /// descendant holding a pipe open is therefore still ours to stop after `wait` has answered.
+    /// Elsewhere the status is learned by reaping, and nothing is signalled afterwards.
+    fn observe(&mut self) -> Option<ExitStatus> {
+        if self.status.is_none() && !self.reaped {
+            #[cfg(any(target_os = "linux", target_os = "android", target_os = "macos", target_os = "freebsd"))]
+            if let Ok(Some(status)) = super::exit_status_unreaped(&mut self.child) {
+                self.status = Some(status);
+            }
+            #[cfg(not(any(target_os = "linux", target_os = "android", target_os = "macos", target_os = "freebsd")))]
+            if let Ok(Some(status)) = self.child.try_wait() {
+                self.status = Some(status);
+                self.mark_reaped();
+            }
         }
         self.status
     }
 
-    /// Reaps the child, blocking until it is gone. Callers signal the group first.
+    /// Reaps the child, blocking until it is gone. Callers signal the group first. A status that
+    /// `observe` already answered is kept: it is how the child ended, before anything was killed.
     fn reap_now(&mut self) {
         if !self.reaped {
-            self.status = self.child.wait().ok();
+            let waited = self.child.wait().ok();
+            if self.status.is_none() {
+                self.status = waited;
+            }
             self.mark_reaped();
         }
     }
@@ -271,8 +287,7 @@ impl Shared {
         let started = Instant::now();
         let mut state = self.lock();
         loop {
-            if let Some(status) = state.reap() {
-                // The reap ends the timer's wait: there is nothing left for it to signal.
+            if let Some(status) = state.observe() {
                 self.changed.notify_all();
                 return Some(status);
             }
@@ -617,7 +632,7 @@ pub(super) fn describe(d: &mut ExtensionDescriptor) {
             Ok(true)
         })
         .signature("(self): boolean")
-        .doc("Kills the child's process group (Unix) or the child, without waiting; idempotent. It does not reap: wait or close does. Once the child is reaped nothing is signalled.");
+        .doc("Kills the child's process group (Unix) or the child, without waiting; idempotent. It does not reap: close does. Once the handle is closed nothing is signalled.");
     handle
         .method("close", |process: &Process| -> Result<()> {
             process.0.0.close();
@@ -684,9 +699,36 @@ mod tests {
     }
 
     #[test]
-    fn a_reaped_child_is_never_signalled_again() {
+    fn a_wait_answers_without_reaping_and_the_close_after_it_signals_the_group_once() {
         let shared = own(leader("true", &[]));
-        assert!(shared.wait(Duration::from_secs(10)).is_some(), "the child was not reaped");
+        let status = shared.wait(Duration::from_secs(10)).expect("the child did not exit");
+        assert!(status.success());
+        assert!(!shared.lock().reaped, "a wait reaped the child, so its group can no longer be signalled");
+        let before = signals();
+        shared.close();
+        assert_eq!(signals() - before, 1, "the close after a wait did not signal the child's group");
+        let state = shared.lock();
+        assert!(state.reaped, "the close did not reap the child");
+        assert!(state.status.is_some_and(|kept| kept.success()), "the kill at close replaced how the child ended");
+    }
+
+    #[test]
+    fn a_wait_reports_an_exit_code_and_a_signal_as_a_reap_would() {
+        use std::os::unix::process::ExitStatusExt as _;
+        let coded = own(leader("sh", &["-c", "exit 7"]));
+        assert_eq!(coded.wait(Duration::from_secs(10)).and_then(|status| status.code()), Some(7));
+        coded.close();
+        let signalled = own(leader("sh", &["-c", "kill -TERM $$"]));
+        let status = signalled.wait(Duration::from_secs(10)).expect("the child did not end");
+        assert_eq!((status.code(), status.signal()), (None, Some(libc::SIGTERM)));
+        signalled.close();
+    }
+
+    #[test]
+    fn a_closed_child_is_never_signalled_again() {
+        let shared = own(leader("true", &[]));
+        assert!(shared.wait(Duration::from_secs(10)).is_some());
+        shared.close();
         let before = signals();
         shared.kill();
         timer_loop(&shared, Instant::now(), Duration::ZERO);
@@ -695,13 +737,13 @@ mod tests {
     }
 
     #[test]
-    fn a_reaped_child_releases_its_timer_before_the_deadline() {
+    fn a_closed_child_releases_its_timer_before_the_deadline() {
         let shared = own(leader("true", &[]));
         assert!(shared.wait(Duration::from_secs(10)).is_some());
+        shared.close();
         let started = Instant::now();
         timer_loop(&shared, Instant::now(), Duration::from_secs(3600));
         assert!(started.elapsed() < Duration::from_secs(1), "the timer waited for its deadline");
-        assert_eq!(signals(), 0);
     }
 
     #[test]
@@ -733,6 +775,8 @@ mod tests {
         let shared = own_holding(leader("true", &[]), Some(ChildQuota::reserve(&quota, "test").unwrap()));
         assert!(ChildQuota::reserve(&quota, "test").is_err(), "the held slot was handed out again");
         assert!(shared.wait(Duration::from_secs(10)).is_some());
+        assert!(ChildQuota::reserve(&quota, "test").is_err(), "a wait freed the slot of an open handle");
+        shared.close();
         assert!(ChildQuota::reserve(&quota, "test").is_ok(), "the reaped child still holds its slot");
         // A second reap, from the timer or close, releases nothing more.
         timer_loop(&shared, Instant::now(), Duration::ZERO);
