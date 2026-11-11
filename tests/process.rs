@@ -1212,3 +1212,135 @@ fn shutdown_kills_a_started_child() {
     std::fs::remove_file(&path).unwrap();
     assert!(!process_exists(pid), "the child {pid} outlived shutdown");
 }
+
+/// A secret reaches a child through a descriptor it inherits and nowhere else: the variable holds
+/// the descriptor's number, the bytes are read once and then the pipe is at end of file, and
+/// neither the child's arguments nor its environment contains them.
+#[cfg(unix)]
+#[test]
+fn a_secret_reaches_a_child_through_an_inherited_descriptor_and_nowhere_else() {
+    runtime_with(false)
+        .exec("assert(not pcall(process.run, 'true', {}, { secret = { env = 'ROOK_SECRET_FD', data = 'x' } }))")
+        .unwrap();
+    let runtime = runtime_granting(&[SPAWN_CAPABILITY], Limits::default());
+    runtime
+        .exec(
+            r#"
+            local secret = 'tok-' .. string.rep('s3cr3t', 20)
+            -- The child reads the descriptor named in the variable, then reads it again.
+            local result = assert(process.run('sh', { '-c',
+              'printf "%s|" "$ROOK_SECRET_FD"; cat <&"$ROOK_SECRET_FD"; printf "|"; cat <&"$ROOK_SECRET_FD"; printf "|end"' },
+              { secret = { env = 'ROOK_SECRET_FD', data = secret }, stdout = 'capture', timeoutMs = 10000 }))
+            assert(result.success, tostring(result.code))
+            local number, first, second = string.match(result.stdout, '^(%d+)|(.*)|(.*)|end$')
+            assert(tonumber(number) >= 3, result.stdout)
+            assert(first == secret, 'the child did not read the secret')
+            assert(second == '', 'the secret could be read twice')
+
+            -- Bytes that are not text, from a buffer.
+            local binary = buffer.fromstring('a\0b\255c')
+            local echoed = assert(process.run('sh', { '-c', 'cat <&"$FD"' },
+              { secret = { env = 'FD', data = binary }, stdout = 'capture', timeoutMs = 10000 }))
+            assert(echoed.stdout == 'a\0b\255c')
+
+            -- What the child can see of itself holds the descriptor's number and not the secret.
+            local seen = assert(process.run('sh', { '-c', 'env; echo "$0" "$@"; cat /proc/$$/cmdline 2>/dev/null; cat /proc/$$/environ 2>/dev/null' },
+              { secret = { env = 'ROOK_SECRET_FD', data = secret }, stdout = 'capture', timeoutMs = 10000 }))
+            assert(string.find(seen.stdout, 'ROOK_SECRET_FD=', 1, true), seen.stdout)
+            assert(not string.find(seen.stdout, 's3cr3t', 1, true), 'the secret is in the child\'s arguments or environment')
+
+            -- A helper the child starts inherits the descriptor: this is how a credential helper reads it.
+            local helped = assert(process.run('sh', { '-c', 'sh -c \'sh -c "cat <&$ROOK_SECRET_FD"\'' },
+              { secret = { env = 'ROOK_SECRET_FD', data = secret }, stdout = 'capture', timeoutMs = 10000 }))
+            assert(helped.stdout == secret, 'a grandchild could not read the secret')
+
+            -- A child without a secret has no such descriptor: the one a sibling was given is not left open.
+            local sibling = assert(process.run('sh', { '-c', 'cat <&' .. number .. ' 2>/dev/null; echo "rc=$?"' },
+              { stdout = 'capture', timeoutMs = 10000 }))
+            assert(string.find(sibling.stdout, 'rc=', 1, true) and not string.find(sibling.stdout, 's3cr3t', 1, true), sibling.stdout)
+            "#,
+        )
+        .unwrap();
+}
+
+/// The same through a started child, and the refusals: every one is raised before anything starts.
+#[cfg(unix)]
+#[test]
+fn a_started_child_takes_a_secret_and_malformed_ones_start_nothing() {
+    let runtime = runtime_granting(&[SPAWN_CAPABILITY], Limits::default());
+    runtime
+        .exec(
+            r#"
+            local child = assert(process.start('sh', { '-c', 'cat <&"$TOKEN_FD"' },
+              { secret = { env = 'TOKEN_FD', data = 'handle-secret' }, stdout = 'pipe', timeoutMs = 10000 }))
+            local text = ''
+            while true do
+              local chunk, message, kind = child:readStdout(4096)
+              if chunk then text = text .. chunk
+              elseif kind == 'wouldBlock' then process.sleep(0.005)
+              elseif message then error(message)
+              else break end
+            end
+            assert(text == 'handle-secret', text)
+            assert(assert(child:wait(5000)).success)
+            child:close()
+
+            local marker = '/tmp/l3i-secret-test-must-not-exist-' .. tostring(os.clock())
+            local refused = {
+              { env = 'TOKEN_FD' },
+              { data = 'x' },
+              { env = 'lower', data = 'x' },
+              { env = '1FD', data = 'x' },
+              { env = 'A=B', data = 'x' },
+              { env = '', data = 'x' },
+              { env = string.rep('A', 65), data = 'x' },
+              { env = 'TOKEN_FD', data = '' },
+              { env = 'TOKEN_FD', data = string.rep('x', 4097) },
+              { env = 'TOKEN_FD', data = 'x', extra = true },
+              { env = 'TOKEN_FD', data = 7 },
+              'not a table',
+            }
+            for index, secret in refused do
+              for _, start in { process.run, process.start } do
+                local ok, problem = pcall(start, 'sh', { '-c', 'touch ' .. marker }, { secret = secret, timeoutMs = 5000 })
+                assert(not ok, 'malformed secret ' .. index .. ' was accepted')
+                assert(not string.find(tostring(problem), 'x', 1, true) or string.find(tostring(problem), 'secret', 1, true), tostring(problem))
+              end
+            end
+            -- The variable the secret names cannot also be set by env.
+            assert(not pcall(process.run, 'true', {}, { env = { TOKEN_FD = '9' }, secret = { env = 'TOKEN_FD', data = 'x' } }))
+            -- The largest secret fits.
+            local largest = string.rep('k', 4096)
+            local fits = assert(process.run('sh', { '-c', 'cat <&"$FD" | wc -c' },
+              { secret = { env = 'FD', data = largest }, stdout = 'capture', timeoutMs = 10000 }))
+            assert(tonumber((string.gsub(fits.stdout, '%s', ''))) == 4096, fits.stdout)
+            -- Nothing a refusal named was started.
+            local probe = assert(process.run('sh', { '-c', 'test -e ' .. marker .. ' && echo there || echo absent' }, { stdout = 'capture' }))
+            assert(probe.stdout == 'absent\n', probe.stdout)
+            "#,
+        )
+        .unwrap();
+}
+
+/// A secret costs no descriptor once the child is started: a hundred of them leave none behind.
+#[cfg(target_os = "linux")]
+#[test]
+fn secrets_leave_no_descriptor_in_the_host() {
+    let runtime = runtime_granting(&[SPAWN_CAPABILITY], Limits::default());
+    let open = || std::fs::read_dir("/proc/self/fd").map_or(0, Iterator::count);
+    runtime
+        .exec("assert(process.run('true', {}, { secret = { env = 'FD', data = 'warm' }, timeoutMs = 5000 }).success)")
+        .unwrap();
+    let before = open();
+    runtime
+        .exec(
+            "for index = 1, 100 do \
+               assert(process.run('true', {}, { secret = { env = 'FD', data = 'secret' .. index }, timeoutMs = 5000 }).success) \
+               local missing = process.run('l3i-no-such-program', {}, { secret = { env = 'FD', data = 'x' }, timeoutMs = 5000 }) \
+               assert(missing == nil) \
+             end",
+        )
+        .unwrap();
+    // Other tests of this binary start children meanwhile, so allow for theirs: a leak would be 100.
+    assert!(open() < before + 50, "secrets left descriptors behind: {} against {before}", open());
+}

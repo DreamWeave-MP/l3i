@@ -553,7 +553,14 @@ pub(super) fn start(
     let mut command = build_command(program, &arguments, &spawn, inherit_environment, true)?;
     let stdin = if matches!(spawn.stdin, Feed::Pipe) { Stdio::piped() } else { Stdio::null() };
     command.stdin(stdin).stdout(spawn.stdout.stdio()).stderr(spawn.stderr.stdio());
-    let mut child = match command.spawn() {
+    // The parent's end of the secret's pipe, held only until the child has been started.
+    let channel = match spawn.secret.as_ref().map(|secret| super::secret::attach(&mut command, secret)).transpose() {
+        Ok(channel) => channel,
+        Err(error) => return Ok(Outcome::Failed(super::secret_failed("dream.process.start", &error))),
+    };
+    let spawned = command.spawn();
+    drop(channel);
+    let mut child = match spawned {
         Ok(child) => child,
         Err(error) => {
             let message = format!("dream.process.start: {name}: {error}");

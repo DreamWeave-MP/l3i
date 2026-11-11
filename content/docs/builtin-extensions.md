@@ -1896,9 +1896,44 @@ and a child that reads the terminal is stopped by it; start what needs the termi
 A host that ignores `SIGCHLD`, or reaps children itself, takes a child's exit status first. `wait`
 then fails, saying so, and `kill`, `close` and the timer signal nothing.
 
-Nothing here passes a secret or credential to a child: stdin carries only what the script writes,
-and no inherited file descriptor is used for that. A child started without the environment
-capability gets the same environment `run` gives it.
+A child started without the environment capability gets the same environment `run` gives it.
+
+### A secret for a child
+
+A child's arguments are in every process listing, its environment is copied to everything it
+starts, and a file is a file: none of them is a place for a credential. `run` and `start` take
+`secret = { env = NAME, data = bytes }` instead:
+
+```luau
+local result = process.run('git', { 'fetch', '--quiet', 'origin' }, {
+    secret = { env = 'APP_TOKEN_FD', data = token },
+    timeoutMs = 60000,
+})
+```
+
+The bytes are written into a pipe nobody else has, and its write end is closed. The child
+inherits the read end; the variable named by `env` holds the **number of that descriptor**, never
+the bytes. Whoever reads the descriptor first gets the secret and then end of file: the child, or
+a helper it starts (a credential helper, say), which inherits the descriptor in its turn. So the
+secret is in no argument, no environment value and no file, and once read it is in no pipe.
+
+| | |
+|---|---|
+| `env` | A variable name of capitals, digits and underscores, at most 64 bytes, not starting with a digit. Naming one that `env` also sets raises |
+| `data` | A string or a buffer of 1 to 4096 bytes: what every supported system's pipe takes in one write that cannot wait |
+
+Anything else raises before the child starts. Only this child inherits the descriptor: both ends
+are close-on-exec from the moment they exist (atomically on Linux, Android and FreeBSD; on macOS
+there is a moment between making the pipe and marking it, before the secret is written, in which a
+child another thread starts would inherit the still empty pipe and could read the secret from it
+later), and the flag is cleared in this child alone. The host closes its end when the child has
+been started and overwrites its copy of the bytes. A child that never reads the descriptor takes
+the secret with it when it and what it started have exited.
+
+The descriptor is the child's to pass on: everything it starts inherits it unless the child
+closes it, so give a secret only to a program whose children you would also give it to. On
+systems other than Unix there is no descriptor to inherit by number, and a call with `secret`
+answers `nil, message, "unsupported"`.
 
 ```luau
 local process = require('@dream/process')
