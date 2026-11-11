@@ -1521,3 +1521,190 @@ fn a_secret_reaches_a_windows_child_through_an_inherited_handle() {
         )
         .unwrap();
 }
+
+/// Git's own answer to "is there a git here": the tests below are skipped without one.
+#[cfg(unix)]
+fn git_is_installed() -> bool {
+    std::process::Command::new("git")
+        .arg("--version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+/// What the Git tests share: the helper Git is told to run, the environment it runs in, and the
+/// description of the credential it is asked for. The helper is a shell function, as Git's
+/// documentation describes one; Git starts it, so it is a grandchild of this process. It answers
+/// `get` with what it reads from the descriptor named in `L3I_GIT_TOKEN_FD`, and nothing when
+/// that is empty. On its standard error it then lists what a credential must not be in: its own
+/// environment, and its own and Git's command lines.
+#[cfg(unix)]
+const GIT_FIXTURE: &str = r#"
+local Token = 'ghs_SYNTHETIC0TOKEN0FOR0TESTS0ONLY0ZZ9'
+local Helper = [=[!f() { test "$1" = get || exit 0; token=$(cat "/dev/fd/$L3I_GIT_TOKEN_FD"); test -n "$token" || exit 1; printf 'username=x-access-token\npassword=%s\n' "$token"; { env; cat /proc/$$/cmdline /proc/$PPID/cmdline 2>/dev/null | tr '\0' ' '; } >&2; }; f]=]
+local Environment = { GIT_CONFIG_NOSYSTEM = '1', GIT_CONFIG_GLOBAL = '/dev/null', GIT_TERMINAL_PROMPT = '0', HOME = '/nonexistent' }
+local Asked = 'protocol=https\nhost=example.invalid\n\n'
+local function arguments(helper)
+  -- The first clears any helper configured elsewhere; nothing in these arguments is the token.
+  return { '-c', 'credential.helper=', '-c', 'credential.helper=' .. helper, 'credential', 'fill' }
+end
+"#;
+
+/// A real Git, asked for a credential, gets the token from a helper it starts itself: through
+/// `process.run`, with the token in no argument and no environment, once.
+#[cfg(unix)]
+#[test]
+fn git_reads_a_token_through_its_credential_helper_and_only_once() {
+    if !git_is_installed() {
+        eprintln!("skipped: no git");
+        return;
+    }
+    // The spawn capability and nothing else: a secret needs no grant of its own.
+    let runtime = runtime_granting(&[SPAWN_CAPABILITY], Limits::default());
+    runtime
+        .exec(&format!(
+            r#"{GIT_FIXTURE}
+            local result = assert(process.run('git', arguments(Helper), {{
+              stdin = Asked, stdout = 'capture', stderr = 'capture', env = Environment, timeoutMs = 30000,
+              secret = {{ env = 'L3I_GIT_TOKEN_FD', data = Token }},
+            }}))
+            assert(result.success, 'git credential fill failed: ' .. tostring(result.stderr))
+            -- Git prints the credential it was given: that it holds the token proves the helper read it.
+            assert(string.find(result.stdout, 'password=' .. Token, 1, true), result.stdout)
+            assert(string.find(result.stdout, 'username=x-access-token', 1, true), result.stdout)
+            -- The helper's environment, its command line and Git's: the variable is there, the token is not.
+            assert(string.find(result.stderr, 'L3I_GIT_TOKEN_FD=', 1, true), 'the helper did not report its environment')
+            assert(not string.find(result.stderr, 'SYNTHETIC', 1, true), 'the token is in an environment or a command line')
+
+            -- One secret is one read. A second request in the same call finds the descriptor at end
+            -- of file: the helper answers nothing, Git may not prompt, and the request fails.
+            local twice = assert(process.run('sh', {{ '-c',
+              'printf "protocol=https\nhost=example.invalid\n\n" | git "$@"; echo "first=$?"; '
+                .. 'printf "protocol=https\nhost=example.invalid\n\n" | git "$@"; echo "second=$?"',
+              'sh', table.unpack(arguments(Helper)) }}, {{
+              stdout = 'capture', stderr = 'null', env = Environment, timeoutMs = 30000,
+              secret = {{ env = 'L3I_GIT_TOKEN_FD', data = Token }},
+            }}))
+            local _, passwords = string.gsub(twice.stdout, 'password=' .. Token, '')
+            assert(passwords == 1, 'the token was given out ' .. passwords .. ' times: ' .. twice.stdout)
+            assert(string.find(twice.stdout, 'first=0', 1, true), twice.stdout)
+            assert(string.find(twice.stdout, 'second=', 1, true) and not string.find(twice.stdout, 'second=0', 1, true), twice.stdout)
+
+            -- A retry is a new call with a new secret, and it is served.
+            local again = assert(process.run('git', arguments(Helper), {{
+              stdin = Asked, stdout = 'capture', stderr = 'null', env = Environment, timeoutMs = 30000,
+              secret = {{ env = 'L3I_GIT_TOKEN_FD', data = Token .. '-second' }},
+            }}))
+            assert(string.find(again.stdout, 'password=' .. Token .. '-second', 1, true), again.stdout)
+
+            -- Without a secret the same helper has nothing to read and Git gets no credential.
+            local without = assert(process.run('git', arguments(Helper), {{
+              stdin = Asked, stdout = 'capture', stderr = 'null', env = Environment, timeoutMs = 30000,
+            }}))
+            assert(not without.success and not string.find(tostring(without.stdout), 'password=', 1, true))
+            "#
+        ))
+        .unwrap();
+}
+
+/// The same through a started Git, fed and read without blocking.
+#[cfg(unix)]
+#[test]
+fn a_started_git_reads_a_token_through_its_credential_helper() {
+    if !git_is_installed() {
+        eprintln!("skipped: no git");
+        return;
+    }
+    let runtime = runtime_granting(&[SPAWN_CAPABILITY], Limits::default());
+    runtime
+        .exec(&format!(
+            r"{GIT_FIXTURE}
+            local child = assert(process.start('git', arguments(Helper), {{
+              stdin = 'pipe', stdout = 'pipe', stderr = 'pipe', env = Environment, timeoutMs = 30000,
+              secret = {{ env = 'L3I_GIT_TOKEN_FD', data = Token }},
+            }}))
+            assert(child:write(Asked) == #Asked)
+            child:closeStdin()
+            local output, errors = '', ''
+            local open = 2
+            while open > 0 do
+              open = 0
+              for _, stream in {{ 'readStdout', 'readStderr' }} do
+                local chunk, message, kind = child[stream](child, 4096)
+                if chunk then
+                  if stream == 'readStdout' then output = output .. chunk else errors = errors .. chunk end
+                  open += 1
+                elseif kind == 'wouldBlock' then
+                  open += 1
+                elseif message then
+                  error(message)
+                end
+              end
+              process.sleep(0.002)
+            end
+            local status = assert(child:wait(10000))
+            child:close()
+            assert(status.success, errors)
+            assert(string.find(output, 'password=' .. Token, 1, true), output)
+            assert(not string.find(errors, 'SYNTHETIC', 1, true), 'the token is in an environment or a command line')
+            "
+        ))
+        .unwrap();
+}
+
+/// A helper that never answers: the call ends at its limit, Git and the helper it started are
+/// gone, and the host holds no descriptor of the secret's pipe.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_git_whose_helper_hangs_is_stopped_at_its_limit_and_leaves_nothing() {
+    if !git_is_installed() {
+        eprintln!("skipped: no git");
+        return;
+    }
+    let descriptors = || std::fs::read_dir("/proc/self/fd").map_or(0, Iterator::count);
+    let helpers = || {
+        // Anchored to the helper's whole command line, so it matches nothing that only mentions it.
+        std::process::Command::new("pgrep")
+            .args(["-f", r"^sleep 47\.1173$"])
+            .output()
+            .map_or(0, |output| String::from_utf8_lossy(&output.stdout).lines().count())
+    };
+    let runtime = runtime_granting(&[SPAWN_CAPABILITY], Limits::default());
+    runtime
+        .exec("assert(process.run('true', {}, { secret = { env = 'FD', data = 'warm' }, timeoutMs = 5000 }).success)")
+        .unwrap();
+    let before = descriptors();
+    runtime
+        .exec(&format!(
+            r"{GIT_FIXTURE}
+            local started = os.clock()
+            -- The helper never reads the descriptor and never answers.
+            local result, message, kind = process.run('git', arguments('!f() {{ sleep 47.1173; }}; f'), {{
+              stdin = Asked, stdout = 'capture', stderr = 'capture', env = Environment, timeoutMs = 400,
+              secret = {{ env = 'L3I_GIT_TOKEN_FD', data = Token }},
+            }})
+            assert(result == nil and kind == 'timeout', tostring(kind))
+            assert(not string.find(tostring(message), 'SYNTHETIC', 1, true), 'the failure repeats the token')
+            assert(os.clock() - started < 20, 'the limit did not end the call')
+
+            -- The same through a handle that is closed while the helper still hangs.
+            local child = assert(process.start('git', arguments('!f() {{ sleep 47.1173; }}; f'), {{
+              stdin = 'pipe', stdout = 'pipe', stderr = 'null', env = Environment,
+              secret = {{ env = 'L3I_GIT_TOKEN_FD', data = Token }},
+            }}))
+            child:write(Asked)
+            child:closeStdin()
+            process.sleep(0.2)
+            child:close()
+            "
+        ))
+        .unwrap();
+    let until = Instant::now() + Duration::from_secs(5);
+    while helpers() > 0 && Instant::now() < until {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(helpers(), 0, "a helper Git started outlived the call that was stopped");
+    // Other tests of this binary start children meanwhile, so allow for theirs.
+    assert!(descriptors() < before + 20, "descriptors were left behind: {} against {before}", descriptors());
+}

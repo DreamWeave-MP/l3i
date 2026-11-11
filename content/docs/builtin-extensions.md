@@ -1942,6 +1942,36 @@ does not receive the handle unless that is turned off for the call
 inheritable handle Git has. Other launchers restrict inheritance the same way. Where that is not
 wanted, make the program that needs the secret the direct child.
 
+A secret needs no capability of its own: `process.spawn` is what starts a child, with a secret
+or without one, and a runtime without it can pass none. Nothing about the existing capabilities
+changes, and a child is given no more of the host's environment for having a secret.
+
+**One secret, one read, one attempt.** The descriptor gives the bytes to its first reader and end
+of file to every later one, so a program that asks for the credential a second time in the same
+call (after a redirect, or because the first answer was rejected) gets nothing. A helper must
+treat an empty read as "no credential" and say so, never invent or cache one; the program then
+fails, and the caller sees that as an ordinary failed call. **A retry is a new call with a new
+`secret`**: the caller, which holds the credential, decides whether to try again, and it can
+mint a fresh token for it. Nothing here retries on its own, and nothing remembers a secret
+between calls.
+
+With Git, the helper is a credential helper, which Git starts itself:
+
+```luau
+-- The helper answers `get` from the descriptor and nothing else. No part of this is the token.
+local helper = [[!f() { test "$1" = get || exit 0; token=$(cat "/dev/fd/$APP_TOKEN_FD"); ]]
+    .. [[test -n "$token" || exit 1; printf 'username=x-access-token\npassword=%s\n' "$token"; }; f]]
+local result, message, kind = process.run('git',
+    { '-c', 'credential.helper=', '-c', 'credential.helper=' .. helper, 'fetch', '--quiet', 'origin' },
+    { secret = { env = 'APP_TOKEN_FD', data = token }, timeoutMs = 60000,
+      env = { GIT_TERMINAL_PROMPT = '0', GIT_CONFIG_NOSYSTEM = '1', GIT_CONFIG_GLOBAL = '/dev/null' } })
+```
+
+The first `credential.helper=` clears any helper configured elsewhere, so the token is offered to
+this one only and stored by none; `GIT_TERMINAL_PROMPT=0` makes a missing credential a failure
+instead of a prompt. If the helper hangs, `timeoutMs` ends the call and the process group, the
+helper with it.
+
 What this does **not** do:
 
 - **It does not hide the secret from other processes of the same user.** On Linux such a process
