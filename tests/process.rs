@@ -570,6 +570,53 @@ fn bounds_options_are_validated() {
         .unwrap();
 }
 
+/// A limit no clock can hold is refused while the options are read, before any child starts. Each
+/// refused call would create a marker file if it ran; the marker must not exist afterwards.
+#[cfg(unix)]
+#[test]
+fn an_unrepresentable_limit_is_refused_before_any_child_starts() {
+    let marker = std::env::temp_dir().join(format!("l3i-process-refused-{}", std::process::id()));
+    let _ = std::fs::remove_file(&marker);
+    let runtime = runtime_granting(&[SPAWN_CAPABILITY], Limits::default());
+    runtime
+        .exec(&format!(
+            r#"local touch = {{ '-c', 'touch "$1"', 'sh', '{}' }}
+               local timeouts = {{ 1e300, 2^63, 2^53, 86400001, 1 / 0, 0 / 0, -1, 1.5 }}
+               for _, timeout in ipairs(timeouts) do
+                   local ok, err = pcall(process.run, 'sh', touch, {{ timeoutMs = timeout }})
+                   assert(not ok and err:find('timeoutMs must be', 1, true), tostring(err))
+                   ok, err = pcall(process.start, 'sh', touch, {{ timeoutMs = timeout }})
+                   assert(not ok and err:find('timeoutMs must be', 1, true), tostring(err))
+               end
+               for _, ceiling in ipairs({{ 2^53, 1e300 }}) do
+                   local ok, err = pcall(process.run, 'sh', touch, {{ stdout = 'capture', maxStdoutBytes = ceiling }})
+                   assert(not ok and err:find('maxStdoutBytes must be', 1, true), tostring(err))
+                   ok, err = pcall(process.start, 'sh', touch, {{ stdout = 'pipe', maxStdoutBytes = ceiling }})
+                   assert(not ok and err:find('maxStdoutBytes must be', 1, true), tostring(err))
+               end
+               process.sleep(0.2)"#,
+            marker.display()
+        ))
+        .unwrap();
+    assert!(!marker.exists(), "a refused child started anyway");
+}
+
+/// The longest timeout, a day, is accepted for a run and for a started child.
+#[cfg(unix)]
+#[test]
+fn the_longest_timeout_is_accepted() {
+    let runtime = runtime_granting(&[SPAWN_CAPABILITY], Limits::default());
+    runtime
+        .exec(
+            r"local result = assert(process.run('sh', { '-c', 'exit 3' }, { timeoutMs = 86400000 }))
+              assert(not result.success and result.code == 3)
+              local child = assert(process.start('sh', { '-c', 'exit 0' }, { timeoutMs = 86400000 }))
+              assert(assert(child:wait(5000)).success)
+              child:close()",
+        )
+        .unwrap();
+}
+
 /// Luau helpers the handle tests share: drain a stream to its end, failing on any real error, and
 /// pause between polls without waiting on the child.
 #[cfg(unix)]

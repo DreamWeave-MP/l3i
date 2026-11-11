@@ -66,6 +66,12 @@ pub const SPAWN_CAPABILITY: &str = "process.spawn";
 pub const ENVIRONMENT_CAPABILITY: &str = "process.environment";
 /// The capability `process.write` and `process.openStdin` need: the host's standard streams.
 pub const STDIO_CAPABILITY: &str = "process.stdio";
+/// The longest `timeoutMs` a child may be given: a day. A longer one is refused before the child
+/// starts, so no deadline computed from it can overflow the clock.
+pub const MAX_TIMEOUT_MS: u64 = 24 * 60 * 60 * 1000;
+/// The largest byte count an option may name: 2^53 - 1, the last whole number every Luau number
+/// holds exactly. A captured stream is held in memory, so no ceiling past that is ever reached.
+const MAX_BYTES: f64 = 9_007_199_254_740_991.0;
 
 const RUN_SIGNATURE: &str = "(program: string, args: { string }?, options: dream_process_RunOptions?) -> (dream_process_Result?, string?, dream_process_ErrorKind?)";
 const OPTIONS_TYPE: &str = "{ cwd: string?, env: { [string]: string }?, clearEnv: boolean?, stdin: (buffer | string)?, \
@@ -160,16 +166,21 @@ impl Bounds {
     }
 }
 
-/// A whole-number option of at least `least`, or nothing when it is absent.
-fn whole_number(context: &str, key: &str, value: Option<f64>, least: f64) -> Result<Option<u64>> {
-    let Some(value) = value else { return Ok(None) };
-    if !value.is_finite() || value.fract() != 0.0 || value < least {
+/// A finite whole number from `least` to `most`, as the integer it names. Anything else is refused
+/// here, before a child is started, so no later arithmetic sees a value it cannot represent.
+pub(super) fn bounded(context: &str, key: &str, value: f64, least: f64, most: f64) -> Result<u64> {
+    if !value.is_finite() || value.fract() != 0.0 || value < least || value > most {
         return Err(Error::runtime(format!(
-            "{context}: {key} must be a finite whole number of at least {least}, got {value}"
+            "{context}: {key} must be a finite whole number from {least} to {most}, got {value}"
         )));
     }
-    #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss, reason = "checked whole and at least 0 above")]
-    Ok(Some(value as u64))
+    #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss, reason = "checked whole and in range above")]
+    Ok(value as u64)
+}
+
+/// An optional whole-number option, bounded as [`bounded`] bounds it.
+fn whole_number(context: &str, key: &str, value: Option<f64>, least: f64, most: f64) -> Result<Option<u64>> {
+    value.map(|value| bounded(context, key, value, least, most)).transpose()
 }
 
 struct SpawnOptions {
@@ -237,11 +248,11 @@ impl SpawnOptions {
             })? {
                 spawn.env = env;
             }
-            let timeout = whole_number(context, "timeoutMs", o.optional("timeoutMs")?, 1.0)?;
+            let timeout = whole_number(context, "timeoutMs", o.optional("timeoutMs")?, 1.0, MAX_TIMEOUT_MS as f64)?;
             spawn.bounds = Bounds {
                 timeout: timeout.map(Duration::from_millis),
-                stdout: whole_number(context, "maxStdoutBytes", o.optional("maxStdoutBytes")?, 0.0)?,
-                stderr: whole_number(context, "maxStderrBytes", o.optional("maxStderrBytes")?, 0.0)?,
+                stdout: whole_number(context, "maxStdoutBytes", o.optional("maxStdoutBytes")?, 0.0, MAX_BYTES)?,
+                stderr: whole_number(context, "maxStderrBytes", o.optional("maxStderrBytes")?, 0.0, MAX_BYTES)?,
             };
             for (key, ceiling, stream) in [
                 ("maxStdoutBytes", spawn.bounds.stdout, spawn.stdout),
@@ -512,9 +523,11 @@ fn drain(
 /// `group` the kill reaches it.
 fn wait(call: &Call<'_>, child: &mut Child, bounds: &Bounds, capture: Capture, group: bool) -> std::io::Result<Ended> {
     let started = Instant::now();
-    // The deadline that comes first, and whether the child's own limit is the one it is.
-    let runtime = crate::runtime::watchdog_remaining(call).map(|remaining| (started + remaining, false));
-    let own = bounds.timeout.map(|timeout| (started + timeout, true));
+    // The span that ends first, measured from `started`, and whether the child's own limit is the
+    // one it is. Spans are compared with elapsed time, never added to an instant, so no limit can
+    // overflow the clock however large the runtime's or the child's is.
+    let runtime = crate::runtime::watchdog_remaining(call).map(|remaining| (remaining, false));
+    let own = bounds.timeout.map(|timeout| (timeout, true));
     let limit = match (runtime, own) {
         (Some(runtime), Some(own)) => Some(if own.0 < runtime.0 { own } else { runtime }),
         (runtime, own) => runtime.or(own),
@@ -534,9 +547,9 @@ fn wait(call: &Call<'_>, child: &mut Child, bounds: &Bounds, capture: Capture, g
                 return Err(error);
             }
         }
-        let now = Instant::now();
-        if let Some((at, by_timeout)) = limit
-            && now >= at
+        let elapsed = started.elapsed();
+        if let Some((span, by_timeout)) = limit
+            && elapsed >= span
         {
             stop(child, group);
             if by_timeout {
@@ -545,7 +558,7 @@ fn wait(call: &Call<'_>, child: &mut Child, bounds: &Bounds, capture: Capture, g
             crate::runtime::expire_if_due(call);
             return Ok(Ended::Expired);
         }
-        let nap = limit.map_or(pause, |(at, _)| pause.min(at - now));
+        let nap = limit.map_or(pause, |(span, _)| pause.min(span.saturating_sub(elapsed)));
         std::thread::sleep(nap);
         pause = (pause * 2).min(Duration::from_millis(20));
     };
@@ -558,9 +571,9 @@ fn wait(call: &Call<'_>, child: &mut Child, bounds: &Bounds, capture: Capture, g
         if readers.iter().all(|reader| reader.as_ref().is_none_or(JoinHandle::is_finished)) {
             break;
         }
-        let now = Instant::now();
-        if let Some((at, by_timeout)) = limit
-            && now >= at
+        let elapsed = started.elapsed();
+        if let Some((span, by_timeout)) = limit
+            && elapsed >= span
         {
             kill_tree(child, group);
             if by_timeout {
@@ -569,7 +582,7 @@ fn wait(call: &Call<'_>, child: &mut Child, bounds: &Bounds, capture: Capture, g
             crate::runtime::expire_if_due(call);
             return Ok(Ended::Expired);
         }
-        let nap = limit.map_or(pause, |(at, _)| pause.min(at - now));
+        let nap = limit.map_or(pause, |(span, _)| pause.min(span.saturating_sub(elapsed)));
         std::thread::sleep(nap);
         pause = (pause * 2).min(Duration::from_millis(20));
     }
@@ -784,7 +797,7 @@ impl Extension for ProcessExtension {
             .doc("The script's process and the ones it starts: run a program and wait for its exit code, environment variables, and the standard streams.")
             .installed("run")
             .signature(RUN_SIGNATURE)
-            .doc("Runs program with args (no shell), waits for it, and returns how it ended; needs the process.spawn capability. stdout and stderr are inherited unless captured or discarded; stdin is empty unless given. timeoutMs (at least 1) stops the child after that many milliseconds, and maxStdoutBytes or maxStderrBytes (at least 0, each for a captured stream) stops it once that stream passes its ceiling: the child is killed and reaped, its output discarded, and the failure is timeout or outputLimit. On Unix a bounded child runs in a process group of its own, which a limit kills whole; elsewhere only the child is killed.")
+            .doc("Runs program with args (no shell), waits for it, and returns how it ended; needs the process.spawn capability. stdout and stderr are inherited unless captured or discarded; stdin is empty unless given. timeoutMs (1 to 86400000, a day) stops the child after that many milliseconds, and maxStdoutBytes or maxStderrBytes (0 to 2^53 - 1, each for a captured stream) stops it once that stream passes its ceiling: the child is killed and reaped, its output discarded, and the failure is timeout or outputLimit. On Unix a bounded child runs in a process group of its own, which a limit kills whole; elsewhere only the child is killed.")
             .installed("start")
             .signature(START_SIGNATURE)
             .doc("Starts program with args (no shell) without waiting, and returns a process handle; needs the process.spawn capability, and fails like run for a program that cannot start. stdin is null unless \"pipe\", stdout and stderr are inherited unless \"pipe\" or \"null\". Reads, writes and wait never block except wait with a timeout. timeoutMs, maxStdoutBytes and maxStderrBytes are lifetime limits, as on run: passing one kills the child's process group (Unix) and later reads answer with the limit's kind. Closing the handle kills and reaps the child.")

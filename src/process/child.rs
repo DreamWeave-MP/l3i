@@ -23,7 +23,7 @@ use crate::runtime::shared::Resource;
 use crate::stack::{Scope, ValueView};
 use crate::userdata::Userdata;
 
-use super::{Feed, Mode, SpawnOptions, arguments, build_command, kill_group};
+use super::{Feed, MAX_BYTES, Mode, SpawnOptions, arguments, bounded, build_command, kill_group};
 
 /// Bytes a stream's buffer holds before its reader stops reading, so the child blocks on its pipe.
 pub const PIPE_BUFFER: usize = 64 * 1024;
@@ -221,17 +221,17 @@ impl Shared {
     /// Waits for the child to exit, for at most `timeout`. Answers its status, or nothing if it is
     /// still running.
     fn wait(&self, timeout: Duration) -> Option<ExitStatus> {
-        let deadline = Instant::now() + timeout;
+        let started = Instant::now();
         let mut state = self.lock();
         loop {
             if let Some(status) = state.reap() {
                 return Some(status);
             }
-            let now = Instant::now();
-            if now >= deadline {
+            let elapsed = started.elapsed();
+            if elapsed >= timeout {
                 return None;
             }
-            state = self.sleep(state, (deadline - now).min(POLL));
+            state = self.sleep(state, timeout.saturating_sub(elapsed).min(POLL));
         }
     }
 
@@ -345,16 +345,16 @@ fn write_loop(shared: &Shared, mut pipe: ChildStdin) {
     }
 }
 
-/// Kills the child at `at` if it is still running, with its group, and marks the kill a timeout.
-/// A child that exited first is not killed, though its group still is, at the same deadline.
-fn timer_loop(shared: &Shared, at: Instant) {
+/// Kills the child `timeout` after `started`, with its group, and marks the kill a timeout. A child
+/// that exited first is not killed, though its group still is, at the same deadline.
+fn timer_loop(shared: &Shared, started: Instant, timeout: Duration) {
     let mut state = shared.lock();
     loop {
         if state.closed {
             return;
         }
-        let now = Instant::now();
-        if now >= at {
+        let elapsed = started.elapsed();
+        if elapsed >= timeout {
             if state.reap().is_none() {
                 state.stop_for("timeout");
             } else {
@@ -363,7 +363,7 @@ fn timer_loop(shared: &Shared, at: Instant) {
             shared.changed.notify_all();
             return;
         }
-        state = shared.sleep(state, at - now);
+        state = shared.sleep(state, timeout.saturating_sub(elapsed));
     }
 }
 
@@ -390,8 +390,8 @@ fn launch(
         spawn_thread("l3i-process-stdin", shared, move |shared| write_loop(shared, pipe))?;
     }
     if let Some(timeout) = timeout {
-        let at = Instant::now() + timeout;
-        spawn_thread("l3i-process-timer", shared, move |shared| timer_loop(shared, at))?;
+        let started = Instant::now();
+        spawn_thread("l3i-process-timer", shared, move |shared| timer_loop(shared, started, timeout))?;
     }
     Ok(())
 }
@@ -481,17 +481,10 @@ impl Process {
     }
 }
 
-/// `maxBytes` for a read: a finite whole number of at least 1.
+/// `maxBytes` for a read: a whole number from 1 to 2^53 - 1.
 fn read_limit(value: f64) -> Result<usize> {
-    if !value.is_finite() || value.fract() != 0.0 || value < 1.0 {
-        return Err(Error::runtime("dream.process.Child: maxBytes must be a finite whole number of at least 1"));
-    }
-    #[expect(
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        reason = "a whole number at least 1, checked above"
-    )]
-    Ok(value as usize)
+    let count = bounded("dream.process.Child", "maxBytes", value, 1.0, MAX_BYTES)?;
+    Ok(usize::try_from(count).unwrap_or(usize::MAX))
 }
 
 /// The status a finished child answers, as `run` answers it.
