@@ -146,6 +146,11 @@ name = "process_leaks"
 path = "tests/process_leaks.rs"
 required-features = ["process"]
 
+[[test]]
+name = "process_secret_leaks"
+path = "tests/process_secret_leaks.rs"
+required-features = ["process"]
+
 [[example]]
 name = "tcp_http_server"
 required-features = ["tcp"]
