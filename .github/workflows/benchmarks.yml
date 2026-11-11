@@ -1,0 +1,37 @@
+name: Benchmarks
+
+# Run by hand from the Actions tab: benchmarks are never part of pull request validation, and the
+# test jobs never run them. Most of l3i's benches are behind features, so every feature is on unless
+# unticked.
+on:
+  workflow_dispatch:
+    inputs:
+      os:
+        type: choice
+        description: "The runner to measure on"
+        default: ubuntu-24.04
+        options:
+          - ubuntu-24.04
+          - macos-latest
+          - macos-26-intel
+          - windows-2025-vs2026
+      filter:
+        type: string
+        description: "Run only the benchmarks whose ID contains this (cargo bench -- <filter>)"
+        required: false
+        default: ''
+      all_features:
+        type: boolean
+        description: "Benchmark with every feature enabled"
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  benchmarks:
+    uses: DreamWeave-MP/StroggForge/.github/workflows/benchmarks.yml@v71
+    with:
+      os: ${{ inputs.os }}
+      filter: ${{ inputs.filter }}
+      all_features: ${{ inputs.all_features }}

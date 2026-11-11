@@ -1,0 +1,11 @@
+# This site as a jess workspace: no package of its own (the repository root is the Rust crate,
+# built by Cargo), and the DreamWeave Mod Template as the tool that builds the site and records the
+# crate's releases, pinned exactly in jess.lock and run as
+# `jess workspace run --trusted dreamweave-build`. Move the version here to update the whole site.
+manifest_version = 1
+
+[workspace]
+members = []
+
+[dev-dependencies]
+"org.dreamweave.mod-template" = "0.4"
