@@ -1,7 +1,12 @@
 //! The child a `process.start` handle owns: its stdout and stderr read by background threads into
 //! bounded buffers, its stdin written by a background thread from a bounded queue, and a timer
 //! that kills it at `timeoutMs`. The script polls with non-blocking calls; only `wait` with a
-//! timeout waits, and never past the runtime's execution time limit.
+//! timeout waits, and never past the runtime's execution time limit. That wait blocks the calling
+//! thread, so a cooperative caller, such as a frame-driven host, polls with `wait(0)` instead.
+//!
+//! The child's live slot is held until it is reaped (see `State::mark_reaped`), and the threads
+//! are bounded by the live-child limit only as far as that goes: a descendant that outlives its
+//! child and keeps a pipe open keeps one reader thread until the pipe closes.
 //!
 //! This plumbing is meant to move onto the common I/O readiness substrate of RFC #11 later. RFC #11
 //! is not implemented here, and nothing above this file depends on threads being how it is done.
@@ -605,14 +610,14 @@ pub(super) fn describe(d: &mut ExtensionDescriptor) {
             }
         })
         .signature("(self, timeoutMs: number?): ({ success: boolean, code: number?, signal: number? }?, string?, dream_process_ErrorKind?)")
-        .doc("The child's exit status once it has exited, { success, code?, signal? }. With timeoutMs (at most 60000) it waits that long, capped by the execution time limit; without it, or at 0, it only looks. Still running is nil, message, wouldBlock.");
+        .doc("The child's exit status once it has exited, { success, code?, signal? }. With timeoutMs (at most 60000) it waits that long, capped by the execution time limit; without it, or at 0, it only looks. Still running is nil, message, wouldBlock. A wait with a timeout blocks the calling thread; a cooperative caller polls with wait() or wait(0).");
     handle
         .method("kill", |process: &Process| -> Result<bool> {
             process.open()?.kill();
             Ok(true)
         })
         .signature("(self): boolean")
-        .doc("Kills the child's process group (Unix) or the child, without waiting; idempotent. It does not reap: wait or close does.");
+        .doc("Kills the child's process group (Unix) or the child, without waiting; idempotent. It does not reap: wait or close does. Once the child is reaped nothing is signalled.");
     handle
         .method("close", |process: &Process| -> Result<()> {
             process.0.0.close();

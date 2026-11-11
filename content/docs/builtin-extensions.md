@@ -1804,18 +1804,23 @@ discards whatever it wrote, and answers `nil, message, kind`:
 
 | Option | Limit | Kind on failure |
 |---|---|---|
-| `timeoutMs` | A whole number of at least 1: the child may run this many milliseconds | `"timeout"` |
-| `maxStdoutBytes` | A whole number of at least 0: the most bytes a captured `stdout` may produce | `"outputLimit"` |
-| `maxStderrBytes` | A whole number of at least 0: the most bytes a captured `stderr` may produce | `"outputLimit"` |
+| `timeoutMs` | A whole number from 1 to 86,400,000 (a day): the child may run this many milliseconds | `"timeout"` |
+| `maxStdoutBytes` | A whole number from 0 to 2^53 - 1: the most bytes a captured `stdout` may produce | `"outputLimit"` |
+| `maxStderrBytes` | A whole number from 0 to 2^53 - 1: the most bytes a captured `stderr` may produce | `"outputLimit"` |
 
-A non-finite, fractional or negative value raises, as does a ceiling for a stream that is not
-`"capture"`. The ceilings are separate: each applies to its own stream only. Reading stops as soon
-as a ceiling is crossed, so memory stays within the ceiling however much the child writes. Without
-any of these options `run` behaves as before.
+A value that is not a finite whole number in its range raises, as does a ceiling for a stream that
+is not `"capture"`. The raise comes before the child starts, so a refused call starts nothing. The
+ceilings are separate: each applies to its own stream only. Reading stops as soon as a ceiling is
+crossed, so memory stays within the ceiling however much the child writes. Without any of these
+options `run` behaves as before.
 
-On Unix a bounded child starts in a process group of its own, and a limit kills the whole group, so
-a process it started cannot hold the pipes open past the limit. Elsewhere only the child is killed.
-An unbounded run does not get a group of its own, so it keeps receiving the terminal's signals.
+On Unix a bounded child starts in a process group of its own, and a limit signals that whole group,
+so a process it started and kept in the group cannot hold the pipes open past the limit. Termination
+covers the child's process group and nothing more: a descendant that left the group (with `setsid`
+or `setpgid`) is not stopped, and may hold an inherited pipe open; the call stops waiting for that
+pipe at its limit. Elsewhere only the child is killed. An unbounded run does not get a group of its
+own, so it keeps receiving the terminal's signals. A run holds one of the runtime's live-child
+slots while it runs (see [Started processes](#started-processes)).
 
 ### Started processes
 
@@ -1838,16 +1843,30 @@ An unbounded run does not get a group of its own, so it keeps receiving the term
 | `close()` | Kills the child if it still runs, reaps it and releases its pipes. Idempotent; every other method raises afterwards |
 
 Reads and writes never block. `wait` is the only method that can wait, and only when given a
-timeout. Each piped output keeps at most 64 KiB buffered: when that is full its reader stops, so
-an unread child blocks on its own pipe instead of growing the host's memory. The stdin queue holds
-1 MiB of bytes not yet written, and `write` answers `wouldBlock` beyond that.
+timeout. A `wait` with a timeout blocks the calling thread for up to that long, so a cooperative
+caller, such as a frame-driven host, polls with `wait()` or `wait(0)` instead. Each piped output
+keeps at most 64 KiB buffered: when that is full its reader stops, so an unread child blocks on its
+own pipe instead of growing the host's memory. The stdin queue holds 1 MiB of bytes not yet written,
+and `write` answers `wouldBlock` beyond that.
 
 When a limit passes, the child is killed and reaped, its buffered output is discarded, and later
 reads or writes answer with the limit's kind: `"timeout"` or `"outputLimit"`. `wait` then reports the
 child as ended by signal. Killing the process group reaches what the child started too, on Unix
-only; elsewhere only the child is killed. Closing the handle, collecting it, or shutting the runtime
-down does what `close` does, so no child outlives its handle. A handle with no `close` still runs
+only, and only while the child is unreaped: the group is signalled before the child is reaped, and
+once `wait` has reaped the child, no timer, `kill` or `close` signals that group again. A descendant
+that outlived a reaped child is therefore not stopped by a later `close`, and one that left the
+group is never stopped. Closing the handle, collecting it, or shutting the runtime down does what
+`close` does, so no direct child outlives its handle. A handle with no `close` still runs
 its child until it is collected.
+
+Each started child, and each `run` while it runs, holds one of the runtime's live-child slots. The
+default is 32. A host sets it with `ProcessExtension::with_max_children(n)` (1 to 1024), and a
+script cannot change it. A child is live from its spawn until it is reaped: by `wait` once it has
+exited, by a limit that kills it, by `close`, or when its handle is collected or the runtime shuts
+down. A start past the limit raises, and a start that fails to spawn holds no slot. The limit is per
+runtime: each runtime has its own. The reader and writer threads of a handle are an interim design,
+pending the readiness substrate of RFC #11; concurrency is bounded by the live-child limit, and a
+reader that a descendant keeps on a pipe after its child is reaped stays until that pipe closes.
 
 Nothing here passes a secret or credential to a child: stdin carries only what the script writes,
 and no inherited file descriptor is used for that. A child started without the environment
@@ -1932,7 +1951,9 @@ even while a script still holds the handle, whose reads then report a closed con
 A host can add its own check with `ProcessExtension.with_input_policy(policy)`, an
 `Rc<dyn process::input::Policy>` asked about `Open` and `Wait` at every such call. What it
 refuses raises in the caller. It runs after the `process.stdio` gate, which it cannot bypass;
-reads and `close()` are never checked.
+reads and `close()` are never checked. The live-child limit is set the same way, and the two
+combine: `ProcessExtension.with_max_children(8).with_input_policy(policy)`. Both return a
+`process::ProcessConfig`, which is itself an extension.
 
 Windows console reads use Rust's standard
 input behavior (Unicode console input); redirected pipes preserve binary bytes on all

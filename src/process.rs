@@ -8,7 +8,13 @@
 //!   variables `env` names. The wait never outlasts the runtime's execution time limit: a child
 //!   still running at the deadline is killed and reaped. `timeoutMs` bounds the child's run, and
 //!   `maxStdoutBytes` and `maxStderrBytes` bound what a captured stream may produce; passing either
-//!   kills the child (on Unix, with every process it started) and discards what it wrote.
+//!   kills the child and, on Unix, its process group, and discards what it wrote. Termination covers
+//!   that group only: a descendant that left it (`setsid`, `setpgid`) is not stopped, and may hold a
+//!   captured pipe open until the call stops waiting for the pipe at the limit.
+//! - `process.start(program, args, options)`: the same program and options, without waiting: a handle
+//!   with nonblocking reads and writes, `wait` (which blocks only with a timeout) and `close`. A run
+//!   and a started child both count against the runtime's live-child limit, which the host sets with
+//!   `ProcessExtension::with_max_children` (32 by default, at most 1024; scripts cannot change it).
 //! - `process.env(name)`: an environment variable, with the `process.environment` capability
 //!   ([`ENVIRONMENT_CAPABILITY`]).
 //! - `process.knownFolder(name)`: the user's `home`, or on Windows the `documents` known folder,
@@ -913,10 +919,10 @@ impl Extension for ProcessExtension {
             .doc("The script's process and the ones it starts: run a program and wait for its exit code, environment variables, and the standard streams.")
             .installed("run")
             .signature(RUN_SIGNATURE)
-            .doc("Runs program with args (no shell), waits for it, and returns how it ended; needs the process.spawn capability. stdout and stderr are inherited unless captured or discarded; stdin is empty unless given. timeoutMs (1 to 86400000, a day) stops the child after that many milliseconds, and maxStdoutBytes or maxStderrBytes (0 to 2^53 - 1, each for a captured stream) stops it once that stream passes its ceiling: the child is killed and reaped, its output discarded, and the failure is timeout or outputLimit. On Unix a bounded child runs in a process group of its own, which a limit kills whole; elsewhere only the child is killed.")
+            .doc("Runs program with args (no shell), waits for it, and returns how it ended; needs the process.spawn capability. stdout and stderr are inherited unless captured or discarded; stdin is empty unless given. timeoutMs (1 to 86400000, a day) stops the child after that many milliseconds, and maxStdoutBytes or maxStderrBytes (0 to 2^53 - 1, each for a captured stream) stops it once that stream passes its ceiling: the child is killed and reaped, its output discarded, and the failure is timeout or outputLimit. On Unix a bounded child runs in a process group of its own, which a limit signals whole (a descendant that left the group is not stopped); elsewhere only the child is killed. A run counts against the live-child limit while it runs.")
             .installed("start")
             .signature(START_SIGNATURE)
-            .doc("Starts program with args (no shell) without waiting, and returns a process handle; needs the process.spawn capability, and fails like run for a program that cannot start. stdin is null unless \"pipe\", stdout and stderr are inherited unless \"pipe\" or \"null\". Reads, writes and wait never block except wait with a timeout. timeoutMs, maxStdoutBytes and maxStderrBytes are lifetime limits, as on run: passing one kills the child's process group (Unix) and later reads answer with the limit's kind. Closing the handle kills and reaps the child.")
+            .doc("Starts program with args (no shell) without waiting, and returns a process handle; needs the process.spawn capability, and fails like run for a program that cannot start. stdin is null unless \"pipe\", stdout and stderr are inherited unless \"pipe\" or \"null\". Reads, writes and wait never block except wait with a timeout. timeoutMs, maxStdoutBytes and maxStderrBytes are lifetime limits, as on run: passing one kills the child's process group (Unix) and later reads answer with the limit's kind. Closing the handle kills and reaps the child. A started child counts against the live-child limit until it is reaped.")
             .installed("env")
             .signature("(name: string) -> string?")
             .doc("The environment variable name, or nil when it is unset; needs the process.environment capability.")
