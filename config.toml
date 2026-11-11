@@ -1,5 +1,6 @@
 # Site configuration. This file is about the website; facts about the crate live in
-# content/home/mod.toml. Zola reads this file; so does CI.
+# content/home/mod.toml. The DreamWeave Mod Template's site generator reads it, run through jess
+# from the template version jess-workspace.toml asks for and jess.lock pins.
 
 # Where the site lives. On GitHub Pages the workflow substitutes the real Pages URL, so this
 # value matters for local previews.
@@ -59,6 +60,7 @@ menu_items = [
     { name = "Extensions", url = "@/docs/extensions.md" },
     { name = "Rust API", url = "@/docs/api/_index.md" },
     { name = "Benchmarks", url = "@/docs/performance.md" },
+    { name = "Network", url = "@/network.md" },
 ]
 
 # DreamWeave's own page-view counter: this is DreamWeave's site.
