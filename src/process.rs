@@ -253,12 +253,9 @@ struct SpawnOptions {
     secret: Option<secret::Secret>,
 }
 
-/// Reads the `secret` option: `{ env = <variable name>, data = <string or buffer> }`.
-fn read_secret(
-    context: &str,
-    frame: &crate::stack::Frame<'_>,
-    table: crate::stack::TableView<'_>,
-) -> Result<secret::Secret> {
+/// Reads the `secret` option: `{ env = <variable name>, data = <string or buffer> }`. The option
+/// reader names the option in front of whatever this says.
+fn read_secret(frame: &crate::stack::Frame<'_>, table: crate::stack::TableView<'_>) -> Result<secret::Secret> {
     let mut env: Option<Vec<u8>> = None;
     // Held from the moment it is copied by the type that overwrites it when dropped, whatever is
     // refused below.
@@ -267,35 +264,38 @@ fn read_secret(
     table.for_each(frame, |_, key, value| {
         match key.read::<&[u8]>() {
             Ok(b"env") => {
-                let name =
-                    value.read::<&[u8]>().map_err(|_| Error::runtime(format!("{context}: secret.env is a string")))?;
+                let name = value.read::<&[u8]>().map_err(|_| Error::runtime("env is a string"))?;
                 env = Some(name.to_vec());
             }
             Ok(b"data") => {
-                let data = BytesView::from_view(value)
-                    .map_err(|_| Error::runtime(format!("{context}: secret.data is a string or a buffer")))?;
-                // SAFETY: copied out at once, with no call into Lua while the slice lives.
-                held.data = unsafe { data.bytes_unchecked() }.to_vec();
+                let data = BytesView::from_view(value).map_err(|_| Error::runtime("data is a string or a buffer"))?;
+                // SAFETY: looked at and copied at once, with no call into Lua while the slice lives.
+                let bytes = unsafe { data.bytes_unchecked() };
+                // Judged before it is copied: a secret that is refused for its size is never held.
+                if bytes.is_empty() || bytes.len() > secret::MAX_BYTES {
+                    return Err(Error::runtime(format!("data is 1 to {} bytes", secret::MAX_BYTES)));
+                }
+                held.data = bytes.to_vec();
                 given = true;
             }
-            _ => return Err(Error::runtime(format!("{context}: secret has only env and data"))),
+            _ => return Err(Error::runtime("only env and data are known")),
         }
         Ok(())
     })?;
     let Some(env) = env.filter(|_| given) else {
-        return Err(Error::runtime(format!("{context}: secret needs env and data")));
+        return Err(Error::runtime("env and data are both needed"));
     };
     let named = !env.is_empty()
         && env.len() <= 64
         && !env[0].is_ascii_digit()
         && env.iter().all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || *byte == b'_');
     if !named {
-        return Err(Error::runtime(format!(
-            "{context}: secret.env is a variable name of capitals, digits and underscores, at most 64 bytes"
-        )));
+        return Err(Error::runtime("env is a variable name of capitals, digits and underscores, at most 64 bytes"));
     }
-    if held.data.is_empty() || held.data.len() > secret::MAX_BYTES {
-        return Err(Error::runtime(format!("{context}: secret.data is 1 to {} bytes", secret::MAX_BYTES)));
+    // A number in one of these would not carry a secret, it would break how the child finds and
+    // loads programs; and `PATH` is set for the child by this module itself.
+    if env == b"PATH" || env.starts_with(b"LD_") || env.starts_with(b"DYLD_") {
+        return Err(Error::runtime("env cannot be PATH or a loader variable (LD_*, DYLD_*)"));
     }
     held.env = os_string("secret.env", &env)?;
     Ok(held)
@@ -363,7 +363,7 @@ impl SpawnOptions {
             })? {
                 spawn.env = env;
             }
-            spawn.secret = o.optional_table("secret", |frame, table| read_secret(context, frame, table))?;
+            spawn.secret = o.optional_table("secret", read_secret)?;
             if let Some(secret) = &spawn.secret
                 && spawn.env.iter().any(|(key, _)| os_string("an env name", key).is_ok_and(|key| key == secret.env))
             {
@@ -635,13 +635,14 @@ fn run(
     command.stdin(stdin).stdout(spawn.stdout.stdio()).stderr(spawn.stderr.stdio());
     let SpawnOptions { stdin, stdout, stderr, bounds, secret, .. } = spawn;
     let failed = |error: std::io::Error| Failure::message(format!("dream.process.run: {name}: {error}"), &error);
-    // The parent's end of the secret's pipe, held only until the child has been started.
-    let channel = match secret.as_ref().map(|secret| secret::attach(&mut command, secret)).transpose() {
-        Ok(channel) => channel,
+    // Held only until the child has been started: the parent's end of the secret's pipe, and
+    // what keeps another child from inheriting it.
+    let starting = match secret::prepare(&mut command, secret.as_ref()) {
+        Ok(starting) => starting,
         Err(error) => return Ok(Outcome::Failed(secret_failed("dream.process.run", &error))),
     };
     let spawned = command.spawn();
-    drop((channel, secret));
+    drop((starting, secret));
     let mut child = match spawned {
         Ok(child) => child,
         Err(error) => return Ok(Outcome::Failed(failed(error))),

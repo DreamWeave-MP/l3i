@@ -447,10 +447,11 @@ A runtime that keeps more than 32 children live at once needs ProcessExtension::
 [[releases]]
 version = "2.9.0"
 date = 2026-11-11
-summary = "A one-shot secret for a child process: bytes it reads once from an inherited descriptor, never from its arguments, its environment or a file."
+summary = "A one-shot secret for a child process: bytes it reads once from an inherited descriptor (Unix) or handle (Windows), never from its arguments, its environment or a file."
 added = [
-    "process.run and process.start accept secret = { env, data }. The bytes (1 to 4096, a string or a buffer) are written into a pipe whose read end the child inherits; the variable named by env holds the descriptor's number. Whoever reads it first, the child or a helper it starts, gets the secret and then end of file. Unix only: elsewhere the call answers unsupported.",
-    "Both ends of the pipe are close-on-exec from creation and the flag is cleared in that child alone, so a child another thread starts does not inherit the secret. The host closes its end once the child is started and overwrites its copy of the bytes.",
+    "process.run and process.start accept secret = { env, data }. The bytes (1 to 4096, a string or a buffer) are written into a pipe whose read end the child inherits; the variable named by env holds its number: a descriptor on Unix, a handle's value on Windows. Whoever reads it first, the child or a helper it starts, gets the secret and then end of file.",
+    "On Linux, Android and the BSDs both ends of the pipe are close-on-exec from creation and the flag is cleared in that child alone. On Windows every child is started under one lock and the handle is inheritable only inside it. On macOS a child started by another thread in the moment between making the pipe and marking it inherits it. The number is never 0, 1 or 2.",
+    "The host closes its end once the child is started and overwrites its own copy of the bytes. It does not hide the secret from other processes of the same user, overwrite the script's copy, or stop the child passing the descriptor on: see the documentation.",
 ]
 migration = """
 Take 2.9.0 in place of 2.8.0. Nothing changes for calls that do not pass secret.

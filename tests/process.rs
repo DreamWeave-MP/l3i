@@ -1286,29 +1286,47 @@ fn a_started_child_takes_a_secret_and_malformed_ones_start_nothing() {
             child:close()
 
             local marker = '/tmp/l3i-secret-test-must-not-exist-' .. tostring(os.clock())
+            -- A value that appears in no message this library writes, so that finding it in one
+            -- would mean a refusal repeated the secret.
+            local Marked = 'ZZ-SECRET-ZZ'
             local refused = {
               { env = 'TOKEN_FD' },
-              { data = 'x' },
-              { env = 'lower', data = 'x' },
-              { env = '1FD', data = 'x' },
-              { env = 'A=B', data = 'x' },
-              { env = '', data = 'x' },
-              { env = string.rep('A', 65), data = 'x' },
+              { data = Marked },
+              { env = 'lower', data = Marked },
+              { env = '1FD', data = Marked },
+              { env = 'A=B', data = Marked },
+              { env = '', data = Marked },
+              { env = string.rep('A', 65), data = Marked },
               { env = 'TOKEN_FD', data = '' },
-              { env = 'TOKEN_FD', data = string.rep('x', 4097) },
-              { env = 'TOKEN_FD', data = 'x', extra = true },
+              { env = 'TOKEN_FD', data = string.rep(Marked, 400) },
+              { env = 'TOKEN_FD', data = Marked, extra = true },
               { env = 'TOKEN_FD', data = 7 },
+              -- A number in one of these would break how the child finds and loads programs.
+              { env = 'PATH', data = Marked },
+              { env = 'LD_PRELOAD', data = Marked },
+              { env = 'DYLD_INSERT_LIBRARIES', data = Marked },
               'not a table',
             }
             for index, secret in refused do
               for _, start in { process.run, process.start } do
                 local ok, problem = pcall(start, 'sh', { '-c', 'touch ' .. marker }, { secret = secret, timeoutMs = 5000 })
                 assert(not ok, 'malformed secret ' .. index .. ' was accepted')
-                assert(not string.find(tostring(problem), 'x', 1, true) or string.find(tostring(problem), 'secret', 1, true), tostring(problem))
+                assert(not string.find(tostring(problem), 'ZZ', 1, true), 'a refusal repeated the secret: ' .. tostring(problem))
+                assert(string.find(tostring(problem), 'secret', 1, true), tostring(problem))
               end
             end
-            -- The variable the secret names cannot also be set by env.
-            assert(not pcall(process.run, 'true', {}, { env = { TOKEN_FD = '9' }, secret = { env = 'TOKEN_FD', data = 'x' } }))
+            -- The variable the secret names cannot also be set by env, through either call.
+            for _, start in { process.run, process.start } do
+              local ok, problem = pcall(start, 'true', {}, { env = { TOKEN_FD = '9' }, secret = { env = 'TOKEN_FD', data = Marked } })
+              assert(not ok and not string.find(tostring(problem), 'ZZ', 1, true), tostring(problem))
+            end
+            -- A program that cannot be started is an answer, with a secret as without one.
+            local missing, missingMessage = process.start('l3i-no-such-program', {}, { secret = { env = 'TOKEN_FD', data = Marked } })
+            assert(missing == nil and not string.find(tostring(missingMessage), 'ZZ', 1, true), tostring(missingMessage))
+            -- A cleared environment still carries the variable, and the secret behind it.
+            local cleared = assert(process.run('/bin/sh', { '-c', 'cat <&"$TOKEN_FD"' },
+              { clearEnv = true, secret = { env = 'TOKEN_FD', data = Marked }, stdout = 'capture', timeoutMs = 10000 }))
+            assert(cleared.stdout == Marked, cleared.stdout)
             -- The largest secret fits.
             local largest = string.rep('k', 4096)
             local fits = assert(process.run('sh', { '-c', 'cat <&"$FD" | wc -c' },
@@ -1343,4 +1361,138 @@ fn secrets_leave_no_descriptor_in_the_host() {
         .unwrap();
     // Other tests of this binary start children meanwhile, so allow for theirs: a leak would be 100.
     assert!(open() < before + 50, "secrets left descriptors behind: {} against {before}", open());
+}
+
+/// The half of the next test that runs with its standard input closed: the pipe the secret is
+/// written into would be given descriptor 0, which the child's own input is then put on.
+#[cfg(unix)]
+#[test]
+fn secret_with_closed_stdin_child() {
+    if std::env::var_os("L3I_SECRET_CLOSED_STDIN_TEST").is_none() {
+        return;
+    }
+    // SAFETY: closing this process's own standard input and output; nothing else here uses them
+    // (the test harness's capture is in-process and the result goes to stderr).
+    unsafe {
+        libc::close(0);
+        libc::close(1);
+    }
+    let runtime = runtime_granting(&[SPAWN_CAPABILITY], Limits::default());
+    runtime
+        .exec(
+            r#"
+            local result = assert(process.run('sh', { '-c', 'printf "%s|" "$FD"; cat <&"$FD"; printf "|"; cat' },
+              { secret = { env = 'FD', data = 'THE-SECRET' }, stdin = 'SCRIPT-STDIN', stdout = 'capture', timeoutMs = 10000 }))
+            local number, secret, input = string.match(result.stdout, '^(%d+)|(.*)|(.*)$')
+            assert(tonumber(number) >= 3, 'the secret was put on a standard descriptor: ' .. result.stdout)
+            assert(secret == 'THE-SECRET', 'the secret was lost: ' .. result.stdout)
+            -- Whether the child's own input arrives in a host without standard descriptors is the
+            -- standard library's business, with a secret or without one; see the comparison below.
+            local plain = assert(process.run('sh', { '-c', 'cat' }, { stdin = 'SCRIPT-STDIN', stdout = 'capture', timeoutMs = 10000 }))
+            assert(input == plain.stdout, 'a secret changed what the child read on its own input: ' .. result.stdout)
+            -- With the child's output inherited (and closed in the host), the secret is not its output.
+            local started = assert(process.start('sh', { '-c', 'cat <&"$FD" >&2' },
+              { secret = { env = 'FD', data = 'SECOND-SECRET' }, stderr = 'pipe', timeoutMs = 10000 }))
+            local text = ''
+            while true do
+              local chunk, message, kind = started:readStderr(4096)
+              if chunk then text = text .. chunk
+              elseif kind == 'wouldBlock' then process.sleep(0.005)
+              elseif message then error(message)
+              else break end
+            end
+            started:close()
+            assert(text == 'SECOND-SECRET', text)
+            "#,
+        )
+        .unwrap();
+}
+
+/// A host that has closed its own standard streams: the secret still reaches the child on a
+/// descriptor of its own, and the child's standard streams are still its own.
+#[cfg(unix)]
+#[test]
+fn a_secret_never_lands_on_a_standard_descriptor() {
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "process::secret_with_closed_stdin_child", "--nocapture"])
+        .env("L3I_SECRET_CLOSED_STDIN_TEST", "1")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "closed-stdin child: {}", String::from_utf8_lossy(&output.stderr));
+}
+
+/// Secrets that are never read, in children started from several threads at once, each of which
+/// reads every descriptor it was given: none finds a secret that is not its own.
+#[cfg(target_os = "linux")]
+#[test]
+fn concurrent_children_never_inherit_one_another_s_secret() {
+    let workers: Vec<_> = (0..6)
+        .map(|worker| {
+            std::thread::spawn(move || {
+                let runtime = runtime_granting(&[SPAWN_CAPABILITY], Limits::default());
+                runtime
+                    .exec(&format!(
+                        r#"
+                        for round = 1, 25 do
+                          local mine = 'secret-of-{worker}-' .. round .. '-'
+                          -- Every descriptor above the standard three, read to its end. Half the
+                          -- children have a secret; the other half must find nothing at all.
+                          local options = {{ stdout = 'capture', stderr = 'null', timeoutMs = 20000 }}
+                          if round % 2 == 0 then options.secret = {{ env = 'FD', data = mine }} end
+                          local result = assert(process.run('sh', {{ '-c',
+                            'for fd in /proc/self/fd/*; do n=${{fd##*/}}; [ "$n" -gt 2 ] && cat "/proc/self/fd/$n" 2>/dev/null; done; true' }}, options))
+                          local seen = result.stdout
+                          local expected = if round % 2 == 0 then mine else ''
+                          for found in string.gmatch(seen, 'secret%-of%-%d+%-%d+%-') do
+                            assert(found == expected, 'a child read another child\'s secret: ' .. found)
+                          end
+                          if round % 2 == 0 then assert(string.find(seen, mine, 1, true), 'a child could not read its own secret') end
+                        end
+                        "#
+                    ))
+                    .unwrap();
+            })
+        })
+        .collect();
+    for worker in workers {
+        worker.join().unwrap();
+    }
+}
+
+/// On Windows the child inherits a handle and the variable holds its value: read once, then end of
+/// file, and neither the environment nor the command line holds the bytes.
+#[cfg(windows)]
+#[test]
+fn a_secret_reaches_a_windows_child_through_an_inherited_handle() {
+    let runtime = runtime_granting(&[SPAWN_CAPABILITY, ENVIRONMENT_CAPABILITY], Limits::default());
+    runtime
+        .exec(
+            r#"
+            local reader = '$h=[IntPtr][Int64]$env:L3I_SECRET_HANDLE; '
+              .. '$s=New-Object System.IO.FileStream((New-Object Microsoft.Win32.SafeHandles.SafeFileHandle($h,$false)),[System.IO.FileAccess]::Read); '
+              .. '$r=New-Object System.IO.StreamReader($s); [Console]::Out.Write($r.ReadToEnd()); [Console]::Out.Write("|"); '
+              .. '[Console]::Out.Write(($s.ReadByte())); [Console]::Out.Write("|"); '
+              .. '[Console]::Out.Write(((Get-ChildItem env: | ForEach-Object { $_.Value }) -join ","))'
+            local secret = 'windows-ZZ-SECRET-ZZ'
+            local result, message = process.run('powershell', { '-NoProfile', '-NonInteractive', '-Command', reader },
+              { secret = { env = 'L3I_SECRET_HANDLE', data = secret }, stdout = 'capture', stderr = 'capture', timeoutMs = 120000 })
+            assert(result, message)
+            assert(result.success, tostring(result.code) .. ': ' .. tostring(result.stderr))
+            local first, again, environment = string.match(result.stdout, '^(.-)|(.-)|(.*)$')
+            assert(first == secret, 'the child did not read the secret: ' .. result.stdout)
+            assert(again == '-1', 'the handle was not at end of file after the secret: ' .. tostring(again))
+            assert(not string.find(environment, 'ZZ-SECRET-ZZ', 1, true), 'the secret is in the child\'s environment')
+            -- A child without a secret inherits no such handle: the same value is not a pipe it can read.
+            local handle = assert(process.run('powershell', { '-NoProfile', '-NonInteractive', '-Command', '[Console]::Out.Write($env:L3I_SECRET_HANDLE)' },
+              { secret = { env = 'L3I_SECRET_HANDLE', data = secret }, stdout = 'capture', timeoutMs = 120000 })).stdout
+            assert(tonumber(handle), 'the variable does not hold a number: ' .. tostring(handle))
+            -- Malformed secrets raise here as everywhere.
+            assert(not pcall(process.run, 'cmd', { '/c', 'exit' }, { secret = { env = 'lower', data = 'x' } }))
+            assert(not pcall(process.start, 'cmd', { '/c', 'exit' }, { secret = { env = 'PATH', data = 'x' } }))
+            "#,
+        )
+        .unwrap();
 }

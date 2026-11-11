@@ -546,20 +546,22 @@ pub(super) fn start(
     quota: &Arc<ChildQuota>,
 ) -> Result<Outcome<StackResults>> {
     let arguments = arguments(call, args)?;
-    let spawn = SpawnOptions::read(call, options, Mode::Start)?;
+    let mut spawn = SpawnOptions::read(call, options, Mode::Start)?;
     // Reserved before anything is spawned. A spawn that fails drops the slot with the error.
     let reservation = ChildQuota::reserve(quota, "dream.process.start")?;
     let name = String::from_utf8_lossy(program).into_owned();
     let mut command = build_command(program, &arguments, &spawn, inherit_environment, true)?;
     let stdin = if matches!(spawn.stdin, Feed::Pipe) { Stdio::piped() } else { Stdio::null() };
     command.stdin(stdin).stdout(spawn.stdout.stdio()).stderr(spawn.stderr.stdio());
-    // The parent's end of the secret's pipe, held only until the child has been started.
-    let channel = match spawn.secret.as_ref().map(|secret| super::secret::attach(&mut command, secret)).transpose() {
-        Ok(channel) => channel,
+    // Held only until the child has been started: the parent's end of the secret's pipe, and
+    // what keeps another child from inheriting it. The secret's bytes go with them.
+    let secret = spawn.secret.take();
+    let starting = match super::secret::prepare(&mut command, secret.as_ref()) {
+        Ok(starting) => starting,
         Err(error) => return Ok(Outcome::Failed(super::secret_failed("dream.process.start", &error))),
     };
     let spawned = command.spawn();
-    drop(channel);
+    drop((starting, secret));
     let mut child = match spawned {
         Ok(child) => child,
         Err(error) => {
