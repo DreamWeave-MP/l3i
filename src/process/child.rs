@@ -23,7 +23,7 @@ use crate::runtime::shared::Resource;
 use crate::stack::{Scope, ValueView};
 use crate::userdata::Userdata;
 
-use super::{Feed, MAX_BYTES, Mode, SpawnOptions, arguments, bounded, build_command, kill_group};
+use super::{Feed, MAX_BYTES, Mode, SpawnOptions, arguments, bounded, build_command, has_exited, kill_group};
 
 /// Bytes a stream's buffer holds before its reader stops reading, so the child blocks on its pipe.
 pub const PIPE_BUFFER: usize = 64 * 1024;
@@ -64,6 +64,9 @@ struct Queue {
 
 struct State {
     child: Child,
+    /// Whether we have reaped the child. Every signal to its group checks this under the lock, and
+    /// none follows a reap: the pid, which is the group id, may be reused from then on.
+    reaped: bool,
     status: Option<ExitStatus>,
     stdout: Pipe,
     stderr: Pipe,
@@ -81,22 +84,49 @@ impl State {
         }
     }
 
-    /// Collects the child's exit status if it has exited, without waiting for it.
+    /// Whether the child has exited, without reaping it. Where the platform allows, an exited child
+    /// stays unreaped, so its pid and group are still ours to signal (see `process::has_exited`).
+    fn exited(&mut self) -> std::io::Result<bool> {
+        if self.reaped {
+            return Ok(true);
+        }
+        has_exited(&mut self.child)
+    }
+
+    /// Collects the child's exit status if it has exited, without waiting for it, and reaps it.
     fn reap(&mut self) -> Option<ExitStatus> {
-        if self.status.is_none()
+        if !self.reaped
             && let Ok(Some(status)) = self.child.try_wait()
         {
             self.status = Some(status);
+            self.reaped = true;
         }
         self.status
     }
 
+    /// Reaps the child, blocking until it is gone. Callers signal the group first.
+    fn reap_now(&mut self) {
+        if !self.reaped {
+            self.status = self.child.wait().ok();
+            self.reaped = true;
+        }
+    }
+
     /// Kills the child's process group, then the child. The group is the child's own (see
-    /// `process::isolate`), so this reaches what the child started too, even after the child has
-    /// exited and been reaped while one of those still holds a pipe.
+    /// `process::isolate`), so this reaches what the child started too, while the child is unreaped.
+    /// Once reaped it sends nothing: the pid, and with it the group id, may belong to another process.
     fn kill(&mut self) {
+        if self.reaped {
+            return;
+        }
         kill_group(&self.child);
         let _ = self.child.kill();
+    }
+
+    /// Signals the group and the child, then reaps the child: the only order that is safe.
+    fn kill_and_reap(&mut self) {
+        self.kill();
+        self.reap_now();
     }
 
     /// Kills the child because `reason` limit passed, and discards what it had not yet been read.
@@ -106,7 +136,7 @@ impl State {
         }
         self.stdout.bytes.clear();
         self.stderr.bytes.clear();
-        self.kill();
+        self.kill_and_reap();
     }
 }
 
@@ -225,6 +255,8 @@ impl Shared {
         let mut state = self.lock();
         loop {
             if let Some(status) = state.reap() {
+                // The reap ends the timer's wait: there is nothing left for it to signal.
+                self.changed.notify_all();
                 return Some(status);
             }
             let elapsed = started.elapsed();
@@ -243,10 +275,7 @@ impl Shared {
         if state.closed {
             return;
         }
-        state.kill();
-        if state.status.is_none() {
-            state.status = state.child.wait().ok();
-        }
+        state.kill_and_reap();
         state.closed = true;
         state.stdout.bytes.clear();
         state.stderr.bytes.clear();
@@ -317,7 +346,7 @@ fn write_loop(shared: &Shared, mut pipe: ChildStdin) {
         let chunk: Vec<u8> = {
             let mut state = shared.lock();
             loop {
-                if state.closed {
+                if state.closed || state.reaped {
                     return;
                 }
                 if !state.stdin.bytes.is_empty() {
@@ -350,15 +379,16 @@ fn write_loop(shared: &Shared, mut pipe: ChildStdin) {
 fn timer_loop(shared: &Shared, started: Instant, timeout: Duration) {
     let mut state = shared.lock();
     loop {
-        if state.closed {
+        // A reaped child has nothing left to signal, so its timer ends with the reap.
+        if state.closed || state.reaped {
             return;
         }
         let elapsed = started.elapsed();
         if elapsed >= timeout {
-            if state.reap().is_none() {
-                state.stop_for("timeout");
+            if state.exited().unwrap_or(false) {
+                state.kill_and_reap();
             } else {
-                state.kill();
+                state.stop_for("timeout");
             }
             shared.changed.notify_all();
             return;
@@ -426,6 +456,7 @@ pub(super) fn start(
     let shared = Arc::new(Shared {
         state: Mutex::new(State {
             child,
+            reaped: false,
             status: None,
             stdout: pipe(stdout_pipe.is_some(), bounds.stdout),
             stderr: pipe(stderr_pipe.is_some(), bounds.stderr),
@@ -573,4 +604,107 @@ pub(super) fn describe(d: &mut ExtensionDescriptor) {
         })
         .signature("(self)")
         .doc("Kills the child if it is still running, reaps it and releases its pipes. Idempotent; every other method raises afterwards.");
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use crate::process::{GROUP_SIGNALS_SENT, group_of};
+    use std::os::unix::process::CommandExt as _;
+    use std::process::Command;
+
+    /// Group signals this thread has sent so far.
+    fn signals() -> usize {
+        GROUP_SIGNALS_SENT.with(std::cell::Cell::get)
+    }
+
+    /// Starts `program` as the leader of a process group of its own, as `process.start` does.
+    fn leader(program: &str, args: &[&str]) -> Child {
+        Command::new(program)
+            .args(args)
+            .process_group(0)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap()
+    }
+
+    /// Owns `child` as a started handle does, with no pipes.
+    fn own(child: Child) -> Arc<Shared> {
+        Arc::new(Shared {
+            state: Mutex::new(State {
+                child,
+                reaped: false,
+                status: None,
+                stdout: Pipe::default(),
+                stderr: Pipe::default(),
+                stdin: Queue::default(),
+                killed_by: None,
+                closed: false,
+            }),
+            changed: Condvar::new(),
+        })
+    }
+
+    /// Waits until the child has exited, without reaping it.
+    fn until_exited(shared: &Shared) {
+        let started = Instant::now();
+        while !shared.lock().exited().unwrap() {
+            assert!(started.elapsed() < Duration::from_secs(10), "the child did not exit");
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    }
+
+    #[test]
+    fn a_reaped_child_is_never_signalled_again() {
+        let shared = own(leader("true", &[]));
+        assert!(shared.wait(Duration::from_secs(10)).is_some(), "the child was not reaped");
+        let before = signals();
+        shared.kill();
+        timer_loop(&shared, Instant::now(), Duration::ZERO);
+        shared.close();
+        assert_eq!(signals(), before, "a reaped child's group was signalled");
+    }
+
+    #[test]
+    fn a_reaped_child_releases_its_timer_before_the_deadline() {
+        let shared = own(leader("true", &[]));
+        assert!(shared.wait(Duration::from_secs(10)).is_some());
+        let started = Instant::now();
+        timer_loop(&shared, Instant::now(), Duration::from_secs(3600));
+        assert!(started.elapsed() < Duration::from_secs(1), "the timer waited for its deadline");
+        assert_eq!(signals(), 0);
+    }
+
+    #[test]
+    fn an_exited_but_unreaped_leader_is_signalled_once_then_reaped() {
+        let shared = own(leader("true", &[]));
+        until_exited(&shared);
+        let before = signals();
+        timer_loop(&shared, Instant::now(), Duration::ZERO);
+        assert_eq!(signals() - before, 1, "the group of an exited leader is signalled before its reap");
+        let state = shared.lock();
+        assert!(state.reaped, "the child was not reaped at its deadline");
+        assert_eq!(state.killed_by, None, "a child that exited first is not a timeout");
+    }
+
+    #[test]
+    fn a_running_leader_past_its_deadline_is_killed_with_its_group() {
+        let shared = own(leader("sleep", &["30"]));
+        let before = signals();
+        timer_loop(&shared, Instant::now(), Duration::ZERO);
+        assert_eq!(signals() - before, 1);
+        let state = shared.lock();
+        assert_eq!(state.killed_by, Some("timeout"));
+        assert!(state.reaped);
+    }
+
+    #[test]
+    fn a_group_is_never_the_host_group_init_or_a_broadcast() {
+        assert_eq!(group_of(0), None);
+        assert_eq!(group_of(1), None);
+        assert_eq!(group_of(2), Some(2));
+        assert_eq!(group_of(u32::MAX), None);
+    }
 }

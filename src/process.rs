@@ -322,19 +322,79 @@ fn isolate(command: &mut Command) {
 #[cfg(not(unix))]
 fn isolate(_: &mut Command) {}
 
+/// Whether a child's process group can be signalled at all. It can where [`has_exited`] tells an
+/// exited leader apart without reaping it: the leader's pid, which is the group id, then stays ours
+/// until we reap it. Elsewhere only the child itself is killed.
+#[cfg(unix)]
+const GROUP_KILLS: bool =
+    cfg!(any(target_os = "linux", target_os = "android", target_os = "macos", target_os = "freebsd"));
+
+#[cfg(test)]
+thread_local! {
+    /// Group signals this thread has sent, which the unit tests read.
+    pub(crate) static GROUP_SIGNALS_SENT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The group id of a child with pid `pid`, when a signal to it can only reach that group: never 0
+/// (the host's own group), 1 (init), or anything whose negation is a broadcast.
+#[cfg(unix)]
+fn group_of(pid: u32) -> Option<libc::pid_t> {
+    libc::pid_t::try_from(pid).ok().filter(|group| *group > 1)
+}
+
 /// Kills the process group `child` leads, which [`isolate`] made of it. The group may already be
-/// gone, which the kill answers with ESRCH and nothing else.
+/// gone, which the kill answers with ESRCH and nothing else. Callers signal before they reap: the
+/// leader's pid is the group id, and it is reserved for the group only while the leader is unreaped.
 #[cfg(unix)]
 fn kill_group(child: &Child) {
-    if let Ok(group) = libc::pid_t::try_from(child.id()) {
-        // SAFETY: `-group` names the process group the child leads (see `isolate`); kill only
-        // sends a signal and touches no memory of this process.
-        unsafe { libc::kill(-group, libc::SIGKILL) };
+    if !GROUP_KILLS {
+        return;
     }
+    let Some(group) = group_of(child.id()) else { return };
+    #[cfg(test)]
+    GROUP_SIGNALS_SENT.with(|sent| sent.set(sent.get() + 1));
+    // SAFETY: `-group` names the process group the child leads (see `isolate`), and `group > 1`
+    // keeps it off the host's own group and off every broadcast; kill only sends a signal.
+    unsafe { libc::kill(-group, libc::SIGKILL) };
 }
 
 #[cfg(not(unix))]
 fn kill_group(_: &Child) {}
+
+/// Whether `child` has exited. Where waitid can wait with WNOWAIT, the child is left unreaped: a
+/// zombie keeps its pid, so the group it leads cannot be reused and can still be signalled, and the
+/// caller reaps it afterwards. Elsewhere this reaps the child, which is why no group is signalled
+/// there (see [`GROUP_KILLS`]).
+#[cfg(any(target_os = "linux", target_os = "android", target_os = "macos", target_os = "freebsd"))]
+pub(super) fn has_exited(child: &mut Child) -> std::io::Result<bool> {
+    loop {
+        let mut info = std::mem::MaybeUninit::<libc::siginfo_t>::zeroed();
+        // SAFETY: `info` is writable and sized for a siginfo_t, which waitid fills; WNOHANG returns at
+        // once, and WEXITED with WNOWAIT reports an exit without reaping the child.
+        let status = unsafe {
+            libc::waitid(
+                libc::P_PID,
+                child.id() as libc::id_t,
+                info.as_mut_ptr(),
+                libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+            )
+        };
+        if status == 0 {
+            // SAFETY: waitid returned 0, so it has written `info`; its pid is zero when no child
+            // changed state.
+            return Ok(unsafe { info.assume_init().si_pid() } != 0);
+        }
+        let error = std::io::Error::last_os_error();
+        if error.kind() != std::io::ErrorKind::Interrupted {
+            return Err(error);
+        }
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "android", target_os = "macos", target_os = "freebsd")))]
+pub(super) fn has_exited(child: &mut Child) -> std::io::Result<bool> {
+    Ok(child.try_wait()?.is_some())
+}
 
 /// Kills the child, and with `group` every process in its group, without reaping it.
 fn kill_tree(child: &mut Child, group: bool) {
@@ -534,14 +594,16 @@ fn wait(call: &Call<'_>, child: &mut Child, bounds: &Bounds, capture: Capture, g
     };
     let Capture { stdout, stderr, exceeded } = capture;
     let mut pause = Duration::from_millis(1);
-    let status = loop {
+    // The leader first. Its exit is seen without reaping it, so the group it leads stays ours to
+    // signal while its captures are still open (see `has_exited`).
+    loop {
         if exceeded.load(Ordering::SeqCst) {
             stop(child, group);
             return Ok(Ended::OutputLimit);
         }
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) => {}
+        match has_exited(child) {
+            Ok(true) => break,
+            Ok(false) => {}
             Err(error) => {
                 stop(child, group);
                 return Err(error);
@@ -551,21 +613,16 @@ fn wait(call: &Call<'_>, child: &mut Child, bounds: &Bounds, capture: Capture, g
         if let Some((span, by_timeout)) = limit
             && elapsed >= span
         {
-            stop(child, group);
-            if by_timeout {
-                return Ok(Ended::TimedOut);
-            }
-            crate::runtime::expire_if_due(call);
-            return Ok(Ended::Expired);
+            return Ok(expire(call, child, group, by_timeout));
         }
         let nap = limit.map_or(pause, |(span, _)| pause.min(span.saturating_sub(elapsed)));
         std::thread::sleep(nap);
         pause = (pause * 2).min(Duration::from_millis(20));
-    };
+    }
     let readers = [&stdout, &stderr];
     loop {
         if exceeded.load(Ordering::SeqCst) {
-            kill_tree(child, group);
+            stop(child, group);
             return Ok(Ended::OutputLimit);
         }
         if readers.iter().all(|reader| reader.as_ref().is_none_or(JoinHandle::is_finished)) {
@@ -575,12 +632,7 @@ fn wait(call: &Call<'_>, child: &mut Child, bounds: &Bounds, capture: Capture, g
         if let Some((span, by_timeout)) = limit
             && elapsed >= span
         {
-            kill_tree(child, group);
-            if by_timeout {
-                return Ok(Ended::TimedOut);
-            }
-            crate::runtime::expire_if_due(call);
-            return Ok(Ended::Expired);
+            return Ok(expire(call, child, group, by_timeout));
         }
         let nap = limit.map_or(pause, |(span, _)| pause.min(span.saturating_sub(elapsed)));
         std::thread::sleep(nap);
@@ -588,12 +640,26 @@ fn wait(call: &Call<'_>, child: &mut Child, bounds: &Bounds, capture: Capture, g
     }
     // A reader can raise the flag between the last check and its own exit.
     if exceeded.load(Ordering::SeqCst) {
+        stop(child, group);
         return Ok(Ended::OutputLimit);
     }
+    // Every signal this call sends is out, so the child is reaped last.
+    let status = child.wait()?;
     let collect = |reader: Option<JoinHandle<Vec<u8>>>| {
         reader.map(|reader| reader.join().unwrap_or_default()).unwrap_or_default()
     };
     Ok(Ended::Exited(std::process::Output { status, stdout: collect(stdout), stderr: collect(stderr) }))
+}
+
+/// Kills and reaps the child at a limit: its own timeout, or the runtime's execution time limit.
+fn expire(call: &Call<'_>, child: &mut Child, group: bool, by_timeout: bool) -> Ended {
+    stop(child, group);
+    if by_timeout {
+        Ended::TimedOut
+    } else {
+        crate::runtime::expire_if_due(call);
+        Ended::Expired
+    }
 }
 
 /// Blocks SIGPIPE on the calling thread: a child that exits without reading all of its input

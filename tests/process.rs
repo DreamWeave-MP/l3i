@@ -617,6 +617,88 @@ fn the_longest_timeout_is_accepted() {
         .unwrap();
 }
 
+/// Kills the sentinel on drop, so a failing assertion does not leave it running.
+#[cfg(unix)]
+struct Sentinel(std::process::Child);
+
+#[cfg(unix)]
+impl Drop for Sentinel {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+/// A handle whose child was reaped by `wait` never signals a group again: not by its timer after
+/// the deadline, not by kill or close. The sentinel is a process of our own in a group of its own;
+/// churning through short processes keeps the pids moving, though pid reuse itself is not forced.
+#[cfg(unix)]
+#[test]
+fn a_reaped_handle_never_signals_its_group_again() {
+    use std::os::unix::process::CommandExt as _;
+    let mut sentinel = Sentinel(std::process::Command::new("sleep").arg("600").process_group(0).spawn().unwrap());
+    let runtime = runtime_granting(&[SPAWN_CAPABILITY], Limits::default());
+    runtime
+        .exec(
+            r"local old = assert(process.start('true', {}, { timeoutMs = 50 }))
+              assert(assert(old:wait(5000)).success)
+              for _ = 1, 300 do assert(process.run('true', {}).success) end
+              assert(old:kill())
+              old:close()
+              old:close()
+              process.sleep(0.2)",
+        )
+        .unwrap();
+    assert!(sentinel.0.try_wait().unwrap().is_none(), "the sentinel was signalled through a reaped handle");
+}
+
+/// A bounded run whose leader exits while a process it started holds the captured pipe open ends
+/// at its time limit: the group, which still holds that process, is killed while the leader is
+/// unreaped, and the run does not wait out the process's own sleep.
+#[cfg(unix)]
+#[test]
+fn a_bounded_run_kills_a_group_member_that_outlives_its_leader() {
+    let runtime = runtime_granting(&[SPAWN_CAPABILITY], Limits::default());
+    let started = Instant::now();
+    runtime
+        .exec(
+            r"local result, _, kind = process.run('sh', { '-c', 'sleep 30 & exit 0' },
+                  { stdout = 'capture', timeoutMs = 300 })
+              assert(result == nil and kind == 'timeout', tostring(kind))",
+        )
+        .unwrap();
+    assert!(started.elapsed() < Duration::from_secs(10), "the run waited {:?}", started.elapsed());
+}
+
+/// A started child whose leader exits while a process it started holds its stdout is ended at the
+/// timeout: its readers reach end of stream, rather than waiting on a pipe nothing closes.
+#[cfg(unix)]
+#[test]
+fn a_timed_handle_ends_a_group_member_its_leader_left_behind() {
+    let runtime = runtime_granting(&[SPAWN_CAPABILITY], Limits::default());
+    runtime
+        .exec(
+            r"local child = assert(process.start('sh', { '-c', 'sleep 30 & echo started; exit 0' },
+                  { stdout = 'pipe', timeoutMs = 300 }))
+              local text, ticks = '', 0
+              while true do
+                  local chunk, _, kind = child:readStdout(4096)
+                  if chunk then
+                      text = text .. chunk
+                  elseif kind == 'wouldBlock' then
+                      process.sleep(0.01)
+                      ticks = ticks + 1
+                      assert(ticks < 1000, 'a group member held the pipe past the timeout')
+                  else
+                      break
+                  end
+              end
+              assert(text == 'started\n', text)
+              child:close()",
+        )
+        .unwrap();
+}
+
 /// Luau helpers the handle tests share: drain a stream to its end, failing on any real error, and
 /// pause between polls without waiting on the child.
 #[cfg(unix)]
