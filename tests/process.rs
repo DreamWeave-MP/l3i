@@ -922,7 +922,10 @@ fn an_unbounded_run_does_not_wait_for_a_process_that_only_holds_its_capture() {
         .exec(&format!(
             r#"local result = assert(process.run('sh', {{ '-c', 'sleep 30 & echo $! > "$1"; echo hi', 'sh', '{}' }},
                   {{ stdout = 'capture', stderr = 'capture' }}))
-              assert(result.success and result.stdout == 'hi\n' and result.stderr == '', tostring(result.stdout))"#,
+              assert(result.success and result.stdout == 'hi\n' and result.stderr == '', tostring(result.stdout))
+              assert(result.held == true, 'a capture cut short was not said to be')
+              local whole = assert(process.run('sh', {{ '-c', 'echo all' }}, {{ stdout = 'capture' }}))
+              assert(whole.held == nil and whole.stdout == 'all\n', 'a capture read to its end was said to be held')"#,
             pid_file.to_string_lossy()
         ))
         .unwrap();
@@ -944,7 +947,7 @@ fn a_run_stops_reading_a_capture_its_child_left_to_a_writer() {
         .exec(
             r"local result = assert(process.run('sh', { '-c', '(while :; do echo more; sleep 0.05; done) & echo first' },
                   { stdout = 'capture', timeoutMs = 20000 }))
-              assert(result.success and result.stdout:sub(1, 6) == 'first\n' or result.stdout:find('first\n', 1, true), result.stdout)",
+              assert(result.success and result.held == true and result.stdout:sub(1, 6) == 'first\n', result.stdout)",
         )
         .unwrap();
     let waited = started.elapsed();
@@ -952,7 +955,8 @@ fn a_run_stops_reading_a_capture_its_child_left_to_a_writer() {
 }
 
 /// The runtime's execution time limit is a bound like the call's own: what the child started is
-/// killed with it, though the call named no limit.
+/// killed with it, though the call named no limit. That holds for a run that shares no stream with
+/// the host; one that does stays the terminal's foreground job, and only the child is killed.
 #[cfg(unix)]
 #[test]
 fn the_execution_time_limit_reaches_what_an_unbounded_run_started() {
@@ -960,11 +964,75 @@ fn the_execution_time_limit_reaches_what_an_unbounded_run_started() {
     let limits = Limits { execution_time: Duration::from_millis(300), memory_bytes: 0 };
     let runtime = runtime_granting(&[SPAWN_CAPABILITY], limits);
     let ran = runtime.exec(&format!(
-        r#"process.run('sh', {{ '-c', 'sleep 30 & echo $! > "$1"; wait', 'sh', '{}' }})"#,
+        r#"process.run('sh', {{ '-c', 'sleep 30 & echo $! > "$1"; wait', 'sh', '{}' }}, {{ stdout = 'null', stderr = 'null' }})"#,
         pid_file.to_string_lossy()
     ));
     assert!(ran.is_err(), "the script ran past the execution time limit");
     assert!(ends(pid_in(&pid_file)), "a process the child started outlived the execution time limit");
+}
+
+/// What a process the child started writes soon after the child exits is still read: the reading
+/// stops when the pipe has gone quiet, not when the child exits. A run that read to the end of its
+/// captures does not say it was held.
+#[cfg(unix)]
+#[test]
+fn a_run_reads_what_arrives_soon_after_its_child_exits() {
+    let runtime = runtime_granting(&[SPAWN_CAPABILITY], Limits::default());
+    runtime
+        .exec(
+            r"local result = assert(process.run('sh', { '-c', '(sleep 0.1; echo late) & echo early' }, { stdout = 'capture' }))
+              assert(result.stdout == 'early\nlate\n' and result.held == nil, result.stdout)",
+        )
+        .unwrap();
+}
+
+/// A megabyte on each stream from a child that exits at once, beside a process that holds both
+/// captures open: every byte the child wrote is in the answer, though the readers were stopped.
+#[cfg(unix)]
+#[test]
+fn a_held_capture_loses_nothing_its_child_wrote() {
+    let runtime = runtime_granting(&[SPAWN_CAPABILITY], Limits::default());
+    runtime
+        .exec(
+            r"for _ = 1, 8 do
+                  local result = assert(process.run('sh',
+                      { '-c', 'sleep 30 & head -c 1048576 /dev/zero; head -c 1048576 /dev/zero >&2' },
+                      { stdout = 'capture', stderr = 'capture', timeoutMs = 20000 }))
+                  assert(result.held == true and #result.stdout == 1048576 and #result.stderr == 1048576,
+                      #result.stdout .. ' ' .. #result.stderr)
+              end",
+        )
+        .unwrap();
+}
+
+/// Under an execution time limit, a run that shares a stream with the host stays in the host's
+/// process group, so a terminal still treats it as the foreground job; one that shares none is
+/// set apart, so the limit can reach what it starts.
+#[cfg(unix)]
+#[test]
+fn a_run_sharing_a_stream_with_the_host_stays_in_its_group_under_an_execution_time_limit() {
+    let group_file = std::env::temp_dir().join(format!("l3i-process-group-{}", std::process::id()));
+    let limits = Limits { execution_time: Duration::from_secs(20), memory_bytes: 0 };
+    let runtime = runtime_granting(&[SPAWN_CAPABILITY], limits);
+    // SAFETY: getpgrp only reads this process's group.
+    let own = unsafe { libc::getpgrp() };
+    let script = r#"ps -o pgid= -p $$ > "$1""#;
+    let group_of = |options: &str| -> libc::pid_t {
+        runtime
+            .exec(&format!(
+                "assert(process.run('sh', {{ '-c', '{script}', 'sh', '{}' }}, {options}).success)",
+                group_file.to_string_lossy()
+            ))
+            .unwrap();
+        pid_in(&group_file)
+    };
+    assert_eq!(group_of("{}"), own, "a run with inherited streams left the host's group");
+    assert_eq!(group_of("{ stdout = 'null' }"), own, "a run that still shares stderr left the host's group");
+    assert_ne!(
+        group_of("{ stdout = 'null', stderr = 'null' }"),
+        own,
+        "a run sharing no stream stayed in the host's group"
+    );
 }
 
 /// A capture with no ceiling of its own has one all the same, since the runtime's memory limit
