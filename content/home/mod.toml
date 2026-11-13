@@ -482,3 +482,22 @@ A caller that relied on process.run collecting what a background process wrote a
 
 Not changed in this release: on Windows a run still waits for a held pipe until a limit, and a descendant still survives a timeout there.
 """
+
+[[releases]]
+version = "2.10.1"
+date = 2026-11-13
+summary = "process.run no longer cuts a capture short, or calls a run held, because the machine was slow to read it."
+changed = [
+    "On Unix, whether something still holds a captured stream after the child of process.run has exited is asked of the pipe. The 250 ms and 2 s that end the reading time a process that holds a capture: they start when one is seen, and bytes waiting unread count as that process not being quiet. A run whose captures nothing holds reads them to their end, with only its own limits over it.",
+    "A process that held a capture and exits while process.run is still reading leaves whole captures and no held: the reading used to stop 250 ms after the child's exit whatever happened next.",
+]
+fixed = [
+    "process.run answered held = true, with a capture cut short, for a child nothing was holding, when the threads reading its captures had not run for 250 ms after it exited. A stalled or heavily loaded machine was enough: a run that only echoed a line could come back held.",
+]
+migration = """
+Take 2.10.1 in place of 2.10.0. Nothing a caller wrote changes.
+
+A run that 2.10.0 called held is still held when a process its child started really does keep the pipe open and stays quiet. One that was called held only because the machine was slow is now read whole.
+
+Not changed in this release: on Windows a run still waits for a held pipe until a limit.
+"""

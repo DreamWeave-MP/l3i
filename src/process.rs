@@ -13,9 +13,10 @@
 //!   memory limit does not see a capture. Termination covers
 //!   that group only: a descendant that left it (`setsid`, `setpgid`) is not stopped. A process the
 //!   child started may hold a captured pipe open after the child has exited: on Unix the call then
-//!   answers the child's own result once nothing more has arrived for a quarter of a second, or two
-//!   seconds after the exit whatever arrives, killing the group if the call was bounded, and the
-//!   result says `held = true`; elsewhere it waits for the pipe until a limit. A run that shares
+//!   answers the child's own result once that process has written nothing for a quarter of a
+//!   second, or two seconds after the exit whatever it writes, killing the group if the call was
+//!   bounded, and the result says `held = true`; a pipe is held when the kernel says a writer still
+//!   has it, never because its reader was slow. Elsewhere it waits for the pipe until a limit. A run that shares
 //!   stdout or stderr with the host stays in the host's group unless it names a limit of its own,
 //!   so the terminal still treats it as the foreground job. One that shares neither is set apart whenever a
 //!   limit can end it, the runtime's included, and is a background job to a controlling terminal.
@@ -95,10 +96,10 @@ const MAX_BYTES: f64 = 9_007_199_254_740_991.0;
 /// child decides how much memory its caller spends. A call that wants more says so with
 /// `maxStdoutBytes` or `maxStderrBytes`.
 const DEFAULT_CAPTURE_BYTES: u64 = 64 * 1024 * 1024;
-/// How long `run` goes on reading a capture once the child has exited and nothing more has
-/// arrived, and the longest it reads on after the exit whatever arrives. A process the child
-/// started can hold the pipe for as long as it lives; what the child itself wrote is in the pipe
-/// by the time it exits, and is read well inside the first.
+/// How long `run` goes on reading a capture that something else holds once the child has exited
+/// and that holder has written nothing more, and the longest it reads on after the exit whatever
+/// the holder writes. A process the child started can hold the pipe for as long as it lives.
+/// Neither is counted against a capture nothing holds: that one is read to its end.
 #[cfg(unix)]
 const CAPTURE_QUIET: Duration = Duration::from_millis(250);
 #[cfg(unix)]
@@ -705,9 +706,21 @@ fn run(
         };
         let progress = Arc::new(AtomicU64::new(0));
         let ceiling = |own: Option<u64>| own.or(Some(DEFAULT_CAPTURE_BYTES));
+        #[cfg(unix)]
+        let watch = watch(&child)?;
         let stdout = drain(child.stdout.take(), ceiling(bounds.stdout), &exceeded, &progress, &cancel)?;
         let stderr = drain(child.stderr.take(), ceiling(bounds.stderr), &exceeded, &progress, &cancel)?;
-        Ok((feeder, Capture { stdout, stderr, exceeded: Arc::clone(&exceeded), progress }))
+        Ok((
+            feeder,
+            Capture {
+                stdout,
+                stderr,
+                exceeded: Arc::clone(&exceeded),
+                progress,
+                #[cfg(unix)]
+                watch,
+            },
+        ))
     })();
     let (feeder, capture) = match threads {
         Ok(threads) => threads,
@@ -720,6 +733,12 @@ fn run(
     };
     let mut capture = capture;
     let ended = wait(call, &mut child, &bounds, &mut capture, group, &cancel);
+    // The read ends kept to ask the pipes with go now, so each closes when its reader does, as
+    // it always did: something still writing learns of it then, not when this call returns.
+    #[cfg(unix)]
+    {
+        capture.watch = [None, None];
+    }
     // On Unix nothing of this call outlives it. A pipe that a process outside the child's group
     // still holds would otherwise keep its thread, its descriptor and what it buffered for as long
     // as that process liked; cancelling ends the thread whoever holds the pipe, so joining it
@@ -804,10 +823,85 @@ struct Capture {
     stdout: Option<JoinHandle<Vec<u8>>>,
     stderr: Option<JoinHandle<Vec<u8>>>,
     exceeded: Arc<AtomicBool>,
-    /// Bytes read from either capture so far: what tells a pipe still being written to from one
-    /// that is only being held.
+    /// Bytes read from either capture so far: with what a pipe has waiting, what tells one still
+    /// being written to from one that is only being held.
     #[cfg_attr(not(unix), allow(dead_code))]
     progress: Arc<AtomicU64>,
+    /// The read end of each capture again, stdout then stderr, for whoever waits on the readers
+    /// to ask the pipes themselves who still holds them.
+    #[cfg(unix)]
+    watch: [Option<std::os::fd::OwnedFd>; 2],
+}
+
+/// The read end of each of `child`'s captures again, stdout then stderr, taken before the readers
+/// take the pipes themselves.
+#[cfg(unix)]
+fn watch(child: &Child) -> std::io::Result<[Option<std::os::fd::OwnedFd>; 2]> {
+    use std::os::fd::AsFd as _;
+    Ok([
+        child.stdout.as_ref().map(|pipe| pipe.as_fd().try_clone_to_owned()).transpose()?,
+        child.stderr.as_ref().map(|pipe| pipe.as_fd().try_clone_to_owned()).transpose()?,
+    ])
+}
+
+/// Whether something other than the exited child still holds a capture open and, if something
+/// does, whether a capture has bytes waiting to be read.
+///
+/// A pipe every writer has closed is held by nothing: its reader reaches the end by itself, and
+/// how long that takes says nothing about the pipe. That is asked of the kernel, never inferred
+/// from how fast a reader reads, so a reader the machine has not run yet is not mistaken for a
+/// pipe something holds. A pipe that could not be asked counts as held with bytes waiting: the
+/// wait goes on, and only the longest it may last ends it.
+#[cfg(unix)]
+fn holder(capture: &Capture) -> Option<bool> {
+    let (mut held, mut waiting) = (false, false);
+    for (reader, watch) in [&capture.stdout, &capture.stderr].into_iter().zip(&capture.watch) {
+        let (Some(reader), Some(watch)) = (reader, watch) else { continue };
+        if reader.is_finished() {
+            continue;
+        }
+        let state = Cancel::state_now(watch);
+        held |= state.is_none_or(|state| !state.hung_up);
+        waiting |= state.is_none_or(|state| state.readable);
+    }
+    held.then_some(waiting)
+}
+
+/// How long a process that holds a capture has held it since the child exited, and how long it
+/// has been quiet: what decides when a run stops reading and answers by its child.
+///
+/// Both clocks run only while something is seen to hold a capture. Neither times a reader: a
+/// capture nothing holds is read to its end, however long that takes.
+#[cfg(unix)]
+struct Holding {
+    /// When something was first seen holding a capture, without a look since that found nothing.
+    since: Option<Instant>,
+    /// The bytes read at the last sign of the holder writing, and when that was.
+    seen: (u64, Instant),
+}
+
+#[cfg(unix)]
+impl Holding {
+    fn new(capture: &Capture) -> Holding {
+        Holding { since: None, seen: (capture.progress.load(Ordering::SeqCst), Instant::now()) }
+    }
+
+    /// Looks at `capture` now, and says whether to stop reading it: something holds it, and has
+    /// written nothing for [`CAPTURE_QUIET`] or has held it for [`CAPTURE_LINGER`].
+    fn is_over(&mut self, capture: &Capture) -> bool {
+        let (read, now) = (capture.progress.load(Ordering::SeqCst), Instant::now());
+        let Some(waiting) = holder(capture) else {
+            (self.since, self.seen) = (None, (read, now));
+            return false;
+        };
+        let since = *self.since.get_or_insert(now);
+        // Bytes read since the last look, or bytes waiting to be: either way the holder is not
+        // quiet, and a reader that has not run yet is not the holder being quiet.
+        if read != self.seen.0 || waiting || since == now {
+            self.seen = (read, now);
+        }
+        self.seen.1.elapsed() >= CAPTURE_QUIET || since.elapsed() >= CAPTURE_LINGER
+    }
 }
 
 /// Writes `input` to the child's stdin on its own thread, until it is all written, the child
@@ -888,10 +982,11 @@ fn drain<P: Read + Pollable + Send + 'static>(
 /// never past the limits: the child's own `timeoutMs` and the runtime's execution time limit,
 /// whichever comes first. At the deadline the child is killed and reaped; the runtime's limit also
 /// marks the call expired, so the watchdog stops the script at its next safepoint. A captured
-/// stream passing its ceiling kills the child at once. A capture still open after the child exited
-/// is held by a process it started: on Unix it is read until it goes quiet ([`CAPTURE_QUIET`]) or
+/// stream passing its ceiling kills the child at once. A capture a process it started still holds
+/// after the child exited is read, on Unix, until that holder goes quiet ([`CAPTURE_QUIET`]) or
 /// for [`CAPTURE_LINGER`], then its readers are cancelled and the child's own result is the
-/// answer, with `group` killing what holds it; elsewhere the deadline or a ceiling ends it.
+/// answer, with `group` killing what holds it; a capture nothing holds is read to its end, with
+/// only the limits over it. Elsewhere the deadline or a ceiling ends the wait.
 fn wait(
     call: &Call<'_>,
     child: &mut Child,
@@ -946,12 +1041,11 @@ fn wait(
     }
     // The child has exited and is not yet reaped. Its captures end when every holder of the pipe
     // has closed it, and a process the child started may hold one for as long as it lives. That
-    // is not the child's output and not the child's failure: once nothing more arrives, the
-    // readers are ended and the child's own result is the answer.
+    // is not the child's output and not the child's failure: once such a holder has gone quiet,
+    // the readers are ended and the child's own result is the answer. A capture nothing holds is
+    // simply read to its end.
     #[cfg(unix)]
-    let exited = Instant::now();
-    #[cfg(unix)]
-    let mut seen = (capture.progress.load(Ordering::SeqCst), exited);
+    let mut holding = Holding::new(capture);
     #[cfg(not(unix))]
     let _ = cancel;
     #[cfg_attr(not(unix), allow(unused_mut))]
@@ -967,11 +1061,7 @@ fn wait(
         // Only where a blocked reader can be ended: elsewhere the limits are all that end the wait.
         #[cfg(unix)]
         {
-            let read = capture.progress.load(Ordering::SeqCst);
-            if read != seen.0 {
-                seen = (read, Instant::now());
-            }
-            if seen.1.elapsed() >= CAPTURE_QUIET || exited.elapsed() >= CAPTURE_LINGER {
+            if holding.is_over(capture) {
                 // The leader is still unreaped, so its group is still ours to signal: what the
                 // child left in it does not outlive a call that was bounded.
                 // Asked again first, as every kill is: a leader the host reaped in the meantime no
@@ -1247,7 +1337,7 @@ impl Extension for ProcessExtension {
             .doc("The script's process and the ones it starts: run a program and wait for its exit code, environment variables, and the standard streams.")
             .installed("run")
             .signature(RUN_SIGNATURE)
-            .doc("Runs program with args (no shell), waits for it, and returns how it ended; needs the process.spawn capability. stdout and stderr are inherited unless captured or discarded; stdin is empty unless given. timeoutMs (1 to 86400000, a day) stops the child after that many milliseconds, and maxStdoutBytes or maxStderrBytes (0 to 2^53 - 1, each for a captured stream) stops it once that stream passes its ceiling: the child is killed and reaped, its output discarded, and the failure is timeout or outputLimit. A captured stream given no ceiling has one of 64 MiB. On Unix a capture that a process the child started still holds open after the child exited is read until nothing has arrived for 250 ms, or for 2 s, and the call then answers the child's own result with held = true: what that process wrote later is not in it. Under an execution time limit a run that shares neither stdout nor stderr with the host is set apart in a group of its own, as a bounded one is, and so cannot use the controlling terminal. On Unix a bounded child runs in a process group of its own, which a limit signals whole on Linux, Android, macOS and FreeBSD (a descendant that left the group is not stopped); elsewhere only the child is killed. On Unix the call leaves no thread behind when it returns; on Windows a thread blocked on a pipe that something else holds stays until that pipe closes. A run counts against the live-child limit while it runs.")
+            .doc("Runs program with args (no shell), waits for it, and returns how it ended; needs the process.spawn capability. stdout and stderr are inherited unless captured or discarded; stdin is empty unless given. timeoutMs (1 to 86400000, a day) stops the child after that many milliseconds, and maxStdoutBytes or maxStderrBytes (0 to 2^53 - 1, each for a captured stream) stops it once that stream passes its ceiling: the child is killed and reaped, its output discarded, and the failure is timeout or outputLimit. A captured stream given no ceiling has one of 64 MiB. On Unix a capture that a process the child started still holds open after the child exited is read until that process has written nothing for 250 ms, or for 2 s, and the call then answers the child's own result with held = true: what that process wrote later is not in it. A run whose captures nothing holds reads them to their end, however long that takes, and is never held. Under an execution time limit a run that shares neither stdout nor stderr with the host is set apart in a group of its own, as a bounded one is, and so cannot use the controlling terminal. On Unix a bounded child runs in a process group of its own, which a limit signals whole on Linux, Android, macOS and FreeBSD (a descendant that left the group is not stopped); elsewhere only the child is killed. On Unix the call leaves no thread behind when it returns; on Windows a thread blocked on a pipe that something else holds stays until that pipe closes. A run counts against the live-child limit while it runs.")
             .installed("start")
             .signature(START_SIGNATURE)
             .doc("Starts program with args (no shell) without waiting, and returns a process handle; needs the process.spawn capability, and fails like run for a program that cannot start. stdin is null unless \"pipe\", stdout and stderr are inherited unless \"pipe\" or \"null\". Reads, writes and wait never block except wait with a timeout. timeoutMs, maxStdoutBytes and maxStderrBytes are lifetime limits, as on run: passing one kills the child and, on Linux, Android, macOS and FreeBSD, its process group, and later reads answer with the limit's kind. Closing the handle kills and reaps the child. A started child counts against the live-child limit until its handle is closed or a limit stops it, so close handles: an unclosed one holds its slot until it is collected.")
@@ -1375,4 +1465,117 @@ fn install(
         },
     )?;
     Ok(())
+}
+
+#[cfg(all(test, unix))]
+mod capture_tests {
+    use std::io::Write as _;
+    use std::os::fd::AsFd as _;
+    use std::sync::mpsc;
+
+    use super::*;
+
+    /// A capture of `read` whose reader has not finished and will not until it is released: a
+    /// reader the machine has not run yet, however long that lasts.
+    fn stalled(read: &std::io::PipeReader) -> (Capture, mpsc::Sender<()>) {
+        let (release, released) = mpsc::channel::<()>();
+        let reader = std::thread::spawn(move || {
+            let _ = released.recv();
+            Vec::new()
+        });
+        let capture = Capture {
+            stdout: Some(reader),
+            stderr: None,
+            exceeded: Arc::default(),
+            progress: Arc::default(),
+            watch: [Some(read.as_fd().try_clone_to_owned().unwrap()), None],
+        };
+        (capture, release)
+    }
+
+    fn finish(capture: Capture, release: &mpsc::Sender<()>) {
+        release.send(()).unwrap();
+        capture.stdout.unwrap().join().unwrap();
+    }
+
+    /// How long `holding` goes on reading `capture`, looked at as `wait` looks: until it is over.
+    fn lasted(holding: &mut Holding, capture: &Capture) -> Duration {
+        let started = Instant::now();
+        while !holding.is_over(capture) {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        started.elapsed()
+    }
+
+    /// The defect this guards against judged a pipe held when its reader had read nothing for a
+    /// quarter of a second: a stalled reader and a held pipe looked alike. They don't to the pipe.
+    #[test]
+    fn a_pipe_nothing_holds_is_held_by_nothing_however_long_its_reader_takes() {
+        let (read, mut write) = std::io::pipe().unwrap();
+        write.write_all(b"out").unwrap();
+        let (capture, release) = stalled(&read);
+        assert_eq!(holder(&capture), Some(true), "a writer still has it, and bytes wait");
+
+        drop(write);
+        assert_eq!(holder(&capture), None, "every writer gone: unread bytes and an idle reader hold nothing");
+        finish(capture, &release);
+    }
+
+    #[test]
+    fn a_pipe_something_holds_says_whether_bytes_wait_in_it() {
+        let (read, mut write) = std::io::pipe().unwrap();
+        let (capture, release) = stalled(&read);
+        assert_eq!(holder(&capture), Some(false), "held, and quiet");
+
+        write.write_all(b"later").unwrap();
+        assert_eq!(holder(&capture), Some(true), "held, and the holder wrote: unread is not quiet");
+
+        // A reader that reached its end is waited on by nobody, whoever still has the pipe.
+        release.send(()).unwrap();
+        while !capture.stdout.as_ref().unwrap().is_finished() {
+            std::thread::yield_now();
+        }
+        assert_eq!(holder(&capture), None);
+        drop(write);
+    }
+
+    /// The wait itself, with the reader stalled for longer than either clock allows a holder: a
+    /// capture nothing holds is still being read, where a clock on the reader gave it up for held
+    /// a quarter of a second in. The sleep is the point: nothing the machine does shortens it.
+    #[test]
+    fn no_clock_runs_on_a_capture_nothing_holds() {
+        let (read, mut write) = std::io::pipe().unwrap();
+        write.write_all(b"out").unwrap();
+        drop(write);
+        let (capture, release) = stalled(&read);
+        let mut holding = Holding::new(&capture);
+        assert!(!holding.is_over(&capture));
+        std::thread::sleep(CAPTURE_LINGER + CAPTURE_QUIET);
+        assert!(!holding.is_over(&capture), "an unread capture nothing holds was given up on");
+        finish(capture, &release);
+    }
+
+    /// A held capture is given up on by the holder's clocks: once it has been quiet, and however
+    /// much it writes once it has been held long enough. A holder that lets go stops both.
+    #[test]
+    fn the_clocks_time_what_holds_a_capture() {
+        let (read, write) = std::io::pipe().unwrap();
+        let (capture, release) = stalled(&read);
+        let quiet = lasted(&mut Holding::new(&capture), &capture);
+        assert!(quiet >= CAPTURE_QUIET, "a quiet holder was given up on after {quiet:?}");
+
+        // Bytes left unread are the holder not being quiet, so only the longer clock ends this.
+        let mut write = write;
+        write.write_all(b"still here").unwrap();
+        let talking = lasted(&mut Holding::new(&capture), &capture);
+        assert!(talking >= CAPTURE_LINGER, "a holder with bytes unread was given up on after {talking:?}");
+
+        // Held long enough to be given up on, and then let go: nothing holds it, so nothing is.
+        let mut holding = Holding::new(&capture);
+        assert!(!holding.is_over(&capture));
+        std::thread::sleep(CAPTURE_LINGER + CAPTURE_QUIET);
+        drop(write);
+        assert!(!holding.is_over(&capture), "a holder that let go was still timed");
+        finish(capture, &release);
+    }
 }

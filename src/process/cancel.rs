@@ -18,6 +18,17 @@ pub(super) struct Cancel {
     inner: unix::Pair,
 }
 
+/// What a pipe's read end says when asked without waiting.
+#[cfg(unix)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct PipeState {
+    /// It has bytes to read.
+    pub(super) readable: bool,
+    /// Every writer has closed it: once what it holds is read, it is at its end. This is the
+    /// kernel's account of who holds the pipe, and no clock comes into it.
+    pub(super) hung_up: bool,
+}
+
 /// A pipe end a thread can wait on together with a [`Cancel`].
 pub(super) trait Pollable {
     #[cfg(unix)]
@@ -69,6 +80,13 @@ impl Cancel {
             let _ = pipe;
             false
         }
+    }
+
+    /// What the read end `pipe` says without waiting: whether it has bytes to read, and whether
+    /// every writer of it has closed it. `None` when the pipe could not be asked.
+    #[cfg(unix)]
+    pub(super) fn state_now(pipe: &impl std::os::fd::AsRawFd) -> Option<PipeState> {
+        unix::Pair::state_now(pipe.as_raw_fd())
     }
 
     /// Reads from `pipe` into `chunk`, as `read` does, or answers `None` once cancelled.
@@ -187,6 +205,26 @@ mod unix {
             // SAFETY: `fds` is a live array of one pollfd, poll only writes its revents, and a zero
             // timeout never waits.
             unsafe { libc::poll(fds.as_mut_ptr(), 1, 0) > 0 && fds[0].revents != 0 }
+        }
+
+        /// Whether `fd`, a pipe's read end, has bytes waiting, and whether its writers are gone.
+        ///
+        /// `None` when poll itself failed, which says nothing about the pipe either way.
+        pub(super) fn state_now(fd: RawFd) -> Option<super::PipeState> {
+            let mut fds = [libc::pollfd { fd, events: libc::POLLIN, revents: 0 }];
+            // SAFETY: `fds` is a live array of one pollfd, poll only writes its revents, and a zero
+            // timeout never waits.
+            let ready = unsafe { libc::poll(fds.as_mut_ptr(), 1, 0) };
+            if ready < 0 {
+                return None;
+            }
+            let said = |events: libc::c_short| ready > 0 && fds[0].revents & events != 0;
+            // An error on the descriptor, or one poll will not take, leaves nothing to wait for:
+            // it counts with the writers being gone.
+            Some(super::PipeState {
+                readable: said(libc::POLLIN),
+                hung_up: said(libc::POLLHUP | libc::POLLERR | libc::POLLNVAL),
+            })
         }
 
         /// Waits until `fd` is ready for `events` (`true`) or this is cancelled (`false`).
