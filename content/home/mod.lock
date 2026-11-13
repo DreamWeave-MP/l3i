@@ -1147,6 +1147,58 @@
       "groups": [],
       "extensions": {},
       "critical_extensions": []
+    },
+    {
+      "version": "2.11.0",
+      "locked_from": "db6018a45c7d93d0dc5157c3d9d4f809e9827b5a",
+      "artifacts": [
+        {
+          "id": "crate",
+          "format": "crate",
+          "filename": "l3i-2.11.0.crate",
+          "media_type": "application/gzip",
+          "size": 3651824,
+          "digests": {
+            "sha256": "d14b9b68ec4c27fbf858ed15d31d6a7635adefa4b267cef479b32dafa3ddfcd3"
+          }
+        }
+      ],
+      "runtimes": {},
+      "platforms": [],
+      "provides": [],
+      "relationships": [
+        {
+          "kind": "requires",
+          "project": "f82752ac-e7f6-43c0-8c2f-d91b7f6b3dda",
+          "name": "dream-net",
+          "version": "=1.1.1",
+          "url": "https://DreamWeave-MP.github.io/dream-net/",
+          "reason": "Runtime infrastructure: the @dream/udp module is in every plan, and l3i owns the bridge."
+        },
+        {
+          "kind": "recommends",
+          "project": "f7b9633b-b7cb-4db9-a19f-63556586a81d",
+          "name": "dream-soft-render",
+          "version": "=2.0.0",
+          "url": "https://DreamWeave-MP.github.io/dream-soft-render/",
+          "reason": "The @dream/soft-render module, when the soft-render feature is on."
+        }
+      ],
+      "components": [
+        {
+          "id": "main",
+          "name": "l3i",
+          "path": ".",
+          "required": true,
+          "default": true,
+          "requires": [],
+          "conflicts": [],
+          "suggested_with": []
+        }
+      ],
+      "groups": [],
+      "extensions": {},
+      "critical_extensions": []
     }
   ]
 }
