@@ -1773,7 +1773,7 @@ if not result.success then error(`tes3cmd exited with {result.code}`) end
 
 | Function | Returns |
 |---|---|
-| `run(program, args?, { cwd?, env?, clearEnv?, stdin?, stdout?, stderr?, timeoutMs?, maxStdoutBytes?, maxStderrBytes? }?)` | `{ success, code?, signal?, stdout?, stderr? }`; `stdout` and `stderr` are `"inherit"` (the default), `"capture"` or `"null"`. A limit that passes answers `nil, message, "timeout"` or `"outputLimit"` (see below) |
+| `run(program, args?, { cwd?, env?, clearEnv?, stdin?, stdout?, stderr?, timeoutMs?, maxStdoutBytes?, maxStderrBytes? }?)` | `{ success, code?, signal?, stdout?, stderr?, held? }`; `stdout` and `stderr` are `"inherit"` (the default), `"capture"` or `"null"`. A limit that passes answers `nil, message, "timeout"` or `"outputLimit"` (see below) |
 | `start(program, args?, { cwd?, env?, clearEnv?, stdin?, stdout?, stderr?, timeoutMs?, maxStdoutBytes?, maxStderrBytes? }?)` | A process handle (see below), or `nil, message, kind` when the program can't start |
 | `env(name)` | An environment variable, or nil |
 | `knownFolder(name)` | A folder the OS defines for the user, or nil when it can't name it. `"home"`: `HOME`, or on Windows `USERPROFILE`, then `HOMEDRIVE` with `HOMEPATH`, then `HOME`. `"documents"`: the Windows Documents known folder from `SHGetKnownFolderPath`, wherever the user (or OneDrive) moved it; nil on every other platform. What an application keeps there is its own business |
@@ -1811,8 +1811,23 @@ discards whatever it wrote, and answers `nil, message, kind`:
 A value that is not a finite whole number in its range raises, as does a ceiling for a stream that
 is not `"capture"`. The raise comes before the child starts, so a refused call starts nothing. The
 ceilings are separate: each applies to its own stream only. Reading stops as soon as a ceiling is
-crossed, so memory stays within the ceiling however much the child writes. Without any of these
-options `run` behaves as before, except that it now holds a live-child slot while it runs.
+crossed, so memory stays within the ceiling however much the child writes. A captured stream given
+no ceiling has one of 64 MiB: a capture is held outside the Luau heap, where the runtime's memory
+limit does not see it. A run that needs more names its own ceiling.
+
+A process the child started can keep a captured pipe open after the child has exited. On Unix `run`
+does not wait for it: once the child is gone it reads until nothing has arrived for 250
+milliseconds, or for 2 seconds whatever arrives, and then answers the child's own result with
+`held = true`. What that process writes later is not in the result. A run with a limit of its own
+kills the child's process group at that point; one without leaves it running. Elsewhere the wait
+lasts until the pipe closes or a limit passes. A `timeoutMs` that passes first still answers
+`"timeout"`.
+
+Under an execution time limit, a run that shares neither `stdout` nor `stderr` with the host is put
+in a process group of its own, as a run with a limit is, so the limit reaches what it started. Such
+a run is a background job to a controlling terminal and cannot use it; one that shares a stream
+stays in the host's group. A `cwd` that is not a directory answers `nil, message, "notFound"` with
+a message that names the `cwd`.
 
 On Unix a bounded child starts in a process group of its own. On Linux, Android, macOS and FreeBSD
 a limit signals that whole group, so a process it started and kept in the group cannot hold the
