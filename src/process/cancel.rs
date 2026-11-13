@@ -83,9 +83,9 @@ impl Cancel {
     }
 
     /// What the read end `pipe` says without waiting: whether it has bytes to read, and whether
-    /// every writer of it has closed it.
+    /// every writer of it has closed it. `None` when the pipe could not be asked.
     #[cfg(unix)]
-    pub(super) fn state_now(pipe: &impl std::os::fd::AsRawFd) -> PipeState {
+    pub(super) fn state_now(pipe: &impl std::os::fd::AsRawFd) -> Option<PipeState> {
         unix::Pair::state_now(pipe.as_raw_fd())
     }
 
@@ -208,17 +208,23 @@ mod unix {
         }
 
         /// Whether `fd`, a pipe's read end, has bytes waiting, and whether its writers are gone.
-        pub(super) fn state_now(fd: RawFd) -> super::PipeState {
+        ///
+        /// `None` when poll itself failed, which says nothing about the pipe either way.
+        pub(super) fn state_now(fd: RawFd) -> Option<super::PipeState> {
             let mut fds = [libc::pollfd { fd, events: libc::POLLIN, revents: 0 }];
             // SAFETY: `fds` is a live array of one pollfd, poll only writes its revents, and a zero
             // timeout never waits.
-            let ready = unsafe { libc::poll(fds.as_mut_ptr(), 1, 0) } > 0;
-            let said = |events: libc::c_short| ready && fds[0].revents & events != 0;
-            // A descriptor poll cannot ask about holds nothing to wait for either.
-            super::PipeState {
+            let ready = unsafe { libc::poll(fds.as_mut_ptr(), 1, 0) };
+            if ready < 0 {
+                return None;
+            }
+            let said = |events: libc::c_short| ready > 0 && fds[0].revents & events != 0;
+            // An error on the descriptor, or one poll will not take, leaves nothing to wait for:
+            // it counts with the writers being gone.
+            Some(super::PipeState {
                 readable: said(libc::POLLIN),
                 hung_up: said(libc::POLLHUP | libc::POLLERR | libc::POLLNVAL),
-            }
+            })
         }
 
         /// Waits until `fd` is ready for `events` (`true`) or this is cancelled (`false`).

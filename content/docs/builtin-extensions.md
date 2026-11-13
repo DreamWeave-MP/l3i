@@ -1819,9 +1819,11 @@ A process the child started can keep a captured pipe open after the child has ex
 does not wait for it: once the child is gone it reads until that process has written nothing for
 250 milliseconds, or for 2 seconds whatever it writes, and then answers the child's own result with
 `held = true`. What that process writes later is not in the result. Whether anything still holds
-the pipe is asked of the pipe, not guessed from the time: a capture nothing holds is read to its
-end and is never `held`, however slow the machine is to read it, and a holder that exits while
-`run` is still reading leaves a whole capture, not a held one. A run with a limit of its own
+the pipe is asked of the pipe, not guessed from the time: a run whose captures nothing holds reads
+them to their end and is never `held`, however slow the machine is to read them, and a holder that
+exits while `run` is still reading leaves whole captures, not a held run. `held` is the run's, not
+one stream's: with one stream held and the other not, both are read as far as they go and the run
+says `held`. A run with a limit of its own
 kills the child's process group at that point; one without leaves it running. Elsewhere the wait
 lasts until the pipe closes or a limit passes. A `timeoutMs` that passes first still answers
 `"timeout"`.
