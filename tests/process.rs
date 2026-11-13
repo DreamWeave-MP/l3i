@@ -940,11 +940,12 @@ fn an_unbounded_run_does_not_wait_for_a_process_that_only_holds_its_capture() {
 /// exits, and no longer: the run answers with what had arrived. The child writes its own line
 /// before it starts the writer, so which comes first is not left to the scheduler, and the limit is
 /// one only a run that never stopped reading reaches: it would answer with no result at all.
+/// How long the writer is read for is not measured here: a stalled writer is a quiet one, and the
+/// clocks are proved without a child beside the wait that keeps them.
 #[cfg(unix)]
 #[test]
 fn a_run_stops_reading_a_capture_its_child_left_to_a_writer() {
     let runtime = runtime_granting(&[SPAWN_CAPABILITY], Limits::default());
-    let started = Instant::now();
     runtime
         .exec(
             r"local result = assert(process.run('sh', { '-c', 'echo first; (while :; do echo more; sleep 0.05; done) &' },
@@ -952,8 +953,6 @@ fn a_run_stops_reading_a_capture_its_child_left_to_a_writer() {
               assert(result.success and result.held == true and result.stdout:sub(1, 6) == 'first\n', result.stdout)",
         )
         .unwrap();
-    let waited = started.elapsed();
-    assert!(waited >= Duration::from_millis(1500), "the run read a writer for only {waited:?}");
 }
 
 /// The runtime's execution time limit is a bound like the call's own: what the child started is
