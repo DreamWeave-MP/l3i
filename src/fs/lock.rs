@@ -43,7 +43,7 @@ impl LockOptions {
         Options::read(scope, options, "dream.fs.lock", |o| {
             lock.shared = o.or("shared", false)?;
             lock.create_parents = o.or("createParents", false)?;
-            lock.mode = mode::checked("lock", o.optional("mode")?)?;
+            lock.mode = mode::of_file("lock", o.optional("mode")?)?;
             Ok(lock)
         })
     }

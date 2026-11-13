@@ -237,11 +237,12 @@ fn every_function_needs_its_capability() {
     assert!(scratch.0.join("x").exists() && !scratch.0.join("y").exists());
 }
 
-/// The permission bits of `path`, read by the test and not by what it tests.
+/// The mode of `path`, read by the test and not by what it tests, without the set-group-ID bit:
+/// a directory takes that from its parent, and the scratch folder's is not the test's to choose.
 #[cfg(unix)]
 fn mode_of(path: &Path) -> u32 {
     use std::os::unix::fs::PermissionsExt;
-    std::fs::symlink_metadata(path).unwrap().permissions().mode() & 0o7777
+    std::fs::symlink_metadata(path).unwrap().permissions().mode() & 0o5777
 }
 
 /// Every call that creates gives what it creates exactly the mode it was handed. 666 and 777 are
@@ -269,6 +270,8 @@ fn a_mode_is_exactly_the_bits_of_what_a_call_creates() {
              assert(fs.mkdir(root .. '/a/b/c', {{ recursive = true, mode = bits('750') }})) \
              assert(fs.mkdir(root .. '/a/b/c', {{ recursive = true, mode = bits('700') }}), 'one that is there is accepted') \
              assert(fs.mkdir(root .. '/unread', {{ mode = bits('300') }})) \
+             assert(fs.mkdir(root .. '/shared', {{ mode = bits('1777') }})) \
+             assert(fs.mkdir(root .. '/shut/in/leaf', {{ recursive = true, mode = bits('040') }})) \
              local lock = assert(fs.lock(root .. '/keeper.lock', {{ mode = bits('600') }})) \
              assert(lock:unlock())"
             , root = scratch.lua()
@@ -287,10 +290,23 @@ fn a_mode_is_exactly_the_bits_of_what_a_call_creates() {
         ("a/b", 0o750),
         ("a/b/c", 0o750),
         ("unread", 0o300),
+        ("shared", 0o1777),
+        ("shut", 0o340),
+        ("shut/in", 0o340),
+        ("shut/in/leaf", 0o040),
         ("keeper.lock", 0o600),
     ] {
         assert_eq!(mode_of(&root.join(name)), mode, "{name} has {:o}", mode_of(&root.join(name)));
     }
+    // What its owner cannot read or search, the scratch folder could not be removed around.
+    runtime()
+        .exec(&format!(
+            "for _, name in {{ '/unread', '/shut', '/shut/in', '/shut/in/leaf' }} do \
+               assert(fs.chmod({root} .. name, tonumber('700', 8))) \
+             end",
+            root = scratch.lua()
+        ))
+        .unwrap();
     let leftovers: Vec<_> =
         std::fs::read_dir(root.join("made")).unwrap().map(|entry| entry.unwrap().file_name()).collect();
     assert_eq!(leftovers, ["atomic"], "an atomic write left its temporary");
@@ -304,9 +320,18 @@ fn a_mode_leaves_a_file_that_exists_alone_and_chmod_changes_it() {
     use std::os::unix::fs::PermissionsExt;
     let scratch = Scratch::new("modes-kept");
     let root = &scratch.0;
-    for name in ["kept", "stream", "lock", "atomic", "replaced"] {
+    // 640 is no umask's default, so an atomic write that keeps it carried it over.
+    for (name, mode) in [
+        ("kept", 0o640),
+        ("stream", 0o640),
+        ("lock", 0o640),
+        ("atomic", 0o640),
+        ("replaced", 0o640),
+        ("sealed", 0o400),
+        ("special", 0o4750),
+    ] {
         std::fs::write(root.join(name), b"old").unwrap();
-        std::fs::set_permissions(root.join(name), std::fs::Permissions::from_mode(0o644)).unwrap();
+        std::fs::set_permissions(root.join(name), std::fs::Permissions::from_mode(mode)).unwrap();
     }
     std::os::unix::fs::symlink(root.join("nowhere"), root.join("dangling")).unwrap();
     runtime()
@@ -318,6 +343,11 @@ fn a_mode_leaves_a_file_that_exists_alone_and_chmod_changes_it() {
              local writer = assert(fs.openWrite(root .. '/stream', {{ mode = bits('600') }})) assert(writer:close()) \
              local lock = assert(fs.lock(root .. '/lock', {{ mode = bits('600') }})) assert(lock:unlock()) \
              assert(fs.writeFile(root .. '/atomic', 'new', {{ atomic = true }}) == 3) \
+             assert(fs.writeFile(root .. '/sealed', 'new', {{ atomic = true }}) == 3) \
+             assert(fs.writeFile(root .. '/special', 'new', {{ atomic = true }}) == 3) \
+             assert(fs.stat(root .. '/special').mode == bits('4750'), 'bits beyond the permissions did not carry over') \
+             assert(not pcall(fs.writeFile, root .. '/never', 'x', {{ mode = bits('4755') }}), 'a file took set-user-ID') \
+             assert(not pcall(fs.openWrite, root .. '/never', {{ mode = bits('1000') }}), 'a file took sticky') \
              assert(fs.writeFile(root .. '/replaced', 'new', {{ atomic = true, mode = bits('600') }}) == 3) \
              local made, message, kind = fs.writeFile(root .. '/dangling', 'x', {{ mode = bits('600') }}) \
              assert(made == nil and kind == 'alreadyExists', tostring(message)) \
@@ -337,7 +367,15 @@ fn a_mode_leaves_a_file_that_exists_alone_and_chmod_changes_it() {
         ))
         .unwrap();
     assert_eq!(mode_of(&root.join("kept")), 0o400);
-    for (name, mode) in [("stream", 0o644), ("lock", 0o644), ("atomic", 0o644), ("replaced", 0o600)] {
+    assert_eq!(std::fs::read(root.join("sealed")).unwrap(), b"new");
+    for (name, mode) in [
+        ("stream", 0o640),
+        ("lock", 0o640),
+        ("atomic", 0o640),
+        ("replaced", 0o600),
+        ("sealed", 0o400),
+        ("special", 0o4750),
+    ] {
         assert_eq!(mode_of(&root.join(name)), mode, "{name} has {:o}", mode_of(&root.join(name)));
     }
     assert!(!root.join("never").exists() && !root.join("nowhere").exists(), "a refused call created something");

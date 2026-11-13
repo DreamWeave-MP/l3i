@@ -571,7 +571,7 @@ impl OpenWrite {
             open.create = o.or("create", true)?;
             open.exclusive = o.or("exclusive", false)?;
             open.write_through = o.or("writeThrough", false)?;
-            open.mode = mode::checked("openWrite", o.optional("mode")?)?;
+            open.mode = mode::of_file("openWrite", o.optional("mode")?)?;
             if open.exclusive && !open.create {
                 return Err(Error::runtime("dream.fs.openWrite: exclusive needs create"));
             }
@@ -643,7 +643,7 @@ impl WriteFile {
             write.exclusive = o.or("exclusive", false)?;
             write.atomic = o.or("atomic", false)?;
             write.create_parents = o.or("createParents", false)?;
-            write.mode = mode::checked("writeFile", o.optional("mode")?)?;
+            write.mode = mode::of_file("writeFile", o.optional("mode")?)?;
             Ok(())
         })?;
         if write.offset.is_some() && write.append {
@@ -717,18 +717,16 @@ pub(super) fn create_sibling(path: &Path, mode: Option<u32>) -> io::Result<(std:
 /// Replaces `path` with `data` through a sibling temporary renamed over it, so a reader sees
 /// the old file or the new one and never part of either. The new file has `mode` when one is
 /// given. Otherwise an existing file's permissions carry over, and a new one gets what creating it
-/// directly would have given it. On Unix the temporary is made with the bits it will keep, before
-/// anything is written to it.
+/// directly would have given it. On Unix the temporary is made with the permission bits it will
+/// keep, before anything is written to it; an old file's set-user-ID, set-group-ID and sticky bits
+/// are set after, since writing clears them.
 fn write_atomic(path: &Path, data: &[u8], mode: Option<u32>) -> io::Result<()> {
     let old = match std::fs::metadata(path) {
         Ok(metadata) => Some(metadata),
         Err(error) if error.kind() == io::ErrorKind::NotFound => None,
         Err(error) => return Err(error),
     };
-    #[cfg(unix)]
-    let (made, after) = (mode.or_else(|| old.as_ref().and_then(mode::of)), None::<std::fs::Permissions>);
-    #[cfg(not(unix))]
-    let (made, after) = (mode, old.map(|old| old.permissions()));
+    let (made, after) = mode::replacing(mode, old.as_ref());
     let (temporary, mut file) = create_sibling(path, made)?;
     let written = file
         .write_all(data)
@@ -796,7 +794,7 @@ pub(crate) fn create_durable(
 ) -> Result<Outcome<f64>> {
     let mode = match options.filter(|view| !view.is_nil()) {
         Some(options) => Options::read(call, options, "dream.fs.createDurable", |o| {
-            mode::checked("createDurable", o.optional("mode")?)
+            mode::of_file("createDurable", o.optional("mode")?)
         })?,
         None => None,
     };

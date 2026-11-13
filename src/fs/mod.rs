@@ -225,7 +225,7 @@ fn recursive(scope: &impl Scope, options: Option<ValueView<'_>>, context: &str) 
 fn mkdir(call: &Call<'_>, path: &[u8], options: Option<ValueView<'_>>) -> Result<Outcome<bool>> {
     let (recursive, mode) = match options.filter(|view| !view.is_nil()) {
         Some(options) => Options::read(call, options, "dream.fs.mkdir", |o| {
-            Ok((o.or("recursive", false)?, mode::checked("mkdir", o.optional("mode")?)?))
+            Ok((o.or("recursive", false)?, mode::of_directory("mkdir", o.optional("mode")?)?))
         })?,
         None => (false, None),
     };
@@ -235,9 +235,7 @@ fn mkdir(call: &Call<'_>, path: &[u8], options: Option<ValueView<'_>>) -> Result
 
 /// `fs.chmod(path, mode)`.
 fn chmod(path: &[u8], mode: crate::convert::Exact<i64>) -> Result<Outcome<bool>> {
-    let Some(mode) = mode::checked("chmod", Some(mode))? else {
-        return Ok(Outcome::Done(false));
-    };
+    let mode = mode::any("chmod", mode)?;
     let host = host_path("chmod", path)?;
     Ok(Outcome::of(mode::change(&host, mode).map(|()| true), "chmod", path))
 }
@@ -570,13 +568,13 @@ const MEMBERS: &[Member] = &[
     member(
         "mkdir",
         "(path: string, options: { recursive: boolean?, mode: number? }?) -> (boolean?, string?, dream_fs_ErrorKind?)",
-        "Creates a directory; recursive creates its missing parents and accepts one that exists. mode is the Unix permission bits of every directory this creates, exactly; one already there keeps its own.",
+        "Creates a directory; recursive creates its missing parents and accepts one that exists. mode is the Unix permission bits of the directory, exactly, when this creates it; a parent it creates has them with the owner's write and search bits, and a directory already there keeps its own.",
         true,
     ),
     member(
         "chmod",
         "(path: string, mode: number) -> (boolean?, string?, dream_fs_ErrorKind?)",
-        "Sets the Unix permission bits of what path names, following symbolic links: a number from 0 to 4095, such as tonumber('600', 8). unsupported where there are no such bits.",
+        "Sets the Unix permission bits of what path names, following symbolic links: a number from 0 to 4095, such as tonumber('600', 8), which may carry set-user-ID, set-group-ID and sticky. unsupported where there are no such bits.",
         true,
     ),
     member(
