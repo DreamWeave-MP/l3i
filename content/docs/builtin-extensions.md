@@ -1469,20 +1469,21 @@ handle.
 | `readAt(path, offset, length)` | `length` bytes from `offset` as a buffer, fewer at the end |
 | `open(path)` | A `dream_fs_Reader` over a memory map of the file; refuses what `readFile` refuses |
 | `openPositional(path)` | A `dream_fs_PositionalReader`: a retained, unmapped handle for a file that may change (below); refuses what `readFile` refuses |
-| `stat(path)`, `lstat(path)` | `{ kind, size, isFile, isDir, isSymlink, readonly, modified, modifiedSeconds, modifiedNanoseconds }`; `lstat` describes a link instead of following it |
+| `stat(path)`, `lstat(path)` | `{ kind, size, isFile, isDir, isSymlink, readonly, mode?, modified, modifiedSeconds, modifiedNanoseconds }`; `lstat` describes a link instead of following it |
 | `exists(path)` | Whether something is there, following links |
 | `isFile(path)`, `isDir(path)` | Whether a regular file or a directory is there, following links; `false` when nothing is, or it can't be read |
 | `list(path)` | The names in a directory, sorted by their bytes |
 | `walk(root, options?)` | Everything under `root`, depth first, as parallel arrays (below) |
 | `canonicalize(path)`, `absolute(path)` | The path with every link resolved, or made absolute without touching the disk |
 | `readLink(path)`, `sameFile(a, b)`, `cwd()` | A link's target as written, whether two paths are one file, the working directory |
-| `writeFile(path, data, { offset?, append?, create?, exclusive?, atomic?, createParents? }?)` | The count written; truncates unless `offset` or `append`. `exclusive` refuses a file that exists (`alreadyExists`); `atomic` writes a temporary beside the file and renames it over, so a reader sees the old file or the new one, keeping the old one's permissions; `createParents` makes missing parent directories |
-| `openWrite(path, { append?, truncate?, create?, exclusive?, writeThrough? }?)` | A buffered `dream_fs_Writer` |
-| `createDurable(path, data)` | The count written: a new file whose contents and name have been synchronized (below) |
+| `writeFile(path, data, { offset?, append?, create?, exclusive?, atomic?, createParents?, mode? }?)` | The count written; truncates unless `offset` or `append`. `exclusive` refuses a file that exists (`alreadyExists`); `atomic` writes a temporary beside the file and renames it over, so a reader sees the old file or the new one, keeping the old one's permissions unless `mode` gives others; `createParents` makes missing parent directories |
+| `openWrite(path, { append?, truncate?, create?, exclusive?, writeThrough?, mode? }?)` | A buffered `dream_fs_Writer` |
+| `createDurable(path, data, { mode? }?)` | The count written: a new file whose contents and name have been synchronized (below) |
 | `syncDirectory(path)`, `replace(source, destination)` | `true`: a directory's entries synchronized, or `source` atomically renamed over `destination` (below) |
-| `mkdir(path, { recursive? }?)`, `remove(path, { recursive? }?)` | `true`; `remove` never follows a link |
+| `mkdir(path, { recursive?, mode? }?)`, `remove(path, { recursive? }?)` | `true`; `remove` never follows a link |
+| `chmod(path, mode)` | `true`: the Unix permission bits of what `path` names, set (below) |
 | `rename(from, to)`, `copy(from, to)`, `hardLink(source, link)`, `symlink(target, link, { directory? }?)` | `true`, or the byte count for `copy` |
-| `lock(path, { shared?, createParents? }?)` | A `dream_fs_Lock`: the operating system's lock on the file, made if it isn't there; a lock held elsewhere is `wouldBlock` (below) |
+| `lock(path, { shared?, createParents?, mode? }?)` | A `dream_fs_Lock`: the operating system's lock on the file, made if it isn't there; a lock held elsewhere is `wouldBlock` (below) |
 
 `walk` takes `{ followLinks?, include?, metadata?, sort?, maxDepth?, skipErrors? }` and returns
 `{ paths, kinds, sizes?, modifiedSeconds?, modifiedNanoseconds?, errors }`: one table per column,
@@ -1498,6 +1499,49 @@ with `read`, `readInto`, `seek` and `skip`. A writer's `write`, `writeAt`, `seek
 script never flushes or closes reaches the file when the writer is collected, when the runtime
 drops, or at `Runtime::shutdown()`, which a host that exits without dropping the runtime calls
 first.
+
+### Permission bits
+
+`mode` is the Unix permission bits of what a call creates: a number from 0 to 511 for a file,
+its nine permission bits. Luau has no octal literal, so write one with `tonumber`:
+
+```luau
+local Private = tonumber('600', 8)
+assert(fs.mkdir(root, { recursive = true, mode = tonumber('700', 8) }))
+assert(fs.writeFile(fs.join(root, 'token'), secret, { atomic = true, mode = Private }))
+```
+
+The bits are exact, whatever the process umask, and nobody but the owner is given more on the
+way there. The file is created with them, so the umask can only take some away, and those are put
+back through the handle just opened, before anything is written. A file for its owner alone is at
+no moment readable by anyone else. `writeFile`, `openWrite`, `createDurable`, `mkdir` and `lock`
+all take it. A file whose bits can't be set, on a filesystem that has none, is an error and is
+not left behind.
+
+A file's mode stops at the permission bits because the system clears set-user-ID and set-group-ID
+from a file as it is written. A directory's `mode` may go to 4095 and carry those and sticky, and
+`chmod` sets any of them on anything; the system may still refuse set-group-ID to a process
+outside the group.
+
+A mode is for what the call creates:
+
+- A file that is already there keeps its own bits, as it does under `open(2)`. `chmod(path, mode)`
+  changes those, following symbolic links, and `stat(path).mode` reads them.
+- An atomic `writeFile` always makes the file anew, so with a `mode` the new file has it; without
+  one it keeps the old file's permissions. Its temporary is created with the permission bits the
+  file will keep.
+- `mkdir` gives the mode to the directory it names. With `recursive`, a parent it creates has the
+  mode and the owner's write and search bits, without which nothing could be made inside it, and
+  a directory that exists is left as it is. A directory keeps the set-group-ID bit it takes from
+  its parent.
+- `createParents` makes parents with the default bits. Make them with `mkdir` first when they
+  matter.
+- With a mode, a file is not created through a dangling symbolic link: the call answers
+  `alreadyExists`.
+- `mode` with `create = false` raises: there is nothing it could apply to.
+
+Only Unix has these bits. On Windows a `mode` is checked and then changes nothing, `stat` reports
+no `mode`, and `chmod` answers `unsupported`.
 
 ### Locks
 

@@ -170,7 +170,7 @@ pub(super) fn replace(from: &Path, to: &Path) -> io::Result<()> {
 pub(super) fn create_durable(path: &Path, data: &[u8]) -> io::Result<()> {
     let parent = super::io::parent_directory(path);
     require_durable_volume(parent)?;
-    let (temporary, mut file) = super::io::create_sibling(path)?;
+    let (temporary, mut file) = super::io::create_sibling(path, None)?;
     let written = file.write_all(data).and_then(|()| file.sync_all());
     drop(file);
     let moved = written.and_then(|()| move_through(&temporary, path, 0));

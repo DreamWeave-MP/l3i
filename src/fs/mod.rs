@@ -53,6 +53,7 @@
 pub mod authenticated;
 mod io;
 mod lock;
+mod mode;
 mod path;
 mod walk;
 #[cfg(windows)]
@@ -161,13 +162,14 @@ fn push_stat(call: &Call<'_>, metadata: &std::fs::Metadata) -> Result<StackResul
         Err(_) => (None, None),
     };
     let mut frame = call.frame();
-    let table = frame.push_table(0, 9)?;
+    let table = frame.push_table(0, 10)?;
     table.raw_set_value(&frame, "kind", kind_name(file_type))?;
     table.raw_set_value(&frame, "size", &(if file_type.is_dir() { 0.0 } else { metadata.len() as f64 }))?;
     table.raw_set_value(&frame, "isFile", &file_type.is_file())?;
     table.raw_set_value(&frame, "isDir", &file_type.is_dir())?;
     table.raw_set_value(&frame, "isSymlink", &file_type.is_symlink())?;
     table.raw_set_value(&frame, "readonly", &metadata.permissions().readonly())?;
+    table.raw_set_value(&frame, "mode", &mode::of(metadata).map(f64::from))?;
     table.raw_set_value(&frame, "modified", &modified)?;
     table.raw_set_value(&frame, "modifiedSeconds", &exact.map(|(seconds, _)| seconds as f64))?;
     table.raw_set_value(&frame, "modifiedNanoseconds", &exact.map(|(_, nanos)| f64::from(nanos)))?;
@@ -219,14 +221,23 @@ fn recursive(scope: &impl Scope, options: Option<ValueView<'_>>, context: &str) 
     Options::read(scope, options, context, |o| o.or("recursive", false))
 }
 
+/// `fs.mkdir(path, { recursive?, mode? }?)`.
 fn mkdir(call: &Call<'_>, path: &[u8], options: Option<ValueView<'_>>) -> Result<Outcome<bool>> {
-    let host = host_path("mkdir", path)?;
-    let result = if recursive(call, options, "dream.fs.mkdir")? {
-        std::fs::create_dir_all(&host)
-    } else {
-        std::fs::create_dir(&host)
+    let (recursive, mode) = match options.filter(|view| !view.is_nil()) {
+        Some(options) => Options::read(call, options, "dream.fs.mkdir", |o| {
+            Ok((o.or("recursive", false)?, mode::of_directory("mkdir", o.optional("mode")?)?))
+        })?,
+        None => (false, None),
     };
-    Ok(Outcome::of(result.map(|()| true), "mkdir", path))
+    let host = host_path("mkdir", path)?;
+    Ok(Outcome::of(mode::create_dir(&host, recursive, mode).map(|()| true), "mkdir", path))
+}
+
+/// `fs.chmod(path, mode)`.
+fn chmod(path: &[u8], mode: crate::convert::Exact<i64>) -> Result<Outcome<bool>> {
+    let mode = mode::any("chmod", mode)?;
+    let host = host_path("chmod", path)?;
+    Ok(Outcome::of(mode::change(&host, mode).map(|()| true), "chmod", path))
 }
 
 /// Removes a file, a link (never what it points at), or a directory: empty, or with everything in
@@ -526,20 +537,20 @@ const MEMBERS: &[Member] = &[
     ),
     member(
         "writeFile",
-        "(path: string, data: buffer | string, options: { offset: number?, append: boolean?, create: boolean?, exclusive: boolean?, atomic: boolean?, createParents: boolean? }?) -> (number?, string?, dream_fs_ErrorKind?)",
-        "Writes data to path, truncating it, and returns the count. offset writes in place without truncating; append adds at the end; create = false refuses a file that does not exist and exclusive = true one that does. atomic writes a temporary beside path and renames it over path, so a reader sees the old file or the new one, never part of either, keeping the old file's permissions. createParents makes missing parent directories first.",
+        "(path: string, data: buffer | string, options: { offset: number?, append: boolean?, create: boolean?, exclusive: boolean?, atomic: boolean?, createParents: boolean?, mode: number? }?) -> (number?, string?, dream_fs_ErrorKind?)",
+        "Writes data to path, truncating it, and returns the count. offset writes in place without truncating; append adds at the end; create = false refuses a file that does not exist and exclusive = true one that does. atomic writes a temporary beside path and renames it over path, so a reader sees the old file or the new one, never part of either, keeping the old file's permissions unless mode gives others. createParents makes missing parent directories first. mode is the Unix permission bits of a file this creates, exactly and from the moment it exists; a file already there keeps its own.",
         true,
     ),
     member(
         "createDurable",
-        "(path: string, data: buffer | string) -> (number?, string?, dream_fs_ErrorKind?)",
-        "Exclusively creates and writes a file, then synchronizes the file and its parent directory. Windows moves a flushed temporary into place with write-through instead, and refuses a volume that isn't local NTFS or ReFS.",
+        "(path: string, data: buffer | string, options: { mode: number? }?) -> (number?, string?, dream_fs_ErrorKind?)",
+        "Exclusively creates and writes a file, then synchronizes the file and its parent directory. mode is the file's Unix permission bits, exactly and from the moment it exists. Windows moves a flushed temporary into place with write-through instead, and refuses a volume that isn't local NTFS or ReFS.",
         true,
     ),
     member(
         "openWrite",
-        "(path: string, options: { append: boolean?, truncate: boolean?, create: boolean?, exclusive: boolean?, writeThrough: boolean? }?) -> (dream_fs_Writer?, string?, dream_fs_ErrorKind?)",
-        "A writer over path, truncated unless append or truncate = false; created unless create = false. exclusive = true refuses a file that exists; writeThrough = true asks the OS to write through its cache.",
+        "(path: string, options: { append: boolean?, truncate: boolean?, create: boolean?, exclusive: boolean?, writeThrough: boolean?, mode: number? }?) -> (dream_fs_Writer?, string?, dream_fs_ErrorKind?)",
+        "A writer over path, truncated unless append or truncate = false; created unless create = false. exclusive = true refuses a file that exists; writeThrough = true asks the OS to write through its cache. mode is the Unix permission bits of a file this creates, exactly and from the moment it exists; a file already there keeps its own.",
         true,
     ),
     member(
@@ -556,8 +567,14 @@ const MEMBERS: &[Member] = &[
     ),
     member(
         "mkdir",
-        "(path: string, options: { recursive: boolean? }?) -> (boolean?, string?, dream_fs_ErrorKind?)",
-        "Creates a directory; recursive creates its missing parents and accepts one that exists.",
+        "(path: string, options: { recursive: boolean?, mode: number? }?) -> (boolean?, string?, dream_fs_ErrorKind?)",
+        "Creates a directory; recursive creates its missing parents and accepts one that exists. mode is the Unix permission bits of the directory, exactly, when this creates it; a parent it creates has them with the owner's write and search bits, and a directory already there keeps its own.",
+        true,
+    ),
+    member(
+        "chmod",
+        "(path: string, mode: number) -> (boolean?, string?, dream_fs_ErrorKind?)",
+        "Sets the Unix permission bits of what path names, following symbolic links: a number from 0 to 4095, such as tonumber('600', 8), which may carry set-user-ID, set-group-ID and sticky. unsupported where there are no such bits.",
         true,
     ),
     member(
@@ -586,8 +603,8 @@ const MEMBERS: &[Member] = &[
     ),
     member(
         "lock",
-        "(path: string, options: { shared: boolean?, createParents: boolean? }?) -> (dream_fs_Lock?, string?, dream_fs_ErrorKind?)",
-        "Takes the operating system's lock on path, creating the file, without waiting: exclusive, or shared with shared = true. Held until unlock, the handle is collected, the runtime shuts down, or the process ends, so it never outlives its holder. A lock held elsewhere answers nil, the message and wouldBlock. Advisory on Unix: it excludes other locks, not reads or writes.",
+        "(path: string, options: { shared: boolean?, createParents: boolean?, mode: number? }?) -> (dream_fs_Lock?, string?, dream_fs_ErrorKind?)",
+        "Takes the operating system's lock on path, creating the file, without waiting: exclusive, or shared with shared = true. mode is the file's Unix permission bits when this creates it. Held until unlock, the handle is collected, the runtime shuts down, or the process ends, so it never outlives its holder. A lock held elsewhere answers nil, the message and wouldBlock. Advisory on Unix: it excludes other locks, not reads or writes.",
         true,
     ),
     member(
@@ -599,7 +616,7 @@ const MEMBERS: &[Member] = &[
 ];
 
 const STAT_TYPE: &str = "{ kind: dream_fs_FileKind, size: number, isFile: boolean, isDir: boolean, isSymlink: boolean, \
-    readonly: boolean, modified: number?, modifiedSeconds: number?, modifiedNanoseconds: number? }";
+    readonly: boolean, mode: number?, modified: number?, modifiedSeconds: number?, modifiedNanoseconds: number? }";
 const WALK_OPTIONS_TYPE: &str = "{ followLinks: boolean?, include: (\"all\" | \"files\" | \"dirs\")?, metadata: boolean?, \
     sort: boolean?, maxDepth: number?, skipErrors: boolean? }";
 const WALK_TYPE: &str = "{ paths: { string }, kinds: { dream_fs_FileKind }, sizes: { number }?, \
@@ -724,6 +741,7 @@ impl Extension for FsExtension {
         bind!("syncDirectory", sync_directory);
         bind!("replace", replace);
         bind!("mkdir", mkdir);
+        bind!("chmod", chmod);
         bind!("remove", remove);
         bind!("rename", |from: &[u8], to: &[u8]| -> Result<Outcome<bool>> {
             let result = std::fs::rename(host_path("rename", from)?, host_path("rename", to)?);
