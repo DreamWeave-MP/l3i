@@ -1816,9 +1816,12 @@ no ceiling has one of 64 MiB: a capture is held outside the Luau heap, where the
 limit does not see it. A run that needs more names its own ceiling.
 
 A process the child started can keep a captured pipe open after the child has exited. On Unix `run`
-does not wait for it: once the child is gone it reads until nothing has arrived for 250
-milliseconds, or for 2 seconds whatever arrives, and then answers the child's own result with
-`held = true`. What that process writes later is not in the result. A run with a limit of its own
+does not wait for it: once the child is gone it reads until that process has written nothing for
+250 milliseconds, or for 2 seconds whatever it writes, and then answers the child's own result with
+`held = true`. What that process writes later is not in the result. Whether anything still holds
+the pipe is asked of the pipe, not guessed from the time: a capture nothing holds is read to its
+end and is never `held`, however slow the machine is to read it, and a holder that exits while
+`run` is still reading leaves a whole capture, not a held one. A run with a limit of its own
 kills the child's process group at that point; one without leaves it running. Elsewhere the wait
 lasts until the pipe closes or a limit passes. A `timeoutMs` that passes first still answers
 `"timeout"`.
