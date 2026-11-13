@@ -22,13 +22,16 @@ use crate::outcome::Failure;
 use crate::stack::{Scope, ValueView};
 use crate::userdata::Userdata;
 
+use super::mode::{self, Create};
 use super::{Outcome, display, done};
 
-/// How `fs.lock` locks: `{ shared?, createParents? }`.
+/// How `fs.lock` locks: `{ shared?, createParents?, mode? }`.
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct LockOptions {
     shared: bool,
     create_parents: bool,
+    /// The permission bits of the file when taking the lock creates it.
+    mode: Option<u32>,
 }
 
 impl LockOptions {
@@ -40,6 +43,7 @@ impl LockOptions {
         Options::read(scope, options, "dream.fs.lock", |o| {
             lock.shared = o.or("shared", false)?;
             lock.create_parents = o.or("createParents", false)?;
+            lock.mode = mode::checked("lock", o.optional("mode")?)?;
             Ok(lock)
         })
     }
@@ -102,7 +106,7 @@ impl Lock {
             done!(Outcome::of(std::fs::create_dir_all(parent), "lock", path));
         }
         let file = done!(Outcome::of(
-            OpenOptions::new().read(true).write(true).create(true).truncate(false).open(&host),
+            mode::open(OpenOptions::new().read(true).write(true), &host, Create::Missing, options.mode),
             "lock",
             path
         ));

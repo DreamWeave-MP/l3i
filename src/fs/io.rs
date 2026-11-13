@@ -18,6 +18,7 @@ use crate::options::Options;
 use crate::stack::{Scope, ValueView};
 use crate::userdata::Userdata;
 
+use super::mode::{self, Create};
 use super::{Outcome, display, done};
 
 /// What reading a FIFO, socket or device as a file fails with: such a file would block the VM
@@ -538,7 +539,7 @@ pub(crate) fn describe_reader(d: &mut ExtensionDescriptor) {
 // Writes
 // ---------------------------------------------------------------------------------------------
 
-/// How `fs.openWrite` opens a file: `{ append?, truncate?, create? }`.
+/// How `fs.openWrite` opens a file: `{ append?, truncate?, create?, exclusive?, writeThrough?, mode? }`.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct OpenWrite {
     append: bool,
@@ -547,12 +548,20 @@ pub(crate) struct OpenWrite {
     create: bool,
     exclusive: bool,
     write_through: bool,
+    /// The permission bits of a file this creates.
+    mode: Option<u32>,
 }
 
 impl OpenWrite {
     pub(crate) fn read(scope: &impl Scope, options: Option<ValueView<'_>>) -> Result<OpenWrite> {
-        let mut open =
-            OpenWrite { append: false, truncate: None, create: true, exclusive: false, write_through: false };
+        let mut open = OpenWrite {
+            append: false,
+            truncate: None,
+            create: true,
+            exclusive: false,
+            write_through: false,
+            mode: None,
+        };
         let Some(options) = options.filter(|view| !view.is_nil()) else {
             return Ok(open);
         };
@@ -562,8 +571,12 @@ impl OpenWrite {
             open.create = o.or("create", true)?;
             open.exclusive = o.or("exclusive", false)?;
             open.write_through = o.or("writeThrough", false)?;
+            open.mode = mode::checked("openWrite", o.optional("mode")?)?;
             if open.exclusive && !open.create {
                 return Err(Error::runtime("dream.fs.openWrite: exclusive needs create"));
+            }
+            if open.mode.is_some() && !open.create {
+                return Err(Error::runtime("dream.fs.openWrite: mode needs create"));
             }
             Ok(open)
         })
@@ -572,12 +585,7 @@ impl OpenWrite {
     fn open(self, path: &Path) -> io::Result<(File, u64)> {
         let truncate = self.truncate.unwrap_or(!self.append);
         let mut options = OpenOptions::new();
-        options
-            .write(true)
-            .create(self.create && !self.exclusive)
-            .create_new(self.exclusive)
-            .append(self.append)
-            .truncate(truncate && !self.append);
+        options.write(true).append(self.append).truncate(truncate && !self.append);
         if self.write_through {
             #[cfg(unix)]
             {
@@ -593,13 +601,13 @@ impl OpenWrite {
             #[cfg(not(any(unix, windows)))]
             return Err(io::Error::new(io::ErrorKind::Unsupported, "write-through is unsupported on this platform"));
         }
-        let file = options.open(path)?;
+        let file = mode::open(&options, path, Create::from_options(self.create, self.exclusive), self.mode)?;
         let position = if self.append { file.metadata()?.len() } else { 0 };
         Ok((file, position))
     }
 }
 
-/// How `fs.writeFile` writes: `{ offset?, append?, create?, exclusive?, atomic?, createParents? }`.
+/// How `fs.writeFile` writes: `{ offset?, append?, create?, exclusive?, atomic?, createParents?, mode? }`.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct WriteFile {
     offset: Option<u64>,
@@ -608,6 +616,8 @@ pub(crate) struct WriteFile {
     exclusive: bool,
     atomic: bool,
     create_parents: bool,
+    /// The permission bits of a file this creates, which an atomic write always does.
+    mode: Option<u32>,
 }
 
 impl WriteFile {
@@ -619,6 +629,7 @@ impl WriteFile {
             exclusive: false,
             atomic: false,
             create_parents: false,
+            mode: None,
         };
         let Some(options) = options.filter(|view| !view.is_nil()) else {
             return Ok(write);
@@ -632,6 +643,7 @@ impl WriteFile {
             write.exclusive = o.or("exclusive", false)?;
             write.atomic = o.or("atomic", false)?;
             write.create_parents = o.or("createParents", false)?;
+            write.mode = mode::checked("writeFile", o.optional("mode")?)?;
             Ok(())
         })?;
         if write.offset.is_some() && write.append {
@@ -639,6 +651,9 @@ impl WriteFile {
         }
         if write.exclusive && !write.create {
             return Err(Error::runtime("dream.fs.writeFile: exclusive needs create"));
+        }
+        if write.mode.is_some() && !write.create {
+            return Err(Error::runtime("dream.fs.writeFile: mode needs create"));
         }
         if write.atomic && (write.offset.is_some() || write.append || write.exclusive || !write.create) {
             return Err(Error::runtime(
@@ -656,21 +671,16 @@ impl WriteFile {
             std::fs::create_dir_all(parent)?;
         }
         if self.atomic {
-            return write_atomic(path, data);
+            return write_atomic(path, data, self.mode);
         }
         let mut open = OpenOptions::new();
         open.write(true);
-        if self.exclusive {
-            open.create_new(true);
-        } else {
-            open.create(self.create);
-        }
         if self.append {
             open.append(true);
         } else if self.offset.is_none() {
             open.truncate(true);
         }
-        let mut file = open.open(path)?;
+        let mut file = mode::open(&open, path, Create::from_options(self.create, self.exclusive), self.mode)?;
         match self.offset {
             Some(offset) => write_all_at(&file, offset, data),
             None => write_complete(&mut file, data),
@@ -683,8 +693,10 @@ pub(super) fn parent_directory(path: &Path) -> &Path {
     path.parent().filter(|parent| !parent.as_os_str().is_empty()).unwrap_or(Path::new("."))
 }
 
-/// A new hidden temporary beside `path`, on the same volume so it can be renamed over it.
-pub(super) fn create_sibling(path: &Path) -> io::Result<(std::path::PathBuf, File)> {
+/// A new hidden temporary beside `path`, on the same volume so it can be renamed over it, made
+/// with `mode` when one is given: what is written to it is never readable more widely than the
+/// file it becomes.
+pub(super) fn create_sibling(path: &Path, mode: Option<u32>) -> io::Result<(std::path::PathBuf, File)> {
     use std::sync::atomic::{AtomicU64, Ordering};
     static NEXT: AtomicU64 = AtomicU64::new(0);
     let name = path.file_name().ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "no file name"))?;
@@ -694,7 +706,7 @@ pub(super) fn create_sibling(path: &Path) -> io::Result<(std::path::PathBuf, Fil
         candidate.push(name);
         candidate.push(format!(".{}.{}.tmp", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
         let candidate = parent.join(candidate);
-        match OpenOptions::new().write(true).create_new(true).open(&candidate) {
+        match mode::open(OpenOptions::new().write(true), &candidate, Create::New, mode) {
             Ok(file) => return Ok((candidate, file)),
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
             Err(error) => return Err(error),
@@ -703,18 +715,24 @@ pub(super) fn create_sibling(path: &Path) -> io::Result<(std::path::PathBuf, Fil
 }
 
 /// Replaces `path` with `data` through a sibling temporary renamed over it, so a reader sees
-/// the old file or the new one and never part of either. An existing file's permissions carry
-/// over; a new one gets what creating it directly would have given it.
-fn write_atomic(path: &Path, data: &[u8]) -> io::Result<()> {
-    let permissions = match std::fs::metadata(path) {
-        Ok(metadata) => Some(metadata.permissions()),
+/// the old file or the new one and never part of either. The new file has `mode` when one is
+/// given. Otherwise an existing file's permissions carry over, and a new one gets what creating it
+/// directly would have given it. On Unix the temporary is made with the bits it will keep, before
+/// anything is written to it.
+fn write_atomic(path: &Path, data: &[u8], mode: Option<u32>) -> io::Result<()> {
+    let old = match std::fs::metadata(path) {
+        Ok(metadata) => Some(metadata),
         Err(error) if error.kind() == io::ErrorKind::NotFound => None,
         Err(error) => return Err(error),
     };
-    let (temporary, mut file) = create_sibling(path)?;
+    #[cfg(unix)]
+    let (made, after) = (mode.or_else(|| old.as_ref().and_then(mode::of)), None::<std::fs::Permissions>);
+    #[cfg(not(unix))]
+    let (made, after) = (mode, old.map(|old| old.permissions()));
+    let (temporary, mut file) = create_sibling(path, made)?;
     let written = file
         .write_all(data)
-        .and_then(|()| permissions.map_or(Ok(()), |permissions| file.set_permissions(permissions)))
+        .and_then(|()| after.map_or(Ok(()), |permissions| file.set_permissions(permissions)))
         .and_then(|()| file.sync_all());
     drop(file);
     let result = written.and_then(|()| std::fs::rename(&temporary, path));
@@ -770,23 +788,37 @@ pub(super) fn open_directory(path: &Path) -> io::Result<File> {
 /// Creates a new file, writes all bytes, synchronizes it and then its containing directory.
 /// An error after creation leaves the path in an uncertain state for the caller to recover.
 /// Windows publishes the name differently; see [`super::windows`].
-pub(crate) fn create_durable(path: &[u8], data: BytesView<'_>) -> Result<Outcome<f64>> {
+pub(crate) fn create_durable(
+    call: &Call<'_>,
+    path: &[u8],
+    data: BytesView<'_>,
+    options: Option<ValueView<'_>>,
+) -> Result<Outcome<f64>> {
+    let mode = match options.filter(|view| !view.is_nil()) {
+        Some(options) => Options::read(call, options, "dream.fs.createDurable", |o| {
+            mode::checked("createDurable", o.optional("mode")?)
+        })?,
+        None => None,
+    };
     let host = super::host_path("createDurable", path)?;
     // SAFETY: the bytes are read only during this native call, without calling into Lua.
     let bytes = unsafe { data.bytes_unchecked() };
     #[cfg(unix)]
     let result = (|| -> io::Result<()> {
         let directory = open_directory(parent_directory(&host))?;
-        let mut file = OpenOptions::new().write(true).create_new(true).open(&host)?;
+        let mut file = mode::open(OpenOptions::new().write(true), &host, Create::New, mode)?;
         file.write_all(bytes)?;
         file.sync_all()?;
         directory.sync_all()
     })();
     #[cfg(windows)]
-    let result = super::windows::create_durable(&host, bytes);
+    let result = {
+        let _ = mode;
+        super::windows::create_durable(&host, bytes)
+    };
     #[cfg(not(any(unix, windows)))]
     let result: io::Result<()> = {
-        let _ = &host;
+        let _ = (&host, mode);
         Err(io::Error::new(io::ErrorKind::Unsupported, "durable file creation is unsupported on this platform"))
     };
     Ok(Outcome::of(result.map(|()| bytes.len() as f64), "createDurable", path))
