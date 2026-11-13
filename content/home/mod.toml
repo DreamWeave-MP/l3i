@@ -456,3 +456,29 @@ added = [
 migration = """
 Take 2.9.0 in place of 2.8.0. Nothing changes for calls that do not pass secret.
 """
+
+[[releases]]
+version = "2.10.0"
+date = 2026-11-12
+summary = "process.run no longer waits on a capture that a process its child started still holds, and bounds a capture given no ceiling."
+added = [
+    "The result of process.run carries held = true when reading stopped while something other than the child still held a captured stream open. It is absent otherwise.",
+]
+changed = [
+    "On Unix, once its child has exited, process.run reads its captures until nothing has arrived for 250 ms, or for 2 s whatever arrives, then answers the child's own result. It used to wait for every holder of the pipe to close it: forever without a limit, and until timeoutMs, answering timeout, with one. A run with a limit of its own kills the child's process group at that point. What a process the child started writes after that is not in the result.",
+    "A captured stream of process.run given no maxStdoutBytes or maxStderrBytes has a ceiling of 64 MiB, and fails with outputLimit past it. Captures are held outside the Luau heap, where the runtime's memory limit does not see them.",
+    "Under an execution time limit, a process.run that shares neither stdout nor stderr with the host runs in a process group of its own, so the limit stops what it started as well. Such a run is a background job to a controlling terminal.",
+]
+fixed = [
+    "A cwd that is not a directory is reported as that by process.run and process.start, not as a program that could not be found.",
+    "A reader stopped at the end of a call takes what its pipe already holds first, and a ceiling passed in a reader's last read is reported as outputLimit.",
+]
+migration = """
+Take 2.10.0 in place of 2.9.0.
+
+A process.run that captures more than 64 MiB from one stream must now say so with maxStdoutBytes or maxStderrBytes.
+
+A caller that relied on process.run collecting what a background process wrote after the child exited must wait for that process in the child, or use process.start and read until the stream ends. Check held when it matters whether a capture was read to its end.
+
+Not changed in this release: on Windows a run still waits for a held pipe until a limit, and a descendant still survives a timeout there.
+"""

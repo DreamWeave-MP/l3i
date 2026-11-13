@@ -9,9 +9,16 @@
 //!   still running at the deadline is killed and reaped. `timeoutMs` bounds the child's run, and
 //!   `maxStdoutBytes` and `maxStderrBytes` bound what a captured stream may produce; passing either
 //!   kills the child and, on Linux, Android, macOS and FreeBSD, its process group, and discards what
-//!   it wrote. Termination covers
-//!   that group only: a descendant that left it (`setsid`, `setpgid`) is not stopped, and may hold a
-//!   captured pipe open until the call stops waiting for the pipe at the limit.
+//!   it wrote. A captured stream with no ceiling of its own may hold 64 MiB, since the runtime's
+//!   memory limit does not see a capture. Termination covers
+//!   that group only: a descendant that left it (`setsid`, `setpgid`) is not stopped. A process the
+//!   child started may hold a captured pipe open after the child has exited: on Unix the call then
+//!   answers the child's own result once nothing more has arrived for a quarter of a second, or two
+//!   seconds after the exit whatever arrives, killing the group if the call was bounded, and the
+//!   result says `held = true`; elsewhere it waits for the pipe until a limit. A run that shares
+//!   stdout or stderr with the host stays in the host's group unless it names a limit of its own,
+//!   so the terminal still treats it as the foreground job. One that shares neither is set apart whenever a
+//!   limit can end it, the runtime's included, and is a background job to a controlling terminal.
 //! - `process.start(program, args, options)`: the same program and options, without waiting: a handle
 //!   with nonblocking reads and writes, `wait` (which blocks only with a timeout) and `close`. A run
 //!   and a started child both count against the runtime's live-child limit, which the host sets with
@@ -55,7 +62,7 @@ use std::borrow::Cow;
 use std::io::Read;
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -83,6 +90,22 @@ pub const MAX_TIMEOUT_MS: u64 = 24 * 60 * 60 * 1000;
 /// The largest byte count an option may name: 2^53 - 1, the last whole number every Luau number
 /// holds exactly. A captured stream is held in memory, so no ceiling past that is ever reached.
 const MAX_BYTES: f64 = 9_007_199_254_740_991.0;
+/// What a captured stream of `run` may hold when the call names no ceiling of its own. Captures are
+/// held outside the Luau heap, so the runtime's memory limit does not see them: without this a
+/// child decides how much memory its caller spends. A call that wants more says so with
+/// `maxStdoutBytes` or `maxStderrBytes`.
+const DEFAULT_CAPTURE_BYTES: u64 = 64 * 1024 * 1024;
+/// How long `run` goes on reading a capture once the child has exited and nothing more has
+/// arrived, and the longest it reads on after the exit whatever arrives. A process the child
+/// started can hold the pipe for as long as it lives; what the child itself wrote is in the pipe
+/// by the time it exits, and is read well inside the first.
+#[cfg(unix)]
+const CAPTURE_QUIET: Duration = Duration::from_millis(250);
+#[cfg(unix)]
+const CAPTURE_LINGER: Duration = Duration::from_secs(2);
+/// The most a reader takes from its pipe after it has been told to stop: what was already there,
+/// which is at most a pipe's worth, and never a writer's whole future.
+const LAST_READ_BYTES: u64 = 1024 * 1024;
 /// The live children a runtime may hold at once, unless its host sets another limit.
 pub const DEFAULT_MAX_CHILDREN: u32 = 32;
 /// The most live children a host may allow a runtime: each started child holds up to four
@@ -99,7 +122,8 @@ const START_OPTIONS_TYPE: &str = "{ cwd: string?, env: { [string]: string }?, cl
     stdout: (\"inherit\" | \"pipe\" | \"null\")?, stderr: (\"inherit\" | \"pipe\" | \"null\")?, \
     timeoutMs: number?, maxStdoutBytes: number?, maxStderrBytes: number?, \
     secret: { env: string, data: buffer | string }? }";
-const RESULT_TYPE: &str = "{ success: boolean, code: number?, signal: number?, stdout: string?, stderr: string? }";
+const RESULT_TYPE: &str =
+    "{ success: boolean, code: number?, signal: number?, stdout: string?, stderr: string?, held: boolean? }";
 /// `dream_process_ErrorKind`: the OS kinds, and the two limits a bounded process answers with.
 const PROCESS_ERROR_KIND_TYPE: &str = "\"notFound\" | \"permissionDenied\" | \"alreadyExists\" | \"isADirectory\" \
     | \"notADirectory\" | \"directoryNotEmpty\" | \"readOnlyFilesystem\" | \"storageFull\" | \"crossesDevices\" \
@@ -636,12 +660,20 @@ fn run(
     // this call returns, after the reap, on every path.
     let _slot = ChildQuota::reserve(quota, "dream.process.run")?;
     let name = String::from_utf8_lossy(program).into_owned();
-    let group = spawn.bounds.is_bounded();
+    // A call the runtime's execution time limit can end is bounded too: what it started must be
+    // within reach of the kill that ends it.
+    // One that shares a stream with the host is left in the host's group all the same: in a group
+    // of its own it would be a background job to the terminal, stopped at its first write to it.
+    let apart = spawn.stdout != Output::Inherit && spawn.stderr != Output::Inherit;
+    let group = spawn.bounds.is_bounded() || (apart && crate::runtime::watchdog_remaining(call).is_some());
     let mut command = build_command(program, &arguments, &spawn, inherit_environment, group)?;
     let stdin = if matches!(spawn.stdin, Feed::Bytes(_)) { Stdio::piped() } else { Stdio::null() };
     command.stdin(stdin).stdout(spawn.stdout.stdio()).stderr(spawn.stderr.stdio());
-    let SpawnOptions { stdin, stdout, stderr, bounds, secret, .. } = spawn;
+    let SpawnOptions { stdin, stdout, stderr, bounds, secret, cwd: spawn_cwd, .. } = spawn;
     let failed = |error: std::io::Error| Failure::message(format!("dream.process.run: {name}: {error}"), &error);
+    if let Some(error) = missing_cwd(spawn_cwd.as_deref()) {
+        return Ok(Outcome::Failed(failed(error)));
+    }
     // Held only until the child has been started: the parent's end of the secret's pipe, and
     // what keeps another child from inheriting it.
     let starting = match secret::prepare(&mut command, secret.as_ref()) {
@@ -671,9 +703,11 @@ fn run(
             (Feed::Bytes(input), Some(pipe)) => Some(feed(pipe, input, &cancel)?),
             _ => None,
         };
-        let stdout = drain(child.stdout.take(), bounds.stdout, &exceeded, &cancel)?;
-        let stderr = drain(child.stderr.take(), bounds.stderr, &exceeded, &cancel)?;
-        Ok((feeder, Capture { stdout, stderr, exceeded: Arc::clone(&exceeded) }))
+        let progress = Arc::new(AtomicU64::new(0));
+        let ceiling = |own: Option<u64>| own.or(Some(DEFAULT_CAPTURE_BYTES));
+        let stdout = drain(child.stdout.take(), ceiling(bounds.stdout), &exceeded, &progress, &cancel)?;
+        let stderr = drain(child.stderr.take(), ceiling(bounds.stderr), &exceeded, &progress, &cancel)?;
+        Ok((feeder, Capture { stdout, stderr, exceeded: Arc::clone(&exceeded), progress }))
     })();
     let (feeder, capture) = match threads {
         Ok(threads) => threads,
@@ -685,7 +719,7 @@ fn run(
         }
     };
     let mut capture = capture;
-    let ended = wait(call, &mut child, &bounds, &mut capture, group);
+    let ended = wait(call, &mut child, &bounds, &mut capture, group, &cancel);
     // On Unix nothing of this call outlives it. A pipe that a process outside the child's group
     // still holds would otherwise keep its thread, its descriptor and what it buffered for as long
     // as that process liked; cancelling ends the thread whoever holds the pipe, so joining it
@@ -705,7 +739,7 @@ fn run(
     #[cfg(not(unix))]
     drop((capture, feeder));
     let output = done!(match ended {
-        Ok(Ended::Exited(output)) => Outcome::Done(output),
+        Ok(Ended::Exited(output, held)) => Outcome::Done((output, held)),
         Ok(Ended::TimedOut) => Outcome::Failed(Failure {
             message: Cow::Owned(format!("dream.process.run: {name}: stopped at its timeoutMs limit")),
             kind: "timeout",
@@ -720,13 +754,20 @@ fn run(
         }
         Err(error) => Outcome::Failed(failed(error)),
     });
+    let (output, held) = output;
+    answer(call, &output, held, stdout, stderr)?;
+    Ok(Outcome::Done(StackResults))
+}
+
+/// Leaves the result of a run on the stack: how the child ended and what was captured of it.
+fn answer(call: &Call<'_>, output: &std::process::Output, held: bool, stdout: Output, stderr: Output) -> Result<()> {
     let status = output.status;
     #[cfg(unix)]
     let signal = std::os::unix::process::ExitStatusExt::signal(&status);
     #[cfg(not(unix))]
     let signal: Option<i32> = None;
     let mut frame = call.frame();
-    let table = frame.push_table(0, 5)?;
+    let table = frame.push_table(0, 6)?;
     table.raw_set_value(&frame, "success", &status.success())?;
     table.raw_set_value(&frame, "code", &status.code().map(f64::from))?;
     table.raw_set_value(&frame, "signal", &signal.map(f64::from))?;
@@ -736,14 +777,20 @@ fn run(
     if stderr == Output::Capture {
         table.raw_set_value(&frame, "stderr", output.stderr.as_slice())?;
     }
+    // Said only when it is so: something else still held a capture when reading stopped, so what
+    // that something wrote later is not here.
+    if held {
+        table.raw_set_value(&frame, "held", &true)?;
+    }
     frame.release();
-    Ok(Outcome::Done(StackResults))
+    Ok(())
 }
 
 /// How a child's wait ended.
 enum Ended {
-    /// The child exited on its own; here is what it wrote.
-    Exited(std::process::Output),
+    /// The child exited on its own; here is what it wrote, and whether reading stopped while
+    /// something else still held a capture open.
+    Exited(std::process::Output, bool),
     /// `timeoutMs` passed first; the child was killed and reaped.
     TimedOut,
     /// A captured stream passed its ceiling first; the child was killed and reaped.
@@ -757,6 +804,10 @@ struct Capture {
     stdout: Option<JoinHandle<Vec<u8>>>,
     stderr: Option<JoinHandle<Vec<u8>>>,
     exceeded: Arc<AtomicBool>,
+    /// Bytes read from either capture so far: what tells a pipe still being written to from one
+    /// that is only being held.
+    #[cfg_attr(not(unix), allow(dead_code))]
+    progress: Arc<AtomicU64>,
 }
 
 /// Writes `input` to the child's stdin on its own thread, until it is all written, the child
@@ -781,20 +832,42 @@ fn drain<P: Read + Pollable + Send + 'static>(
     pipe: Option<P>,
     ceiling: Option<u64>,
     exceeded: &Arc<AtomicBool>,
+    progress: &Arc<AtomicU64>,
     cancel: &Arc<Cancel>,
 ) -> std::io::Result<Option<JoinHandle<Vec<u8>>>> {
     let Some(mut pipe) = pipe else { return Ok(None) };
-    let (exceeded, cancel) = (Arc::clone(exceeded), Arc::clone(cancel));
+    let (exceeded, progress, cancel) = (Arc::clone(exceeded), Arc::clone(progress), Arc::clone(cancel));
     let reader = std::thread::Builder::new().name("l3i-process-capture".into()).spawn(move || {
         let mut bytes = Vec::new();
         let mut chunk = [0_u8; 8192];
         let mut total = 0_u64;
         loop {
             match cancel.read(&mut pipe, &mut chunk) {
-                // The end of the stream, or of the call.
-                Ok(Some(0) | None) => break,
+                // The end of the stream.
+                Ok(Some(0)) => break,
+                // The end of the call. What is already in the pipe was written before the reader
+                // was told to stop and is still part of the answer; nothing is waited for.
+                Ok(None) => {
+                    let mut last = 0_u64;
+                    while last < LAST_READ_BYTES && Cancel::readable_now(&pipe) {
+                        match pipe.read(&mut chunk) {
+                            Ok(count) if count > 0 => {
+                                last += count as u64;
+                                total = total.saturating_add(count as u64);
+                                if ceiling.is_some_and(|ceiling| total > ceiling) {
+                                    exceeded.store(true, Ordering::SeqCst);
+                                    break;
+                                }
+                                bytes.extend_from_slice(&chunk[..count]);
+                            }
+                            _ => break,
+                        }
+                    }
+                    break;
+                }
                 Ok(Some(count)) => {
                     total = total.saturating_add(count as u64);
+                    progress.fetch_add(count as u64, Ordering::SeqCst);
                     if ceiling.is_some_and(|ceiling| total > ceiling) {
                         exceeded.store(true, Ordering::SeqCst);
                         break;
@@ -816,14 +889,16 @@ fn drain<P: Read + Pollable + Send + 'static>(
 /// whichever comes first. At the deadline the child is killed and reaped; the runtime's limit also
 /// marks the call expired, so the watchdog stops the script at its next safepoint. A captured
 /// stream passing its ceiling kills the child at once. A capture still open after the child exited
-/// can be held by a process it started; the deadline or a ceiling ends that too, and with
-/// `group` the kill reaches it.
+/// is held by a process it started: on Unix it is read until it goes quiet ([`CAPTURE_QUIET`]) or
+/// for [`CAPTURE_LINGER`], then its readers are cancelled and the child's own result is the
+/// answer, with `group` killing what holds it; elsewhere the deadline or a ceiling ends it.
 fn wait(
     call: &Call<'_>,
     child: &mut Child,
     bounds: &Bounds,
     capture: &mut Capture,
     group: bool,
+    cancel: &Cancel,
 ) -> std::io::Result<Ended> {
     let started = Instant::now();
     // The span that ends first, measured from `started`, and whether the child's own limit is the
@@ -869,6 +944,18 @@ fn wait(
         std::thread::sleep(nap);
         pause = (pause * 2).min(Duration::from_millis(20));
     }
+    // The child has exited and is not yet reaped. Its captures end when every holder of the pipe
+    // has closed it, and a process the child started may hold one for as long as it lives. That
+    // is not the child's output and not the child's failure: once nothing more arrives, the
+    // readers are ended and the child's own result is the answer.
+    #[cfg(unix)]
+    let exited = Instant::now();
+    #[cfg(unix)]
+    let mut seen = (capture.progress.load(Ordering::SeqCst), exited);
+    #[cfg(not(unix))]
+    let _ = cancel;
+    #[cfg_attr(not(unix), allow(unused_mut))]
+    let mut held = false;
     loop {
         if exceeded.load(Ordering::SeqCst) {
             stop(child, group);
@@ -876,6 +963,26 @@ fn wait(
         }
         if [&capture.stdout, &capture.stderr].iter().all(|reader| reader.as_ref().is_none_or(JoinHandle::is_finished)) {
             break;
+        }
+        // Only where a blocked reader can be ended: elsewhere the limits are all that end the wait.
+        #[cfg(unix)]
+        {
+            let read = capture.progress.load(Ordering::SeqCst);
+            if read != seen.0 {
+                seen = (read, Instant::now());
+            }
+            if seen.1.elapsed() >= CAPTURE_QUIET || exited.elapsed() >= CAPTURE_LINGER {
+                // The leader is still unreaped, so its group is still ours to signal: what the
+                // child left in it does not outlive a call that was bounded.
+                // Asked again first, as every kill is: a leader the host reaped in the meantime no
+                // longer keeps its group's id for us.
+                if group && !matches!(has_exited(child), Err(ref error) if reaped_elsewhere(error)) {
+                    kill_group(child);
+                }
+                cancel.cancel();
+                held = true;
+                break;
+            }
         }
         let elapsed = started.elapsed();
         if let Some((span, by_timeout)) = limit
@@ -898,7 +1005,21 @@ fn wait(
         reader.map(|reader| reader.join().unwrap_or_default()).unwrap_or_default()
     };
     let (stdout, stderr) = (collect(capture.stdout.take()), collect(capture.stderr.take()));
-    Ok(Ended::Exited(std::process::Output { status, stdout, stderr }))
+    // A reader that passed its ceiling in its last read says so only as it ends.
+    if exceeded.load(Ordering::SeqCst) {
+        return Ok(Ended::OutputLimit);
+    }
+    Ok(Ended::Exited(std::process::Output { status, stdout, stderr }, held))
+}
+
+/// The failure of a `cwd` that is not a directory, said as that. Left to the spawn it reads as the
+/// program not being found, which sends a caller looking for the wrong thing.
+pub(super) fn missing_cwd(cwd: Option<&[u8]>) -> Option<std::io::Error> {
+    let cwd = os_string("cwd", cwd?).ok()?;
+    if std::path::Path::new(&cwd).is_dir() {
+        return None;
+    }
+    Some(std::io::Error::new(std::io::ErrorKind::NotFound, "cwd is not a directory"))
 }
 
 /// Whether `error`, from asking after a child, says the child is no longer ours to ask after: the
@@ -1126,7 +1247,7 @@ impl Extension for ProcessExtension {
             .doc("The script's process and the ones it starts: run a program and wait for its exit code, environment variables, and the standard streams.")
             .installed("run")
             .signature(RUN_SIGNATURE)
-            .doc("Runs program with args (no shell), waits for it, and returns how it ended; needs the process.spawn capability. stdout and stderr are inherited unless captured or discarded; stdin is empty unless given. timeoutMs (1 to 86400000, a day) stops the child after that many milliseconds, and maxStdoutBytes or maxStderrBytes (0 to 2^53 - 1, each for a captured stream) stops it once that stream passes its ceiling: the child is killed and reaped, its output discarded, and the failure is timeout or outputLimit. On Unix a bounded child runs in a process group of its own, which a limit signals whole on Linux, Android, macOS and FreeBSD (a descendant that left the group is not stopped); elsewhere only the child is killed. On Unix the call leaves no thread behind when it returns; on Windows a thread blocked on a pipe that something else holds stays until that pipe closes. A run counts against the live-child limit while it runs.")
+            .doc("Runs program with args (no shell), waits for it, and returns how it ended; needs the process.spawn capability. stdout and stderr are inherited unless captured or discarded; stdin is empty unless given. timeoutMs (1 to 86400000, a day) stops the child after that many milliseconds, and maxStdoutBytes or maxStderrBytes (0 to 2^53 - 1, each for a captured stream) stops it once that stream passes its ceiling: the child is killed and reaped, its output discarded, and the failure is timeout or outputLimit. A captured stream given no ceiling has one of 64 MiB. On Unix a capture that a process the child started still holds open after the child exited is read until nothing has arrived for 250 ms, or for 2 s, and the call then answers the child's own result with held = true: what that process wrote later is not in it. Under an execution time limit a run that shares neither stdout nor stderr with the host is set apart in a group of its own, as a bounded one is, and so cannot use the controlling terminal. On Unix a bounded child runs in a process group of its own, which a limit signals whole on Linux, Android, macOS and FreeBSD (a descendant that left the group is not stopped); elsewhere only the child is killed. On Unix the call leaves no thread behind when it returns; on Windows a thread blocked on a pipe that something else holds stays until that pipe closes. A run counts against the live-child limit while it runs.")
             .installed("start")
             .signature(START_SIGNATURE)
             .doc("Starts program with args (no shell) without waiting, and returns a process handle; needs the process.spawn capability, and fails like run for a program that cannot start. stdin is null unless \"pipe\", stdout and stderr are inherited unless \"pipe\" or \"null\". Reads, writes and wait never block except wait with a timeout. timeoutMs, maxStdoutBytes and maxStderrBytes are lifetime limits, as on run: passing one kills the child and, on Linux, Android, macOS and FreeBSD, its process group, and later reads answer with the limit's kind. Closing the handle kills and reaps the child. A started child counts against the live-child limit until its handle is closed or a limit stops it, so close handles: an unclosed one holds its slot until it is collected.")

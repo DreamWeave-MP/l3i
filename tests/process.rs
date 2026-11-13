@@ -866,22 +866,211 @@ fn a_closed_handle_never_signals_its_group_again() {
     assert!(sentinel.0.try_wait().unwrap().is_none(), "the sentinel was signalled through a closed handle");
 }
 
-/// A bounded run whose leader exits while a process it started holds the captured pipe open ends
-/// at its time limit: the group, which still holds that process, is killed while the leader is
-/// unreaped, and the run does not wait out the process's own sleep.
+/// Waits for `pid_file` to name a process, and answers its pid.
+#[cfg(unix)]
+fn pid_in(pid_file: &std::path::Path) -> libc::pid_t {
+    let pid = std::fs::read_to_string(pid_file).unwrap().trim().parse().unwrap();
+    std::fs::remove_file(pid_file).unwrap();
+    pid
+}
+
+/// Whether `pid` ends within two seconds.
+#[cfg(unix)]
+fn ends(pid: libc::pid_t) -> bool {
+    let waited = Instant::now();
+    while alive(pid) {
+        if waited.elapsed() > Duration::from_secs(2) {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    true
+}
+
+/// A bounded run whose leader exits while a process it started holds the captured pipe open
+/// answers the leader's own result, with what it wrote, well inside its time limit: a pipe that is
+/// only held is not output still to come. The group, which still holds that process, is killed
+/// while the leader is unreaped, so nothing of a bounded call outlives it.
 #[cfg(unix)]
 #[test]
-fn a_bounded_run_kills_a_group_member_that_outlives_its_leader() {
+fn a_bounded_run_answers_its_leader_and_kills_a_group_member_that_outlives_it() {
+    let pid_file = std::env::temp_dir().join(format!("l3i-process-held-{}", std::process::id()));
+    let runtime = runtime_granting(&[SPAWN_CAPABILITY], Limits::default());
+    let started = Instant::now();
+    runtime
+        .exec(&format!(
+            r#"local result, message, kind = process.run('sh', {{ '-c', 'sleep 30 & echo $! > "$1"; echo hi; exit 3', 'sh', '{}' }},
+                  {{ stdout = 'capture', timeoutMs = 20000 }})
+              assert(result, tostring(message) .. ' ' .. tostring(kind))
+              assert(result.code == 3 and result.stdout == 'hi\n', tostring(result.code) .. ' ' .. tostring(result.stdout))"#,
+            pid_file.to_string_lossy()
+        ))
+        .unwrap();
+    assert!(started.elapsed() < Duration::from_secs(5), "the run waited {:?}", started.elapsed());
+    assert!(ends(pid_in(&pid_file)), "the group member outlived a bounded run");
+}
+
+/// A run with no limit of its own does not wait out a process its child left holding the capture
+/// either. Nothing bounded the call, so nothing is killed: a child may leave a daemon behind.
+#[cfg(unix)]
+#[test]
+fn an_unbounded_run_does_not_wait_for_a_process_that_only_holds_its_capture() {
+    let pid_file = std::env::temp_dir().join(format!("l3i-process-daemon-{}", std::process::id()));
+    let runtime = runtime_granting(&[SPAWN_CAPABILITY], Limits::default());
+    let started = Instant::now();
+    runtime
+        .exec(&format!(
+            r#"local result = assert(process.run('sh', {{ '-c', 'sleep 30 & echo $! > "$1"; echo hi', 'sh', '{}' }},
+                  {{ stdout = 'capture', stderr = 'capture' }}))
+              assert(result.success and result.stdout == 'hi\n' and result.stderr == '', tostring(result.stdout))
+              assert(result.held == true, 'a capture cut short was not said to be')
+              local whole = assert(process.run('sh', {{ '-c', 'echo all' }}, {{ stdout = 'capture' }}))
+              assert(whole.held == nil and whole.stdout == 'all\n', 'a capture read to its end was said to be held')"#,
+            pid_file.to_string_lossy()
+        ))
+        .unwrap();
+    assert!(started.elapsed() < Duration::from_secs(5), "the run waited {:?}", started.elapsed());
+    let pid = pid_in(&pid_file);
+    assert!(alive(pid), "an unbounded run killed what its child left behind");
+    // SAFETY: the pid was written by the child for the process it started, which is still alive.
+    unsafe { libc::kill(pid, libc::SIGKILL) };
+}
+
+/// A process the child started that goes on writing is read for a bounded while after the child
+/// exits, and no longer: the run answers with what had arrived.
+#[cfg(unix)]
+#[test]
+fn a_run_stops_reading_a_capture_its_child_left_to_a_writer() {
     let runtime = runtime_granting(&[SPAWN_CAPABILITY], Limits::default());
     let started = Instant::now();
     runtime
         .exec(
-            r"local result, _, kind = process.run('sh', { '-c', 'sleep 30 & exit 0' },
-                  { stdout = 'capture', timeoutMs = 300 })
-              assert(result == nil and kind == 'timeout', tostring(kind))",
+            r"local result = assert(process.run('sh', { '-c', '(while :; do echo more; sleep 0.05; done) & echo first' },
+                  { stdout = 'capture', timeoutMs = 20000 }))
+              assert(result.success and result.held == true and result.stdout:sub(1, 6) == 'first\n', result.stdout)",
         )
         .unwrap();
-    assert!(started.elapsed() < Duration::from_secs(10), "the run waited {:?}", started.elapsed());
+    let waited = started.elapsed();
+    assert!(waited >= Duration::from_millis(1500) && waited < Duration::from_secs(8), "the run waited {waited:?}");
+}
+
+/// The runtime's execution time limit is a bound like the call's own: what the child started is
+/// killed with it, though the call named no limit. That holds for a run that shares no stream with
+/// the host; one that does stays the terminal's foreground job, and only the child is killed.
+#[cfg(unix)]
+#[test]
+fn the_execution_time_limit_reaches_what_an_unbounded_run_started() {
+    let pid_file = std::env::temp_dir().join(format!("l3i-process-expired-{}", std::process::id()));
+    let limits = Limits { execution_time: Duration::from_millis(300), memory_bytes: 0 };
+    let runtime = runtime_granting(&[SPAWN_CAPABILITY], limits);
+    let ran = runtime.exec(&format!(
+        r#"process.run('sh', {{ '-c', 'sleep 30 & echo $! > "$1"; wait', 'sh', '{}' }}, {{ stdout = 'null', stderr = 'null' }})"#,
+        pid_file.to_string_lossy()
+    ));
+    assert!(ran.is_err(), "the script ran past the execution time limit");
+    assert!(ends(pid_in(&pid_file)), "a process the child started outlived the execution time limit");
+}
+
+/// What a process the child started writes soon after the child exits is still read: the reading
+/// stops when the pipe has gone quiet, not when the child exits. A run that read to the end of its
+/// captures does not say it was held.
+#[cfg(unix)]
+#[test]
+fn a_run_reads_what_arrives_soon_after_its_child_exits() {
+    let runtime = runtime_granting(&[SPAWN_CAPABILITY], Limits::default());
+    runtime
+        .exec(
+            r"local result = assert(process.run('sh', { '-c', '(sleep 0.1; echo late) & echo early' }, { stdout = 'capture' }))
+              assert(result.stdout == 'early\nlate\n' and result.held == nil, result.stdout)",
+        )
+        .unwrap();
+}
+
+/// A megabyte on each stream from a child that exits at once, beside a process that holds both
+/// captures open: every byte the child wrote is in the answer, though the readers were stopped.
+#[cfg(unix)]
+#[test]
+fn a_held_capture_loses_nothing_its_child_wrote() {
+    let runtime = runtime_granting(&[SPAWN_CAPABILITY], Limits::default());
+    runtime
+        .exec(
+            r"for _ = 1, 8 do
+                  local result = assert(process.run('sh',
+                      { '-c', 'sleep 30 & head -c 1048576 /dev/zero; head -c 1048576 /dev/zero >&2' },
+                      { stdout = 'capture', stderr = 'capture', timeoutMs = 20000 }))
+                  assert(result.held == true and #result.stdout == 1048576 and #result.stderr == 1048576,
+                      #result.stdout .. ' ' .. #result.stderr)
+              end",
+        )
+        .unwrap();
+}
+
+/// Under an execution time limit, a run that shares a stream with the host stays in the host's
+/// process group, so a terminal still treats it as the foreground job; one that shares none is
+/// set apart, so the limit can reach what it starts.
+#[cfg(unix)]
+#[test]
+fn a_run_sharing_a_stream_with_the_host_stays_in_its_group_under_an_execution_time_limit() {
+    let group_file = std::env::temp_dir().join(format!("l3i-process-group-{}", std::process::id()));
+    let limits = Limits { execution_time: Duration::from_secs(20), memory_bytes: 0 };
+    let runtime = runtime_granting(&[SPAWN_CAPABILITY], limits);
+    // SAFETY: getpgrp only reads this process's group.
+    let own = unsafe { libc::getpgrp() };
+    let script = r#"ps -o pgid= -p $$ > "$1""#;
+    let group_of = |options: &str| -> libc::pid_t {
+        runtime
+            .exec(&format!(
+                "assert(process.run('sh', {{ '-c', '{script}', 'sh', '{}' }}, {options}).success)",
+                group_file.to_string_lossy()
+            ))
+            .unwrap();
+        pid_in(&group_file)
+    };
+    assert_eq!(group_of("{}"), own, "a run with inherited streams left the host's group");
+    assert_eq!(group_of("{ stdout = 'null' }"), own, "a run that still shares stderr left the host's group");
+    assert_ne!(
+        group_of("{ stdout = 'null', stderr = 'null' }"),
+        own,
+        "a run sharing no stream stayed in the host's group"
+    );
+}
+
+/// A capture with no ceiling of its own has one all the same, since the runtime's memory limit
+/// does not see what a capture holds; a call that wants more than that says so.
+#[cfg(unix)]
+#[test]
+fn a_capture_without_a_ceiling_is_still_bounded() {
+    let runtime = runtime_granting(&[SPAWN_CAPABILITY], Limits::default());
+    runtime
+        .exec(
+            r"local over = tostring(64 * 1024 * 1024 + 1)
+              local result, _, kind = process.run('head', { '-c', over, '/dev/zero' }, { stdout = 'capture' })
+              assert(result == nil and kind == 'outputLimit', tostring(kind))
+              result, _, kind = process.run('sh', { '-c', 'head -c ' .. over .. ' /dev/zero >&2' }, { stderr = 'capture' })
+              assert(result == nil and kind == 'outputLimit', tostring(kind))
+              local exact = assert(process.run('head', { '-c', tostring(64 * 1024 * 1024), '/dev/zero' }, { stdout = 'capture' }))
+              assert(#exact.stdout == 64 * 1024 * 1024)
+              local asked = assert(process.run('head', { '-c', over, '/dev/zero' },
+                  { stdout = 'capture', maxStdoutBytes = 80 * 1024 * 1024 }))
+              assert(#asked.stdout == 64 * 1024 * 1024 + 1)",
+        )
+        .unwrap();
+}
+
+/// A `cwd` that is not a directory is said to be that, by both entry points, and not passed off as
+/// a program that could not be found.
+#[test]
+fn a_missing_cwd_is_named_as_the_cwd() {
+    let runtime = runtime_granting(&[SPAWN_CAPABILITY], Limits::default());
+    runtime
+        .exec(
+            r"for _, call in { process.run, process.start } do
+                  local result, message, kind = call('true', {}, { cwd = '/no/such/l3i/directory' })
+                  assert(result == nil and kind == 'notFound', tostring(kind))
+                  assert(message:find('cwd is not a directory', 1, true), message)
+              end",
+        )
+        .unwrap();
 }
 
 /// A started child whose leader exits while a process it started holds its stdout is ended at the

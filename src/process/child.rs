@@ -550,6 +550,10 @@ pub(super) fn start(
     // Reserved before anything is spawned. A spawn that fails drops the slot with the error.
     let reservation = ChildQuota::reserve(quota, "dream.process.start")?;
     let name = String::from_utf8_lossy(program).into_owned();
+    if let Some(error) = super::missing_cwd(spawn.cwd.as_deref()) {
+        let message = format!("dream.process.start: {name}: {error}");
+        return Ok(Outcome::Failed(Failure::message(message, &error)));
+    }
     let mut command = build_command(program, &arguments, &spawn, inherit_environment, true)?;
     let stdin = if matches!(spawn.stdin, Feed::Pipe) { Stdio::piped() } else { Stdio::null() };
     command.stdin(stdin).stdout(spawn.stdout.stdio()).stderr(spawn.stderr.stdio());

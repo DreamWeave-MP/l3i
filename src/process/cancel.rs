@@ -59,6 +59,18 @@ impl Cancel {
         self.inner.cancel();
     }
 
+    /// Whether `pipe` has bytes, or its end, to read without waiting. Off Unix nothing can be asked
+    /// without blocking, so the answer is no.
+    pub(super) fn readable_now(pipe: &impl Pollable) -> bool {
+        #[cfg(unix)]
+        return unix::Pair::readable_now(pipe.descriptor());
+        #[cfg(not(unix))]
+        {
+            let _ = pipe;
+            false
+        }
+    }
+
     /// Reads from `pipe` into `chunk`, as `read` does, or answers `None` once cancelled.
     pub(super) fn read(&self, pipe: &mut (impl Read + Pollable), chunk: &mut [u8]) -> std::io::Result<Option<usize>> {
         loop {
@@ -167,6 +179,14 @@ mod unix {
                 // dropping `end` below closes the write end and that wakes the waiters too.
                 unsafe { libc::write(end.as_raw_fd(), [1_u8].as_ptr().cast(), 1) };
             }
+        }
+
+        /// Whether a read of `fd` would return at once.
+        pub(super) fn readable_now(fd: RawFd) -> bool {
+            let mut fds = [libc::pollfd { fd, events: libc::POLLIN, revents: 0 }];
+            // SAFETY: `fds` is a live array of one pollfd, poll only writes its revents, and a zero
+            // timeout never waits.
+            unsafe { libc::poll(fds.as_mut_ptr(), 1, 0) > 0 && fds[0].revents != 0 }
         }
 
         /// Waits until `fd` is ready for `events` (`true`) or this is cancelled (`false`).
