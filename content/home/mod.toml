@@ -488,13 +488,13 @@ version = "2.11.0"
 date = 2026-11-13
 summary = "Unix permission bits for what @dream/fs creates, set exactly and from the moment it exists, and fs.chmod. process.run no longer cuts a capture short, or calls a run held, because the machine was slow to read it."
 added = [
-    "fs.writeFile, fs.openWrite, fs.createDurable, fs.mkdir and fs.lock take mode: the Unix permission bits of what the call creates, a number from 0 to 4095 such as tonumber('600', 8). The bits are exact, whatever the process umask, and the file never has more than them: it is created with them, and what the umask took away is put back through the handle just opened before anything is written. A file that is already there keeps its own bits. mkdir with recursive gives the mode to every directory it creates.",
+    "fs.writeFile, fs.openWrite, fs.createDurable, fs.mkdir and fs.lock take mode: the Unix permission bits of what the call creates, such as tonumber('600', 8): a file's nine permission bits (0 to 511), and for mkdir set-user-ID, set-group-ID and sticky as well (0 to 4095). The bits are exact, whatever the process umask, and nobody but the owner is given more on the way there: the file is created with them, and what the umask took away is put back through the handle just opened before anything is written. A file that is already there keeps its own bits. mkdir with recursive gives a parent it creates the mode and the owner's write and search bits.",
     "fs.writeFile with atomic and a mode gives the new file that mode in place of the old file's permissions.",
     "fs.chmod(path, mode) sets the bits of what path names, following symbolic links. It needs filesystem.write, as every call that changes the disk does.",
     "fs.stat and fs.lstat report mode, the permission bits, on Unix.",
 ]
 changed = [
-    "On Unix the temporary of an atomic fs.writeFile is created with the bits the file will keep. It used to be created under the umask, written, and narrowed afterwards, so the new contents of a file private to its owner could be read by others until the write finished.",
+    "On Unix the temporary of an atomic fs.writeFile is created with the permission bits the file will keep. It used to be created under the umask, written, and narrowed afterwards, so the new contents of a file private to its owner could be read by others until the write finished.",
     "On Unix, whether something still holds a captured stream after the child of process.run has exited is asked of the pipe. The 250 ms and 2 s that end the reading time a process that holds a capture: they start when one is seen, and bytes waiting unread count as that process not being quiet. A run whose captures nothing holds reads them to their end, with only its own limits over it.",
     "A process that held a capture and exits while process.run is still reading leaves whole captures and no held: the reading used to stop 250 ms after the child's exit whatever happened next.",
 ]

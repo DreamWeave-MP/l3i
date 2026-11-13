@@ -1502,9 +1502,8 @@ first.
 
 ### Permission bits
 
-`mode` is the Unix permission bits of what a call creates: a number from 0 to 4095, the nine
-permission bits with set-user-ID, set-group-ID and sticky above them. Luau has no octal literal,
-so write one with `tonumber`:
+`mode` is the Unix permission bits of what a call creates: a number from 0 to 511 for a file,
+its nine permission bits. Luau has no octal literal, so write one with `tonumber`:
 
 ```luau
 local Private = tonumber('600', 8)
@@ -1512,20 +1511,29 @@ assert(fs.mkdir(root, { recursive = true, mode = tonumber('700', 8) }))
 assert(fs.writeFile(fs.join(root, 'token'), secret, { atomic = true, mode = Private }))
 ```
 
-The bits are exact, and they are never exceeded on the way there. The file is created with them,
-so the process umask can only take some away, and those are put back through the handle just
-opened, before anything is written. A file for its owner alone is at no moment readable by anyone
-else. `writeFile`, `openWrite`, `createDurable`, `mkdir` and `lock` all take it.
+The bits are exact, whatever the process umask, and nobody but the owner is given more on the
+way there. The file is created with them, so the umask can only take some away, and those are put
+back through the handle just opened, before anything is written. A file for its owner alone is at
+no moment readable by anyone else. `writeFile`, `openWrite`, `createDurable`, `mkdir` and `lock`
+all take it. A file whose bits can't be set, on a filesystem that has none, is an error and is
+not left behind.
+
+A file's mode stops at the permission bits because the system clears set-user-ID and set-group-ID
+from a file as it is written. A directory's `mode` may go to 4095 and carry those and sticky, and
+`chmod` sets any of them on anything; the system may still refuse set-group-ID to a process
+outside the group.
 
 A mode is for what the call creates:
 
 - A file that is already there keeps its own bits, as it does under `open(2)`. `chmod(path, mode)`
   changes those, following symbolic links, and `stat(path).mode` reads them.
 - An atomic `writeFile` always makes the file anew, so with a `mode` the new file has it; without
-  one it keeps the old file's permissions. Its temporary is created with the bits the file will
-  keep.
-- `mkdir` with `recursive` gives the mode to every directory it creates, and leaves one that
-  exists as it is. A directory keeps the set-group-ID bit it takes from its parent.
+  one it keeps the old file's permissions. Its temporary is created with the permission bits the
+  file will keep.
+- `mkdir` gives the mode to the directory it names. With `recursive`, a parent it creates has the
+  mode and the owner's write and search bits, without which nothing could be made inside it, and
+  a directory that exists is left as it is. A directory keeps the set-group-ID bit it takes from
+  its parent.
 - `createParents` makes parents with the default bits. Make them with `mkdir` first when they
   matter.
 - With a mode, a file is not created through a dangling symbolic link: the call answers
