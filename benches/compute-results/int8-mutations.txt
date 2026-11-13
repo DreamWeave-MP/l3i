@@ -1,0 +1,5 @@
+1 [control: comment only, must survive] SURVIVED
+2 [int8: signed values treated as unsigned] caught: scales_and_validation_are_explicit deterministic_random_products_match_i128_oracle exact_accumulation_covers_blocks_and_signed_extremes
+3 [int8: row scale ignored] caught: deterministic_random_products_match_i128_oracle scales_and_validation_are_explicit
+4 [int8: final chunk omitted] caught: exact_accumulation_covers_blocks_and_signed_extremes scales_and_validation_are_explicit deterministic_random_products_match_i128_oracle
+caught 3, survived 1, of 4

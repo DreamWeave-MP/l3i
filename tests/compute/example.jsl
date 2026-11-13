@@ -1,0 +1,67 @@
+-- @dream/compute through whole invocations, with the test runtime's oracles alongside.
+local function bytes(values)
+    local b = buffer.create(#values * 4)
+    for i, v in values do buffer.writef32(b, (i - 1) * 4, v) end
+    return b
+end
+local function input(values, rows, cols)
+    local b = bytes(values)
+    return compute.f32(b, rows, cols), b
+end
+local function expect(t, values)
+    local b = t:read()
+    assert(buffer.len(b) == #values * 4)
+    for i, v in values do assert(buffer.readf32(b, (i - 1) * 4) == v, `element {i}`) end
+end
+
+-- One structure, several inputs: nothing about the data is in the program.
+local x, y = compute.slot(0, 2, 3), compute.slot(1, 1, 3)
+local program = x:mul(y):add(compute.constant(2)):relu():compile()
+assert(string.find(program:ir(), 'elementwise', 1, true))
+local a, source = input({ -2, 1, 3, 4, 5, 6 }, 2, 3)
+local b = input({ 2, 3, 4 }, 1, 3)
+buffer.writef32(source, 0, 999) -- import was an explicit copy
+expect(program:run(a, b), { 0, 5, 14, 10, 17, 26 })
+expect(program:run(a, (input({ 1, 1, 1 }, 1, 3))), { 0, 3, 5, 6, 7, 8 })
+
+-- Call-scoped Luau buffers: no import, no native result, the caller's output.
+local out = buffer.create(24)
+program:runInto(out, bytes({ -2, 1, 3, 4, 5, 6 }), bytes({ 2, 3, 4 }))
+for i, v in { 0, 5, 14, 10, 17, 26 } do assert(buffer.readf32(out, (i - 1) * 4) == v) end
+local inPlace = bytes({ 1, 2, 3, 4, 5, 6 })
+assert(not pcall(function() program:runInto(inPlace, inPlace, bytes({ 1, 1, 1 })) end), 'output alias')
+assert(not pcall(function() program:runInto(buffer.create(4), inPlace, bytes({ 1, 1, 1 })) end), 'output size')
+assert(not pcall(function() program:runInto(out, inPlace) end), 'missing input')
+assert(not pcall(function() program:runInto(out, buffer.create(4), bytes({ 1, 1, 1 })) end), 'input size')
+
+local transposed = a:view(3, 2, 0, 4, 12)
+assert(a:shares(transposed))
+expect(transposed, { -2, 4, 1, 5, 3, 6 })
+
+local p, q = compute.slot(0, 2, 3), compute.slot(1, 3, 2)
+expect(p:matmul(q):compile():run(a, (input({ 1, 2, 3, 4, 5, 6 }, 3, 2))), { 16, 18, 49, 64 })
+local empty, zero = input({}, 2, 0), input({}, 0, 3)
+expect(compute.slot(0, 2, 0):matmul(compute.slot(1, 0, 3)):compile():run(empty, zero), { 0, 0, 0, 0, 0, 0 })
+
+assert(not pcall(compute.f32, source, 1.5, 4))
+assert(not pcall(compute.f32, source, -1, 6))
+assert(not pcall(function() a:view(2, 3, 0, 1000, 4) end))
+assert(not pcall(function() x:matmul(y) end))
+assert(not pcall(function() compute.slot(0, 2, 0):add(x) end))
+assert(not pcall(function() program:run(a) end))
+assert(not pcall(function() program:run(a, a) end))
+assert(not pcall(function() program:run(a, 'not a tensor') end))
+
+-- Native payload is invisible to Luau's pacing: results no script holds must not exhaust the
+-- budget. These 80 unreferenced 4 MiB results total 320 MiB against a 64 MiB limit.
+do
+    local big = compute.f32(buffer.create(4194304), 1, 1048576)
+    local identity = compute.slot(0, 1, 1048576):compile()
+    for _ = 1, 80 do identity:run(big) end
+end
+
+-- Programs survive collection of the nodes and the inputs that first ran through them.
+local keep = compute.slot(0, 2, 3):add(compute.constant(2)):compile()
+shared.state.retained, shared.state.retained_input = keep, bytes({ 1, 2, 3, 4, 5, 6 })
+a, b, x, y, transposed, source, program = nil, nil, nil, nil, nil, nil, nil
+print('programs: rebinding, fusion, broadcast, shared views, matrix, borrowed buffers, errors verified')

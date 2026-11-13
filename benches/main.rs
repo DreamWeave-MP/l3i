@@ -9,10 +9,22 @@
 #[cfg(target_os = "linux")]
 #[path = "instructions/counter.rs"]
 mod counter;
-#[cfg(any(feature = "intl", feature = "tcp", feature = "tls", feature = "fs-authenticated"))]
+#[cfg(any(
+    feature = "intl",
+    feature = "tcp",
+    feature = "tls",
+    feature = "fs-authenticated",
+    feature = "compute-testing"
+))]
 mod counting_alloc;
 
-#[cfg(any(feature = "intl", feature = "tcp", feature = "tls", feature = "fs-authenticated"))]
+#[cfg(any(
+    feature = "intl",
+    feature = "tcp",
+    feature = "tls",
+    feature = "fs-authenticated",
+    feature = "compute-testing"
+))]
 #[global_allocator]
 static GLOBAL: counting_alloc::Counting = counting_alloc::Counting;
 
@@ -26,6 +38,8 @@ mod udp;
 
 #[cfg(feature = "bytes")]
 mod bytes;
+#[cfg(feature = "compute-testing")]
+mod compute;
 #[cfg(feature = "data")]
 mod data;
 #[cfg(all(feature = "dns", feature = "tls"))]
@@ -55,6 +69,13 @@ fn main() {
     if filter.as_deref().is_some_and(|filter| filter.starts_with("data_")) {
         data::benches();
         criterion::Criterion::default().configure_from_args().final_summary();
+        return;
+    }
+
+    // Compute's harnesses run only when named: they take minutes and report rather than judge.
+    #[cfg(feature = "compute-testing")]
+    if let Some(filter) = filter.as_deref().filter(|filter| filter.starts_with("compute_")) {
+        compute::main(filter);
         return;
     }
 

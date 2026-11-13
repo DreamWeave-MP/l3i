@@ -1,0 +1,2 @@
+diagnose elementwise product_add vs_strict=1311 vs_fma=0 fixture_distinguishes=1311
+diagnose matmul side=64 vs_strict=3056 vs_fma=0

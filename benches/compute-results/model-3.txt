@@ -1,0 +1,23 @@
+# base commit 8094916 plus packed matmul, model run 3 of 3, disposable fedora:44 container, user-space counters, no wall clock
+Model name:                              Intel(R) Core(TM) i7-10870H CPU @ 2.20GHz
+rustc 1.99.1 (58cf8f9c3 2026-10-13)
+# model sequence=64 width=128 blocks=2 passes=7 (median pass)
+model_plan_strict_matmul instructions=6217745 cycles=4145515 l1d_misses=269197 llc_misses=2662 share_of_instructions=95.9% share_of_cycles=91.4%
+model_plan_strict_elementwise instructions=50014 cycles=87588 l1d_misses=10243 llc_misses=39 share_of_instructions=0.8% share_of_cycles=1.9%
+model_plan_strict_normalization_native instructions=111410 cycles=143904 l1d_misses=2099 llc_misses=3 share_of_instructions=1.7% share_of_cycles=3.2%
+model_plan_strict_softmax_native instructions=59946 cycles=98088 l1d_misses=565 llc_misses=6 share_of_instructions=0.9% share_of_cycles=2.2%
+model_plan_strict_transpose_native instructions=45376 cycles=59945 l1d_misses=5413 llc_misses=1 share_of_instructions=0.7% share_of_cycles=1.3%
+model_plan_strict_total instructions=6484491 cycles=4535040
+model_plan_fast_matmul instructions=4371057 cycles=2883818 l1d_misses=265444 llc_misses=69 share_of_instructions=94.2% share_of_cycles=88.7%
+model_plan_fast_elementwise instructions=50112 cycles=75800 l1d_misses=10236 llc_misses=2 share_of_instructions=1.1% share_of_cycles=2.3%
+model_plan_fast_normalization_native instructions=111410 cycles=140588 l1d_misses=2091 llc_misses=0 share_of_instructions=2.4% share_of_cycles=4.3%
+model_plan_fast_softmax_native instructions=59946 cycles=93229 l1d_misses=564 llc_misses=0 share_of_instructions=1.3% share_of_cycles=2.9%
+model_plan_fast_transpose_native instructions=45376 cycles=57298 l1d_misses=5238 llc_misses=0 share_of_instructions=1.0% share_of_cycles=1.8%
+model_plan_fast_total instructions=4637901 cycles=3250733
+model_baseline_matmul instructions=4153475 cycles=2363616 l1d_misses=190303 llc_misses=35 share_of_instructions=94.4% share_of_cycles=87.3%
+model_baseline_elementwise instructions=29270 cycles=49417 l1d_misses=9380 llc_misses=1 share_of_instructions=0.7% share_of_cycles=1.8%
+model_baseline_normalization_native instructions=111410 cycles=141108 l1d_misses=2093 llc_misses=0 share_of_instructions=2.5% share_of_cycles=5.2%
+model_baseline_softmax_native instructions=59946 cycles=93821 l1d_misses=560 llc_misses=0 share_of_instructions=1.4% share_of_cycles=3.5%
+model_baseline_transpose_native instructions=45376 cycles=58211 l1d_misses=5546 llc_misses=2 share_of_instructions=1.0% share_of_cycles=2.2%
+model_baseline_total instructions=4399477 cycles=2706173
+model_agreement strict_vs_fast=8.64e-6 strict_vs_baseline=8.64e-6

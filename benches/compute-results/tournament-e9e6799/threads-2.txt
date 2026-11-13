@@ -1,0 +1,35 @@
+openblas: OpenBLAS OpenBLAS 0.3.29 DYNAMIC_ARCH NO_AFFINITY USE_OPENMP Haswell MAX_THREADS=128; threads=2
+prepared contiguous inputs; preallocated outputs; packing included; one thread; no cached packed weights
+strict: ordered f32; fast: ordered FMA where available; matrixmultiply: library-selected arithmetic
+shape m=128 k=128 n=128
+graph_Fast median_us=42.006 min_us=40.197 p90_us=42.781 cycles=171413 instructions=572855 l1_read_misses=27869 ll_read_misses=0 allocations=1
+graph_Fast_threads2 median_us=32.225 min_us=31.619 p90_us=33.416 cycles=25253 instructions=2388 l1_read_misses=2192 ll_read_misses=0 allocations=5
+graph_Fast_prepare_once median_us=2.710 min_us=2.537 p90_us=2.778 cycles=12185 instructions=18746 l1_read_misses=3172 ll_read_misses=0 allocations=2
+graph_Fast_prepared median_us=38.915 min_us=37.150 p90_us=40.333 cycles=157784 instructions=554468 l1_read_misses=24890 ll_read_misses=0 allocations=0
+graph_Fast_prepared_threads2 median_us=23.747 min_us=22.602 p90_us=26.458 cycles=3474 instructions=1481 l1_read_misses=68 ll_read_misses=0 allocations=4
+openblas_sgemm median_us=25.072 min_us=23.947 p90_us=25.827 cycles=106256 instructions=313618 l1_read_misses=11090 ll_read_misses=0 allocations=0
+graph_budget_peak_bytes=262144
+shape m=256 k=256 n=256
+graph_Fast median_us=317.863 min_us=314.816 p90_us=323.307 cycles=1291692 instructions=4481742 l1_read_misses=204194 ll_read_misses=0 allocations=1
+graph_Fast_threads2 median_us=202.144 min_us=182.280 p90_us=219.406 cycles=41146 instructions=2382 l1_read_misses=4281 ll_read_misses=0 allocations=5
+graph_Fast_prepare_once median_us=13.340 min_us=13.075 p90_us=14.805 cycles=59862 instructions=71404 l1_read_misses=12609 ll_read_misses=0 allocations=2
+graph_Fast_prepared median_us=294.789 min_us=274.380 p90_us=347.141 cycles=1260302 instructions=4410807 l1_read_misses=193755 ll_read_misses=0 allocations=0
+graph_Fast_prepared_threads2 median_us=185.368 min_us=152.068 p90_us=195.605 cycles=4266 instructions=1548 l1_read_misses=114 ll_read_misses=0 allocations=4
+openblas_sgemm median_us=163.127 min_us=148.874 p90_us=166.546 cycles=669264 instructions=2220801 l1_read_misses=87284 ll_read_misses=0 allocations=0
+graph_budget_peak_bytes=1048576
+shape m=512 k=512 n=512
+graph_Fast median_us=2218.200 min_us=2175.830 p90_us=2384.852 cycles=9979991 instructions=35535279 l1_read_misses=1586024 ll_read_misses=0 allocations=1
+graph_Fast_threads2 median_us=1317.669 min_us=1255.250 p90_us=1356.229 cycles=47304 instructions=2396 l1_read_misses=4310 ll_read_misses=0 allocations=5
+graph_Fast_prepare_once median_us=55.432 min_us=54.169 p90_us=59.576 cycles=253837 instructions=282242 l1_read_misses=50861 ll_read_misses=0 allocations=2
+graph_Fast_prepared median_us=2231.948 min_us=2211.838 p90_us=2379.965 cycles=10155490 instructions=35253567 l1_read_misses=1551935 ll_read_misses=1 allocations=0
+graph_Fast_prepared_threads2 median_us=1269.021 min_us=1181.784 p90_us=1302.319 cycles=8261 instructions=1594 l1_read_misses=138 ll_read_misses=0 allocations=4
+openblas_sgemm median_us=1212.749 min_us=1163.124 p90_us=1240.770 cycles=4957252 instructions=17210461 l1_read_misses=653148 ll_read_misses=0 allocations=0
+graph_budget_peak_bytes=4194304
+shape m=1024 k=1024 n=1024
+graph_Fast median_us=18759.387 min_us=17867.867 p90_us=20175.087 cycles=83984900 instructions=282995524 l1_read_misses=13592162 ll_read_misses=9551 allocations=1
+graph_Fast_threads2 median_us=10262.430 min_us=9779.799 p90_us=10438.264 cycles=46943 instructions=2437 l1_read_misses=4316 ll_read_misses=41 allocations=5
+graph_Fast_prepare_once median_us=284.134 min_us=259.266 p90_us=375.590 cycles=1162389 instructions=1125490 l1_read_misses=211494 ll_read_misses=148 allocations=2
+graph_Fast_prepared median_us=20780.738 min_us=20466.782 p90_us=21138.273 cycles=83176759 instructions=281871869 l1_read_misses=13476267 ll_read_misses=2526 allocations=0
+graph_Fast_prepared_threads2 median_us=10090.882 min_us=9713.697 p90_us=10329.985 cycles=13219 instructions=1635 l1_read_misses=143 ll_read_misses=18 allocations=4
+openblas_sgemm median_us=9718.324 min_us=9621.049 p90_us=10862.126 cycles=38517202 instructions=135474157 l1_read_misses=5272842 ll_read_misses=4865 allocations=0
+graph_budget_peak_bytes=16777216

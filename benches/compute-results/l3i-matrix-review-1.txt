@@ -1,0 +1,130 @@
+OpenBLAS OpenBLAS 0.3.29 DYNAMIC_ARCH NO_AFFINITY USE_OPENMP Haswell MAX_THREADS=128; threads=1
+prepared contiguous inputs; preallocated outputs; packing included; one thread; no cached packed weights
+strict: ordered f32; fast: ordered FMA where available; matrixmultiply: library-selected arithmetic
+shape m=1 k=128 n=128
+graph_Strict median_us=0.950 min_us=0.890 p90_us=1.067
+graph_Fast median_us=0.824 min_us=0.795 p90_us=0.897
+matrixmultiply median_us=4.836 min_us=4.635 p90_us=5.406
+openblas_sgemm median_us=4.147 min_us=3.776 p90_us=4.603
+openblas_sgemv_transposed median_us=0.765 min_us=0.707 p90_us=0.866
+graph_budget_peak_bytes=66048
+shape m=1 k=256 n=256
+graph_Strict median_us=4.212 min_us=3.966 p90_us=4.738
+graph_Fast median_us=3.897 min_us=3.675 p90_us=4.224
+matrixmultiply median_us=26.771 min_us=24.920 p90_us=28.584
+openblas_sgemm median_us=19.725 min_us=17.894 p90_us=21.163
+openblas_sgemv_transposed median_us=3.723 min_us=3.533 p90_us=3.954
+graph_budget_peak_bytes=263168
+shape m=1 k=1024 n=1024
+graph_Strict median_us=82.264 min_us=74.192 p90_us=94.750
+graph_Fast median_us=71.774 min_us=69.028 p90_us=76.658
+matrixmultiply median_us=504.614 min_us=464.914 p90_us=549.830
+openblas_sgemm median_us=284.058 min_us=267.853 p90_us=298.738
+openblas_sgemv_transposed median_us=73.186 min_us=68.123 p90_us=77.074
+graph_budget_peak_bytes=4198400
+shape m=1 k=4096 n=1
+graph_Strict median_us=4.141 min_us=3.720 p90_us=4.424
+graph_Fast median_us=4.149 min_us=3.721 p90_us=4.390
+matrixmultiply median_us=11.188 min_us=10.485 p90_us=11.972
+openblas_sgemm median_us=6.174 min_us=5.723 p90_us=6.472
+openblas_sgemv median_us=0.559 min_us=0.511 p90_us=0.606
+graph_budget_peak_bytes=32768
+shape m=4 k=1024 n=1024
+graph_Strict median_us=368.690 min_us=337.362 p90_us=400.421
+graph_Strict_prepared median_us=177.369 min_us=158.821 p90_us=185.961
+graph_Fast median_us=258.714 min_us=235.490 p90_us=273.536
+graph_Fast_prepared median_us=114.416 min_us=104.112 p90_us=135.829
+matrixmultiply median_us=484.324 min_us=471.448 p90_us=542.147
+openblas_sgemm median_us=246.721 min_us=233.051 p90_us=256.299
+graph_budget_peak_bytes=8404992
+shape m=8 k=512 n=512
+graph_Strict median_us=136.252 min_us=132.917 p90_us=140.217
+graph_Strict_prepared median_us=73.108 min_us=70.625 p90_us=78.414
+graph_Fast median_us=119.040 min_us=110.610 p90_us=131.025
+graph_Fast_prepared median_us=52.663 min_us=49.821 p90_us=55.853
+matrixmultiply median_us=114.665 min_us=113.420 p90_us=116.962
+openblas_sgemm median_us=84.216 min_us=82.736 p90_us=91.691
+graph_budget_peak_bytes=2113536
+shape m=16 k=16 n=16
+graph_Strict median_us=0.495 min_us=0.450 p90_us=0.518
+graph_Strict_prepared median_us=0.401 min_us=0.377 p90_us=0.422
+graph_Fast median_us=0.406 min_us=0.385 p90_us=0.428
+graph_Fast_prepared median_us=0.354 min_us=0.334 p90_us=0.378
+matrixmultiply median_us=0.286 min_us=0.269 p90_us=0.306
+openblas_sgemm median_us=0.279 min_us=0.246 p90_us=0.294
+graph_budget_peak_bytes=3072
+shape m=31 k=127 n=17
+graph_Strict median_us=5.428 min_us=4.993 p90_us=5.863
+graph_Strict_prepared median_us=4.318 min_us=4.053 p90_us=4.592
+graph_Fast median_us=4.098 min_us=3.754 p90_us=4.426
+graph_Fast_prepared median_us=3.381 min_us=2.927 p90_us=3.550
+matrixmultiply median_us=3.430 min_us=3.264 p90_us=3.592
+openblas_sgemm median_us=2.965 min_us=2.713 p90_us=3.070
+graph_budget_peak_bytes=36576
+shape m=64 k=64 n=64
+graph_Strict median_us=11.692 min_us=11.034 p90_us=13.441
+graph_Strict_prepared median_us=10.739 min_us=10.007 p90_us=11.365
+graph_Fast median_us=7.999 min_us=7.625 p90_us=8.362
+graph_Fast_prepared median_us=6.987 min_us=6.677 p90_us=7.264
+matrixmultiply median_us=7.101 min_us=6.741 p90_us=7.467
+openblas_sgemm median_us=6.217 min_us=5.935 p90_us=6.395
+graph_budget_peak_bytes=49152
+shape m=64 k=128 n=1
+graph_Strict median_us=2.216 min_us=2.128 p90_us=2.333
+graph_Strict_prepared median_us=0.591 min_us=0.571 p90_us=0.620
+graph_Fast median_us=2.177 min_us=2.150 p90_us=2.229
+graph_Fast_prepared median_us=0.581 min_us=0.566 p90_us=0.599
+matrixmultiply median_us=3.911 min_us=3.791 p90_us=4.005
+openblas_sgemm median_us=1.959 min_us=1.864 p90_us=1.987
+openblas_sgemv median_us=0.480 min_us=0.464 p90_us=0.497
+graph_budget_peak_bytes=66048
+shape m=64 k=128 n=128
+graph_Strict median_us=39.401 min_us=38.493 p90_us=40.041
+graph_Strict_prepared median_us=35.924 min_us=35.357 p90_us=36.866
+graph_Fast median_us=25.304 min_us=24.771 p90_us=26.717
+graph_Fast_prepared median_us=21.804 min_us=21.412 p90_us=22.254
+matrixmultiply median_us=24.911 min_us=24.198 p90_us=25.662
+openblas_sgemm median_us=21.094 min_us=20.885 p90_us=21.304
+graph_budget_peak_bytes=163840
+shape m=128 k=128 n=128
+graph_Strict median_us=75.613 min_us=73.149 p90_us=76.698
+graph_Strict_prepared median_us=70.958 min_us=69.430 p90_us=71.460
+graph_Fast median_us=55.728 min_us=55.056 p90_us=57.305
+graph_Fast_prepared median_us=51.536 min_us=50.352 p90_us=53.607
+matrixmultiply median_us=46.675 min_us=45.523 p90_us=49.303
+openblas_sgemm median_us=40.474 min_us=39.802 p90_us=41.489
+graph_budget_peak_bytes=196608
+shape m=128 k=64 n=512
+graph_Strict median_us=150.310 min_us=146.934 p90_us=152.111
+graph_Strict_prepared median_us=144.727 min_us=141.366 p90_us=147.310
+graph_Fast median_us=99.664 min_us=97.257 p90_us=102.644
+graph_Fast_prepared median_us=94.247 min_us=91.924 p90_us=95.762
+matrixmultiply median_us=92.481 min_us=90.103 p90_us=94.240
+openblas_sgemm median_us=82.972 min_us=80.504 p90_us=84.272
+graph_budget_peak_bytes=294912
+shape m=256 k=256 n=1
+graph_Strict median_us=16.617 min_us=16.137 p90_us=16.949
+graph_Strict_prepared median_us=4.957 min_us=4.407 p90_us=5.664
+graph_Fast median_us=17.554 min_us=16.705 p90_us=18.350
+graph_Fast_prepared median_us=6.271 min_us=4.482 p90_us=6.612
+matrixmultiply median_us=30.840 min_us=29.853 p90_us=31.536
+openblas_sgemm median_us=14.898 min_us=14.424 p90_us=15.763
+openblas_sgemv median_us=4.751 min_us=4.406 p90_us=4.954
+graph_budget_peak_bytes=525312
+shape m=256 k=256 n=256
+graph_Strict median_us=593.774 min_us=580.074 p90_us=603.114
+graph_Strict_prepared median_us=573.901 min_us=561.164 p90_us=602.553
+graph_Fast median_us=376.753 min_us=364.662 p90_us=398.045
+graph_Fast_prepared median_us=361.775 min_us=352.979 p90_us=369.548
+matrixmultiply median_us=348.539 min_us=342.618 p90_us=357.601
+openblas_sgemm median_us=305.011 min_us=297.456 p90_us=312.610
+graph_budget_peak_bytes=786432
+shape m=4096 k=16 n=1
+graph_Strict median_us=15.968 min_us=15.761 p90_us=16.676
+graph_Strict_prepared median_us=5.058 min_us=4.778 p90_us=5.353
+graph_Fast median_us=16.815 min_us=16.140 p90_us=17.640
+graph_Fast_prepared median_us=5.090 min_us=4.860 p90_us=5.498
+matrixmultiply median_us=35.316 min_us=33.584 p90_us=37.132
+openblas_sgemm median_us=19.980 min_us=18.927 p90_us=20.798
+openblas_sgemv median_us=8.261 min_us=8.079 p90_us=8.705
+graph_budget_peak_bytes=524352
