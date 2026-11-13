@@ -17,7 +17,8 @@
 //!   seconds after the exit whatever arrives, killing the group if the call was bounded, and the
 //!   result says `held = true`; elsewhere it waits for the pipe until a limit. A run that shares
 //!   stdout or stderr with the host stays in the host's group unless it names a limit of its own,
-//!   so the terminal still treats it as the foreground job.
+//!   so the terminal still treats it as the foreground job. One that shares neither is set apart whenever a
+//!   limit can end it, the runtime's included, and is a background job to a controlling terminal.
 //! - `process.start(program, args, options)`: the same program and options, without waiting: a handle
 //!   with nonblocking reads and writes, `wait` (which blocks only with a timeout) and `close`. A run
 //!   and a started child both count against the runtime's live-child limit, which the host sets with
@@ -953,6 +954,7 @@ fn wait(
     let mut seen = (capture.progress.load(Ordering::SeqCst), exited);
     #[cfg(not(unix))]
     let _ = cancel;
+    #[cfg_attr(not(unix), allow(unused_mut))]
     let mut held = false;
     loop {
         if exceeded.load(Ordering::SeqCst) {
@@ -1245,7 +1247,7 @@ impl Extension for ProcessExtension {
             .doc("The script's process and the ones it starts: run a program and wait for its exit code, environment variables, and the standard streams.")
             .installed("run")
             .signature(RUN_SIGNATURE)
-            .doc("Runs program with args (no shell), waits for it, and returns how it ended; needs the process.spawn capability. stdout and stderr are inherited unless captured or discarded; stdin is empty unless given. timeoutMs (1 to 86400000, a day) stops the child after that many milliseconds, and maxStdoutBytes or maxStderrBytes (0 to 2^53 - 1, each for a captured stream) stops it once that stream passes its ceiling: the child is killed and reaped, its output discarded, and the failure is timeout or outputLimit. A captured stream given no ceiling has one of 64 MiB. On Unix a capture that a process the child started still holds open after the child exited is read until nothing has arrived for 250 ms, or for 2 s, and the call then answers the child's own result with held = true: what that process wrote later is not in it. A captured stream given no ceiling has one of 64 MiB. On Unix a bounded child runs in a process group of its own, which a limit signals whole on Linux, Android, macOS and FreeBSD (a descendant that left the group is not stopped); elsewhere only the child is killed. On Unix the call leaves no thread behind when it returns; on Windows a thread blocked on a pipe that something else holds stays until that pipe closes. A run counts against the live-child limit while it runs.")
+            .doc("Runs program with args (no shell), waits for it, and returns how it ended; needs the process.spawn capability. stdout and stderr are inherited unless captured or discarded; stdin is empty unless given. timeoutMs (1 to 86400000, a day) stops the child after that many milliseconds, and maxStdoutBytes or maxStderrBytes (0 to 2^53 - 1, each for a captured stream) stops it once that stream passes its ceiling: the child is killed and reaped, its output discarded, and the failure is timeout or outputLimit. A captured stream given no ceiling has one of 64 MiB. On Unix a capture that a process the child started still holds open after the child exited is read until nothing has arrived for 250 ms, or for 2 s, and the call then answers the child's own result with held = true: what that process wrote later is not in it. Under an execution time limit a run that shares neither stdout nor stderr with the host is set apart in a group of its own, as a bounded one is, and so cannot use the controlling terminal. On Unix a bounded child runs in a process group of its own, which a limit signals whole on Linux, Android, macOS and FreeBSD (a descendant that left the group is not stopped); elsewhere only the child is killed. On Unix the call leaves no thread behind when it returns; on Windows a thread blocked on a pipe that something else holds stays until that pipe closes. A run counts against the live-child limit while it runs.")
             .installed("start")
             .signature(START_SIGNATURE)
             .doc("Starts program with args (no shell) without waiting, and returns a process handle; needs the process.spawn capability, and fails like run for a program that cannot start. stdin is null unless \"pipe\", stdout and stderr are inherited unless \"pipe\" or \"null\". Reads, writes and wait never block except wait with a timeout. timeoutMs, maxStdoutBytes and maxStderrBytes are lifetime limits, as on run: passing one kills the child and, on Linux, Android, macOS and FreeBSD, its process group, and later reads answer with the limit's kind. Closing the handle kills and reaps the child. A started child counts against the live-child limit until its handle is closed or a limit stops it, so close handles: an unclosed one holds its slot until it is collected.")
