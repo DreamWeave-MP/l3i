@@ -806,12 +806,17 @@ fn select_words(span: &Span, comparison: Comparison, threshold: f64, words: &mut
 }
 
 fn selection(len: Exact<i64>) -> Result<Owned<Selection>> {
-    let len = non_negative("data.selection", "length", len.0)?;
+    // Not saturated, unlike a span's numbers: no bounds check follows a selection's length, so a
+    // length past this target's address space is refused rather than silently shortened.
+    let requested = len.0;
+    let no_memory = || Error::runtime(format!("data.selection: no memory for a selection of length {requested}"));
+    let len = u64::try_from(requested)
+        .map_err(|_| Error::runtime(format!("data.selection: negative length {requested}")))
+        .and_then(|len| usize::try_from(len).map_err(|_| no_memory()))?;
     // The bitset is Rust's memory, outside the VM's limit: a length the host cannot allocate is
     // an error here, where `Selection::new` would abort the process.
     let mut bits = Vec::new();
-    bits.try_reserve_exact(len.div_ceil(64))
-        .map_err(|_| Error::runtime(format!("data.selection: no memory for a selection of length {len}")))?;
+    bits.try_reserve_exact(len.div_ceil(64)).map_err(|_| no_memory())?;
     bits.resize(len.div_ceil(64), 0);
     let selection = Selection::new(0);
     selection.set_bits(bits);
