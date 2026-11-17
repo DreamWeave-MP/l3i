@@ -69,3 +69,9 @@ jobs:
         run: >
           cargo test --target wasm32-unknown-emscripten --test integration --
           packed_carrier:: carrier_corpus:: bits64:: luau_0747:: primitives:: quat:: raster:: type_surface::
+      - name: Record the boxed carrier's cost per bound call
+        run: cargo test --release --target wasm32-unknown-emscripten --test integration carrier_cost -- --ignored --nocapture
+      - name: Run the whole default-feature suite (report)
+        continue-on-error: true
+        timeout-minutes: 20
+        run: cargo test --target wasm32-unknown-emscripten --test integration -- --test-threads=1

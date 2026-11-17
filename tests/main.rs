@@ -71,6 +71,7 @@ mod bits64;
 mod bytes;
 mod call;
 mod carrier_corpus;
+mod carrier_cost;
 #[cfg(feature = "jit")]
 mod carrier_equivalence;
 mod comprehension;
