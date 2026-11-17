@@ -117,6 +117,7 @@ mod tcp;
 mod thread;
 #[cfg(feature = "tls")]
 mod tls;
+mod type_surface;
 #[cfg(all(feature = "analysis", feature = "soft-render"))]
 mod typed_definitions;
 mod udp;
