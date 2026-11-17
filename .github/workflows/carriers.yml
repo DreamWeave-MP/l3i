@@ -48,7 +48,10 @@ jobs:
   wasm32:
     runs-on: ubuntu-24.04
     env:
-      CARGO_TARGET_WASM32_UNKNOWN_EMSCRIPTEN_RUNNER: node
+      # V8 runs wasm frames on its own native stack, about 1 MB by default: too little for an
+      # unoptimized build's frontend and parser at their nesting limits. 7800 KB stays inside
+      # the runner's 8 MB main thread.
+      CARGO_TARGET_WASM32_UNKNOWN_EMSCRIPTEN_RUNNER: node --stack-size=7800
       # The goldens and fixtures are read from the checkout: Node's real filesystem, not
       # emscripten's in-memory one. Emscripten's default 64 KiB stack is too small for Luau's
       # parser at its recursion limit; 8 MiB is a desktop main thread's.
