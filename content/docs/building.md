@@ -83,7 +83,11 @@ everywhere else, wasm32 first. `L3I_CARRIER=boxed` forces the boxed carrier on a
 test it (an environment variable, since the gates build with `--all-features`), and
 `L3I_CARRIER=light` on a target off the allowlist is refused. `jit` needs the light carrier: the
 lowering hooks are written against it, and the boxed combination is refused at build time. CI
-runs both carriers on x86-64 and AArch64 Linux and on macOS (`.github/workflows/carriers.yml`).
+runs both carriers on x86-64 and AArch64 Linux and on macOS, and builds for
+`wasm32-unknown-emscripten` (the boxed carrier, no `jit`) and runs the carrier, packed-value,
+Bits64 and 0.747 suites under Node, goldens included (`.github/workflows/carriers.yml`).
+`.cargo/config.toml` hands that target to emscripten's `em++`, `emcc` and `emar`; a test build
+there links with `-sNODERAWFS=1` to read the checkout.
 
 ## Features
 

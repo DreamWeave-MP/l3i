@@ -545,12 +545,13 @@ added = [
 ]
 changed = [
     "Native lowering of `@dream/quat`, `@dream/raster` and `@dream/bytes` reads and writes the light carrier directly and checks the kind nibble, so a lowered call stays native. Results that feed straight into another lowered call cost more than they did as integers (Luau does not track a light userdata's tag in registers): about 18 cycles on a reassigned `acc = Q:mul(acc, r)`, 3 to 5 ns on reassigned raster operations. Binder instruction counts are unchanged.",
-    "On targets other than x86-64 and AArch64 (wasm32 first) a packed scalar is an interned userdata: the same semantics, at the cost of a lookup and, for a new value, an allocation. `jit` is refused there.",
+    "On targets other than x86-64 and AArch64 (wasm32 first) a packed scalar is an interned userdata: the same semantics, at the cost of a lookup and, for a new value, an allocation. `jit` is refused there. CI builds `wasm32-unknown-emscripten` and runs the carrier, packed-value, Bits64 and 0.747 suites there under Node; the boxed carrier reproduces the integer carrier's corpus and BufferPack goldens byte for byte.",
     "Packed type names are erased to `any` before bytecode, so native type guards never reject a packed value; analysis still sees the names.",
 ]
 fixed = [
     "A lowered colour operation accepted a `Color` whose payload exceeded 32 bits, which the bound call refuses; it now exits to the bound call.",
     "`quat.key`, `keyRotation` and `keyFlags` canonicalized a non-canonical payload where their lowering did not; both now compute on the bits.",
+    "l3i did not build for wasm32: the value mirror pinned a 64-bit `TString` layout (its asserts refused the build rather than misread), the toolchain config handed emscripten's target to plain clang, and the value mirror's self-test compared a light userdata's whole value word where a 32-bit pointer fills half of it.",
     "`quat.mul`, `slerp` and `rotate` (module and `quat.math()`) agreed with their native lowering only to the angle: the bound path decoded, renormalised and branched differently. They now run the lowering's operations in its order and return the same bits; results from well-formed rotations are unchanged.",
 ]
 migration = """
