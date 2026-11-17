@@ -49,6 +49,9 @@ jobs:
     runs-on: ubuntu-24.04
     env:
       CARGO_TARGET_WASM32_UNKNOWN_EMSCRIPTEN_RUNNER: node
+      # The goldens and fixtures are read from the checkout: Node's real filesystem, not
+      # emscripten's in-memory one.
+      CARGO_TARGET_WASM32_UNKNOWN_EMSCRIPTEN_RUSTFLAGS: -Clink-arg=-sNODERAWFS=1
       L3I_UNVERIFIED_TOOLCHAIN: "1"
     steps:
       - uses: actions/checkout@v6

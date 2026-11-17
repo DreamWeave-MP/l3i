@@ -153,8 +153,13 @@ pub(crate) unsafe fn self_test(state: *mut ffi::lua_State) -> crate::error::Resu
         let ok = {
             let slot = |offset: i32| ffi::l3i_stack_slot(state, top + offset).as_ref();
             let number = slot(1).is_some_and(|v| v.tag() == ffi::LUA_TNUMBER && v.number() == 2.5);
+            // A pointer fills the value word only on 64-bit targets; on wasm32 the high half is
+            // whatever the slot held before, so only the pointer's own width is compared.
+            let pointer_mask = usize::MAX as u64;
             let light = slot(2).is_some_and(|v| {
-                v.tag() == ffi::LUA_TLIGHTUSERDATA && v.pointer_bits() == mark as usize as u64 && v.extra() == 7
+                v.tag() == ffi::LUA_TLIGHTUSERDATA
+                    && v.pointer_bits() & pointer_mask == mark as usize as u64
+                    && v.extra() == 7
             });
             let boolean = slot(3).is_some_and(|v| v.tag() == ffi::LUA_TBOOLEAN && v.boolean());
             let vector = slot(4).is_some_and(|v| v.tag() == ffi::LUA_TVECTOR && v.vector() == [1.5, -2.5, 3.5]);
