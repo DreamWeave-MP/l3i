@@ -198,9 +198,20 @@ pub fn builtin_kinds() -> [PackedKind; 4] {
 /// The kind numbers of [`builtin_kinds`], as documentation and as a compile-time anchor.
 pub const BUILTIN_KINDS: [u8; 4] = [1, 2, 3, 4];
 
-/// Fails unless `T` is the registered owner of its kind on the VM behind `state`.
+/// Fails unless `T` is the registered owner of its kind on the VM behind `state`. l3i's own kinds
+/// pass without a lookup: every runtime registers them at creation and no other type can take
+/// their numbers, so the check could only succeed (the comparison folds away per `T`).
 #[inline(always)]
 fn check_registered<T: PackedScalar>(state: *mut crate::raw::ffi::lua_State) -> Result<()> {
+    use std::any::TypeId;
+    let id = TypeId::of::<T>();
+    if id == TypeId::of::<crate::quat::Quaternion>()
+        || id == TypeId::of::<crate::quat::AnimationKey>()
+        || id == TypeId::of::<crate::raster::Color>()
+        || id == TypeId::of::<crate::raster::ClipRect>()
+    {
+        return Ok(());
+    }
     // SAFETY: `state` comes from a live scope.
     let shared = unsafe { crate::runtime::shared_for(state) };
     match shared.and_then(|shared| shared.packed_owner(T::KIND)) {
