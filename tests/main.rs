@@ -70,6 +70,7 @@ mod bits64;
 #[cfg(feature = "bytes")]
 mod bytes;
 mod call;
+mod carrier_corpus;
 #[cfg(feature = "jit")]
 mod carrier_equivalence;
 mod comprehension;
