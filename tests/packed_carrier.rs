@@ -284,8 +284,12 @@ fn the_host_push_refuses_l3i_tags_and_pointers_with_a_kind_nibble() {
         |value: LightUserdata| runtime.stack().with_frame(|f| value.push_into(f).map(|_| ())).unwrap_err().to_string();
     let tagged = refused(LightUserdata { pointer: std::ptr::null_mut(), tag: 128 });
     assert!(tagged.contains("128") && tagged.contains("packed scalars"), "{tagged}");
-    let nibble = refused(LightUserdata { pointer: (0x1000_0000_0000_0010_usize) as *mut std::ffi::c_void, tag: 0 });
-    assert!(nibble.contains("top nibble") && nibble.contains("HWASan"), "{nibble}");
+    // Only a 64-bit pointer can set the top nibble of the value word.
+    #[cfg(target_pointer_width = "64")]
+    {
+        let nibble = refused(LightUserdata { pointer: (0x1000_0000_0000_0010_usize) as *mut std::ffi::c_void, tag: 0 });
+        assert!(nibble.contains("top nibble") && nibble.contains("HWASan"), "{nibble}");
+    }
     // A real pointer under a host tag crosses.
     let mut slot = 0u32;
     runtime
