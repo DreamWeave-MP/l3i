@@ -545,7 +545,7 @@ added = [
 ]
 changed = [
     "Native lowering of `@dream/quat`, `@dream/raster` and `@dream/bytes` reads and writes the light carrier directly and checks the kind nibble, so a lowered call stays native. Results that feed straight into another lowered call cost more than they did as integers (Luau does not track a light userdata's tag in registers): about 18 cycles on a reassigned `acc = Q:mul(acc, r)`, 3 to 5 ns on reassigned raster operations. Binder instruction counts are unchanged.",
-    "On targets other than x86-64 and AArch64 (wasm32 first) a packed scalar is an interned userdata: the same semantics, at the cost of a lookup and, for a new value, an allocation. `jit` is refused there. CI builds `wasm32-unknown-emscripten` and runs the carrier, packed-value, Bits64 and 0.747 suites there under Node; the boxed carrier reproduces the integer carrier's corpus and BufferPack goldens byte for byte.",
+    "On targets other than x86-64 and AArch64 (wasm32 first) a packed scalar is an interned userdata: the same semantics, at the cost of a lookup and, for a new value, an allocation. `jit` is refused there. CI builds `wasm32-unknown-emscripten` and runs the whole default-feature suite there under Node, but for UDP sockets, child processes and threads; the boxed carrier reproduces the integer carrier's corpus and BufferPack goldens byte for byte. A wasm32 host links with a `-sSTACK_SIZE` well above emscripten's 64 KiB default and with `ALLOW_MEMORY_GROWTH`.",
     "Packed type names are erased to `any` before bytecode, so native type guards never reject a packed value; analysis still sees the names.",
 ]
 fixed = [

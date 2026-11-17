@@ -340,6 +340,26 @@ replaced, the reassigned `Q:mul` is about 18 cycles (12 percent) slower and the 
 `C:red` chain 57 to 65 percent, with the same instruction counts. Results kept in a local and
 used once cost within 1.5 percent of what they did.
 
+### The carriers in wall time
+
+wasm32 under Node has no CPU counters, so the carriers are also compared in wall time by
+`tests/carrier_cost.rs` (`cargo test --release --test integration carrier_cost -- --ignored
+--nocapture`): nanoseconds per bound call, the loop subtracted, minimum of five rounds of
+200,000. The desktop rows are one x86-64 Linux machine, release; the wasm32 column is the CI
+runner under Node, release, as the range over two runs, and is a record rather than a budget.
+
+| Per call | light, x86-64 | boxed, x86-64 | boxed, wasm32 |
+|---|---:|---:|---:|
+| bound `(f64) -> f64` | 19.5 | 19.0 | 36.9 to 40.9 |
+| bound `(Vector3) -> f64` | 28.5 | 27.6 | 37.5 to 41.3 |
+| bound `(Packed<Color>) -> f64` | 28.0 | 28.4 | 40.2 to 48.7 |
+| bound `(Bits64) -> f64` | 23.5 | 26.8 | 36.7 to 39.8 |
+| a bound function returns a packed `Color` (the same value each call) | 19.6 | 56.2 | 67.1 to 85.2 |
+
+Reading a packed argument costs the same on both carriers. Returning one costs the interned
+carrier a weak-table lookup, about three times the light carrier's push in this row, where the
+value is already live; a value that is not also pays an allocation.
+
 A packed rotation built natively costs a sixth of a table and a fifth of a binder call, and
 allocates nothing. Rotating by four numbers already in locals is still cheaper than unpacking one;
 the packed form pays for itself where the rotation is stored, keyed, or sent rather than used once.

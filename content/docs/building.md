@@ -84,8 +84,9 @@ test it (an environment variable, since the gates build with `--all-features`), 
 `L3I_CARRIER=light` on a target off the allowlist is refused. `jit` needs the light carrier: the
 lowering hooks are written against it, and the boxed combination is refused at build time. CI
 runs both carriers on x86-64 and AArch64 Linux and on macOS, and builds for
-`wasm32-unknown-emscripten` (the boxed carrier, no `jit`) and runs the carrier, packed-value,
-Bits64 and 0.747 suites under Node, goldens included (`.github/workflows/carriers.yml`).
+`wasm32-unknown-emscripten` (the boxed carrier, no `jit`) and runs the whole default-feature
+suite under Node, goldens included, except what emscripten cannot do: UDP sockets, child
+processes and threads (`.github/workflows/carriers.yml`).
 `.cargo/config.toml` hands that target to emscripten's `em++`, `emcc` and `emar`; a test build
 there links with `-sNODERAWFS=1` to read the checkout. A host linking l3i for emscripten sets
 `-sSTACK_SIZE` well above emscripten's 64 KiB default (CI uses 8 MB): Luau's parser recurses up
