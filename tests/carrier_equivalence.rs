@@ -180,6 +180,17 @@ fn ops() -> Vec<Op> {
         good: &["buffer.create(40)", "20", "v", "v", "ca"],
         results: 1,
     });
+    #[cfg(feature = "bytes")]
+    ops.extend([
+        Op { receiver: "B", method: "readi64be", slots: &[Buffer, Number], good: &["bytesBuf", "8"], results: 1 },
+        Op {
+            receiver: "B",
+            method: "writei64be",
+            slots: &[Buffer, Number, Wide],
+            good: &["bytesBuf", "8", "wa"],
+            results: 0,
+        },
+    ]);
     let _ = Buffer;
     ops
 }
@@ -332,7 +343,7 @@ fn describe(value: &Value, scope: &impl Scope, exact: bool) -> String {
             Ok(match raw.tag() {
                 l3i::ffi::LUA_TNIL => "nil".to_owned(),
                 l3i::ffi::LUA_TBOOLEAN => format!("boolean {}", raw.boolean()),
-                l3i::ffi::LUA_TSTRING => format!("string {:?}", view.read::<String>()?),
+                l3i::ffi::LUA_TSTRING => format!("string {:?}", String::from_utf8_lossy(&view.read::<Vec<u8>>()?)),
                 l3i::ffi::LUA_TVECTOR if !exact => "vector".to_owned(),
                 l3i::ffi::LUA_TVECTOR => format!("vector {:#018x} {:#010x}", raw.pointer_bits(), raw.extra()),
                 l3i::ffi::LUA_TLIGHTUSERDATA if !exact => {
@@ -352,12 +363,15 @@ fn every_lowered_operation_agrees_with_its_binder_on_every_operand() {
         .compat_global("@dream/quat", "quat")
         .compat_global("@dream/raster", "raster")
         .compat_global("@dream/soft-render", "soft")
+        .compat_global("@dream/bytes", "bytes")
         .native_code(NativeCodePolicy {
             mode: NativeCodeMode::Annotated,
             record_counters: true,
             ..NativeCodePolicy::default()
         });
     let builder = RuntimePlan::builder().policy(policy).extension(QuatExtension).extension(RasterExtension);
+    #[cfg(feature = "bytes")]
+    let builder = builder.extension(l3i::bytes::BytesExtension);
     #[cfg(feature = "soft-render")]
     let builder = builder.extension(l3i::soft_render::SoftRenderExtension);
     let plan = builder.finalize().unwrap();
@@ -381,6 +395,7 @@ fn every_lowered_operation_agrees_with_its_binder_on_every_operand() {
          local wa = raster.widen(ca)\n\
          local wb = raster.rgba16(100, 20000, 65535, 3)\n\
          local v = vector.create(1, 2, 3)\n\
+         local bytesBuf = buffer.create(24) buffer.writestring(bytesBuf, 8, '\\x80\\x01\\x02\\x03\\x04\\x05\\x06\\xFF')\n\
          local cases = {}\n",
     );
     let mut labels: Vec<Vec<(String, bool)>> = Vec::new();
@@ -411,12 +426,26 @@ fn every_lowered_operation_agrees_with_its_binder_on_every_operand() {
     );
     #[cfg(feature = "soft-render")]
     driver.push_str("local V: dream_soft_render_Vertices = soft.vertices()\n");
-    driver.push_str("local lowered, bound = {}, {}\n");
+    #[cfg(feature = "bytes")]
+    driver.push_str("local B: dream_bytes_Math = bytes.math()\n");
+    driver.push_str("local lowered, bound, writes = {}, {}, {}\n");
     for (index, op) in ops.iter().enumerate() {
         let params: Vec<String> = (1..=op.slots.len()).map(|i| format!("a{i}")).collect();
         let results: Vec<String> = (1..=op.results).map(|i| format!("r{i}")).collect();
         let (params, results) = (params.join(", "), results.join(", "));
         let (receiver, method) = (op.receiver, op.method);
+        if op.results == 0 {
+            // A write: the dispatcher hands it a fresh copy of the buffer and reads the bytes back.
+            writeln!(
+                driver,
+                "lowered[{n}] = function({params}) {receiver}:{method}({params}) end\n\
+                 bound[{n}] = function({params}) {receiver}.{method}({receiver}, {params}) end\n\
+                 writes[{n}] = true",
+                n = index + 1
+            )
+            .unwrap();
+            continue;
+        }
         writeln!(
             driver,
             "lowered[{n}] = function({params}) local {results} = {receiver}:{method}({params}) return {results} end\n\
@@ -425,7 +454,7 @@ fn every_lowered_operation_agrees_with_its_binder_on_every_operand() {
         )
         .unwrap();
     }
-    driver.push_str("return { lowered = lowered, bound = bound }\n");
+    driver.push_str("return { lowered = lowered, bound = bound, writes = writes }\n");
     // Loaded through the path that compiles natively (`Runtime::load` does not). Only the
     // wrappers are native (the policy compiles `--!native` modules alone), so an exit counted
     // around a call is the lowered call's own.
@@ -439,6 +468,13 @@ fn every_lowered_operation_agrees_with_its_binder_on_every_operand() {
         .load_function(
             "return function(wrappers, cases) return function(path, op, i) \
              local args = cases[op][i] \
+             if wrappers.writes[op] then \
+               args = table.clone(args) \
+               if type(args[1]) == 'buffer' then args[1] = buffer.create(buffer.len(args[1])) end \
+               local ok, err = pcall(wrappers[path][op], table.unpack(args, 1, args.n)) \
+               if not ok then return false, err end \
+               return true, buffer.tostring(args[1]) \
+             end \
              return pcall(wrappers[path][op], table.unpack(args, 1, args.n)) end end",
         )
         .unwrap();
