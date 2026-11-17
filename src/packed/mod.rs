@@ -360,6 +360,50 @@ impl<T: PackedScalar> PackedBits<T> {
         }
         Ok(PackedBits(bits as u64, std::marker::PhantomData))
     }
+
+    /// The 56-bit payload.
+    pub(crate) fn payload(self) -> u64 {
+        self.0 & PAYLOAD_MASK
+    }
+
+    /// The four flag bits.
+    pub(crate) fn flags(self) -> u8 {
+        ((self.0 >> PAYLOAD_BITS) & 0xF) as u8
+    }
+}
+
+/// A `PackedBits<T>` parameter: the registry check and the kind nibble, exactly what lowered code
+/// checks, and no `unpack`: an operation on the bits themselves (moving a payload under another
+/// kind, setting flags) must not canonicalize a payload its lowering passes through.
+impl<'v, T: PackedScalar> FromView<'v> for PackedBits<T> {
+    const EXPECTED: &'static str = T::NAME;
+
+    fn from_view(view: ValueView<'v>) -> Result<Self> {
+        check_registered::<T>(view.state())?;
+        match carrier::read(view) {
+            Some(bits) => PackedBits::new(bits as i64),
+            None => Err(view.type_error_expecting(T::NAME)),
+        }
+    }
+
+    fn matches(view: ValueView<'v>) -> bool {
+        carrier::read(view).is_some_and(|bits| decode(bits as i64).0 == T::KIND)
+    }
+}
+
+impl<T: PackedScalar> crate::bind::Param for PackedBits<T> {
+    type Item<'c> = PackedBits<T>;
+}
+
+impl<'c, T: PackedScalar> crate::bind::ParamItem<'c> for PackedBits<T> {
+    const KIND: crate::bind::ParamKind = crate::bind::ParamKind::Regular;
+    const EXPECTED: &'static str = T::NAME;
+    fn read_slot(view: ValueView<'c>) -> Result<Self> {
+        <PackedBits<T> as FromView<'c>>::from_view(view)
+    }
+    fn matches(view: ValueView<'c>) -> bool {
+        <PackedBits<T> as FromView<'c>>::matches(view)
+    }
 }
 
 impl<T: PackedScalar> Push for PackedBits<T> {

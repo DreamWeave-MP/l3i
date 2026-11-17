@@ -42,7 +42,7 @@
 use crate::convert::{Exact, Vector3};
 use crate::error::Result;
 use crate::extension::{Extension, ExtensionDescriptor};
-use crate::packed::{Packed, PackedScalar};
+use crate::packed::{Packed, PackedBits, PackedScalar};
 
 /// A unit quaternion in f64: the reference representation and the host's accumulator.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -390,6 +390,17 @@ fn key_flags(flags: Exact<i64>) -> u8 {
     (flags.0 & 0xF) as u8
 }
 
+/// `quat.key` on the bits: the rotation's payload under the key kind with the low four bits of
+/// `flags`, as the lowering computes it. A payload is carried over, never decoded and re-encoded.
+fn key_bits(q: PackedBits<Quaternion>, flags: Exact<i64>) -> Result<PackedBits<AnimationKey>> {
+    PackedBits::new(crate::packed::encode(AnimationKey::KIND, key_flags(flags), q.payload())?)
+}
+
+/// `quat.keyRotation` on the bits: the key's payload under the rotation kind, flags dropped.
+fn key_rotation_bits(k: PackedBits<AnimationKey>) -> Result<PackedBits<Quaternion>> {
+    PackedBits::new(crate::packed::encode(Quaternion::KIND, 0, k.payload())?)
+}
+
 fn to_vec3(v: [f64; 3]) -> Vector3 {
     Vector3 { x: v[0] as f32, y: v[1] as f32, z: v[2] as f32 }
 }
@@ -438,11 +449,11 @@ impl Extension for QuatExtension {
             .signature("(q: integer, v: vector) -> vector")
             .function("angleTo", |a: Packed<Quaternion>, b: Packed<Quaternion>| a.0.0.angle_to(b.0.0))
             .signature("(a: integer, b: integer) -> number")
-            .function("key", |q: Packed<Quaternion>, flags: Exact<i64>| AnimationKey::pack(q.0.0, key_flags(flags)))
+            .function("key", key_bits)
             .signature("(q: integer, flags: number) -> integer")
-            .function("keyRotation", |k: Packed<AnimationKey>| Quaternion::pack(k.0.rotation))
+            .function("keyRotation", key_rotation_bits)
             .signature("(k: integer) -> integer")
-            .function("keyFlags", |k: Packed<AnimationKey>| i64::from(k.0.flags))
+            .function("keyFlags", |k: PackedBits<AnimationKey>| i64::from(k.flags()))
             .signature("(k: integer) -> number");
         #[cfg(feature = "jit")]
         {
@@ -467,15 +478,13 @@ impl Extension for QuatExtension {
                 .method("fromXYZW", |_: &lowering::Math, x: f64, y: f64, z: f64, w: f64| from_xyzw(x, y, z, w))
                 .signature("(self, x: number, y: number, z: number, w: number): integer");
             receiver
-                .method("key", |_: &lowering::Math, q: Packed<Quaternion>, flags: Exact<i64>| {
-                    AnimationKey::pack(q.0.0, key_flags(flags))
-                })
+                .method("key", |_: &lowering::Math, q: PackedBits<Quaternion>, flags: Exact<i64>| key_bits(q, flags))
                 .signature("(self, q: integer, flags: number): integer");
             receiver
-                .method("keyRotation", |_: &lowering::Math, k: Packed<AnimationKey>| Quaternion::pack(k.0.rotation))
+                .method("keyRotation", |_: &lowering::Math, k: PackedBits<AnimationKey>| key_rotation_bits(k))
                 .signature("(self, k: integer): integer");
             receiver
-                .method("keyFlags", |_: &lowering::Math, k: Packed<AnimationKey>| i64::from(k.0.flags))
+                .method("keyFlags", |_: &lowering::Math, k: PackedBits<AnimationKey>| i64::from(k.flags()))
                 .signature("(self, k: integer): number");
             d.native_hooks(lowering::Lowering);
         }
