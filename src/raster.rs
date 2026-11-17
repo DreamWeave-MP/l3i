@@ -312,6 +312,10 @@ unsafe impl crate::userdata::Userdata for Math {
     const NAME: &'static str = "dream.raster.Math";
 }
 
+/// The width of a [`Color`]'s payload: its `unpack` refuses any bit above it, and so must lowered
+/// code.
+pub(crate) const COLOR_PAYLOAD_BITS: u32 = 32;
+
 impl PackedScalar for Color {
     const KIND: u8 = 3;
     const NAME: &'static str = "Color";
@@ -319,8 +323,10 @@ impl PackedScalar for Color {
         (u64::from(self.packed()), 0)
     }
     fn unpack(payload: u64, _flags: u8) -> Result<Self> {
-        let bits = u32::try_from(payload).map_err(|_| Error::runtime("Color payload has bits above 32"))?;
-        Ok(Color::from_packed(bits))
+        if payload >> COLOR_PAYLOAD_BITS != 0 {
+            return Err(Error::runtime("Color payload has bits above 32"));
+        }
+        Ok(Color::from_packed(payload as u32))
     }
 }
 
@@ -714,7 +720,7 @@ pub mod lowering {
     /// (the wide 16-bit form) and returns its bits.
     fn checked(build: &mut IrBuilder<'_>, reg: IrOp, exit: IrOp, format: Format) -> IrOp {
         match format.kind {
-            Some(kind) => packed_ir::load_checked(build, reg, kind, exit),
+            Some(kind) => packed_ir::load_checked_payload(build, reg, kind, super::COLOR_PAYLOAD_BITS, exit),
             None => packed_ir::load_wide(build, reg, exit),
         }
     }

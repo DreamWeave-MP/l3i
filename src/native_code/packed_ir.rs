@@ -41,12 +41,26 @@ const LOAD: IrCmd = IrCmd::LOAD_INT64;
 /// Guards that `reg` holds a packed scalar of nibble kind `kind` and returns its 64 bits; anything
 /// else exits to `exit`.
 pub fn load_checked(build: &mut IrBuilder<'_>, reg: IrOp, kind: u8, exit: IrOp) -> IrOp {
+    load_checked_payload(build, reg, kind, crate::packed::PAYLOAD_BITS, exit)
+}
+
+/// [`load_checked`] for a kind whose payload is only `payload_bits` wide, as its `unpack`
+/// requires: the bits between the payload and the flag nibble must be zero too, or the binder
+/// refuses the value and lowered code must not accept it. The kind, the zero bits and the payload
+/// width are one compare: `(bits >> payload_bits)` with the flags masked off equals the kind,
+/// shifted into place, and nothing else.
+pub fn load_checked_payload(build: &mut IrBuilder<'_>, reg: IrOp, kind: u8, payload_bits: u32, exit: IrOp) -> IrOp {
+    debug_assert!((1..=crate::packed::PAYLOAD_BITS).contains(&payload_bits));
     let bits = load_wide(build, reg, exit);
-    let sixty = build.const_int64(60);
-    let fifteen = build.const_int64(15);
-    let actual = build.inst(IrCmd::BITRSHIFT_INT64, &[bits, sixty]);
-    let actual = build.inst(IrCmd::BITAND_INT64, &[actual, fifteen]);
-    let expected = build.const_int64(i64::from(kind));
+    // Above the payload: `56 - payload_bits` bits that must be zero, the flags, the kind.
+    let above = 64 - payload_bits;
+    let flag_shift = above - 8;
+    let mask = !(0xF_i64 << flag_shift) & ((1_i64 << above) - 1);
+    let shift = build.const_int64(i64::from(payload_bits));
+    let mask = build.const_int64(mask);
+    let actual = build.inst(IrCmd::BITRSHIFT_INT64, &[bits, shift]);
+    let actual = build.inst(IrCmd::BITAND_INT64, &[actual, mask]);
+    let expected = build.const_int64(i64::from(kind) << (above - 4));
     let equal = build.cond(IrCondition::Equal);
     build.inst(IrCmd::CHECK_CMP_INT64, &[actual, expected, equal, exit]);
     bits

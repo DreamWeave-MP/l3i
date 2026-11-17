@@ -651,7 +651,13 @@ pub mod lowering {
             let size = build.const_int(VERTEX_BYTES as i32);
             build.inst(IrCmd::CHECK_BUFFER_LEN, &[buffer, offset, zero, size, offset_number, exit]);
 
-            let bits = packed_ir::load_checked(build, color_reg, <Color as PackedScalar>::KIND, exit);
+            let bits = packed_ir::load_checked_payload(
+                build,
+                color_reg,
+                <Color as PackedScalar>::KIND,
+                crate::raster::COLOR_PAYLOAD_BITS,
+                exit,
+            );
 
             let buffer_tag = build.const_tag(LUA_TBUFFER as u8);
             write_f32_pair(build, buffer, offset, 0, pos_reg, buffer_tag);
