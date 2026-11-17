@@ -3,7 +3,8 @@ name: Packed scalar carriers
 # The Luau 0.747 campaign: every carrier a packed scalar can ride in (src/packed/carrier.rs), on
 # x86-64 and AArch64. `integer` is the Luau 0.746 oracle, `light` the tagged light userdata carrier,
 # `boxed` the interned userdata carrier wasm32 and every other target use, forced here on a desktop
-# build with jit off (it has no native lowering). The library workflow tests the default carrier.
+# build with jit off (it has no native lowering). The library workflow tests the default carrier,
+# and the doctests, which rustdoc links with the system cc on Linux AArch64.
 on:
   workflow_dispatch:
   pull_request:
@@ -35,6 +36,6 @@ jobs:
       - uses: DreamWeave-MP/StroggForge/.github/actions/setup-llvm@v72
       - name: Test with jit
         if: matrix.carrier != 'boxed'
-        run: cargo test --workspace --all-features
+        run: cargo test --workspace --lib --tests --all-features
       - name: Test without jit
-        run: cargo test --workspace --features "$NOJIT"
+        run: cargo test --workspace --lib --tests --features "$NOJIT"
