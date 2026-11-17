@@ -55,7 +55,8 @@ jobs:
       # The goldens and fixtures are read from the checkout: Node's real filesystem, not
       # emscripten's in-memory one. Emscripten's default 64 KiB stack is too small for Luau's
       # parser at its recursion limit; 8 MiB is a desktop main thread's.
-      CARGO_TARGET_WASM32_UNKNOWN_EMSCRIPTEN_RUSTFLAGS: -Clink-arg=-sNODERAWFS=1 -Clink-arg=-sSTACK_SIZE=8MB
+      CARGO_TARGET_WASM32_UNKNOWN_EMSCRIPTEN_RUSTFLAGS: >-
+        -Clink-arg=-sNODERAWFS=1 -Clink-arg=-sSTACK_SIZE=8MB -Clink-arg=-sALLOW_MEMORY_GROWTH=1
       L3I_UNVERIFIED_TOOLCHAIN: "1"
     steps:
       - uses: actions/checkout@v6
@@ -69,13 +70,15 @@ jobs:
           version: 4.0.9
       - name: Build the library
         run: cargo build --target wasm32-unknown-emscripten --lib
-      - name: Test the carrier and packed suites
+      # The whole default-feature suite, but what emscripten cannot do: UDP sockets (udp::), child
+      # processes (the coroutine finalizer tests rerun themselves in one) and threads (the hostile
+      # source cases run on a thread with a larger stack). One thread: there are no others.
+      - name: Test the default-feature suite
+        timeout-minutes: 20
         run: >
-          cargo test --target wasm32-unknown-emscripten --test integration --
-          packed_carrier:: carrier_corpus:: bits64:: luau_0747:: primitives:: quat:: raster:: type_surface::
+          cargo test --target wasm32-unknown-emscripten --test integration -- --test-threads=1
+          --skip udp:: --skip memory::a_failed_coroutine_hands_its_error_to_its_finalizers
+          --skip memory::a_finalizer_registers_from_inside_a_lua_call --skip memory::coroutine_finalizers_run_when_asked
+          --skip source::hostile_source_is_scanned_in_linear_time
       - name: Record the boxed carrier's cost per bound call
         run: cargo test --release --target wasm32-unknown-emscripten --test integration carrier_cost -- --ignored --nocapture
-      - name: Run the whole default-feature suite (report)
-        continue-on-error: true
-        timeout-minutes: 20
-        run: cargo test --target wasm32-unknown-emscripten --test integration -- --test-threads=1

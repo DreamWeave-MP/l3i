@@ -111,6 +111,9 @@ fn protection_is_restored_and_metatable_frozen() {
 
 #[test]
 fn receivers_respect_owned_and_borrowed_storage_and_exact_identity() {
+    // The counter is per thread, and a harness running every test on one thread (wasm32, or
+    // --test-threads=1) shares it: count from here.
+    let dropped_before = DROPPED.with(Cell::get);
     let runtime = Runtime::new().unwrap();
     register_untagged(&runtime);
     untagged::register::<Other>(&runtime, |ty| ty.property("value", |o: &Other| o.value)).unwrap();
@@ -151,7 +154,7 @@ fn receivers_respect_owned_and_borrowed_storage_and_exact_identity() {
     }
     drop(runtime);
     assert_eq!(engine_owned.value, 11, "borrowed storage never dropped the engine object");
-    assert_eq!(DROPPED.with(Cell::get), 1, "only the owned instance dropped with the VM");
+    assert_eq!(DROPPED.with(Cell::get) - dropped_before, 1, "only the owned instance dropped with the VM");
 }
 
 #[test]
