@@ -3,122 +3,122 @@ Q:rotate 1 ok | vector 0x3f1ee0b4 0xbf47dec0 0x3f07a9c0 | nil | nil | nil
 Q:rotate 2 ok | vector 0x3ffde420 0xbf37c4c0 0xbf314740 | nil | nil | nil
 Q:rotate 3 ok | vector 0x3fa79420 0x3fc42f21 0xbf543f98 | nil | nil | nil
 Q:rotate 4 ok | vector 0xbfa7b29c 0xbf752a58 0xbf262708 | nil | nil | nil
-Q:rotate 5 ok | vector 0x3ea39504 0x3f967956 0xbf9d96c2 | nil | nil | nil
-Q:rotate 6 ok | vector 0xbf885058 0x3f9504b7 0xbf933cd6 | nil | nil | nil
-Q:rotate 7 ok | vector 0xbfbe1be0 0x3fb01f20 0x3fc6fea0 | nil | nil | nil
-Q:rotate 8 ok | vector 0x3df295f0 0xbf6ce298 0xbf0933c8 | nil | nil | nil
-Q:rotate 9 ok | vector 0xbf61faa8 0xbf06e808 0x3fd6630c | nil | nil | nil
-Q:rotate 10 ok | vector 0xbf786e7f 0xbfb4db87 0x3f8ab546 | nil | nil | nil
-Q:rotate 11 ok | vector 0xbea09cd5 0x3fac5553 0xbf1fe0ca | nil | nil | nil
-Q:rotate 12 ok | vector 0x3fc815f3 0x3fcb9ab6 0x3dcaf3cb | nil | nil | nil
-Q:rotate 13 ok | vector 0x3eb71a7d 0xbe8601c9 0x3fa36fad | nil | nil | nil
-Q:rotate 14 ok | vector 0x4025017c 0xbe48962a 0xbea15db9 | nil | nil | nil
-Q:rotate 15 ok | vector 0xbfb3aa87 0xbf310e48 0xbf22acc4 | nil | nil | nil
-Q:rotate 16 ok | vector 0xbfe617a4 0x3f839f3a 0xbe85ab9f | nil | nil | nil
-Q:rotate 17 ok | vector 0xbfc1c3d2 0xbed387d2 0xbfc0b2c4 | nil | nil | nil
-Q:rotate 18 ok | vector 0x3f3aab0f 0x3f05bc37 0xbe25d0c5 | nil | nil | nil
-Q:rotate 19 ok | vector 0x400cf861 0x3f3a889e 0xbe9085a9 | nil | nil | nil
-Q:rotate 20 ok | vector 0xbf984e77 0x400d2943 0x3e88b450 | nil | nil | nil
-Q:rotate 21 ok | vector 0xbf702953 0x3fabf36c 0x3f867821 | nil | nil | nil
-Q:rotate 22 ok | vector 0xbf2b00ff 0x3f9e93a2 0x3f75ab00 | nil | nil | nil
-Q:rotate 23 ok | vector 0xbf00c6eb 0xc00d87d8 0xbf12616f | nil | nil | nil
-Q:rotate 24 ok | vector 0xbe1fa671 0x3fb8c2c6 0x3f851d0f | nil | nil | nil
-Q:rotate 25 ok | vector 0x3f835afc 0x3d9e57bc 0x3d98d68b | nil | nil | nil
-Q:rotate 26 ok | vector 0xbf5c322d 0xbee29c37 0xbfaf4b16 | nil | nil | nil
-Q:rotate 27 ok | vector 0x3f802ab2 0xbeb16b42 0x3f6b4f64 | nil | nil | nil
-Q:rotate 28 ok | vector 0x3f2d1b56 0xbf8272d1 0xbfd4aa19 | nil | nil | nil
-Q:rotate 29 ok | vector 0x3f8a87fa 0x3f4cd89e 0x3f592049 | nil | nil | nil
-Q:rotate 30 ok | vector 0xbe92505d 0xbfec490d 0x3fb83e51 | nil | nil | nil
-Q:rotate 31 ok | vector 0xbe253a33 0x3fadf4a0 0xbfd63e1b | nil | nil | nil
-Q:rotate 32 ok | vector 0xbf55e9d1 0x3e3e5700 0x3ead9e1e | nil | nil | nil
-Q:rotate 33 ok | vector 0x3e029a5d 0xbfcd3cca 0xc0049e1b | nil | nil | nil
-Q:rotate 34 ok | vector 0xbf206925 0x3e6331fe 0xbf0a6ed6 | nil | nil | nil
-Q:rotate 35 ok | vector 0xbf4f48bf 0x4002aaa4 0xbf954953 | nil | nil | nil
-Q:rotate 36 ok | vector 0xbf20781a 0xbf0741eb 0x3fd25e19 | nil | nil | nil
-Q:rotate 37 ok | vector 0xbf404540 0x3feb024c 0x3f800230 | nil | nil | nil
-Q:rotate 38 ok | vector 0x3f06e1f6 0x3fc418f3 0x3f17afb8 | nil | nil | nil
-Q:rotate 39 ok | vector 0xbedcdc26 0xbf4a90dc 0xc00a92cb | nil | nil | nil
-Q:rotate 40 ok | vector 0xbfcd3811 0xbf1e3a2d 0x3fd6944b | nil | nil | nil
-Q:mul 1 ok | packed 0x10e06d599de1b057 | nil | nil | nil
-Q:mul 2 ok | packed 0x1011044d1f6edd09 | nil | nil | nil
-Q:mul 3 ok | packed 0x10cb13ee9191293a | nil | nil | nil
-Q:mul 4 ok | packed 0x10926e75b586edb2 | nil | nil | nil
-Q:mul 5 ok | packed 0x10f7025dd3cb4bcc | nil | nil | nil
-Q:mul 6 ok | packed 0x10e40d38d1cc8a73 | nil | nil | nil
-Q:mul 7 ok | packed 0x105d7095c361c6f6 | nil | nil | nil
-Q:mul 8 ok | packed 0x108b260b90a14b8c | nil | nil | nil
-Q:mul 9 ok | packed 0x10dfeff98926326f | nil | nil | nil
-Q:mul 10 ok | packed 0x10901687f0fd8a5c | nil | nil | nil
-Q:mul 11 ok | packed 0x10edea7aae693aa5 | nil | nil | nil
-Q:mul 12 ok | packed 0x10e1f6ce9bcf6a1c | nil | nil | nil
-Q:mul 13 ok | packed 0x10ac93086724df86 | nil | nil | nil
-Q:mul 14 ok | packed 0x104689bad8f0e8ab | nil | nil | nil
-Q:mul 15 ok | packed 0x10d797b60d09c4f2 | nil | nil | nil
-Q:mul 16 ok | packed 0x105c7e86d6ed6228 | nil | nil | nil
-Q:mul 17 ok | packed 0x109ec1f682ec2379 | nil | nil | nil
-Q:mul 18 ok | packed 0x10db6ee2560d1032 | nil | nil | nil
-Q:mul 19 ok | packed 0x10ee6a8574c60af2 | nil | nil | nil
-Q:mul 20 ok | packed 0x10d953c628913a0d | nil | nil | nil
-Q:mul 21 ok | packed 0x109f4d9221ab8267 | nil | nil | nil
-Q:mul 22 ok | packed 0x1088425d049d4331 | nil | nil | nil
-Q:mul 23 ok | packed 0x10d5c1c2ce158678 | nil | nil | nil
-Q:mul 24 ok | packed 0x10dcef6901463fa4 | nil | nil | nil
-Q:mul 25 ok | packed 0x10ea5c34feb8f60c | nil | nil | nil
-Q:mul 26 ok | packed 0x10cfd761b968b3d8 | nil | nil | nil
-Q:mul 27 ok | packed 0x10747e52bfedb6a1 | nil | nil | nil
-Q:mul 28 ok | packed 0x100c3b6bce5e8fcb | nil | nil | nil
-Q:mul 29 ok | packed 0x101f8e75669ee517 | nil | nil | nil
-Q:mul 30 ok | packed 0x10d5ffdf7231fee8 | nil | nil | nil
-Q:mul 31 ok | packed 0x10e1f8b3839b53d4 | nil | nil | nil
-Q:mul 32 ok | packed 0x10ec209503ccfa9f | nil | nil | nil
-Q:mul 33 ok | packed 0x10e7914c330847ad | nil | nil | nil
-Q:mul 34 ok | packed 0x106ebdf4b1a323d1 | nil | nil | nil
-Q:mul 35 ok | packed 0x10c7f3e1e332f152 | nil | nil | nil
-Q:mul 36 ok | packed 0x10f290d8835926e4 | nil | nil | nil
-Q:mul 37 ok | packed 0x10e18f006841276a | nil | nil | nil
-Q:mul 38 ok | packed 0x10dc06c46a3e2c8a | nil | nil | nil
-Q:mul 39 ok | packed 0x1053f426f4f57860 | nil | nil | nil
-Q:mul 40 ok | packed 0x100738f90bdca7e5 | nil | nil | nil
-Q:slerp 1 ok | packed 0x100a19119cfd3ec6 | nil | nil | nil
-Q:slerp 2 ok | packed 0x10f4a3b7480228ca | nil | nil | nil
-Q:slerp 3 ok | packed 0x105ee9867996219f | nil | nil | nil
+Q:rotate 5 ok | vector 0x3ea393ac 0x3f9679ac 0xbf9d9686 | nil | nil | nil
+Q:rotate 6 ok | vector 0xbf9504b7 0xbf885058 0xbf933cd6 | nil | nil | nil
+Q:rotate 7 ok | vector 0x3fc6fea0 0x3fb01f20 0x3fbe1be0 | nil | nil | nil
+Q:rotate 8 ok | vector 0xbdf295f0 0x3f6ce298 0xbf0933c8 | nil | nil | nil
+Q:rotate 9 ok | vector 0xbf61faa8 0xbf07c311 0x3fd64078 | nil | nil | nil
+Q:rotate 10 ok | vector 0xbf61b505 0x3f97586e 0xbfb22685 | nil | nil | nil
+Q:rotate 11 ok | vector 0xbf2d6d02 0x3f937ccb 0xbf37a035 | nil | nil | nil
+Q:rotate 12 ok | vector 0x3fa4661b 0x3fe99d5f 0xbd5b9dc5 | nil | nil | nil
+Q:rotate 13 ok | vector 0xbf239c91 0xbf1830c9 0x3f8415d5 | nil | nil | nil
+Q:rotate 14 ok | vector 0x4009deaa 0x3fbaf33b 0xbdd75371 | nil | nil | nil
+Q:rotate 15 ok | vector 0x3faa535c 0x3ec04eb8 0xbf78478f | nil | nil | nil
+Q:rotate 16 ok | vector 0x3f76dbf8 0x3febbf76 0xbe3f4510 | nil | nil | nil
+Q:rotate 17 ok | vector 0x40084609 0x3e3957b4 0xbece1ee4 | nil | nil | nil
+Q:rotate 18 ok | vector 0x3f15c6c0 0x3ea2a37e 0x3f1f61e7 | nil | nil | nil
+Q:rotate 19 ok | vector 0x3f5e9528 0x3f7bcff5 0xbff78017 | nil | nil | nil
+Q:rotate 20 ok | vector 0x3f5fab6d 0x4016c516 0xbe4a0f9d | nil | nil | nil
+Q:rotate 21 ok | vector 0x3f69f679 0xbf9c3a9e 0xbf9ad7c6 | nil | nil | nil
+Q:rotate 22 ok | vector 0xbf4eef20 0x3fbfef6c 0x3be1124b | nil | nil | nil
+Q:rotate 23 ok | vector 0xbfdd8f2d 0xbfc0f1ef 0xbee6222f | nil | nil | nil
+Q:rotate 24 ok | vector 0x3f435dd8 0x3f544e9c 0x3fb152ac | nil | nil | nil
+Q:rotate 25 ok | vector 0xbf2e56b5 0xbf46647b 0x3c8fadb3 | nil | nil | nil
+Q:rotate 26 ok | vector 0x3f98e100 0x3c30a58a 0x3f969d82 | nil | nil | nil
+Q:rotate 27 ok | vector 0x3f1ba775 0x3f3fc680 0xbf8253dd | nil | nil | nil
+Q:rotate 28 ok | vector 0x3fef0f0e 0x3f5c0e91 0x3e2f1b2a | nil | nil | nil
+Q:rotate 29 ok | vector 0x3f5d489a 0x3f7fe4a2 0x3f62c35b | nil | nil | nil
+Q:rotate 30 ok | vector 0xc00957a4 0xbf4b4b38 0x3f1205ac | nil | nil | nil
+Q:rotate 31 ok | vector 0xbf98b57d 0x3fdf59ac 0xbee89b65 | nil | nil | nil
+Q:rotate 32 ok | vector 0x3e01cd98 0xbef8b4ef 0xbf45974c | nil | nil | nil
+Q:rotate 33 ok | vector 0x400d8acc 0x3edc7cbf 0x3fabf0b9 | nil | nil | nil
+Q:rotate 34 ok | vector 0x3f2585a8 0xbeb050ea 0xbee39d12 | nil | nil | nil
+Q:rotate 35 ok | vector 0x400d8ede 0xbf265f06 0xbf6ebbfe | nil | nil | nil
+Q:rotate 36 ok | vector 0xbf70788a 0xbfca0022 0x3c8ee446 | nil | nil | nil
+Q:rotate 37 ok | vector 0xbfcab7e9 0x3f724f70 0x3f9e6128 | nil | nil | nil
+Q:rotate 38 ok | vector 0x3fb20580 0xbf2b95d7 0x3f450131 | nil | nil | nil
+Q:rotate 39 ok | vector 0x4007837b 0x3efdbfb7 0xbf60d4c9 | nil | nil | nil
+Q:rotate 40 ok | vector 0x3de4701f 0xbf802002 0xc00b762e | nil | nil | nil
+Q:mul 1 ok | packed 0x1061f782449c6df4 | nil | nil | nil
+Q:mul 2 ok | packed 0x10927722672b4a46 | nil | nil | nil
+Q:mul 3 ok | packed 0x10c91a32dd6d14f3 | nil | nil | nil
+Q:mul 4 ok | packed 0x10b61b4bbb847cb7 | nil | nil | nil
+Q:mul 5 ok | packed 0x10a6224841560584 | nil | nil | nil
+Q:mul 6 ok | packed 0x10e269a9c112a94c | nil | nil | nil
+Q:mul 7 ok | packed 0x107afd0bbeb1280f | nil | nil | nil
+Q:mul 8 ok | packed 0x10747c0c0cd8a59a | nil | nil | nil
+Q:mul 9 ok | packed 0x10e03633cd9d75d5 | nil | nil | nil
+Q:mul 10 ok | packed 0x1053493e9df161de | nil | nil | nil
+Q:mul 11 ok | packed 0x10c5ba14d4317ceb | nil | nil | nil
+Q:mul 12 ok | packed 0x10961f052fe3a36f | nil | nil | nil
+Q:mul 13 ok | packed 0x10a40d0d1e41b8df | nil | nil | nil
+Q:mul 14 ok | packed 0x1004c6e83b4ae8c1 | nil | nil | nil
+Q:mul 15 ok | packed 0x10dac6e8417a7c0b | nil | nil | nil
+Q:mul 16 ok | packed 0x107d22daf2c5945b | nil | nil | nil
+Q:mul 17 ok | packed 0x10d7e4c3edad32fd | nil | nil | nil
+Q:mul 18 ok | packed 0x1053a83890fe55fd | nil | nil | nil
+Q:mul 19 ok | packed 0x1055a2c967322ed2 | nil | nil | nil
+Q:mul 20 ok | packed 0x10ec992b45fb2b0b | nil | nil | nil
+Q:mul 21 ok | packed 0x106e99b6162d0927 | nil | nil | nil
+Q:mul 22 ok | packed 0x102148b140d77078 | nil | nil | nil
+Q:mul 23 ok | packed 0x10fe8fa7dc01ddac | nil | nil | nil
+Q:mul 24 ok | packed 0x10235d9bda1f2e1c | nil | nil | nil
+Q:mul 25 ok | packed 0x104a5c7760df48ae | nil | nil | nil
+Q:mul 26 ok | packed 0x10700c2af9ada49b | nil | nil | nil
+Q:mul 27 ok | packed 0x10f6de6e3ae2b6da | nil | nil | nil
+Q:mul 28 ok | packed 0x103118cc7118932d | nil | nil | nil
+Q:mul 29 ok | packed 0x10421a59182ae60d | nil | nil | nil
+Q:mul 30 ok | packed 0x101f43937743a7b7 | nil | nil | nil
+Q:mul 31 ok | packed 0x101ad6453073859e | nil | nil | nil
+Q:mul 32 ok | packed 0x10f270c86dd4dde7 | nil | nil | nil
+Q:mul 33 ok | packed 0x10f3d71380686719 | nil | nil | nil
+Q:mul 34 ok | packed 0x10eed989b6bbcd8a | nil | nil | nil
+Q:mul 35 ok | packed 0x10592ad8ae5d9430 | nil | nil | nil
+Q:mul 36 ok | packed 0x10fa90d70fc2c8b4 | nil | nil | nil
+Q:mul 37 ok | packed 0x1075dff9a3c8f3c6 | nil | nil | nil
+Q:mul 38 ok | packed 0x10dbd0d7f47476a0 | nil | nil | nil
+Q:mul 39 ok | packed 0x1036cab54df09938 | nil | nil | nil
+Q:mul 40 ok | packed 0x10c64dc523ded8d6 | nil | nil | nil
+Q:slerp 1 ok | packed 0x100a63e1b2cae022 | nil | nil | nil
+Q:slerp 2 ok | packed 0x100d254c2e38d80a | nil | nil | nil
+Q:slerp 3 ok | packed 0x105eef068141d835 | nil | nil | nil
 Q:slerp 4 ok | packed 0x109ffff7fffdffff | nil | nil | nil
-Q:slerp 5 ok | packed 0x10f6698d49574cbb | nil | nil | nil
-Q:slerp 6 ok | packed 0x10127c2c71684ccc | nil | nil | nil
-Q:slerp 7 ok | packed 0x10d96a45a01472c6 | nil | nil | nil
-Q:slerp 8 ok | packed 0x109ffff7fffdffff | nil | nil | nil
-Q:slerp 9 ok | packed 0x10e3f51802f95e25 | nil | nil | nil
-Q:slerp 10 ok | packed 0x10e333a715923527 | nil | nil | nil
-Q:slerp 11 ok | packed 0x10e222f8fa1e4558 | nil | nil | nil
-Q:slerp 12 ok | packed 0x10ec58e9d13a0a80 | nil | nil | nil
-Q:slerp 13 ok | packed 0x10e01c8a1175c07b | nil | nil | nil
-Q:slerp 14 ok | packed 0x1095103a0d4e0bf9 | nil | nil | nil
-Q:slerp 15 ok | packed 0x109defa3f7cfbacd | nil | nil | nil
-Q:slerp 16 ok | packed 0x1049f7fcbfa147e9 | nil | nil | nil
-Q:slerp 17 ok | packed 0x10ce50a412f6c37e | nil | nil | nil
-Q:slerp 18 ok | packed 0x10e2974750f1ee8b | nil | nil | nil
-Q:slerp 19 ok | packed 0x10d51336f881b7cb | nil | nil | nil
-Q:slerp 20 ok | packed 0x10d6f85731d9cab0 | nil | nil | nil
-Q:slerp 21 ok | packed 0x10d663d93fd13d9c | nil | nil | nil
-Q:slerp 22 ok | packed 0x10efb2f9e20cbadc | nil | nil | nil
-Q:slerp 23 ok | packed 0x109bf0562e7e0226 | nil | nil | nil
-Q:slerp 24 ok | packed 0x10afb7447c330f08 | nil | nil | nil
-Q:slerp 25 ok | packed 0x10f33a171d31fae1 | nil | nil | nil
-Q:slerp 26 ok | packed 0x10c9c603b5590a22 | nil | nil | nil
-Q:slerp 27 ok | packed 0x10e04ba731c5bdd0 | nil | nil | nil
-Q:slerp 28 ok | packed 0x101a5f29549bf242 | nil | nil | nil
-Q:slerp 29 ok | packed 0x10d52e12efc8974b | nil | nil | nil
-Q:slerp 30 ok | packed 0x1097b85bcb8b2137 | nil | nil | nil
-Q:slerp 31 ok | packed 0x10e0074f0c7dce3f | nil | nil | nil
-Q:slerp 32 ok | packed 0x10e700759d936ba9 | nil | nil | nil
-Q:slerp 33 ok | packed 0x10eb07d7a3e93ea2 | nil | nil | nil
-Q:slerp 34 ok | packed 0x106c014a9252f3c4 | nil | nil | nil
-Q:slerp 35 ok | packed 0x10dba2167f7239cc | nil | nil | nil
-Q:slerp 36 ok | packed 0x10db0037ff06294d | nil | nil | nil
-Q:slerp 37 ok | packed 0x1078db2c6e51e4fb | nil | nil | nil
-Q:slerp 38 ok | packed 0x10e90ec8d629d704 | nil | nil | nil
-Q:slerp 39 ok | packed 0x109265b2c54df97b | nil | nil | nil
-Q:slerp 40 ok | packed 0x10fa64e4b9d9bab6 | nil | nil | nil
+Q:slerp 5 ok | packed 0x10b3948dc1377ab0 | nil | nil | nil
+Q:slerp 6 ok | packed 0x1060e961a15d0220 | nil | nil | nil
+Q:slerp 7 ok | packed 0x10a8a49b1debb7eb | nil | nil | nil
+Q:slerp 8 ok | packed 0x10dffff7fffdffff | nil | nil | nil
+Q:slerp 9 ok | packed 0x10d3f477f6efecb7 | nil | nil | nil
+Q:slerp 10 ok | packed 0x10b2f4e231d1de74 | nil | nil | nil
+Q:slerp 11 ok | packed 0x10e44fd43128c84f | nil | nil | nil
+Q:slerp 12 ok | packed 0x1033811870b4830d | nil | nil | nil
+Q:slerp 13 ok | packed 0x10dfa3114726ce6c | nil | nil | nil
+Q:slerp 14 ok | packed 0x1095392a059d8413 | nil | nil | nil
+Q:slerp 15 ok | packed 0x107a0873908a8d40 | nil | nil | nil
+Q:slerp 16 ok | packed 0x104a15bbd446c6d6 | nil | nil | nil
+Q:slerp 17 ok | packed 0x10344cb2480e2e82 | nil | nil | nil
+Q:slerp 18 ok | packed 0x10cf21ac739e719d | nil | nil | nil
+Q:slerp 19 ok | packed 0x10fb5c2ae53296fe | nil | nil | nil
+Q:slerp 20 ok | packed 0x10202e2ca1436ade | nil | nil | nil
+Q:slerp 21 ok | packed 0x10b9509568339017 | nil | nil | nil
+Q:slerp 22 ok | packed 0x108acfa5cfcf895a | nil | nil | nil
+Q:slerp 23 ok | packed 0x109c0016358d8271 | nil | nil | nil
+Q:slerp 24 ok | packed 0x10ac7c13a99523c7 | nil | nil | nil
+Q:slerp 25 ok | packed 0x1019a1c7db3437af | nil | nil | nil
+Q:slerp 26 ok | packed 0x10f724fc78070004 | nil | nil | nil
+Q:slerp 27 ok | packed 0x109dc6ee0e8761b3 | nil | nil | nil
+Q:slerp 28 ok | packed 0x10198f8985ac6c46 | nil | nil | nil
+Q:slerp 29 ok | packed 0x10aed86ef27a9edf | nil | nil | nil
+Q:slerp 30 ok | packed 0x1096be5c1f1da920 | nil | nil | nil
+Q:slerp 31 ok | packed 0x105e274745c0fd1f | nil | nil | nil
+Q:slerp 32 ok | packed 0x10c9f34d93bd53e3 | nil | nil | nil
+Q:slerp 33 ok | packed 0x1086c448527fa126 | nil | nil | nil
+Q:slerp 34 ok | packed 0x106cb41ab89dc2ac | nil | nil | nil
+Q:slerp 35 ok | packed 0x10754833992f4acf | nil | nil | nil
+Q:slerp 36 ok | packed 0x10f8b4ec27d2e32e | nil | nil | nil
+Q:slerp 37 ok | packed 0x1078bddc6919b586 | nil | nil | nil
+Q:slerp 38 ok | packed 0x1031e72b97f6a3f6 | nil | nil | nil
+Q:slerp 39 ok | packed 0x10926562cfdda0c5 | nil | nil | nil
+Q:slerp 40 ok | packed 0x100c78b52e68771c | nil | nil | nil
 Q:fromXYZW 1 ok | packed 0x1081f79a390ea835 | nil | nil | nil
 Q:fromXYZW 2 ok | packed 0x1055d67333935674 | nil | nil | nil
 Q:fromXYZW 3 ok | packed 0x103a0b39cde87686 | nil | nil | nil
@@ -163,82 +163,82 @@ Q:key 1 ok | packed 0x2edffff7fffdffff | nil | nil | nil
 Q:key 2 ok | packed 0x261ffff7fffdffff | nil | nil | nil
 Q:key 3 ok | packed 0x245ffff7fffdffff | nil | nil | nil
 Q:key 4 ok | packed 0x219ffff7fffdffff | nil | nil | nil
-Q:key 5 ok | packed 0x2cf6a08da8236a08 | nil | nil | nil
-Q:key 6 ok | packed 0x2b1ffff7fffdffff | nil | nil | nil
-Q:key 7 ok | packed 0x2c5ffff7fffdffff | nil | nil | nil
-Q:key 8 ok | packed 0x239ffff7fffdffff | nil | nil | nil
-Q:key 9 ok | packed 0x21dffff7fffdffff | nil | nil | nil
-Q:key 10 ok | packed 0x26db1d18723112f8 | nil | nil | nil
-Q:key 11 ok | packed 0x2927da3e49214108 | nil | nil | nil
-Q:key 12 ok | packed 0x232547b5ca3bf20a | nil | nil | nil
-Q:key 13 ok | packed 0x2158678d835b18d4 | nil | nil | nil
-Q:key 14 ok | packed 0x25eb02787c22b7a9 | nil | nil | nil
-Q:key 15 ok | packed 0x2be61477c671a49e | nil | nil | nil
-Q:key 16 ok | packed 0x23faa43d0cd6b6a0 | nil | nil | nil
-Q:key 17 ok | packed 0x25df5a68561df392 | nil | nil | nil
-Q:key 18 ok | packed 0x208394945ff9f950 | nil | nil | nil
-Q:key 19 ok | packed 0x26d82231978214d6 | nil | nil | nil
-Q:key 20 ok | packed 0x22e22b984c020313 | nil | nil | nil
-Q:key 21 ok | packed 0x2e390f6da6b508ec | nil | nil | nil
-Q:key 22 ok | packed 0x24b9585515a6e63a | nil | nil | nil
-Q:key 23 ok | packed 0x20ed36295b10aa7d | nil | nil | nil
-Q:key 24 ok | packed 0x2cf96f8ac7b6e7b6 | nil | nil | nil
-Q:key 25 ok | packed 0x24c19708a9e66aa8 | nil | nil | nil
-Q:key 26 ok | packed 0x2b3a7268035578c5 | nil | nil | nil
-Q:key 27 ok | packed 0x2a3e16968a8a20bb | nil | nil | nil
-Q:key 28 ok | packed 0x29ca2c1d5302f8c8 | nil | nil | nil
-Q:key 29 ok | packed 0x20ebeab7e85a6408 | nil | nil | nil
-Q:key 30 ok | packed 0x286a4fc35922e525 | nil | nil | nil
-Q:key 31 ok | packed 0x2af6d8a266a6d07d | nil | nil | nil
-Q:key 32 ok | packed 0x247562d2a6d2fcba | nil | nil | nil
-Q:key 33 ok | packed 0x2eb6ca62c7ad0227 | nil | nil | nil
-Q:key 34 ok | packed 0x22e03da97cce0e82 | nil | nil | nil
-Q:key 35 ok | packed 0x26cf279647eaa03a | nil | nil | nil
-Q:key 36 ok | packed 0x21f185a74708919a | nil | nil | nil
-Q:key 37 ok | packed 0x22e111374c3e3293 | nil | nil | nil
-Q:key 38 ok | packed 0x260c365e0a7642cd | nil | nil | nil
-Q:key 39 ok | packed 0x28ee329b744192aa | nil | nil | nil
-Q:key 40 ok | packed 0x25d035f532272361 | nil | nil | nil
+Q:key 5 ok | packed 0x2c36a08da8236a08 | nil | nil | nil
+Q:key 6 ok | packed 0x2b3fffe7fffdffff | nil | nil | nil
+Q:key 7 ok | packed 0x2c5ffff7fffc0000 | nil | nil | nil
+Q:key 8 ok | packed 0x23dffff7fffdffff | nil | nil | nil
+Q:key 9 ok | packed 0x21e00b87fffdffff | nil | nil | nil
+Q:key 10 ok | packed 0x26e8b0e734dba598 | nil | nil | nil
+Q:key 11 ok | packed 0x292823de8412085e | nil | nil | nil
+Q:key 12 ok | packed 0x2326f75515952f7a | nil | nil | nil
+Q:key 13 ok | packed 0x2157c8edf681c749 | nil | nil | nil
+Q:key 14 ok | packed 0x25c8a686f8b47a7b | nil | nil | nil
+Q:key 15 ok | packed 0x2bc663d8f26b80e4 | nil | nil | nil
+Q:key 16 ok | packed 0x23393dab90c96097 | nil | nil | nil
+Q:key 17 ok | packed 0x25514f4397107c72 | nil | nil | nil
+Q:key 18 ok | packed 0x2083cf4467765c06 | nil | nil | nil
+Q:key 19 ok | packed 0x266c50577d830cbb | nil | nil | nil
+Q:key 20 ok | packed 0x2231b308b78c5e92 | nil | nil | nil
+Q:key 21 ok | packed 0x2e3aa35e01ca1db2 | nil | nil | nil
+Q:key 22 ok | packed 0x24b9e29505bd4b20 | nil | nil | nil
+Q:key 23 ok | packed 0x208a0385be6aee1b | nil | nil | nil
+Q:key 24 ok | packed 0x2c2f6d6d05cd34dc | nil | nil | nil
+Q:key 25 ok | packed 0x241c5d35b7b6ebb9 | nil | nil | nil
+Q:key 26 ok | packed 0x2b3ae5a80361e1e7 | nil | nil | nil
+Q:key 27 ok | packed 0x2a3dc3668e919106 | nil | nil | nil
+Q:key 28 ok | packed 0x29046622f64e8ef8 | nil | nil | nil
+Q:key 29 ok | packed 0x201f046c28d445a1 | nil | nil | nil
+Q:key 30 ok | packed 0x286adc83199de2de | nil | nil | nil
+Q:key 31 ok | packed 0x2a04e23bf1b8eb84 | nil | nil | nil
+Q:key 32 ok | packed 0x2476cb024cbddbeb | nil | nil | nil
+Q:key 33 ok | packed 0x2eb64622e5fb23a1 | nil | nil | nil
+Q:key 34 ok | packed 0x22e1073e58d63dec | nil | nil | nil
+Q:key 35 ok | packed 0x262c0b239d6baebc | nil | nil | nil
+Q:key 36 ok | packed 0x2188c118f55b7e00 | nil | nil | nil
+Q:key 37 ok | packed 0x22e81202b0b77e78 | nil | nil | nil
+Q:key 38 ok | packed 0x260c591dffd99471 | nil | nil | nil
+Q:key 39 ok | packed 0x283a3af4c1b8a6ee | nil | nil | nil
+Q:key 40 ok | packed 0x25880ac3bebcb7d1 | nil | nil | nil
 Q:keyRotation 1 ok | packed 0x10dffff7fffdffff | nil | nil | nil
 Q:keyRotation 2 ok | packed 0x101ffff7fffdffff | nil | nil | nil
 Q:keyRotation 3 ok | packed 0x105ffff7fffdffff | nil | nil | nil
 Q:keyRotation 4 ok | packed 0x109ffff7fffdffff | nil | nil | nil
-Q:keyRotation 5 ok | packed 0x10f6a08da8236a08 | nil | nil | nil
-Q:keyRotation 6 ok | packed 0x101ffff7fffdffff | nil | nil | nil
-Q:keyRotation 7 ok | packed 0x105ffff7fffdffff | nil | nil | nil
-Q:keyRotation 8 ok | packed 0x109ffff7fffdffff | nil | nil | nil
-Q:keyRotation 9 ok | packed 0x10dffff7fffdffff | nil | nil | nil
-Q:keyRotation 10 ok | packed 0x10bc2d45f71b3d39 | nil | nil | nil
-Q:keyRotation 11 ok | packed 0x10e14758f8c5c164 | nil | nil | nil
-Q:keyRotation 12 ok | packed 0x10e032f8bf8e4778 | nil | nil | nil
-Q:keyRotation 13 ok | packed 0x10322ae8c4a70c5b | nil | nil | nil
-Q:keyRotation 14 ok | packed 0x10e4be695035a820 | nil | nil | nil
-Q:keyRotation 15 ok | packed 0x10d8a9e7d1e9cb20 | nil | nil | nil
-Q:keyRotation 16 ok | packed 0x10cf08165541f16d | nil | nil | nil
-Q:keyRotation 17 ok | packed 0x10e0c5066d8b1458 | nil | nil | nil
-Q:keyRotation 18 ok | packed 0x10d0249af98f0da6 | nil | nil | nil
-Q:keyRotation 19 ok | packed 0x10e72226e51a6107 | nil | nil | nil
-Q:keyRotation 20 ok | packed 0x100eace0f95e3951 | nil | nil | nil
-Q:keyRotation 21 ok | packed 0x10ee146af6adda02 | nil | nil | nil
-Q:keyRotation 22 ok | packed 0x10f1ee025b94dc1c | nil | nil | nil
-Q:keyRotation 23 ok | packed 0x10cd64dd6e11a68e | nil | nil | nil
-Q:keyRotation 24 ok | packed 0x10e0a50826f604e2 | nil | nil | nil
-Q:keyRotation 25 ok | packed 0x10f69eec9db0ffb8 | nil | nil | nil
-Q:keyRotation 26 ok | packed 0x10ea97b5bfee105e | nil | nil | nil
-Q:keyRotation 27 ok | packed 0x10a7477a4e3f6899 | nil | nil | nil
-Q:keyRotation 28 ok | packed 0x100dfd3bffeeb319 | nil | nil | nil
-Q:keyRotation 29 ok | packed 0x10680e74d8f8e055 | nil | nil | nil
-Q:keyRotation 30 ok | packed 0x1098393ab4d0fdc6 | nil | nil | nil
-Q:keyRotation 31 ok | packed 0x10d8c1990d42f756 | nil | nil | nil
-Q:keyRotation 32 ok | packed 0x10dd2a9859d1fdbe | nil | nil | nil
-Q:keyRotation 33 ok | packed 0x10df96a7bb4e0f1f | nil | nil | nil
-Q:keyRotation 34 ok | packed 0x104b57729e9f099d | nil | nil | nil
-Q:keyRotation 35 ok | packed 0x10d26975f9cef48f | nil | nil | nil
-Q:keyRotation 36 ok | packed 0x1038704637239ef8 | nil | nil | nil
-Q:keyRotation 37 ok | packed 0x10de3e57c131ba98 | nil | nil | nil
-Q:keyRotation 38 ok | packed 0x10eb492575319862 | nil | nil | nil
-Q:keyRotation 39 ok | packed 0x10a8d8683be7df25 | nil | nil | nil
-Q:keyRotation 40 ok | packed 0x10afd7d3b5a3abee | nil | nil | nil
+Q:keyRotation 5 ok | packed 0x1036a08da8236a08 | nil | nil | nil
+Q:keyRotation 6 ok | packed 0x103fffe7fffdffff | nil | nil | nil
+Q:keyRotation 7 ok | packed 0x105ffff7fffc0000 | nil | nil | nil
+Q:keyRotation 8 ok | packed 0x10dffff7fffdffff | nil | nil | nil
+Q:keyRotation 9 ok | packed 0x10e00b87fffdffff | nil | nil | nil
+Q:keyRotation 10 ok | packed 0x10be22b5d2e138cb | nil | nil | nil
+Q:keyRotation 11 ok | packed 0x10976711779c7844 | nil | nil | nil
+Q:keyRotation 12 ok | packed 0x10debad33a98384a | nil | nil | nil
+Q:keyRotation 13 ok | packed 0x103379a8d2cdbc74 | nil | nil | nil
+Q:keyRotation 14 ok | packed 0x10e60fa9ad918fb9 | nil | nil | nil
+Q:keyRotation 15 ok | packed 0x10fe4d18be4ada5d | nil | nil | nil
+Q:keyRotation 16 ok | packed 0x102cb7c86f2bce8a | nil | nil | nil
+Q:keyRotation 17 ok | packed 0x10deaffaae1428e3 | nil | nil | nil
+Q:keyRotation 18 ok | packed 0x1085667cfd8140d7 | nil | nil | nil
+Q:keyRotation 19 ok | packed 0x100fdfdd87e07131 | nil | nil | nil
+Q:keyRotation 20 ok | packed 0x100ec6f103f19f0e | nil | nil | nil
+Q:keyRotation 21 ok | packed 0x1039ed36b3a4bfc4 | nil | nil | nil
+Q:keyRotation 22 ok | packed 0x104a10fd943f182d | nil | nil | nil
+Q:keyRotation 23 ok | packed 0x104423c5e8454001 | nil | nil | nil
+Q:keyRotation 24 ok | packed 0x10f925cdf00abea1 | nil | nil | nil
+Q:keyRotation 25 ok | packed 0x10375972efa0f714 | nil | nil | nil
+Q:keyRotation 26 ok | packed 0x1005c1b8bee8c161 | nil | nil | nil
+Q:keyRotation 27 ok | packed 0x10da11f61f2c17fb | nil | nil | nil
+Q:keyRotation 28 ok | packed 0x100e354bf37d2e4f | nil | nil | nil
+Q:keyRotation 29 ok | packed 0x1068bad495824c73 | nil | nil | nil
+Q:keyRotation 30 ok | packed 0x1097b43ae31a3b2c | nil | nil | nil
+Q:keyRotation 31 ok | packed 0x108f5a0a6ad8ba14 | nil | nil | nil
+Q:keyRotation 32 ok | packed 0x10c8466af025ed24 | nil | nil | nil
+Q:keyRotation 33 ok | packed 0x106a3f121d439f7f | nil | nil | nil
+Q:keyRotation 34 ok | packed 0x1049d4f239f1d580 | nil | nil | nil
+Q:keyRotation 35 ok | packed 0x1087eff46a548f67 | nil | nil | nil
+Q:keyRotation 36 ok | packed 0x103b8b75fd10ea78 | nil | nil | nil
+Q:keyRotation 37 ok | packed 0x10d74b26c8b8a7f5 | nil | nil | nil
+Q:keyRotation 38 ok | packed 0x10c86a6d4ff6d885 | nil | nil | nil
+Q:keyRotation 39 ok | packed 0x10aa65e84668a9e9 | nil | nil | nil
+Q:keyRotation 40 ok | packed 0x10b22083174ce948 | nil | nil | nil
 Q:keyFlags 1 ok | number 0x3ff0000000000000 | nil | nil | nil
 Q:keyFlags 2 ok | number 0x4000000000000000 | nil | nil | nil
 Q:keyFlags 3 ok | number 0x4008000000000000 | nil | nil | nil
@@ -1204,122 +1204,122 @@ Q:rotate 1 ok | vector 0x3f1ee0b4 0xbf47dec0 0x3f07a9c0 | nil | nil | nil
 Q:rotate 2 ok | vector 0x3ffde420 0xbf37c4c0 0xbf314740 | nil | nil | nil
 Q:rotate 3 ok | vector 0x3fa79420 0x3fc42f21 0xbf543f98 | nil | nil | nil
 Q:rotate 4 ok | vector 0xbfa7b29c 0xbf752a58 0xbf262708 | nil | nil | nil
-Q:rotate 5 ok | vector 0x3ea39504 0x3f967956 0xbf9d96c2 | nil | nil | nil
-Q:rotate 6 ok | vector 0xbf885058 0x3f9504b7 0xbf933cd6 | nil | nil | nil
-Q:rotate 7 ok | vector 0xbfbe1be0 0x3fb01f20 0x3fc6fea0 | nil | nil | nil
-Q:rotate 8 ok | vector 0x3df295f0 0xbf6ce298 0xbf0933c8 | nil | nil | nil
-Q:rotate 9 ok | vector 0xbf61faa8 0xbf06e808 0x3fd6630c | nil | nil | nil
-Q:rotate 10 ok | vector 0xbf786e7f 0xbfb4db87 0x3f8ab546 | nil | nil | nil
-Q:rotate 11 ok | vector 0xbea09cd5 0x3fac5553 0xbf1fe0ca | nil | nil | nil
-Q:rotate 12 ok | vector 0x3fc815f3 0x3fcb9ab6 0x3dcaf3cb | nil | nil | nil
-Q:rotate 13 ok | vector 0x3eb71a7d 0xbe8601c9 0x3fa36fad | nil | nil | nil
-Q:rotate 14 ok | vector 0x4025017c 0xbe48962a 0xbea15db9 | nil | nil | nil
-Q:rotate 15 ok | vector 0xbfb3aa87 0xbf310e48 0xbf22acc4 | nil | nil | nil
-Q:rotate 16 ok | vector 0xbfe617a4 0x3f839f3a 0xbe85ab9f | nil | nil | nil
-Q:rotate 17 ok | vector 0xbfc1c3d2 0xbed387d2 0xbfc0b2c4 | nil | nil | nil
-Q:rotate 18 ok | vector 0x3f3aab0f 0x3f05bc37 0xbe25d0c5 | nil | nil | nil
-Q:rotate 19 ok | vector 0x400cf861 0x3f3a889e 0xbe9085a9 | nil | nil | nil
-Q:rotate 20 ok | vector 0xbf984e77 0x400d2943 0x3e88b450 | nil | nil | nil
-Q:rotate 21 ok | vector 0xbf702953 0x3fabf36c 0x3f867821 | nil | nil | nil
-Q:rotate 22 ok | vector 0xbf2b00ff 0x3f9e93a2 0x3f75ab00 | nil | nil | nil
-Q:rotate 23 ok | vector 0xbf00c6eb 0xc00d87d8 0xbf12616f | nil | nil | nil
-Q:rotate 24 ok | vector 0xbe1fa671 0x3fb8c2c6 0x3f851d0f | nil | nil | nil
-Q:rotate 25 ok | vector 0x3f835afc 0x3d9e57bc 0x3d98d68b | nil | nil | nil
-Q:rotate 26 ok | vector 0xbf5c322d 0xbee29c37 0xbfaf4b16 | nil | nil | nil
-Q:rotate 27 ok | vector 0x3f802ab2 0xbeb16b42 0x3f6b4f64 | nil | nil | nil
-Q:rotate 28 ok | vector 0x3f2d1b56 0xbf8272d1 0xbfd4aa19 | nil | nil | nil
-Q:rotate 29 ok | vector 0x3f8a87fa 0x3f4cd89e 0x3f592049 | nil | nil | nil
-Q:rotate 30 ok | vector 0xbe92505d 0xbfec490d 0x3fb83e51 | nil | nil | nil
-Q:rotate 31 ok | vector 0xbe253a33 0x3fadf4a0 0xbfd63e1b | nil | nil | nil
-Q:rotate 32 ok | vector 0xbf55e9d1 0x3e3e5700 0x3ead9e1e | nil | nil | nil
-Q:rotate 33 ok | vector 0x3e029a5d 0xbfcd3cca 0xc0049e1b | nil | nil | nil
-Q:rotate 34 ok | vector 0xbf206925 0x3e6331fe 0xbf0a6ed6 | nil | nil | nil
-Q:rotate 35 ok | vector 0xbf4f48bf 0x4002aaa4 0xbf954953 | nil | nil | nil
-Q:rotate 36 ok | vector 0xbf20781a 0xbf0741eb 0x3fd25e19 | nil | nil | nil
-Q:rotate 37 ok | vector 0xbf404540 0x3feb024c 0x3f800230 | nil | nil | nil
-Q:rotate 38 ok | vector 0x3f06e1f6 0x3fc418f3 0x3f17afb8 | nil | nil | nil
-Q:rotate 39 ok | vector 0xbedcdc26 0xbf4a90dc 0xc00a92cb | nil | nil | nil
-Q:rotate 40 ok | vector 0xbfcd3811 0xbf1e3a2d 0x3fd6944b | nil | nil | nil
-Q:mul 1 ok | packed 0x10e06d599de1b057 | nil | nil | nil
-Q:mul 2 ok | packed 0x1011044d1f6edd09 | nil | nil | nil
-Q:mul 3 ok | packed 0x10cb13ee9191293a | nil | nil | nil
-Q:mul 4 ok | packed 0x10926e75b586edb2 | nil | nil | nil
-Q:mul 5 ok | packed 0x10f7025dd3cb4bcc | nil | nil | nil
-Q:mul 6 ok | packed 0x10e40d38d1cc8a73 | nil | nil | nil
-Q:mul 7 ok | packed 0x105d7095c361c6f6 | nil | nil | nil
-Q:mul 8 ok | packed 0x108b260b90a14b8c | nil | nil | nil
-Q:mul 9 ok | packed 0x10dfeff98926326f | nil | nil | nil
-Q:mul 10 ok | packed 0x10901687f0fd8a5c | nil | nil | nil
-Q:mul 11 ok | packed 0x10edea7aae693aa5 | nil | nil | nil
-Q:mul 12 ok | packed 0x10e1f6ce9bcf6a1c | nil | nil | nil
-Q:mul 13 ok | packed 0x10ac93086724df86 | nil | nil | nil
-Q:mul 14 ok | packed 0x104689bad8f0e8ab | nil | nil | nil
-Q:mul 15 ok | packed 0x10d797b60d09c4f2 | nil | nil | nil
-Q:mul 16 ok | packed 0x105c7e86d6ed6228 | nil | nil | nil
-Q:mul 17 ok | packed 0x109ec1f682ec2379 | nil | nil | nil
-Q:mul 18 ok | packed 0x10db6ee2560d1032 | nil | nil | nil
-Q:mul 19 ok | packed 0x10ee6a8574c60af2 | nil | nil | nil
-Q:mul 20 ok | packed 0x10d953c628913a0d | nil | nil | nil
-Q:mul 21 ok | packed 0x109f4d9221ab8267 | nil | nil | nil
-Q:mul 22 ok | packed 0x1088425d049d4331 | nil | nil | nil
-Q:mul 23 ok | packed 0x10d5c1c2ce158678 | nil | nil | nil
-Q:mul 24 ok | packed 0x10dcef6901463fa4 | nil | nil | nil
-Q:mul 25 ok | packed 0x10ea5c34feb8f60c | nil | nil | nil
-Q:mul 26 ok | packed 0x10cfd761b968b3d8 | nil | nil | nil
-Q:mul 27 ok | packed 0x10747e52bfedb6a1 | nil | nil | nil
-Q:mul 28 ok | packed 0x100c3b6bce5e8fcb | nil | nil | nil
-Q:mul 29 ok | packed 0x101f8e75669ee517 | nil | nil | nil
-Q:mul 30 ok | packed 0x10d5ffdf7231fee8 | nil | nil | nil
-Q:mul 31 ok | packed 0x10e1f8b3839b53d4 | nil | nil | nil
-Q:mul 32 ok | packed 0x10ec209503ccfa9f | nil | nil | nil
-Q:mul 33 ok | packed 0x10e7914c330847ad | nil | nil | nil
-Q:mul 34 ok | packed 0x106ebdf4b1a323d1 | nil | nil | nil
-Q:mul 35 ok | packed 0x10c7f3e1e332f152 | nil | nil | nil
-Q:mul 36 ok | packed 0x10f290d8835926e4 | nil | nil | nil
-Q:mul 37 ok | packed 0x10e18f006841276a | nil | nil | nil
-Q:mul 38 ok | packed 0x10dc06c46a3e2c8a | nil | nil | nil
-Q:mul 39 ok | packed 0x1053f426f4f57860 | nil | nil | nil
-Q:mul 40 ok | packed 0x100738f90bdca7e5 | nil | nil | nil
-Q:slerp 1 ok | packed 0x100a19119cfd3ec6 | nil | nil | nil
-Q:slerp 2 ok | packed 0x10f4a3b7480228ca | nil | nil | nil
-Q:slerp 3 ok | packed 0x105ee9867996219f | nil | nil | nil
+Q:rotate 5 ok | vector 0x3ea393ac 0x3f9679ac 0xbf9d9686 | nil | nil | nil
+Q:rotate 6 ok | vector 0xbf9504b7 0xbf885058 0xbf933cd6 | nil | nil | nil
+Q:rotate 7 ok | vector 0x3fc6fea0 0x3fb01f20 0x3fbe1be0 | nil | nil | nil
+Q:rotate 8 ok | vector 0xbdf295f0 0x3f6ce298 0xbf0933c8 | nil | nil | nil
+Q:rotate 9 ok | vector 0xbf61faa8 0xbf07c311 0x3fd64078 | nil | nil | nil
+Q:rotate 10 ok | vector 0xbf61b505 0x3f97586e 0xbfb22685 | nil | nil | nil
+Q:rotate 11 ok | vector 0xbf2d6d02 0x3f937ccb 0xbf37a035 | nil | nil | nil
+Q:rotate 12 ok | vector 0x3fa4661b 0x3fe99d5f 0xbd5b9dc5 | nil | nil | nil
+Q:rotate 13 ok | vector 0xbf239c91 0xbf1830c9 0x3f8415d5 | nil | nil | nil
+Q:rotate 14 ok | vector 0x4009deaa 0x3fbaf33b 0xbdd75371 | nil | nil | nil
+Q:rotate 15 ok | vector 0x3faa535c 0x3ec04eb8 0xbf78478f | nil | nil | nil
+Q:rotate 16 ok | vector 0x3f76dbf8 0x3febbf76 0xbe3f4510 | nil | nil | nil
+Q:rotate 17 ok | vector 0x40084609 0x3e3957b4 0xbece1ee4 | nil | nil | nil
+Q:rotate 18 ok | vector 0x3f15c6c0 0x3ea2a37e 0x3f1f61e7 | nil | nil | nil
+Q:rotate 19 ok | vector 0x3f5e9528 0x3f7bcff5 0xbff78017 | nil | nil | nil
+Q:rotate 20 ok | vector 0x3f5fab6d 0x4016c516 0xbe4a0f9d | nil | nil | nil
+Q:rotate 21 ok | vector 0x3f69f679 0xbf9c3a9e 0xbf9ad7c6 | nil | nil | nil
+Q:rotate 22 ok | vector 0xbf4eef20 0x3fbfef6c 0x3be1124b | nil | nil | nil
+Q:rotate 23 ok | vector 0xbfdd8f2d 0xbfc0f1ef 0xbee6222f | nil | nil | nil
+Q:rotate 24 ok | vector 0x3f435dd8 0x3f544e9c 0x3fb152ac | nil | nil | nil
+Q:rotate 25 ok | vector 0xbf2e56b5 0xbf46647b 0x3c8fadb3 | nil | nil | nil
+Q:rotate 26 ok | vector 0x3f98e100 0x3c30a58a 0x3f969d82 | nil | nil | nil
+Q:rotate 27 ok | vector 0x3f1ba775 0x3f3fc680 0xbf8253dd | nil | nil | nil
+Q:rotate 28 ok | vector 0x3fef0f0e 0x3f5c0e91 0x3e2f1b2a | nil | nil | nil
+Q:rotate 29 ok | vector 0x3f5d489a 0x3f7fe4a2 0x3f62c35b | nil | nil | nil
+Q:rotate 30 ok | vector 0xc00957a4 0xbf4b4b38 0x3f1205ac | nil | nil | nil
+Q:rotate 31 ok | vector 0xbf98b57d 0x3fdf59ac 0xbee89b65 | nil | nil | nil
+Q:rotate 32 ok | vector 0x3e01cd98 0xbef8b4ef 0xbf45974c | nil | nil | nil
+Q:rotate 33 ok | vector 0x400d8acc 0x3edc7cbf 0x3fabf0b9 | nil | nil | nil
+Q:rotate 34 ok | vector 0x3f2585a8 0xbeb050ea 0xbee39d12 | nil | nil | nil
+Q:rotate 35 ok | vector 0x400d8ede 0xbf265f06 0xbf6ebbfe | nil | nil | nil
+Q:rotate 36 ok | vector 0xbf70788a 0xbfca0022 0x3c8ee446 | nil | nil | nil
+Q:rotate 37 ok | vector 0xbfcab7e9 0x3f724f70 0x3f9e6128 | nil | nil | nil
+Q:rotate 38 ok | vector 0x3fb20580 0xbf2b95d7 0x3f450131 | nil | nil | nil
+Q:rotate 39 ok | vector 0x4007837b 0x3efdbfb7 0xbf60d4c9 | nil | nil | nil
+Q:rotate 40 ok | vector 0x3de4701f 0xbf802002 0xc00b762e | nil | nil | nil
+Q:mul 1 ok | packed 0x1061f782449c6df4 | nil | nil | nil
+Q:mul 2 ok | packed 0x10927722672b4a46 | nil | nil | nil
+Q:mul 3 ok | packed 0x10c91a32dd6d14f3 | nil | nil | nil
+Q:mul 4 ok | packed 0x10b61b4bbb847cb7 | nil | nil | nil
+Q:mul 5 ok | packed 0x10a6224841560584 | nil | nil | nil
+Q:mul 6 ok | packed 0x10e269a9c112a94c | nil | nil | nil
+Q:mul 7 ok | packed 0x107afd0bbeb1280f | nil | nil | nil
+Q:mul 8 ok | packed 0x10747c0c0cd8a59a | nil | nil | nil
+Q:mul 9 ok | packed 0x10e03633cd9d75d5 | nil | nil | nil
+Q:mul 10 ok | packed 0x1053493e9df161de | nil | nil | nil
+Q:mul 11 ok | packed 0x10c5ba14d4317ceb | nil | nil | nil
+Q:mul 12 ok | packed 0x10961f052fe3a36f | nil | nil | nil
+Q:mul 13 ok | packed 0x10a40d0d1e41b8df | nil | nil | nil
+Q:mul 14 ok | packed 0x1004c6e83b4ae8c1 | nil | nil | nil
+Q:mul 15 ok | packed 0x10dac6e8417a7c0b | nil | nil | nil
+Q:mul 16 ok | packed 0x107d22daf2c5945b | nil | nil | nil
+Q:mul 17 ok | packed 0x10d7e4c3edad32fd | nil | nil | nil
+Q:mul 18 ok | packed 0x1053a83890fe55fd | nil | nil | nil
+Q:mul 19 ok | packed 0x1055a2c967322ed2 | nil | nil | nil
+Q:mul 20 ok | packed 0x10ec992b45fb2b0b | nil | nil | nil
+Q:mul 21 ok | packed 0x106e99b6162d0927 | nil | nil | nil
+Q:mul 22 ok | packed 0x102148b140d77078 | nil | nil | nil
+Q:mul 23 ok | packed 0x10fe8fa7dc01ddac | nil | nil | nil
+Q:mul 24 ok | packed 0x10235d9bda1f2e1c | nil | nil | nil
+Q:mul 25 ok | packed 0x104a5c7760df48ae | nil | nil | nil
+Q:mul 26 ok | packed 0x10700c2af9ada49b | nil | nil | nil
+Q:mul 27 ok | packed 0x10f6de6e3ae2b6da | nil | nil | nil
+Q:mul 28 ok | packed 0x103118cc7118932d | nil | nil | nil
+Q:mul 29 ok | packed 0x10421a59182ae60d | nil | nil | nil
+Q:mul 30 ok | packed 0x101f43937743a7b7 | nil | nil | nil
+Q:mul 31 ok | packed 0x101ad6453073859e | nil | nil | nil
+Q:mul 32 ok | packed 0x10f270c86dd4dde7 | nil | nil | nil
+Q:mul 33 ok | packed 0x10f3d71380686719 | nil | nil | nil
+Q:mul 34 ok | packed 0x10eed989b6bbcd8a | nil | nil | nil
+Q:mul 35 ok | packed 0x10592ad8ae5d9430 | nil | nil | nil
+Q:mul 36 ok | packed 0x10fa90d70fc2c8b4 | nil | nil | nil
+Q:mul 37 ok | packed 0x1075dff9a3c8f3c6 | nil | nil | nil
+Q:mul 38 ok | packed 0x10dbd0d7f47476a0 | nil | nil | nil
+Q:mul 39 ok | packed 0x1036cab54df09938 | nil | nil | nil
+Q:mul 40 ok | packed 0x10c64dc523ded8d6 | nil | nil | nil
+Q:slerp 1 ok | packed 0x100a63e1b2cae022 | nil | nil | nil
+Q:slerp 2 ok | packed 0x100d254c2e38d80a | nil | nil | nil
+Q:slerp 3 ok | packed 0x105eef068141d835 | nil | nil | nil
 Q:slerp 4 ok | packed 0x109ffff7fffdffff | nil | nil | nil
-Q:slerp 5 ok | packed 0x10f6698d49574cbb | nil | nil | nil
-Q:slerp 6 ok | packed 0x10127c2c71684ccc | nil | nil | nil
-Q:slerp 7 ok | packed 0x10d96a45a01472c6 | nil | nil | nil
-Q:slerp 8 ok | packed 0x109ffff7fffdffff | nil | nil | nil
-Q:slerp 9 ok | packed 0x10e3f51802f95e25 | nil | nil | nil
-Q:slerp 10 ok | packed 0x10e333a715923527 | nil | nil | nil
-Q:slerp 11 ok | packed 0x10e222f8fa1e4558 | nil | nil | nil
-Q:slerp 12 ok | packed 0x10ec58e9d13a0a80 | nil | nil | nil
-Q:slerp 13 ok | packed 0x10e01c8a1175c07b | nil | nil | nil
-Q:slerp 14 ok | packed 0x1095103a0d4e0bf9 | nil | nil | nil
-Q:slerp 15 ok | packed 0x109defa3f7cfbacd | nil | nil | nil
-Q:slerp 16 ok | packed 0x1049f7fcbfa147e9 | nil | nil | nil
-Q:slerp 17 ok | packed 0x10ce50a412f6c37e | nil | nil | nil
-Q:slerp 18 ok | packed 0x10e2974750f1ee8b | nil | nil | nil
-Q:slerp 19 ok | packed 0x10d51336f881b7cb | nil | nil | nil
-Q:slerp 20 ok | packed 0x10d6f85731d9cab0 | nil | nil | nil
-Q:slerp 21 ok | packed 0x10d663d93fd13d9c | nil | nil | nil
-Q:slerp 22 ok | packed 0x10efb2f9e20cbadc | nil | nil | nil
-Q:slerp 23 ok | packed 0x109bf0562e7e0226 | nil | nil | nil
-Q:slerp 24 ok | packed 0x10afb7447c330f08 | nil | nil | nil
-Q:slerp 25 ok | packed 0x10f33a171d31fae1 | nil | nil | nil
-Q:slerp 26 ok | packed 0x10c9c603b5590a22 | nil | nil | nil
-Q:slerp 27 ok | packed 0x10e04ba731c5bdd0 | nil | nil | nil
-Q:slerp 28 ok | packed 0x101a5f29549bf242 | nil | nil | nil
-Q:slerp 29 ok | packed 0x10d52e12efc8974b | nil | nil | nil
-Q:slerp 30 ok | packed 0x1097b85bcb8b2137 | nil | nil | nil
-Q:slerp 31 ok | packed 0x10e0074f0c7dce3f | nil | nil | nil
-Q:slerp 32 ok | packed 0x10e700759d936ba9 | nil | nil | nil
-Q:slerp 33 ok | packed 0x10eb07d7a3e93ea2 | nil | nil | nil
-Q:slerp 34 ok | packed 0x106c014a9252f3c4 | nil | nil | nil
-Q:slerp 35 ok | packed 0x10dba2167f7239cc | nil | nil | nil
-Q:slerp 36 ok | packed 0x10db0037ff06294d | nil | nil | nil
-Q:slerp 37 ok | packed 0x1078db2c6e51e4fb | nil | nil | nil
-Q:slerp 38 ok | packed 0x10e90ec8d629d704 | nil | nil | nil
-Q:slerp 39 ok | packed 0x109265b2c54df97b | nil | nil | nil
-Q:slerp 40 ok | packed 0x10fa64e4b9d9bab6 | nil | nil | nil
+Q:slerp 5 ok | packed 0x10b3948dc1377ab0 | nil | nil | nil
+Q:slerp 6 ok | packed 0x1060e961a15d0220 | nil | nil | nil
+Q:slerp 7 ok | packed 0x10a8a49b1debb7eb | nil | nil | nil
+Q:slerp 8 ok | packed 0x10dffff7fffdffff | nil | nil | nil
+Q:slerp 9 ok | packed 0x10d3f477f6efecb7 | nil | nil | nil
+Q:slerp 10 ok | packed 0x10b2f4e231d1de74 | nil | nil | nil
+Q:slerp 11 ok | packed 0x10e44fd43128c84f | nil | nil | nil
+Q:slerp 12 ok | packed 0x1033811870b4830d | nil | nil | nil
+Q:slerp 13 ok | packed 0x10dfa3114726ce6c | nil | nil | nil
+Q:slerp 14 ok | packed 0x1095392a059d8413 | nil | nil | nil
+Q:slerp 15 ok | packed 0x107a0873908a8d40 | nil | nil | nil
+Q:slerp 16 ok | packed 0x104a15bbd446c6d6 | nil | nil | nil
+Q:slerp 17 ok | packed 0x10344cb2480e2e82 | nil | nil | nil
+Q:slerp 18 ok | packed 0x10cf21ac739e719d | nil | nil | nil
+Q:slerp 19 ok | packed 0x10fb5c2ae53296fe | nil | nil | nil
+Q:slerp 20 ok | packed 0x10202e2ca1436ade | nil | nil | nil
+Q:slerp 21 ok | packed 0x10b9509568339017 | nil | nil | nil
+Q:slerp 22 ok | packed 0x108acfa5cfcf895a | nil | nil | nil
+Q:slerp 23 ok | packed 0x109c0016358d8271 | nil | nil | nil
+Q:slerp 24 ok | packed 0x10ac7c13a99523c7 | nil | nil | nil
+Q:slerp 25 ok | packed 0x1019a1c7db3437af | nil | nil | nil
+Q:slerp 26 ok | packed 0x10f724fc78070004 | nil | nil | nil
+Q:slerp 27 ok | packed 0x109dc6ee0e8761b3 | nil | nil | nil
+Q:slerp 28 ok | packed 0x10198f8985ac6c46 | nil | nil | nil
+Q:slerp 29 ok | packed 0x10aed86ef27a9edf | nil | nil | nil
+Q:slerp 30 ok | packed 0x1096be5c1f1da920 | nil | nil | nil
+Q:slerp 31 ok | packed 0x105e274745c0fd1f | nil | nil | nil
+Q:slerp 32 ok | packed 0x10c9f34d93bd53e3 | nil | nil | nil
+Q:slerp 33 ok | packed 0x1086c448527fa126 | nil | nil | nil
+Q:slerp 34 ok | packed 0x106cb41ab89dc2ac | nil | nil | nil
+Q:slerp 35 ok | packed 0x10754833992f4acf | nil | nil | nil
+Q:slerp 36 ok | packed 0x10f8b4ec27d2e32e | nil | nil | nil
+Q:slerp 37 ok | packed 0x1078bddc6919b586 | nil | nil | nil
+Q:slerp 38 ok | packed 0x1031e72b97f6a3f6 | nil | nil | nil
+Q:slerp 39 ok | packed 0x10926562cfdda0c5 | nil | nil | nil
+Q:slerp 40 ok | packed 0x100c78b52e68771c | nil | nil | nil
 Q:fromXYZW 1 ok | packed 0x1081f79a390ea835 | nil | nil | nil
 Q:fromXYZW 2 ok | packed 0x1055d67333935674 | nil | nil | nil
 Q:fromXYZW 3 ok | packed 0x103a0b39cde87686 | nil | nil | nil
@@ -1364,82 +1364,82 @@ Q:key 1 ok | packed 0x2edffff7fffdffff | nil | nil | nil
 Q:key 2 ok | packed 0x261ffff7fffdffff | nil | nil | nil
 Q:key 3 ok | packed 0x245ffff7fffdffff | nil | nil | nil
 Q:key 4 ok | packed 0x219ffff7fffdffff | nil | nil | nil
-Q:key 5 ok | packed 0x2cf6a08da8236a08 | nil | nil | nil
-Q:key 6 ok | packed 0x2b1ffff7fffdffff | nil | nil | nil
-Q:key 7 ok | packed 0x2c5ffff7fffdffff | nil | nil | nil
-Q:key 8 ok | packed 0x239ffff7fffdffff | nil | nil | nil
-Q:key 9 ok | packed 0x21dffff7fffdffff | nil | nil | nil
-Q:key 10 ok | packed 0x26db1d18723112f8 | nil | nil | nil
-Q:key 11 ok | packed 0x2927da3e49214108 | nil | nil | nil
-Q:key 12 ok | packed 0x232547b5ca3bf20a | nil | nil | nil
-Q:key 13 ok | packed 0x2158678d835b18d4 | nil | nil | nil
-Q:key 14 ok | packed 0x25eb02787c22b7a9 | nil | nil | nil
-Q:key 15 ok | packed 0x2be61477c671a49e | nil | nil | nil
-Q:key 16 ok | packed 0x23faa43d0cd6b6a0 | nil | nil | nil
-Q:key 17 ok | packed 0x25df5a68561df392 | nil | nil | nil
-Q:key 18 ok | packed 0x208394945ff9f950 | nil | nil | nil
-Q:key 19 ok | packed 0x26d82231978214d6 | nil | nil | nil
-Q:key 20 ok | packed 0x22e22b984c020313 | nil | nil | nil
-Q:key 21 ok | packed 0x2e390f6da6b508ec | nil | nil | nil
-Q:key 22 ok | packed 0x24b9585515a6e63a | nil | nil | nil
-Q:key 23 ok | packed 0x20ed36295b10aa7d | nil | nil | nil
-Q:key 24 ok | packed 0x2cf96f8ac7b6e7b6 | nil | nil | nil
-Q:key 25 ok | packed 0x24c19708a9e66aa8 | nil | nil | nil
-Q:key 26 ok | packed 0x2b3a7268035578c5 | nil | nil | nil
-Q:key 27 ok | packed 0x2a3e16968a8a20bb | nil | nil | nil
-Q:key 28 ok | packed 0x29ca2c1d5302f8c8 | nil | nil | nil
-Q:key 29 ok | packed 0x20ebeab7e85a6408 | nil | nil | nil
-Q:key 30 ok | packed 0x286a4fc35922e525 | nil | nil | nil
-Q:key 31 ok | packed 0x2af6d8a266a6d07d | nil | nil | nil
-Q:key 32 ok | packed 0x247562d2a6d2fcba | nil | nil | nil
-Q:key 33 ok | packed 0x2eb6ca62c7ad0227 | nil | nil | nil
-Q:key 34 ok | packed 0x22e03da97cce0e82 | nil | nil | nil
-Q:key 35 ok | packed 0x26cf279647eaa03a | nil | nil | nil
-Q:key 36 ok | packed 0x21f185a74708919a | nil | nil | nil
-Q:key 37 ok | packed 0x22e111374c3e3293 | nil | nil | nil
-Q:key 38 ok | packed 0x260c365e0a7642cd | nil | nil | nil
-Q:key 39 ok | packed 0x28ee329b744192aa | nil | nil | nil
-Q:key 40 ok | packed 0x25d035f532272361 | nil | nil | nil
+Q:key 5 ok | packed 0x2c36a08da8236a08 | nil | nil | nil
+Q:key 6 ok | packed 0x2b3fffe7fffdffff | nil | nil | nil
+Q:key 7 ok | packed 0x2c5ffff7fffc0000 | nil | nil | nil
+Q:key 8 ok | packed 0x23dffff7fffdffff | nil | nil | nil
+Q:key 9 ok | packed 0x21e00b87fffdffff | nil | nil | nil
+Q:key 10 ok | packed 0x26e8b0e734dba598 | nil | nil | nil
+Q:key 11 ok | packed 0x292823de8412085e | nil | nil | nil
+Q:key 12 ok | packed 0x2326f75515952f7a | nil | nil | nil
+Q:key 13 ok | packed 0x2157c8edf681c749 | nil | nil | nil
+Q:key 14 ok | packed 0x25c8a686f8b47a7b | nil | nil | nil
+Q:key 15 ok | packed 0x2bc663d8f26b80e4 | nil | nil | nil
+Q:key 16 ok | packed 0x23393dab90c96097 | nil | nil | nil
+Q:key 17 ok | packed 0x25514f4397107c72 | nil | nil | nil
+Q:key 18 ok | packed 0x2083cf4467765c06 | nil | nil | nil
+Q:key 19 ok | packed 0x266c50577d830cbb | nil | nil | nil
+Q:key 20 ok | packed 0x2231b308b78c5e92 | nil | nil | nil
+Q:key 21 ok | packed 0x2e3aa35e01ca1db2 | nil | nil | nil
+Q:key 22 ok | packed 0x24b9e29505bd4b20 | nil | nil | nil
+Q:key 23 ok | packed 0x208a0385be6aee1b | nil | nil | nil
+Q:key 24 ok | packed 0x2c2f6d6d05cd34dc | nil | nil | nil
+Q:key 25 ok | packed 0x241c5d35b7b6ebb9 | nil | nil | nil
+Q:key 26 ok | packed 0x2b3ae5a80361e1e7 | nil | nil | nil
+Q:key 27 ok | packed 0x2a3dc3668e919106 | nil | nil | nil
+Q:key 28 ok | packed 0x29046622f64e8ef8 | nil | nil | nil
+Q:key 29 ok | packed 0x201f046c28d445a1 | nil | nil | nil
+Q:key 30 ok | packed 0x286adc83199de2de | nil | nil | nil
+Q:key 31 ok | packed 0x2a04e23bf1b8eb84 | nil | nil | nil
+Q:key 32 ok | packed 0x2476cb024cbddbeb | nil | nil | nil
+Q:key 33 ok | packed 0x2eb64622e5fb23a1 | nil | nil | nil
+Q:key 34 ok | packed 0x22e1073e58d63dec | nil | nil | nil
+Q:key 35 ok | packed 0x262c0b239d6baebc | nil | nil | nil
+Q:key 36 ok | packed 0x2188c118f55b7e00 | nil | nil | nil
+Q:key 37 ok | packed 0x22e81202b0b77e78 | nil | nil | nil
+Q:key 38 ok | packed 0x260c591dffd99471 | nil | nil | nil
+Q:key 39 ok | packed 0x283a3af4c1b8a6ee | nil | nil | nil
+Q:key 40 ok | packed 0x25880ac3bebcb7d1 | nil | nil | nil
 Q:keyRotation 1 ok | packed 0x10dffff7fffdffff | nil | nil | nil
 Q:keyRotation 2 ok | packed 0x101ffff7fffdffff | nil | nil | nil
 Q:keyRotation 3 ok | packed 0x105ffff7fffdffff | nil | nil | nil
 Q:keyRotation 4 ok | packed 0x109ffff7fffdffff | nil | nil | nil
-Q:keyRotation 5 ok | packed 0x10f6a08da8236a08 | nil | nil | nil
-Q:keyRotation 6 ok | packed 0x101ffff7fffdffff | nil | nil | nil
-Q:keyRotation 7 ok | packed 0x105ffff7fffdffff | nil | nil | nil
-Q:keyRotation 8 ok | packed 0x109ffff7fffdffff | nil | nil | nil
-Q:keyRotation 9 ok | packed 0x10dffff7fffdffff | nil | nil | nil
-Q:keyRotation 10 ok | packed 0x10bc2d45f71b3d39 | nil | nil | nil
-Q:keyRotation 11 ok | packed 0x10e14758f8c5c164 | nil | nil | nil
-Q:keyRotation 12 ok | packed 0x10e032f8bf8e4778 | nil | nil | nil
-Q:keyRotation 13 ok | packed 0x10322ae8c4a70c5b | nil | nil | nil
-Q:keyRotation 14 ok | packed 0x10e4be695035a820 | nil | nil | nil
-Q:keyRotation 15 ok | packed 0x10d8a9e7d1e9cb20 | nil | nil | nil
-Q:keyRotation 16 ok | packed 0x10cf08165541f16d | nil | nil | nil
-Q:keyRotation 17 ok | packed 0x10e0c5066d8b1458 | nil | nil | nil
-Q:keyRotation 18 ok | packed 0x10d0249af98f0da6 | nil | nil | nil
-Q:keyRotation 19 ok | packed 0x10e72226e51a6107 | nil | nil | nil
-Q:keyRotation 20 ok | packed 0x100eace0f95e3951 | nil | nil | nil
-Q:keyRotation 21 ok | packed 0x10ee146af6adda02 | nil | nil | nil
-Q:keyRotation 22 ok | packed 0x10f1ee025b94dc1c | nil | nil | nil
-Q:keyRotation 23 ok | packed 0x10cd64dd6e11a68e | nil | nil | nil
-Q:keyRotation 24 ok | packed 0x10e0a50826f604e2 | nil | nil | nil
-Q:keyRotation 25 ok | packed 0x10f69eec9db0ffb8 | nil | nil | nil
-Q:keyRotation 26 ok | packed 0x10ea97b5bfee105e | nil | nil | nil
-Q:keyRotation 27 ok | packed 0x10a7477a4e3f6899 | nil | nil | nil
-Q:keyRotation 28 ok | packed 0x100dfd3bffeeb319 | nil | nil | nil
-Q:keyRotation 29 ok | packed 0x10680e74d8f8e055 | nil | nil | nil
-Q:keyRotation 30 ok | packed 0x1098393ab4d0fdc6 | nil | nil | nil
-Q:keyRotation 31 ok | packed 0x10d8c1990d42f756 | nil | nil | nil
-Q:keyRotation 32 ok | packed 0x10dd2a9859d1fdbe | nil | nil | nil
-Q:keyRotation 33 ok | packed 0x10df96a7bb4e0f1f | nil | nil | nil
-Q:keyRotation 34 ok | packed 0x104b57729e9f099d | nil | nil | nil
-Q:keyRotation 35 ok | packed 0x10d26975f9cef48f | nil | nil | nil
-Q:keyRotation 36 ok | packed 0x1038704637239ef8 | nil | nil | nil
-Q:keyRotation 37 ok | packed 0x10de3e57c131ba98 | nil | nil | nil
-Q:keyRotation 38 ok | packed 0x10eb492575319862 | nil | nil | nil
-Q:keyRotation 39 ok | packed 0x10a8d8683be7df25 | nil | nil | nil
-Q:keyRotation 40 ok | packed 0x10afd7d3b5a3abee | nil | nil | nil
+Q:keyRotation 5 ok | packed 0x1036a08da8236a08 | nil | nil | nil
+Q:keyRotation 6 ok | packed 0x103fffe7fffdffff | nil | nil | nil
+Q:keyRotation 7 ok | packed 0x105ffff7fffc0000 | nil | nil | nil
+Q:keyRotation 8 ok | packed 0x10dffff7fffdffff | nil | nil | nil
+Q:keyRotation 9 ok | packed 0x10e00b87fffdffff | nil | nil | nil
+Q:keyRotation 10 ok | packed 0x10be22b5d2e138cb | nil | nil | nil
+Q:keyRotation 11 ok | packed 0x10976711779c7844 | nil | nil | nil
+Q:keyRotation 12 ok | packed 0x10debad33a98384a | nil | nil | nil
+Q:keyRotation 13 ok | packed 0x103379a8d2cdbc74 | nil | nil | nil
+Q:keyRotation 14 ok | packed 0x10e60fa9ad918fb9 | nil | nil | nil
+Q:keyRotation 15 ok | packed 0x10fe4d18be4ada5d | nil | nil | nil
+Q:keyRotation 16 ok | packed 0x102cb7c86f2bce8a | nil | nil | nil
+Q:keyRotation 17 ok | packed 0x10deaffaae1428e3 | nil | nil | nil
+Q:keyRotation 18 ok | packed 0x1085667cfd8140d7 | nil | nil | nil
+Q:keyRotation 19 ok | packed 0x100fdfdd87e07131 | nil | nil | nil
+Q:keyRotation 20 ok | packed 0x100ec6f103f19f0e | nil | nil | nil
+Q:keyRotation 21 ok | packed 0x1039ed36b3a4bfc4 | nil | nil | nil
+Q:keyRotation 22 ok | packed 0x104a10fd943f182d | nil | nil | nil
+Q:keyRotation 23 ok | packed 0x104423c5e8454001 | nil | nil | nil
+Q:keyRotation 24 ok | packed 0x10f925cdf00abea1 | nil | nil | nil
+Q:keyRotation 25 ok | packed 0x10375972efa0f714 | nil | nil | nil
+Q:keyRotation 26 ok | packed 0x1005c1b8bee8c161 | nil | nil | nil
+Q:keyRotation 27 ok | packed 0x10da11f61f2c17fb | nil | nil | nil
+Q:keyRotation 28 ok | packed 0x100e354bf37d2e4f | nil | nil | nil
+Q:keyRotation 29 ok | packed 0x1068bad495824c73 | nil | nil | nil
+Q:keyRotation 30 ok | packed 0x1097b43ae31a3b2c | nil | nil | nil
+Q:keyRotation 31 ok | packed 0x108f5a0a6ad8ba14 | nil | nil | nil
+Q:keyRotation 32 ok | packed 0x10c8466af025ed24 | nil | nil | nil
+Q:keyRotation 33 ok | packed 0x106a3f121d439f7f | nil | nil | nil
+Q:keyRotation 34 ok | packed 0x1049d4f239f1d580 | nil | nil | nil
+Q:keyRotation 35 ok | packed 0x1087eff46a548f67 | nil | nil | nil
+Q:keyRotation 36 ok | packed 0x103b8b75fd10ea78 | nil | nil | nil
+Q:keyRotation 37 ok | packed 0x10d74b26c8b8a7f5 | nil | nil | nil
+Q:keyRotation 38 ok | packed 0x10c86a6d4ff6d885 | nil | nil | nil
+Q:keyRotation 39 ok | packed 0x10aa65e84668a9e9 | nil | nil | nil
+Q:keyRotation 40 ok | packed 0x10b22083174ce948 | nil | nil | nil
 Q:keyFlags 1 ok | number 0x3ff0000000000000 | nil | nil | nil
 Q:keyFlags 2 ok | number 0x4000000000000000 | nil | nil | nil
 Q:keyFlags 3 ok | number 0x4008000000000000 | nil | nil | nil

@@ -236,12 +236,21 @@ fn buffer_pack_bytes_match_the_checked_in_golden() {
         write(&mut bytes).unwrap();
         line(name, &bytes);
     };
+    // Exact components, not axis-angle: `sin` and `cos` round differently from one libm to the next
+    // (Windows' moved a lane of the quarter turn), and the golden pins the encoding, not a libm.
+    // These are what `Quat::from_axis_angle` gave on the Linux build that wrote the golden.
+    let exact = |[x, y, z, w]: [u64; 4]| Quat {
+        x: f64::from_bits(x),
+        y: f64::from_bits(y),
+        z: f64::from_bits(z),
+        w: f64::from_bits(w),
+    };
     let rotations = [
         ("identity", Quat::IDENTITY),
-        ("quarter z", Quat::from_axis_angle([0.0, 0.0, 1.0], std::f64::consts::FRAC_PI_2)),
-        ("half x", Quat::from_axis_angle([1.0, 0.0, 0.0], std::f64::consts::PI)),
-        ("odd", Quat::from_axis_angle([0.3, -0.5, 0.81], 2.2)),
-        ("tiny", Quat::from_axis_angle([0.0, 1.0, 0.0], 1e-4)),
+        ("quarter z", exact([0, 0, 0x3fe6_a09e_667f_3bcc, 0x3fe6_a09e_667f_3bcd])),
+        ("half x", exact([0x3ff0_0000_0000_0000, 0, 0, 0x3c91_a626_3314_5c07])),
+        ("odd", exact([0x3fd1_2507_85bc_e34e, 0xbfdc_930c_8990_2583, 0x3fe7_2530_8e25_6610, 0x3fdd_07b8_06c7_6111])),
+        ("tiny", exact([0, 0x3f0a_36e2_eaed_5994, 0, 0x3fef_ffff_ff54_3389])),
     ];
     for (name, q) in rotations {
         put(&format!("Quaternion {name}"), &|b| Quaternion::pack(q).write_to(b));

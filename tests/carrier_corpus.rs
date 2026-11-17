@@ -65,19 +65,19 @@ local function rand()
   seed = (seed * 1103515245 + 12345) % 2147483648
   return seed / 2147483648
 end
+-- Components from basic arithmetic alone: fromXYZW normalizes with sqrt, which every platform
+-- rounds the same, where sin and cos differ from one libm to the next.
 local function rotation()
-  local axis = vector.create(rand() * 2 - 1, rand() * 2 - 1, rand() * 2 - 1)
-  if vector.magnitude(axis) < 1e-3 then axis = vector.create(0, 0, 1) end
-  return quat.axisAngle(axis, rand() * 7 - 0.5)
+  return quat.fromXYZW(rand() * 2 - 1, rand() * 2 - 1, rand() * 2 - 1, rand() * 2 - 0.9)
 end
 local function channel() return math.floor(rand() * 256) end
 local function color() return raster.rgba8(channel(), channel(), channel(), channel()) end
 local function wide() return raster.rgba16(rand() * 65536, rand() * 65536, rand() * 65536, rand() * 65536) end
 local function weight() local w = rand() * 1.4 - 0.2 if rand() < 0.1 then return 0 elseif rand() < 0.1 then return 1 end return w end
 local boundaries = {
-  quat.IDENTITY, quat.axisAngle(vector.create(1, 0, 0), math.pi), quat.axisAngle(vector.create(0, 1, 0), math.pi),
-  quat.axisAngle(vector.create(0, 0, 1), math.pi), quat.axisAngle(vector.create(1, 1, 1), 2 * math.pi / 3),
-  quat.fromXYZW(1, 0, 0, 0), quat.fromXYZW(0, 1, 0, 0), quat.fromXYZW(0, 0, 1, 0), quat.fromXYZW(0, 0, 0, 1),
+  quat.IDENTITY, quat.fromXYZW(1, 0, 0, 0), quat.fromXYZW(0, 1, 0, 0), quat.fromXYZW(0, 0, 1, 0),
+  quat.fromXYZW(1, 1, 1, 1), quat.fromXYZW(1, 1, 0, 0), quat.fromXYZW(0, -1, 0, 1), quat.fromXYZW(0, 0, 0, -1),
+  quat.fromXYZW(1e-3, 0, 0, 1),
 }
 local colors = { raster.WHITE, raster.BLACK, raster.TRANSPARENT, raster.rgba8(255, 0, 0, 1), raster.rgba8(1, 2, 3, 255) }
 local wides = { raster.WHITE16, raster.BLACK16, raster.TRANSPARENT16, raster.widen(raster.rgba8(128, 64, 32, 16)) }
@@ -216,8 +216,12 @@ fn compare(path: &str, actual: &str) {
         .nth(1)
         .and_then(|rest| rest.split("\n== ").next())
         .unwrap_or_else(|| panic!("the golden has no {path} section"));
-    let expected: Vec<&str> = section.trim_end().lines().collect();
-    let actual: Vec<&str> = actual.trim_end().lines().collect();
+    // slerp runs acos and sin, which differ from one libm to the next: its results are compared on
+    // the platform that wrote the golden only (A0 holds its lowering to its binder everywhere).
+    let portable =
+        |line: &&str| cfg!(all(target_os = "linux", target_arch = "x86_64")) || !line.starts_with("Q:slerp ");
+    let expected: Vec<&str> = section.trim_end().lines().filter(portable).collect();
+    let actual: Vec<&str> = actual.trim_end().lines().filter(portable).collect();
     assert_eq!(expected.len(), actual.len(), "{path}: the corpus changed size");
     let differences: Vec<String> = expected
         .iter()
