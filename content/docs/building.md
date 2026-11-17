@@ -87,7 +87,10 @@ runs both carriers on x86-64 and AArch64 Linux and on macOS, and builds for
 `wasm32-unknown-emscripten` (the boxed carrier, no `jit`) and runs the carrier, packed-value,
 Bits64 and 0.747 suites under Node, goldens included (`.github/workflows/carriers.yml`).
 `.cargo/config.toml` hands that target to emscripten's `em++`, `emcc` and `emar`; a test build
-there links with `-sNODERAWFS=1` to read the checkout.
+there links with `-sNODERAWFS=1` to read the checkout. A host linking l3i for emscripten sets
+`-sSTACK_SIZE` well above emscripten's 64 KiB default (CI uses 8 MB): Luau's parser recurses up
+to its limit of 1000 levels on deeply nested source, and a stack too small for that ends the
+module with an out-of-bounds access instead of a Lua error.
 
 ## Features
 

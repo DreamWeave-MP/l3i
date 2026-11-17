@@ -50,8 +50,9 @@ jobs:
     env:
       CARGO_TARGET_WASM32_UNKNOWN_EMSCRIPTEN_RUNNER: node
       # The goldens and fixtures are read from the checkout: Node's real filesystem, not
-      # emscripten's in-memory one.
-      CARGO_TARGET_WASM32_UNKNOWN_EMSCRIPTEN_RUSTFLAGS: -Clink-arg=-sNODERAWFS=1
+      # emscripten's in-memory one. Emscripten's default 64 KiB stack is too small for Luau's
+      # parser at its recursion limit; 8 MiB is a desktop main thread's.
+      CARGO_TARGET_WASM32_UNKNOWN_EMSCRIPTEN_RUSTFLAGS: -Clink-arg=-sNODERAWFS=1 -Clink-arg=-sSTACK_SIZE=8MB
       L3I_UNVERIFIED_TOOLCHAIN: "1"
     steps:
       - uses: actions/checkout@v6
