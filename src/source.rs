@@ -63,7 +63,6 @@ pub enum CompileConstant {
     Nil,
     Boolean(bool),
     Number(f64),
-    Integer(i64),
     Vector(f32, f32, f32),
     String(String),
 }
@@ -107,7 +106,6 @@ unsafe extern "C" fn member_constant_callback(
             Some(CompileConstant::Nil) => ffi::luau_set_compile_constant_nil(constant),
             Some(CompileConstant::Boolean(b)) => ffi::luau_set_compile_constant_boolean(constant, c_int::from(b)),
             Some(CompileConstant::Number(n)) => ffi::luau_set_compile_constant_number(constant, n),
-            Some(CompileConstant::Integer(i)) => ffi::luau_set_compile_constant_integer64(constant, i),
             Some(CompileConstant::Vector(x, y, z)) => ffi::luau_set_compile_constant_vector(constant, x, y, z, 0.0),
             Some(CompileConstant::String(text)) => {
                 let kept: Box<str> = text.into_boxed_str();

@@ -16,7 +16,7 @@ use std::fmt::Write as _;
 
 use l3i::Runtime;
 use l3i::bind::{Call, Return};
-use l3i::convert::{Integer, Push};
+use l3i::convert::Push;
 use l3i::error::Result;
 use l3i::extension::{NativeCodePolicy, RuntimePlan, RuntimePolicy};
 use l3i::native_code::NativeCodeMode;
@@ -43,7 +43,15 @@ impl Push for Made {
                 }
                 Ok(scope.top_value())
             }
-            Made::Int(value) => Integer(value).push_into(scope),
+            Made::Int(value) => {
+                // SAFETY: room for one slot is checked first. Luau 0.746 still has the type; the
+                // integer cases go with it.
+                unsafe {
+                    assert!(l3i::ffi::lua_checkstack(scope.state(), 1) != 0);
+                    l3i::ffi::lua_pushinteger64(scope.state(), value);
+                }
+                Ok(scope.top_value())
+            }
         }
     }
 }

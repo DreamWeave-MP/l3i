@@ -39,7 +39,7 @@ fn spellings_and_spans_are_one_integer_identity() {
              local exact = intern.new() \
              assert(exact:policy() == 'exact' and exact:intern('A') ~= exact:intern('a'), 'exact by default') \
              assert(exact:intern('A') == 1 and exact:intern('a') == 2, 'tokens are pool-relative and dense') \
-             assert(exact:resolve(2) == 'a' and exact:resolve(2i) == 'a', 'resolve takes a number or an integer')",
+             assert(exact:resolve(2) == 'a' and not pcall(exact.resolve, exact, '2'), 'resolve takes a number')",
         )
         .unwrap();
 }
@@ -255,8 +255,7 @@ for _, policy in { 'exact', 'ascii-nocase', 'rules' } do
     expect(okL == okB and (okL and errL == errB or string.match(errL, ':%d+: (.*)') == string.match(errB, ':%d+: (.*)')), policy .. ' fallback ' .. i .. ' ' .. tostring(errL) .. ' / ' .. tostring(errB))
   end
 
-  -- An integer offset is a number the lowering does not take: the slow path, same answer.
-  expect(lowered(a, 'xxCaius', 2i, 5i) == bound(b, 'xxCaius', 2, 5), policy .. ' integer offset')
+
 end
 
 return table.concat(failures, '\n')

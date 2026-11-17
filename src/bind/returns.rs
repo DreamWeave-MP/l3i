@@ -3,7 +3,7 @@
 use std::ffi::c_int;
 
 use super::Call;
-use crate::convert::{Integer, Push, Vector3};
+use crate::convert::{Push, Vector3};
 use crate::error::Result;
 use crate::stack::Scope;
 use crate::value::{Function, Table, Value};
@@ -50,8 +50,6 @@ single_returns!(
     String,
     &'static str,
     Vec<u8>,
-    Integer,
-    crate::convert::Bits64,
     crate::convert::NewBuffer,
     Vector3,
     Value,

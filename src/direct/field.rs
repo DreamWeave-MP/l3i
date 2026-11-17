@@ -2,7 +2,9 @@
 //!
 //! A registered getter runs from `GETTABLEKS` with no Lua frame, receiving only the userdata
 //! payload and a result slot. It must not touch the Lua API and must not fail. Only the value
-//! kinds Luau provides setters for can be produced.
+//! kinds Luau provides setters for can be produced, and a [`crate::convert::Bits64`] on a carrier
+//! that needs no allocation for it (a boxed one would have to allocate inside the getter, so on
+//! those targets the variant does not exist and a getter that wants it fails to build).
 
 use std::ffi::{CString, c_int, c_void};
 
@@ -18,7 +20,9 @@ pub enum FieldValue {
     Nil,
     Boolean(bool),
     Number(f64),
-    Integer(i64),
+    /// An opaque 64-bit value, as a [`crate::convert::Bits64`] to scripts.
+    #[cfg(not(l3i_carrier = "boxed"))]
+    Bits64(u64),
     Vector(Vector3),
 }
 
@@ -39,7 +43,12 @@ unsafe extern "C" fn field_thunk<T: Userdata, H: DirectField<T>>(userdata: *mut 
             FieldValue::Nil => ffi::lua_userdatadirectfield_setnil(result),
             FieldValue::Boolean(b) => ffi::lua_userdatadirectfield_setboolean(result, c_int::from(b)),
             FieldValue::Number(n) => ffi::lua_userdatadirectfield_setnumber(result, n),
-            FieldValue::Integer(i) => ffi::lua_userdatadirectfield_setinteger64(result, i),
+            #[cfg(l3i_carrier = "light")]
+            FieldValue::Bits64(bits) => {
+                ffi::l3i_directfield_setlightbits(result, bits, c_int::from(crate::packed::carrier::BITS64_TAG));
+            }
+            #[cfg(l3i_carrier = "integer")]
+            FieldValue::Bits64(bits) => ffi::lua_userdatadirectfield_setinteger64(result, bits as i64),
             FieldValue::Vector(v) => ffi::lua_userdatadirectfield_setvector(result, v.x, v.y, v.z),
         }
     }

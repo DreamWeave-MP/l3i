@@ -1,6 +1,6 @@
 //! `@dream/intl` through Luau: locales parse to their canonical spelling, compare by it, give
 //! their subtags back, and a malformed tag fails with the call's name and the reason; plural
-//! rules take numbers, integers and decimal strings, keep visible fraction digits, and refuse
+//! rules take numbers and decimal strings, keep visible fraction digits, and refuse
 //! what is not a finite number; decimal formatters write each locale's digits and separators
 //! under the grouping and fraction digit options, and refuse bad options by name.
 
@@ -75,7 +75,7 @@ fn plural_rules_select_cldr_categories() {
             "local en = intl.pluralRules('en') \
              assert(en:type() == 'cardinal' and en:locale() == 'en') \
              assert(en:category(1) == 'one' and en:category(2) == 'other' and en:category(0) == 'other') \
-             assert(en:category(1i) == 'one' and en:category(-1) == 'one' and en:category(1.0) == 'one') \
+             assert(en:category(-1) == 'one' and en:category(1.0) == 'one') \
              assert(en:category('1') == 'one' and en:category('1.0') == 'other' and en:category('1.00') == 'other') \
              local ordinal = intl.pluralRules(intl.locale('EN'), 'ordinal') \
              assert(ordinal:type() == 'ordinal') \
@@ -100,7 +100,7 @@ fn plural_rules_select_cldr_categories() {
              assert(#ar:categories() == 6) \
              local fr = intl.pluralRules('fr') \
              assert(fr:category(1000000) == 'many' and fr:category('1000000') == 'many' and fr:category('1000000.0') == 'other') \
-             assert(pl:category(9223372036854775807i) == 'many' and pl:category(2^53) == 'few' and pl:category(1e300) == 'many') \
+             assert(pl:category('9223372036854775807') == 'many' and pl:category(2^53) == 'few' and pl:category(1e300) == 'many') \
              assert(pl:category('12345678901234567892') == 'few')",
         )
         .unwrap();
@@ -148,9 +148,9 @@ fn decimal_formatters_follow_the_locale_and_options() {
              assert(intl.decimalFormatter(intl.locale('ar-EG')):format(123) == '١٢٣') \
              assert(intl.decimalFormatter('ar-EG-u-nu-latn'):format(123) == '123') \
              local en = intl.decimalFormatter('en') \
-             assert(en:format(1234i) == '1,234' and en:format(-1234.5) == '-1,234.5' and en:format('-0') == '-0') \
+             assert(en:format(1234) == '1,234' and en:format(-1234.5) == '-1,234.5' and en:format('-0') == '-0') \
              assert(en:format(-0.0) == '-0' and en:format(0) == '0' and en:format(0.1) == '0.1') \
-             assert(en:format(9223372036854775807i) == '9,223,372,036,854,775,807') \
+             assert(en:format('9223372036854775807') == '9,223,372,036,854,775,807') \
              assert(en:format(1e21) == '1,000,000,000,000,000,000,000') \
              assert(en:format(0.123456789) == '0.123' and en:format('1.50') == '1.5') \
              local never = intl.decimalFormatter('en', { grouping = 'never' }) \

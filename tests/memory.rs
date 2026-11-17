@@ -720,7 +720,7 @@ fn scalar_and_pinned_pushes_past_the_stack_limit_fail_instead_of_aborting() {
                 for index in 0..100_000_i32 {
                     match kind {
                         0 => frame.push(&true).map(drop)?,
-                        1 => frame.push(&l3i::convert::Integer(i64::from(index))).map(drop)?,
+                        1 => frame.push(&l3i::convert::Bits64(index as u64)).map(drop)?,
                         2 => frame.push(&f64::from(index)).map(drop)?,
                         3 => frame.push(&1.5_f32).map(drop)?,
                         4 => frame.push(&index).map(drop)?,

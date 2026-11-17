@@ -97,7 +97,6 @@ single_results!(
     f64,
     String,
     Vec<u8>,
-    crate::convert::Integer,
     crate::convert::Bits64,
     crate::convert::Vector3,
     crate::raster::Color16,

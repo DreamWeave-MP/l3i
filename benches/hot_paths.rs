@@ -409,8 +409,8 @@ fn typed_variants(c: &mut Criterion) {
     let packed_red = runtime
         .bind_function("dreamweave.bench.packedRed", |c: l3i::packed::Packed<l3i::raster::Color>| f64::from(c.0.r))
         .unwrap();
-    let integer_id =
-        runtime.bind_function("dreamweave.bench.integerId", |i: l3i::convert::Integer| i.0 as f64).unwrap();
+    let bits_id =
+        runtime.bind_function("dreamweave.bench.bitsId", |b: l3i::convert::Bits64| (b.0 & 0xFFFF) as f64).unwrap();
     let four = runtime
         .bind_function(
             "dreamweave.bench.four",
@@ -432,13 +432,14 @@ fn typed_variants(c: &mut Criterion) {
         ("unit", &unit),
         ("vec_x", &vec_x),
         ("packed_red", &packed_red),
-        ("integer_id", &integer_id),
+        ("bits_id", &bits_id),
         ("four", &four),
     ] {
         runtime.set_global(name, function).unwrap();
     }
-    runtime.set_global("color", &l3i::convert::Integer(l3i::raster::Color::WHITE.pack().bits().unwrap())).unwrap();
-    runtime.set_global("clip", &l3i::convert::Integer(l3i::raster::ClipRect::ALL.pack().bits().unwrap())).unwrap();
+    runtime.set_global("color", &l3i::raster::Color::WHITE.pack()).unwrap();
+    runtime.set_global("clip", &l3i::raster::ClipRect::ALL.pack()).unwrap();
+    runtime.set_global("wide", &l3i::convert::Bits64(u64::MAX)).unwrap();
     runtime.exec("hoisted = vector.create(1, 2, 3)").unwrap();
     let mut group = c.benchmark_group("typed_variants");
     group.throughput(Throughput::Elements(CALLS));
@@ -451,7 +452,7 @@ fn typed_variants(c: &mut Criterion) {
         ("(i32, i32) -> i32", "s = two_i32(i, 1)"),
         ("(f64) -> ()", "unit(i)"),
         ("(Vector3) -> f64, hoisted", "s = vec_x(hoisted)"),
-        ("(Integer) -> f64", "s = integer_id(color)"),
+        ("(Bits64) -> f64", "s = bits_id(wide)"),
         ("(Packed<Color>) -> f64", "s = packed_red(color)"),
         ("(Vector3, Vector3, Packed, Packed) -> f64", "s = four(hoisted, hoisted, color, clip)"),
     ] {

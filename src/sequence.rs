@@ -98,7 +98,6 @@ sequence_items!(
     String,
     &'static str,
     Vec<u8>,
-    crate::convert::Integer,
     crate::convert::Bits64,
     crate::convert::Vector3,
     crate::value::Value,

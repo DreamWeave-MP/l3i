@@ -5,11 +5,11 @@
 //! string-to-number coercion, and no silent fallback. The numeric rules are the C++ binder's
 //! and are tested against its oracle:
 //!
-//! - Luau has two numeric runtime types. `Number` (f64) converts to an integer by rounding half
-//!   away from zero and must land inside `[-2^digits, 2^digits)`; `Integer` (i64) converts by
-//!   range check only. Non-finite numbers never convert to integers.
-//! - Rust integers push as `Number` and must be exactly representable as an f64; the explicit
-//!   [`Integer`] wrapper pushes a Luau 64-bit integer.
+//! - A Lua `number` (f64) converts to a Rust integer by rounding half away from zero and must
+//!   land inside `[-2^digits, 2^digits)`; [`Exact`] refuses a fraction instead of rounding it.
+//!   Non-finite numbers never convert to integers.
+//! - Rust integers push as numbers and must be exactly representable as an f64: beyond 2^53 a
+//!   push is an error, never a rounded number. An opaque 64-bit value crosses as [`Bits64`].
 //! - `f32` rejects finite values outside its range; NaN and infinities pass through untouched.
 //!   Finiteness is a domain rule for hosts to express with their own converter.
 //! - Strings never come from numbers and numbers never come from strings.
@@ -33,7 +33,6 @@ use crate::stack::{Scope, ValueView};
 pub use buffer::{BufferView, BytesView, NewBuffer, new_buffer};
 pub use exact::{Bits64, Exact};
 pub use raw::RawValue;
-pub use scalar::Integer;
 pub use vector::Vector3;
 
 /// A Rust type readable from one stack slot with one checked conversion.

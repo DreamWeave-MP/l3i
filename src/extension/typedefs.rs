@@ -106,7 +106,6 @@ fn constant_type(constant: &CompileConstant) -> &'static str {
         CompileConstant::Nil => "nil",
         CompileConstant::Boolean(_) => "boolean",
         CompileConstant::Number(_) => "number",
-        CompileConstant::Integer(_) => "integer",
         CompileConstant::Vector(..) => "vector",
         CompileConstant::String(_) => "string",
     }

@@ -60,7 +60,6 @@ impl LibraryMembers for ModuleMembers {
                 CompileConstant::Nil => bytecode::NIL,
                 CompileConstant::Boolean(_) => bytecode::BOOLEAN,
                 CompileConstant::Number(_) => bytecode::NUMBER,
-                CompileConstant::Integer(_) => bytecode::INTEGER,
                 CompileConstant::Vector(..) => bytecode::VECTOR,
                 CompileConstant::String(_) => bytecode::STRING,
             },
@@ -85,7 +84,6 @@ mod bytecode {
     pub const STRING: u8 = 3;
     pub const FUNCTION: u8 = 5;
     pub const VECTOR: u8 = 8;
-    pub const INTEGER: u8 = 10;
 }
 
 /// The install-phase view of the runtime one extension receives.
@@ -233,7 +231,8 @@ impl Push for FieldValue {
             FieldValue::Nil => ().push_into(scope),
             FieldValue::Boolean(value) => value.push_into(scope),
             FieldValue::Number(value) => value.push_into(scope),
-            FieldValue::Integer(value) => crate::convert::Integer(*value).push_into(scope),
+            #[cfg(not(l3i_carrier = "boxed"))]
+            FieldValue::Bits64(value) => crate::convert::Bits64(*value).push_into(scope),
             FieldValue::Vector(value) => value.push_into(scope),
         }
     }
@@ -382,7 +381,6 @@ impl<'c> ModuleInstaller<'c> {
             CompileConstant::Nil => self.table.set(&stack, name, &())?,
             CompileConstant::Boolean(b) => self.table.set(&stack, name, b)?,
             CompileConstant::Number(n) => self.table.set(&stack, name, n)?,
-            CompileConstant::Integer(i) => self.table.set(&stack, name, &crate::convert::Integer(*i))?,
             CompileConstant::Vector(x, y, z) => {
                 self.table.set(&stack, name, &crate::convert::Vector3 { x: *x, y: *y, z: *z })?;
             }

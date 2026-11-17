@@ -202,6 +202,15 @@ impl RuntimePlanBuilder {
             None => crate::udp::UdpExtension::new(),
         };
         extensions.insert(0, Box::new(bridge));
+        // So is `@dream/bits64`: the bridge takes and returns `Bits64` values (client and protocol
+        // ids), and a script needs the module to make and read one.
+        if extensions.iter().any(|extension| extension.id() == crate::bits64::EXTENSION_ID) {
+            return Err(Error::logic(format!(
+                "extension id '{}' is reserved for l3i's Bits64 module, which every plan carries; do not add one",
+                crate::bits64::EXTENSION_ID
+            )));
+        }
+        extensions.insert(0, Box::new(crate::bits64::Bits64Extension));
 
         // 1. Describe.
         let mut descriptors = Vec::with_capacity(extensions.len());

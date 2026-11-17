@@ -12,7 +12,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use super::Math;
 use crate::native_code::hooks::{NamecallSite, NativeCodeHooks, NativeContext};
 use crate::native_code::ir::{IrBuilder, IrCmd, IrOp, bytecode_type};
-use crate::raw::ffi::{LUA_TBUFFER, LUA_TINTEGER, LUA_TNUMBER};
+use crate::native_code::packed_ir;
+use crate::packed::carrier::BITS64_TAG;
+use crate::raw::ffi::{LUA_TBUFFER, LUA_TNUMBER};
 
 static LOWERED: AtomicUsize = AtomicUsize::new(0);
 
@@ -87,7 +89,7 @@ impl Op {
 
     fn result_type(self) -> u8 {
         match self {
-            Op::Read64 => bytecode_type::INTEGER,
+            Op::Read64 => packed_ir::RESULT_TYPE,
             op if op.is_read() => bytecode_type::NUMBER,
             _ => bytecode_type::ANY,
         }
@@ -211,9 +213,7 @@ impl NativeCodeHooks for ByteMath {
             Op::Read64 => {
                 let raw = build.inst(IrCmd::BUFFER_READI64, &[buffer, offset, buffer_tag]);
                 let value = build.inst(IrCmd::BYTESWAP_INT64, &[raw]);
-                build.inst(IrCmd::STORE_INT64, &[result, value]);
-                let tag = build.const_tag(LUA_TINTEGER as u8);
-                build.inst(IrCmd::STORE_TAG, &[result, tag]);
+                packed_ir::store(build, result, value, BITS64_TAG);
             }
             Op::Write16 | Op::Write24 { .. } | Op::Write32 => {
                 let value_reg = build.vm_reg(site.arg_res_reg + 4);
@@ -256,8 +256,8 @@ impl NativeCodeHooks for ByteMath {
             }
             Op::Write64 => {
                 let value_reg = build.vm_reg(site.arg_res_reg + 4);
-                build.load_and_check_tag(value_reg, LUA_TINTEGER as u8, exit);
-                let bits = build.inst(IrCmd::LOAD_INT64, &[value_reg]);
+                // A Bits64 is a wide kind: any value on the carrier, as the binder accepts.
+                let bits = packed_ir::load_wide(build, value_reg, exit);
                 let swapped = build.inst(IrCmd::BYTESWAP_INT64, &[bits]);
                 build.inst(IrCmd::BUFFER_WRITEI64, &[buffer, offset, swapped, buffer_tag]);
             }

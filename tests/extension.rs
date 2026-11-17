@@ -32,7 +32,7 @@ struct ValueField;
 
 impl DirectField<Counter> for ValueField {
     fn get(counter: &Counter) -> FieldValue {
-        FieldValue::Integer(counter.value.get())
+        FieldValue::Number(counter.value.get() as f64)
     }
 }
 
@@ -73,7 +73,7 @@ impl Extension for Core {
             .function("new", |n: i64| Owned(Counter { value: Cell::new(n) }))
             .untyped()
             .constant("ANSWER", CompileConstant::Number(42.0))
-            .constant("LIMIT", CompileConstant::Integer(7))
+            .constant("LIMIT", CompileConstant::Boolean(true))
             .constant("NAME", CompileConstant::String("core".to_owned()));
         d.memory_category("dream.core");
         Ok(())
@@ -109,7 +109,7 @@ const SCRIPT: &str = "local core = require('@dream/core') local tools = require(
     assert(c:double() == 14, 'double') assert(c:describe() == 'counter at 7', 'describe') \
     assert(c.twice == 14, 'twice get') c.twice = 20 assert(c:get() == 10, 'twice set') \
     assert(tostring(c) == 'Counter(10)', 'tostring') assert(tools.version() == 2, 'version') assert(core.ANSWER == 42, 'answer') \
-    assert(core.LIMIT == 7i, 'limit') assert(c.missing == nil, 'missing')";
+    assert(core.LIMIT == true, 'limit') assert(c.missing == nil, 'missing')";
 
 fn plan_with(core: Core, policy: RuntimePolicy) -> Rc<RuntimePlan> {
     // Tools registered first: order comes from the dependency graph, not registration.
@@ -119,7 +119,7 @@ fn plan_with(core: Core, policy: RuntimePolicy) -> Rc<RuntimePlan> {
 #[test]
 fn dependency_order_composition_and_direct_dispatch() {
     let plan = plan_with(Core::preferred(), RuntimePolicy::new());
-    assert_eq!(plan.installation_order(), ["dream.core", "dream.tools", "dream.udp"]);
+    assert_eq!(plan.installation_order(), ["dream.bits64", "dream.core", "dream.tools", "dream.udp"]);
     let counter = plan.userdata_by_key("dream.tests.Counter").unwrap();
     assert_eq!(counter.owner, "dream.core");
     assert_eq!(counter.tag, Some(1), "the network bridge's Client keys after it");
@@ -140,7 +140,8 @@ fn dependency_order_composition_and_direct_dispatch() {
 
     let runtime = Runtime::from_plan(&plan).unwrap();
     runtime.exec(SCRIPT).unwrap();
-    runtime.exec("local core = require('@dream/core') local c = core.new(1) assert(c.value == 1i, 'field') c:add(41) assert(c.value == 42i, 'field after add')").unwrap();
+    runtime.exec("local core = require('@dream/core') local c = core.new(1) assert(c.value == 1, 'field') c:add(41) assert(c.value == 42, 'field after add')").unwrap();
+
     // A frozen module refuses writes.
     let error = runtime.exec("local core = require('@dream/core') core.new = nil").unwrap_err().to_string();
     assert!(error.contains("readonly"), "{error}");
@@ -233,9 +234,9 @@ fn compiler_metadata_and_type_definitions_follow_composition() {
     assert_eq!(options.known_libraries, vec![std::ffi::CString::new("core").unwrap()]);
     let members = options.library_members.as_ref().unwrap();
     assert_eq!(members.member_constant("core", "ANSWER"), Some(CompileConstant::Number(42.0)));
-    assert_eq!(members.member_constant("core", "LIMIT"), Some(CompileConstant::Integer(7)));
+    assert_eq!(members.member_constant("core", "LIMIT"), Some(CompileConstant::Boolean(true)));
     assert_eq!(members.member_type("core", "ANSWER"), Some(2));
-    assert_eq!(members.member_type("core", "LIMIT"), Some(10));
+    assert_eq!(members.member_type("core", "LIMIT"), Some(1));
     assert_eq!(members.member_type("core", "new"), Some(5));
     assert_eq!(members.member_type("core", "missing"), None);
     // Userdata types reach the compiler under the class name scripts annotate, in slot order
@@ -243,7 +244,7 @@ fn compiler_metadata_and_type_definitions_follow_composition() {
     let names: Vec<&str> = options.userdata_types.iter().map(|n| n.to_str().unwrap()).collect();
     assert_eq!(names, ["dream_tests_Counter", "dream_udp_Client", "dream_udp_Server"]);
     // The compat global works and the folded constant reads the same.
-    runtime.exec("assert(core.ANSWER == 42, 'answer') assert(core.LIMIT == 7i, 'limit') assert(core.NAME == 'core', 'name') assert(core.new(1):get() == 1, 'get')").unwrap();
+    runtime.exec("assert(core.ANSWER == 42, 'answer') assert(core.LIMIT == true, 'limit') assert(core.NAME == 'core', 'name') assert(core.new(1):get() == 1, 'get')").unwrap();
 
     let definitions = runtime.type_definitions().unwrap();
     assert!(definitions.contains("declare extern type dream_tests_Counter"), "{definitions}");
@@ -253,7 +254,7 @@ fn compiler_metadata_and_type_definitions_follow_composition() {
     assert!(definitions.contains("    value: number"), "{definitions}");
     assert!(definitions.contains("export type Module__dream_core = {"), "{definitions}");
     assert!(definitions.contains("    ANSWER: number,"), "{definitions}");
-    assert!(definitions.contains("    LIMIT: integer,"), "{definitions}");
+    assert!(definitions.contains("    LIMIT: boolean,"), "{definitions}");
     assert!(definitions.contains("declare core: Module__dream_core"), "{definitions}");
     // The plan alone renders the userdata and module stubs.
     assert!(plan.type_definitions().contains("declare extern type dream_tests_Counter"));
@@ -363,7 +364,7 @@ fn finalization_rejects_bad_compositions() {
     // plan without being asked for, and the plan knows its module.
     let plan =
         RuntimePlan::builder().extension(Bare("zeta", vec![])).extension(Bare("alpha", vec![])).finalize().unwrap();
-    assert_eq!(plan.installation_order(), ["alpha", "dream.udp", "zeta"]);
+    assert_eq!(plan.installation_order(), ["alpha", "dream.bits64", "dream.udp", "zeta"]);
     assert!(plan.modules().iter().any(|m| m.path == "@dream/udp"));
     let runtime = Runtime::from_plan(&plan).unwrap();
     runtime.exec("local udp = require('@dream/udp') assert(type(udp.schema) == 'function')").unwrap();
@@ -680,8 +681,8 @@ fn finalization_rejects_bad_compositions() {
         .exec(
             "local core = require('@dream/core') local clash = require('@dream/clash') \
              local c = core.new(4) local o = clash.new() \
-             for _ = 1, 3 do assert(c.value == 4i, 'field through slot') assert(o:value() == 99, 'method') end \
-             c:add(1) assert(c.value == 5i, 'field after add')",
+             for _ = 1, 3 do assert(c.value == 4, 'field through slot') assert(o:value() == 99, 'method') end \
+             c:add(1) assert(c.value == 5, 'field after add')",
         )
         .unwrap();
     // On one type the two meanings would share a key.
@@ -694,7 +695,7 @@ fn finalization_rejects_bad_compositions() {
             struct OtherValue;
             impl DirectField<Other> for OtherValue {
                 fn get(_: &Other) -> FieldValue {
-                    FieldValue::Integer(0)
+                    FieldValue::Number(0.0)
                 }
             }
             let mut other = d.userdata::<Other>("dream.tests.Other");

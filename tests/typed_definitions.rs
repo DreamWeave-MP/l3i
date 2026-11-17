@@ -104,11 +104,11 @@ const BYTES_SCRIPT: (&str, &str) = (
      local piece: buffer = bytes.slice(buf, 0, 4)\n\
      local text: string, after: number = bytes.readCString('abc', 0)\n\
      local next: number = bytes.writeCString(buf, 0, text, 8)\n\
-     local value: integer, after2: number = bytes.readVarint(buf, 0)\n\
+     local value: number, after2: number = bytes.readVarint(buf, 0)\n\
      local written: number = bytes.writeVarint(buf, 8, value)\n\
      local n: number = bytes.readu32be(buf, 0) + bytes.readf16(buf, 4) + bytes.readi24be('abc', 0)\n\
      bytes.writef64be(buf, 8, n)\n\
-     local big: integer = bytes.readi64be(buf, 8)\n\
+     local big: Bits64 = bytes.readi64be(buf, 8)\n\
      local B = bytes.math()\n\
      local m: number = B:readu16be(buf, 0) + B:readf32be(buf, 4)\n\
      B:writei64be(buf, 16, big)\n\
@@ -197,12 +197,12 @@ const INTL_SCRIPT: (&str, &str) = (
      local rules = intl.pluralRules(locale, 'ordinal')\n\
      local category: dream_intl_PluralCategory = rules:category(21)\n\
      local exact: string = rules:category('1.00')\n\
-     local whole: string = intl.pluralRules('pl'):category(5i)\n\
+     local whole: string = intl.pluralRules('pl'):category(5)\n\
      local categories: { dream_intl_PluralCategory } = rules:categories()\n\
      local kind: dream_intl_PluralType = rules:type()\n\
      local rulesLocale: string = rules:locale()\n\
      local formatter = intl.decimalFormatter('fr', { grouping = 'min2', minFractionDigits = 2, maxFractionDigits = 2 })\n\
-     local text: string = formatter:format('1234567.895') .. formatter:format(2) .. formatter:format(3i)\n\
+     local text: string = formatter:format('1234567.895') .. formatter:format(2) .. formatter:format(3)\n\
      local options = formatter:resolvedOptions()\n\
      local grouping: dream_intl_Grouping = options.grouping\n\
      local digits: number = options.minFractionDigits + options.maxFractionDigits\n\
@@ -521,7 +521,7 @@ const SCRIPTS: &[(&str, &str)] = &[
         "--!strict\n\
          local udp = require('@dream/udp')\n\
          local schema = udp.schema({ version = 1, channels = { { name = 'state', delivery = 'unreliable' } }, events = { { name = 'ping', channel = 'state', maxPayload = 8 } } })\n\
-         local id: integer = schema:eventId('ping') or 0i\n\
+         local id: number = schema:eventId('ping') or 0\n\
          local name: string = schema:eventName(id) or ''\n\
          local count: number = schema.eventCount\n\
          local client = udp.client({ schema = schema })\n\
@@ -637,12 +637,12 @@ struct Numbers(Vec<i64>);
 
 impl l3i::sequence::SequenceSource for Numbers {
     const NAME: &'static str = "dream.views.Numbers";
-    type Item = l3i::convert::Integer;
+    type Item = i64;
     fn len(&self) -> usize {
         self.0.len()
     }
     fn get(&self, index: usize) -> Option<Self::Item> {
-        self.0.get(index).map(|n| l3i::convert::Integer(*n))
+        self.0.get(index).copied()
     }
 }
 
@@ -695,7 +695,7 @@ impl l3i::extension::Extension for Views {
         "dream.views"
     }
     fn describe(&self, d: &mut l3i::extension::ExtensionDescriptor) -> l3i::Result<()> {
-        d.sequence::<Numbers>("dream.views.Numbers").item_type("integer");
+        d.sequence::<Numbers>("dream.views.Numbers").item_type("number");
         d.sequence::<Rows>("dream.views.Rows").item_type("dream_views_Row");
         d.stream::<Countdown>("dream.views.Countdown").item_type("number");
         d.userdata::<Row>("dream.views.Row").getter("name", |r: &Row| r.name.clone()).signature("string");
@@ -725,10 +725,10 @@ const VIEW_SCRIPT: &str = "--!strict\n\
     local views = require('@dream/views')\n\
     local s = views.numbers(3)\n\
     local n: number = #s\n\
-    local first: integer? = s[1]\n\
+    local first: number? = s[1]\n\
     local sum: number = 0\n\
-    for i, v in s do local x: integer = v sum += i end\n\
-    local t: { integer } = s:toTable()\n\
+    for i, v in s do local x: number = v sum += i end\n\
+    local t: { number } = s:toTable()\n\
     local rows = views.rows()\n\
     local names = ''\n\
     for _, r in rows do local name: string = r.name names ..= name end\n\
@@ -741,12 +741,12 @@ const VIEW_SCRIPT: &str = "--!strict\n\
 fn views_are_typed_forward_module_references_resolve_and_owned_rows_need_no_clone() {
     let plan = RuntimePlan::builder().extension(Views).finalize().unwrap();
     let definitions = plan.type_definitions();
-    assert!(definitions.contains("    [number]: integer?"), "{definitions}");
+    assert!(definitions.contains("    [number]: number?"), "{definitions}");
     assert!(
         definitions.contains("function __iter(self): (({}, number) -> (number?, dream_views_Row), {}, number)"),
         "{definitions}"
     );
-    assert!(definitions.contains("    function toTable(self): { integer }"), "{definitions}");
+    assert!(definitions.contains("    function toTable(self): { number }"), "{definitions}");
     let child = definitions.find("export type Module__dream_parent_child").unwrap();
     let parent = definitions.find("export type Module__dream_parent =").unwrap();
     assert!(child < parent, "the referenced module is declared first:\n{definitions}");
@@ -767,9 +767,8 @@ fn views_are_typed_forward_module_references_resolve_and_owned_rows_need_no_clon
     assert!(report.is_clean(), "{}", text.join("\n"));
     // ...and runs with the same answers on the VM.
     let runtime = l3i::Runtime::from_plan(&plan).unwrap();
-    let (n, first, sum, len, names, total): (f64, l3i::convert::Integer, f64, f64, String, f64) =
-        runtime.eval(VIEW_SCRIPT).unwrap();
-    assert_eq!((n, first.0, sum, len, names.as_str(), total), (3.0, 10, 6.0, 3.0, "ab", 6.0));
+    let (n, first, sum, len, names, total): (f64, f64, f64, f64, String, f64) = runtime.eval(VIEW_SCRIPT).unwrap();
+    assert_eq!((n, first, sum, len, names.as_str(), total), (3.0, 10.0, 6.0, 3.0, "ab", 6.0));
 }
 
 /// Every method of a `math()` receiver is also a module function of the same name, taking the

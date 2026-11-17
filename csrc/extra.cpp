@@ -125,10 +125,10 @@ void luau_visitfflags(void* context, void (*visit)(void* context, const char* na
 
 extern "C" {
 
-// One call for the binder's scalar readers: the slot's type tag, plus the payload when it is a
-// number or an integer. Replaces a lua_type + lua_tonumberx/lua_tointeger64 pair, and never
-// coerces strings (lua_tonumberx would). Returns LUA_TNONE for a nonexistent slot.
-int l3i_read_scalar(lua_State* L, int idx, double* number, int64_t* integer)
+// One call for the binder's number readers: the slot's type tag, plus the payload when it is a
+// number. Replaces a lua_type + lua_tonumberx pair, and never coerces strings (lua_tonumberx
+// would). Returns LUA_TNONE for a nonexistent slot.
+int l3i_read_scalar(lua_State* L, int idx, double* number)
 {
     const TValue* o = luaA_toobject(L, idx);
     if (o == nullptr)
@@ -137,11 +137,6 @@ int l3i_read_scalar(lua_State* L, int idx, double* number, int64_t* integer)
     {
         *number = nvalue(o);
         return LUA_TNUMBER;
-    }
-    if (ttisinteger(o))
-    {
-        *integer = lvalue(o);
-        return LUA_TINTEGER;
     }
     return ttype(o);
 }
@@ -234,6 +229,16 @@ void l3i_push_light_bits(lua_State* L, uint64_t bits, int tag)
     // lapi.cpp's api_incr_top, which is private to that file.
     api_check(L, L->top < L->ci->top);
     L->top++;
+}
+
+// A direct field getter's result as a light userdata packed scalar (src/direct/field.rs): the
+// same three fields as l3i_push_light_bits, written where Luau's own direct field setters write.
+void l3i_directfield_setlightbits(void* result, uint64_t bits, int tag)
+{
+    TValue* o = static_cast<TValue*>(result);
+    memcpy(&o->value, &bits, sizeof(bits));
+    o->extra[0] = tag;
+    o->tt = LUA_TLIGHTUSERDATA;
 }
 
 // One call for the generated and planned dispatchers: the argument count, the thread's data

@@ -17,27 +17,17 @@ fn with_frame(body: impl FnOnce(&Frame<'_>)) {
 #[test]
 fn integers_convert_by_range_and_numbers_by_rounding() {
     with_frame(|frame| {
-        let integer = frame.push(&Integer(42)).unwrap();
-        assert_eq!(integer.read::<f64>().unwrap(), 42.0);
-        assert!(integer.read::<String>().is_err());
-        assert!(integer.is_integer());
-        assert!(integer.is::<i32>() && integer.is::<u8>() && integer.is::<f32>() && integer.is::<Option<f32>>());
-        assert_eq!(integer.read::<Integer>().unwrap(), Integer(42));
-
-        let precise: i64 = (1 << 62) + (1 << 38) + 1;
-        let precise_value = frame.push(&Integer(precise)).unwrap();
-        assert_eq!(precise_value.read::<f32>().unwrap(), precise as f32);
-        assert_eq!(precise_value.read::<i64>().unwrap(), precise);
-
-        let negative = frame.push(&Integer(-1)).unwrap();
+        // A 64-bit pattern is not a number to any number reader.
+        let bits = frame.push(&Bits64(42)).unwrap();
+        assert!(bits.read::<f64>().is_err() && bits.read::<i32>().is_err() && bits.read::<Exact<i64>>().is_err());
+        assert!(!bits.is::<i32>() && !bits.is::<f32>() && !bits.is::<Option<f32>>());
+        assert_eq!(bits.read::<Bits64>().unwrap(), Bits64(42));
+        let negative = frame.push_number(-1.0).unwrap();
         assert!(!negative.is::<u8>());
         assert_eq!(
             negative.read::<u8>().unwrap_err(),
-            Error::runtime(format!("Lua stack index {}: integer -1 is out of range for u8", negative.index()))
+            Error::runtime(format!("Lua stack index {}: number -1 is out of range for u8", negative.index()))
         );
-        let too_large = frame.push(&Integer(256)).unwrap();
-        assert!(!too_large.is::<u8>());
-        assert!(too_large.read::<u8>().is_err());
 
         assert_eq!(frame.push_number(1.0).unwrap().read::<i32>().unwrap(), 1);
         assert_eq!(frame.push_number(1.5).unwrap().read::<i32>().unwrap(), 2);
@@ -141,35 +131,16 @@ fn booleans_are_exact_and_options_map_nil() {
 }
 
 #[test]
-fn integer_kind_vm_semantics_probe() {
-    // Pins this Luau release's integer semantics: cross-kind equality is false, same-kind
-    // compares payloads, arithmetic with a number errors. Re-verify on any Luau bump.
-    let runtime = Runtime::new().unwrap();
-    {
-        let stack = runtime.stack();
-        let frame = stack.frame();
-        frame.push(&Integer(5)).unwrap();
-        frame.set_global("int_five").unwrap();
-        frame.push(&Integer(5)).unwrap();
-        frame.set_global("int_five_again").unwrap();
-    }
-    runtime.exec("assert(int_five ~= 5)").unwrap();
-    runtime.exec("assert(int_five == int_five_again)").unwrap();
-    let error = runtime.exec("return int_five + 1").unwrap_err().to_string();
-    assert!(error.contains("attempt to perform arithmetic"), "{error}");
-}
-
-#[test]
-fn integer_versus_number_is_preserved_through_a_table() {
+fn a_64_bit_pattern_and_a_number_stay_distinct_through_a_table() {
     let runtime = Runtime::new().unwrap();
     let stack = runtime.stack();
     let table = crate::value::Table::new(&stack, 0, 4).unwrap();
     {
         let frame = stack.frame();
         let view = table.push_to(&frame).unwrap();
-        frame.push(&Integer(i64::MIN)).unwrap();
+        frame.push(&Bits64(1 << 63)).unwrap();
         view.raw_set(&frame, "min").unwrap();
-        frame.push(&Integer(i64::MAX)).unwrap();
+        frame.push(&Bits64(u64::MAX)).unwrap();
         view.raw_set(&frame, "max").unwrap();
         frame.push(&7i64).unwrap();
         view.raw_set(&frame, "plain").unwrap();
@@ -184,9 +155,9 @@ fn integer_versus_number_is_preserved_through_a_table() {
     let frame = stack.frame();
     let view = copy.push_to(&frame).unwrap();
     let min = view.raw_get(&frame, "min").unwrap();
-    assert_eq!(min.type_of(), Type::Integer);
-    assert_eq!(min.read::<i64>().unwrap(), i64::MIN);
-    assert_eq!(view.raw_get(&frame, "max").unwrap().read::<i64>().unwrap(), i64::MAX);
+    assert!(min.is::<Bits64>() && !min.is_number());
+    assert_eq!(min.read::<Bits64>().unwrap(), Bits64(1 << 63));
+    assert_eq!(view.raw_get(&frame, "max").unwrap().read::<Bits64>().unwrap(), Bits64(u64::MAX));
     assert_eq!(view.raw_get(&frame, "plain").unwrap().type_of(), Type::Number);
     assert_eq!(view.raw_get(&frame, "real").unwrap().type_of(), Type::Number);
 }

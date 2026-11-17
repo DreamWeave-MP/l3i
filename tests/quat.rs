@@ -38,7 +38,7 @@ fn packed_quaternions_and_keys_are_distinct_kinds_through_luau() {
              local key = quat.key(a, 5) assert(quat.keyFlags(key) == 5) assert(quat.angleTo(quat.keyRotation(key), a) < 1e-5) \
              local ok, err = pcall(quat.mul, a, key) assert(not ok and err:find('Quaternion'), err) \
              local ok2, err2 = pcall(quat.keyFlags, a) assert(not ok2 and err2:find('AnimationKey'), err2) \
-             local ok3 = pcall(quat.mul, a, 42i) assert(not ok3) \
+             local ok3 = pcall(quat.mul, a, 42) assert(not ok3) \
              -- The userdata baseline agrees. \
              local ua = quatud.axisAngle(vector.create(0, 0, 1), math.pi / 2) local uc = ua:mul(ua) \
              local uv = uc:rotate(vector.create(1, 0, 0)) assert(math.abs(uv.x + 1) < 1e-4)",
@@ -147,7 +147,7 @@ fn packed_quaternion_operations_lower_to_native_code() {
              -- exits to the interpreter, whose C method raises the type error.\n\
              local ok, err = pcall(function() local r = Q:mul(a, key) return r end)\n\
              assert(not ok and string.find(err, 'Quaternion'), err)\n\
-             local ok2 = pcall(function() local r = Q:rotate(42i, v) return r end)\n\
+             local ok2 = pcall(function() local r = Q:rotate(42, v) return r end)\n\
              assert(not ok2)\n\
              local ok3, err3 = pcall(function() local r = Q:keyRotation(a) return r end)\n\
              assert(not ok3 and string.find(err3, 'AnimationKey'), err3)\n\

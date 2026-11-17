@@ -624,7 +624,7 @@ unsafe extern "C" {
     pub fn luau_getfint(name: *const c_char, out: *mut c_int) -> c_int;
     pub fn luau_visitfflags(context: *mut c_void, visit: unsafe extern "C" fn(*mut c_void, *const c_char, c_int));
     pub fn lua_getmetatablepointer(L: *mut lua_State, objindex: c_int) -> *const c_void;
-    pub fn l3i_read_scalar(L: *mut lua_State, idx: c_int, number: *mut f64, integer: *mut i64) -> c_int;
+    pub fn l3i_read_scalar(L: *mut lua_State, idx: c_int, number: *mut f64) -> c_int;
     pub fn l3i_touserdata_tag(L: *mut lua_State, idx: c_int, tag: *mut c_int) -> *mut c_void;
     pub fn l3i_native_enter(
         L: *mut lua_State,
@@ -635,6 +635,7 @@ unsafe extern "C" {
     pub fn l3i_call_base(L: *mut lua_State) -> *const crate::convert::RawValue;
     pub fn l3i_stack_slot(L: *mut lua_State, idx: c_int) -> *const crate::convert::RawValue;
     pub fn l3i_push_light_bits(L: *mut lua_State, bits: u64, tag: c_int);
+    pub fn l3i_directfield_setlightbits(result: *mut c_void, bits: u64, tag: c_int);
     pub fn l3i_read_vector(L: *mut lua_State, idx: c_int, out: *mut f32) -> c_int;
     pub fn l3i_host_level(L: *mut lua_State) -> c_int;
     pub fn l3i_thread_resettable(L: *mut lua_State) -> c_int;

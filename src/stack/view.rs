@@ -151,9 +151,9 @@ impl<'v> ValueView<'v> {
     pub fn is_boolean(&self) -> bool {
         self.type_of() == Type::Boolean
     }
-    /// True for both Luau numbers and Luau 64-bit integers.
+    /// True for a Luau number.
     pub fn is_number(&self) -> bool {
-        matches!(self.type_of(), Type::Number | Type::Integer)
+        self.type_of() == Type::Number
     }
     pub fn is_integer(&self) -> bool {
         self.type_of() == Type::Integer

@@ -4,7 +4,7 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use super::*;
-use crate::convert::{Integer, Vector3};
+use crate::convert::{Bits64, Vector3};
 use crate::error::Error;
 use crate::runtime::Runtime;
 use crate::stack::{Scope, Type, ValueView};
@@ -253,13 +253,14 @@ fn return_adapters_cover_every_shape() {
     let raw = runtime
         .bind_function(NAME, |call: &Call| {
             call.push(&1i32).unwrap();
-            call.push(&Integer(2)).unwrap();
+            call.push(&Bits64(2)).unwrap();
             StackResults
         })
         .unwrap();
     let results = raw.invoke_multi(&runtime.stack(), ()).unwrap();
     assert_eq!(results.len(), 2);
-    assert_eq!(results[1].type_of(), Type::Integer);
+    assert_eq!(results[0].type_of(), Type::Number);
+    assert_ne!(results[1].type_of(), Type::Number);
 
     let failing = runtime
         .bind_function(NAME, |fail: bool| -> Result<i32> {

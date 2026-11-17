@@ -54,7 +54,7 @@ fn colors_and_clips_are_distinct_packed_kinds() {
              -- Kinds are checked: a clip is not a color, a color is not a clip, an integer is neither. \
              local ok4, err4 = pcall(raster.channels, clip) assert(not ok4 and err4:find('Color'), err4) \
              local ok5, err5 = pcall(raster.clipBounds, c) assert(not ok5 and err5:find('ClipRect'), err5) \
-             assert(not pcall(raster.channels, 42i))",
+             assert(not pcall(raster.channels, 42))",
         )
         .unwrap();
     // The Rust side agrees on the bit pattern scripts see.
@@ -143,7 +143,7 @@ fn color_math_lowers_to_native_code() {
              local clip = raster.clip(0, 0, 1, 1)
              local ok, err = pcall(function() local r = M:red(clip) return r end)
              assert(not ok and string.find(err, 'Color'), err)
-             local ok2 = pcall(function() local r = M:mul(colors[1], 42i) return r end)
+             local ok2 = pcall(function() local r = M:mul(colors[1], 42) return r end)
              assert(not ok2)
              local ok3, err3 = pcall(function() local r = M:lerp16(colors[1], colors[2], 'x') return r end)
              assert(not ok3 and string.find(err3, 'number'), err3)
