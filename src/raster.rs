@@ -974,7 +974,7 @@ pub mod lowering {
                     }
                     // Exact integers: no rounding needed.
                     let bits = pack(build, out, false, RGBA16);
-                    packed_ir::store(build, result, bits, format.tag);
+                    packed_ir::store(build, result, bits, RGBA16.tag);
                 }
                 ("narrow", 2) => {
                     let reg = arg(build, 0);
