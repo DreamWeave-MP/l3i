@@ -346,6 +346,37 @@ impl<T: PackedScalar> crate::bind::Return for Packed<T> {
     }
 }
 
+/// The encoded bits of a packed `T`, pushed as they are: for an operation that computes the
+/// encoding itself, and so must match its lowering bit for bit, rather than through `T::pack`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct PackedBits<T>(u64, std::marker::PhantomData<T>);
+
+impl<T: PackedScalar> PackedBits<T> {
+    /// `bits` as a `T`; an error unless their kind nibble is `T`'s.
+    pub(crate) fn new(bits: i64) -> Result<Self> {
+        let (kind, _, _) = decode(bits);
+        if kind != T::KIND {
+            return Err(Error::runtime(format!("expected a packed {}, got kind {kind}", T::NAME)));
+        }
+        Ok(PackedBits(bits as u64, std::marker::PhantomData))
+    }
+}
+
+impl<T: PackedScalar> Push for PackedBits<T> {
+    fn push_into<'s, S: Scope>(&self, scope: &'s S) -> Result<ValueView<'s>> {
+        check_registered::<T>(scope.state())?;
+        carrier::push(scope, self.0, carrier::nibble_tag(T::KIND))?;
+        Ok(scope.top_value())
+    }
+}
+
+impl<T: PackedScalar> crate::bind::Return for PackedBits<T> {
+    fn push_results(self, call: &crate::bind::Call<'_>) -> Result<std::ffi::c_int> {
+        self.push_into(call)?;
+        Ok(1)
+    }
+}
+
 pub(crate) mod sealed {
     pub trait Sealed {}
 }

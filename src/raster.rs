@@ -519,14 +519,21 @@ impl Extension for RasterExtension {
         let module = d.module(MODULE);
         module
             .doc("Colors and clip rectangles as packed integers.")
-            .constant("TRANSPARENT", CompileConstant::Integer(Color::TRANSPARENT.pack().bits()?))
-            .constant("BLACK", CompileConstant::Integer(Color::BLACK.pack().bits()?))
-            .constant("WHITE", CompileConstant::Integer(Color::WHITE.pack().bits()?))
-            .constant("CLIP_ALL", CompileConstant::Integer(ClipRect::ALL.pack().bits()?))
+            .value("TRANSPARENT", Color::TRANSPARENT.pack())
+            .signature("integer")
+            .value("BLACK", Color::BLACK.pack())
+            .signature("integer")
+            .value("WHITE", Color::WHITE.pack())
+            .signature("integer")
+            .value("CLIP_ALL", ClipRect::ALL.pack())
+            .signature("integer")
             .constant("CLIP_MAX_COORD", CompileConstant::Number(f64::from(ClipRect::MAX_COORD)))
-            .constant("TRANSPARENT16", CompileConstant::Integer(Color16::TRANSPARENT.bits()))
-            .constant("BLACK16", CompileConstant::Integer(Color16::BLACK.bits()))
-            .constant("WHITE16", CompileConstant::Integer(Color16::WHITE.bits()));
+            .value("TRANSPARENT16", Color16::TRANSPARENT)
+            .signature("integer")
+            .value("BLACK16", Color16::BLACK)
+            .signature("integer")
+            .value("WHITE16", Color16::WHITE)
+            .signature("integer");
         macro_rules! module_member {
             ($name:literal, $args:literal, $result:literal, |$($param:ident: $ty:ty),*| $body:expr) => {
                 module.function($name, |$($param: $ty),*| $body).signature(concat!("(", $args, ") -> ", $result));
@@ -978,7 +985,7 @@ pub mod lowering {
                         *slot = build.inst(IrCmd::DIV_NUM, &[*slot, factor]);
                     }
                     let bits = pack(build, out, true, RGBA8);
-                    packed_ir::store(build, result, bits, format.tag);
+                    packed_ir::store(build, result, bits, RGBA8.tag);
                 }
                 _ => return false,
             }

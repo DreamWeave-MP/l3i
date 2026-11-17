@@ -31,6 +31,8 @@ pub(crate) type SharedFieldRegistrar = Rc<dyn Fn(&Runtime) -> Result<()>>;
 pub(crate) type Registrar = fn(&Runtime, &ResolvedUserdata, &[SharedInstaller]) -> Result<()>;
 /// Binds a declared module function in one runtime: `(runtime, debug roots, debug name)`.
 pub(crate) type SharedModuleFunction = Rc<dyn Fn(&Runtime, &[Box<str>], &str) -> Result<Function>>;
+/// Sets a declared module value in one runtime: `(runtime, module table, member name)`.
+pub(crate) type SharedModuleValue = Rc<dyn Fn(&Runtime, &Table, &str) -> Result<()>>;
 
 /// What the compiler may know about a module member exposed as a global library.
 #[derive(Clone, Debug)]
@@ -313,6 +315,12 @@ impl<'c> ModuleInstaller<'c> {
         };
         match member.kind {
             ModuleMemberKind::Installed => {}
+            ModuleMemberKind::Value => {
+                return Err(Error::logic(format!(
+                    "module '{}' member '{name}' is a declared value; install cannot replace it",
+                    self.resolved.path
+                )));
+            }
             ModuleMemberKind::Function => {
                 return Err(Error::logic(format!(
                     "module '{}' member '{name}' is bound from its declaration; install cannot replace it",
@@ -404,6 +412,11 @@ impl<'c> ModuleInstaller<'c> {
                     module.table.set(&runtime.stack(), &member.name, &function)?;
                 }
                 ModuleMemberKind::Constant(value) => module.set_constant(&member.name, value)?,
+                ModuleMemberKind::Value => {
+                    let set = member.value.as_ref().expect("a declared value carries its setter");
+                    module.record(&member.name, ModuleMemberInfo::Unknown)?;
+                    set(runtime, &module.table, &member.name)?;
+                }
                 ModuleMemberKind::Installed => {}
             }
         }

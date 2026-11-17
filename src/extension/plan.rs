@@ -356,7 +356,10 @@ fn check_signatures(userdata: &[ResolvedUserdata], modules: &[ResolvedModule]) -
     }
     for module in modules {
         for member in &module.members {
-            let needs = matches!(member.kind, ModuleMemberKind::Function | ModuleMemberKind::Installed);
+            let needs = matches!(
+                member.kind,
+                ModuleMemberKind::Function | ModuleMemberKind::Value | ModuleMemberKind::Installed
+            );
             if needs && member.signature.is_none() && !member.untyped {
                 return Err(Error::logic(format!(
                     "member '{}' of module '{}' (from '{}') has no signature; give it one or declare it untyped()",

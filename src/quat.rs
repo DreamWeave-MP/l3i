@@ -39,11 +39,10 @@
 //! against 220 ns through the binder; `fromXYZW` takes 93 instructions against 459 through the
 //! binder (`benches/instructions`).
 
-use crate::convert::{Exact, Integer, Vector3};
+use crate::convert::{Exact, Vector3};
 use crate::error::Result;
 use crate::extension::{Extension, ExtensionDescriptor};
 use crate::packed::{Packed, PackedScalar};
-use crate::source::CompileConstant;
 
 /// A unit quaternion in f64: the reference representation and the host's accumulator.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -369,7 +368,7 @@ fn finite_weight(t: f64) -> Result<()> {
 /// is refused by `Exact`; higher bits are dropped, on the lowered path too).
 /// `quat.fromXYZW` and `Q:fromXYZW`: four components normalized and packed, or an error when they
 /// are not a rotation (all zero, or not finite).
-fn from_xyzw(x: f64, y: f64, z: f64, w: f64) -> Result<Integer> {
+fn from_xyzw(x: f64, y: f64, z: f64, w: f64) -> Result<crate::packed::PackedBits<Quaternion>> {
     let n2 = x * x + y * y + z * z + w * w;
     // NaN fails both comparisons.
     if !(n2 > 0.0 && n2 < f64::INFINITY) {
@@ -384,7 +383,7 @@ fn from_xyzw(x: f64, y: f64, z: f64, w: f64) -> Result<Integer> {
         (components, components.iter().map(|v| v * v).sum())
     };
     let bits = PackedRotation::encode_scaled(components, n2);
-    Ok(Integer(crate::packed::encode(Quaternion::KIND, 0, bits.0)?))
+    crate::packed::PackedBits::new(crate::packed::encode(Quaternion::KIND, 0, bits.0)?)
 }
 
 fn key_flags(flags: Exact<i64>) -> u8 {
@@ -412,7 +411,8 @@ impl Extension for QuatExtension {
         let module = d.module("@dream/quat");
         module
             .doc("Rotations as packed integers.")
-            .constant("IDENTITY", CompileConstant::Integer(Quaternion::pack(Quat::IDENTITY).bits()?))
+            .value("IDENTITY", Quaternion::pack(Quat::IDENTITY))
+            .signature("integer")
             .function("axisAngle", |axis: Vector3, angle: f64| -> Result<Packed<Quaternion>> {
                 Quat::try_from_axis_angle(from_vec3(axis), angle).map(Quaternion::pack).ok_or_else(|| {
                     crate::error::Error::runtime(

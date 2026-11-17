@@ -181,7 +181,7 @@ pub(crate) fn module_type(module: &super::plan::ResolvedModule) -> String {
             (Some(signature), _) => signature.clone(),
             (None, ModuleMemberKind::Function) => "(...any) -> ...any".to_owned(),
             (None, ModuleMemberKind::Constant(constant)) => constant_type(constant).to_owned(),
-            (None, ModuleMemberKind::Installed) => "any".to_owned(),
+            (None, ModuleMemberKind::Installed | ModuleMemberKind::Value) => "any".to_owned(),
         };
         let _ = writeln!(out, "    {}: {ty},", member.name);
     }
