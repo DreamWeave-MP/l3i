@@ -649,6 +649,10 @@ fn compile_options(plan: &RuntimePlan, members: &Rc<ModuleMembers>) -> CompileOp
         .iter()
         .map(|u| CString::new(super::typedefs::class_name(&u.key)).expect("class names have no NUL"))
         .collect();
+    options.packed_types = super::typedefs::packed_type_names(plan)
+        .into_iter()
+        .map(|name| CString::new(name).expect("kind names have no NUL"))
+        .collect();
     #[cfg(feature = "jit")]
     if plan.policy.native_code.is_some() {
         options.type_info_level = 1;

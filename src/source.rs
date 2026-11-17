@@ -26,6 +26,12 @@ pub struct CompileOptions {
     pub vector_type: Option<CString>,
     pub mutable_globals: Vec<CString>,
     pub userdata_types: Vec<CString>,
+    /// Type names compiled as `any`: the packed scalar kinds (`crate::packed::carrier`), which
+    /// the compiler would otherwise take for userdata, so a native function annotated with one
+    /// would refuse its own arguments at the entry guard and run at interpreter speed. Only the
+    /// bytecode compile sees this; analysis keeps the names. The default lists l3i's own kinds; a
+    /// plan adds its host kinds, and `Runtime::register_packed` adds the kind it registers.
+    pub packed_types: Vec<CString>,
     pub disabled_builtins: Vec<CString>,
     /// Libraries whose members the compiler may ask about through `library_members`
     /// (`librariesWithKnownMembers`); the compiler folds constant members and specialises on
@@ -124,6 +130,7 @@ impl std::fmt::Debug for CompileOptions {
             .field("vector_type", &self.vector_type)
             .field("mutable_globals", &self.mutable_globals)
             .field("userdata_types", &self.userdata_types)
+            .field("packed_types", &self.packed_types)
             .field("disabled_builtins", &self.disabled_builtins)
             .field("known_libraries", &self.known_libraries)
             .field("library_members", &self.library_members.is_some())
@@ -143,6 +150,12 @@ impl Default for CompileOptions {
             vector_type: None,
             mutable_globals: Vec::new(),
             userdata_types: Vec::new(),
+            packed_types: crate::packed::builtin_kinds()
+                .iter()
+                .map(|kind| kind.name)
+                .chain(crate::packed::WIDE_NAMES)
+                .map(|name| CString::new(name).expect("kind names have no NUL"))
+                .collect(),
             disabled_builtins: Vec::new(),
             known_libraries: Vec::new(),
             library_members: None,
@@ -276,11 +289,14 @@ fn compile_native(source: &str, options: &CompileOptions, disassemble: bool) -> 
     // an outer compile still points into its own.
     let outer = with_members.then(|| ACTIVE_MEMBERS.with(|active| active.replace(options.library_members.clone())));
     let strings = CONSTANT_STRINGS.with(|strings| strings.borrow().len());
-    let compile = if disassemble { ffi::l3i_luau_disassemble } else { ffi::l3i_luau_compile };
-    // SAFETY: every pointer in `raw` outlives this call (the CStrings and the pointer arrays
-    // are locals of this function). The C++ shim owns lowering, mapping and parsing and
-    // catches all compiler exceptions, reporting failure in-band.
-    let bytecode = unsafe { compile(source.as_ptr().cast(), source.len(), &mut raw, &mut size) };
+    let compile = if disassemble { ffi::l3i_luau_disassemble_erasing } else { ffi::l3i_luau_compile_erasing };
+    let mut packed_types = Vec::new();
+    let erased = c_array(&options.packed_types, &mut packed_types);
+    // SAFETY: every pointer in `raw` and `erased` outlives this call (the CStrings and the
+    // pointer arrays are locals of this function or borrowed from `options`). The C++ shim owns
+    // lowering, mapping, erasure and parsing and catches all compiler exceptions, reporting
+    // failure in-band.
+    let bytecode = unsafe { compile(source.as_ptr().cast(), source.len(), &mut raw, erased, &mut size) };
     if let Some(outer) = outer {
         ACTIVE_MEMBERS.with(|active| *active.borrow_mut() = outer);
         CONSTANT_STRINGS.with(|kept| kept.borrow_mut().truncate(strings));

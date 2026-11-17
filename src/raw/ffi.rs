@@ -529,6 +529,23 @@ unsafe extern "C" {
         outsize: *mut usize,
     ) -> *mut c_char;
     /// Disassembles through the same lowering, mapping and compilation pipeline as
+    /// [`l3i_luau_compile`] with `erased`, a null-terminated list of type names compiled as
+    /// `any` (`CompileOptions::packed_types`), or null.
+    pub fn l3i_luau_compile_erasing(
+        source: *const c_char,
+        size: usize,
+        options: *mut lua_CompileOptions,
+        erased: *const *const c_char,
+        outsize: *mut usize,
+    ) -> *mut c_char;
+    /// [`l3i_luau_disassemble`] with `erased`, as [`l3i_luau_compile_erasing`].
+    pub fn l3i_luau_disassemble_erasing(
+        source: *const c_char,
+        size: usize,
+        options: *mut lua_CompileOptions,
+        erased: *const *const c_char,
+        outsize: *mut usize,
+    ) -> *mut c_char;
     /// [`l3i_luau_compile`], with identical error and ownership conventions.
     pub fn l3i_luau_disassemble(
         source: *const c_char,

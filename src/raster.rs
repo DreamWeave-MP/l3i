@@ -437,74 +437,74 @@ impl Extension for RasterExtension {
                 $each!(
                     "rgba8",
                     "r: number, g: number, b: number, a: number",
-                    "integer",
+                    "Color",
                     |r: f64, g: f64, b: f64, a: f64| Color::from_numbers(r, g, b, a).pack()
                 );
-                $each!("rgb8", "r: number, g: number, b: number", "integer", |r: f64, g: f64, b: f64| {
+                $each!("rgb8", "r: number, g: number, b: number", "Color", |r: f64, g: f64, b: f64| {
                     Color::from_numbers(r, g, b, 255.0).pack()
                 });
-                $each!("red", "color: integer", "number", |c: Packed<Color>| f64::from(c.0.r));
-                $each!("green", "color: integer", "number", |c: Packed<Color>| f64::from(c.0.g));
-                $each!("blue", "color: integer", "number", |c: Packed<Color>| f64::from(c.0.b));
-                $each!("alpha", "color: integer", "number", |c: Packed<Color>| f64::from(c.0.a));
-                $each!("channels", "color: integer", "(number, number, number, number)", |c: Packed<Color>| (
+                $each!("red", "color: Color", "number", |c: Packed<Color>| f64::from(c.0.r));
+                $each!("green", "color: Color", "number", |c: Packed<Color>| f64::from(c.0.g));
+                $each!("blue", "color: Color", "number", |c: Packed<Color>| f64::from(c.0.b));
+                $each!("alpha", "color: Color", "number", |c: Packed<Color>| f64::from(c.0.a));
+                $each!("channels", "color: Color", "(number, number, number, number)", |c: Packed<Color>| (
                     f64::from(c.0.r),
                     f64::from(c.0.g),
                     f64::from(c.0.b),
                     f64::from(c.0.a)
                 ));
-                $each!("withAlpha", "color: integer, a: number", "integer", |c: Packed<Color>, a: f64| c
+                $each!("withAlpha", "color: Color, a: number", "Color", |c: Packed<Color>, a: f64| c
                     .0
                     .with_alpha(a)
                     .pack());
                 $each!(
                     "lerp",
-                    "a: integer, b: integer, t: number",
-                    "integer",
+                    "a: Color, b: Color, t: number",
+                    "Color",
                     |a: Packed<Color>, b: Packed<Color>, t: f64| a.0.lerp(b.0, t).pack()
                 );
-                $each!("mul", "a: integer, b: integer", "integer", |a: Packed<Color>, b: Packed<Color>| a
+                $each!("mul", "a: Color, b: Color", "Color", |a: Packed<Color>, b: Packed<Color>| a
                     .0
                     .modulate(b.0)
                     .pack());
-                $each!("add", "a: integer, b: integer", "integer", |a: Packed<Color>, b: Packed<Color>| a
+                $each!("add", "a: Color, b: Color", "Color", |a: Packed<Color>, b: Packed<Color>| a
                     .0
                     .saturating_add(b.0)
                     .pack());
-                $each!("scale", "color: integer, factor: number", "integer", |c: Packed<Color>, factor: f64| c
+                $each!("scale", "color: Color, factor: number", "Color", |c: Packed<Color>, factor: f64| c
                     .0
                     .scale(factor)
                     .pack());
-                $each!("premultiply", "color: integer", "integer", |c: Packed<Color>| c.0.premultiply().pack());
+                $each!("premultiply", "color: Color", "Color", |c: Packed<Color>| c.0.premultiply().pack());
                 $each!(
                     "rgba16",
                     "r: number, g: number, b: number, a: number",
-                    "integer",
+                    "Color16",
                     |r: f64, g: f64, b: f64, a: f64| Color16::from_numbers(r, g, b, a)
                 );
-                $each!("rgb16", "r: number, g: number, b: number", "integer", |r: f64, g: f64, b: f64| {
+                $each!("rgb16", "r: number, g: number, b: number", "Color16", |r: f64, g: f64, b: f64| {
                     Color16::from_numbers(r, g, b, 65535.0)
                 });
-                $each!("red16", "color: integer", "number", |c: Color16| f64::from(c.r));
-                $each!("green16", "color: integer", "number", |c: Color16| f64::from(c.g));
-                $each!("blue16", "color: integer", "number", |c: Color16| f64::from(c.b));
-                $each!("alpha16", "color: integer", "number", |c: Color16| f64::from(c.a));
-                $each!("channels16", "color: integer", "(number, number, number, number)", |c: Color16| (
+                $each!("red16", "color: Color16", "number", |c: Color16| f64::from(c.r));
+                $each!("green16", "color: Color16", "number", |c: Color16| f64::from(c.g));
+                $each!("blue16", "color: Color16", "number", |c: Color16| f64::from(c.b));
+                $each!("alpha16", "color: Color16", "number", |c: Color16| f64::from(c.a));
+                $each!("channels16", "color: Color16", "(number, number, number, number)", |c: Color16| (
                     f64::from(c.r),
                     f64::from(c.g),
                     f64::from(c.b),
                     f64::from(c.a)
                 ));
-                $each!("withAlpha16", "color: integer, a: number", "integer", |c: Color16, a: f64| c.with_alpha(a));
-                $each!("lerp16", "a: integer, b: integer, t: number", "integer", |a: Color16, b: Color16, t: f64| a
+                $each!("withAlpha16", "color: Color16, a: number", "Color16", |c: Color16, a: f64| c.with_alpha(a));
+                $each!("lerp16", "a: Color16, b: Color16, t: number", "Color16", |a: Color16, b: Color16, t: f64| a
                     .lerp(b, t));
-                $each!("mul16", "a: integer, b: integer", "integer", |a: Color16, b: Color16| a.modulate(b));
-                $each!("add16", "a: integer, b: integer", "integer", |a: Color16, b: Color16| a.saturating_add(b));
-                $each!("scale16", "color: integer, factor: number", "integer", |c: Color16, factor: f64| c
+                $each!("mul16", "a: Color16, b: Color16", "Color16", |a: Color16, b: Color16| a.modulate(b));
+                $each!("add16", "a: Color16, b: Color16", "Color16", |a: Color16, b: Color16| a.saturating_add(b));
+                $each!("scale16", "color: Color16, factor: number", "Color16", |c: Color16, factor: f64| c
                     .scale(factor));
-                $each!("premultiply16", "color: integer", "integer", |c: Color16| c.premultiply());
-                $each!("widen", "color: integer", "integer", |c: Packed<Color>| Color16::widen(c.0));
-                $each!("narrow", "color: integer", "integer", |c: Color16| c.narrow().pack());
+                $each!("premultiply16", "color: Color16", "Color16", |c: Color16| c.premultiply());
+                $each!("widen", "color: Color", "Color16", |c: Packed<Color>| Color16::widen(c.0));
+                $each!("narrow", "color: Color16", "Color", |c: Color16| c.narrow().pack());
             };
         }
 
@@ -524,22 +524,22 @@ impl Extension for RasterExtension {
 
         let module = d.module(MODULE);
         module
-            .doc("Colors and clip rectangles as packed integers.")
+            .doc("Colors and clip rectangles as packed scalars.")
             .value("TRANSPARENT", Color::TRANSPARENT.pack())
-            .signature("integer")
+            .signature("Color")
             .value("BLACK", Color::BLACK.pack())
-            .signature("integer")
+            .signature("Color")
             .value("WHITE", Color::WHITE.pack())
-            .signature("integer")
+            .signature("Color")
             .value("CLIP_ALL", ClipRect::ALL.pack())
-            .signature("integer")
+            .signature("ClipRect")
             .constant("CLIP_MAX_COORD", CompileConstant::Number(f64::from(ClipRect::MAX_COORD)))
             .value("TRANSPARENT16", Color16::TRANSPARENT)
-            .signature("integer")
+            .signature("Color16")
             .value("BLACK16", Color16::BLACK)
-            .signature("integer")
+            .signature("Color16")
             .value("WHITE16", Color16::WHITE)
-            .signature("integer");
+            .signature("Color16");
         macro_rules! module_member {
             ($name:literal, $args:literal, $result:literal, |$($param:ident: $ty:ty),*| $body:expr) => {
                 module.function($name, |$($param: $ty),*| $body).signature(concat!("(", $args, ") -> ", $result));
@@ -548,7 +548,7 @@ impl Extension for RasterExtension {
         color_members!(module_member);
         module
             .function("packed", |c: Packed<Color>| f64::from(c.0.packed()))
-            .signature("(color: integer) -> number")
+            .signature("(color: Color) -> number")
             .function("math", || crate::userdata::Owned(Math))
             .signature("() -> dream_raster_Math")
             .function(
@@ -567,11 +567,11 @@ impl Extension for RasterExtension {
                     .pack())
                 },
             )
-            .signature("(minX: number, minY: number, maxX: number, maxY: number) -> integer")
+            .signature("(minX: number, minY: number, maxX: number, maxY: number) -> ClipRect")
             .function("clipBounds", |c: Packed<ClipRect>| {
                 (f64::from(c.0.min_x), f64::from(c.0.min_y), f64::from(c.0.max_x), f64::from(c.0.max_y))
             })
-            .signature("(clip: integer) -> (number, number, number, number)");
+            .signature("(clip: ClipRect) -> (number, number, number, number)");
         Ok(())
     }
 }

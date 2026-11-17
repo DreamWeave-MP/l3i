@@ -603,6 +603,14 @@ impl Runtime {
     /// `typeof` answers the kind's name.
     pub(crate) fn adopt_packed_kind(&self, kind: crate::packed::PackedKind) -> Result<()> {
         if self.shared().register_packed_kind(kind)? {
+            // Scripts compiled from here on erase the kind's annotations; ones compiled before
+            // keep treating the name as a userdata (see `CompileOptions::packed_types`).
+            let name = std::ffi::CString::new(kind.name).map_err(|_| Error::logic("packed kind name contains NUL"))?;
+            let mut options = self.compile_options.borrow_mut();
+            if !options.packed_types.contains(&name) {
+                options.packed_types.push(name);
+            }
+            drop(options);
             // SAFETY: the main thread; the tag is the kind's, in l3i's band.
             unsafe {
                 crate::packed::carrier::name_tag(self.state, crate::packed::carrier::nibble_tag(kind.kind), kind.name)

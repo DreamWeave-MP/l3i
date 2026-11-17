@@ -116,7 +116,134 @@ Parsed parseForCompile(std::string_view source, Luau::AstNameTable& names, Luau:
     return parsed;
 }
 
-char* compileImpl(const char* source, size_t size, lua_CompileOptions* options, size_t* outsize, bool dump)
+// Renames every annotation that names a packed scalar kind (src/packed/carrier.rs) to `any`,
+// between the parse and the compile. Luau's compiler takes a type name it does not know for a
+// userdata, and a native function's entry guard then refuses the light userdata a packed scalar
+// is, on every call: correct results at interpreter speed. Only the name changes, never a
+// location, so line info and source maps are untouched; analysis parses on its own and never
+// sees this. The compiler's own rules decide what is left alone: a prefixed name (`mod.Color`),
+// a name a type alias in an enclosing block binds (`type Color = { r: number }`; every alias in a
+// block covers the whole block, as the compiler's do), and a generic parameter in scope. Erasing
+// to `any` is never wrong at run time; it only gives up a type the compiler would have used.
+class ErasePackedTypes final : public Luau::AstVisitor
+{
+public:
+    ErasePackedTypes(Luau::AstNameTable& names, const char* const* erased)
+    {
+        for (; erased && *erased; ++erased)
+        {
+            // A name the parse never interned appears nowhere in this source.
+            Luau::AstName name = names.get(*erased);
+            if (name.value)
+                targets.push_back(name);
+        }
+        if (!targets.empty())
+            any = names.getOrAdd("any");
+    }
+
+    bool active() const
+    {
+        return !targets.empty();
+    }
+
+    bool visit(Luau::AstStatBlock* block) override
+    {
+        size_t mark = bound.size();
+        for (Luau::AstStat* stat : block->body)
+        {
+            if (auto alias = stat->as<Luau::AstStatTypeAlias>())
+                bound.push_back(alias->name);
+            else if (auto function = stat->as<Luau::AstStatTypeFunction>())
+                bound.push_back(function->name);
+        }
+        for (Luau::AstStat* stat : block->body)
+            stat->visit(this);
+        bound.resize(mark);
+        return false;
+    }
+
+    bool visit(Luau::AstExprFunction* function) override
+    {
+        size_t mark = bindGenerics(function->generics, function->genericPacks);
+        for (Luau::AstLocal* arg : function->args)
+            if (arg->annotation)
+                arg->annotation->visit(this);
+        if (function->varargAnnotation)
+            function->varargAnnotation->visit(this);
+        if (function->returnAnnotation)
+            function->returnAnnotation->visit(this);
+        function->body->visit(this);
+        bound.resize(mark);
+        return false;
+    }
+
+    bool visit(Luau::AstStatTypeAlias* alias) override
+    {
+        size_t mark = bindGenerics(alias->generics, alias->genericPacks);
+        alias->type->visit(this);
+        bound.resize(mark);
+        return false;
+    }
+
+    bool visit(Luau::AstTypeFunction* function) override
+    {
+        size_t mark = bindGenerics(function->generics, function->genericPacks);
+        for (Luau::AstType* arg : function->argTypes.types)
+            arg->visit(this);
+        if (function->argTypes.tailType)
+            function->argTypes.tailType->visit(this);
+        if (function->returnTypes)
+            function->returnTypes->visit(this);
+        bound.resize(mark);
+        return false;
+    }
+
+    // AstVisitor skips type annotations by default; this pass is about nothing else, so it walks
+    // every type and type pack: unions (`Color?`), tables, groups, function types, packs.
+    bool visit(Luau::AstType*) override
+    {
+        return true;
+    }
+
+    bool visit(Luau::AstTypePack*) override
+    {
+        return true;
+    }
+
+    bool visit(Luau::AstTypeReference* reference) override
+    {
+        if (!reference->prefix && isTarget(reference->name) && !isBound(reference->name))
+            reference->name = any;
+        return true;
+    }
+
+private:
+    std::vector<Luau::AstName> targets;
+    std::vector<Luau::AstName> bound;
+    Luau::AstName any;
+
+    size_t bindGenerics(const Luau::AstArray<Luau::AstGenericType*>& generics, const Luau::AstArray<Luau::AstGenericTypePack*>& packs)
+    {
+        size_t mark = bound.size();
+        for (Luau::AstGenericType* generic : generics)
+            bound.push_back(generic->name);
+        for (Luau::AstGenericTypePack* pack : packs)
+            bound.push_back(pack->name);
+        return mark;
+    }
+
+    bool isTarget(Luau::AstName name) const
+    {
+        return std::find(targets.begin(), targets.end(), name) != targets.end();
+    }
+
+    bool isBound(Luau::AstName name) const
+    {
+        return std::find(bound.begin(), bound.end(), name) != bound.end();
+    }
+};
+
+char* compileImpl(const char* source, size_t size, lua_CompileOptions* options, const char* const* erased, size_t* outsize, bool dump)
 {
 
     if (!outsize)
@@ -146,6 +273,9 @@ char* compileImpl(const char* source, size_t size, lua_CompileOptions* options, 
             throw parsed.result.errors.front();
         if (!parsed.lowered.map.empty())
             L3i::Surface::orderLocalReads(parsed.result);
+        ErasePackedTypes erase(names, erased);
+        if (erase.active())
+            parsed.result.root->visit(&erase);
         Luau::compileOrThrow(bytecode, parsed.result, names, compileOptions);
         output = dump ? bytecode.dumpEverything() : bytecode.getBytecode();
     }
@@ -177,14 +307,14 @@ char* compileImpl(const char* source, size_t size, lua_CompileOptions* options, 
     return result;
 }
 
-char* compile(const char* source, size_t size, lua_CompileOptions* options, size_t* outsize, bool dump) noexcept
+char* compile(const char* source, size_t size, lua_CompileOptions* options, const char* const* erased, size_t* outsize, bool dump) noexcept
 {
     if (!outsize)
         return nullptr;
     *outsize = 0;
     try
     {
-        return compileImpl(source, size, options, outsize, dump);
+        return compileImpl(source, size, options, erased, outsize, dump);
     }
     catch (...)
     {
@@ -197,12 +327,28 @@ char* compile(const char* source, size_t size, lua_CompileOptions* options, size
 
 extern "C" char* l3i_luau_compile(const char* source, size_t size, lua_CompileOptions* options, size_t* outsize)
 {
-    return compile(source, size, options, outsize, false);
+    return compile(source, size, options, nullptr, outsize, false);
 }
 
 extern "C" char* l3i_luau_disassemble(const char* source, size_t size, lua_CompileOptions* options, size_t* outsize)
 {
-    return compile(source, size, options, outsize, true);
+    return compile(source, size, options, nullptr, outsize, true);
+}
+
+// The two above with `erased`, a null-terminated list of type names compiled as `any`
+// (ErasePackedTypes), or null for none.
+extern "C" char* l3i_luau_compile_erasing(
+    const char* source, size_t size, lua_CompileOptions* options, const char* const* erased, size_t* outsize
+)
+{
+    return compile(source, size, options, erased, outsize, false);
+}
+
+extern "C" char* l3i_luau_disassemble_erasing(
+    const char* source, size_t size, lua_CompileOptions* options, const char* const* erased, size_t* outsize
+)
+{
+    return compile(source, size, options, erased, outsize, true);
 }
 
 namespace

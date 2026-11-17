@@ -421,9 +421,9 @@ impl Extension for QuatExtension {
     fn describe(&self, d: &mut ExtensionDescriptor) -> Result<()> {
         let module = d.module("@dream/quat");
         module
-            .doc("Rotations as packed integers.")
+            .doc("Rotations as packed scalars.")
             .value("IDENTITY", Quaternion::pack(Quat::IDENTITY))
-            .signature("integer")
+            .signature("Quaternion")
             .function("axisAngle", |axis: Vector3, angle: f64| -> Result<Packed<Quaternion>> {
                 Quat::try_from_axis_angle(from_vec3(axis), angle).map(Quaternion::pack).ok_or_else(|| {
                     crate::error::Error::runtime(
@@ -431,30 +431,30 @@ impl Extension for QuatExtension {
                     )
                 })
             })
-            .signature("(axis: vector, angle: number) -> integer")
+            .signature("(axis: vector, angle: number) -> Quaternion")
             .function("fromXYZW", from_xyzw)
-            .signature("(x: number, y: number, z: number, w: number) -> integer")
+            .signature("(x: number, y: number, z: number, w: number) -> Quaternion")
             .function("toXYZW", |q: Packed<Quaternion>| (q.0.0.x, q.0.0.y, q.0.0.z, q.0.0.w))
-            .signature("(q: integer) -> (number, number, number, number)")
+            .signature("(q: Quaternion) -> (number, number, number, number)")
             .function("mul", |a: Packed<Quaternion>, b: Packed<Quaternion>| Quaternion::pack(a.0.0 * b.0.0))
-            .signature("(a: integer, b: integer) -> integer")
+            .signature("(a: Quaternion, b: Quaternion) -> Quaternion")
             .function("inverse", |q: Packed<Quaternion>| Quaternion::pack(q.0.0.inverse()))
-            .signature("(q: integer) -> integer")
+            .signature("(q: Quaternion) -> Quaternion")
             .function("slerp", |a: Packed<Quaternion>, b: Packed<Quaternion>, t: f64| -> Result<Packed<Quaternion>> {
                 finite_weight(t)?;
                 Ok(Quaternion::pack(a.0.0.slerp(b.0.0, t)))
             })
-            .signature("(a: integer, b: integer, t: number) -> integer")
+            .signature("(a: Quaternion, b: Quaternion, t: number) -> Quaternion")
             .function("rotate", |q: Packed<Quaternion>, v: Vector3| to_vec3(q.0.0.rotate(from_vec3(v))))
-            .signature("(q: integer, v: vector) -> vector")
+            .signature("(q: Quaternion, v: vector) -> vector")
             .function("angleTo", |a: Packed<Quaternion>, b: Packed<Quaternion>| a.0.0.angle_to(b.0.0))
-            .signature("(a: integer, b: integer) -> number")
+            .signature("(a: Quaternion, b: Quaternion) -> number")
             .function("key", key_bits)
-            .signature("(q: integer, flags: number) -> integer")
+            .signature("(q: Quaternion, flags: number) -> AnimationKey")
             .function("keyRotation", key_rotation_bits)
-            .signature("(k: integer) -> integer")
+            .signature("(k: AnimationKey) -> Quaternion")
             .function("keyFlags", |k: PackedBits<AnimationKey>| i64::from(k.flags()))
-            .signature("(k: integer) -> number");
+            .signature("(k: AnimationKey) -> number");
         #[cfg(feature = "jit")]
         {
             module.function("math", || crate::userdata::Owned(lowering::Math)).signature("() -> dream_quat_Math");
@@ -465,27 +465,27 @@ impl Extension for QuatExtension {
                 .doc("Natively lowered rotation operations.");
             receiver
                 .method("rotate", |_: &lowering::Math, q: Packed<Quaternion>, v: Vector3| lowering::rotate(q, v))
-                .signature("(self, q: integer, v: vector): vector");
+                .signature("(self, q: Quaternion, v: vector): vector");
             receiver
                 .method("mul", |_: &lowering::Math, a: Packed<Quaternion>, b: Packed<Quaternion>| lowering::mul(a, b))
-                .signature("(self, a: integer, b: integer): integer");
+                .signature("(self, a: Quaternion, b: Quaternion): Quaternion");
             receiver
                 .method("slerp", |_: &lowering::Math, a: Packed<Quaternion>, b: Packed<Quaternion>, t: f64| {
                     lowering::slerp(a, b, t)
                 })
-                .signature("(self, a: integer, b: integer, t: number): integer");
+                .signature("(self, a: Quaternion, b: Quaternion, t: number): Quaternion");
             receiver
                 .method("fromXYZW", |_: &lowering::Math, x: f64, y: f64, z: f64, w: f64| from_xyzw(x, y, z, w))
-                .signature("(self, x: number, y: number, z: number, w: number): integer");
+                .signature("(self, x: number, y: number, z: number, w: number): Quaternion");
             receiver
                 .method("key", |_: &lowering::Math, q: PackedBits<Quaternion>, flags: Exact<i64>| key_bits(q, flags))
-                .signature("(self, q: integer, flags: number): integer");
+                .signature("(self, q: Quaternion, flags: number): AnimationKey");
             receiver
                 .method("keyRotation", |_: &lowering::Math, k: PackedBits<AnimationKey>| key_rotation_bits(k))
-                .signature("(self, k: integer): integer");
+                .signature("(self, k: AnimationKey): Quaternion");
             receiver
                 .method("keyFlags", |_: &lowering::Math, k: PackedBits<AnimationKey>| i64::from(k.flags()))
-                .signature("(self, k: integer): number");
+                .signature("(self, k: AnimationKey): number");
             d.native_hooks(lowering::Lowering);
         }
         Ok(())

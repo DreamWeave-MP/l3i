@@ -195,6 +195,10 @@ pub fn builtin_kinds() -> [PackedKind; 4] {
     ]
 }
 
+/// The names of l3i's wide kinds, [`crate::raster::Color16`] and [`crate::convert::Bits64`], under
+/// their light tags `carrier::COLOR16_TAG` and `carrier::BITS64_TAG`.
+pub const WIDE_NAMES: [&str; 2] = ["Color16", "Bits64"];
+
 /// The kind numbers of [`builtin_kinds`], as documentation and as a compile-time anchor.
 pub const BUILTIN_KINDS: [u8; 4] = [1, 2, 3, 4];
 

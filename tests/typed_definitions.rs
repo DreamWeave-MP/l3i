@@ -467,32 +467,32 @@ const SCRIPTS: &[(&str, &str)] = &[
         "quat_script",
         "--!strict\n\
          local quat = require('@dream/quat')\n\
-         local q: integer = quat.axisAngle(vector.create(0, 0, 1), 1.0)\n\
+         local q: Quaternion = quat.axisAngle(vector.create(0, 0, 1), 1.0)\n\
          local r: vector = quat.rotate(q, vector.create(1, 0, 0))\n\
-         local m: integer = quat.mul(q, quat.IDENTITY)\n\
-         local s: integer = quat.slerp(q, quat.inverse(m), 0.5)\n\
+         local m: Quaternion = quat.mul(q, quat.IDENTITY)\n\
+         local s: Quaternion = quat.slerp(q, quat.inverse(m), 0.5)\n\
          local x, y, z, w = quat.toXYZW(s)\n\
          local angle: number = quat.angleTo(q, m) + x + y + z + w\n\
-         local k: integer = quat.key(q, 3)\n\
-         local back: integer = quat.keyRotation(k)\n\
+         local k: AnimationKey = quat.key(q, 3)\n\
+         local back: Quaternion = quat.keyRotation(k)\n\
          local flags: number = quat.keyFlags(k)\n\
          local math = quat.math()\n\
-         local lowered: integer = math:mul(back, math:slerp(q, m, 0.25))\n\
+         local lowered: Quaternion = math:mul(back, math:slerp(q, m, 0.25))\n\
          print(r, angle, flags, lowered)\n",
     ),
     (
         "raster_script",
         "--!strict\n\
          local raster = require('@dream/raster')\n\
-         local c: integer = raster.rgba8(1, 2, 3, 4)\n\
-         local d: integer = raster.lerp(c, raster.WHITE, 0.5)\n\
+         local c: Color = raster.rgba8(1, 2, 3, 4)\n\
+         local d: Color = raster.lerp(c, raster.WHITE, 0.5)\n\
          local r, g, b, a = raster.channels(d)\n\
          local sum: number = r + g + b + a + raster.packed(c)\n\
          local m = raster.math()\n\
-         local e: integer = m:add(m:mul(c, d), m:scale(raster.BLACK, 0.5))\n\
-         local wide: integer = raster.widen(e)\n\
-         local narrow: integer = m:narrow(m:lerp16(wide, raster.WHITE16, 0.5))\n\
-         local clip: integer = raster.clip(0, 0, 10, 10)\n\
+         local e: Color = m:add(m:mul(c, d), m:scale(raster.BLACK, 0.5))\n\
+         local wide: Color16 = raster.widen(e)\n\
+         local narrow: Color = m:narrow(m:lerp16(wide, raster.WHITE16, 0.5))\n\
+         local clip: ClipRect = raster.clip(0, 0, 10, 10)\n\
          local minX, minY, maxX, maxY = raster.clipBounds(raster.CLIP_ALL)\n\
          print(sum, narrow, clip, minX + minY + maxX + maxY)\n",
     ),
@@ -544,7 +544,8 @@ fn the_generated_definitions_type_check_and_typed_scripts_pass_strict_mode() {
     let definitions = plan.type_definitions();
     assert!(definitions.contains("declare extern type dream_quat_Math with"), "{definitions}");
     assert!(definitions.contains("declare extern type dream_udp_Client with"), "{definitions}");
-    assert!(definitions.contains("    IDENTITY: integer,"), "{definitions}");
+    assert!(definitions.contains("    IDENTITY: Quaternion,"), "{definitions}");
+    assert!(definitions.contains("declare extern type Quaternion with end"), "{definitions}");
     for fallback in ["(self, ...any): any", "(...any) -> ...any", ": any,\n", ": any\n"] {
         assert!(!definitions.contains(fallback), "every built-in member is typed ({fallback:?} found):\n{definitions}");
     }

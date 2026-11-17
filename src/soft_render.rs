@@ -454,7 +454,7 @@ fn describe_module(d: &mut ExtensionDescriptor) {
             let c = c.0;
             Color::from_packed(dream_soft_render::Color::from_rgba_unmultiplied(c.r, c.g, c.b, c.a).to_packed()).pack()
         })
-        .signature("(color: integer) -> integer")
+        .signature("(color: Color) -> Color")
         .constant("MAX_SURFACE_PIXELS", CompileConstant::Number(dream_soft_render::MAX_SURFACE_PIXELS as f64))
         .constant("MAX_TEXTURE_BYTES", CompileConstant::Number(dream_soft_render::MAX_TEXTURE_BYTES as f64))
         .constant("VERTEX_BYTES", CompileConstant::Number(VERTEX_BYTES as f64));
@@ -490,12 +490,12 @@ impl Extension for SoftRenderExtension {
 
         let mut frame = d.userdata::<Frame>("dream.soft_render.Frame");
         frame.tag(TagPolicy::Required).doc("One frame of immediate drawing; stale after finish().");
-        frame.method("clear", |f: &Frame, color: Packed<Color>| f.clear(color)).signature("(self, color: integer)");
+        frame.method("clear", |f: &Frame, color: Packed<Color>| f.clear(color)).signature("(self, color: Color)");
         frame
             .method("rect", |f: &Frame, min: Vector3, max: Vector3, color: Packed<Color>, clip: Packed<ClipRect>| {
                 f.rect(min, max, color, clip)
             })
-            .signature("(self, min: vector, max: vector, color: integer, clip: integer)");
+            .signature("(self, min: vector, max: vector, color: Color, clip: ClipRect)");
         frame
             .method(
                 "image",
@@ -509,7 +509,7 @@ impl Extension for SoftRenderExtension {
                  clip: Packed<ClipRect>| f.image(min, max, uv_min, uv_max, texture, tint, clip),
             )
             .signature(
-                "(self, min: vector, max: vector, uvMin: vector, uvMax: vector, texture: dream_soft_render_Texture, tint: integer, clip: integer)",
+                "(self, min: vector, max: vector, uvMin: vector, uvMax: vector, texture: dream_soft_render_Texture, tint: Color, clip: ClipRect)",
             );
         frame
             .method(
@@ -520,7 +520,9 @@ impl Extension for SoftRenderExtension {
                  texture: Option<&Texture>,
                  clip: Packed<ClipRect>| { f.mesh(vertices, indices, texture, clip) },
             )
-            .signature("(self, vertices: buffer, indices: buffer, texture: dream_soft_render_Texture?, clip: integer)");
+            .signature(
+                "(self, vertices: buffer, indices: buffer, texture: dream_soft_render_Texture?, clip: ClipRect)",
+            );
         frame.method("finish", |f: &Frame| f.finish()).signature("(self)");
         frame.field::<FrameWidth>("width").signature("number");
         frame.field::<FrameHeight>("height").signature("number");
@@ -554,7 +556,7 @@ impl Extension for SoftRenderExtension {
                     write_vertex(buffer, offset, pos, uv, color)
                 },
             )
-            .signature("(self, buffer: buffer, offset: number, pos: vector, uv: vector, color: integer): number");
+            .signature("(self, buffer: buffer, offset: number, pos: vector, uv: vector, color: Color): number");
         #[cfg(feature = "jit")]
         d.native_hooks(lowering::VertexWriter);
 
