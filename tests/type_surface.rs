@@ -14,7 +14,12 @@ use l3i::raster::RasterExtension;
 
 fn plan(policy: RuntimePolicy) -> Rc<RuntimePlan> {
     RuntimePlan::builder()
-        .policy(policy.compat_global("@dream/quat", "quat").compat_global("@dream/raster", "raster"))
+        .policy(
+            policy
+                .compat_global("@dream/quat", "quat")
+                .compat_global("@dream/raster", "raster")
+                .compat_global("@dream/bits64", "bits64"),
+        )
         .extension(QuatExtension)
         .extension(RasterExtension)
         .finalize()
@@ -194,4 +199,75 @@ fn erasure_keeps_line_numbers() {
         .unwrap_err()
         .to_string();
     assert!(error.contains(":4:") && error.contains("line four"), "{error}");
+}
+
+/// #30's lint was to catch packed parameters the erasure cannot reach. Luau's compiler gives a
+/// guard only to a bare name it does not know (`Compiler/src/Types.cpp`): a prefixed name and a
+/// generic parameter are `any`, an alias is its body, and the erasure renames every bare packed
+/// name, inside aliases too. Every other form a script can write is held here at zero exits over a
+/// thousand native calls, so the only reference left with a guard is a kind missing from
+/// `CompileOptions::packed_types`, which is a list the host passes, not something a lint over the
+/// source could see.
+#[cfg(feature = "jit")]
+#[test]
+fn every_annotation_form_the_erasure_leaves_stays_native() {
+    use l3i::extension::NativeCodePolicy;
+    use l3i::native_code::NativeCodeMode;
+    use l3i::source::LoadScope;
+
+    let policy = RuntimePolicy::new().native_code(NativeCodePolicy {
+        mode: NativeCodeMode::Annotated,
+        record_counters: true,
+        ..NativeCodePolicy::default()
+    });
+    let runtime = Runtime::from_plan(&plan(policy)).unwrap();
+    let generator = runtime.native_code().expect("native code");
+    if !generator.is_available() {
+        eprintln!("no Luau code generator on this platform; skipping");
+        return;
+    }
+    // (form, script, whether the compiler guards it when nothing is erased)
+    let forms = [
+        ("an alias of a kind", "type Rot = Quaternion\nlocal function f(q: Rot): number return 1 end", true),
+        ("an alias of an optional kind", "type Rot = Quaternion?\nlocal function f(q: Rot): number return 1 end", true),
+        ("an alias chain", "type A = Quaternion\ntype B = A\nlocal function f(q: B): number return 1 end", true),
+        ("a generic alias", "type Box<T> = T\nlocal function f(q: Box<Quaternion>): number return 1 end", false),
+        ("a generic parameter", "local function f<T>(q: T): number return 1 end", false),
+        ("a union", "local function f(q: Quaternion | number): number return 1 end", false),
+        ("an intersection", "local function f(q: Quaternion & Quaternion): number return 1 end", false),
+        ("an optional", "local function f(q: Quaternion?): number return 1 end", true),
+        ("a parenthesised kind", "local function f(q: (Quaternion)): number return 1 end", true),
+        ("typeof a packed value", "local function f(q: typeof(quat.IDENTITY)): number return 1 end", false),
+        ("a wide kind", "local function f(q: Bits64): number return 1 end", true),
+        ("an @native function", "@native local function f(q: Quaternion): number return 1 end", true),
+    ];
+    let options = runtime.compile_options();
+    let mut unerased = options.clone();
+    unerased.packed_types.clear();
+    let exits = |name: &str, body: &str, options: &l3i::source::CompileOptions| -> u64 {
+        let source = format!("--!native\n{body}\nreturn f\n");
+        let f: l3i::value::Function = {
+            let stack = runtime.stack();
+            let chunk = stack.load_source("=form", &source, options).unwrap();
+            chunk.invoke(&stack, ()).unwrap()
+        };
+        runtime.set_global("f", &f).unwrap();
+        let value = if name == "a wide kind" { "bits64.fromNumber(7)" } else { "quat.IDENTITY" };
+        let before = generator.execution_stats(&runtime.stack()).vm_exits_taken;
+        runtime.exec(&format!("local v = {value} for i = 1, 1000 do f(v) end")).unwrap();
+        generator.execution_stats(&runtime.stack()).vm_exits_taken - before
+    };
+    for (name, body, guarded) in forms {
+        let erased = exits(name, body, &options);
+        assert_eq!(erased, 0, "{name}: {erased} exits over 1000 calls");
+        // The control: without the erasure, the forms the compiler guards exit on every call, so
+        // the zero above is the erasure at work and not a call that never reached native code.
+        // The others are `any` to the compiler whatever the erasure does.
+        let control = exits(name, body, &unerased);
+        if guarded {
+            assert!(control >= 1000, "{name}: only {control} exits without the erasure");
+        } else {
+            assert_eq!(control, 0, "{name}: {control} exits without the erasure");
+        }
+    }
 }

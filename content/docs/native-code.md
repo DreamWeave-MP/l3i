@@ -257,7 +257,12 @@ Three things keep a call site native or explain why it is not:
   know to `userdata`, and a native function's entry guard would then refuse a packed argument on
   every call: the right answer at interpreter speed. Before compiling, l3i rewrites every
   reference to a packed kind in a type annotation to `any` (`CompileOptions::packed_types`, which
-  a plan fills with its kinds). Analysis still sees the names.
+  a plan fills with its kinds). Analysis still sees the names. Prefixed names, generic
+  parameters, unions, intersections and `typeof` are `any` to the compiler anyway, and aliases
+  resolve through their erased bodies, so every form a script can write stays native
+  (`tests/type_surface.rs`). The one way left to get a guard is a kind missing from the list: a
+  standalone `source::compile` without the host's kinds, or a kind registered after the compile
+  (`Runtime::register_packed` adds its kind to later compiles only).
 - **Inlining drops annotations.** A local function the compiler inlines at `-O2` loses its
   parameter annotations, so a lowered namecall on an annotated parameter inside it runs the
   generic path in the caller instead. The result is the same; only the speed differs. This is
