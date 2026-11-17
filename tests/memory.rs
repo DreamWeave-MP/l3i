@@ -658,11 +658,11 @@ fn a_failed_coroutine_hands_its_error_to_its_finalizers() {
 #[test]
 fn fast_flags_are_introspectable() {
     let _runtime = Runtime::new().unwrap();
-    assert_eq!(memory::fast_flag("LuauFastpcall"), Some(true), "policy flag is on");
+    assert_eq!(memory::fast_flag("LuauOptimizeStringSplit"), Some(true), "policy flag is on");
     assert_eq!(memory::fast_flag("NoSuchFlagAtAll"), None);
-    assert!(memory::fast_flags().iter().any(|(name, _)| name == "LuauFastpcall"));
+    assert!(memory::fast_flags().iter().any(|(name, _)| name == "LuauOptimizeStringSplit"));
     // Writes the value the policy already set: other tests' VMs share these process-wide flags.
-    memory::set_fast_flag("LuauFastpcall", true).unwrap();
+    memory::set_fast_flag("LuauOptimizeStringSplit", true).unwrap();
     assert!(memory::set_fast_flag("NoSuchFlagAtAll", true).is_err());
     assert!(memory::set_fast_int("NoSuchIntAtAll", 1).is_err());
     assert_eq!(memory::fast_int("NoSuchIntAtAll"), None);

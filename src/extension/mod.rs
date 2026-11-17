@@ -331,7 +331,7 @@ impl<T: Userdata> UserdataBuilder<'_, T> {
         &mut self.decl.members[index]
     }
 
-    /// A direct primitive field (boolean, number, integer64, Vec3, nil) served by `H`,
+    /// A direct primitive field (boolean, number, 64-bit pattern, Vec3, nil) served by `H`,
     /// installed as the canonical property too. Makes the tag policy effectively `Required`.
     pub fn field<H: DirectField<T>>(&mut self, name: &str) -> &mut MemberDecl {
         let owned = name.to_owned();

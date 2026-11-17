@@ -25,14 +25,13 @@ pub enum Library {
     Math,
     Debug,
     Vector,
-    Integer,
     /// Luau's experimental `class` library.
     Class,
 }
 
 impl Library {
     /// Every library `luaL_openlibs` opens, in its order.
-    pub const STANDARD: [Library; 12] = [
+    pub const STANDARD: [Library; 11] = [
         Library::Base,
         Library::Coroutine,
         Library::Table,
@@ -44,7 +43,6 @@ impl Library {
         Library::Bit32,
         Library::Buffer,
         Library::Vector,
-        Library::Integer,
     ];
 
     /// The global the library is installed as (empty for `Base`).
@@ -61,7 +59,6 @@ impl Library {
             Library::Math => "math",
             Library::Debug => "debug",
             Library::Vector => "vector",
-            Library::Integer => "integer",
             Library::Class => "class",
         }
     }
@@ -79,7 +76,6 @@ impl Library {
             Library::Math => ffi::luaopen_math,
             Library::Debug => ffi::luaopen_debug,
             Library::Vector => ffi::luaopen_vector,
-            Library::Integer => ffi::luaopen_integer,
             Library::Class => ffi::luaopen_class,
         }
     }

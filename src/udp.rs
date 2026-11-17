@@ -5,10 +5,9 @@
 //! `tcp` feature's `dream.tcp`, which shares nothing with it). dream-net stays pure Rust and
 //! knows peers, event ids, channels, and bytes; this module owns the Luau-facing shape:
 //!
-//! - peer, event, channel, and client ids are Luau integers (exact, compared with `==`),
-//!   never strings or doubles; sizes and counters are plain numbers, because Luau integers
-//!   have no `<`/`<=` operators (the `integer` library orders them) and counters get
-//!   thresholded;
+//! - peer, event and channel ids are Luau numbers, exact or an error, never rounded; the
+//!   protocol id and client ids are opaque 64-bit patterns (`Bits64`, `@dream/bits64`), compared
+//!   with `==`; sizes and counters are plain numbers;
 //! - payloads are Luau buffers (or strings on send); `pollInto` copies one received payload
 //!   into a caller-owned buffer and `sendEvent` copies out of one before returning, so no Lua
 //!   memory is ever retained by the transport;

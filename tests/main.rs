@@ -94,6 +94,7 @@ mod intl;
 mod iterator;
 mod libraries;
 mod lowering;
+mod luau_0747;
 mod memory;
 mod metatable;
 mod module;

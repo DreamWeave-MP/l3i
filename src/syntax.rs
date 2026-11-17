@@ -262,10 +262,6 @@ pub const TYPES: &[(&str, &str)] = &[
         "{ kind: \"ExprConstantNumber\", line: number, column: number, endLine: number, endColumn: number, value: number }",
     ),
     (
-        "dream_luau_ExprConstantInteger",
-        "{ kind: \"ExprConstantInteger\", line: number, column: number, endLine: number, endColumn: number, value: integer }",
-    ),
-    (
         "dream_luau_ExprConstantString",
         "{ kind: \"ExprConstantString\", line: number, column: number, endLine: number, endColumn: number, value: string, quoteStyle: \"double\" | \"single\" | \"backtick\" | \"long\" | \"unquoted\" }",
     ),
@@ -415,7 +411,7 @@ pub const TYPES: &[(&str, &str)] = &[
     ),
     (
         "dream_luau_StatClass",
-        "{ kind: \"StatClass\", line: number, column: number, endLine: number, endColumn: number, hasSemicolon: boolean, name: dream_luau_Local, super: dream_luau_Expr?, exported: boolean, open: boolean }",
+        "{ kind: \"StatClass\", line: number, column: number, endLine: number, endColumn: number, hasSemicolon: boolean, name: dream_luau_Local | dream_luau_Expr, super: dream_luau_Expr?, exported: boolean, open: boolean }",
     ),
     (
         "dream_luau_StatError",
@@ -427,7 +423,7 @@ pub const TYPES: &[(&str, &str)] = &[
     ),
     (
         "dream_luau_TypeTable",
-        "{ kind: \"TypeTable\", line: number, column: number, endLine: number, endColumn: number, props: { dream_luau_TableProp }, indexer: dream_luau_TableIndexer?, isExact: boolean }",
+        "{ kind: \"TypeTable\", line: number, column: number, endLine: number, endColumn: number, props: { dream_luau_TableProp }, indexer: dream_luau_TableIndexer? }",
     ),
     (
         "dream_luau_TypeFunction",
@@ -479,7 +475,7 @@ pub const TYPES: &[(&str, &str)] = &[
     ),
     (
         "dream_luau_Expr",
-        "dream_luau_ExprGroup | dream_luau_ExprConstantNil | dream_luau_ExprConstantBool | dream_luau_ExprConstantNumber | dream_luau_ExprConstantInteger | dream_luau_ExprConstantString | dream_luau_ExprLocal | dream_luau_ExprGlobal | dream_luau_ExprVarargs | dream_luau_ExprCall | dream_luau_ExprIndexName | dream_luau_ExprIndexExpr | dream_luau_ExprFunction | dream_luau_ExprTable | dream_luau_ExprUnary | dream_luau_ExprBinary | dream_luau_ExprTypeAssertion | dream_luau_ExprIfElse | dream_luau_ExprInterpString | dream_luau_ExprInstantiate | dream_luau_ExprError | dream_luau_ExprRange | dream_luau_ExprEnumerate | dream_luau_ExprZip | dream_luau_ExprSlice | dream_luau_ExprComprehension | dream_luau_ExprReduction | dream_luau_ExprSink",
+        "dream_luau_ExprGroup | dream_luau_ExprConstantNil | dream_luau_ExprConstantBool | dream_luau_ExprConstantNumber | dream_luau_ExprConstantString | dream_luau_ExprLocal | dream_luau_ExprGlobal | dream_luau_ExprVarargs | dream_luau_ExprCall | dream_luau_ExprIndexName | dream_luau_ExprIndexExpr | dream_luau_ExprFunction | dream_luau_ExprTable | dream_luau_ExprUnary | dream_luau_ExprBinary | dream_luau_ExprTypeAssertion | dream_luau_ExprIfElse | dream_luau_ExprInterpString | dream_luau_ExprInstantiate | dream_luau_ExprError | dream_luau_ExprRange | dream_luau_ExprEnumerate | dream_luau_ExprZip | dream_luau_ExprSlice | dream_luau_ExprComprehension | dream_luau_ExprReduction | dream_luau_ExprSink",
     ),
     (
         "dream_luau_Stat",

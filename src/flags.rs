@@ -18,17 +18,17 @@ use crate::raw::ffi;
 /// `LuauCompileLoopUnrollZero` and `LuauCompileRecursiveAliases` and the runtime's
 /// `LuauTableArrayAdjustCheck`, `LuauSplitTableLookups`, `LuauTableMoveTimeoutFix`,
 /// `LuauNewPointerEncode`, `LuauPcallOptimize`, `LuauCallLuauTm`, `LuauBackedgeHeapCheck` and
-/// `LuauFastpcallInterrupt`.
+/// `LuauFastpcallInterrupt`. 0.747 graduated `LuauCompileNoFoldVectorEqW`,
+/// `LuauCompileMoveElision`, `LuauCompileFastpcall`, `LuauFastpcall` and `LuauTableRobustOom`,
+/// and removed the integer type with its four flags here (`LuauIntegerType2`,
+/// `LuauIntegerFastcalls`, `LuauIntegerBufferFastcalls`, `LuauIntegerLibrary`).
 pub const LUAU_FLAGS: &[&str] = &[
     // Compiler side
-    "LuauCompileNoFoldVectorEqW",
     "LuauCompileConcatTargetTop",
-    "LuauIntegerFastcalls",
-    "LuauIntegerBufferFastcalls",
-    "LuauCompileMoveElision",
-    "LuauCompileFastpcall",
-    "LuauIntegerType2",
-    // Luau 0.742's fixes for two miscompiles. Move elision (above) reused the assignment
+    // Luau 0.747: an unrolled loop's first iteration binds the loop variable to `from` exactly,
+    // where it used to compute `from + 0 * step`, which turned a -0 start into +0.
+    "LuauCompileLoopUnrollNegativeZero",
+    // Luau 0.742's fixes for two miscompiles. Move elision (graduated in 0.747) reused the assignment
     // target's register while a later argument still read it, so `x = id(f(x))` passed `f` to
     // itself. Table constant folding, which no flag gates, kept folding `t.a` after `t` had been
     // an operand whose metamethod could write to it.
@@ -52,12 +52,9 @@ pub const LUAU_FLAGS: &[&str] = &[
     // so `require` always runs in a frame of the function the script wrote.
     "LuauCompileRequireNoInline",
     // Runtime side
-    "LuauIntegerLibrary",
     "LuauOptimizeStringSplit",
     "LuauLoadRemapOptionalUserdata",
-    "LuauTableRobustOom",
     "FixMathNoisePrecision",
-    "LuauFastpcall",
     // Luau 0.742: a protected call an error continuation starts inside a resumed coroutine is
     // resumed, where it used to be dropped.
     "LuauPcallErrorContinuationReentry",
@@ -103,9 +100,14 @@ pub const LUAU_FLAGS: &[&str] = &[
 /// graduated `LuauCodegenNoLinearFastpcall` and `LuauCodegenLimitVersions`; 0.745 graduated
 /// `LuauCodegenX64IntSpillRestore`, `LuauCodegenExitSyncUpdate`,
 /// `LuauCodegenScopedSpillKeepLazy`, `LuauCodegenNoZeroScale` and
-/// `LuauCodegenLimitVersionsExtra`.
+/// `LuauCodegenLimitVersionsExtra`; 0.747 graduated `LuauCodegenPropagateFallbackTags` and removed
+/// the integer type with its three flags here (`LuauCodegenInteger3`, `LuauCodegenIntegerCompare`,
+/// `LuauCodegenBufferInteger`). 0.747's runtime recompilation (`LuauCodegenRuntimeFeedback`),
+/// native direct userdata access (`LuauCodegenUserdataDirect`), the frozen-metatable cache
+/// (`LuauCodegenMetatableCache`), multi-lane dot products (`LuauCodegenMultiLaneDot`) and split-store
+/// forwarding (`LuauCodegenForwardSplitStore`) are features, not fixes, and stay off until each is
+/// measured on its own.
 pub const LUAU_CODEGEN_FLAGS: &[&str] = &[
-    "LuauCodegenPropagateFallbackTags",
     // Luau 0.745's fixes. A comparison can run `__eq`, but one whose result went unused was
     // deleted with its metamethod; and a store removed from a register marked dead left the
     // register dead at a VM exit that still read it.
@@ -113,9 +115,6 @@ pub const LUAU_CODEGEN_FLAGS: &[&str] = &[
     "LuauCodegenMarkUsed",
     "LuauCodegenA64ForgLoopArray",
     "LuauCodeGenFastpcall",
-    "LuauCodegenInteger3",
-    "LuauCodegenIntegerCompare",
-    "LuauCodegenBufferInteger",
     // Luau 0.744's fixes. Dead store elimination kept a tag store whose load had been
     // overwritten; `INVOKE_FASTPCALL` can replace the environment, so it now invalidates the
     // safe-environment assumption; a VM exit's register restores are planned per exit (a crash
@@ -133,6 +132,12 @@ pub const LUAU_CODEGEN_FLAGS: &[&str] = &[
     // Luau 0.746: the final x64 pass folds a tag or integer load into the check that uses it only
     // when nothing between the two writes the register it reads.
     "LuauCodegenX64ConflictCheck",
+    // Luau 0.747's fixes. A VM exit that restores a register stored in part (the value without the
+    // tag) restores it under the tag the code expected there; and a fastcall's argument registers
+    // get types only when the call's argument count is fixed, where a variable count used to give
+    // registers the call never wrote a type.
+    "LuauCodegenExitSyncExpectedTag",
+    "LuauCodegenFastcallAnalysisLimit",
 ];
 
 /// The flags defined in Luau's Analysis component, which only the `analysis` feature compiles.

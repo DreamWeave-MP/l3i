@@ -1,4 +1,4 @@
-//! Builds Luau from the `luau/` git submodule (pinned at the 0.746 release), the binder's own C
+//! Builds Luau from the `luau/` git submodule (pinned at the 0.747 release), the binder's own C
 //! additions (`csrc/extra.cpp`), and, per feature, the C++ shims over
 //! Luau's code generator and analysis libraries. Everything is compiled with `cc`, with no
 //! network access at build time and nothing outside the package. The compiler must be clang or
@@ -62,7 +62,7 @@ fn carrier(jit: bool) -> &'static str {
 
 // The Luau release the `luau/` submodule is pinned at. Bumping the submodule means bumping this,
 // re-auditing src/raw/ffi.rs against the new headers, and re-checking the flag policy.
-const LUAU_VERSION: &str = "0.746";
+const LUAU_VERSION: &str = "0.747";
 
 struct Luau {
     root: PathBuf,

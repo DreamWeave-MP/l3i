@@ -14,7 +14,6 @@ pub enum Type {
     Boolean = ffi::LUA_TBOOLEAN,
     LightUserdata = ffi::LUA_TLIGHTUSERDATA,
     Number = ffi::LUA_TNUMBER,
-    Integer = ffi::LUA_TINTEGER,
     Vector = ffi::LUA_TVECTOR,
     String = ffi::LUA_TSTRING,
     Table = ffi::LUA_TTABLE,
@@ -32,7 +31,6 @@ impl Type {
             ffi::LUA_TBOOLEAN => Type::Boolean,
             ffi::LUA_TLIGHTUSERDATA => Type::LightUserdata,
             ffi::LUA_TNUMBER => Type::Number,
-            ffi::LUA_TINTEGER => Type::Integer,
             ffi::LUA_TVECTOR => Type::Vector,
             ffi::LUA_TSTRING => Type::String,
             ffi::LUA_TTABLE => Type::Table,
@@ -52,7 +50,6 @@ impl Type {
             Type::Boolean => "boolean",
             Type::LightUserdata => "userdata",
             Type::Number => "number",
-            Type::Integer => "integer",
             Type::Vector => "vector",
             Type::String => "string",
             Type::Table => "table",
@@ -154,9 +151,6 @@ impl<'v> ValueView<'v> {
     /// True for a Luau number.
     pub fn is_number(&self) -> bool {
         self.type_of() == Type::Number
-    }
-    pub fn is_integer(&self) -> bool {
-        self.type_of() == Type::Integer
     }
     pub fn is_string(&self) -> bool {
         self.type_of() == Type::String

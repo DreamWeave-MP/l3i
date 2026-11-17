@@ -146,7 +146,7 @@ impl<'c> ParamItem<'c> for Operand<'c> {
 
     #[inline]
     fn matches(view: ValueView<'c>) -> bool {
-        matches!(view.type_of(), Type::Number | Type::Integer | Type::String)
+        matches!(view.type_of(), Type::Number | Type::String)
     }
 }
 

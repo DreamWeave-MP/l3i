@@ -148,13 +148,6 @@ pub fn describe_value(value: ValueView<'_>, max_length: usize) -> String {
             Type::Boolean => {
                 return if ffi::lua_toboolean(state, value.index()) != 0 { "true" } else { "false" }.to_owned();
             }
-            Type::Integer => {
-                let mut is_integer = 0;
-                let integer = ffi::lua_tointeger64(state, value.index(), &mut is_integer);
-                if is_integer != 0 {
-                    return integer.to_string();
-                }
-            }
             Type::Number => {
                 let mut is_number = 0;
                 let number = ffi::lua_tonumberx(state, value.index(), &mut is_number);

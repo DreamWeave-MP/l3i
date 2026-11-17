@@ -1,4 +1,4 @@
-//! Luau 0.746 C API, transcribed from `VM/include/lua.h`, `VM/include/lualib.h`,
+//! Luau 0.747 C API, transcribed from `VM/include/lua.h`, `VM/include/lualib.h`,
 //! `Compiler/include/luacode.h`, `CodeGen/include/luacodegen.h`, and the binder's own additions
 //! in `csrc/`.
 //!
@@ -57,17 +57,18 @@ pub const LUA_TNONE: c_int = -1;
 pub const LUA_TNIL: c_int = 0;
 pub const LUA_TBOOLEAN: c_int = 1;
 pub const LUA_TLIGHTUSERDATA: c_int = 2;
+// Luau 0.747 removed LUA_TINTEGER, which sat after LUA_TNUMBER: every tag after it moved down by
+// one. csrc/extra.cpp checks each of these against the header at compile time.
 pub const LUA_TNUMBER: c_int = 3;
-pub const LUA_TINTEGER: c_int = 4;
-pub const LUA_TVECTOR: c_int = 5;
-pub const LUA_TSTRING: c_int = 6;
-pub const LUA_TTABLE: c_int = 7;
-pub const LUA_TFUNCTION: c_int = 8;
-pub const LUA_TUSERDATA: c_int = 9;
-pub const LUA_TTHREAD: c_int = 10;
-pub const LUA_TBUFFER: c_int = 11;
-pub const LUA_TCLASS: c_int = 12;
-pub const LUA_TOBJECT: c_int = 13;
+pub const LUA_TVECTOR: c_int = 4;
+pub const LUA_TSTRING: c_int = 5;
+pub const LUA_TTABLE: c_int = 6;
+pub const LUA_TFUNCTION: c_int = 7;
+pub const LUA_TUSERDATA: c_int = 8;
+pub const LUA_TTHREAD: c_int = 9;
+pub const LUA_TBUFFER: c_int = 10;
+pub const LUA_TCLASS: c_int = 11;
+pub const LUA_TOBJECT: c_int = 12;
 
 // lua_GCOp
 pub const LUA_GCSTOP: c_int = 0;
@@ -247,7 +248,6 @@ unsafe extern "C-unwind" {
     // access functions (stack -> C)
     pub fn lua_isnumber(L: *mut lua_State, idx: c_int) -> c_int;
     pub fn lua_isstring(L: *mut lua_State, idx: c_int) -> c_int;
-    pub fn lua_isinteger64(L: *mut lua_State, idx: c_int) -> c_int;
     pub fn lua_iscfunction(L: *mut lua_State, idx: c_int) -> c_int;
     pub fn lua_isLfunction(L: *mut lua_State, idx: c_int) -> c_int;
     pub fn lua_isuserdata(L: *mut lua_State, idx: c_int) -> c_int;
@@ -261,7 +261,6 @@ unsafe extern "C-unwind" {
     pub fn lua_tounsignedx(L: *mut lua_State, idx: c_int, isnum: *mut c_int) -> c_uint;
     pub fn lua_tovector(L: *mut lua_State, idx: c_int) -> *const LUA_VECTOR_TYPE;
     pub fn lua_toboolean(L: *mut lua_State, idx: c_int) -> c_int;
-    pub fn lua_tointeger64(L: *mut lua_State, idx: c_int, isinteger: *mut c_int) -> i64;
     pub fn lua_tolstring(L: *mut lua_State, idx: c_int, len: *mut usize) -> *const c_char;
     pub fn lua_tostringatom(L: *mut lua_State, idx: c_int, atom: *mut c_int) -> *const c_char;
     pub fn lua_tolstringatom(L: *mut lua_State, idx: c_int, len: *mut usize, atom: *mut c_int) -> *const c_char;
@@ -282,7 +281,6 @@ unsafe extern "C-unwind" {
     pub fn lua_pushnil(L: *mut lua_State);
     pub fn lua_pushnumber(L: *mut lua_State, n: f64);
     pub fn lua_pushinteger(L: *mut lua_State, n: c_int);
-    pub fn lua_pushinteger64(L: *mut lua_State, n: i64);
     pub fn lua_pushunsigned(L: *mut lua_State, n: c_uint);
     pub fn lua_pushvector(L: *mut lua_State, x: LUA_VECTOR_TYPE, y: LUA_VECTOR_TYPE, z: LUA_VECTOR_TYPE);
     pub fn lua_pushlstring(L: *mut lua_State, s: *const c_char, l: usize);
@@ -334,6 +332,17 @@ unsafe extern "C-unwind" {
         data: *const c_char,
         size: usize,
         env: c_int,
+    ) -> c_int;
+    /// Luau 0.747: `luau_load`, but every function other than the main one is built on first
+    /// access; `data` must stay valid until `release(owner)`. Declared, not yet used.
+    pub fn luau_loadlazy(
+        L: *mut lua_State,
+        chunkname: *const c_char,
+        data: *const c_char,
+        size: usize,
+        env: c_int,
+        owner: *mut c_void,
+        release: Option<unsafe extern "C" fn(owner: *mut c_void)>,
     ) -> c_int;
     pub fn lua_call(L: *mut lua_State, nargs: c_int, nresults: c_int);
     pub fn lua_pcall(L: *mut lua_State, nargs: c_int, nresults: c_int, errfunc: c_int) -> c_int;
@@ -403,7 +412,6 @@ unsafe extern "C-unwind" {
         z: LUA_VECTOR_TYPE,
     );
     pub fn lua_userdatadirectfield_setboolean(result: *mut c_void, b: c_int);
-    pub fn lua_userdatadirectfield_setinteger64(result: *mut c_void, n: i64);
     pub fn lua_userdatadirectfield_setnil(result: *mut c_void);
 
     pub fn lua_setlightuserdataname(L: *mut lua_State, tag: c_int, name: *const c_char);
@@ -465,9 +473,7 @@ unsafe extern "C-unwind" {
     pub fn luaL_checkboolean(L: *mut lua_State, narg: c_int) -> c_int;
     pub fn luaL_optboolean(L: *mut lua_State, narg: c_int, def: c_int) -> c_int;
     pub fn luaL_checkinteger(L: *mut lua_State, numArg: c_int) -> c_int;
-    pub fn luaL_checkinteger64(L: *mut lua_State, numArg: c_int) -> i64;
     pub fn luaL_optinteger(L: *mut lua_State, nArg: c_int, def: c_int) -> c_int;
-    pub fn luaL_optinteger64(L: *mut lua_State, nArg: c_int, def: i64) -> i64;
     pub fn luaL_checkunsigned(L: *mut lua_State, numArg: c_int) -> c_uint;
     pub fn luaL_optunsigned(L: *mut lua_State, numArg: c_int, def: c_uint) -> c_uint;
     pub fn luaL_checkvector(L: *mut lua_State, narg: c_int) -> *const LUA_VECTOR_TYPE;
@@ -500,7 +506,6 @@ unsafe extern "C-unwind" {
     pub fn luaopen_math(L: *mut lua_State) -> c_int;
     pub fn luaopen_debug(L: *mut lua_State) -> c_int;
     pub fn luaopen_vector(L: *mut lua_State) -> c_int;
-    pub fn luaopen_integer(L: *mut lua_State) -> c_int;
     pub fn luaL_openlibs(L: *mut lua_State);
     pub fn luaL_sandbox(L: *mut lua_State);
     pub fn luaL_sandboxthread(L: *mut lua_State);
@@ -567,7 +572,6 @@ unsafe extern "C" {
     pub fn luau_set_compile_constant_nil(constant: *mut lua_CompileConstant);
     pub fn luau_set_compile_constant_boolean(constant: *mut lua_CompileConstant, b: c_int);
     pub fn luau_set_compile_constant_number(constant: *mut lua_CompileConstant, n: f64);
-    pub fn luau_set_compile_constant_integer64(constant: *mut lua_CompileConstant, l: i64);
     pub fn luau_set_compile_constant_vector(constant: *mut lua_CompileConstant, x: f32, y: f32, z: f32, w: f32);
     pub fn luau_set_compile_constant_vectord(constant: *mut lua_CompileConstant, x: f64, y: f64, z: f64, w: f64);
     pub fn luau_set_compile_constant_string(constant: *mut lua_CompileConstant, s: *const c_char, l: usize);

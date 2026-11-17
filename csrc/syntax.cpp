@@ -164,7 +164,6 @@ using namespace Luau;
     X(prefix, "prefix") \
     X(hasParameterList, "hasParameterList") \
     X(parameters, "parameters") \
-    X(isExact, "isExact") \
     X(argTypes, "argTypes") \
     X(argNames, "argNames") \
     X(returnTypes, "returnTypes") \
@@ -195,7 +194,6 @@ using namespace Luau;
     X(KExprConstantNil, "ExprConstantNil") \
     X(KExprConstantBool, "ExprConstantBool") \
     X(KExprConstantNumber, "ExprConstantNumber") \
-    X(KExprConstantInteger, "ExprConstantInteger") \
     X(KExprConstantString, "ExprConstantString") \
     X(KExprLocal, "ExprLocal") \
     X(KExprGlobal, "ExprGlobal") \
@@ -558,7 +556,11 @@ public:
             for (auto* v : s->vars) local(v);
         else if (auto* s = n->as<AstStatLocalFunction>()) local(s->name);
         else if (auto* s = n->as<AstStatIf>()) local(s->conditionLocal);
-        else if (auto* s = n->as<AstStatClass>()) local(s->name);
+        else if (auto* s = n->as<AstStatClass>())
+        {
+            if (s->declModifier != AstStatClass::DeclModifier::None)
+                local(s->localName);
+        }
         return true;
     }
     bool visit(AstExprLocal* n) override
@@ -1065,15 +1067,6 @@ public:
         return false;
     }
 
-    bool visit(AstExprConstantInteger* node) override
-    {
-        open(KExprConstantInteger, node->location, 1);
-        setlvalue(L->top, node->value);
-        L->top++;
-        popInto(value);
-        return false;
-    }
-
     // What the string was written with. Luau's tree folds single quotes, double quotes and
     // backticks into one style; the string's first byte tells them apart.
     Str quote(AstExprConstantString* node)
@@ -1519,9 +1512,13 @@ public:
     bool visit(AstStatClass* node) override
     {
         stat(node, KStatClass, 4);
-        setLocal(name, node->name);
+        // Luau 0.747: `class a.b` names an expression; `local`, `const` and `export class` a local.
+        if (node->declModifier == AstStatClass::DeclModifier::None)
+            setNode(name, node->exprName);
+        else
+            setLocal(name, node->localName);
         setNode(super, node->super);
-        setBool(exported, node->exported);
+        setBool(exported, node->declModifier == AstStatClass::DeclModifier::Export);
         setBool(Str::open, node->open);
         return false;
     }
@@ -1549,7 +1546,7 @@ public:
 
     bool visit(AstTypeTable* node) override
     {
-        open(KTypeTable, node->location, 3);
+        open(KTypeTable, node->location, 2);
         newTable(int(node->props.size), 0);
         for (size_t i = 0; i < node->props.size; ++i)
         {
@@ -1562,7 +1559,6 @@ public:
         }
         popInto(props);
         tableIndexer(node->indexer);
-        setBool(isExact, node->isExact);
         return false;
     }
 

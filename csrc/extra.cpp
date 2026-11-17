@@ -9,6 +9,7 @@
 #include "lstate.h"
 #include "ltable.h"
 
+#include "Luau/Bytecode.h"
 #include "Luau/Common.h"
 
 #include <stdio.h>
@@ -210,7 +211,22 @@ const TValue* l3i_stack_slot(lua_State* L, int idx)
 // The light userdata tags (build.rs defines the limit; src/raw/ffi.rs mirrors it and splits it
 // into the host's 0..128 and the packed scalars' 128..160).
 static_assert(LUA_LUTAG_LIMIT == 160, "l3i mirrors 160 light userdata tags");
-static_assert(LUA_TLIGHTUSERDATA == 2 && LUA_TUSERDATA == 9, "l3i mirrors the light and full userdata type tags");
+
+// src/bytecode_scan.rs walks chunks with these numbers before luau_load reads them.
+static_assert(LBC_VERSION_MIN == 3 && LBC_VERSION_MAX == 14 && LBC_VERSION_CLASSES == 100, "bytecode versions moved");
+static_assert(LBC_TYPE_VERSION_MIN == 1 && LBC_TYPE_VERSION_MAX == 3, "bytecode type versions moved");
+static_assert(LBC_CONSTANT_NIL == 0 && LBC_CONSTANT_BOOLEAN == 1 && LBC_CONSTANT_NUMBER == 2 && LBC_CONSTANT_STRING == 3 &&
+                  LBC_CONSTANT_IMPORT == 4 && LBC_CONSTANT_TABLE == 5 && LBC_CONSTANT_CLOSURE == 6 && LBC_CONSTANT_VECTOR == 7 &&
+                  LBC_CONSTANT_TABLE_WITH_CONSTANTS == 8 && LBC_CONSTANT_INTEGER_DEPRECATED == 9 && LBC_CONSTANT_CLASS_SHAPE == 10 &&
+                  LBC_CONSTANT_VECTORD == 11 && LBC_CONSTANT__COUNT == 12,
+    "bytecode constant kinds moved; update src/bytecode_scan.rs");
+static_assert(LFT_CALLTARGET == 0 && LFT_CONSTRUCT == 1 && LPF_INLINABLE == (1 << 3), "bytecode feedback and flags moved");
+// Every type tag src/raw/ffi.rs declares: Luau 0.747 removed LUA_TINTEGER and moved every tag after
+// LUA_TNUMBER down by one, and a stale tag would make a raw read match the wrong type.
+static_assert(LUA_TNONE == -1 && LUA_TNIL == 0 && LUA_TBOOLEAN == 1, "l3i mirrors the type tags");
+static_assert(LUA_TLIGHTUSERDATA == 2 && LUA_TNUMBER == 3 && LUA_TVECTOR == 4, "l3i mirrors the type tags");
+static_assert(LUA_TSTRING == 5 && LUA_TTABLE == 6 && LUA_TFUNCTION == 7 && LUA_TUSERDATA == 8, "l3i mirrors the type tags");
+static_assert(LUA_TTHREAD == 9 && LUA_TBUFFER == 10 && LUA_TCLASS == 11 && LUA_TOBJECT == 12, "l3i mirrors the type tags");
 static_assert(offsetof(Udata, len) == 4, "l3i mirrors the userdata length at offset 4");
 static_assert(offsetof(Udata, metatable) == 8, "l3i mirrors the userdata metatable at offset 8");
 

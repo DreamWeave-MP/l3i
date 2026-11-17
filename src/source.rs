@@ -324,23 +324,14 @@ pub trait LoadScope: Scope + Sized {
     /// chunk as a `Function`. A chunk name starting with `@` or `=` is stripped of that prefix
     /// in debug records, as Luau does. A load failure is `Error::Runtime` with Luau's message;
     /// a chunk name containing NUL is a logic error.
+    ///
+    /// Bytecode from a cache may come from an older build. Luau 0.746 and 0.747 both write
+    /// version 14, so before loading, the chunk's constants are walked: one holding a 64-bit
+    /// integer constant (which 0.747 removed and would misread), a constant kind this build does
+    /// not know, or a function cut short is refused with `Error::Runtime` naming the chunk.
     fn load_bytecode(&self, chunk_name: &str, bytecode: &[u8]) -> Result<Function> {
-        let name = CString::new(chunk_name).map_err(|_| Error::logic("Chunk name cannot contain NUL"))?;
-        self.with_frame(|frame| {
-            let state = frame.state();
-            // SAFETY: the frame's thread is live; the bytecode and name outlive the call.
-            // luau_load reports failure by status and leaves the message on top of the frame.
-            let status = unsafe { ffi::luau_load(state, name.as_ptr(), bytecode.as_ptr().cast(), bytecode.len(), 0) };
-            if status != ffi::LUA_OK {
-                // SAFETY: the message is on the frame's thread.
-                return Err(unsafe { crate::raw::protect::pop_error(state, status) });
-            }
-            #[cfg(feature = "jit")]
-            if let Some(generator) = crate::native_code::NativeCodeGen::for_scope(frame) {
-                generator.compile(frame, -1, bytecode)?;
-            }
-            Function::from_value(Value::store(frame.top_value())?)
-        })
+        crate::bytecode_scan::check(bytecode).map_err(|refusal| refusal.into_error(chunk_name))?;
+        load_checked(self, chunk_name, bytecode)
     }
 
     /// Compiles `source` with `options` and loads it as [`LoadScope::load_bytecode`] does. A
@@ -348,8 +339,29 @@ pub trait LoadScope: Scope + Sized {
     /// failed `luau_load` reports it.
     fn load_source(&self, chunk_name: &str, source: &str, options: &CompileOptions) -> Result<Function> {
         let bytecode = compile_raw(source, options)?;
-        self.load_bytecode(chunk_name, &bytecode)
+        // This build just wrote it: there is nothing older to refuse.
+        load_checked(self, chunk_name, &bytecode)
     }
+}
+
+/// [`LoadScope::load_bytecode`] past the walk over its constants.
+fn load_checked(scope: &impl Scope, chunk_name: &str, bytecode: &[u8]) -> Result<Function> {
+    let name = CString::new(chunk_name).map_err(|_| Error::logic("Chunk name cannot contain NUL"))?;
+    scope.with_frame(|frame| {
+        let state = frame.state();
+        // SAFETY: the frame's thread is live; the bytecode and name outlive the call.
+        // luau_load reports failure by status and leaves the message on top of the frame.
+        let status = unsafe { ffi::luau_load(state, name.as_ptr(), bytecode.as_ptr().cast(), bytecode.len(), 0) };
+        if status != ffi::LUA_OK {
+            // SAFETY: the message is on the frame's thread.
+            return Err(unsafe { crate::raw::protect::pop_error(state, status) });
+        }
+        #[cfg(feature = "jit")]
+        if let Some(generator) = crate::native_code::NativeCodeGen::for_scope(frame) {
+            generator.compile(frame, -1, bytecode)?;
+        }
+        Function::from_value(Value::store(frame.top_value())?)
+    })
 }
 
 impl<S: Scope> LoadScope for S {}

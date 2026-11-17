@@ -779,10 +779,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn integer_library_is_live_after_flags() {
+    fn the_integer_type_is_gone() {
+        // Luau 0.747 removed the type: `42i` does not parse, there is no integer library.
         let runtime = Runtime::new().unwrap();
-        // LuauIntegerType2 parses `42i`; LuauIntegerLibrary provides the integer library.
-        runtime.exec("assert(typeof(42i) == 'integer', typeof(42i))").unwrap();
+        let error = runtime.exec("return 42i").unwrap_err().to_string();
+        assert!(error.contains("Malformed number"), "{error}");
+        runtime.exec("assert(integer == nil, 'no integer library')").unwrap();
     }
 
     #[test]
