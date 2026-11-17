@@ -522,6 +522,16 @@ A constant the compiler may fold in place of a library member access. `Clone`, `
 Compiles Luau source to bytecode. A compile error is `Error::Runtime` carrying Luau's message
 (without a chunk name) rather than error bytecode. Freezes the flag policy first.
 
+{{ api_signature(value="fn lint_native_annotations(source: &str, options: &CompileOptions, known_userdata: &[&str]) -> Result<Vec<NativeAnnotationWarning>>") }}
+
+The parameters of native functions (`--!native` modules, `@native` functions) that `options`
+still compiles to a plain userdata guard after erasing `options.packed_types`, which refuses a
+packed scalar on every call: a packed kind missing from the list, or a misspelt type.
+`known_userdata` names the host's own userdata types. `NativeAnnotationWarning { line, column,
+parameter, type_name }` is 1-based in the source as written and displays as a sentence. A parse
+error is `Error::Runtime`. `Runtime::lint_native_annotations(source)` runs it with the runtime's
+options and its plan's userdata types.
+
 {{ api_signature(value="trait LoadScope: Scope + Sized") }}
 
 Loading chunks on the thread of any scope, implemented for every `Scope`. The chunk loads on

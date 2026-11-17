@@ -175,6 +175,97 @@ fn c_array(values: &[CString], storage: &mut Vec<*const c_char>) -> *const *cons
     storage.as_ptr()
 }
 
+/// A parameter of a native function that Luau's compiler still types as a plain userdata after
+/// the packed-kind erasure: its entry guard refuses a packed scalar on every call, so the
+/// function runs, correctly, at interpreter speed. Positions are 1-based, in the source as
+/// written.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NativeAnnotationWarning {
+    pub line: u32,
+    pub column: u32,
+    pub parameter: String,
+    /// The type name the compiler did not know.
+    pub type_name: String,
+}
+
+impl std::fmt::Display for NativeAnnotationWarning {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}:{}: parameter '{}' is annotated '{}', which this compile types as a userdata: a native entry guard will refuse a packed scalar there",
+            self.line, self.column, self.parameter, self.type_name
+        )
+    }
+}
+
+/// #30's lint: the parameters of native functions (a `--!native` module, or an `@native`
+/// function) whose annotation `options` still compiles to a plain userdata guard after erasing
+/// `options.packed_types`. The packed kinds the list names never appear here, nor do prefixed
+/// names, generic parameters, unions of different types or `typeof`, which the compiler types as
+/// `any`. What does is a name the compile knows nothing about: a packed kind missing from
+/// `packed_types` (a standalone compile without the host's kinds, a kind registered after the
+/// compile), or a misspelt type. `known_userdata` names the host's own userdata types, whose
+/// guard is the right one. A parse error is `Error::Runtime`.
+pub fn lint_native_annotations(
+    source: &str,
+    options: &CompileOptions,
+    known_userdata: &[&str],
+) -> Result<Vec<NativeAnnotationWarning>> {
+    let mut userdata_types = Vec::new();
+    let mut packed_types = Vec::new();
+    let mut known_names = Vec::new();
+    let known: Vec<CString> = known_userdata
+        .iter()
+        .map(|name| CString::new(*name).map_err(|_| Error::logic("A userdata type name cannot contain NUL")))
+        .collect::<Result<_>>()?;
+    let raw = ffi::lua_CompileOptions {
+        optimizationLevel: 0,
+        debugLevel: 0,
+        typeInfoLevel: 0,
+        coverageLevel: 0,
+        vectorLib: ptr::null(),
+        vectorCtor: ptr::null(),
+        vectorType: c_ptr(options.vector_type.as_ref()),
+        vectorPrecision: 0,
+        mutableGlobals: ptr::null(),
+        userdataTypes: c_array(&options.userdata_types, &mut userdata_types),
+        librariesWithKnownMembers: ptr::null(),
+        libraryMemberTypeCb: None,
+        libraryMemberConstantCb: None,
+        disabledBuiltins: ptr::null(),
+    };
+    let erased = c_array(&options.packed_types, &mut packed_types);
+    let known = c_array(&known, &mut known_names);
+    let mut size = 0usize;
+    // SAFETY: every pointer in `raw`, `erased` and `known` outlives the call (locals of this
+    // function or borrowed from `options`); the shim catches every C++ exception and reports a
+    // parse error in-band.
+    let out =
+        unsafe { ffi::l3i_luau_lint_native(source.as_ptr().cast(), source.len(), &raw, erased, known, &mut size) };
+    if out.is_null() {
+        return Err(Error::runtime("the native annotation lint ran out of memory"));
+    }
+    // SAFETY: the shim returned `size` valid bytes, ours until `free`.
+    let text = unsafe { std::slice::from_raw_parts(out.cast::<u8>(), size) }.to_vec();
+    unsafe { ffi::free(out.cast()) };
+    if let Some(message) = text.strip_prefix(b"\0") {
+        return Err(Error::runtime(String::from_utf8_lossy(message).into_owned()));
+    }
+    let text = String::from_utf8_lossy(&text);
+    Ok(text
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.splitn(4, '\t');
+            Some(NativeAnnotationWarning {
+                line: fields.next()?.parse().ok()?,
+                column: fields.next()?.parse().ok()?,
+                parameter: fields.next()?.to_owned(),
+                type_name: fields.next()?.to_owned(),
+            })
+        })
+        .collect())
+}
+
 /// Compiles Luau source to bytecode. A compile error is returned as `Error::Runtime` carrying
 /// Luau's message (without a chunk name) rather than as error bytecode.
 /// L3i surface forms are lowered before parsing; compiler errors and emitted debug line

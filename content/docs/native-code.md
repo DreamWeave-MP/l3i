@@ -260,9 +260,13 @@ Three things keep a call site native or explain why it is not:
   a plan fills with its kinds). Analysis still sees the names. Prefixed names, generic
   parameters, unions, intersections and `typeof` are `any` to the compiler anyway, and aliases
   resolve through their erased bodies, so every form a script can write stays native
-  (`tests/type_surface.rs`). The one way left to get a guard is a kind missing from the list: a
-  standalone `source::compile` without the host's kinds, or a kind registered after the compile
-  (`Runtime::register_packed` adds its kind to later compiles only).
+  (`tests/type_surface.rs`). The one way left to get a guard is a name the compile does not
+  know: a kind missing from the list (a standalone `source::compile` without the host's kinds, a
+  kind `Runtime::register_packed` added after the compile) or a misspelt type.
+  `Runtime::lint_native_annotations(source)`, or `source::lint_native_annotations` with explicit
+  options and the host's userdata type names, lists those parameters, with their position, for
+  `--!native` modules and `@native` functions; it applies the compiler's own typing rules, so it
+  warns exactly where an entry guard would refuse a packed value.
 - **Inlining drops annotations.** A local function the compiler inlines at `-O2` loses its
   parameter annotations, so a lowered namecall on an annotated parameter inside it runs the
   generic path in the caller instead. The result is the same; only the speed differs. This is

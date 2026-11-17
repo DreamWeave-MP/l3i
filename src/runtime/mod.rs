@@ -663,6 +663,17 @@ impl Runtime {
         self.compile_options.borrow().clone()
     }
 
+    /// [`crate::source::lint_native_annotations`] with this runtime's compiler options, its
+    /// packed kinds included, and its plan's userdata types as the known ones.
+    pub fn lint_native_annotations(&self, source: &str) -> Result<Vec<crate::source::NativeAnnotationWarning>> {
+        let classes: Vec<String> = self
+            .plan()
+            .map(|plan| plan.userdata().iter().map(|ud| crate::extension::class_name(&ud.key)).collect())
+            .unwrap_or_default();
+        let known: Vec<&str> = classes.iter().map(String::as_str).collect();
+        crate::source::lint_native_annotations(source, &self.compile_options(), &known)
+    }
+
     /// Replaces the compiler options of a manually assembled runtime; a runtime made from a
     /// plan derives them from the plan and refuses.
     pub fn set_compile_options(&self, options: CompileOptions) -> Result<()> {

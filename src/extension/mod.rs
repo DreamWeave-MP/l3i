@@ -27,6 +27,8 @@ mod install;
 mod plan;
 mod typedefs;
 
+pub(crate) use typedefs::class_name;
+
 /// Crate-internal seams the runtime uses.
 pub(crate) mod install_detail {
     pub(crate) use super::install::{ModuleMembers, downcast, instantiate};

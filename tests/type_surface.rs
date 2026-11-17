@@ -269,5 +269,55 @@ fn every_annotation_form_the_erasure_leaves_stays_native() {
         } else {
             assert_eq!(control, 0, "{name}: {control} exits without the erasure");
         }
+        // The lint predicts exactly what was measured: silent on the erased compile, and on the
+        // unerased one a warning precisely for the forms whose guard took the exits.
+        let source = format!("--!native\n{body}\nreturn f\n");
+        assert_eq!(l3i::source::lint_native_annotations(&source, &options, &[]).unwrap(), [], "{name}");
+        let warned = l3i::source::lint_native_annotations(&source, &unerased, &[]).unwrap();
+        assert_eq!(!warned.is_empty(), guarded, "{name}: the lint said {warned:?}");
     }
+}
+
+/// The lint's own cases: what it reports, where, and what it leaves alone.
+#[test]
+fn the_native_annotation_lint_reports_only_guards_that_refuse_packed_values() {
+    use l3i::source::{CompileOptions, NativeAnnotationWarning, lint_native_annotations};
+    let runtime = Runtime::from_plan(&plan(RuntimePolicy::new())).unwrap();
+    let warn = |line, column, parameter: &str, type_name: &str| NativeAnnotationWarning {
+        line,
+        column,
+        parameter: parameter.to_owned(),
+        type_name: type_name.to_owned(),
+    };
+
+    // The plan's own kinds, its classes and the any forms: nothing to say.
+    let clean = "--!native\n\
+                 local function f(q: Quaternion, c: Color?, k: AnimationKey, b: Bits64, C: dream_udp_Client, \
+                 g: (number) -> (), t: { x: number }, u: Quaternion | number) end\n\
+                 local function h<T>(x: T, y: typeof(f)) end\n";
+    assert_eq!(runtime.lint_native_annotations(clean).unwrap(), []);
+
+    // A misspelt kind, an alias to it, and two unknown names in one union are all guarded.
+    let wrong = "--!native\nlocal function f(a: number, q: Quaternoin) end\n\
+                 type Rot = Quaternoin\nlocal function g(r: Rot?) end\n\
+                 local function h(x: Foo | Bar) end\n";
+    assert_eq!(
+        runtime.lint_native_annotations(wrong).unwrap(),
+        [warn(2, 29, "q", "Quaternoin"), warn(4, 18, "r", "Quaternoin"), warn(5, 18, "x", "Bar")]
+    );
+
+    // Only native code is linted: the module flag or the function's own attribute.
+    let interpreted = "local function f(q: Quaternoin) end\n@native local function g(q: Quaternoin) end\n";
+    assert_eq!(runtime.lint_native_annotations(interpreted).unwrap(), [warn(2, 26, "q", "Quaternoin")]);
+
+    // A standalone compile without the host's kinds: the packed kinds are what the lint names.
+    let bare = CompileOptions { packed_types: Vec::new(), ..CompileOptions::default() };
+    let missing =
+        lint_native_annotations("--!native\nlocal function f(q: Quaternion, h: Handle) end\n", &bare, &["Handle"]);
+    assert_eq!(missing.unwrap(), [warn(2, 18, "q", "Quaternion")]);
+
+    // The message says what will happen; a parse error is an error.
+    let shown = warn(2, 18, "q", "Quaternion").to_string();
+    assert!(shown.contains("2:18") && shown.contains("refuse a packed scalar"), "{shown}");
+    assert!(lint_native_annotations("--!native\nlocal function (", &bare, &[]).is_err());
 }

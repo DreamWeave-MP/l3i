@@ -543,6 +543,18 @@ unsafe extern "C" {
         erased: *const *const c_char,
         outsize: *mut usize,
     ) -> *mut c_char;
+    /// The native annotation lint (`csrc/bytecode.cpp`): one `line\tcolumn\tparameter\ttype`
+    /// line per parameter of a native function that the compile still guards as a plain
+    /// userdata, or a leading NUL and a parse error. `known` is a null-terminated list of
+    /// userdata type names to leave alone, or null. Malloc'd; null when allocation failed.
+    pub fn l3i_luau_lint_native(
+        source: *const c_char,
+        size: usize,
+        options: *const lua_CompileOptions,
+        erased: *const *const c_char,
+        known: *const *const c_char,
+        outsize: *mut usize,
+    ) -> *mut c_char;
     /// [`l3i_luau_disassemble`] with `erased`, as [`l3i_luau_compile_erasing`].
     pub fn l3i_luau_disassemble_erasing(
         source: *const c_char,
