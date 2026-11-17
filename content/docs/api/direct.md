@@ -228,7 +228,7 @@ struct ValueField;
 
 impl DirectField<Counter> for ValueField {
     fn get(counter: &Counter) -> FieldValue {
-        FieldValue::Integer(counter.value.get())
+        FieldValue::Number(counter.value.get() as f64)
     }
 }
 ```

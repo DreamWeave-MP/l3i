@@ -11,7 +11,7 @@ kind = "tutorial"
 
 ```toml
 [dependencies]
-l3i = { version = "2", features = ["jit"] }
+l3i = { version = "3", features = ["jit"] }
 ```
 
 The crate's name in code is `l3i`. It needs Rust 1.95 or newer and edition 2024. Three features
@@ -96,7 +96,7 @@ the gain. Both are why `build.rs` checks up front.
 
 ## Building from a checkout
 
-Luau is the `luau/` git submodule, pinned at release 0.746. A crates.io
+Luau is the `luau/` git submodule, pinned at release 0.747. A crates.io
 package carries the Luau sources it needs; a checkout has to fetch them:
 
 ```sh

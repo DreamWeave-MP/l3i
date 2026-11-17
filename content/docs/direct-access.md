@@ -188,7 +188,7 @@ serves one type's slot to the other.
 
 ## Direct fields
 
-`direct::field` is Luau 0.745's `lua_registeruserdatadirectfieldget`: a registered getter runs
+`direct::field` is Luau's `lua_registeruserdatadirectfieldget`: a registered getter runs
 from `GETTABLEKS` with no Lua frame, receiving only the userdata payload and a result slot. It
 must not touch the Lua API and cannot fail, so it is a unit type implementing
 `direct::field::DirectField<T>` with one function.
@@ -222,11 +222,13 @@ fn install(runtime: &Runtime) -> l3i::Result<()> {
 }
 ```
 
-`FieldValue` carries what Luau has setters for: `Nil`, `Boolean`, `Number`, `Integer` and
-`Vector`. Luau's direct-field API has no string setter, so a text field is a getter. Direct
+`FieldValue` carries what Luau has setters for: `Nil`, `Boolean`, `Number`, `Vector`, and on the
+light userdata carrier `Bits64`, written as a light userdata with `Bits64`'s tag (the boxed
+carrier would have to allocate, which a direct getter cannot). Luau's direct-field API has no
+string setter, so a text field is a getter. Direct
 fields never reach `__index`; `T` must be a registered tagged type with a read-only metatable,
 and since Luau offers no query, replacement or removal, registering a field twice is a logic
-error. A planned direct field costs 78 instructions per read against 397 for a planned getter;
+error. A planned direct field costs 69 instructions per read against 330 for a planned getter;
 [Performance](@/docs/performance.md) has the whole table.
 
 ## The vector buffer writer

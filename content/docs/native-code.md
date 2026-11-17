@@ -213,9 +213,9 @@ The hook sets in the crate:
 | Hook set | Lowers |
 |---|---|
 | `native_code::vector_buffer::VectorBufferWriter` | `vector:writef32x3(buffer, offset)` to three native f32 stores; part of the default hook set. Its interpreter half, `Runtime::install_vector_buffer_writer()`, installs the `__namecall` shim on Luau's vector metatable with exactly the semantics of three `buffer.writef32` calls, and is where a failed guard lands |
-| `quat::lowering::Lowering` | `dream_quat_Math`'s `rotate`, `mul`, `slerp`, `fromXYZW`, `key`, `keyRotation`, `keyFlags`: integer unpacking, double arithmetic, vector or integer stores, no C call |
+| `quat::lowering::Lowering` | `dream_quat_Math`'s `rotate`, `mul`, `slerp`, `fromXYZW`, `key`, `keyRotation`, `keyFlags`: light userdata loads and kind checks, double arithmetic, vector, number or light userdata stores, no C call |
 | `raster::lowering::ColorMath` | `dream_raster_Math`'s color arithmetic in both widths |
-| `bytes::lowering::ByteMath` | `dream_bytes_Math`'s 16-, 24-, 32- and 64-bit integer reads and writes: a tag check, Luau's own bounds check, one load or store, and a byte swap for the big-endian forms |
+| `bytes::lowering::ByteMath` | `dream_bytes_Math`'s 16-, 24-, 32- and 64-bit integer reads and writes (the 64-bit ones as `Bits64`): a tag check, Luau's own bounds check, one load or store, and a byte swap for the big-endian forms |
 | `intern::lowering::InternLowering` | An annotated `dream_intern_Pool`'s `intern` and `find` on a string or buffer span: the policy's hash eight bytes at a time, the probe and a word compare against the arena; an insert or a bad argument runs the bound method through `namecall_call` |
 | `soft_render::lowering::VertexWriter` | `dream_soft_render_Vertices:write`: one bounds check and six buffer stores |
 
@@ -236,10 +236,37 @@ local back = Q:keyRotation(k)   -- lowers
 return Q:mul(back, q)           -- multiple results: the bound method runs
 ```
 
-The bound method is always the oracle: a lowered call that hits a guard, a wrong tag, an integer
-of another packed kind, a non-finite weight, an offset outside the buffer, exits to the
+The bound method is always the oracle: a lowered call that hits a guard, a wrong tag, a value of
+another packed kind, a non-finite weight, an offset outside the buffer, exits to the
 interpreter, whose bound method raises the same error the script would have seen without native
 code.
+
+### Packed values in native code
+
+A packed scalar reaches lowered code as a light userdata. `native_code::packed_ir` is the one
+place hooks load and store it: a checked load tests the slot's type and the kind nibble in the
+top four bits (never the light userdata tag), a wide load (`Color16`, `Bits64`) tests the type
+only, and a store writes the 64 bits, the tag and the type. The equivalence suite
+(`tests/carrier_equivalence.rs`) runs every lowered operation and its bound method over the
+bit patterns a carrier can meet, forged and mismatched ones included, and holds them to the same
+accept or refuse, the same bits, the same tag and the same error.
+
+Three things keep a call site native or explain why it is not:
+
+- **Annotations name kinds, bytecode does not.** Luau's compiler maps a type name it does not
+  know to `userdata`, and a native function's entry guard would then refuse a packed argument on
+  every call: the right answer at interpreter speed. Before compiling, l3i rewrites every
+  reference to a packed kind in a type annotation to `any` (`CompileOptions::packed_types`, which
+  a plan fills with its kinds). Analysis still sees the names.
+- **Inlining drops annotations.** A local function the compiler inlines at `-O2` loses its
+  parameter annotations, so a lowered namecall on an annotated parameter inside it runs the
+  generic path in the caller instead. The result is the same; only the speed differs. This is
+  Luau's behaviour, not the carrier's, and held before 3.0.0 too.
+- **Luau does not track a light userdata's tag in registers.** A lowered result that feeds
+  straight into another lowered call is stored to the stack slot and read back, so chained or
+  reassigned results (`acc = Q:mul(acc, r)`) cost about 18 cycles more per call than an integer
+  did, and very short chains through a local (`local c = C:rgba8(...)`, then `C:red(c)`)
+  proportionally more.
 
 ## Counters and dumps
 

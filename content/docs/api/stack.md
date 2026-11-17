@@ -125,7 +125,7 @@ fn main() -> l3i::Result<()> {
 
 ## Type
 
-{{ api_signature(value="enum Type { None, Nil, Boolean, LightUserdata, Number, Integer, Vector, String, Table, Function, Userdata, Thread, Buffer }") }}
+{{ api_signature(value="enum Type { None, Nil, Boolean, LightUserdata, Number, Vector, String, Table, Function, Userdata, Thread, Buffer }") }}
 
 Luau's value types, including the Luau-only ones, with the `LUA_T*` discriminants. `None` is
 `LUA_TNONE`, a slot that does not exist. `Clone`, `Copy`, `Debug`, `Eq`.
@@ -133,8 +133,9 @@ Luau's value types, including the Luau-only ones, with the `LUA_T*` discriminant
 {{ api_signature(value="fn name(self) -> &'static str") }}
 
 Luau's own name, as `lua_typename` reports it: `no value`, `nil`, `boolean`, `userdata` (for
-both userdata kinds), `number`, `integer`, `vector`, `string`, `table`, `function`, `thread`,
-`buffer`.
+both userdata kinds), `number`, `vector`, `string`, `table`, `function`, `thread`, `buffer`. A
+packed scalar is a `LightUserdata` (or, on the boxed carrier, a `Userdata`) here; `typeof` in a
+script answers its kind's name.
 
 ## ValueView
 
@@ -149,8 +150,7 @@ aliasing whatever Luau puts there next. `Clone`, `Copy`, `Debug`.
 |---|---|
 | `fn index(&self) -> c_int` | The absolute index, a pseudo-index, or 0 for no value |
 | `fn type_of(&self) -> Type` | `None` when the slot no longer exists |
-| `fn is_nil(&self) -> bool`, `is_boolean`, `is_integer`, `is_string`, `is_table`, `is_function`, `is_light_userdata`, `is_userdata`, `is_thread`, `is_buffer`, `is_vector` | One type test each |
-| `fn is_number(&self) -> bool` | True for both Luau numbers and Luau 64-bit integers |
+| `fn is_nil(&self) -> bool`, `is_boolean`, `is_number`, `is_string`, `is_table`, `is_function`, `is_light_userdata`, `is_userdata`, `is_thread`, `is_buffer`, `is_vector` | One type test each |
 | `fn as_table(&self) -> Result<TableView<'v>>` | The slot as a table, or its type error |
 | `fn as_function(&self) -> Result<FunctionView<'v>>` | The slot as a function, or its type error |
 | `fn read<T: FromView<'v>>(self) -> Result<T>` | One checked conversion of this slot |
@@ -277,7 +277,7 @@ Arguments for a call: `()` and tuples of one to eight `Push` values.
 
 Results of a call, read from the frame slots `first..first + COUNT`; Lua pads with nil or
 truncates. Implemented for `()`, `bool`, every Rust integer, `f32`, `f64`, `String`, `Vec<u8>`,
-`Integer`, `Vector3`, `Value`, `Table`, `Function`, `Option<T>` where `Option<T>: FromView`, and
+`Vector3`, `Value`, `Table`, `Function`, `Option<T>` where `Option<T>: FromView`, and
 tuples of two to six results. Borrowing types (`&str`, views) are excluded on purpose: the
 result slots are popped when the call frame closes.
 
@@ -333,12 +333,11 @@ return path uses it so a scalar result costs one `lua_push*` and nothing else. `
 | Rust type | Reads from | Pushes as | Rule |
 |---|---|---|---|
 | `bool` | boolean | boolean | Exact |
-| `i8` .. `i64`, `isize`, `u8` .. `u64`, `usize` | number or integer | number | A number rounds half away from zero and must land inside `[-2^digits, 2^digits)`; an integer is range-checked; non-finite never converts. Pushing a value an f64 cannot hold exactly is an error, never a rounded result |
-| `f64` | number or integer | number | An integer converts as `i64 as f64` |
-| `f32` | number or integer | number | Finite values outside the f32 range are rejected; NaN and infinities pass through |
-| `Integer` | integer | integer | `EXPECTED` is `integer` |
-| `Exact<T>` | integer or integral number | (input only) | Never rounds |
-| `Bits64` | integer | integer | All 64 bits, no numeric meaning |
+| `i8` .. `i64`, `isize`, `u8` .. `u64`, `usize` | number | number | A number rounds half away from zero and must land inside `[-2^digits, 2^digits)`; non-finite never converts. Pushing a value an f64 cannot hold exactly is an error, never a rounded result |
+| `f64` | number | number | |
+| `f32` | number | number | Finite values outside the f32 range are rejected; NaN and infinities pass through |
+| `Exact<T>` | integral number | (input only) | Never rounds |
+| `Bits64` | any light userdata or packed value | `Bits64` | All 64 bits, no numeric meaning |
 | `&str`, `String` | string | string | Borrowed or copied; invalid UTF-8 is `Lua string is not valid UTF-8` |
 | `&[u8]`, `Vec<u8>`, `[u8]` | string | string | Any bytes |
 | `()` | | nil | The counterpart of `None` |
@@ -349,31 +348,26 @@ return path uses it so a scalar result costs one `lua_push*` and nothing else. `
 | `ValueView` | any present value | copies the slot | |
 | `Value`, `Table`, `Function` | any, table, function | the pinned value | `Value` pins the slot |
 | `LightUserdata` | light userdata | light userdata | See [Direct access and the VM](@/docs/api/direct.md) |
-| `Packed<T>` | integer of kind `T::KIND` | integer | See [Extensions and primitives](@/docs/api/extension.md) |
+| `Packed<T>` | packed value of kind `T::KIND` | the kind's type | See [Extensions and primitives](@/docs/api/extension.md) |
 
-Out-of-range wording: `Lua stack index N: integer <value> is out of range for i32`, `number
-<value> is out of range for u8`, `number <value> is not an exact usize`.
+Out-of-range wording: `number <value> is out of range for u8`, `number <value> is not an exact
+usize`.
 
-## Integer, Exact and Bits64
-
-{{ api_signature(value="struct Integer(pub i64)") }}
-
-An explicit Luau 64-bit integer. Plain Rust integers push as Lua numbers; wrap them in
-`Integer` to push the `integer` runtime type. Reads accept only an integer slot. `Clone`,
-`Copy`, `Debug`, `Default`, `Eq`, `Hash`.
+## Exact and Bits64
 
 {{ api_signature(value="struct Exact<T>(pub T)") }}
 
-An integer parameter that never rounds: a Luau integer in range, or a number with a zero
-fractional part in range (`640.4` is refused where a plain `i32` would read `640`). For
+An integer parameter that never rounds: a number with a zero fractional part in range (`640.4`
+is refused where a plain `i32` would read `640`). For
 indices, offsets, counts, sizes and ids. Input only; it has no push form. Implemented for every
 Rust integer type. `Clone`, `Copy`, `Debug`, `Default`, `Eq`, `Hash`.
 
 {{ api_signature(value="struct Bits64(pub u64)") }}
 
-A 64-bit pattern carried in a Luau integer: opaque ids and hashes, all 64 bits, no numeric
-meaning. Numerically it may look negative to a script. Reads accept an integer only; a number
-never becomes one. `Clone`, `Copy`, `Debug`, `Default`, `Eq`, `Hash`.
+A 64-bit pattern: opaque ids and hashes, all 64 bits, no numeric meaning. A wide packed scalar,
+`typeof` `Bits64` to scripts, equal and a table key by value, with no arithmetic;
+`@dream/bits64` converts it. Reads accept the bits of any light userdata or packed value,
+whatever its kind; a number never becomes one. `Clone`, `Copy`, `Debug`, `Default`, `Eq`, `Hash`.
 
 ## Vector3
 

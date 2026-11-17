@@ -7,7 +7,7 @@ weight = 100
 kind = "guide"
 +++
 
-l3i owns its Luau build. Luau is the `luau/` git submodule, pinned at release 0.746;
+l3i owns its Luau build. Luau is the `luau/` git submodule, pinned at release 0.747;
 `build.rs` compiles it and the binder's C++ additions with `cc`, in parallel, from
 the checkout alone. There is no network access at build time and no external Lua crate. Rust 1.95
 or newer, edition 2024.
@@ -33,6 +33,7 @@ binder's own C additions are `csrc/extra.cpp`; the shims over the C++-only APIs 
 | `LUAI_MAXCSTACK` | `8000` | Luau's default, OpenMW's too; `LUA_REGISTRYINDEX` in the FFI derives from it |
 | `LUA_VECTOR_SIZE` | `3` | Three-component vectors, as OpenMW |
 | `LUA_UTAG_LIMIT` | `254` | Every tag Luau can address; `l3i::TAG_LIMIT` mirrors it, and `LUAU_CXXFLAGS` cannot lower it |
+| `LUA_LUTAG_LIMIT` | `160` | Light userdata tags: `0..128` for the host, `128..160` for packed kinds and the wide scalars |
 | `LUA_API`, `LUALIB_API`, and the per-library `*_API` | `extern "C"` | The C ABI Rust declares by hand in `src/raw/ffi.rs` |
 | `LUAU_ENABLE_ASSERT` | Set when Rust's debug assertions are on | Luau's internal `api_check` assertions in debug builds; a release build with debuginfo keeps the release VM |
 | `-fno-math-errno` | Release only | Lets the compiler lower `sqrt` to one instruction |
@@ -44,7 +45,7 @@ binder's own C additions are `csrc/extra.cpp`; the shims over the C++-only APIs 
 Hosts may append compiler flags through `LUAU_CXXFLAGS`. Under `jit`, `build.rs` also parses
 `Luau/IrData.h` and `Luau/CodeGenOptions.h` and writes `ir_enums.rs` into `OUT_DIR`, the mirrors
 of `IrCmd`, `IrCondition`, `IrBlockKind` and `HostMetamethod` for that exact Luau build. It exports
-`LUAU_VERSION` (`0.746`) and `L3I_TAG_LIMIT` to the crate.
+`LUAU_VERSION` (`0.747`) and `L3I_TAG_LIMIT` to the crate.
 
 Compiled chunks default to optimisation level 2 and debug level 1, and runtime plans turn type
 information on so native code sees the userdata types.
@@ -62,18 +63,32 @@ static_assert(offsetof(TValue, tt) == 12, "l3i mirrors the tag at offset 12");
 static_assert(LUA_VECTOR_SIZE == 3, "l3i mirrors three-component vectors");
 static_assert(offsetof(Udata, tag) == 3, "l3i mirrors the userdata tag at offset 3");
 static_assert(offsetof(Udata, data) == 16, "l3i mirrors the userdata payload at offset 16");
+static_assert(LUA_TLIGHTUSERDATA == 2 && LUA_TNUMBER == 3 && LUA_TVECTOR == 4, "l3i mirrors the type tags");
 ```
 
-Each runtime proves the mirror against the API once at creation, so a Luau bump that moves a
-byte fails at once rather than misreading slots. Bumping the submodule means bumping
-`LUAU_VERSION` in `build.rs`, re-auditing `src/raw/ffi.rs` against the new headers, and
-re-checking the flag policy.
+The type tags themselves are pinned the same way, every one of them (Luau 0.747 removed
+`LUA_TINTEGER` and moved the tags after `LUA_TNUMBER` down by one), and so are the bytecode
+constant kinds the loader's pre-walk reads. Each runtime proves the mirror against the API once at
+creation, one value of every type, so a Luau bump that moves a byte fails at once rather than
+misreading slots. Bumping the submodule means bumping `LUAU_VERSION` in `build.rs`, re-auditing
+`src/raw/ffi.rs` against the new headers, and re-checking the flag policy.
+
+### The packed scalar carrier
+
+`build.rs` picks how a packed scalar rides in a Luau value as `cfg(l3i_carrier)`: `light`, a
+tagged light userdata, on x86-64 and AArch64, an allowlist rather than a pointer-width test, so a
+new 64-bit target boxes until it is added with its tests; `boxed`, an interned userdata,
+everywhere else, wasm32 first. `L3I_CARRIER=boxed` forces the boxed carrier on a desktop build to
+test it (an environment variable, since the gates build with `--all-features`), and
+`L3I_CARRIER=light` on a target off the allowlist is refused. `jit` needs the light carrier: the
+lowering hooks are written against it, and the boxed combination is refused at build time. CI
+runs both carriers on x86-64 and AArch64 Linux and on macOS (`.github/workflows/carriers.yml`).
 
 ## Features
 
 ```toml
 [dependencies]
-l3i = { version = "2", features = ["jit"] }
+l3i = { version = "3", features = ["jit"] }
 ```
 
 | Feature | Default | Adds |

@@ -69,29 +69,27 @@ zero, so `640.4` reads as `640`. That is compatibility, not a contract for a str
 
 {{ api_signature(value="struct Exact<T>(pub T)") }}
 
-`Exact<T>` reads an integer that never rounds: a Luau integer in range, or a number whose
-fractional part is exactly zero and that is in range, for `T` any of `i8` to `i64`, `isize`,
-`u8` to `u64`, `usize`. A fraction, NaN, an infinity, or an out-of-range value is an error
-(`number 3.5 is not an exact i64`, `integer <value> is out of range for <type>`). It is input
+`Exact<T>` reads an integer that never rounds: a number whose fractional part is exactly zero and
+that is in range, for `T` any of `i8` to `i64`, `isize`, `u8` to `u64`, `usize`. A fraction, NaN,
+an infinity, or an out-of-range value is an error (`number 3.5 is not an exact i64`). It is input
 only and has no push form. Use it for indices, offsets, counts, sizes, and ids.
 
 For results the vocabulary is:
 
 | Type | Pushes | Luau sees |
 |---|---|---|
-| A plain Rust integer (`i64`, `u32`, ...) | A number | `number`, exact while it fits a double |
-| `Integer(pub i64)` | A Luau integer | `integer` |
-| `Bits64(pub u64)` | A Luau integer holding all 64 bits | `integer`, with no numeric meaning |
+| A plain Rust integer (`i64`, `u32`, ...) | A number, or an error beyond 2^53 | `number`, always exact |
+| `Bits64(pub u64)` | All 64 bits, as a wide packed scalar | `Bits64`, with no numeric meaning |
 
-`Bits64` carries an opaque pattern (a hash, a peer id) through a Luau integer: reads accept an
-integer only, a number never becomes one, and numerically the value may look negative to a script,
-which is the deal for opaque ids. A numeric `u64` stays within what an integer or an exact number
-holds, so nothing silently reinterprets.
+`Bits64` carries an opaque pattern (a digest, a client id, a protocol id): equal and a table key
+by value, never arithmetic, and a number never reads as one. `@dream/bits64`, in every plan,
+converts it: `fromNumber` and `toNumber` (exact, an error past 2^53), `fromParts` and `parts` (two
+32-bit halves), `hex` and `fromHex`, and `read` and `write` on a buffer in either byte order.
 
-{% callout(kind="note", title="Luau integers compare with == only") %}
-In Luau 0.745, `<` and `<=` between two integers raise, and an integer never equals a number
-(`42i ~= 42`). l3i pushes identities as integers and everything a script thresholds or counts as
-plain numbers.
+{% callout(kind="note", title="No integer type since 3.0.0") %}
+Luau 0.747 removed the `integer` type, its `42i` literals and its library. A number that would
+not fit a double exactly is an error rather than a rounded value, and a 64-bit pattern is a
+`Bits64`.
 {% end %}
 
 ## Packed layouts and packed scalars
@@ -106,14 +104,26 @@ crossing: one bounds check, one copy, no per-field calls. The primitive integers
 
 {{ api_signature(value="trait PackedScalar: Sized + 'static { const KIND: u8; const NAME: &'static str; fn pack(&self) -> (u64, u8); fn unpack(payload: u64, flags: u8) -> Result<Self>; }") }}
 
-A `PackedScalar` is a semantic value that physically occupies one Luau integer: a 4-bit kind in
-the top nibble, 4 flag bits the kind may use, and a 56-bit payload. The kind is checked on every
-read, so untyped script code handing the wrong integer to a native operation fails with a type
-error (`expected a packed Quaternion, got kind 3`) instead of decoding garbage. `Packed<T>(pub T)`
-is the parameter and return type; `Packed::bits()` and `Packed::from_bits(i64)` convert by hand,
-and `packed::encode(kind, flags, payload)` and `packed::decode(bits)` are the bit-level forms.
+A `PackedScalar` is a semantic value that physically occupies 64 bits: a 4-bit kind in the top
+nibble, 4 flag bits the kind may use, and a 56-bit payload. The kind is checked on every read, so
+untyped script code handing the wrong value to a native operation fails with a type error
+(`expected a packed Quaternion, got kind 3`) instead of decoding garbage. `Packed<T>(pub T)` is
+the parameter and return type; `Packed::bits()` and `Packed::from_bits(i64)` convert by hand, and
+`packed::encode(kind, flags, payload)` and `packed::decode(bits)` are the bit-level forms.
 
-Kinds are a registry, not a convention, because a kind number is what a packed integer means
+To a script a packed value is its kind's type: `typeof(q)` is `"Quaternion"`, the definitions
+declare `Quaternion` as a nominal type, and two packed values are equal, and the same table key,
+exactly when their 64 bits and their kind are. They have no arithmetic and no ordering.
+
+The bits ride in a carrier chosen when l3i is built. On x86-64 and AArch64 (Linux, macOS,
+Windows) it is a light userdata whose pointer word is the 64 bits, written and read as bits and
+never followed, with a light userdata tag per kind; that costs a scalar's push and read, and
+native code reads it the same way. Everywhere else, wasm32 first, it is a small full userdata
+interned per value, so equality and table keys behave the same at an allocation's cost. The
+runtime checks its carrier when it starts and refuses to run on one that does not round trip.
+`L3I_CARRIER=boxed` at build time forces the interned carrier on a desktop, without `jit`.
+
+Kinds are a registry, not a convention, because a kind number is what a packed value means
 once it is written to a file or a socket:
 
 | Kind | Owner | Fixed |
@@ -123,7 +133,7 @@ once it is written to a file or a socket:
 | 3 | `raster::Color` | For good |
 | 4 | `raster::ClipRect` | For good |
 | 5 to 15 | The application's, one Rust type per number | Per plan or per runtime |
-| 0 | Reserved, so a plain zero integer never passes | |
+| 0 | Reserved, so all-zero bits never pass | |
 
 An application declares a kind per extension with `ExtensionDescriptor::packed::<T>()` or per
 hand-assembled runtime with `Runtime::register_packed::<T>()`. A plan with two types on one number
@@ -131,7 +141,7 @@ does not finalize; a runtime refuses a second type on a registered number (`kind
 registered to Handle`) and a host type on one of l3i's numbers (`kind 3, which belongs to l3i
 (Color)`); a `Packed<T>` crossing into or out of a VM where `T` is not the kind's registered
 owner is a logic error rather than another type's bits. An encoding whose kind, flags or payload
-overflow their fields is an error, never a truncated integer.
+overflow their fields is an error, never truncated bits.
 
 ```rust
 #[derive(Clone, Copy)]
@@ -156,8 +166,8 @@ let make = runtime.bind_function("dreamweave.tests.make", |id: i64| Packed(Handl
 let read = runtime.bind_function("dreamweave.tests.read", |handle: Packed<Handle>| i64::from(handle.0.id) * 2)?;
 ```
 
-A script then sees `make(21)` as an integer, `read(make(21))` as `42`, and `read(21i)` as a type
-error naming `Handle`.
+A script then sees `typeof(make(21))` as `"Handle"`, `read(make(21))` as `42`, and `read(21)` as
+a type error naming `Handle`.
 
 ## Strict option tables
 
@@ -284,7 +294,7 @@ d.module("@dream/views")
 ```
 
 Elements are pushed by value through `SequenceItem`: every `Push` scalar, `String`, `Vec<u8>`,
-`Integer`, `Bits64`, `Vector3`, `Value`, `Table`, `Function`, `Packed<T>`, `Option<T>`, and
+`Bits64`, `Vector3`, `Value`, `Table`, `Function`, `Packed<T>`, `Option<T>`, and
 `Owned<T>` for any registered `T`, which moves the row into a fresh userdata without needing
 `Clone`. `IterStep(control, item)` is what an iterator step returns: the next control value and
 the element.
@@ -294,15 +304,21 @@ receiver is one tag-to-type compare, the key one tag test.
 
 ## What they cost
 
-Per call, in retired instructions on Luau 0.740, from `cargo bench -- instructions`
-(see [Compatibility and performance](@/docs/performance.md)):
+Per call, in retired instructions on Luau 0.747 with the light userdata carrier, from
+`cargo bench -- instructions` (see [Compatibility and performance](@/docs/performance.md)):
 
 | Path | Instructions |
 |---|---|
-| Bound `(Packed<Color>) -> f64` | 364, of which eleven are the kind registry check (one owner load and a type compare) on top of the bit decode |
-| Planned method `() -> f64` | 431 |
-| Planned sequence `[i]` | 547 |
-| Planned sequence `#` | 563 |
+| Bound `(Vector3) -> f64` | 290 |
+| Bound `(Packed<Color>) -> f64` | 309: the carrier read, the kind check and the bit decode; l3i's own kinds skip the registry lookup |
+| Bound `(Bits64) -> f64` | 294 |
+| Planned method `() -> f64` | 375 |
+| Planned sequence `[i]` | 454 |
+| Planned sequence `#` | 457 |
+
+On the interned carrier (`L3I_CARRIER=boxed`, measured on a desktop without `jit`) the same packed
+argument costs about 36 instructions more, the price of telling a full userdata apart by its
+metatable.
 
 The rest of a view's cost is Luau's own `__index` dispatch, since the VM has no integer-key
 direct path for userdata.

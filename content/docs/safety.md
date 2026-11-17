@@ -53,8 +53,24 @@ is why `memory::raw::set_userdata_tag` is `unsafe`.
 
 **The value layout is proven, not assumed.** The binder reads argument slots straight from
 Luau's 16-byte value layout. `csrc/extra.cpp` pins every offset at compile time, and each
-runtime proves the mirror against the API once at creation, so a Luau bump that moves a byte
-fails at once rather than misreading a slot.
+runtime proves the mirror against the API once at creation, one value of every type, so a Luau
+bump that moves a byte or renumbers a type tag (0.747 removed one) fails at once rather than
+misreading a slot.
+
+**A packed scalar's bits are never a pointer.** On the light userdata carrier the 64 bits sit in
+the pointer word of a light userdata. They are written and read with `memcpy` through that
+mirror, never converted to a pointer, never followed, and the kind is read from the top four bits,
+not from the tag. Light userdata tags `128..160` belong to packed kinds, so a host's
+`LightUserdata` push or `set_light_userdata_name` at or above 128 is refused, as is a host pointer
+whose top four bits are not zero, which would read as a kind. Each runtime proves its carrier at
+creation: every single bit, zero, all ones and non-canonical patterns through a push, a read,
+equality, inequality under another tag and a table key, or the runtime is not made.
+
+**Bytecode from an older build is refused, not misread.** Luau 0.747 dropped the integer constant
+but kept bytecode version 14, so `load_bytecode` walks a chunk's constants first and refuses one
+holding an integer constant, a constant kind this build does not know, or a function cut short,
+with an error naming the chunk. Bytecode is otherwise trusted as Luau trusts it: load only what a
+build of l3i compiled.
 
 **Buffers are copied, not sliced.** A script can pass one buffer to two parameters, so safe
 `BufferView` access goes through bounds-checked copies. The slice forms are `unsafe fn
@@ -69,24 +85,23 @@ a silent no-op, so a Luau bump cannot drop a flag quietly.
 ## Questionable semantics carried over from the C++ binder
 
 None remain. The last one, the C++ binder's `expected integer, got integer` for an out-of-range
-Luau integer, was replaced on 2026-09-27 by `integer <value> is out of range for <type>` (and
-`number <value> is out of range for <type>` for a rounded Lua number), since the accidental
-wording told the caller nothing.
+Luau integer, was replaced on 2026-09-27 by a message naming the value and the type, since the
+accidental wording told the caller nothing; Luau 0.747 then removed the integer type altogether.
 
 ## Luau facts the ecosystem builds on
 
-**Luau 0.745 integers (`42i`) compare with `==` only.** `<`, `<=`, `>` and `>=` between two
-integers raise `attempt to compare integer <= integer`; ordering goes through the `integer`
-library (`lt`, `le`, and the rest). An integer never equals a number: `42i ~= 42`. l3i therefore
-pushes identities (peer, event, channel and client ids, hashes, handles, packed scalars) as
-integers, and everything scripts threshold or count (sizes, counters, lengths) as plain numbers.
-The `i64` and `u64` conversions push numbers; `convert::Integer` pushes an integer.
+**Luau 0.747 has no integer type.** A double holds every whole number up to 2^53 exactly, so l3i
+pushes counts, sizes, offsets and small ids as numbers and refuses, rather than rounds, one past
+that. An opaque 64-bit pattern (a digest, a client or protocol id) is a `Bits64`; a packed scalar
+is its kind's type. Both compare and key tables by their bits, never equal a number, and have no
+arithmetic or ordering.
 
 ```luau
-local id = 42i
-assert(id == 42i and id ~= 42)
-assert(typeof(id) == "integer")
-local ok = pcall(function() return id < 43i end)
+local bits64 = require("@dream/bits64")
+local id = bits64.fromNumber(42)
+assert(id == bits64.fromNumber(42) and id ~= 42)
+assert(typeof(id) == "Bits64")
+local ok = pcall(function() return id < bits64.fromNumber(43) end)
 assert(not ok)
 ```
 

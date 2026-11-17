@@ -13,7 +13,7 @@ hide_child_cards = true
 
 ```toml
 [dependencies]
-l3i = "2.1"
+l3i = "3.0"
 ```
 
 The crate is `l3i`. Its modules are public and are reached by their module path
@@ -65,7 +65,7 @@ Declared at the root:
 ```text
 pub mod ffi                          the raw Luau C API (raw::ffi, re-exported)
 pub const TAG_LIMIT: u8              254: valid userdata tags are 1..TAG_LIMIT
-pub const LUAU_VERSION: &str         "0.746"
+pub const LUAU_VERSION: &str         "0.747"
 pub const VERIFIED_TOOLCHAIN: bool   whether build.rs found the verified toolchain
 ```
 
@@ -100,11 +100,10 @@ crate returns. [The raw C API](@/docs/api/ffi.md) covers `ffi` and the two VM co
 - **`Result<T>` from a bound function raises.** `Ok(value)` pushes `value`'s results; `Err`
   raises the message with the caller's location, in `luaL_error` wording where the C++ binder
   had it (`invalid argument #2 to 'name' (number expected, got string)`).
-- **Integers.** Luau 0.745 integers (`42i`) compare with `==` only; `<` between two integers
-  raises, and an integer never equals a number. l3i pushes identities (peer, event, channel and
-  client ids, hashes, handles, packed scalars) as Luau integers through `convert::Integer`,
-  `Bits64` and `Packed<T>`, and everything scripts threshold or count (sizes, lengths, counters)
-  as plain numbers: `i64`, `u64` and the other Rust integers push numbers. Reading a plain Rust
+- **Integers.** Luau 0.747 has no integer type. Counts, sizes, lengths and small ids push as
+  numbers, exact or an error past 2^53: `i64`, `u64` and the other Rust integers push numbers.
+  Opaque 64-bit values (hashes, client and protocol ids) are `Bits64`, and packed scalars
+  `Packed<T>`, each its own type to scripts, compared and keyed by their bits. Reading a plain Rust
   integer from a Lua number rounds half away from zero (OpenMW's rule); `convert::Exact<T>`
   refuses a fractional or out-of-range value.
 - **Time.** Watchdog and profiler times are `std::time::Duration` on the way in and

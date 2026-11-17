@@ -9,9 +9,10 @@ kind = "reference"
 
 ## Versions
 
-l3i is on 2.x: every release in 2.x keeps the Rust API compatible, as Cargo's semver rules
-expect, and the [changelog](@/home/_changelog.md) lists what 2.0 changed against 1.3.1 and how
-to move. The Luau it embeds is release 0.746, as the `luau/` submodule; bumping it is a
+l3i is on 3.x: every release in 3.x keeps the Rust API compatible, as Cargo's semver rules
+expect, and the [changelog](@/home/_changelog.md) lists what 3.0 changed against 2.11 (Luau
+0.747's removal of the integer type) and how to move. The Luau it embeds is release 0.747, as
+the `luau/` submodule; bumping it is a
 deliberate change that re-audits the hand-declared C API and the flag list.
 
 ## Rust and dependencies
@@ -286,26 +287,31 @@ Past a few nanoseconds wall time is noise, so the binder's own cost is tracked i
 instructions and cycles per call, read from the CPU's counters by `cargo bench -- instructions`
 (Linux, `perf_event_paranoid` at 2 or lower, no `perf` binary needed). The loop is
 subtracted, the minimum over seven rounds is reported, and the floors are measured the same way:
-a hand-written `lua_CFunction` and a typed direct handler. On Luau 0.740:
+a hand-written `lua_CFunction` and a typed direct handler. On Luau 0.747, light userdata carrier:
 
 | Per call | Instructions | Cycles |
 |---|---:|---:|
-| hand-written `lua_CFunction (f64, f64)` | 277 | 69 |
-| bound `() -> f64` | 292 | 73 |
-| bound `(f64, f64) -> f64` | 369 | 89 |
-| bound `(Vector3) -> f64` | 332 | 85 |
-| bound `(Packed<Color>) -> f64` | 364 | 89 |
-| typed direct namecall, the VM's leanest method path | 368 | 98 |
-| planned method `() -> f64` | 431 | 107 |
-| planned getter | 397 | 101 |
-| planned direct field | 78 | 12 |
-| planned sequence `[i]` | 547 | 148 |
-| planned sequence `#` | 563 | 148 |
+| hand-written `lua_CFunction (f64, f64)` | 182 | 50 |
+| bound `() -> f64` | 266 | 61 |
+| bound `(f64, f64) -> f64` | 320 | 73 |
+| bound `(Vector3) -> f64` | 290 | 65 |
+| bound `(Bits64) -> f64` | 294 | 67 |
+| bound `(Packed<Color>) -> f64` | 309 | 72 |
+| bound `(Vector3, Vector3, Packed, Packed) -> f64` | 475 | 157 |
+| typed direct namecall, the VM's leanest method path | 313 | 82 |
+| planned method `() -> f64` | 375 | 96 |
+| planned method `(f64, f64) -> f64` | 429 | 113 |
+| planned getter | 330 | 84 |
+| planned direct field | 69 | 9 |
+| planned sequence `[i]` | 454 | 118 |
+| planned sequence `#` | 457 | 119 |
 
-A bound call is within about forty instructions of a bare C function; a planned method is within
-sixty of the typed direct handler. The rest is Luau's own call and return machinery. A packed
-argument pays eleven instructions for the kind registry check (one owner load and a type
-compare) on top of its bit decode.
+A bound call costs about 140 instructions more than a bare C function, the argument checks, the
+error protocol and the result push; a planned method is about sixty over the typed direct
+handler. The rest is Luau's own call and return machinery. A packed argument costs about twenty
+instructions more than a vector: the carrier read, the kind check and the bit decode, with no
+registry lookup for l3i's own kinds. Moving from Luau 0.746 to 0.747 changed no row by more than
+1.5 percent, and on 0.746 the light carrier counted the same as the integer it replaced.
 
 The `jit` build adds a second table: packed rotations and colors inside `--!native` code, where
 the lowered receivers (`quat.math()`, `raster.math()`) skip the call entirely. Each body computes
@@ -315,14 +321,24 @@ drop the work; the bare native loop is subtracted.
 | Per call, native | Instructions | Cycles |
 |---|---:|---:|
 | four numbers in locals (no packing) | 9 | 2 |
-| a table `{ x, y, z, w }` | 616 | 196 |
-| `quat.fromXYZW` through the binder | 459 | 196 |
-| `Q:fromXYZW`, lowered | 93 | 70 |
-| `Q:rotate` of a packed rotation, lowered | 104 | 77 |
-| `Q:fromXYZW` then `Q:rotate`, lowered | 185 | 164 |
-| the same rotation as plain `vector` math on four numbers | 59 | 60 |
-| `raster.rgba8` through the binder | 432 | 129 |
-| `C:rgba8`, lowered | 20 | 11 |
+| a table `{ x, y, z, w }` | 478 | 155 |
+| `quat.fromXYZW` through the binder | 469 | 188 |
+| `Q:fromXYZW`, lowered | 96 | 73 |
+| `Q:rotate` of a packed rotation, lowered | 104 | 76 |
+| `Q:fromXYZW` then `Q:rotate`, lowered | 190 | 175 |
+| the same rotation as plain `vector` math on four numbers | 59 | 59 |
+| `Q:mul` into a local, lowered | 208 | 149 |
+| `Q:mul` reassigned, `acc = Q:mul(acc, r)`, lowered | 211 | 178 |
+| `raster.rgba8` through the binder | 303 | 86 |
+| `C:rgba8`, lowered | 23 | 18 |
+| `C:rgba8` into a fresh local, then `C:red`, lowered | 33 | 22 |
+
+The reassigned row is the light userdata carrier's one real cost. Luau does not track a light
+userdata's `extra` word, so a lowered result is written as three narrower stores and the next
+read of the whole value stalls on store forwarding: on Luau 0.746, against the integer it
+replaced, the reassigned `Q:mul` is about 18 cycles (12 percent) slower and the `C:rgba8` then
+`C:red` chain 57 to 65 percent, with the same instruction counts. Results kept in a local and
+used once cost within 1.5 percent of what they did.
 
 A packed rotation built natively costs a sixth of a table and a fifth of a binder call, and
 allocates nothing. Rotating by four numbers already in locals is still cheaper than unpacking one;
@@ -492,7 +508,7 @@ Only a host-level scope pays for one.
 ### Conversion
 
 One checked conversion per value, with rules that do not guess: a number becomes an integer by
-rounding and a range check, a Luau integer by range check alone, and a Rust integer is pushed
+rounding and a range check, and a Rust integer is pushed
 as a number only when a double can hold it exactly ([`convert.hpp` 201-214](https://gitlab.com/magicaldave1/openmw/-/blob/f69579c8d54fb2ae4d7a79a4d7033205effaec0e/components/luau/convert.hpp#L201-214),
 [`convert.hpp` 216-236](https://gitlab.com/magicaldave1/openmw/-/blob/f69579c8d54fb2ae4d7a79a4d7033205effaec0e/components/luau/convert.hpp#L216-236), [`convert.hpp` 589-626](https://gitlab.com/magicaldave1/openmw/-/blob/f69579c8d54fb2ae4d7a79a4d7033205effaec0e/components/luau/convert.hpp#L589-626)).
 
@@ -544,8 +560,8 @@ No C++ ancestor, for better or worse:
   moves a byte fails at once instead of misreading.
 - **One call on entry.** `l3i_native_enter` returns the argument count, the thread record and
   the closure context together, where a bound function would otherwise ask Luau three times.
-  The instruction counts above are what is left: a bound call within about forty instructions
-  of a bare C function.
+  The instruction counts above are what is left: a bound call about 140 instructions over a bare
+  C function, for argument checks, the error protocol and the result push.
 - **Packed 64-bit scalars** and their kind registry: values that never allocate.
 - **The shared block's layout.** One cache line holds the slot table, the plan and the
   profiler switch.

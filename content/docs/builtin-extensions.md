@@ -15,6 +15,7 @@ that requires its module type checks against the plan's definitions.
 | Extension | Module | Rust | Feature |
 |---|---|---|---|
 | `dream.udp` | `@dream/udp` | `l3i::udp` | always |
+| `dream.bits64` | `@dream/bits64` | `l3i::bits64` | always |
 | `dream.quat` | `@dream/quat` | `l3i::quat::QuatExtension` | always (`quat.math()` needs `jit`) |
 | `dream.raster` | `@dream/raster` | `l3i::raster::RasterExtension` | always |
 | `dream.soft_render` | `@dream/soft-render` | `l3i::soft_render::SoftRenderExtension` | `soft-render` |
@@ -41,7 +42,7 @@ runtime lacks the network and the policy's capabilities decide what scripts may 
 dream-net stays pure Rust and knows peers, event ids, channels and bytes; this module owns the
 Luau-facing shape.
 
-- Peer, event, channel and client ids are Luau integers, exact and compared with `==`; a peer id is a `Bits64` pattern, all 64 bits. Sizes and counters are plain numbers, because scripts threshold them.
+- Peer, event and channel ids are numbers, exact or an error, never rounded: a peer id is a generation above a 16-bit slot, exact while the generation stays below 2^37. The protocol id, client ids and the schema's fingerprint halves are opaque 64-bit patterns, [`Bits64`](#dream-bits64) values compared with `==`. Sizes and counters are plain numbers.
 - Payloads are Luau buffers, or strings on send. `pollInto` copies one received payload into a caller-owned buffer and `sendEvent` copies out of one before returning, so the transport retains no Lua memory.
 - The transport clock is the plan's: `update()` reads a monotonic clock started with the bridge, or the clock the host gave `RuntimePlanBuilder::network_clock`, so a script cannot spoof time and a simulation can drive it.
 - The server private key never reaches Luau. A host may still hand scripts a `udp::Server` handle, or Luau may create one with `udp.server{}`; both `udp.server{}` and `udp.client{}` require the `network.transport` capability (`udp::TRANSPORT_CAPABILITY`). A Luau-created server keeps its generated key in native userdata and mints client tokens with `server:connectToken(clientId, expiresInSeconds?, timeoutSeconds?)`.
@@ -53,7 +54,7 @@ Luau-facing shape.
 |---|---|
 | `schema(options)` | `(options: { version: number, maxMessagesPerPacket: number?, channels: { { [string]: any } }, events: { { [string]: any } } }) -> dream_udp_Schema` |
 | `client(options)` | `(options: { schema: dream_udp_Schema, bind: string? }) -> dream_udp_Client`, bound at install because it depends on the capability |
-| `server(options)` | `(options: { schema: dream_udp_Schema, address: string, protocolId: integer, maxClients: number? }) -> dream_udp_Server`, bound at install because it depends on the capability |
+| `server(options)` | `(options: { schema: dream_udp_Schema, address: string, protocolId: Bits64, maxClients: number? }) -> dream_udp_Server`, bound at install because it depends on the capability |
 | `CONNECT_TOKEN_BYTES`, `MAX_EVENT_PAYLOAD`, `MAX_CHANNELS` | Folded numbers: 2048, dream-net's payload limit, 64 |
 
 `udp.schema{}` is a strict option table. A channel is `{ name, delivery, capacity?, overflow?,
@@ -77,7 +78,7 @@ local schema = udp.schema{
 }
 assert(schema.eventCount == 2 and schema.channelCount == 2)
 assert(schema:eventName(schema:eventId("Ping")) == "Ping")
-assert(schema:maxPayload(schema:eventId("Move")) == 12i)
+assert(schema:maxPayload(schema:eventId("Move")) == 12)
 ```
 
 ### Schema, client, server
@@ -87,18 +88,20 @@ required is the host-granted `network.transport` capability; token bytes are saf
 clients, while the signing key remains private to the server userdata:
 
 ```luau
+local bits64 = require("@dream/bits64")
 local server = udp.server{
     schema = schema,
     address = "127.0.0.1:0", -- the bound and advertised address
-    protocolId = 0x12345678,
+    protocolId = bits64.fromHex("0000000012345678"),
     maxClients = 4,
 }
-local token = server:connectToken(1) -- buffer; expires after 300 seconds by default
+local token = server:connectToken(bits64.fromNumber(1)) -- buffer; expires after 300 seconds by default
 ```
 
 `dream_udp_Schema` is untagged: getters `version`, `fingerprint` (32 hex digits), `eventCount`,
-`channelCount`; methods `eventId(name)`, `channelId(name)` (`integer?`), `eventName(id)`,
-`channelName(id)` (`string?`), `maxPayload(eventId)` (`integer?`), `fingerprintHalves()`.
+`channelCount`; methods `eventId(name)`, `channelId(name)` (`number?`), `eventName(id)`,
+`channelName(id)` (`string?`), `maxPayload(eventId)` (`number?`), `fingerprintHalves()` (two
+`Bits64`).
 
 `dream_udp_Client` and `dream_udp_Server` are tagged when tags allow. The hot calls are the same
 on both:
@@ -118,7 +121,7 @@ on both:
 | `"rejected"` | peer | client id | reason | |
 | `"connectFailed"` | `0` | reason | | |
 
-A client polls with `peer` 0 and `client id` 0. The client also has `connect(token)`,
+`client id` is a `Bits64`; a client polls with `peer` 0. The client also has `connect(token)`,
 `disconnect()`, `counters()`, `memoryUsage()`, the getters `status` (`disconnected`,
 `connecting`, `handshaking`, `connected`), `port`, `serverAddress`, and the direct fields
 `connected`, `rtt`, `jitter`, `packetLoss`, `sentKbps`, `receivedKbps`, `ackedKbps` (`number?`,
@@ -157,34 +160,64 @@ Misuse is a script error prefixed `dream.udp:`, never a panic: an unknown event 
 range past its buffer (`payload range 0..40 exceeds the 7-byte buffer`), a peer that is not
 connected. `benches/udp.rs` measures the bridge over localhost UDP.
 
+## dream.bits64
+
+Luau has no 64-bit integer type since 0.747, and a double holds whole numbers exactly only up to
+2^53. A digest, a client id or a protocol id is therefore a `Bits64`: all 64 bits as a wide packed
+scalar, `typeof` `Bits64`, equal and a table key by value, with no arithmetic and no ordering. The
+planner adds `Bits64Extension` to every plan, beside the network bridge that hands such values out,
+and reserves the id `dream.bits64`.
+
+| Member | Type |
+|---|---|
+| `fromNumber(n)` | `(n: number) -> Bits64`, an exact whole number in `0..2^64` |
+| `toNumber(value)` | `(value: Bits64) -> number`, an error above 2^53 |
+| `fromParts(hi, lo)`, `parts(value)` | Two exact 32-bit halves, high first |
+| `hex(value)`, `fromHex(text)` | Sixteen lower-case digits; one to sixteen digits in, with or without `0x` |
+| `read(buffer, offset, order?)`, `write(buffer, offset, value, order?)` | Eight bytes, `"little"` (the default) or `"big"` |
+
+```luau
+local bits64 = require("@dream/bits64")
+local id = bits64.fromHex("0x9e3779b97f4a7c15")
+assert(bits64.hex(id) == "9e3779b97f4a7c15" and typeof(id) == "Bits64")
+local hi, lo = bits64.parts(id)
+assert(bits64.fromParts(hi, lo) == id)
+local seen = { [id] = true }
+assert(seen[bits64.fromHex("9E3779B97F4A7C15")])
+assert(not pcall(bits64.toNumber, id)) -- above 2^53
+```
+
+A computation on 64-bit quantities (a hash mix, a counter past 2^53) runs on 32-bit halves or in a
+buffer; `Bits64` is how its result crosses to native code, a file or the wire.
+
 ## dream.quat
 
-`QuatExtension` provides rotations as packed Luau integers. A unit quaternion is compressed
+`QuatExtension` provides rotations as packed scalars. A unit quaternion is compressed
 smallest-three into the 56-bit payload of `quat::Quaternion` (kind 1): two bits name the largest
 component, the other three are 18-bit lanes over `[-1/√2, 1/√2]`, and the omitted one is rebuilt
 from the unit norm. The grid has an exact zero, so the identity and axis-aligned rotations round
 trip exactly; a random rotation comes back within 1.6e-5 rad (mean 5.7e-6). Scripts see one
-integer: no allocation, no GC object, and a type error rather than garbage when an integer of
-another kind is passed.
+`Quaternion` value: on x86-64 and AArch64 no allocation and no GC object, and everywhere a type
+error rather than garbage when a value of another kind is passed.
 
 `quat::AnimationKey` (kind 2) is the rotation plus four opaque flag bits: a pose key, an
-animation frame, a network snapshot, in one integer. l3i keeps the nibble opaque; the system that
+animation frame, a network snapshot, in one value. l3i keeps the nibble opaque; the system that
 produces the keys defines the bits.
 
 | Member | Type |
 |---|---|
-| `IDENTITY` | `integer`, a compiler-folded constant |
-| `axisAngle(axis, angle)` | `(axis: vector, angle: number) -> integer` |
-| `fromXYZW(x, y, z, w)` | `(x: number, y: number, z: number, w: number) -> integer`, normalised |
-| `toXYZW(q)` | `(q: integer) -> (number, number, number, number)` |
-| `mul(a, b)` | `(a: integer, b: integer) -> integer`, the Hamilton product: apply `b`, then `a` |
-| `inverse(q)` | `(q: integer) -> integer` |
-| `slerp(a, b, t)` | `(a: integer, b: integer, t: number) -> integer`, the shorter arc, `t` clamped to `0..=1` |
-| `rotate(q, v)` | `(q: integer, v: vector) -> vector` |
-| `angleTo(a, b)` | `(a: integer, b: integer) -> number`, radians |
-| `key(q, flags)` | `(q: integer, flags: number) -> integer`, an `AnimationKey` from the low four bits of an exact integer |
-| `keyRotation(k)` | `(k: integer) -> integer` |
-| `keyFlags(k)` | `(k: integer) -> number` |
+| `IDENTITY` | `Quaternion`, a module value |
+| `axisAngle(axis, angle)` | `(axis: vector, angle: number) -> Quaternion` |
+| `fromXYZW(x, y, z, w)` | `(x: number, y: number, z: number, w: number) -> Quaternion`, normalised |
+| `toXYZW(q)` | `(q: Quaternion) -> (number, number, number, number)` |
+| `mul(a, b)` | `(a: Quaternion, b: Quaternion) -> Quaternion`, the Hamilton product: apply `b`, then `a` |
+| `inverse(q)` | `(q: Quaternion) -> Quaternion` |
+| `slerp(a, b, t)` | `(a: Quaternion, b: Quaternion, t: number) -> Quaternion`, the shorter arc, `t` clamped to `0..=1` |
+| `rotate(q, v)` | `(q: Quaternion, v: vector) -> vector` |
+| `angleTo(a, b)` | `(a: Quaternion, b: Quaternion) -> number`, radians |
+| `key(q, flags)` | `(q: Quaternion, flags: number) -> AnimationKey`, from the low four bits of an exact integer |
+| `keyRotation(k)` | `(k: AnimationKey) -> Quaternion` |
+| `keyFlags(k)` | `(k: AnimationKey) -> number` |
 | `math()` | `() -> dream_quat_Math` (`jit` feature) |
 
 ```luau
@@ -205,7 +238,7 @@ Malformed input is refused: `axisAngle` with a zero or non-finite axis or a non-
 `fromXYZW` with non-finite components or all zeros (a scaled identity normalises), `slerp` with
 a non-finite weight (finite weights outside `0..1` clamp), `key` with a fractional flag value
 (`Exact` refuses it; higher bits are dropped). A quaternion where a key is expected, or the
-reverse, fails naming `Quaternion` or `AnimationKey`; a plain integer fails too.
+reverse, fails naming `Quaternion` or `AnimationKey`; a number fails too.
 
 The interpolation uses polynomial trigonometry, `acos` to 2e-8 and sine to 6e-8 on their
 domains, so the bound path and the native lowering compute the same formulas; the angular error
@@ -238,9 +271,10 @@ local k = Q:key(a, 3)
 local back = Q:keyRotation(k)
 ```
 
-No C call: the integer is unpacked with shifts and masks, the arithmetic runs on doubles, and the
-result is stored as a vector, a number, or a fresh packed integer. The lowering checks the
-receiver's tag, the operands' integer tags and packed kinds, a non-finite weight, a fractional
+No C call: the 64 bits are loaded from the light userdata and unpacked with shifts and masks, the
+arithmetic runs on doubles, and the result is stored as a vector, a number, or a fresh light
+userdata with its kind's tag. The lowering checks the receiver's tag, the operands' light userdata
+type and kind nibbles, a non-finite weight, a fractional
 flag value, and `fromXYZW` components that are zero, not finite, or so small their squared norm
 is below 1e-290 (the binder rescales those); a mismatch exits to the interpreter, whose bound method raises the same error. Only
 single-result, fixed-arity call sites lower: `return Q:mul(a, b)` and `Q:keyRotation(Q:key(q, 3))`
@@ -259,7 +293,7 @@ its quotient and square root run side by side.
 
 ## dream.raster
 
-`RasterExtension` provides raster scalars as packed integers.
+`RasterExtension` provides raster scalars as packed values.
 
 `raster::Color` (kind 3) is an RGBA8 color. Its 32-bit form, red in bits 0 to 7 through alpha
 in bits 24 to 31, is exactly the four bytes `[r, g, b, a]` a vertex color field or a texture
@@ -274,23 +308,25 @@ a clip type of its own. Construction and unpacking both require `min <= max` on 
 `ClipRect::ALL` has every field at the maximum, which a clamping renderer treats as no clip.
 
 `raster::Color16` is the wide form for formats that require 16 bits per channel: red in bits 0
-to 15 through alpha in bits 48 to 63, the little-endian `u64` being an RGBA16 pixel. It fills the
-whole Luau integer and so has no kind nibble: any integer is accepted as a `Color16`, and nothing
-at runtime distinguishes it from an RGBA8 color or an id. That is the deliberate price of exact
-interchange; `widen` (`x * 257`) and `narrow` (`round(x / 257)`) convert exactly.
+to 15 through alpha in bits 48 to 63, the little-endian `u64` being an RGBA16 pixel. It fills all
+64 bits and so has no kind nibble. It is its own type to scripts (`typeof` answers `Color16`),
+but a parameter that takes one reads the bits of any packed value (or light userdata), so a
+`Color` passed by mistake reads as an RGBA16 pixel rather than failing; a number is refused. That
+is the deliberate price
+of exact interchange; `widen` (`x * 257`) and `narrow` (`round(x / 257)`) convert exactly.
 
 | Member | Type |
 |---|---|
-| `TRANSPARENT`, `BLACK`, `WHITE`, `CLIP_ALL`, `TRANSPARENT16`, `BLACK16`, `WHITE16` | Folded `integer` constants |
+| `TRANSPARENT`, `BLACK`, `WHITE`, `CLIP_ALL`, `TRANSPARENT16`, `BLACK16`, `WHITE16` | `Color`, `ClipRect` and `Color16` module values |
 | `CLIP_MAX_COORD` | `number`, 16383 |
-| `rgba8(r, g, b, a)`, `rgb8(r, g, b)` | `-> integer`; each channel clamped to `0..=255` and rounded to nearest, NaN as 0 |
+| `rgba8(r, g, b, a)`, `rgb8(r, g, b)` | `-> Color`; each channel clamped to `0..=255` and rounded to nearest, NaN as 0 |
 | `red(color)`, `green`, `blue`, `alpha` | `-> number`, one channel |
 | `packed(color)` | `-> number`, the `u32` for `buffer.writeu32` |
 | `channels(color)` | `-> (number, number, number, number)` |
-| `withAlpha(color, a)`, `lerp(a, b, t)`, `mul(a, b)`, `add(a, b)`, `scale(color, factor)`, `premultiply(color)` | `-> integer` |
+| `withAlpha(color, a)`, `lerp(a, b, t)`, `mul(a, b)`, `add(a, b)`, `scale(color, factor)`, `premultiply(color)` | `-> Color` |
 | `rgba16`, `rgb16`, `red16`, `green16`, `blue16`, `alpha16`, `channels16`, `withAlpha16`, `lerp16`, `mul16`, `add16`, `scale16`, `premultiply16` | The same on `Color16` |
-| `widen(color)`, `narrow(color)` | `-> integer` between the two widths |
-| `clip(minX, minY, maxX, maxY)` | `-> integer`; exact integers in `0..=16383`, `min <= max` |
+| `widen(color)`, `narrow(color)` | `-> Color16` and `-> Color` |
+| `clip(minX, minY, maxX, maxY)` | `-> ClipRect`; exact integers in `0..=16383`, `min <= max` |
 | `clipBounds(clip)` | `-> (number, number, number, number)` |
 | `math()` | `() -> dream_raster_Math` |
 
@@ -337,8 +373,8 @@ input yields channel 0; `M:rgba8(-4, 255.4, 254.5, 1e9)` is `raster.rgba8(0, 255
 The module's functions and the receiver's methods expand from one list in `raster.rs`, so a name
 means the same arguments and the same arithmetic on both. The lowering,
 `raster::lowering::ColorMath`, unpacks with shifts and masks, computes on doubles, clamps, rounds
-and packs into one integer store; the 8-bit form is tag- and kind-checked, the 16-bit form
-tag-checked only.
+and packs into one light userdata store; the 8-bit form checks the light userdata type and the
+kind nibble, the 16-bit form the type only.
 
 Measured per call (`benches/raster.rs`): `rgba8` 71 ns through the module against 2.6 ns lowered,
 `lerp` 72 ns against 15 ns, `mul` 61 ns against 17 ns, `premultiply` 52 ns against 16 ns, `lerp16`
@@ -348,9 +384,9 @@ Measured per call (`benches/raster.rs`): `rgba8` 71 ns through the module agains
 
 With the `soft-render` feature, `SoftRenderExtension` binds
 [dream-soft-render](https://github.com/DreamWeave-MP/dream-soft-render) as a small software
-rendering device. It requires `dream.raster` in the same plan: colors are `raster` integers the
-renderer reads as premultiplied (`soft.premultiply` converts straight alpha), clip rectangles are
-`ClipRect` integers. Luau describes raster work in native-shaped values and Rust does it: nothing
+rendering device. It requires `dream.raster` in the same plan: colors are `raster` `Color` values
+the renderer reads as premultiplied (`soft.premultiply` converts straight alpha), clip rectangles
+are `ClipRect` values. Luau describes raster work in native-shaped values and Rust does it: nothing
 is per-pixel and nothing is a table.
 
 dream-net (runtime infrastructure) and dream-soft-render (an experimental rendering primitive
@@ -362,7 +398,7 @@ does not depend on the renderer unless the feature is on.
 |---|---|
 | `renderer()` | `() -> dream_soft_render_Renderer` |
 | `vertices()` | `() -> dream_soft_render_Vertices` |
-| `premultiply(color)` | `(color: integer) -> integer` |
+| `premultiply(color)` | `(color: Color) -> Color` |
 | `MAX_SURFACE_PIXELS`, `MAX_TEXTURE_BYTES`, `VERTEX_BYTES` | Folded numbers; `VERTEX_BYTES` is 20 |
 
 | Type | Members |
@@ -370,7 +406,7 @@ does not depend on the renderer unless the feature is on.
 | `Renderer` | `beginFrame(width, height): Frame`, `createTexture(width, height, pixels: buffer \| string): Texture`, `readInto(buffer, offset?): number` (the byte count, `width * height * 4`), fields `width`, `height` |
 | `Frame` | `clear(color)`, `rect(min: vector, max: vector, color, clip)`, `image(min, max, uvMin, uvMax, texture, tint, clip)`, `mesh(vertices: buffer, indices: buffer, texture: Texture?, clip)`, `finish()`, fields `width`, `height` |
 | `Texture` | `update(x, y, width, height, pixels)`, `free()`, fields `width`, `height` |
-| `Vertices` | `write(buffer, offset: number, pos: vector, uv: vector, color: integer): number`, the next offset |
+| `Vertices` | `write(buffer, offset: number, pos: vector, uv: vector, color: Color): number`, the next offset |
 
 Draws rasterize immediately in call order, as the crate does; a `Frame` is a token that goes
 stale on `finish()` or the next `beginFrame`. A mesh is a buffer of 20-byte vertices (`x, y, u, v`
@@ -437,8 +473,8 @@ writer (cos, sin, and `vector.create` included).
 
 Feature `bytes`; module `@dream/bytes`, `l3i::bytes::BytesExtension`. The extension for scripts
 that parse foreign file formats, which is most of what a preserved game engine does. Luau's own
-`buffer` library already reads and writes every little-endian width, 64-bit integers (`readinteger`)
-and bit fields (`readbits`), and its code generator lowers all of them to native loads and stores,
+`buffer` library already reads and writes every little-endian width and bit fields (`readbits`),
+and its code generator lowers all of them to native loads and stores,
 so a parser written against `buffer` under `--!native` already runs at native speed. This module
 adds what a script cannot do fast, or at all, on top of that. Every "some bytes" input is a
 `buffer | string`, every bytes output is a new `buffer` of exactly its length, offsets are
@@ -471,8 +507,10 @@ local count, after = bytes.readVarint(header, next)
 | `toBase64(source, offset?, length?)`, `fromBase64(text)` | Standard padded base64 (RFC 4648) of a range, the whole source by default, and back; `fromBase64` refuses anything else, naming the byte |
 | `readCString(source, offset, fieldLength?)` | The text up to the first NUL and the offset after the terminator, or after the fixed-width field when `fieldLength` is given |
 | `writeCString(target, offset, text, fieldLength?)` | Writes the text and a NUL, NUL-padded to the field; returns the offset after it |
-| `readVarint`, `readSignedVarint(source, offset)` | LEB128: the value as an integer and the offset after it |
-| `writeVarint`, `writeSignedVarint(target, offset, value)` | The offset after the encoding |
+| `readVarint`, `readSignedVarint(source, offset)` | LEB128: the value as an exact number and the offset after it; an error beyond 2^53, never a rounded value |
+| `readVarint64(source, offset)` | Unsigned LEB128, all 64 bits as a [`Bits64`](#dream-bits64), and the offset after it |
+| `writeVarint`, `writeSignedVarint(target, offset, value)` | The offset after the encoding of an exact whole number |
+| `writeVarint64(target, offset, value)` | The offset after the encoding of a `Bits64` |
 
 Every bounds failure names the call, the width and the offset: `bytes.readu32be: 4 bytes at
 offset 30 past the end (length 32)`.
@@ -550,13 +588,13 @@ print((setting:replaceAll('a=1', '${value}=${key}'))) --> 1=a
 ### The widths and orders buffer lacks
 
 `readu16be`, `readi16be`, `readu24`, `readi24`, `readu24be`, `readi24be`, `readu32be`,
-`readi32be`, `readf32be`, `readf64be`, `readi64be` (an integer), `readf16` and `readf16be` (IEEE
+`readi32be`, `readf32be`, `readf64be`, `readi64be` (a `Bits64`), `readf16` and `readf16be` (IEEE
 half floats), each `(source, offset)`, and the matching `write*(target, offset, value)`. A value
 written through a `u` or `i` form is truncated to the width exactly as `buffer.writeu16`
 truncates, so both paths of a lowered call agree by construction.
 
 The same methods live on `bytes.math()`, the `dream_bytes_Math` receiver. Under `jit`, when the
-script annotates it (`local B: dream_bytes_Math = bytes.math()`), the integer forms lower to
+script annotates it (`local B: dream_bytes_Math = bytes.math()`), the integer widths lower to
 native code: the receiver's tag check, Luau's own buffer bounds check, one load or store, and a
 byte swap, which is what `buffer.readu32` compiles to plus the swap. A bad offset exits to the
 interpreter, whose bound method raises the error. The float forms stay on the binder path, since
@@ -599,11 +637,13 @@ result. All of it is pure Rust: `miniz_oxide`, `lz4_flex`, `ruzstd`, `lzma-rs`.
 ### Digests (`bytes-digests`)
 
 `crc32(data, seed?)`, `adler32`, `fnv1a32`, `xxh32(data, seed?)` return numbers; `fnv1a64`,
-`xxh64(data, seed?)`, `xxh3` return integers carrying the 64 bits; `md5`, `sha1`, `sha256` and
+`xxh64(data, seed?)` (a `Bits64` seed), `xxh3` return a [`Bits64`](#dream-bits64) carrying the 64
+bits; `md5`, `sha1`, `sha256` and
 `blake3` return lower-case hex; `digest(data, algorithm)` returns the raw bytes of any of them
 (checksums big-endian). For data that arrives in pieces, `hasher(algorithm)` returns a
 `dream_bytes_Hasher`: `update(data)` any number of times, `finish()` for the hex, `finishBytes()`
-for the bytes, `value()` for the integer of a checksum, `reset()` to start over. `finish` leaves
+for the bytes, `value()` for a checksum's value (a number for the 32-bit ones, a `Bits64` for the
+64-bit ones), `reset()` to start over. `finish` leaves
 the state intact, so a running digest can be read at any point.
 
 ### Randomness, HMAC and signatures (`bytes-crypto`)
@@ -1032,10 +1072,9 @@ rule a byte map and these switches can't say, stay the domain's, applied before 
 ### Tokens
 
 A token is the identity's 1-based position in its pool, `1, 2, 3, ...` in first-seen order, as a
-Luau number. A number and not an `integer`, because Luau keeps dense number keys in a table's
-array part and always hashes an `integer` key: reading a table by token costs about a fifth of
-the instructions of reading it by an `integer` or a string, and a third of an `integer` key's L1
-misses (below). Dense tokens also fit a `u32` column, `buffer.writeu32(column, i * 4, id)`.
+Luau number. Luau keeps dense number keys in a table's array part and always hashes a string or a
+`Bits64` key, so reading a table by token costs a fraction of reading it by either (below). Dense
+tokens also fit a `u32` column, `buffer.writeu32(column, i * 4, id)`.
 
 Tokens are pool-relative: two pools hand out the same numbers, and a token means something only
 to the pool that made it. A pool only grows (nothing is removed or reused), so a token never
@@ -1113,10 +1152,11 @@ folds it or it is already normal; 2178 when a run of `/` sends it to the binder;
 `map[string.gsub(string.lower(path), "\\", "/")]`, is 5008. From Rust, `Interner::intern` on the
 same key is 898 and 551.
 
-The lowered call costs about what the Rust lookup does: the C-call protocol, 277 instructions
+The lowered call costs about what the Rust lookup does: the C-call protocol, 182 instructions
 for even a hand-written `lua_CFunction`, is gone. Reading a table keyed by tokens is 25
-instructions and a quarter to one L1 miss, against 140 and 2.5 to 4 for `integer` keys and 122
-and 3 to 5.5 for strings. `resolve` is about 900 instructions, most of it making the string.
+instructions and a quarter to one L1 miss, against 122 and 3 to 5.5 for strings (measured before
+3.0.0; the harness's `Bits64` key row replaces the integer one). `resolve` is about 900
+instructions, most of it making the string.
 
 ## dream.intl
 
@@ -1158,8 +1198,8 @@ print(french:format("1234567.895"))                  -- 1 234 567,90, narrow no-
 | `formatter:format(value)` | The number as text for the locale |
 | `formatter:locale()`, `formatter:resolvedOptions()` | The canonical tag; the options with defaults filled in |
 
-A locale argument is a `dream_intl_Locale` or a tag string. Values are a Luau number, a Luau
-`integer`, or a decimal string. Handles are built once and reused; build them where the locale is
+A locale argument is a `dream_intl_Locale` or a tag string. Values are a Luau number or a decimal
+string, which keeps digits a double cannot. Handles are built once and reused; build them where the locale is
 chosen, not per value.
 
 ### Locales

@@ -206,4 +206,4 @@ unsafe extern "C-unwind" fn twice(state: *mut ffi::lua_State) -> c_int {
 }
 ```
 
-`l3i::TAG_LIMIT` and `l3i::LUAU_VERSION` (`"0.746"`) describe the linked VM.
+`l3i::TAG_LIMIT` and `l3i::LUAU_VERSION` (`"0.747"`) describe the linked VM.

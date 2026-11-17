@@ -1,6 +1,6 @@
 +++
 title = "The raw C API"
-description = "The ffi module: every Luau 0.746 C entry point declared by hand; TAG_LIMIT and LUAU_VERSION; the rules for hand-written lua_CFunctions."
+description = "The ffi module: every Luau 0.747 C entry point declared by hand; TAG_LIMIT and LUAU_VERSION; the rules for hand-written lua_CFunctions."
 weight = 270
 
 [extra]
@@ -15,14 +15,14 @@ depend on.
 
 {{ api_signature(value="pub mod ffi") }}
 
-The raw Luau C API for hand-written native functions, transcribed from Luau 0.746's headers.
+The raw Luau C API for hand-written native functions, transcribed from Luau 0.747's headers.
 Everything here is `unsafe`; prefer the safe layers. Names, argument order and types follow the
 headers exactly, so the C++ binder's code reads across one to one.
 
 | Header | Declares |
 |---|---|
 | `VM/include/luaconf.h` | The values the VM was compiled with: `LUAI_MAXCSTACK` 8000, `LUA_MINSTACK` 20, `LUA_IDSIZE` 256, `LUA_MEMORY_CATEGORIES` 256, `LUA_VECTOR_SIZE` 3 |
-| `VM/include/lua.h` | The status codes (`LUA_OK`, `LUA_YIELD`, `LUA_ERRRUN`, `LUA_ERRSYNTAX`, `LUA_ERRMEM`, `LUA_ERRERR`, `LUA_BREAK`), coroutine statuses, type tags (`LUA_TNONE` to `LUA_TBUFFER`, including `LUA_TINTEGER` and `LUA_TVECTOR`), the pseudo-indexes and `lua_upvalueindex`, `lua_State`, `lua_Debug`, `lua_Callbacks`, the callback types (`lua_CFunction`, `lua_Continuation`, `lua_Alloc`, `lua_CageAlloc`, `lua_Destructor`, `lua_UserdataMark`, `lua_EmbedderMark`, `lua_EmbedderGc`, `lua_CategoryName`, `lua_UserdataDirectAccess`, `lua_UserdataDirectNamecall`, `lua_UserdataDirectFieldGet`, `lua_Hook`, `lua_Coverage`, `lua_CounterFunction`, `lua_CounterValue`), and every function |
+| `VM/include/lua.h` | The status codes (`LUA_OK`, `LUA_YIELD`, `LUA_ERRRUN`, `LUA_ERRSYNTAX`, `LUA_ERRMEM`, `LUA_ERRERR`, `LUA_BREAK`), coroutine statuses, type tags (`LUA_TNONE` to `LUA_TOBJECT`, including `LUA_TVECTOR`, `LUA_TBUFFER` and the experimental class tags; Luau 0.747 removed `LUA_TINTEGER` and moved every tag after `LUA_TNUMBER` down by one), the pseudo-indexes and `lua_upvalueindex`, `lua_State`, `lua_Debug`, `lua_Callbacks`, the callback types (`lua_CFunction`, `lua_Continuation`, `lua_Alloc`, `lua_CageAlloc`, `lua_Destructor`, `lua_UserdataMark`, `lua_EmbedderMark`, `lua_EmbedderGc`, `lua_CategoryName`, `lua_UserdataDirectAccess`, `lua_UserdataDirectNamecall`, `lua_UserdataDirectFieldGet`, `lua_Hook`, `lua_Coverage`, `lua_CounterFunction`, `lua_CounterValue`), and every function |
 | `VM/include/lualib.h` | `luaL_Reg`, `luaL_Strbuf` and `LUA_BUFFERSIZE`, `LUA_LUTAG_LIMIT`, the `luaopen_*` openers, `luaL_openlibs`, `luaL_sandbox`, `luaL_sandboxthread`, the `luaL_check*`/`luaL_opt*` argument helpers, `luaL_errorL`, `luaL_typeerrorL`, `luaL_traceback`, `luaL_findtable`, `luaL_newmetatable`, the string buffer functions |
 | `Compiler/include/luacode.h` | `lua_CompileOptions`, `lua_CompileConstant`, the library member callback types, `luau_compile`, `luau_set_compile_constant_*` |
 | `CodeGen/include/luacodegen.h` | `luau_codegen_supported`, `luau_codegen_create`, `luau_codegen_compile` |
@@ -55,7 +55,7 @@ reserved: which tag a type gets is the host's or the planner's choice, per runti
 
 ## LUAU_VERSION
 
-{{ api_signature(value='const LUAU_VERSION: &str = "0.746"') }}
+{{ api_signature(value='const LUAU_VERSION: &str = "0.747"') }}
 
 The Luau release the linked VM was built from: the release OpenMW pins, as the `luau/` git
 submodule. The flag policy names this version in its error when a flag does not exist.

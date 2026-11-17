@@ -1,6 +1,6 @@
 # l3i
 
-**The Luau runtime for DreamWeave.** A Rust binder for [Luau](https://luau.org) 0.746 that
+**The Luau runtime for DreamWeave.** A Rust binder for [Luau](https://luau.org) 0.747 that
 owns its own Luau build, plans every VM before it exists, and lowers hot script calls to native
 code.
 
@@ -25,7 +25,7 @@ Documentation: **<https://DreamWeave-MP.github.io/l3i/>**. This file is the shor
 | | |
 |---|---|
 | **No `mlua`, no binding crate** | Luau is a git submodule compiled by `build.rs`. The whole C API is declared by hand in `l3i::ffi`, and a safe, scoped layer sits over it. |
-| **Arguments read from the value layout** | The typed binder reads stack slots straight from Luau's 16-byte `TValue`. A bound `(f64, f64) -> f64` call retires 369 instructions against 277 for a bare `lua_CFunction`. |
+| **Arguments read from the value layout** | The typed binder reads stack slots straight from Luau's 16-byte `TValue`. A bound `(f64, f64) -> f64` call retires 320 instructions against 182 for a bare `lua_CFunction`. |
 | **Tags, atoms and slots are plan data** | A `RuntimePlan` assigns userdata tags, Luau's 32 compiler type slots, atoms and direct-access slots per VM, so one Rust type can be tag 8 in one runtime and untagged in another. |
 | **Typed by construction** | Every module member carries a Luau signature. The plan renders the `.d.luau`, and the `analysis` feature type checks strict scripts against it in the crate's own tests. |
 | **The game transport is not optional** | Every plan carries the `dream.udp` bridge; the policy's capabilities decide what a script may do with it. Raw TCP is a separate, optional extension. |
@@ -37,7 +37,7 @@ Nothing here is a catalogue: tags, atoms, type names and debug-name roots are ho
 
 ```toml
 [dependencies]
-l3i = { version = "2", features = ["jit"] }   # jit, analysis, soft-render, bytes(-codecs, -crypto, -digests, -text, -regex), data, intern, intl, syntax, fs, process, tcp, dns, tls are optional
+l3i = { version = "3", features = ["jit"] }   # jit, analysis, soft-render, bytes(-codecs, -crypto, -digests, -text, -regex), data, intern, intl, syntax, fs, process, tcp, dns, tls are optional
 ```
 
 l3i builds only with **clang, lld and cross-language thin LTO**, and Cargo does not inherit a
@@ -99,7 +99,7 @@ Each row is a page of the guide.
 | **Runtime options** | Watchdog on time and heap, memory categories, call scopes with self-time accounting, collector control, a sampling profiler, frozen fast flags. | [Runtime options](https://DreamWeave-MP.github.io/l3i/docs/runtime-options/) |
 | **Direct access** | Atoms let `GETTABLEKS`/`NAMECALL` reach a native callback with no metatable walk; `DirectPlan` validates Luau's inline cache in O(1) and serves a type under any tag. | [Direct access](https://DreamWeave-MP.github.io/l3i/docs/direct-access/) |
 | **Extensions and plans** | A crate declares its Luau surface once (`describe`), a plan composes crates and assigns every tag, slot and atom (`finalize`), a runtime is built from it (`from_plan`); the plan renders the `.d.luau` and can type check it. | [Extensions](https://DreamWeave-MP.github.io/l3i/docs/extensions/) |
-| **Primitives** | `BytesView`, `BufferView`, `Exact<T>`, `Integer`, `Bits64`, `PackedScalar` with a kind registry, strict `Options` tables, in-place table walks, `Sequence` and `Stream` views. | [Primitives](https://DreamWeave-MP.github.io/l3i/docs/primitives/) |
+| **Primitives** | `BytesView`, `BufferView`, `Exact<T>`, `Bits64`, `PackedScalar` with a kind registry and one checked carrier, strict `Options` tables, in-place table walks, `Sequence` and `Stream` views. | [Primitives](https://DreamWeave-MP.github.io/l3i/docs/primitives/) |
 | **Built-in extensions** | `@dream/udp` (in every plan), `@dream/quat`, `@dream/raster`, `@dream/bytes`, `@dream/data`, `@dream/intern`, `@dream/intl`, `@dream/luau`, `@dream/soft-render`, `@dream/fs`, `@dream/process`, `@dream/tcp`, `@dream/dns`, `@dream/tls`, `@dream/audio`. | [Built-in extensions](https://DreamWeave-MP.github.io/l3i/docs/builtin-extensions/) |
 | **The dialect** | `[for e in entities if e.active => e.id]`, `sum[...]`, `into(out)[...]`, `t[a:b]`, `buf[1:n, "f32@16"]` and `local {x, y} = p`: source syntax lowered by one frontend to the same-contract handwritten loop, with tooling in original coordinates. | [The l3i dialect](https://DreamWeave-MP.github.io/l3i/docs/dialect/) |
 | **Native code** | Luau's CodeGen with lowering hooks written in Rust; which call sites lower and why. | [Native code](https://DreamWeave-MP.github.io/l3i/docs/native-code/) |
@@ -111,8 +111,9 @@ Each row is a page of the guide.
 | Extension | Module | What it is |
 |---|---|---|
 | `dream.udp` | `@dream/udp` | The dream-net bridge, in every plan: schemas, capability-gated Luau clients and servers, opaque server keys with Luau token minting, `pollInto` with one payload copy and no allocation. |
-| `dream.quat` | `@dream/quat` | Unit rotations packed into one Luau integer (smallest-three, 18 bits per component) and animation keys; `quat.math()` lowers `rotate` to 21 ns native. |
-| `dream.raster` | `@dream/raster` | RGBA8 colours, clip rectangles and RGBA16 colours as packed integers; `raster.math()` lowers colour arithmetic. |
+| `dream.quat` | `@dream/quat` | Unit rotations packed into 64 bits (smallest-three, 18 bits per component) and animation keys; `quat.math()` lowers `rotate` to about 21 ns native. |
+| `dream.raster` | `@dream/raster` | RGBA8 colours, clip rectangles and RGBA16 colours as packed values; `raster.math()` lowers colour arithmetic. |
+| `dream.bits64` | `@dream/bits64` | In every plan: opaque 64-bit values (digests, client and protocol ids) to and from exact numbers, halves, hex and buffer bytes. |
 | `dream.bytes` (`bytes`) | `@dream/bytes` | For parsing foreign file formats in script: searching, C strings, varints, big-endian and half-float reads lowered natively, plus codecs, digests and text codepages behind `bytes-codecs`, `bytes-digests`, `bytes-text`. |
 | `dream.data` (`data`) | `@dream/data` | The generic bulk-data plane: typed spans of buffers reduced, compared into selections, gathered, scattered, filled, combined, stably argsorted and partitioned natively with no per-element callbacks; reductions also lower to native loops under `jit`, and the dialect's recognized pipelines over buffer slices use it automatically ([dream.data](https://DreamWeave-MP.github.io/l3i/docs/builtin-extensions/#dream-data)). |
 | `dream.intern` (`intern`) | `@dream/intern` | Textual identity as dense numbers: pools that intern strings or buffer spans exactly, ASCII case-insensitively, or by their normal form under byte rules (case, replaced bytes, collapsed runs, trimmed ends), folding inside the hash, with no Luau string made for a duplicate. |
@@ -174,15 +175,15 @@ binder.
 - Tags are `1..254`; tag 0 is Luau's untagged default. Fast flags are one named policy,
   l3i's own, frozen before the first VM or compile; a flag the linked Luau lacks is an error,
   never a silent no-op.
-- Luau integers (`42i`) compare with `==` only and never equal a number, so identities (peers,
-  events, handles, packed scalars) are integers and everything a script counts or thresholds is
-  a plain number.
+- Luau 0.747 has no integer type. Counts, sizes and small ids are numbers, exact or an error past
+  2^53; opaque 64-bit values are `Bits64`; packed scalars ride in tagged light userdata on x86-64
+  and AArch64 and interned userdata elsewhere, with bits that are never a pointer.
 
 ## Building
 
 | | |
 |---|---|
-| Luau | git submodule `luau/`, release 0.746; `git clone --recurse-submodules` |
+| Luau | git submodule `luau/`, release 0.747; `git clone --recurse-submodules` |
 | C++ side | compiled by `build.rs` with `cc`: `LUAI_MAXCSTACK=8000`, three-component vectors, `LUA_UTAG_LIMIT=254`, `-fno-math-errno`, no `-march` |
 | Toolchain | clang++, lld, cross-language thin LTO, clang and rustc on the same LLVM major; enforced by `build.rs` |
 | Apple targets | clang and lld without `-Clinker-plugin-lto` (ld64.lld rejects it); macOS forfeits the cross-language inlining |
@@ -210,15 +211,15 @@ the GitHub release.
 
 Wall time is noise past a few nanoseconds, so the binder's own cost is tracked in retired
 instructions per call from the CPU's counters (`cargo bench -- instructions`), the loop
-subtracted, on Luau 0.740:
+subtracted, on Luau 0.747:
 
 | Per call | Instructions | Cycles |
 |---|---:|---:|
-| hand-written `lua_CFunction (f64, f64)` | 277 | 69 |
-| bound `(f64, f64) -> f64` | 369 | 89 |
-| typed direct namecall, the VM's leanest method path | 368 | 98 |
-| planned method `() -> f64` | 431 | 107 |
-| planned direct field | 78 | 12 |
+| hand-written `lua_CFunction (f64, f64)` | 182 | 50 |
+| bound `(f64, f64) -> f64` | 320 | 73 |
+| typed direct namecall, the VM's leanest method path | 313 | 82 |
+| planned method `() -> f64` | 375 | 96 |
+| planned direct field | 69 | 9 |
 
 Every scenario reports fewer than 0.005 cache, TLB and branch misses per call. A bare VM's heap
 is 64 KiB after a full collection; the binder's own state is a 600-byte shared block plus 32

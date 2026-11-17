@@ -1,6 +1,6 @@
 +++
 title = "l3i"
-description = "The Luau runtime for DreamWeave: a Rust binder that owns its Luau 0.746 build, plans every VM before it exists, and lowers hot script calls to native code."
+description = "The Luau runtime for DreamWeave: a Rust binder that owns its Luau 0.747 build, plans every VM before it exists, and lowers hot script calls to native code."
 
 [taxonomies]
 tags = ["Rust", "Luau", "Bindings", "Game development", "Native code"]
@@ -19,7 +19,7 @@ script sees has to be declared once, typed, and impossible to drift from what th
 l3i is that binder. It started life as
 [a C++ Luau binder for OpenMW](https://gitlab.com/magicaldave1/openmw/-/tree/f69579c8d54fb2ae4d7a79a4d7033205effaec0e/components/luau),
 and this is the same design done again in Rust, with the parts a multi-crate engine needs on
-top: a planner that composes a VM from extensions before the VM exists, a packed integer
+top: a planner that composes a VM from extensions before the VM exists, a packed scalar
 vocabulary for values that should never allocate, the network bridge in every runtime, Luau's
 native code generator with lowering hooks written in Rust, and a dialect of Luau whose
 comprehensions, slices and record patterns compile to the loops you would have written by hand.
@@ -27,12 +27,12 @@ comprehensions, slices and record patterns compile to the loops you would have w
 {{ pipeline(data_path="data/pipeline/plan.json") }}
 
 {% features() %}
-- **Its own Luau.** Luau 0.746 is a git submodule compiled by `build.rs` with clang, lld and
+- **Its own Luau.** Luau 0.747 is a git submodule compiled by `build.rs` with clang, lld and
   cross-language thin LTO, so the Rust thunks and the Luau API inline into each other. No `mlua`,
   no separate binding crate, nothing fetched at build time.
 - **Arguments read from the value layout.** The typed binder reads stack slots straight from
   Luau's 16-byte `TValue`, and each runtime proves the mirror against the API once at creation. A
-  bound `(f64, f64) -> f64` call retires 369 instructions against 277 for a bare `lua_CFunction`.
+  bound `(f64, f64) -> f64` call retires 320 instructions against 182 for a bare `lua_CFunction`.
 - **Tags, atoms and slots are plan data.** A `RuntimePlan` assigns userdata tags, Luau's 32
   compiler type slots, atoms and direct-access slots per VM, so the same Rust type can be tag 8
   in one runtime and untagged in another, and one handler serves both.
@@ -40,8 +40,8 @@ comprehensions, slices and record patterns compile to the loops you would have w
   The plan renders the `.d.luau`, and the `analysis` feature type checks strict scripts against
   it in the crate's tests, so the declared API and the runtime cannot disagree.
 - **Values that never allocate.** Rotations, animation keys, colours and clip rectangles travel
-  as one Luau integer each, with a kind nibble checked on every read. A packed `rotate` runs in
-  21 ns lowered to native code.
+  as 64 bits each in a tagged light userdata, each kind its own type, with a kind nibble checked
+  on every read. A packed `rotate` runs in about 21 ns lowered to native code.
 - **The network is not optional.** Every plan carries the `dream.udp` bridge; the policy's
   capabilities decide what a script may do with it. Nothing calls into Luau from inside the
   transport.
@@ -109,7 +109,7 @@ std::fs::write("dream.d.luau", plan.type_definitions())?;
 local quat = require("@dream/quat")
 local raster = require("@dream/raster")
 
--- A rotation is one integer: 18 bits per component, smallest three, exact identity.
+-- A rotation is one value: 18 bits per component, smallest three, exact identity.
 local spin = quat.axisAngle(vector.create(0, 0, 1), math.pi / 2)
 local key = quat.key(spin, 5)          -- an AnimationKey: the rotation plus four flag bits
 assert(quat.keyFlags(key) == 5)
@@ -124,20 +124,20 @@ local tint = C:lerp(raster.rgb8(255, 240, 255), raster.rgba8(198, 160, 246, 255)
 
 Every name above is declared in the plan's definitions, so a strict script that misspells one, or
 passes a key where a rotation is expected, fails in the checker before it runs. At runtime the same
-mistake is a type error naming the kind: `Quaternion expected, got AnimationKey`.
+mistake is a type error naming the kind: `expected a packed Quaternion, got kind 2`.
 
 ## What it costs
 
-Retired instructions per call, read from the CPU's counters on Luau 0.740, with the
+Retired instructions per call, read from the CPU's counters on Luau 0.747, with the
 loop subtracted. The rest of a call is Luau's own machinery.
 
 | Per call | Instructions | Cycles |
 |---|---:|---:|
-| hand-written `lua_CFunction (f64, f64)` | 277 | 69 |
-| bound `(f64, f64) -> f64` | 369 | 89 |
-| typed direct namecall, the VM's leanest method path | 368 | 98 |
-| planned method `() -> f64` | 431 | 107 |
-| planned direct field | 78 | 12 |
+| hand-written `lua_CFunction (f64, f64)` | 182 | 50 |
+| bound `(f64, f64) -> f64` | 320 | 73 |
+| typed direct namecall, the VM's leanest method path | 313 | 82 |
+| planned method `() -> f64` | 375 | 96 |
+| planned direct field | 69 | 9 |
 
 Every scenario reports fewer than 0.005 cache misses, TLB misses and branch misses per call: the
 whole path stays in L1 and predicts. [Compatibility and performance](@/docs/performance.md) has the
