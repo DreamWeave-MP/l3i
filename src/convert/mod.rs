@@ -34,7 +34,6 @@ pub use buffer::{BufferView, BytesView, NewBuffer, new_buffer};
 pub use exact::{Bits64, Exact};
 pub use raw::RawValue;
 pub use scalar::Integer;
-pub(crate) use scalar::read_integer64;
 pub use vector::Vector3;
 
 /// A Rust type readable from one stack slot with one checked conversion.

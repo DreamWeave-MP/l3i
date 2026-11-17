@@ -42,6 +42,19 @@ impl RawValue {
         self.bits as i64
     }
 
+    /// The value word as 64 bits, whatever the slot holds: for a light userdata the pointer word,
+    /// which on the light carrier is a packed scalar's bits and is never a pointer to follow.
+    #[inline(always)]
+    pub fn pointer_bits(&self) -> u64 {
+        self.bits
+    }
+
+    /// The `extra` word: a light userdata's tag, a vector's third component.
+    #[inline(always)]
+    pub fn extra(&self) -> i32 {
+        self.extra
+    }
+
     /// The payload of a `LUA_TBOOLEAN` slot (an `int` in the low word).
     #[inline(always)]
     pub fn boolean(&self) -> bool {
@@ -64,6 +77,29 @@ impl RawValue {
         let object = self.bits as usize as *mut u8;
         // SAFETY: the caller checked the tag; a live Udata is at least its header long.
         unsafe { (*object.add(3), object.add(16).cast::<c_void>()) }
+    }
+
+    /// The payload length of a `LUA_TUSERDATA` slot (`Udata::len`, offset 4).
+    ///
+    /// # Safety
+    /// The slot must hold a live full userdata (tag `LUA_TUSERDATA`).
+    #[inline(always)]
+    pub unsafe fn userdata_len(&self) -> usize {
+        let object = self.bits as usize as *const u8;
+        // SAFETY: the caller checked the tag; `csrc/extra.cpp` pins the offset.
+        let len = unsafe { object.add(4).cast::<i32>().read_unaligned() };
+        usize::try_from(len).unwrap_or(0)
+    }
+
+    /// The metatable of a `LUA_TUSERDATA` slot (`Udata::metatable`, offset 8), or null.
+    ///
+    /// # Safety
+    /// The slot must hold a live full userdata (tag `LUA_TUSERDATA`).
+    #[inline(always)]
+    pub unsafe fn userdata_metatable(&self) -> *const c_void {
+        let object = self.bits as usize as *const u8;
+        // SAFETY: the caller checked the tag; `csrc/extra.cpp` pins the offset.
+        unsafe { object.add(8).cast::<*const c_void>().read_unaligned() }
     }
 
     /// The bytes of a `LUA_TSTRING` slot (`TString`: the length at offset 20, the bytes at 24).

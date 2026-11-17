@@ -212,6 +212,30 @@ const TValue* l3i_stack_slot(lua_State* L, int idx)
     return luaA_toobject(L, idx);
 }
 
+// The light userdata tags (build.rs defines the limit; src/raw/ffi.rs mirrors it and splits it
+// into the host's 0..128 and the packed scalars' 128..160).
+static_assert(LUA_LUTAG_LIMIT == 160, "l3i mirrors 160 light userdata tags");
+static_assert(LUA_TLIGHTUSERDATA == 2 && LUA_TUSERDATA == 9, "l3i mirrors the light and full userdata type tags");
+static_assert(offsetof(Udata, len) == 4, "l3i mirrors the userdata length at offset 4");
+static_assert(offsetof(Udata, metatable) == 8, "l3i mirrors the userdata metatable at offset 8");
+
+// Pushes a packed scalar on the light userdata carrier (src/packed/carrier.rs): the 64 bits in the
+// value word, `tag` in `extra`, the light userdata type tag. The bits are copied, never converted
+// to a pointer: most of them are not valid pointers (kind 1 alone is non-canonical on x86-64), and
+// the VM only copies the word and compares it. Only the 64-bit carrier calls this.
+void l3i_push_light_bits(lua_State* L, uint64_t bits, int tag)
+{
+    static_assert(sizeof(L->top->value) >= sizeof(bits), "the value word holds 64 bits");
+    api_check(L, unsigned(tag) < LUA_LUTAG_LIMIT);
+    TValue* o = L->top;
+    memcpy(&o->value, &bits, sizeof(bits));
+    o->extra[0] = tag;
+    o->tt = LUA_TLIGHTUSERDATA;
+    // lapi.cpp's api_incr_top, which is private to that file.
+    api_check(L, L->top < L->ci->top);
+    L->top++;
+}
+
 // One call for the generated and planned dispatchers: the argument count, the thread's data
 // slot (the binder's per-thread record), and the first argument slot.
 int l3i_direct_enter(lua_State* L, void** threaddata, const TValue** base)

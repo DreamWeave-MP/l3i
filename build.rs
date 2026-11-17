@@ -22,8 +22,46 @@ const MAX_CSTACK: usize = 8000;
 // LUAU_CXXFLAGS but cannot lower this one.
 const TAG_LIMIT: u32 = 254;
 
+// Luau's default is 128 light userdata tags. Hosts keep 0..128; l3i's packed scalars take
+// 128..160 (src/packed/carrier.rs): 128 + kind for the fifteen nibble kinds, 144.. for the wide
+// kinds. src/raw/ffi.rs mirrors it as LUA_LUTAG_LIMIT and csrc/extra.cpp checks the two agree.
+const LIGHT_TAG_LIMIT: u32 = 160;
+
 // Three-component vectors, as OpenMW.
 const VECTOR_SIZE: u32 = 3;
+
+/// The Luau value a packed scalar rides in (src/packed/carrier.rs), as one
+/// `cfg(l3i_carrier = "...")`. Tagged light userdata only on the architectures where it has been
+/// proven to keep all 64 bits (an allowlist, not a pointer-width test: a new 64-bit target boxes
+/// until it is added with its tests); boxed userdata everywhere else. `L3I_CARRIER` overrides the
+/// choice for testing: `integer` is the Luau 0.746 integer carrier, kept as the oracle the others
+/// are compared against, and `boxed` runs the boxed carrier on a desktop build. It is an
+/// environment variable rather than a feature because the gates build with `--all-features`.
+fn carrier(jit: bool) -> &'static str {
+    println!("cargo:rerun-if-env-changed=L3I_CARRIER");
+    println!("cargo:rustc-check-cfg=cfg(l3i_carrier, values(\"integer\", \"light\", \"boxed\"))");
+    let arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
+    let allowlisted = arch == "x86_64" || arch == "aarch64";
+    let carrier = match env::var("L3I_CARRIER").as_deref() {
+        // Until the lowering and the type surface move (the Luau 0.747 campaign), the integer
+        // carrier stays the default.
+        Ok("integer") | Err(_) => "integer",
+        Ok("light") => {
+            assert!(allowlisted, "L3I_CARRIER=light: the light userdata carrier is not proven on {arch}");
+            "light"
+        }
+        Ok("boxed") => "boxed",
+        Ok(other) => panic!("L3I_CARRIER={other}: expected integer, light or boxed"),
+    };
+    // Luau generates native code for x86-64 and AArch64 only, and no lowering hook is written
+    // against the boxed carrier: refuse the combination rather than compile one.
+    assert!(
+        !(jit && carrier == "boxed"),
+        "the `jit` feature needs the light userdata carrier; the boxed carrier ({arch}, or L3I_CARRIER=boxed) has no native lowering"
+    );
+    println!("cargo:rustc-cfg=l3i_carrier=\"{carrier}\"");
+    carrier
+}
 
 // The Luau release the `luau/` submodule is pinned at. Bumping the submodule means bumping this,
 // re-auditing src/raw/ffi.rs against the new headers, and re-checking the flag policy.
@@ -101,6 +139,7 @@ fn main() {
     let jit = env::var_os("CARGO_FEATURE_JIT").is_some();
     let analysis = env::var_os("CARGO_FEATURE_ANALYSIS").is_some();
     let syntax = env::var_os("CARGO_FEATURE_SYNTAX").is_some();
+    carrier(jit);
     if env::var_os("CARGO_FEATURE_AUDIO").is_some() {
         build_opus(&target, debug);
     }
@@ -111,6 +150,7 @@ fn main() {
     base.define("LUAI_MAXCSTACK", Some(MAX_CSTACK.to_string().as_str()));
     base.define("LUA_VECTOR_SIZE", Some(VECTOR_SIZE.to_string().as_str()));
     base.define("LUA_UTAG_LIMIT", Some(TAG_LIMIT.to_string().as_str()));
+    base.define("LUA_LUTAG_LIMIT", Some(LIGHT_TAG_LIMIT.to_string().as_str()));
     base.define("LUA_API", Some("extern \"C\""));
     base.define("LUALIB_API", Some("extern \"C\""));
     if debug {
@@ -138,6 +178,10 @@ fn main() {
         assert!(
             !extra.contains("LUA_UTAG_LIMIT"),
             "LUA_UTAG_LIMIT is fixed at {TAG_LIMIT} by l3i; remove it from LUAU_CXXFLAGS"
+        );
+        assert!(
+            !extra.contains("LUA_LUTAG_LIMIT"),
+            "LUA_LUTAG_LIMIT is fixed at {LIGHT_TAG_LIMIT} by l3i; remove it from LUAU_CXXFLAGS"
         );
         for flag in extra.split_whitespace() {
             base.flag(flag);

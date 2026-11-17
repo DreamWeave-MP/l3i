@@ -259,7 +259,16 @@ impl RuntimeBuilder {
         // SAFETY: a fresh main thread with a free stack.
         unsafe { crate::convert::raw::self_test(state)? };
         for kind in crate::packed::builtin_kinds() {
-            runtime.shared().register_packed_kind(kind)?;
+            runtime.adopt_packed_kind(kind)?;
+        }
+        // SAFETY: the fresh main thread, at host level.
+        unsafe {
+            use crate::packed::carrier::{BITS64_TAG, COLOR16_TAG, name_tag, self_test};
+            name_tag(state, COLOR16_TAG, "Color16")?;
+            name_tag(state, BITS64_TAG, "Bits64")?;
+            // A platform or VM that does not keep a packed scalar whole fails here, naming the
+            // carrier, rather than later with a wrong rotation.
+            self_test(state)?;
         }
         Ok(runtime)
     }
@@ -587,7 +596,19 @@ impl Runtime {
     /// same kind number is a logic error.
     pub fn register_packed<T: crate::packed::PackedScalar>(&self) -> Result<()> {
         self.refuse_if_planned("register a packed kind")?;
-        self.shared().register_packed_kind(crate::packed::PackedKind::of::<T>())
+        self.adopt_packed_kind(crate::packed::PackedKind::of::<T>())
+    }
+
+    /// Records `kind` in this VM's registry and, the first time, names its light tag so
+    /// `typeof` answers the kind's name.
+    pub(crate) fn adopt_packed_kind(&self, kind: crate::packed::PackedKind) -> Result<()> {
+        if self.shared().register_packed_kind(kind)? {
+            // SAFETY: the main thread; the tag is the kind's, in l3i's band.
+            unsafe {
+                crate::packed::carrier::name_tag(self.state, crate::packed::carrier::nibble_tag(kind.kind), kind.name)
+            }?;
+        }
+        Ok(())
     }
 
     /// A runtime made from a plan has one immutable shape: its packed kinds, compiler

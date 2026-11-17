@@ -617,6 +617,7 @@ unsafe extern "C" {
     ) -> *mut c_void;
     pub fn l3i_call_base(L: *mut lua_State) -> *const crate::convert::RawValue;
     pub fn l3i_stack_slot(L: *mut lua_State, idx: c_int) -> *const crate::convert::RawValue;
+    pub fn l3i_push_light_bits(L: *mut lua_State, bits: u64, tag: c_int);
     pub fn l3i_read_vector(L: *mut lua_State, idx: c_int, out: *mut f32) -> c_int;
     pub fn l3i_host_level(L: *mut lua_State) -> c_int;
     pub fn l3i_thread_resettable(L: *mut lua_State) -> c_int;
@@ -646,8 +647,13 @@ pub struct luaL_Strbuf {
 
 pub const LUA_BUFFERSIZE: usize = 512;
 
-/// Light userdata tags run `0..LUA_LUTAG_LIMIT`.
-pub const LUA_LUTAG_LIMIT: c_int = 128;
+/// Light userdata tags run `0..LUA_LUTAG_LIMIT` in this build (`build.rs` defines it; Luau's
+/// default is 128). Hosts have `0..`[`HOST_LUTAG_LIMIT`]; the rest is l3i's packed scalars'.
+pub const LUA_LUTAG_LIMIT: c_int = 160;
+
+/// The light userdata tags a host may use, `0..HOST_LUTAG_LIMIT`: everything below the packed
+/// scalar band (`crate::packed::carrier`).
+pub const HOST_LUTAG_LIMIT: c_int = 128;
 
 pub type luarequire_NavigateResult = c_int;
 pub const NAVIGATE_SUCCESS: c_int = 0;

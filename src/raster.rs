@@ -45,12 +45,11 @@
 //! `rgb8` are the strict constructors (an integer outside `0..=255` is an error); the receiver's
 //! clamp, so both paths of a lowered call agree by construction.
 
-use crate::convert::{Exact, FromView, Integer, Push};
+use crate::convert::Exact;
 use crate::error::{Error, Result};
 use crate::extension::{Extension, ExtensionDescriptor};
 use crate::packed::{BufferPack, Packed, PackedScalar};
 use crate::source::CompileConstant;
-use crate::stack::{Scope, Type, ValueView};
 
 /// An RGBA8 color. Channel meaning (straight or premultiplied) belongs to the consumer.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -277,67 +276,20 @@ impl Color16 {
     }
 }
 
-impl<'v> FromView<'v> for Color16 {
-    const EXPECTED: &'static str = "integer";
-
+impl crate::packed::WideScalar for Color16 {
+    const NAME: &'static str = "Color16";
+    const LIGHT_TAG: crate::packed::carrier::LightTag = crate::packed::carrier::COLOR16_TAG;
     #[inline]
-    fn from_view(view: ValueView<'v>) -> Result<Self> {
-        match crate::convert::read_integer64(view) {
-            Some(bits) => Ok(Color16::from_packed(bits as u64)),
-            None => Err(view.type_error(Type::Integer)),
-        }
-    }
-
-    #[inline(always)]
-    fn from_raw_arg(raw: &crate::convert::RawValue, view: impl FnOnce() -> ValueView<'v>) -> Result<Self> {
-        if raw.tag() == crate::raw::ffi::LUA_TINTEGER {
-            Ok(Color16::from_packed(raw.integer() as u64))
-        } else {
-            Err(view().type_error(Type::Integer))
-        }
-    }
-
-    fn matches(view: ValueView<'v>) -> bool {
-        crate::convert::read_integer64(view).is_some()
-    }
-}
-
-impl crate::bind::Param for Color16 {
-    type Item<'c> = Color16;
-}
-
-impl<'c> crate::bind::ParamItem<'c> for Color16 {
-    const KIND: crate::bind::ParamKind = crate::bind::ParamKind::Regular;
-    const EXPECTED: &'static str = "integer";
-    #[inline]
-    fn read_slot(view: ValueView<'c>) -> Result<Self> {
-        <Color16 as FromView<'c>>::from_view(view)
-    }
-    #[inline(always)]
-    fn read_arg(call: &'c crate::bind::Call<'c>, index: std::ffi::c_int) -> Result<Self> {
-        match call.raw_arg(index) {
-            Some(raw) => <Color16 as FromView<'c>>::from_raw_arg(raw, || call.arg(index)),
-            None => <Color16 as FromView<'c>>::from_view(call.arg(index)),
-        }
+    fn to_bits(self) -> u64 {
+        self.packed()
     }
     #[inline]
-    fn matches(view: ValueView<'c>) -> bool {
-        <Color16 as FromView<'c>>::matches(view)
+    fn from_bits(bits: u64) -> Self {
+        Color16::from_packed(bits)
     }
 }
 
-impl Push for Color16 {
-    fn push_into<'s, S: Scope>(&self, scope: &'s S) -> Result<ValueView<'s>> {
-        Integer(self.bits()).push_into(scope)
-    }
-}
-
-impl crate::bind::Return for Color16 {
-    fn push_results(self, call: &crate::bind::Call<'_>) -> Result<std::ffi::c_int> {
-        self.push_into(call)?;
-        Ok(1)
-    }
-}
+crate::packed::wide_scalar_conversions!(Color16);
 
 /// Eight bytes, little-endian: an RGBA16 pixel.
 impl BufferPack for Color16 {

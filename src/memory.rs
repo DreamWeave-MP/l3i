@@ -144,11 +144,16 @@ impl Runtime {
         Ok(())
     }
 
-    /// Names light userdata `tag` (`lua_setlightuserdataname`), as `typeof` reports it. Tags run
-    /// `0..LUA_LUTAG_LIMIT`.
+    /// Names light userdata `tag` (`lua_setlightuserdataname`), as `typeof` reports it. A host's
+    /// tags run `0..HOST_LUTAG_LIMIT` (128); the tags above are l3i's packed scalars'.
     pub fn set_light_userdata_name(&self, tag: c_int, name: &str) -> Result<()> {
-        if !(0..ffi::LUA_LUTAG_LIMIT).contains(&tag) {
-            return Err(Error::logic(format!("Light userdata tag {tag} is outside 0..{}", ffi::LUA_LUTAG_LIMIT)));
+        if !(0..ffi::HOST_LUTAG_LIMIT).contains(&tag) {
+            return Err(Error::logic(format!(
+                "Light userdata tag {tag} is outside the host's 0..{}; {}..{} belong to l3i's packed scalars",
+                ffi::HOST_LUTAG_LIMIT,
+                ffi::HOST_LUTAG_LIMIT,
+                ffi::LUA_LUTAG_LIMIT
+            )));
         }
         let name = CString::new(name).map_err(|_| Error::logic("Light userdata name contains NUL"))?;
         // SAFETY: the name is copied into an interned string.
@@ -327,6 +332,14 @@ impl WeakRef {
 
 /// A light userdata: a raw pointer with a tag (`lua_pushlightuserdatatagged`). Tag 0 is the
 /// plain light userdata Lua knows.
+///
+/// A host pushes tags `0..HOST_LUTAG_LIMIT` (128) and pointers whose top four bits are zero. The
+/// tags above are l3i's packed scalars', and on the light carrier a light userdata whose top
+/// nibble is a packed kind's *is* that packed scalar to every parameter and every lowered call
+/// (`crate::packed::carrier`): the nibble is the discriminator. User-space pointers on x86-64
+/// and AArch64 have a zero top nibble unless a tagging scheme claims the top byte (HWASan, Arm
+/// top-byte-ignore tags). A light userdata read back may be a packed scalar: its `pointer` is
+/// then 64 bits of data, never an address to follow.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LightUserdata {
     pub pointer: *mut c_void,
@@ -335,11 +348,20 @@ pub struct LightUserdata {
 
 impl Push for LightUserdata {
     fn push_into<'s, S: Scope>(&self, scope: &'s S) -> Result<ValueView<'s>> {
-        if !(0..ffi::LUA_LUTAG_LIMIT).contains(&self.tag) {
+        if !(0..ffi::HOST_LUTAG_LIMIT).contains(&self.tag) {
             return Err(Error::logic(format!(
-                "Light userdata tag {} is outside 0..{}",
+                "Light userdata tag {} is outside the host's 0..{}; {}..{} belong to l3i's packed scalars",
                 self.tag,
+                ffi::HOST_LUTAG_LIMIT,
+                ffi::HOST_LUTAG_LIMIT,
                 ffi::LUA_LUTAG_LIMIT
+            )));
+        }
+        if (self.pointer as usize as u64) >> 60 != 0 {
+            return Err(Error::logic(format!(
+                "Light userdata pointer {:p} has a non-zero top nibble, which l3i reads as a packed scalar's kind; \
+                 a pointer tagging scheme that uses the top byte (HWASan, top-byte-ignore) cannot cross as a light userdata",
+                self.pointer
             )));
         }
         unsafe {

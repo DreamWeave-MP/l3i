@@ -538,7 +538,7 @@ fn build_runtime(plan: &Rc<RuntimePlan>) -> Result<Runtime> {
     }
     let runtime = builder.build()?;
     for kind in &plan.packed_kinds {
-        runtime.shared().register_packed_kind(*kind)?;
+        runtime.adopt_packed_kind(*kind)?;
     }
     #[cfg(feature = "jit")]
     {
