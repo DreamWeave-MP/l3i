@@ -107,3 +107,67 @@ jobs:
           --skip fs_authenticated::a_racing_writer_can_fail_reads_but_never_change_what_one_returns
           --skip fs_authenticated::through_luau::a_missing_file_is_an_answer_for_a_publisher_too
           --skip syntax::long_shadow_chains_do_not_recurse
+
+  # #32's binder budget as a gate: every bound call row of tests/carrier_cost.rs on this branch
+  # against the same rows on the last commit with Luau 0.746's integer carrier, built in the same
+  # job, at most 2 percent more instructions. Cachegrind counts instructions in software, so the
+  # gate needs no perf counters; each row is the difference between two call counts, which cancels
+  # everything but the loop, minus the bare loop's own count.
+  budgets:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.os }}
+    env:
+      BASELINE: 2c6eb5498012727866c31cca12f4180e32a3e94f
+      CALLS: "20000"
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: true
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: DreamWeave-MP/StroggForge/.github/actions/setup-llvm@v72
+      - name: Install Cachegrind
+        run: sudo apt-get update && sudo apt-get install -y valgrind
+      - name: Build the harness here and on the Luau 0.746 integer carrier
+        run: |
+          set -euo pipefail
+          git worktree add ../baseline "$BASELINE"
+          git -C ../baseline submodule update --init luau
+          cp tests/carrier_cost.rs ../baseline/tests/carrier_cost.rs
+          echo 'mod carrier_cost;' >> ../baseline/tests/main.rs
+          binary() {
+            cargo test --release --test integration --no-run --message-format=json \
+              | jq -r 'select(.executable != null and .target.name == "integration") | .executable' | tail -1
+          }
+          echo "CURRENT=$(binary)" >> "$GITHUB_ENV"
+          echo "INTEGER=$(cd ../baseline && binary)" >> "$GITHUB_ENV"
+      - name: Hold every binder row to 2 percent over the integer carrier
+        run: |
+          set -euo pipefail
+          count() {
+            L3I_BUDGET_SCENARIO="$2" L3I_BUDGET_CALLS="$3" valgrind --tool=cachegrind --cache-sim=no \
+              --cachegrind-out-file=/dev/null "$1" --ignored --exact carrier_cost::budget_scenario --test-threads=1 \
+              2>&1 >/dev/null | awk '/I *refs:/ { gsub(",", "", $NF); print $NF }'
+          }
+          per_call() {
+            local once twice
+            once=$(count "$1" "$2" "$CALLS")
+            twice=$(count "$1" "$2" "$((CALLS * 2))")
+            echo $(( (twice - once) / CALLS ))
+          }
+          current_loop=$(per_call "$CURRENT" loop)
+          integer_loop=$(per_call "$INTEGER" loop)
+          echo "loop alone: current $current_loop, integer $integer_loop instructions per iteration"
+          status=0
+          for scenario in number vector color bits make_color; do
+            current=$(( $(per_call "$CURRENT" "$scenario") - current_loop ))
+            integer=$(( $(per_call "$INTEGER" "$scenario") - integer_loop ))
+            limit=$(( integer + (integer * 2 + 99) / 100 ))
+            verdict=ok
+            if [ "$current" -gt "$limit" ]; then verdict="OVER BUDGET"; status=1; fi
+            printf '%-12s current %6d  integer %6d  limit %6d  %s\n' "$scenario" "$current" "$integer" "$limit" "$verdict"
+          done
+          exit $status
