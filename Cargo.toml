@@ -131,10 +131,13 @@ cc = { version = "1", features = ["parallel"] }
 
 [dev-dependencies]
 criterion = { version = "0.8.2", features = ["html_reports"] }
-# Test PKIs for `@dream/tls`: CAs, chains, expired and mismatched certificates, made per run.
-rcgen = { version = "0.14", default-features = false, features = ["ring", "pem"] }
 # Signal masks, dispositions and descriptor limits for tests of what the OS does at the edges.
 libc = "0.2"
+
+# Test PKIs for `@dream/tls`: CAs, chains, expired and mismatched certificates, made per run.
+# Not on emscripten, where its `ring` backend does not build (and `tls` is not tested).
+[target.'cfg(not(target_os = "emscripten"))'.dev-dependencies]
+rcgen = { version = "0.14", default-features = false, features = ["ring", "pem"] }
 
 [[test]]
 name = "integration"
