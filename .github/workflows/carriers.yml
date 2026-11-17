@@ -82,3 +82,12 @@ jobs:
           --skip source::hostile_source_is_scanned_in_linear_time
       - name: Record the boxed carrier's cost per bound call
         run: cargo test --release --target wasm32-unknown-emscripten --test integration carrier_cost -- --ignored --nocapture
+      - name: Test the feature-gated suites that need no OS facility emscripten lacks (report)
+        continue-on-error: true
+        timeout-minutes: 30
+        run: >
+          cargo test --target wasm32-unknown-emscripten --test integration
+          --features analysis,soft-render,bytes,bytes-codecs,bytes-digests,bytes-crypto,bytes-text,bytes-regex,data,syntax,fs,fs-authenticated,intern,intl,audio
+          -- --test-threads=1 --skip udp:: --skip memory::a_failed_coroutine_hands_its_error_to_its_finalizers
+          --skip memory::a_finalizer_registers_from_inside_a_lua_call --skip memory::coroutine_finalizers_run_when_asked
+          --skip source::hostile_source_is_scanned_in_linear_time
