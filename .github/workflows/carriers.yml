@@ -82,10 +82,12 @@ jobs:
           --skip source::hostile_source_is_scanned_in_linear_time
       - name: Record the boxed carrier's cost per bound call
         run: cargo test --release --target wasm32-unknown-emscripten --test integration carrier_cost -- --ignored --nocapture
-      # bytes-crypto is left out with process, tcp, dns and tls: its `ring` backend has no
-      # emscripten support.
-      - name: Test the feature-gated suites that need no OS facility emscripten lacks (report)
-        continue-on-error: true
+      # Every feature but jit and those emscripten cannot back: process, tcp, dns and tls need
+      # processes and sockets, and bytes-crypto's `ring` has no emscripten support. Excluded on
+      # top of the default suite's: fs tests of what emscripten's Node filesystem does not have
+      # (advisory locks, permission bits, FIFOs and devices, links and identity, direct writes,
+      # child processes), and tests that spawn threads.
+      - name: Test the feature-gated suites
         timeout-minutes: 30
         run: >
           cargo test --target wasm32-unknown-emscripten --test integration
@@ -93,3 +95,15 @@ jobs:
           -- --test-threads=1 --skip udp:: --skip memory::a_failed_coroutine_hands_its_error_to_its_finalizers
           --skip memory::a_finalizer_registers_from_inside_a_lua_call --skip memory::coroutine_finalizers_run_when_asked
           --skip source::hostile_source_is_scanned_in_linear_time
+          --skip fs::a_mode_is_exactly_the_bits_of_what_a_call_creates
+          --skip fs::a_mode_leaves_a_file_that_exists_alone_and_chmod_changes_it
+          --skip fs::fifos_and_devices_are_refused_instead_of_blocking_or_never_ending
+          --skip fs::files_read_whole_positionally_and_through_a_reader
+          --skip fs::killed_processes_leave_reopenable_files_and_release_locks
+          --skip fs::links_and_identity --skip fs::locks_are_the_operating_systems_and_end_with_their_holder
+          --skip fs::namespace_barriers_accept_relative_paths --skip fs::retained_single_file_checkpoint_fixture
+          --skip fs::retained_single_file_survives_process_kills_at_record_boundaries
+          --skip fs::write_through_writer_remains_usable_after_sync
+          --skip fs_authenticated::a_racing_writer_can_fail_reads_but_never_change_what_one_returns
+          --skip fs_authenticated::through_luau::a_missing_file_is_an_answer_for_a_publisher_too
+          --skip syntax::long_shadow_chains_do_not_recurse
