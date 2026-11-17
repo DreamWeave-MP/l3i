@@ -1,4 +1,4 @@
-//! Luau 0.745 C API, transcribed from `VM/include/lua.h`, `VM/include/lualib.h`,
+//! Luau 0.746 C API, transcribed from `VM/include/lua.h`, `VM/include/lualib.h`,
 //! `Compiler/include/luacode.h`, `CodeGen/include/luacodegen.h`, and the binder's own additions
 //! in `csrc/`.
 //!

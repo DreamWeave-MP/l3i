@@ -45,8 +45,12 @@ pub const LUAU_FLAGS: &[&str] = &[
     // `if local x = f() then ... end` syntax. The C++ binder leaves this off.
     "LuauExperimentalIfLocalSyntax",
     // Luau 0.745: `while local x = f() do ... end`, the condition re-evaluated and rebound every
-    // iteration. Luau gates it behind a debug flag while the syntax is experimental.
-    "DebugLuauWhileLocalSyntax",
+    // iteration. Luau gates it behind a flag while the syntax is experimental; 0.746 renamed it
+    // from `DebugLuauWhileLocalSyntax`.
+    "LuauExperimentalWhileLocalSyntax",
+    // Luau 0.746: a function that calls the global `require` is never inlined into its caller,
+    // so `require` always runs in a frame of the function the script wrote.
+    "LuauCompileRequireNoInline",
     // Runtime side
     "LuauIntegerLibrary",
     "LuauOptimizeStringSplit",
@@ -80,6 +84,14 @@ pub const LUAU_FLAGS: &[&str] = &[
     // Luau 0.741's fix for GC pacing, which read a heap that shrank between measurements as an
     // enormous allocation rate. A dynamic flag, off upstream by default.
     "LuauGcHeapShrinkFix",
+    // Luau 0.746: loading bytecode turns the collector off with its own switch, where it used to
+    // raise the threshold, and a `collectgarbage` step or full collection requested while it is
+    // off does nothing, so a collection cannot run on a half-loaded chunk.
+    "LuauLoadExplicitGcDisable",
+    // Luau 0.746: the string interning table hashes with a salt derived from the pointer
+    // encoding key, so a script cannot choose strings that all land in one bucket. Inert in a
+    // runtime with pointer encoding off.
+    "LuauSaltedInterningTable",
 ];
 
 /// The rest of the policy, defined in Luau's CodeGen component. CodeGen is compiled only
@@ -118,13 +130,17 @@ pub const LUAU_CODEGEN_FLAGS: &[&str] = &[
     // immediate offset instead of crashing.
     "LuauCodegenA64BitlrotateSelf",
     "LuauCodegenA64ReloadLargeConstOffset",
+    // Luau 0.746: the final x64 pass folds a tag or integer load into the check that uses it only
+    // when nothing between the two writes the register it reads.
+    "LuauCodegenX64ConflictCheck",
 ];
 
 /// The flags defined in Luau's Analysis component, which only the `analysis` feature compiles.
-/// `DebugLuauWhileLocalAnalysis` types the `while local` binding the parser flag lets through. The
-/// linker keeps the file that defines it only in a binary that uses the type checker, so a binary
-/// that doesn't has no such flag, and none of its checks to apply it to.
-pub const LUAU_ANALYSIS_FLAGS: &[&str] = &["DebugLuauWhileLocalAnalysis"];
+/// `LuauExperimentalWhileLocalAnalysis` (0.745's `DebugLuauWhileLocalAnalysis`) types the
+/// `while local` binding the parser flag lets through. The linker keeps the file that defines it
+/// only in a binary that uses the type checker, so a binary that doesn't has no such flag, and
+/// none of its checks to apply it to.
+pub const LUAU_ANALYSIS_FLAGS: &[&str] = &["LuauExperimentalWhileLocalAnalysis"];
 
 static INITIALIZED: OnceLock<std::result::Result<(), String>> = OnceLock::new();
 

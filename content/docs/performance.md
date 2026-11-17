@@ -11,7 +11,7 @@ kind = "reference"
 
 l3i is on 2.x: every release in 2.x keeps the Rust API compatible, as Cargo's semver rules
 expect, and the [changelog](@/home/_changelog.md) lists what 2.0 changed against 1.3.1 and how
-to move. The Luau it embeds is release 0.745, as the `luau/` submodule; bumping it is a
+to move. The Luau it embeds is release 0.746, as the `luau/` submodule; bumping it is a
 deliberate change that re-audits the hand-declared C API and the flag list.
 
 ## Rust and dependencies
@@ -471,7 +471,7 @@ the same defaults: optimisation 2, debug 1, no type information, no coverage.
 
 Further: the flags are set by name through `luau_setfflag`, and a name the linked Luau does not
 have is a logic error for required linked components. L3i also enables its own policy choices:
-`LuauExperimentalIfLocalSyntax`, `DebugLuauWhileLocalSyntax`, `LuauGcTraceUdata`,
+`LuauExperimentalIfLocalSyntax`, `LuauExperimentalWhileLocalSyntax`, `LuauGcTraceUdata`,
 `LuauBufferCage`, `LuauCageSplitData`, and the Analysis and CodeGen fixes listed in `flags`.
 The options own their strings instead of borrowing pointers for the duration of a compile.
 

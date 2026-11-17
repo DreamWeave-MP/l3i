@@ -65,7 +65,7 @@ Declared at the root:
 ```text
 pub mod ffi                          the raw Luau C API (raw::ffi, re-exported)
 pub const TAG_LIMIT: u8              254: valid userdata tags are 1..TAG_LIMIT
-pub const LUAU_VERSION: &str         "0.745"
+pub const LUAU_VERSION: &str         "0.746"
 pub const VERIFIED_TOOLCHAIN: bool   whether build.rs found the verified toolchain
 ```
 
