@@ -63,6 +63,7 @@ static_assert(offsetof(TValue, tt) == 12, "l3i mirrors the tag at offset 12");
 static_assert(LUA_VECTOR_SIZE == 3, "l3i mirrors three-component vectors");
 static_assert(offsetof(Udata, tag) == 3, "l3i mirrors the userdata tag at offset 3");
 static_assert(offsetof(Udata, data) == 16, "l3i mirrors the userdata payload at offset 16");
+static_assert(offsetof(TString, len) == (sizeof(void*) == 8 ? 20 : 16), "l3i mirrors the string length");
 static_assert(LUA_TLIGHTUSERDATA == 2 && LUA_TNUMBER == 3 && LUA_TVECTOR == 4, "l3i mirrors the type tags");
 ```
 

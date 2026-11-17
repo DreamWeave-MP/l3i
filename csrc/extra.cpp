@@ -190,8 +190,12 @@ static_assert(LUA_VECTOR_SIZE == 3, "l3i mirrors three-component vectors");
 static_assert(offsetof(Udata, tag) == 3, "l3i mirrors the userdata tag at offset 3");
 // `native_code::USERDATA_PAYLOAD_OFFSET` publishes this one, and a test holds them together.
 static_assert(offsetof(Udata, data) == 16, "l3i mirrors the userdata payload at offset 16");
-static_assert(offsetof(TString, len) == 20, "l3i mirrors the string length at offset 20");
-static_assert(offsetof(TString, data) == 24, "l3i mirrors the string bytes at offset 24");
+// TString holds a `next` pointer before its hash and length, so they move with the pointer
+// width: 20 and 24 on 64-bit targets, 16 and 20 on 32-bit ones (wasm32). src/convert/raw.rs
+// reads them with the same rule.
+static_assert(offsetof(TString, len) == (sizeof(void*) == 8 ? 20 : 16), "l3i mirrors the string length");
+static_assert(offsetof(TString, data) == (sizeof(void*) == 8 ? 24 : 20), "l3i mirrors the string bytes");
+static_assert(sizeof(void*) == 8 || sizeof(void*) == 4, "l3i mirrors 32- and 64-bit layouts only");
 static_assert(offsetof(Buffer, len) == 4, "l3i mirrors the buffer length at offset 4");
 static_assert(offsetof(Buffer, data) == 8, "l3i mirrors the buffer bytes at offset 8");
 

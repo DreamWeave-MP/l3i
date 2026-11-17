@@ -23,6 +23,10 @@ pub struct RawValue {
 
 const _: () = assert!(std::mem::size_of::<RawValue>() == 16);
 
+/// `TString::len` and `TString::data`, which follow a pointer (`csrc/extra.cpp` pins both).
+const STRING_LEN: usize = if cfg!(target_pointer_width = "64") { 20 } else { 16 };
+const STRING_DATA: usize = STRING_LEN + 4;
+
 impl RawValue {
     /// The type tag (`LUA_T*`).
     #[inline(always)]
@@ -96,7 +100,8 @@ impl RawValue {
         unsafe { object.add(8).cast::<*const c_void>().read_unaligned() }
     }
 
-    /// The bytes of a `LUA_TSTRING` slot (`TString`: the length at offset 20, the bytes at 24).
+    /// The bytes of a `LUA_TSTRING` slot (`TString`: the length at offset 20 and the bytes at 24
+    /// on 64-bit targets, 16 and 20 on 32-bit ones, after the `next` pointer).
     ///
     /// # Safety
     /// The slot must hold a live string, and the slice must not outlive the slot's hold on it.
@@ -106,8 +111,8 @@ impl RawValue {
         // SAFETY: the caller checked the tag; a live TString holds `len` bytes after its header,
         // and strings are immutable.
         unsafe {
-            let len = object.add(20).cast::<u32>().read_unaligned();
-            std::slice::from_raw_parts(object.add(24), len as usize)
+            let len = object.add(STRING_LEN).cast::<u32>().read_unaligned();
+            std::slice::from_raw_parts(object.add(STRING_DATA), len as usize)
         }
     }
 
