@@ -43,14 +43,13 @@ fn carrier(jit: bool) -> &'static str {
     let arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
     let allowlisted = arch == "x86_64" || arch == "aarch64";
     let carrier = match env::var("L3I_CARRIER").as_deref() {
-        // Until the lowering and the type surface move (the Luau 0.747 campaign), the integer
-        // carrier stays the default.
-        Ok("integer") | Err(_) => "integer",
+        Err(_) if allowlisted => "light",
+        Err(_) | Ok("boxed") => "boxed",
+        Ok("integer") => "integer",
         Ok("light") => {
             assert!(allowlisted, "L3I_CARRIER=light: the light userdata carrier is not proven on {arch}");
             "light"
         }
-        Ok("boxed") => "boxed",
         Ok(other) => panic!("L3I_CARRIER={other}: expected integer, light or boxed"),
     };
     // Luau generates native code for x86-64 and AArch64 only, and no lowering hook is written
