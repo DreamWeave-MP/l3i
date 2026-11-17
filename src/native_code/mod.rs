@@ -10,6 +10,7 @@
 pub(crate) mod ffi;
 pub mod hooks;
 pub mod ir;
+pub mod packed_ir;
 pub mod vector_buffer;
 
 use std::cell::RefCell;

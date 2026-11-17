@@ -575,10 +575,11 @@ pub mod lowering {
 
     use super::{VERTEX_BYTES, Vertices};
     use crate::native_code::hooks::{NamecallSite, NativeCodeHooks, NativeContext};
-    use crate::native_code::ir::{IrBuilder, IrCmd, IrCondition, IrOp, bytecode_type};
+    use crate::native_code::ir::{IrBuilder, IrCmd, IrOp, bytecode_type};
+    use crate::native_code::packed_ir;
     use crate::packed::PackedScalar;
     use crate::raster::Color;
-    use crate::raw::ffi::{LUA_TBUFFER, LUA_TINTEGER, LUA_TNUMBER, LUA_TVECTOR};
+    use crate::raw::ffi::{LUA_TBUFFER, LUA_TNUMBER, LUA_TVECTOR};
 
     static LOWERED: AtomicUsize = AtomicUsize::new(0);
 
@@ -642,7 +643,6 @@ pub mod lowering {
             build.load_and_check_tag(offset_reg, LUA_TNUMBER as u8, exit);
             build.load_and_check_tag(pos_reg, LUA_TVECTOR as u8, exit);
             build.load_and_check_tag(uv_reg, LUA_TVECTOR as u8, exit);
-            build.load_and_check_tag(color_reg, LUA_TINTEGER as u8, exit);
 
             let buffer = build.inst(IrCmd::LOAD_POINTER, &[buffer_reg]);
             let offset_number = build.inst(IrCmd::LOAD_DOUBLE, &[offset_reg]);
@@ -651,14 +651,7 @@ pub mod lowering {
             let size = build.const_int(VERTEX_BYTES as i32);
             build.inst(IrCmd::CHECK_BUFFER_LEN, &[buffer, offset, zero, size, offset_number, exit]);
 
-            let bits = build.inst(IrCmd::LOAD_INT64, &[color_reg]);
-            let sixty = build.const_int64(60);
-            let fifteen = build.const_int64(15);
-            let kind = build.inst(IrCmd::BITRSHIFT_INT64, &[bits, sixty]);
-            let kind = build.inst(IrCmd::BITAND_INT64, &[kind, fifteen]);
-            let expected = build.const_int64(i64::from(<Color as PackedScalar>::KIND));
-            let equal = build.cond(IrCondition::Equal);
-            build.inst(IrCmd::CHECK_CMP_INT64, &[kind, expected, equal, exit]);
+            let bits = packed_ir::load_checked(build, color_reg, <Color as PackedScalar>::KIND, exit);
 
             let buffer_tag = build.const_tag(LUA_TBUFFER as u8);
             write_f32_pair(build, buffer, offset, 0, pos_reg, buffer_tag);

@@ -661,9 +661,11 @@ pub mod lowering {
 
     use super::{Color, Color16, Math};
     use crate::native_code::hooks::{NamecallSite, NativeCodeHooks, NativeContext};
-    use crate::native_code::ir::{IrBuilder, IrCmd, IrCondition, IrOp, bytecode_type};
+    use crate::native_code::ir::{IrBuilder, IrCmd, IrOp, bytecode_type};
+    use crate::native_code::packed_ir;
     use crate::packed::PackedScalar;
-    use crate::raw::ffi::{LUA_TINTEGER, LUA_TNUMBER};
+    use crate::packed::carrier::{COLOR16_TAG, LightTag, nibble_tag};
+    use crate::raw::ffi::LUA_TNUMBER;
 
     static LOWERED: AtomicUsize = AtomicUsize::new(0);
 
@@ -681,12 +683,19 @@ pub mod lowering {
     struct Format {
         bits: i64,
         max: f64,
-        /// The packed kind to check, or none for the raw 16-bit form.
-        kind: Option<i64>,
+        /// The packed kind to check, or none for the wide 16-bit form.
+        kind: Option<u8>,
+        /// The light tag results are stored under.
+        tag: LightTag,
     }
 
-    const RGBA8: Format = Format { bits: 8, max: 255.0, kind: Some(<Color as PackedScalar>::KIND as i64) };
-    const RGBA16: Format = Format { bits: 16, max: 65535.0, kind: None };
+    const RGBA8: Format = Format {
+        bits: 8,
+        max: 255.0,
+        kind: Some(<Color as PackedScalar>::KIND),
+        tag: nibble_tag(<Color as PackedScalar>::KIND),
+    };
+    const RGBA16: Format = Format { bits: 16, max: 65535.0, kind: None, tag: COLOR16_TAG };
 
     impl Format {
         fn shift(self, lane: usize) -> i64 {
@@ -694,21 +703,13 @@ pub mod lowering {
         }
     }
 
-    /// Checks the register holds an integer (and, for the 8-bit form, a packed `Color`) and
-    /// returns its bits.
+    /// Checks the register holds a packed `Color` (the 8-bit form) or any value on the carrier
+    /// (the wide 16-bit form) and returns its bits.
     fn checked(build: &mut IrBuilder<'_>, reg: IrOp, exit: IrOp, format: Format) -> IrOp {
-        build.load_and_check_tag(reg, LUA_TINTEGER as u8, exit);
-        let bits = build.inst(IrCmd::LOAD_INT64, &[reg]);
-        if let Some(kind) = format.kind {
-            let sixty = build.const_int64(60);
-            let fifteen = build.const_int64(15);
-            let actual = build.inst(IrCmd::BITRSHIFT_INT64, &[bits, sixty]);
-            let actual = build.inst(IrCmd::BITAND_INT64, &[actual, fifteen]);
-            let expected = build.const_int64(kind);
-            let equal = build.cond(IrCondition::Equal);
-            build.inst(IrCmd::CHECK_CMP_INT64, &[actual, expected, equal, exit]);
+        match format.kind {
+            Some(kind) => packed_ir::load_checked(build, reg, kind, exit),
+            None => packed_ir::load_wide(build, reg, exit),
         }
-        bits
     }
 
     fn number(build: &mut IrBuilder<'_>, reg: IrOp, exit: IrOp) -> IrOp {
@@ -771,17 +772,11 @@ pub mod lowering {
         let bits = bits.expect("four channels");
         match format.kind {
             Some(kind) => {
-                let kind = build.const_int64(kind << 60);
+                let kind = build.const_int64(i64::from(kind) << 60);
                 build.inst(IrCmd::BITOR_INT64, &[bits, kind])
             }
             None => bits,
         }
-    }
-
-    fn store_integer(build: &mut IrBuilder<'_>, result: IrOp, bits: IrOp) {
-        build.inst(IrCmd::STORE_INT64, &[result, bits]);
-        let tag = build.const_tag(LUA_TINTEGER as u8);
-        build.inst(IrCmd::STORE_TAG, &[result, tag]);
     }
 
     fn store_number(build: &mut IrBuilder<'_>, result: IrOp, value: IrOp) {
@@ -825,7 +820,7 @@ pub mod lowering {
             match classify(member) {
                 Some(("red" | "green" | "blue" | "alpha", _, _)) => bytecode_type::NUMBER,
                 Some(("channels", _, _)) | None => bytecode_type::ANY,
-                Some(_) => bytecode_type::INTEGER,
+                Some(_) => packed_ir::RESULT_TYPE,
             }
         }
 
@@ -864,7 +859,7 @@ pub mod lowering {
                         channels[3] = build.const_double(format.max);
                     }
                     let bits = pack(build, channels, true, format);
-                    store_integer(build, result, bits);
+                    packed_ir::store(build, result, bits, format.tag);
                 }
                 ("red" | "green" | "blue" | "alpha", 2) => {
                     let reg = arg(build, 0);
@@ -893,7 +888,7 @@ pub mod lowering {
                         alpha,
                     ];
                     let bits = pack(build, channels, true, format);
-                    store_integer(build, result, bits);
+                    packed_ir::store(build, result, bits, format.tag);
                 }
                 ("lerp", 4) => {
                     let (a_reg, b_reg, t_reg) = (arg(build, 0), arg(build, 1), arg(build, 2));
@@ -912,7 +907,7 @@ pub mod lowering {
                         out[i] = build.inst(IrCmd::ADD_NUM, &[a[i], step]);
                     }
                     let bits = pack(build, out, true, format);
-                    store_integer(build, result, bits);
+                    packed_ir::store(build, result, bits, format.tag);
                 }
                 ("mul" | "add", 3) => {
                     let (a_reg, b_reg) = (arg(build, 0), arg(build, 1));
@@ -931,7 +926,7 @@ pub mod lowering {
                         };
                     }
                     let bits = pack(build, out, true, format);
-                    store_integer(build, result, bits);
+                    packed_ir::store(build, result, bits, format.tag);
                 }
                 ("scale", 3) => {
                     let (c_reg, f_reg) = (arg(build, 0), arg(build, 1));
@@ -943,7 +938,7 @@ pub mod lowering {
                     }
                     // Alpha passes through: already an exact channel, so rounding is a no-op.
                     let bits = pack(build, out, true, format);
-                    store_integer(build, result, bits);
+                    packed_ir::store(build, result, bits, format.tag);
                 }
                 ("premultiply", 2) => {
                     let reg = arg(build, 0);
@@ -960,7 +955,7 @@ pub mod lowering {
                     }
                     // Truncating conversion: `(c * a + bias) / max` in integer arithmetic.
                     let bits = pack(build, out, false, format);
-                    store_integer(build, result, bits);
+                    packed_ir::store(build, result, bits, format.tag);
                 }
                 ("widen", 2) => {
                     let reg = arg(build, 0);
@@ -972,7 +967,7 @@ pub mod lowering {
                     }
                     // Exact integers: no rounding needed.
                     let bits = pack(build, out, false, RGBA16);
-                    store_integer(build, result, bits);
+                    packed_ir::store(build, result, bits, format.tag);
                 }
                 ("narrow", 2) => {
                     let reg = arg(build, 0);
@@ -983,7 +978,7 @@ pub mod lowering {
                         *slot = build.inst(IrCmd::DIV_NUM, &[*slot, factor]);
                     }
                     let bits = pack(build, out, true, RGBA8);
-                    store_integer(build, result, bits);
+                    packed_ir::store(build, result, bits, format.tag);
                 }
                 _ => return false,
             }

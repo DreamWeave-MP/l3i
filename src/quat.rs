@@ -506,8 +506,10 @@ pub mod lowering {
     use crate::convert::Vector3;
     use crate::native_code::hooks::{NamecallSite, NativeCodeHooks, NativeContext};
     use crate::native_code::ir::{IrBuilder, IrCmd, IrCondition, IrOp, bytecode_type};
+    use crate::native_code::packed_ir;
+    use crate::packed::carrier::{LightTag, nibble_tag};
     use crate::packed::{Packed, PackedScalar};
-    use crate::raw::ffi::{LUA_TINTEGER, LUA_TNUMBER, LUA_TVECTOR};
+    use crate::raw::ffi::{LUA_TNUMBER, LUA_TVECTOR};
     use crate::userdata::Userdata;
 
     /// The receiver `quat.math()` returns (`dream.quat.Math`, class `dream_quat_Math` in annotations).
@@ -579,31 +581,14 @@ pub mod lowering {
         build.inst(IrCmd::SELECT_NUM, &[else_value, then_value, l, which])
     }
 
-    /// Checks the register holds an integer of packed kind `expected_kind` and loads its bits;
-    /// anything else exits to the interpreter.
-    fn checked_bits(build: &mut IrBuilder<'_>, reg: IrOp, expected_kind: i64, exit: IrOp) -> IrOp {
-        build.load_and_check_tag(reg, LUA_TINTEGER as u8, exit);
-        let bits = build.inst(IrCmd::LOAD_INT64, &[reg]);
-        let sixty = i64c(build, 60);
-        let fifteen = i64c(build, 15);
-        let kind = op(build, IrCmd::BITRSHIFT_INT64, bits, sixty);
-        let kind = op(build, IrCmd::BITAND_INT64, kind, fifteen);
-        let expected = i64c(build, expected_kind);
-        let equal = build.cond(IrCondition::Equal);
-        build.inst(IrCmd::CHECK_CMP_INT64, &[kind, expected, equal, exit]);
-        bits
-    }
-
-    fn store_integer(build: &mut IrBuilder<'_>, result: IrOp, bits: IrOp) {
-        build.inst(IrCmd::STORE_INT64, &[result, bits]);
-        let integer_tag = build.const_tag(LUA_TINTEGER as u8);
-        build.inst(IrCmd::STORE_TAG, &[result, integer_tag]);
-    }
+    /// The light tags results are stored under.
+    const QUATERNION_TAG: LightTag = nibble_tag(<Quaternion as PackedScalar>::KIND);
+    const KEY_TAG: LightTag = nibble_tag(<AnimationKey as PackedScalar>::KIND);
 
     /// Checks the register holds a packed `Quaternion` and unpacks it: three 18-bit lanes and
     /// the omitted component rebuilt from the unit norm.
     fn decode(build: &mut IrBuilder<'_>, reg: IrOp, exit: IrOp) -> Decoded {
-        let bits = checked_bits(build, reg, KIND, exit);
+        let bits = packed_ir::load_checked(build, reg, <Quaternion as PackedScalar>::KIND, exit);
         decode_bits(build, bits)
     }
 
@@ -796,7 +781,7 @@ pub mod lowering {
         let less = build.cond(IrCondition::Less);
         build.inst(IrCmd::CHECK_CMP_NUM, &[n2, infinity, less, exit]);
         let bits = encode_scaled(build, c, n2);
-        store_integer(build, result, bits);
+        packed_ir::store(build, result, bits, QUATERNION_TAG);
     }
 
     /// `Q:slerp(a, b, t)` in one block: both weight sets are computed and the linear pair is
@@ -853,7 +838,7 @@ pub mod lowering {
         }
         let unit = normalized(build, r);
         let bits = encode(build, &unit);
-        store_integer(build, result, bits);
+        packed_ir::store(build, result, bits, QUATERNION_TAG);
     }
 
     /// Four components divided by their norm.
@@ -910,7 +895,7 @@ pub mod lowering {
             }
             match member {
                 "rotate" => bytecode_type::VECTOR,
-                "mul" | "slerp" | "key" | "keyRotation" | "fromXYZW" => bytecode_type::INTEGER,
+                "mul" | "slerp" | "key" | "keyRotation" | "fromXYZW" => packed_ir::RESULT_TYPE,
                 "keyFlags" => bytecode_type::NUMBER,
                 _ => bytecode_type::ANY,
             }
@@ -975,7 +960,7 @@ pub mod lowering {
                     let b = decode(build, second, exit);
                     let product = product(build, &a, &b);
                     let bits = encode(build, &product);
-                    store_integer(build, result, bits);
+                    packed_ir::store(build, result, bits, QUATERNION_TAG);
                 }
                 ("slerp", 4) => lower_slerp(build, result, first, second, site.arg_res_reg + 4, exit),
                 ("fromXYZW", 5) => lower_from_xyzw(build, result, site.arg_res_reg + 2, exit),
@@ -991,7 +976,7 @@ pub mod lowering {
                     let equal = build.cond(IrCondition::Equal);
                     build.inst(IrCmd::CHECK_CMP_NUM, &[number, back, equal, exit]);
                     // The rotation payload with the low four bits of `flags` and kind 2.
-                    let q = checked_bits(build, first, KIND, exit);
+                    let q = packed_ir::load_checked(build, first, <Quaternion as PackedScalar>::KIND, exit);
                     let fifteen = i64c(build, 15);
                     let flags = op(build, IrCmd::BITAND_INT64, truncated, fifteen);
                     let shift = i64c(build, FLAG_SHIFT);
@@ -1001,18 +986,18 @@ pub mod lowering {
                     let bits = op(build, IrCmd::BITOR_INT64, payload, flags);
                     let kind = i64c(build, KEY_KIND << 60);
                     let bits = op(build, IrCmd::BITOR_INT64, bits, kind);
-                    store_integer(build, result, bits);
+                    packed_ir::store(build, result, bits, KEY_TAG);
                 }
                 ("keyRotation", 2) => {
-                    let k = checked_bits(build, first, KEY_KIND, exit);
+                    let k = packed_ir::load_checked(build, first, <AnimationKey as PackedScalar>::KIND, exit);
                     let payload_mask = i64c(build, PAYLOAD_MASK);
                     let payload = op(build, IrCmd::BITAND_INT64, k, payload_mask);
                     let kind = i64c(build, KIND << 60);
                     let bits = op(build, IrCmd::BITOR_INT64, payload, kind);
-                    store_integer(build, result, bits);
+                    packed_ir::store(build, result, bits, QUATERNION_TAG);
                 }
                 ("keyFlags", 2) => {
-                    let k = checked_bits(build, first, KEY_KIND, exit);
+                    let k = packed_ir::load_checked(build, first, <AnimationKey as PackedScalar>::KIND, exit);
                     let shift = i64c(build, FLAG_SHIFT);
                     let flags = op(build, IrCmd::BITRSHIFT_INT64, k, shift);
                     let fifteen = i64c(build, 15);
