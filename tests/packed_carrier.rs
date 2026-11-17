@@ -1,8 +1,7 @@
 //! The packed scalar carrier's contract (`src/packed/carrier.rs`), one suite for every carrier: the
 //! 64 bits arrive whole wherever the value goes, the kind nibble decides what a parameter accepts,
 //! values compare and key tables by their bits and kind, and `typeof` names the kind. The suite
-//! is the specification: an expectation that differs by carrier is only allowed for the integer
-//! oracle, which keeps Luau 0.746's integer semantics until it is deleted.
+//! is the specification: no expectation differs by carrier, except where a test reads the raw slot.
 
 #![allow(clippy::cast_possible_truncation, clippy::cast_sign_loss, clippy::unreadable_literal)]
 
@@ -17,10 +16,6 @@ use l3i::raster::{ClipRect, Color, Color16};
 use l3i::stack::Scope;
 
 const CARRIER: &str = l3i::packed::carrier::CARRIER;
-
-fn oracle() -> bool {
-    CARRIER == "integer"
-}
 
 /// A host kind whose payload and flags are exactly what it holds: any bits survive its unpack.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -80,14 +75,11 @@ fn every_flag_and_the_whole_payload_survive_the_carrier() {
         for payload in PAYLOADS {
             let value = Packed(Probe(payload, flags));
             let bits = encode(Probe::KIND, flags, payload).unwrap() as u64;
-            // The value word holds the bits on the light carrier and the oracle; a boxed value's
-            // slot holds its box.
+            // The value word holds the bits on the light carrier; a boxed value's slot holds its box.
             if CARRIER != "boxed userdata" {
                 let (tag, raw) = raw_bits(&runtime, &value);
                 assert_eq!(raw, bits, "the raw slot holds the exact bits for flags {flags} payload {payload:#x}");
-                if !oracle() {
-                    assert_eq!(tag, l3i::ffi::LUA_TLIGHTUSERDATA);
-                }
+                assert_eq!(tag, l3i::ffi::LUA_TLIGHTUSERDATA);
             }
             let back: Packed<Probe> = through.invoke(&runtime.stack(), (&value,)).unwrap();
             assert_eq!(back, value, "flags {flags} payload {payload:#x} through a table, an upvalue and a coroutine");
@@ -195,9 +187,6 @@ fn values_compare_and_key_tables_by_bits_and_kind() {
              assert(w ~= make16(6) and w == make16(5), 'wide values compare by bits')",
         )
         .unwrap();
-    if oracle() {
-        return;
-    }
     // A Color16 never equals a value of another kind with the same bits: the light tag, or the
     // boxed carrier's kind, is part of the value.
     let same = runtime

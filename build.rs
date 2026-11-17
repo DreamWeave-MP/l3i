@@ -33,24 +33,22 @@ const VECTOR_SIZE: u32 = 3;
 /// The Luau value a packed scalar rides in (src/packed/carrier.rs), as one
 /// `cfg(l3i_carrier = "...")`. Tagged light userdata only on the architectures where it has been
 /// proven to keep all 64 bits (an allowlist, not a pointer-width test: a new 64-bit target boxes
-/// until it is added with its tests); boxed userdata everywhere else. `L3I_CARRIER` overrides the
-/// choice for testing: `integer` is the Luau 0.746 integer carrier, kept as the oracle the others
-/// are compared against, and `boxed` runs the boxed carrier on a desktop build. It is an
-/// environment variable rather than a feature because the gates build with `--all-features`.
+/// until it is added with its tests); boxed userdata everywhere else. `L3I_CARRIER=boxed` runs the
+/// boxed carrier on a desktop build for testing. It is an environment variable rather than a
+/// feature because the gates build with `--all-features`, which would combine it with `jit`.
 fn carrier(jit: bool) -> &'static str {
     println!("cargo:rerun-if-env-changed=L3I_CARRIER");
-    println!("cargo:rustc-check-cfg=cfg(l3i_carrier, values(\"integer\", \"light\", \"boxed\"))");
+    println!("cargo:rustc-check-cfg=cfg(l3i_carrier, values(\"light\", \"boxed\"))");
     let arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
     let allowlisted = arch == "x86_64" || arch == "aarch64";
     let carrier = match env::var("L3I_CARRIER").as_deref() {
         Err(_) if allowlisted => "light",
         Err(_) | Ok("boxed") => "boxed",
-        Ok("integer") => "integer",
         Ok("light") => {
             assert!(allowlisted, "L3I_CARRIER=light: the light userdata carrier is not proven on {arch}");
             "light"
         }
-        Ok(other) => panic!("L3I_CARRIER={other}: expected integer, light or boxed"),
+        Ok(other) => panic!("L3I_CARRIER={other}: expected light or boxed"),
     };
     // Luau generates native code for x86-64 and AArch64 only, and no lowering hook is written
     // against the boxed carrier: refuse the combination rather than compile one.

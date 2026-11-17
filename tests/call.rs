@@ -148,8 +148,7 @@ fn a_64_bit_pattern_is_preserved_through_the_call_boundary() {
     assert_ne!(echoed.type_of(), Type::Number);
     assert_eq!(echo.invoke::<Bits64, _>(&stack, (Bits64(u64::MAX),)).unwrap(), Bits64(u64::MAX));
     assert!(echo.invoke::<i64, _>(&stack, (Bits64(1),)).is_err(), "a pattern is not a number");
-    let name = if l3i::packed::carrier::CARRIER == "integer" { "integer" } else { "Bits64" };
-    assert_eq!(kind_of.invoke::<String, _>(&stack, (Bits64(1),)).unwrap(), name);
+    assert_eq!(kind_of.invoke::<String, _>(&stack, (Bits64(1),)).unwrap(), "Bits64");
     assert_eq!(echo.invoke::<Value, _>(&stack, (7i64,)).unwrap().type_of(), Type::Number);
     assert_eq!(kind_of.invoke::<String, _>(&stack, (7i64,)).unwrap(), "number");
 }

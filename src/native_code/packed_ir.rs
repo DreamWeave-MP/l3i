@@ -21,22 +21,11 @@ use crate::raw::ffi;
 /// The bytecode type a `*_type` hook answers for an operation whose result is a packed scalar.
 /// Luau has no bytecode type for a light userdata, so it is `ANY`; the optimizer still knows the
 /// tag of a value it has just seen stored.
-#[cfg(l3i_carrier = "light")]
 pub const RESULT_TYPE: u8 = bytecode_type::ANY;
-/// The bytecode type a `*_type` hook answers for an operation whose result is a packed scalar.
-#[cfg(l3i_carrier = "integer")]
-pub const RESULT_TYPE: u8 = bytecode_type::INTEGER;
 
-/// The Luau type tag of a packed scalar on this carrier.
-#[cfg(l3i_carrier = "light")]
+/// The Luau type tag of a packed scalar: native code runs on the light userdata carrier only
+/// (`build.rs` refuses `jit` with the boxed one).
 const TYPE_TAG: u8 = ffi::LUA_TLIGHTUSERDATA as u8;
-#[cfg(l3i_carrier = "integer")]
-const TYPE_TAG: u8 = ffi::LUA_TINTEGER as u8;
-
-#[cfg(l3i_carrier = "light")]
-const LOAD: IrCmd = IrCmd::LOAD_POINTER;
-#[cfg(l3i_carrier = "integer")]
-const LOAD: IrCmd = IrCmd::LOAD_INT64;
 
 /// Guards that `reg` holds a packed scalar of nibble kind `kind` and returns its 64 bits; anything
 /// else exits to `exit`.
@@ -70,23 +59,15 @@ pub fn load_checked_payload(build: &mut IrBuilder<'_>, reg: IrOp, kind: u8, payl
 /// its 64 bits.
 pub fn load_wide(build: &mut IrBuilder<'_>, reg: IrOp, exit: IrOp) -> IrOp {
     build.load_and_check_tag(reg, TYPE_TAG, exit);
-    build.inst(LOAD, &[reg])
+    build.inst(IrCmd::LOAD_POINTER, &[reg])
 }
 
 /// Writes `bits` to `result` as a packed scalar under light tag `tag`: the value, the tag in
 /// `extra`, then the type tag.
 pub fn store(build: &mut IrBuilder<'_>, result: IrOp, bits: IrOp, tag: LightTag) {
-    #[cfg(l3i_carrier = "light")]
-    {
-        build.inst(IrCmd::STORE_POINTER, &[result, bits]);
-        let extra = build.const_int(std::ffi::c_int::from(tag));
-        build.inst(IrCmd::STORE_EXTRA, &[result, extra]);
-    }
-    #[cfg(l3i_carrier = "integer")]
-    {
-        let _ = tag;
-        build.inst(IrCmd::STORE_INT64, &[result, bits]);
-    }
+    build.inst(IrCmd::STORE_POINTER, &[result, bits]);
+    let extra = build.const_int(std::ffi::c_int::from(tag));
+    build.inst(IrCmd::STORE_EXTRA, &[result, extra]);
     let type_tag = build.const_tag(TYPE_TAG);
     build.inst(IrCmd::STORE_TAG, &[result, type_tag]);
 }

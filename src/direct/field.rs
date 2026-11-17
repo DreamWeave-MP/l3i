@@ -47,8 +47,6 @@ unsafe extern "C" fn field_thunk<T: Userdata, H: DirectField<T>>(userdata: *mut 
             FieldValue::Bits64(bits) => {
                 ffi::l3i_directfield_setlightbits(result, bits, c_int::from(crate::packed::carrier::BITS64_TAG));
             }
-            #[cfg(l3i_carrier = "integer")]
-            FieldValue::Bits64(bits) => ffi::lua_userdatadirectfield_setinteger64(result, bits as i64),
             FieldValue::Vector(v) => ffi::lua_userdatadirectfield_setvector(result, v.x, v.y, v.z),
         }
     }

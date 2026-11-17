@@ -283,9 +283,7 @@ fn packed_scalars_cross_with_a_kind_check() {
         runtime.bind_function("dreamweave.tests.read", |handle: Packed<Handle>| i64::from(handle.0.id) * 2).unwrap();
     runtime.set_global("make", &make).unwrap();
     runtime.set_global("read", &read).unwrap();
-    // typeof answers the kind's name on every carrier but the integer oracle.
-    let name = if l3i::packed::carrier::CARRIER == "integer" { "integer" } else { "Handle" };
-    runtime.set_global("kind_name", name).unwrap();
+    runtime.set_global("kind_name", "Handle").unwrap();
     runtime
         .exec(
             "local h = make(21) assert(typeof(h) == kind_name, typeof(h)) assert(read(h) == 42) \

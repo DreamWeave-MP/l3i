@@ -5,8 +5,8 @@
 //! wrote before it was deleted. The light carrier must reproduce it on both paths, the boxed
 //! carrier on the bound path (it has no native code). A changed line is a changed result.
 //!
-//! `L3I_WRITE_CARRIER_CORPUS=1` rewrites the golden: only ever from the integer carrier, and the
-//! diff is read line by line before it is committed.
+//! The golden was written by the integer carrier at c280c32 and is never rewritten: there is no
+//! carrier left that could stand in for the oracle.
 
 #![allow(clippy::too_many_lines)]
 
@@ -242,12 +242,6 @@ fn every_carrier_reproduces_the_integer_carriers_corpus() {
     let bound = run("bound");
     #[cfg(feature = "jit")]
     let lowered = run("lowered");
-    if std::env::var_os("L3I_WRITE_CARRIER_CORPUS").is_some() {
-        assert_eq!(CARRIER, "integer", "the golden is written by the integer carrier only");
-        #[cfg(feature = "jit")]
-        std::fs::write(golden_path(), format!("== bound\n{bound}== lowered\n{lowered}")).unwrap();
-        return;
-    }
     compare("bound", &bound);
     #[cfg(feature = "jit")]
     compare("lowered", &lowered);

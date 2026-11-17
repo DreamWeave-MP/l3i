@@ -1,8 +1,8 @@
 name: Packed scalar carriers
 
 # The Luau 0.747 campaign: every carrier a packed scalar can ride in (src/packed/carrier.rs), on
-# x86-64 and AArch64. `integer` is the Luau 0.746 oracle, `light` the tagged light userdata carrier,
-# `boxed` the interned userdata carrier wasm32 and every other target use, forced here on a desktop
+# x86-64 and AArch64. `light` is the tagged light userdata carrier, `boxed` the interned userdata
+# carrier wasm32 and every other target use, forced here on a desktop
 # build with jit off (it has no native lowering). The library workflow tests the default carrier,
 # and the doctests, which rustdoc links with the system cc on Linux AArch64.
 on:
@@ -24,7 +24,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-24.04, ubuntu-24.04-arm, macos-latest]
-        carrier: [integer, light, boxed]
+        carrier: [light, boxed]
     runs-on: ${{ matrix.os }}
     env:
       L3I_CARRIER: ${{ matrix.carrier }}

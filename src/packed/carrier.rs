@@ -13,12 +13,9 @@
 //!   light tag) whose metatable is its kind's, interned through a weak-valued registry table keyed
 //!   by tag and bits, so equal values are one object and `==`, `rawequal` and table keys behave as
 //!   on the light carrier. A metatable carries `__type`, so `typeof` answers the kind's name.
-//! - **integer**, on Luau 0.746 only, selected with `L3I_CARRIER=integer`: the Luau `integer` the
-//!   scalars rode in before Luau 0.747 removed the type, kept as the oracle the others are
-//!   measured against.
 //!
-//! **The nibble is the kind.** A read here checks the Luau type alone (light userdata, a boxed
-//! scalar, an integer) and returns the bits; the caller checks the kind nibble in them, exactly as
+//! **The nibble is the kind.** A read here checks the Luau type alone (light userdata, or a boxed
+//! scalar) and returns the bits; the caller checks the kind nibble in them, exactly as
 //! lowered code does. The light tag is written on every push so that `typeof`, equality and table
 //! keys are right, but no check reads it: in native code the nibble check is free and an exact tag
 //! check is not, and two paths that checked different things would disagree. A host light userdata
@@ -63,9 +60,6 @@ pub const CARRIER: &str = "light userdata";
 /// Which carrier this build uses, for messages and documentation.
 #[cfg(l3i_carrier = "boxed")]
 pub const CARRIER: &str = "boxed userdata";
-/// Which carrier this build uses, for messages and documentation.
-#[cfg(l3i_carrier = "integer")]
-pub const CARRIER: &str = "integer";
 
 /// The bits of the packed scalar in `view`, of any kind, or `None` when it holds no packed scalar.
 #[inline]
@@ -385,34 +379,5 @@ mod imp {
                  (read {read}, interned {equal}, unequal under another tag {unequal})"
             ))),
         }
-    }
-}
-
-#[cfg(l3i_carrier = "integer")]
-mod imp {
-    use super::{LightTag, Result, Scope};
-    use crate::convert::RawValue;
-    use crate::raw::ffi;
-
-    #[inline(always)]
-    pub(super) fn read_raw(raw: &RawValue, _state: impl FnOnce() -> *mut ffi::lua_State) -> Option<u64> {
-        (raw.tag() == ffi::LUA_TINTEGER).then(|| raw.pointer_bits())
-    }
-
-    #[inline(always)]
-    pub(super) fn push<S: Scope>(scope: &S, bits: u64, _tag: LightTag) -> Result<()> {
-        // SAFETY: pushes one integer after push_fixed makes room for it.
-        unsafe { crate::stack::push_fixed(scope.state(), |state| ffi::lua_pushinteger64(state, bits as i64)) }
-    }
-
-    #[allow(clippy::unnecessary_wraps, reason = "the signature every carrier shares; an integer has no tag to name")]
-    pub(super) unsafe fn name_tag(_state: *mut ffi::lua_State, _tag: LightTag, _name: &std::ffi::CStr) -> Result<()> {
-        Ok(())
-    }
-
-    #[allow(clippy::unnecessary_wraps, reason = "the signature every carrier shares; Luau's integer is its own type")]
-    pub(super) unsafe fn self_test(_state: *mut ffi::lua_State) -> Result<()> {
-        let _ = super::self_test_patterns;
-        Ok(())
     }
 }

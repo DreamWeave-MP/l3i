@@ -5,7 +5,7 @@
 //! interpreter speed are a regression too.
 //!
 //! The cases: good values from real operations and forged with every flag value and payloads
-//! above 2^53 and at 2^56 - 1; nil, a number, a vector, a string, an integer; a light userdata
+//! above 2^53 and at 2^56 - 1; nil, a number, a vector, a string; a light userdata
 //! under tag 0 with each of the sixteen top nibbles; every other packed kind and each wide kind;
 //! values whose nibble and light tag disagree, both ways. Forged values are written through the
 //! raw FFI, since the host push refuses them.
@@ -25,34 +25,18 @@ use l3i::raster::RasterExtension;
 use l3i::stack::{Scope, ValueView};
 use l3i::value::Value;
 
-/// A value the host push would refuse: any 64 bits under any light tag, or a raw integer.
+/// A value the host push would refuse: any 64 bits under any light tag.
 #[derive(Clone, Copy)]
-enum Made {
-    Light(u64, i32),
-    Int(i64),
-}
+struct Made(u64, i32);
 
 impl Push for Made {
     fn push_into<'s, S: Scope>(&self, scope: &'s S) -> Result<ValueView<'s>> {
-        match *self {
-            Made::Light(bits, tag) => {
-                // SAFETY: room for one slot is checked first; the tag is below LUA_LUTAG_LIMIT.
-                unsafe {
-                    assert!(l3i::ffi::lua_checkstack(scope.state(), 1) != 0);
-                    l3i::ffi::l3i_push_light_bits(scope.state(), bits, tag);
-                }
-                Ok(scope.top_value())
-            }
-            Made::Int(value) => {
-                // SAFETY: room for one slot is checked first. Luau 0.746 still has the type; the
-                // integer cases go with it.
-                unsafe {
-                    assert!(l3i::ffi::lua_checkstack(scope.state(), 1) != 0);
-                    l3i::ffi::lua_pushinteger64(scope.state(), value);
-                }
-                Ok(scope.top_value())
-            }
+        // SAFETY: room for one slot is checked first; the tag is below LUA_LUTAG_LIMIT.
+        unsafe {
+            assert!(l3i::ffi::lua_checkstack(scope.state(), 1) != 0);
+            l3i::ffi::l3i_push_light_bits(scope.state(), self.0, self.1);
         }
+        Ok(scope.top_value())
     }
 }
 
@@ -63,12 +47,9 @@ impl Return for Made {
     }
 }
 
-/// What a packed value of light tag `tag` is on this carrier: a light userdata, or on the integer
-/// oracle an integer for l3i's tags. Tag -1 asks for an integer on any carrier.
+/// A light userdata with `hi:lo` as its bits under light tag `tag`.
 fn make(hi: u32, lo: u32, tag: i32) -> Made {
-    let bits = (u64::from(hi) << 32) | u64::from(lo);
-    let oracle = l3i::packed::carrier::CARRIER == "integer";
-    if tag < 0 || (oracle && tag >= 128) { Made::Int(bits as i64) } else { Made::Light(bits, tag) }
+    Made((u64::from(hi) << 32) | u64::from(lo), tag)
 }
 
 /// One operand slot of a lowered operation.
@@ -237,8 +218,7 @@ fn cases(slot: Slot) -> Vec<(String, String, bool)> {
             for (expr, label) in plain {
                 add(expr.to_owned(), label.to_owned(), false);
             }
-            add("42i".to_owned(), "integer 42".to_owned(), false);
-            add(format!("make({}, 9, -1)", u32::from(kind) << 28), "integer with the kind's nibble".to_owned(), false);
+
             for nibble in 0..16u32 {
                 add(
                     format!("make({}, 4660, 0)", nibble << 28),
@@ -289,7 +269,6 @@ fn cases(slot: Slot) -> Vec<(String, String, bool)> {
             for (expr, label) in plain {
                 add(expr.to_owned(), label.to_owned(), false);
             }
-            add("42i".to_owned(), "integer 42".to_owned(), false);
         }
         Slot::Number => {
             for (expr, label) in [
@@ -303,7 +282,6 @@ fn cases(slot: Slot) -> Vec<(String, String, bool)> {
                 ("-1", "minus one"),
                 ("ca", "a Color"),
                 ("vector.create(1, 2, 3)", "vector"),
-                ("7i", "integer 7"),
             ] {
                 add(expr.to_owned(), label.to_owned(), false);
             }
