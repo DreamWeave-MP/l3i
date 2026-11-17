@@ -69,6 +69,8 @@ mod audio;
 #[cfg(feature = "bytes")]
 mod bytes;
 mod call;
+#[cfg(feature = "jit")]
+mod carrier_equivalence;
 mod comprehension;
 #[cfg(feature = "data")]
 mod data;
