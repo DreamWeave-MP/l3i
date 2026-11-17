@@ -39,3 +39,30 @@ jobs:
         run: cargo test --workspace --lib --tests --all-features
       - name: Test without jit
         run: cargo test --workspace --lib --tests --features "$NOJIT"
+
+  # wasm32, the target the boxed carrier exists for: Luau and l3i built with emscripten for
+  # wasm32-unknown-emscripten, no `jit` (CodeGen does not target wasm), the boxed carrier by
+  # default, and the suites that need no sockets, processes or threads run under Node: the
+  # carrier specification and self-test, the corpus and BufferPack goldens, Bits64, the 0.747
+  # removals and bytecode walk, the packed kinds, and the type surface.
+  wasm32:
+    runs-on: ubuntu-24.04
+    env:
+      CARGO_TARGET_WASM32_UNKNOWN_EMSCRIPTEN_RUNNER: node
+      L3I_UNVERIFIED_TOOLCHAIN: "1"
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: true
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-emscripten
+      - uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: 4.0.9
+      - name: Build the library
+        run: cargo build --target wasm32-unknown-emscripten --lib
+      - name: Test the carrier and packed suites
+        run: >
+          cargo test --target wasm32-unknown-emscripten --test integration --
+          packed_carrier:: carrier_corpus:: bits64:: luau_0747:: primitives:: quat:: raster:: type_surface::
