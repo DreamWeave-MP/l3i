@@ -1,6 +1,8 @@
 //! The plan's generated `.d.luau` is checked by Luau's own frontend, and strict scripts that
 //! `require` every built-in module by its canonical path type check against the plan's stubs:
 //! the declared API and the runtime agree, with no compatibility global in sight.
+// The strict-mode scripts and the plan they check against serve a test that needs `jit`.
+#![cfg_attr(not(feature = "jit"), allow(dead_code))]
 
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -533,6 +535,9 @@ const SCRIPTS: &[(&str, &str)] = &[
 
 /// The plan's definitions parse and type check in Luau's own frontend, and a strict script
 /// against every built-in module has no diagnostics: the declared API and the runtime agree.
+/// The scripts use the lowered receivers (`quat.math()`, `bytes.math()`), which only a `jit`
+/// build declares.
+#[cfg(feature = "jit")]
 #[test]
 fn the_generated_definitions_type_check_and_typed_scripts_pass_strict_mode() {
     let plan = plan();
