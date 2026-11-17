@@ -513,7 +513,9 @@ pub(crate) mod selection_layout {
     use super::Selection;
 
     pub const LEN: i32 = 0;
-    pub const WORDS: i32 = 8;
+    /// After `len`, a `usize`: 8 on the 64-bit targets native code runs on, 4 on wasm32, which
+    /// has no native code but builds the type all the same.
+    pub const WORDS: i32 = if cfg!(target_pointer_width = "64") { 8 } else { 4 };
 
     const _: () = {
         assert!(std::mem::offset_of!(Selection, len) == LEN as usize);
