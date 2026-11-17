@@ -550,6 +550,7 @@ changed = [
 fixed = [
     "A lowered colour operation accepted a `Color` whose payload exceeded 32 bits, which the bound call refuses; it now exits to the bound call.",
     "`quat.key`, `keyRotation` and `keyFlags` canonicalized a non-canonical payload where their lowering did not; both now compute on the bits.",
+    "`quat.mul`, `slerp` and `rotate` (module and `quat.math()`) agreed with their native lowering only to the angle: the bound path decoded, renormalised and branched differently. They now run the lowering's operations in its order and return the same bits; results from well-formed rotations are unchanged.",
 ]
 migration = """
 Rebuild every bytecode cache: a chunk with an integer constant is refused, and chunks without one load but were compiled with the old flags.

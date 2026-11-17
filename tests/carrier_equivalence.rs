@@ -302,12 +302,11 @@ fn cases(slot: Slot) -> Vec<(String, String, bool)> {
     out
 }
 
-/// Whether the lowering is bit-exact against its binder. Rotation products, slerp and rotate
-/// differ from the binder in the last bits of the arithmetic (the quat tests bound the angle,
-/// 5e-5); for those the comparison is acceptance, type, light tag and the kind and flag byte, and
-/// the payload bits are compared across carriers by the differential corpus instead.
-fn exact(op: &Op) -> bool {
-    !(op.receiver == "Q" && matches!(op.method, "rotate" | "mul" | "slerp"))
+/// Whether the lowering is held bit-exact against its binder: every operation is. `rotate`, `mul`
+/// and `slerp` once kept the host's `Quat` arithmetic on the bound path and agreed only to the
+/// angle; their bound calls now run the lowering's operations in its order (`quat::exact`).
+fn exact(_op: &Op) -> bool {
+    true
 }
 
 /// A result slot as a comparable description: the type tag and, by type, the exact bits (only the

@@ -401,8 +401,131 @@ fn key_rotation_bits(k: PackedBits<AnimationKey>) -> Result<PackedBits<Quaternio
     PackedBits::new(crate::packed::encode(Quaternion::KIND, 0, k.payload())?)
 }
 
-fn to_vec3(v: [f64; 3]) -> Vector3 {
-    Vector3 { x: v[0] as f32, y: v[1] as f32, z: v[2] as f32 }
+/// The script-facing `mul`, `slerp` and `rotate`, on the module and on `dream.quat.Math`, computed
+/// with the native lowering's operations in the lowering's order (`lowering::decode_bits`,
+/// `quantize`, `product`, `lower_slerp`), so the bound call and the lowered one agree bit for bit
+/// on every payload, forged ones included. The host's [`Quat`] math is not this: it decodes,
+/// renormalises off-unit results and branches where the lowering selects.
+// The names are the lowering's own (a, b, c, l, x, y, z, w), and `max` then `min` is the IR's
+// MAX_NUM then MIN_NUM, which `clamp` is not guaranteed to match on every input.
+#[allow(clippy::many_single_char_names, clippy::manual_clamp)]
+mod exact {
+    use super::{CENTER, COMPONENT_BITS, COMPONENT_MAX, RANGE, SCALE, acos_poly, sin_poly};
+
+    const LANE: u64 = (1 << COMPONENT_BITS) - 1;
+    const DECODE_SCALE: f64 = 2.0 * RANGE / COMPONENT_MAX;
+
+    /// `decode_bits`: three lanes scaled and offset, the omitted one from the unit norm, placed
+    /// by the index in bits 54 and 55.
+    pub(super) fn decode(payload: u64) -> [f64; 4] {
+        let lane = |shift: u32| ((payload >> shift) & LANE) as f64 * DECODE_SCALE + -RANGE;
+        let (a, b, c) = (lane(2 * COMPONENT_BITS), lane(COMPONENT_BITS), lane(0));
+        let l = ((payload >> (3 * COMPONENT_BITS)) & 3) as f64;
+        let sum = a * a + b * b + c * c;
+        let big = 0.0f64.max(1.0 - sum).sqrt();
+        let x = if l == 0.0 { big } else { a };
+        let y = if l == 0.0 {
+            a
+        } else if l == 1.0 {
+            big
+        } else {
+            b
+        };
+        let z = if l == 3.0 {
+            c
+        } else if l == 2.0 {
+            big
+        } else {
+            b
+        };
+        let w = if l == 3.0 { big } else { c };
+        [x, y, z, w]
+    }
+
+    /// `quantize` with no norm: the largest magnitude's index (ties to the lowest) and sign, each
+    /// lane scaled, centred, clamped and truncated, packed as `pack_lanes` packs them.
+    pub(super) fn encode(c: [f64; 4]) -> u64 {
+        let abs = c.map(f64::abs);
+        let m = abs[0].max(abs[1]).max(abs[2].max(abs[3]));
+        let index = if abs[0] == m {
+            0
+        } else if abs[1] == m {
+            1
+        } else if abs[2] == m {
+            2
+        } else {
+            3
+        };
+        let signed = if c[index] == 0.0 - m { -SCALE } else { SCALE };
+        let lanes = c.map(|v| (v * signed + CENTER).max(0.5).min(COMPONENT_MAX + 0.5) as i64 as u64);
+        let a = if index == 0 { lanes[1] } else { lanes[0] };
+        let b = if index == 1 || index == 0 { lanes[2] } else { lanes[1] };
+        let c = if index == 3 { lanes[2] } else { lanes[3] };
+        ((index as u64) << (3 * COMPONENT_BITS)) | (a << (2 * COMPONENT_BITS)) | (b << COMPONENT_BITS) | c
+    }
+
+    /// `product`: the Hamilton product, each component summed left to right.
+    pub(super) fn mul(a: [f64; 4], b: [f64; 4]) -> [f64; 4] {
+        let [ax, ay, az, aw] = a;
+        let [bx, by, bz, bw] = b;
+        [
+            aw * bx + ax * bw + ay * bz - az * by,
+            aw * by - ax * bz + ay * bw + az * bx,
+            aw * bz + ax * by - ay * bx + az * bw,
+            aw * bw - ax * bx - ay * by - az * bz,
+        ]
+    }
+
+    /// The `rotate` lowering: `v + w t + q × t` with `t = 2 (q × v)`, rounded to `f32` last.
+    pub(super) fn rotate(q: [f64; 4], v: [f64; 3]) -> [f32; 3] {
+        let cross = |a: [f64; 3], b: [f64; 3]| {
+            [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+        };
+        let qv = [q[0], q[1], q[2]];
+        let t = cross(qv, v).map(|x| x * 2.0);
+        let qt = cross(qv, t);
+        [0, 1, 2].map(|i| (v[i] + q[3] * t[i] + qt[i]) as f32)
+    }
+
+    /// `lower_slerp`: both weight pairs computed, the linear pair selected at `dot >= 0.9995`,
+    /// the shorter arc taken by the sign of the dot, then normalised by multiplying by `1 / norm`.
+    pub(super) fn slerp(a: [f64; 4], b: [f64; 4], t: f64) -> [f64; 4] {
+        let t = 0.0f64.max(1.0f64.min(t));
+        let d = a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3];
+        let sign = if d < 0.0 { -1.0 } else { 1.0 };
+        let dot = d.abs();
+        let theta = acos_poly(dot);
+        let sin_theta = (1.0 - dot * dot).sqrt();
+        let one_minus_t = 1.0 - t;
+        let inv_sin_theta = 1.0 / sin_theta;
+        let spherical0 = sin_poly(one_minus_t * theta) * inv_sin_theta;
+        let spherical1 = sin_poly(t * theta) * inv_sin_theta;
+        let linear = dot.max(0.9995) == dot;
+        let s0 = if linear { one_minus_t } else { spherical0 };
+        let s1 = if linear { t } else { spherical1 } * sign;
+        let r = [0, 1, 2, 3].map(|i| s0 * a[i] + s1 * b[i]);
+        let sum = r[0] * r[0] + r[1] * r[1] + r[2] * r[2] + r[3] * r[3];
+        let inv = 1.0 / sum.sqrt();
+        r.map(|v| v * inv)
+    }
+}
+
+/// `quat.mul` and `Q:mul` on the bits, as the lowering computes it.
+fn mul_bits(a: PackedBits<Quaternion>, b: PackedBits<Quaternion>) -> Result<PackedBits<Quaternion>> {
+    let bits = exact::encode(exact::mul(exact::decode(a.payload()), exact::decode(b.payload())));
+    PackedBits::new(crate::packed::encode(Quaternion::KIND, 0, bits)?)
+}
+
+/// `quat.slerp` and `Q:slerp` on the bits, as the lowering computes it; a non-finite `t` is an error.
+fn slerp_bits(a: PackedBits<Quaternion>, b: PackedBits<Quaternion>, t: f64) -> Result<PackedBits<Quaternion>> {
+    finite_weight(t)?;
+    let bits = exact::encode(exact::slerp(exact::decode(a.payload()), exact::decode(b.payload()), t));
+    PackedBits::new(crate::packed::encode(Quaternion::KIND, 0, bits)?)
+}
+
+/// `quat.rotate` and `Q:rotate` on the bits, as the lowering computes it.
+fn rotate_bits(q: PackedBits<Quaternion>, v: Vector3) -> Vector3 {
+    exact::rotate(exact::decode(q.payload()), from_vec3(v)).into()
 }
 
 fn from_vec3(v: Vector3) -> [f64; 3] {
@@ -436,16 +559,13 @@ impl Extension for QuatExtension {
             .signature("(x: number, y: number, z: number, w: number) -> Quaternion")
             .function("toXYZW", |q: Packed<Quaternion>| (q.0.0.x, q.0.0.y, q.0.0.z, q.0.0.w))
             .signature("(q: Quaternion) -> (number, number, number, number)")
-            .function("mul", |a: Packed<Quaternion>, b: Packed<Quaternion>| Quaternion::pack(a.0.0 * b.0.0))
+            .function("mul", mul_bits)
             .signature("(a: Quaternion, b: Quaternion) -> Quaternion")
             .function("inverse", |q: Packed<Quaternion>| Quaternion::pack(q.0.0.inverse()))
             .signature("(q: Quaternion) -> Quaternion")
-            .function("slerp", |a: Packed<Quaternion>, b: Packed<Quaternion>, t: f64| -> Result<Packed<Quaternion>> {
-                finite_weight(t)?;
-                Ok(Quaternion::pack(a.0.0.slerp(b.0.0, t)))
-            })
+            .function("slerp", slerp_bits)
             .signature("(a: Quaternion, b: Quaternion, t: number) -> Quaternion")
-            .function("rotate", |q: Packed<Quaternion>, v: Vector3| to_vec3(q.0.0.rotate(from_vec3(v))))
+            .function("rotate", rotate_bits)
             .signature("(q: Quaternion, v: vector) -> vector")
             .function("angleTo", |a: Packed<Quaternion>, b: Packed<Quaternion>| a.0.0.angle_to(b.0.0))
             .signature("(a: Quaternion, b: Quaternion) -> number")
@@ -464,14 +584,16 @@ impl Extension for QuatExtension {
                 .compiler_type(crate::extension::CompilerTypePolicy::Required)
                 .doc("Natively lowered rotation operations.");
             receiver
-                .method("rotate", |_: &lowering::Math, q: Packed<Quaternion>, v: Vector3| lowering::rotate(q, v))
+                .method("rotate", |_: &lowering::Math, q: PackedBits<Quaternion>, v: Vector3| rotate_bits(q, v))
                 .signature("(self, q: Quaternion, v: vector): vector");
             receiver
-                .method("mul", |_: &lowering::Math, a: Packed<Quaternion>, b: Packed<Quaternion>| lowering::mul(a, b))
+                .method("mul", |_: &lowering::Math, a: PackedBits<Quaternion>, b: PackedBits<Quaternion>| {
+                    mul_bits(a, b)
+                })
                 .signature("(self, a: Quaternion, b: Quaternion): Quaternion");
             receiver
-                .method("slerp", |_: &lowering::Math, a: Packed<Quaternion>, b: Packed<Quaternion>, t: f64| {
-                    lowering::slerp(a, b, t)
+                .method("slerp", |_: &lowering::Math, a: PackedBits<Quaternion>, b: PackedBits<Quaternion>, t: f64| {
+                    slerp_bits(a, b, t)
                 })
                 .signature("(self, a: Quaternion, b: Quaternion, t: number): Quaternion");
             receiver
@@ -512,12 +634,11 @@ pub mod lowering {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::{AnimationKey, CENTER, COMPONENT_BITS, COMPONENT_MAX, NORM2_FLOOR, Quaternion, RANGE, SCALE};
-    use crate::convert::Vector3;
     use crate::native_code::hooks::{NamecallSite, NativeCodeHooks, NativeContext};
     use crate::native_code::ir::{IrBuilder, IrCmd, IrCondition, IrOp, bytecode_type};
     use crate::native_code::packed_ir;
+    use crate::packed::PackedScalar;
     use crate::packed::carrier::{LightTag, nibble_tag};
-    use crate::packed::{Packed, PackedScalar};
     use crate::raw::ffi::{LUA_TNUMBER, LUA_TVECTOR};
     use crate::userdata::Userdata;
 
@@ -536,23 +657,6 @@ pub mod lowering {
     #[doc(hidden)]
     pub fn lowered_sites() -> usize {
         LOWERED.load(Ordering::Relaxed)
-    }
-
-    /// The interpreter path of `Math:rotate`, the oracle the lowering must match.
-    pub fn rotate(q: Packed<Quaternion>, v: Vector3) -> Vector3 {
-        let r = q.0.0.rotate([f64::from(v.x), f64::from(v.y), f64::from(v.z)]);
-        Vector3 { x: r[0] as f32, y: r[1] as f32, z: r[2] as f32 }
-    }
-
-    /// The interpreter path of `Math:mul`.
-    pub fn mul(a: Packed<Quaternion>, b: Packed<Quaternion>) -> Packed<Quaternion> {
-        Packed(Quaternion(a.0.0 * b.0.0))
-    }
-
-    /// The interpreter path of `Math:slerp`; a non-finite `t` is an error, as on the module.
-    pub fn slerp(a: Packed<Quaternion>, b: Packed<Quaternion>, t: f64) -> crate::error::Result<Packed<Quaternion>> {
-        super::finite_weight(t)?;
-        Ok(Packed(Quaternion(a.0.0.slerp(b.0.0, t))))
     }
 
     /// The hook set; [`super::QuatExtension`] registers it.

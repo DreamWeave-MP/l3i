@@ -243,7 +243,10 @@ reverse, fails naming `Quaternion` or `AnimationKey`; a number fails too.
 The interpolation uses polynomial trigonometry, `acos` to 2e-8 and sine to 6e-8 on their
 domains, so the bound path and the native lowering compute the same formulas; the angular error
 against exact slerp stays below 1e-7 rad, three orders of magnitude under the packed form's own
-quantisation.
+quantisation. `mul`, `slerp` and `rotate`, on the module and on `quat.math()`, run the lowering's
+operations in the lowering's order, so a bound call and a lowered one return the same 64 bits
+for every operand, malformed payloads included; `tests/carrier_equivalence.rs` holds them to it.
+The host's `quat::Quat` arithmetic is separate and normalises differently.
 
 The packed form is storage and transport, never the live accumulator: re-encoding after every
 blend step random-walks (1.7e-3 rad over 100k slerp steps), while packing an f64 state each step
