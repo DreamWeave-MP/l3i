@@ -146,7 +146,7 @@ jobs:
             echo 'mod carrier_cost;' >> "../${tree%%:*}/tests/main.rs"
           done
           binary() {
-            cargo test --release --test integration --no-run --message-format=json \
+            cargo test --release --features jit --test integration --no-run --message-format=json \
               | jq -r 'select(.executable != null and .target.name == "integration") | .executable' | tail -1
           }
           echo "CURRENT=$(binary)" >> "$GITHUB_ENV"
@@ -155,9 +155,13 @@ jobs:
       - name: Hold every binder row to 2 percent over the integer carrier
         run: |
           set -euo pipefail
+          # Native scenarios run Luau's generated code, which Cachegrind sees fresh with
+          # --smc-check=all-non-file.
           count() {
-            L3I_BUDGET_SCENARIO="$2" L3I_BUDGET_CALLS="$3" valgrind --tool=cachegrind --cache-sim=no \
-              --cachegrind-out-file=/dev/null "$1" --ignored --exact carrier_cost::budget_scenario --test-threads=1 \
+            local test=carrier_cost::budget_scenario
+            case "$2" in native_*) test=carrier_cost::native_budget_scenario ;; esac
+            L3I_BUDGET_SCENARIO="$2" L3I_BUDGET_CALLS="$3" valgrind --tool=cachegrind --cache-sim=no --smc-check=all-non-file \
+              --cachegrind-out-file=/dev/null "$1" --ignored --exact "$test" --test-threads=1 \
               2>&1 >/dev/null | awk '/I *refs:/ { gsub(",", "", $NF); print $NF }'
           }
           per_call() {
@@ -188,5 +192,21 @@ jobs:
             if [ "$binder" -gt "$limit" ]; then verdict="OVER BUDGET"; status=1; fi
             printf '%-12s total: current %4d  light 0.746 %4d  integer 0.746 %4d | l3i: current %4d  integer %4d  limit %4d  %s\n' \
               "$scenario" "$current" "$middle" "$integer" "$binder" "$binder_integer" "$limit" "$verdict"
+          done
+          # #32's native budget: a lowered call in --!native code, the native loop subtracted, at
+          # most 3 percent over the integer carrier's.
+          current_nloop=$(per_call "$CURRENT" native_loop)
+          integer_nloop=$(per_call "$INTEGER" native_loop)
+          middle_nloop=$(per_call "$LIGHT746" native_loop)
+          echo "native loop alone: current $current_nloop, light 0.746 $middle_nloop, integer 0.746 $integer_nloop"
+          for scenario in native_fromxyzw native_rotate native_mul_local native_rgba8; do
+            current=$(( $(per_call "$CURRENT" "$scenario") - current_nloop ))
+            integer=$(( $(per_call "$INTEGER" "$scenario") - integer_nloop ))
+            middle=$(( $(per_call "$LIGHT746" "$scenario") - middle_nloop ))
+            limit=$(( integer + (integer * 3 + 99) / 100 ))
+            verdict=ok
+            if [ "$current" -gt "$limit" ]; then verdict="OVER BUDGET"; status=1; fi
+            printf '%-16s current %4d  light 0.746 %4d  integer 0.746 %4d  limit %4d  %s\n' \
+              "$scenario" "$current" "$middle" "$integer" "$limit" "$verdict"
           done
           exit $status

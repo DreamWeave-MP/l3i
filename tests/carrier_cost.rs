@@ -109,3 +109,66 @@ fn budget_scenario() {
     let f = looped(&runtime, body, calls);
     f.invoke::<f64, _>(&runtime.stack(), ()).unwrap();
 }
+
+/// The lowered calls #32 budgets at 3 percent, in natively compiled code, for the budgets job: a
+/// name, then the loop body. `x` varies per iteration so nothing is hoisted, as in
+/// `benches/instructions`; `loop` is the bare native loop.
+#[cfg(feature = "jit")]
+const NATIVE_SCENARIOS: [(&str, &str); 5] = [
+    ("native_loop", "s = x"),
+    ("native_fromxyzw", "s = Q:fromXYZW(x, 0.2, 0.3, 0.9)"),
+    ("native_rotate", "s = Q:rotate(r, p)"),
+    ("native_mul_local", "s = Q:mul(r, r)"),
+    ("native_rgba8", "s = C:rgba8(i % 256, 40, 40, 255)"),
+];
+
+/// One native scenario (`L3I_BUDGET_SCENARIO`) run `L3I_BUDGET_CALLS` times inside `--!native`
+/// code with the lowered receivers, for the budgets job to count.
+#[cfg(feature = "jit")]
+#[test]
+#[ignore = "an instruction budget scenario: the budgets job runs it under Cachegrind"]
+fn native_budget_scenario() {
+    use l3i::extension::{NativeCodePolicy, RuntimePlan, RuntimePolicy};
+    use l3i::native_code::NativeCodeMode;
+    use l3i::quat::QuatExtension;
+    use l3i::raster::RasterExtension;
+    use l3i::runtime::{CallContext, MemoryCategory};
+    use l3i::sandbox::{InstanceSpec, SandboxOptions};
+
+    let wanted = std::env::var("L3I_BUDGET_SCENARIO").expect("L3I_BUDGET_SCENARIO names a scenario");
+    let calls: u32 = std::env::var("L3I_BUDGET_CALLS").expect("L3I_BUDGET_CALLS").parse().expect("a call count");
+    let (_, body) = NATIVE_SCENARIOS.iter().find(|(name, _)| *name == wanted).expect("a known native scenario");
+    let policy = RuntimePolicy::new()
+        .compat_global("@dream/quat", "quat")
+        .compat_global("@dream/raster", "raster")
+        .native_code(NativeCodePolicy { mode: NativeCodeMode::Eager, ..NativeCodePolicy::default() });
+    let plan =
+        RuntimePlan::builder().policy(policy).extension(QuatExtension).extension(RasterExtension).finalize().unwrap();
+    let runtime = Runtime::from_plan(&plan).unwrap();
+    assert!(
+        runtime.native_code().is_some_and(l3i::native_code::NativeCodeGen::is_available),
+        "the budgets job runs where Luau generates native code"
+    );
+    let sandbox = runtime
+        .sandbox(|_| {}, SandboxOptions { compile_options: runtime.compile_options(), ..SandboxOptions::default() })
+        .unwrap();
+    let loader = runtime.load_function("return function(name) error('module ' .. name .. ' not found') end").unwrap();
+    let instance = sandbox
+        .new_instance(&runtime, &InstanceSpec { name: "n", packages: &[], hidden_data: None, loader: &loader })
+        .unwrap();
+    let template = sandbox
+        .load_template(
+            &runtime,
+            "native.lua",
+            &format!(
+                "--!native\nlocal Q: dream_quat_Math = quat.math()\nlocal C: dream_raster_Math = raster.math()\n\
+                 local r = quat.axisAngle(vector.create(0, 0, 1), 0.3)\nlocal p = vector.create(1, 2, 3)\nlocal sink\n\
+                 return function() local s = 0 for i = 1, {calls} do local x = 0.1 + (i % 64) * 0.01 {body} end sink = s return 0 end"
+            ),
+        )
+        .unwrap();
+    let results =
+        sandbox.run(&runtime, &template, &instance, CallContext { id: 1, category: MemoryCategory(0) }).unwrap();
+    let f = l3i::value::Function::from_value(results.into_iter().next().unwrap()).unwrap();
+    f.invoke::<f64, _>(&runtime.stack(), ()).unwrap();
+}
