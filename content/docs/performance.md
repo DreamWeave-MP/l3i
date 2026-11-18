@@ -340,6 +340,28 @@ replaced, the reassigned `Q:mul` is about 18 cycles (12 percent) slower and the 
 `C:red` chain 57 to 65 percent, with the same instruction counts. Results kept in a local and
 used once cost within 1.5 percent of what they did.
 
+### The binder budget in CI
+
+The `budgets` job in `.github/workflows/carriers.yml` holds #32's binder budget on every push, on
+x86-64 and AArch64 Linux: it builds `tests/carrier_cost.rs` on the branch, on Luau 0.746 with the
+light carrier, and on Luau 0.746 with the integer carrier the light one replaced, and counts each
+bound call's instructions under Cachegrind, which needs no perf counters. What l3i adds to Luau's
+own call (a row minus a raw `lua_CFunction`) may be at most 2 percent over the integer carrier's.
+At the Luau 0.747 release, per call:
+
+| Row | x86-64: total, l3i's share | integer 0.746 | AArch64: total, l3i's share | integer 0.746 |
+|---|---:|---:|---:|---:|
+| raw `lua_CFunction` (Luau alone) | 260 | 259 | 243 | 234 |
+| bound `(f64) -> f64` | 363, 103 | 362, 103 | 343, 100 | 334, 100 |
+| bound `(Vector3) -> f64` | 501, 241 | 498, 239 | 468, 225 | 458, 224 |
+| bound `(Packed<Color>) -> f64` | 504, 244 | 502, 243 | 471, 228 | 461, 227 |
+| bound `(Bits64) -> f64` | 463, 203 | 461, 202 | 436, 193 | 427, 193 |
+| returns a packed `Color` | 365, 105 | 377, 118 | 334, 91 | 340, 106 |
+
+The light carrier costs l3i nothing it did not cost as an integer, and returning a packed value
+costs less. Luau 0.747 itself adds about 9 instructions to every C function call on AArch64, bound
+or not, and none on x86-64: an upstream change, carried as it is.
+
 ### The carriers in wall time
 
 wasm32 under Node has no CPU counters, so the carriers are also compared in wall time by
