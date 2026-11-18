@@ -1905,7 +1905,9 @@ limit does not see it. A run that needs more names its own ceiling.
 A process the child started can keep a captured pipe open after the child has exited. On Unix `run`
 does not wait for it: once the child is gone it reads until that process has written nothing for
 250 milliseconds, or for 2 seconds whatever it writes, and then answers the child's own result with
-`held = true`. What that process writes later is not in the result. Whether anything still holds
+`held = true`. What that process writes later is not in the result. `held` says what the reading
+saw, not what `run` expected: a process that writes and exits just as `run` stops reading leaves
+whole captures and no `held`. Whether anything still holds
 the pipe is asked of the pipe, not guessed from the time: a run whose captures nothing holds reads
 them to their end and is never `held`, however slow the machine is to read them, and a holder that
 exits while `run` is still reading leaves whole captures, not a held run. `held` is the run's, not

@@ -555,6 +555,7 @@ fixed = [
     "`data.selection` with a length the host cannot allocate aborted the process (Rust's infallible allocation); it raises. On 32-bit targets a span's count, offset or stride past the address space was reported as negative or as a short stride; it is refused as a 64-bit target refuses it.",
     "l3i did not build for wasm32: the value mirror pinned a 64-bit `TString` layout (its asserts refused the build rather than misread), the toolchain config handed emscripten's target to plain clang, and the value mirror's self-test compared a light userdata's whole value word where a 32-bit pointer fills half of it, and `data` pinned a 64-bit offset for its selections' word pointer.",
     "`quat.mul`, `slerp` and `rotate` (module and `quat.math()`) agreed with their native lowering only to the angle: the bound path decoded, renormalised and branched differently. They now run the lowering's operations in its order and return the same bits; results from well-formed rotations are unchanged.",
+    "`process.run` could answer `held = true` with whole captures: a process holding a capture that wrote and exited just as the run gave up on it after 250 ms quiet had its output read, but the run still said held. `held` now says a reader was stopped before its stream's end (#37).",
 ]
 migration = """
 Rebuild every bytecode cache: a chunk with an integer constant is refused, and chunks without one load but were compiled with the old flags.

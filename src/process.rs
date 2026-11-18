@@ -15,8 +15,8 @@
 //!   child started may hold a captured pipe open after the child has exited: on Unix the call then
 //!   answers the child's own result once that process has written nothing for a quarter of a
 //!   second, or two seconds after the exit whatever it writes, killing the group if the call was
-//!   bounded, and the result says `held = true`; a pipe is held when the kernel says a writer still
-//!   has it, never because its reader was slow. Elsewhere it waits for the pipe until a limit. A run that shares
+//!   bounded, and the result says `held = true` if reading stopped before that process let go; a
+//!   pipe is held when the kernel says a writer still has it, never because its reader was slow. Elsewhere it waits for the pipe until a limit. A run that shares
 //!   stdout or stderr with the host stays in the host's group unless it names a limit of its own,
 //!   so the terminal still treats it as the foreground job. One that shares neither is set apart whenever a
 //!   limit can end it, the runtime's included, and is a background job to a controlling terminal.
@@ -796,8 +796,8 @@ fn answer(call: &Call<'_>, output: &std::process::Output, held: bool, stdout: Ou
     if stderr == Output::Capture {
         table.raw_set_value(&frame, "stderr", output.stderr.as_slice())?;
     }
-    // Said only when it is so: something else still held a capture when reading stopped, so what
-    // that something wrote later is not here.
+    // Said only when it is so: a reader was stopped before its stream's end while something else
+    // still held the capture, so what that something wrote later is not here.
     if held {
         table.raw_set_value(&frame, "held", &true)?;
     }
@@ -807,8 +807,8 @@ fn answer(call: &Call<'_>, output: &std::process::Output, held: bool, stdout: Ou
 
 /// How a child's wait ended.
 enum Ended {
-    /// The child exited on its own; here is what it wrote, and whether reading stopped while
-    /// something else still held a capture open.
+    /// The child exited on its own; here is what it wrote, and whether a reader was stopped before
+    /// its stream's end while something else still held that capture open.
     Exited(std::process::Output, bool),
     /// `timeoutMs` passed first; the child was killed and reaped.
     TimedOut,
@@ -818,10 +818,18 @@ enum Ended {
     Expired,
 }
 
+/// What a capture's reader read, and whether it was stopped before the stream's end: told to
+/// stop while something still held the pipe, so what that something wrote later is not in it.
+#[derive(Default)]
+struct Drained {
+    bytes: Vec<u8>,
+    cut: bool,
+}
+
 /// The readers of a child's captured streams, and whether one of them passed its ceiling.
 struct Capture {
-    stdout: Option<JoinHandle<Vec<u8>>>,
-    stderr: Option<JoinHandle<Vec<u8>>>,
+    stdout: Option<JoinHandle<Drained>>,
+    stderr: Option<JoinHandle<Drained>>,
     exceeded: Arc<AtomicBool>,
     /// Bytes read from either capture so far: with what a pipe has waiting, what tells one still
     /// being written to from one that is only being held.
@@ -831,6 +839,13 @@ struct Capture {
     /// to ask the pipes themselves who still holds them.
     #[cfg(unix)]
     watch: [Option<std::os::fd::OwnedFd>; 2],
+}
+
+impl Capture {
+    /// Whether every reader has finished: reached its stream's end, its ceiling, or a cancellation.
+    fn read(&self) -> bool {
+        [&self.stdout, &self.stderr].iter().all(|reader| reader.as_ref().is_none_or(JoinHandle::is_finished))
+    }
 }
 
 /// The read end of each of `child`'s captures again, stdout then stderr, taken before the readers
@@ -889,8 +904,11 @@ impl Holding {
     /// Looks at `capture` now, and says whether to stop reading it: something holds it, and has
     /// written nothing for [`CAPTURE_QUIET`] or has held it for [`CAPTURE_LINGER`].
     fn is_over(&mut self, capture: &Capture) -> bool {
+        // The pipe is asked before the count is read: bytes a reader takes in between then show
+        // as read, where the other order missed them both as waiting and as read.
+        let held = holder(capture);
         let (read, now) = (capture.progress.load(Ordering::SeqCst), Instant::now());
-        let Some(waiting) = holder(capture) else {
+        let Some(waiting) = held else {
             (self.since, self.seen) = (None, (read, now));
             return false;
         };
@@ -921,18 +939,21 @@ fn feed(mut pipe: std::process::ChildStdin, input: Vec<u8>, cancel: &Arc<Cancel>
 
 /// Reads `pipe` to its end on its own thread, or until the call is cancelled. Past `ceiling` bytes
 /// the reader stops, keeps nothing more, and raises `exceeded`, so memory stays within the ceiling
-/// however much the child writes.
+/// however much the child writes. The reader says whether it was cut short: cancelled before the
+/// stream's end. One that reaches the end while reading what was already there is not, whoever
+/// cancelled it, so a holder that let go just as the call gave up on it is not reported held.
 fn drain<P: Read + Pollable + Send + 'static>(
     pipe: Option<P>,
     ceiling: Option<u64>,
     exceeded: &Arc<AtomicBool>,
     progress: &Arc<AtomicU64>,
     cancel: &Arc<Cancel>,
-) -> std::io::Result<Option<JoinHandle<Vec<u8>>>> {
+) -> std::io::Result<Option<JoinHandle<Drained>>> {
     let Some(mut pipe) = pipe else { return Ok(None) };
     let (exceeded, progress, cancel) = (Arc::clone(exceeded), Arc::clone(progress), Arc::clone(cancel));
     let reader = std::thread::Builder::new().name("l3i-process-capture".into()).spawn(move || {
         let mut bytes = Vec::new();
+        let mut cut = false;
         let mut chunk = [0_u8; 8192];
         let mut total = 0_u64;
         loop {
@@ -940,12 +961,18 @@ fn drain<P: Read + Pollable + Send + 'static>(
                 // The end of the stream.
                 Ok(Some(0)) => break,
                 // The end of the call. What is already in the pipe was written before the reader
-                // was told to stop and is still part of the answer; nothing is waited for.
+                // was told to stop and is still part of the answer; nothing is waited for. Only
+                // reaching the end here says the pipe was not held after all.
                 Ok(None) => {
+                    cut = true;
                     let mut last = 0_u64;
                     while last < LAST_READ_BYTES && Cancel::readable_now(&pipe) {
                         match pipe.read(&mut chunk) {
-                            Ok(count) if count > 0 => {
+                            Ok(0) => {
+                                cut = false;
+                                break;
+                            }
+                            Ok(count) => {
                                 last += count as u64;
                                 total = total.saturating_add(count as u64);
                                 if ceiling.is_some_and(|ceiling| total > ceiling) {
@@ -954,7 +981,7 @@ fn drain<P: Read + Pollable + Send + 'static>(
                                 }
                                 bytes.extend_from_slice(&chunk[..count]);
                             }
-                            _ => break,
+                            Err(_) => break,
                         }
                     }
                     break;
@@ -973,7 +1000,7 @@ fn drain<P: Read + Pollable + Send + 'static>(
                 Err(_) => break,
             }
         }
-        bytes
+        Drained { bytes, cut }
     })?;
     Ok(Some(reader))
 }
@@ -1048,20 +1075,26 @@ fn wait(
     let mut holding = Holding::new(capture);
     #[cfg(not(unix))]
     let _ = cancel;
-    #[cfg_attr(not(unix), allow(unused_mut))]
-    let mut held = false;
     loop {
         if exceeded.load(Ordering::SeqCst) {
             stop(child, group);
             return Ok(Ended::OutputLimit);
         }
-        if [&capture.stdout, &capture.stderr].iter().all(|reader| reader.as_ref().is_none_or(JoinHandle::is_finished)) {
+        if capture.read() {
             break;
         }
         // Only where a blocked reader can be ended: elsewhere the limits are all that end the wait.
         #[cfg(unix)]
         {
             if holding.is_over(capture) {
+                // The readers stop first, and are seen to: each then says whether its holder let
+                // go before it stopped. Killed first, a holder ended by this call would read as one
+                // that let go, and a run cut short would not say held. A cancelled reader reads
+                // only what is already in its pipe, so this does not wait on the holder.
+                cancel.cancel();
+                while !capture.read() {
+                    std::thread::sleep(Duration::from_millis(1));
+                }
                 // The leader is still unreaped, so its group is still ours to signal: what the
                 // child left in it does not outlive a call that was bounded.
                 // Asked again first, as every kill is: a leader the host reaped in the meantime no
@@ -1069,8 +1102,6 @@ fn wait(
                 if group && !matches!(has_exited(child), Err(ref error) if reaped_elsewhere(error)) {
                     kill_group(child);
                 }
-                cancel.cancel();
-                held = true;
                 break;
             }
         }
@@ -1091,7 +1122,7 @@ fn wait(
     }
     // Every signal this call sends is out, so the child is reaped last.
     let status = child.wait()?;
-    let collect = |reader: Option<JoinHandle<Vec<u8>>>| {
+    let collect = |reader: Option<JoinHandle<Drained>>| {
         reader.map(|reader| reader.join().unwrap_or_default()).unwrap_or_default()
     };
     let (stdout, stderr) = (collect(capture.stdout.take()), collect(capture.stderr.take()));
@@ -1099,7 +1130,11 @@ fn wait(
     if exceeded.load(Ordering::SeqCst) {
         return Ok(Ended::OutputLimit);
     }
-    Ok(Ended::Exited(std::process::Output { status, stdout, stderr }, held))
+    // Held is what the readers saw, not what the wait judged when it cancelled them: a holder can
+    // write and let go between the last look and a reader learning it was cancelled, and then
+    // nothing was cut from the answer.
+    let held = stdout.cut || stderr.cut;
+    Ok(Ended::Exited(std::process::Output { status, stdout: stdout.bytes, stderr: stderr.bytes }, held))
 }
 
 /// The failure of a `cwd` that is not a directory, said as that. Left to the spawn it reads as the
@@ -1337,7 +1372,7 @@ impl Extension for ProcessExtension {
             .doc("The script's process and the ones it starts: run a program and wait for its exit code, environment variables, and the standard streams.")
             .installed("run")
             .signature(RUN_SIGNATURE)
-            .doc("Runs program with args (no shell), waits for it, and returns how it ended; needs the process.spawn capability. stdout and stderr are inherited unless captured or discarded; stdin is empty unless given. timeoutMs (1 to 86400000, a day) stops the child after that many milliseconds, and maxStdoutBytes or maxStderrBytes (0 to 2^53 - 1, each for a captured stream) stops it once that stream passes its ceiling: the child is killed and reaped, its output discarded, and the failure is timeout or outputLimit. A captured stream given no ceiling has one of 64 MiB. On Unix a capture that a process the child started still holds open after the child exited is read until that process has written nothing for 250 ms, or for 2 s, and the call then answers the child's own result with held = true: what that process wrote later is not in it. A run whose captures nothing holds reads them to their end, however long that takes, and is never held. Under an execution time limit a run that shares neither stdout nor stderr with the host is set apart in a group of its own, as a bounded one is, and so cannot use the controlling terminal. On Unix a bounded child runs in a process group of its own, which a limit signals whole on Linux, Android, macOS and FreeBSD (a descendant that left the group is not stopped); elsewhere only the child is killed. On Unix the call leaves no thread behind when it returns; on Windows a thread blocked on a pipe that something else holds stays until that pipe closes. A run counts against the live-child limit while it runs.")
+            .doc("Runs program with args (no shell), waits for it, and returns how it ended; needs the process.spawn capability. stdout and stderr are inherited unless captured or discarded; stdin is empty unless given. timeoutMs (1 to 86400000, a day) stops the child after that many milliseconds, and maxStdoutBytes or maxStderrBytes (0 to 2^53 - 1, each for a captured stream) stops it once that stream passes its ceiling: the child is killed and reaped, its output discarded, and the failure is timeout or outputLimit. A captured stream given no ceiling has one of 64 MiB. On Unix a capture that a process the child started still holds open after the child exited is read until that process has written nothing for 250 ms, or for 2 s, and the call then answers the child's own result, with held = true if reading stopped before that process let go: what it wrote later is not in it. A run whose captures nothing holds reads them to their end, however long that takes, and is never held. Under an execution time limit a run that shares neither stdout nor stderr with the host is set apart in a group of its own, as a bounded one is, and so cannot use the controlling terminal. On Unix a bounded child runs in a process group of its own, which a limit signals whole on Linux, Android, macOS and FreeBSD (a descendant that left the group is not stopped); elsewhere only the child is killed. On Unix the call leaves no thread behind when it returns; on Windows a thread blocked on a pipe that something else holds stays until that pipe closes. A run counts against the live-child limit while it runs.")
             .installed("start")
             .signature(START_SIGNATURE)
             .doc("Starts program with args (no shell) without waiting, and returns a process handle; needs the process.spawn capability, and fails like run for a program that cannot start. stdin is null unless \"pipe\", stdout and stderr are inherited unless \"pipe\" or \"null\". Reads, writes and wait never block except wait with a timeout. timeoutMs, maxStdoutBytes and maxStderrBytes are lifetime limits, as on run: passing one kills the child and, on Linux, Android, macOS and FreeBSD, its process group, and later reads answer with the limit's kind. Closing the handle kills and reaps the child. A started child counts against the live-child limit until its handle is closed or a limit stops it, so close handles: an unclosed one holds its slot until it is collected.")
@@ -1481,7 +1516,7 @@ mod capture_tests {
         let (release, released) = mpsc::channel::<()>();
         let reader = std::thread::spawn(move || {
             let _ = released.recv();
-            Vec::new()
+            Drained::default()
         });
         let capture = Capture {
             stdout: Some(reader),
@@ -1553,6 +1588,54 @@ mod capture_tests {
         std::thread::sleep(CAPTURE_LINGER + CAPTURE_QUIET);
         assert!(!holding.is_over(&capture), "an unread capture nothing holds was given up on");
         finish(capture, &release);
+    }
+
+    impl Pollable for std::io::PipeReader {
+        fn descriptor(&self) -> std::os::fd::RawFd {
+            std::os::fd::AsRawFd::as_raw_fd(self)
+        }
+    }
+
+    /// A reader of `read` that has already read `first`: blocked waiting for more, or for the
+    /// call to cancel it.
+    fn reading(read: std::io::PipeReader, first: &[u8]) -> (JoinHandle<Drained>, Arc<Cancel>) {
+        let (cancel, progress) = (Arc::new(Cancel::new().unwrap()), Arc::new(AtomicU64::new(0)));
+        let reader = drain(Some(read), None, &Arc::default(), &progress, &cancel).unwrap().unwrap();
+        while progress.load(Ordering::SeqCst) < first.len() as u64 {
+            std::thread::yield_now();
+        }
+        (reader, cancel)
+    }
+
+    /// #37: the run gave up on a holder, the holder wrote and let go, and only then did the reader
+    /// learn it was cancelled. Nothing was cut, so nothing is held, whichever the reader saw
+    /// first: the bytes or the cancellation.
+    #[test]
+    fn a_holder_that_lets_go_as_its_reader_is_cancelled_leaves_it_whole() {
+        let (read, mut write) = std::io::pipe().unwrap();
+        write.write_all(b"early").unwrap();
+        let (reader, cancel) = reading(read, b"early");
+        write.write_all(b"late").unwrap();
+        drop(write);
+        cancel.cancel();
+        let drained = reader.join().unwrap();
+        assert_eq!(drained.bytes, b"earlylate");
+        assert!(!drained.cut, "a reader that reached the end was reported cut short");
+    }
+
+    /// The same, with a holder that keeps the pipe: what it wrote before the reader stopped is
+    /// read, and the reader was cut short, since the holder could still write.
+    #[test]
+    fn a_holder_that_keeps_the_pipe_as_its_reader_is_cancelled_cuts_it_short() {
+        let (read, mut write) = std::io::pipe().unwrap();
+        write.write_all(b"early").unwrap();
+        let (reader, cancel) = reading(read, b"early");
+        write.write_all(b"late").unwrap();
+        cancel.cancel();
+        let drained = reader.join().unwrap();
+        assert_eq!(drained.bytes, b"earlylate");
+        assert!(drained.cut, "a reader stopped on a held pipe was not reported cut short");
+        drop(write);
     }
 
     /// A held capture is given up on by the holder's clocks: once it has been quiet, and however
