@@ -168,15 +168,23 @@ jobs:
           integer_loop=$(per_call "$INTEGER" loop)
           middle_loop=$(per_call "$LIGHT746" loop)
           echo "loop alone: current $current_loop, light on 0.746 $middle_loop, integer $integer_loop per iteration"
+          # Luau's own C call, no binder: a pin's share of every row.
+          current_raw=$(( $(per_call "$CURRENT" raw) - current_loop ))
+          integer_raw=$(( $(per_call "$INTEGER" raw) - integer_loop ))
+          middle_raw=$(( $(per_call "$LIGHT746" raw) - middle_loop ))
+          echo "raw lua_CFunction: current $current_raw, light 0.746 $middle_raw, integer 0.746 $integer_raw"
+          echo "Rows are per call; the budget holds what l3i adds to Luau's call (row minus raw) to 2 percent."
           status=0
           for scenario in number vector color bits make_color; do
             current=$(( $(per_call "$CURRENT" "$scenario") - current_loop ))
             integer=$(( $(per_call "$INTEGER" "$scenario") - integer_loop ))
             middle=$(( $(per_call "$LIGHT746" "$scenario") - middle_loop ))
-            limit=$(( integer + (integer * 2 + 99) / 100 ))
+            binder=$(( current - current_raw ))
+            binder_integer=$(( integer - integer_raw ))
+            limit=$(( binder_integer + (binder_integer * 2 + 99) / 100 ))
             verdict=ok
-            if [ "$current" -gt "$limit" ]; then verdict="OVER BUDGET"; status=1; fi
-            printf '%-12s current %6d  light 0.746 %6d  integer 0.746 %6d  limit %6d  %s\n' \
-              "$scenario" "$current" "$middle" "$integer" "$limit" "$verdict"
+            if [ "$binder" -gt "$limit" ]; then verdict="OVER BUDGET"; status=1; fi
+            printf '%-12s total: current %4d  light 0.746 %4d  integer 0.746 %4d | l3i: current %4d  integer %4d  limit %4d  %s\n' \
+              "$scenario" "$current" "$middle" "$integer" "$binder" "$binder_integer" "$limit" "$verdict"
           done
           exit $status

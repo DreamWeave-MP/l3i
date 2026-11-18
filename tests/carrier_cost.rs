@@ -21,8 +21,10 @@ const CALLS: u32 = 200_000;
 const ROUNDS: usize = 5;
 
 /// The scenarios: a name the budgets job uses, a label, and the loop body.
-const SCENARIOS: [(&str, &str, &str); 6] = [
+const SCENARIOS: [(&str, &str, &str); 7] = [
     ("loop", "the loop alone", "s = i"),
+    // Luau's own call, no binder: what a pin moves in the call path, apart from l3i.
+    ("raw", "raw lua_CFunction (f64) -> f64", "s = raw_number(i)"),
     ("number", "bound (f64) -> f64", "s = take_number(i)"),
     ("vector", "bound (Vector3) -> f64", "s = take_vector(v)"),
     ("color", "bound (Packed<Color>) -> f64", "s = take_color(c)"),
@@ -30,8 +32,24 @@ const SCENARIOS: [(&str, &str, &str); 6] = [
     ("make_color", "binder returns a packed Color", "c = make_color()"),
 ];
 
+unsafe extern "C-unwind" fn raw_number(state: *mut l3i::ffi::lua_State) -> std::ffi::c_int {
+    // SAFETY: a plain C function Luau calls with one number.
+    unsafe {
+        l3i::ffi::lua_pushnumber(state, l3i::ffi::lua_tonumber(state, 1));
+        1
+    }
+}
+
 fn runtime() -> Runtime {
     let runtime = Runtime::new().unwrap();
+    runtime
+        .stack()
+        .with_frame(|frame| {
+            // SAFETY: a plain C function with a static debug name.
+            unsafe { frame.push_c_function(raw_number, c"dreamweave.cost.raw".as_ptr()).unwrap() };
+            frame.set_global("raw_number")
+        })
+        .unwrap();
     let global = |name: &str, f: l3i::value::Function| runtime.set_global(name, &f).unwrap();
     global("take_number", runtime.bind_function("dreamweave.cost.number", |x: f64| x).unwrap());
     global("take_vector", runtime.bind_function("dreamweave.cost.vector", |v: Vector3| f64::from(v.x)).unwrap());
