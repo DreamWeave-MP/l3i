@@ -81,7 +81,9 @@ jobs:
           --skip memory::a_finalizer_registers_from_inside_a_lua_call --skip memory::coroutine_finalizers_run_when_asked
           --skip source::hostile_source_is_scanned_in_linear_time
       - name: Record the boxed carrier's cost per bound call
-        run: cargo test --release --target wasm32-unknown-emscripten --test integration carrier_cost -- --ignored --nocapture
+        run: >
+          cargo test --release --target wasm32-unknown-emscripten --test integration --
+          --ignored --nocapture --exact carrier_cost::record_the_bound_call_cost_per_argument_kind
       # Every feature but jit and those emscripten cannot back: process, tcp, dns and tls need
       # processes and sockets, and bytes-crypto's `ring` has no emscripten support. Excluded on
       # top of the default suite's: fs tests of what emscripten's Node filesystem does not have
