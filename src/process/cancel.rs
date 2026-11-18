@@ -82,6 +82,18 @@ impl Cancel {
         }
     }
 
+    /// Whether `pipe` is at its end, asked without reading it: every writer has closed it and
+    /// nothing is left in it. Off Unix nothing can be asked without blocking, so the answer is no.
+    pub(super) fn ended_now(pipe: &impl Pollable) -> bool {
+        #[cfg(unix)]
+        return unix::Pair::ended_now(pipe.descriptor());
+        #[cfg(not(unix))]
+        {
+            let _ = pipe;
+            false
+        }
+    }
+
     /// What the read end `pipe` says without waiting: whether it has bytes to read, and whether
     /// every writer of it has closed it. `None` when the pipe could not be asked.
     #[cfg(unix)]
@@ -205,6 +217,18 @@ mod unix {
             // SAFETY: `fds` is a live array of one pollfd, poll only writes its revents, and a zero
             // timeout never waits.
             unsafe { libc::poll(fds.as_mut_ptr(), 1, 0) > 0 && fds[0].revents != 0 }
+        }
+
+        /// Whether `fd`, a pipe's read end, is at its end: every writer gone and nothing left in it.
+        /// The writers are asked first, so no byte can arrive after the count says none waits.
+        pub(super) fn ended_now(fd: RawFd) -> bool {
+            if !Self::state_now(fd).is_some_and(|state| state.hung_up) {
+                return false;
+            }
+            let mut waiting: libc::c_int = 0;
+            // SAFETY: FIONREAD on a pipe's read end writes one int, the bytes it holds, to
+            // `waiting`, a live local; on a descriptor it does not take it fails and writes nothing.
+            unsafe { libc::ioctl(fd, libc::FIONREAD, &raw mut waiting) == 0 && waiting == 0 }
         }
 
         /// Whether `fd`, a pipe's read end, has bytes waiting, and whether its writers are gone.

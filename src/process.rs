@@ -956,44 +956,31 @@ fn drain<P: Read + Pollable + Send + 'static>(
         let mut cut = false;
         let mut chunk = [0_u8; 8192];
         let mut total = 0_u64;
+        // Keeps what was read, or raises `exceeded` past the ceiling and says to stop.
+        let mut keep = |read: &[u8]| {
+            total = total.saturating_add(read.len() as u64);
+            if ceiling.is_some_and(|ceiling| total > ceiling) {
+                exceeded.store(true, Ordering::SeqCst);
+                return false;
+            }
+            bytes.extend_from_slice(read);
+            true
+        };
         loop {
             match cancel.read(&mut pipe, &mut chunk) {
                 // The end of the stream.
                 Ok(Some(0)) => break,
                 // The end of the call. What is already in the pipe was written before the reader
-                // was told to stop and is still part of the answer; nothing is waited for. Only
-                // reaching the end here says the pipe was not held after all.
+                // was told to stop and is still part of the answer; nothing is waited for.
                 Ok(None) => {
-                    cut = true;
-                    let mut last = 0_u64;
-                    while last < LAST_READ_BYTES && Cancel::readable_now(&pipe) {
-                        match pipe.read(&mut chunk) {
-                            Ok(0) => {
-                                cut = false;
-                                break;
-                            }
-                            Ok(count) => {
-                                last += count as u64;
-                                total = total.saturating_add(count as u64);
-                                if ceiling.is_some_and(|ceiling| total > ceiling) {
-                                    exceeded.store(true, Ordering::SeqCst);
-                                    break;
-                                }
-                                bytes.extend_from_slice(&chunk[..count]);
-                            }
-                            Err(_) => break,
-                        }
-                    }
+                    cut = last_read(&mut pipe, &mut chunk, LAST_READ_BYTES, &mut keep);
                     break;
                 }
                 Ok(Some(count)) => {
-                    total = total.saturating_add(count as u64);
                     progress.fetch_add(count as u64, Ordering::SeqCst);
-                    if ceiling.is_some_and(|ceiling| total > ceiling) {
-                        exceeded.store(true, Ordering::SeqCst);
+                    if !keep(&chunk[..count]) {
                         break;
                     }
-                    bytes.extend_from_slice(&chunk[..count]);
                 }
                 // A read error ends the capture where it stopped, as wait_with_output would
                 // surface; the exit status still says how the child ended.
@@ -1003,6 +990,34 @@ fn drain<P: Read + Pollable + Send + 'static>(
         Drained { bytes, cut }
     })?;
     Ok(Some(reader))
+}
+
+/// What a cancelled reader still reads: what is already in `pipe`, until a read reaches
+/// `allowance` bytes, so a holder that never stops writing cannot keep it going. Each read goes to `keep`,
+/// which says whether to go on. Answers whether the reader was cut short: anything but the pipe
+/// seen at its end, by a read or, once the reading stops, by asking the pipe. Asked, a holder that
+/// let go with nothing left over is not one that cut the capture short, however the reading
+/// stopped: on the allowance with every byte read, or on an empty pipe the holder closed just after.
+fn last_read<P: Read + Pollable>(
+    pipe: &mut P,
+    chunk: &mut [u8],
+    allowance: u64,
+    keep: &mut impl FnMut(&[u8]) -> bool,
+) -> bool {
+    let mut last = 0_u64;
+    while last < allowance && Cancel::readable_now(pipe) {
+        match pipe.read(chunk) {
+            Ok(0) => return false,
+            Ok(count) => {
+                last += count as u64;
+                if !keep(&chunk[..count]) {
+                    return true;
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    !Cancel::ended_now(pipe)
 }
 
 /// Waits for `child` and collects what it was asked to capture, as `wait_with_output` does, but
@@ -1636,6 +1651,46 @@ mod capture_tests {
         assert_eq!(drained.bytes, b"earlylate");
         assert!(drained.cut, "a reader stopped on a held pipe was not reported cut short");
         drop(write);
+    }
+
+    /// A cancelled reader's last read of `pipe`, five bytes a read and five in all: what it kept,
+    /// and whether it was cut short.
+    fn last_five(pipe: &mut std::io::PipeReader) -> (Vec<u8>, bool) {
+        let mut kept = Vec::new();
+        let cut = last_read(pipe, &mut [0_u8; 5], 5, &mut |read: &[u8]| {
+            kept.extend_from_slice(read);
+            true
+        });
+        (kept, cut)
+    }
+
+    /// The last read used its whole allowance on the last bytes there were, and the holder had let
+    /// go: no read saw the end, but the pipe is at it, so nothing was cut.
+    #[test]
+    fn a_last_read_that_ends_on_its_allowance_at_the_pipes_end_is_whole() {
+        let (mut read, mut write) = std::io::pipe().unwrap();
+        write.write_all(b"early").unwrap();
+        drop(write);
+        assert_eq!(last_five(&mut read), (b"early".to_vec(), false));
+    }
+
+    /// The allowance runs out with bytes still in a pipe nobody holds: those bytes are cut.
+    #[test]
+    fn a_last_read_that_leaves_bytes_behind_is_cut_short() {
+        let (mut read, mut write) = std::io::pipe().unwrap();
+        write.write_all(b"earlylate").unwrap();
+        drop(write);
+        assert_eq!(last_five(&mut read), (b"early".to_vec(), true));
+    }
+
+    /// The pipe is empty, but a holder still has it: it can write more, so the reader is cut short.
+    /// Once that holder lets go, the same empty pipe is its end.
+    #[test]
+    fn a_last_read_of_an_empty_pipe_is_cut_short_only_while_it_is_held() {
+        let (mut read, write) = std::io::pipe().unwrap();
+        assert_eq!(last_five(&mut read), (Vec::new(), true));
+        drop(write);
+        assert_eq!(last_five(&mut read), (Vec::new(), false));
     }
 
     /// A held capture is given up on by the holder's clocks: once it has been quiet, and however
