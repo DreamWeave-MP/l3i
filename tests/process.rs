@@ -975,14 +975,26 @@ fn the_execution_time_limit_reaches_what_an_unbounded_run_started() {
 /// What a process the child started writes soon after the child exits is still read: the reading
 /// stops when the pipe has gone quiet, not when the child exits. A run that read to the end of its
 /// captures does not say it was held.
+///
+/// Whether `late` comes within the quiet window is up to the scheduler: on a loaded machine the
+/// subshell can take longer than that to start, and the run is then rightly held. So every attempt
+/// must be truthful (whole when not held, the child's own line either way), and one of a few must
+/// read `late` (#37).
 #[cfg(unix)]
 #[test]
 fn a_run_reads_what_arrives_soon_after_its_child_exits() {
     let runtime = runtime_granting(&[SPAWN_CAPABILITY], Limits::default());
     runtime
         .exec(
-            r"local result = assert(process.run('sh', { '-c', '(sleep 0.1; echo late) & echo early' }, { stdout = 'capture' }))
-              assert(result.stdout == 'early\nlate\n' and result.held == nil, result.stdout)",
+            r"for _ = 1, 5 do
+                  local result = assert(process.run('sh', { '-c', '(sleep 0.1; echo late) & echo early' }, { stdout = 'capture' }))
+                  if result.held == nil then
+                      assert(result.stdout == 'early\nlate\n', result.stdout)
+                      return
+                  end
+                  assert(result.held == true and string.sub(result.stdout, 1, 6) == 'early\n', result.stdout)
+              end
+              error('held on every attempt')",
         )
         .unwrap();
 }
