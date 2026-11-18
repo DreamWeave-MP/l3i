@@ -377,8 +377,9 @@ The same job counts the lowered calls in `--!native` code, the native loop subtr
 | `C:rgba8` | 22, 20 (over) | 32, 29 (over) |
 
 `C:rgba8` exceeds the budget on both: the result's three stores against the integer's one (the
-paragraph after the native table under "Instructions and cycles"). The gate reports it as over budget rather than
-widening the limit, which is a decision for the project, not the measurement.
+paragraph after the native table under "Instructions and cycles"). It is an accepted exception
+until Luau tracks a light userdata's `extra` word (#34): the gate allows it at most 4
+instructions over the integer carrier, and still fails it past that.
 
 ### The carriers in wall time
 

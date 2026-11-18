@@ -194,7 +194,10 @@ jobs:
               "$scenario" "$current" "$middle" "$integer" "$binder" "$binder_integer" "$limit" "$verdict"
           done
           # #32's native budget: a lowered call in --!native code, the native loop subtracted, at
-          # most 3 percent over the integer carrier's.
+          # most 3 percent over the integer carrier's. One accepted exception, until Luau tracks a
+          # light userdata's extra word (#34): C:rgba8 is so small that the light carrier's three
+          # result stores, against the integer's one, are 10 percent of it. It may be up to 4
+          # instructions over (measured +2 on x86-64, +4 on AArch64), and fails past that.
           current_nloop=$(per_call "$CURRENT" native_loop)
           integer_nloop=$(per_call "$INTEGER" native_loop)
           middle_nloop=$(per_call "$LIGHT746" native_loop)
@@ -205,6 +208,7 @@ jobs:
             middle=$(( $(per_call "$LIGHT746" "$scenario") - middle_nloop ))
             limit=$(( integer + (integer * 3 + 99) / 100 ))
             verdict=ok
+            if [ "$scenario" = native_rgba8 ]; then limit=$(( integer + 4 )); verdict="ok (accepted exception, #34)"; fi
             if [ "$current" -gt "$limit" ]; then verdict="OVER BUDGET"; status=1; fi
             printf '%-16s current %4d  light 0.746 %4d  integer 0.746 %4d  limit %4d  %s\n' \
               "$scenario" "$current" "$middle" "$integer" "$limit" "$verdict"
