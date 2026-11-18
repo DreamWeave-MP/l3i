@@ -17,7 +17,7 @@ use std::ffi::c_int;
 use l3i::Result;
 use l3i::Runtime;
 use l3i::bind::Call;
-use l3i::convert::{Integer, Vector3};
+use l3i::convert::{Bits64, Vector3};
 use l3i::direct::field::{DirectField, FieldValue};
 use l3i::direct::{self, Atom, DirectAccess, DirectMetamethods};
 use l3i::extension::{Extension, ExtensionDescriptor, RuntimePlan, RuntimePolicy, TagPolicy};
@@ -59,12 +59,12 @@ struct Nums(Vec<i64>);
 
 impl l3i::sequence::SequenceSource for Nums {
     const NAME: &'static str = "dream.bench.Nums";
-    type Item = Integer;
+    type Item = i64;
     fn len(&self) -> usize {
         self.0.len()
     }
     fn get(&self, index: usize) -> Option<Self::Item> {
-        self.0.get(index).map(|n| Integer(*n))
+        self.0.get(index).copied()
     }
 }
 
@@ -82,7 +82,7 @@ impl Extension for PlannedExtension {
         planned.method("addTwo", |p: &Planned, a: f64, b: f64| p.value.get() + a + b).untyped();
         planned.getter("value", |p: &Planned| p.value.get()).untyped();
         planned.field::<PlannedValue>("field").untyped();
-        d.sequence::<Nums>("dream.bench.Nums").tag(TagPolicy::Preferred).item_type("integer");
+        d.sequence::<Nums>("dream.bench.Nums").tag(TagPolicy::Preferred).item_type("number");
         d.module("@dream/bench")
             .function("new", |v: f64| Owned(Planned { value: Cell::new(v) }))
             .untyped()
@@ -99,7 +99,7 @@ impl Extension for PlannedExtension {
             .untyped()
             .function("packed", |c: Packed<Color>| f64::from(c.0.r))
             .untyped()
-            .function("integer", |i: Integer| i.0 as f64)
+            .function("bits", |b: Bits64| (b.0 & 0xFFFF) as f64)
             .untyped()
             .function("four", |a: Vector3, b: Vector3, c: Packed<Color>, d: Packed<ClipRect>| {
                 f64::from(a.x + b.y) + f64::from(c.0.r) + f64::from(d.0.max_x)
@@ -170,8 +170,9 @@ fn runtime() -> Runtime {
             frame.set_global("raw_add")
         })
         .unwrap();
-    runtime.set_global("color", &Integer(Color::WHITE.pack().bits().unwrap())).unwrap();
-    runtime.set_global("clip", &Integer(ClipRect::ALL.pack().bits().unwrap())).unwrap();
+    // Through the packed carrier, whichever it is.
+    runtime.set_global("color", &Color::WHITE.pack()).unwrap();
+    runtime.set_global("clip", &ClipRect::ALL.pack()).unwrap();
     runtime.exec("planned = bench.new(7) hoisted = vector.create(1, 2, 3) seq = bench.nums(16)").unwrap();
     runtime
 }
@@ -212,7 +213,7 @@ pub fn main() {
         ("bound () -> f64", "s = bench.zero()"),
         ("bound (f64, f64) -> f64", "s = bench.two(i, 1)"),
         ("bound (Vector3) -> f64", "s = bench.vec(hoisted)"),
-        ("bound (Integer) -> f64", "s = bench.integer(color)"),
+        ("bound (Bits64) -> f64", "s = bench.bits(color)"),
         ("bound (Packed<Color>) -> f64", "s = bench.packed(color)"),
         ("bound (V, V, Packed, Packed) -> f64", "s = bench.four(hoisted, hoisted, color, clip)"),
         ("typed direct namecall (VM floor)", "s = direct:get()"),
@@ -332,9 +333,15 @@ fn native(counters: &[Option<Counter>], rounds: usize, only: Option<&str>) {
         ),
         ("rotate: lowered Q:fromXYZW + Q:rotate", "local q = Q:fromXYZW(x, 0.2, 0.3, 0.9) s = Q:rotate(q, p)"),
         ("rotate: lowered Q:rotate of a packed rotation", "s = Q:rotate(r, p)"),
+        // The two shapes the packed carrier budgets tell apart: a result that lands in its local,
+        // and one that is reassigned to a value the next call reads (a store-forwarding stall on
+        // the light userdata carrier).
+        ("mul: lowered Q:mul into a local", "s = Q:mul(r, r)"),
+        ("mul: lowered Q:mul reassigned, acc = Q:mul(acc, r)", "acc = Q:mul(acc, r)"),
         ("color: four numbers (plain Luau)", "s, t, u, v = i % 256, 40, 40, 255"),
         ("color: binder raster.rgba8", "s = raster.rgba8(i % 256, 40, 40, 255)"),
         ("color: lowered C:rgba8", "s = C:rgba8(i % 256, 40, 40, 255)"),
+        ("color: lowered C:rgba8 into a fresh local, C:red", "local c = C:rgba8(i % 256, 40, 40, 255) s = C:red(c)"),
     ];
     let functions: Vec<(&str, Function)> = scenarios
         .iter()
@@ -347,7 +354,7 @@ fn native(counters: &[Option<Counter>], rounds: usize, only: Option<&str>) {
                     &format!(
                         "--!native\nlocal Q: dream_quat_Math = quat.math()\nlocal C: dream_raster_Math = raster.math()\n\
                          local r = quat.axisAngle(vector.create(0, 0, 1), 0.3)\nlocal p = vector.create(1, 2, 3)\nlocal sink\n\
-                         return function() local s, t, u, v = 0, 0, 0, 0 for i = 1, {CALLS} do local x = 0.1 + (i % 64) * 0.01 {body} end sink = {{ s, t, u, v }} return 0 end"
+                         return function() local s, t, u, v = 0, 0, 0, 0 local acc = r for i = 1, {CALLS} do local x = 0.1 + (i % 64) * 0.01 {body} end sink = {{ s, t, u, v, acc }} return 0 end"
                     ),
                 )
                 .unwrap();

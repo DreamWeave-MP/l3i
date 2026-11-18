@@ -202,6 +202,15 @@ impl RuntimePlanBuilder {
             None => crate::udp::UdpExtension::new(),
         };
         extensions.insert(0, Box::new(bridge));
+        // So is `@dream/bits64`: the bridge takes and returns `Bits64` values (client and protocol
+        // ids), and a script needs the module to make and read one.
+        if extensions.iter().any(|extension| extension.id() == crate::bits64::EXTENSION_ID) {
+            return Err(Error::logic(format!(
+                "extension id '{}' is reserved for l3i's Bits64 module, which every plan carries; do not add one",
+                crate::bits64::EXTENSION_ID
+            )));
+        }
+        extensions.insert(0, Box::new(crate::bits64::Bits64Extension));
 
         // 1. Describe.
         let mut descriptors = Vec::with_capacity(extensions.len());
@@ -239,6 +248,8 @@ impl RuntimePlanBuilder {
             }
         }
         check_type_aliases(&descriptors, &classes)?;
+        let packed_kinds = resolve_packed_kinds(&descriptors, &order)?;
+        check_packed_names(&packed_kinds, &classes, &descriptors)?;
 
         // 5. Tags: pinned, then Required, then Preferred while tags remain.
         assign_tags(&mut userdata, &pinned_tags, policy.first_tag)?;
@@ -250,7 +261,6 @@ impl RuntimePlanBuilder {
         let categories = resolve_categories(&descriptors)?;
         check_services_and_capabilities(&descriptors, &services, &policy)?;
         let roots = debug_roots(&policy, &descriptors, &userdata);
-        let packed_kinds = resolve_packed_kinds(&descriptors, &order)?;
 
         Ok(Rc::new(RuntimePlan {
             policy,
@@ -266,6 +276,38 @@ impl RuntimePlanBuilder {
             packed_kinds,
         }))
     }
+}
+
+/// The compiler erases packed kind names to `any` before bytecode, so a userdata class or a type
+/// alias with a packed kind's name would lose its type in compiled code: refused here, where the
+/// collision is visible, rather than run slower or untyped later.
+fn check_packed_names(
+    packed: &[crate::packed::PackedKind],
+    classes: &HashMap<String, &str>,
+    descriptors: &[ExtensionDescriptor],
+) -> Result<()> {
+    let names = crate::packed::builtin_kinds()
+        .iter()
+        .chain(packed)
+        .map(|kind| kind.name)
+        .chain(crate::packed::WIDE_NAMES)
+        .collect::<Vec<_>>();
+    for name in &names {
+        if let Some(owner) = classes.get(*name) {
+            return Err(Error::logic(format!(
+                "userdata class {name} (from '{owner}') has the name of a packed scalar kind, which compiled code erases to any"
+            )));
+        }
+        for descriptor in descriptors {
+            if descriptor.type_aliases().iter().any(|(alias, _)| alias == name) {
+                return Err(Error::logic(format!(
+                    "type alias {name} (from '{}') has the name of a packed scalar kind, which compiled code erases to any",
+                    descriptor.id()
+                )));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Every declared type alias: a Luau identifier, declared once across the plan, and not a
@@ -356,7 +398,10 @@ fn check_signatures(userdata: &[ResolvedUserdata], modules: &[ResolvedModule]) -
     }
     for module in modules {
         for member in &module.members {
-            let needs = matches!(member.kind, ModuleMemberKind::Function | ModuleMemberKind::Installed);
+            let needs = matches!(
+                member.kind,
+                ModuleMemberKind::Function | ModuleMemberKind::Value | ModuleMemberKind::Installed
+            );
             if needs && member.signature.is_none() && !member.untyped {
                 return Err(Error::logic(format!(
                     "member '{}' of module '{}' (from '{}') has no signature; give it one or declare it untyped()",

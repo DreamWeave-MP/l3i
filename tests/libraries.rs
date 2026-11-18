@@ -20,7 +20,7 @@ fn libraries_open_one_at_a_time() {
     runtime.exec("assert(math.sqrt(16) == 4) assert(string == nil) assert(type(pcall) == 'function')").unwrap();
     runtime.open_library(Library::String).unwrap();
     runtime.exec("assert(string.rep('a', 3) == 'aaa')").unwrap();
-    assert_eq!(Library::STANDARD.len(), 12);
+    assert_eq!(Library::STANDARD.len(), 11);
     assert_eq!(Library::Vector.global_name(), "vector");
 }
 

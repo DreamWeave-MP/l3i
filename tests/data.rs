@@ -1367,3 +1367,19 @@ fn lowered_f32_receivers_agree_with_the_module_functions_on_adversarial_values()
     run_native(&runtime, &chunk);
     assert!(l3i::data::lowering::lowered_sites() > before, "the receiver calls were lowered");
 }
+
+/// A selection's bitset is Rust's memory, outside the VM's limit: a length nobody can allocate is
+/// a Lua error, not an aborted host (it once was, through Vec's infallible allocation). On a
+/// 32-bit target the length also saturates instead of being reported as negative.
+#[test]
+fn a_selection_too_large_to_allocate_raises() {
+    exec(
+        r"
+        local ok, message = pcall(data.selection, 2 ^ 62)
+        assert(not ok and string.find(message, 'no memory for a selection', 1, true), tostring(message))
+        ok, message = pcall(data.selection, -1)
+        assert(not ok and string.find(message, 'negative length', 1, true), tostring(message))
+        assert(data.selection(64):len() == 64)
+    ",
+    );
+}

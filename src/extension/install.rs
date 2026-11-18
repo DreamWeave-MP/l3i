@@ -31,6 +31,8 @@ pub(crate) type SharedFieldRegistrar = Rc<dyn Fn(&Runtime) -> Result<()>>;
 pub(crate) type Registrar = fn(&Runtime, &ResolvedUserdata, &[SharedInstaller]) -> Result<()>;
 /// Binds a declared module function in one runtime: `(runtime, debug roots, debug name)`.
 pub(crate) type SharedModuleFunction = Rc<dyn Fn(&Runtime, &[Box<str>], &str) -> Result<Function>>;
+/// Sets a declared module value in one runtime: `(runtime, module table, member name)`.
+pub(crate) type SharedModuleValue = Rc<dyn Fn(&Runtime, &Table, &str) -> Result<()>>;
 
 /// What the compiler may know about a module member exposed as a global library.
 #[derive(Clone, Debug)]
@@ -58,7 +60,6 @@ impl LibraryMembers for ModuleMembers {
                 CompileConstant::Nil => bytecode::NIL,
                 CompileConstant::Boolean(_) => bytecode::BOOLEAN,
                 CompileConstant::Number(_) => bytecode::NUMBER,
-                CompileConstant::Integer(_) => bytecode::INTEGER,
                 CompileConstant::Vector(..) => bytecode::VECTOR,
                 CompileConstant::String(_) => bytecode::STRING,
             },
@@ -83,7 +84,6 @@ mod bytecode {
     pub const STRING: u8 = 3;
     pub const FUNCTION: u8 = 5;
     pub const VECTOR: u8 = 8;
-    pub const INTEGER: u8 = 10;
 }
 
 /// The install-phase view of the runtime one extension receives.
@@ -231,7 +231,8 @@ impl Push for FieldValue {
             FieldValue::Nil => ().push_into(scope),
             FieldValue::Boolean(value) => value.push_into(scope),
             FieldValue::Number(value) => value.push_into(scope),
-            FieldValue::Integer(value) => crate::convert::Integer(*value).push_into(scope),
+            #[cfg(not(l3i_carrier = "boxed"))]
+            FieldValue::Bits64(value) => crate::convert::Bits64(*value).push_into(scope),
             FieldValue::Vector(value) => value.push_into(scope),
         }
     }
@@ -313,6 +314,12 @@ impl<'c> ModuleInstaller<'c> {
         };
         match member.kind {
             ModuleMemberKind::Installed => {}
+            ModuleMemberKind::Value => {
+                return Err(Error::logic(format!(
+                    "module '{}' member '{name}' is a declared value; install cannot replace it",
+                    self.resolved.path
+                )));
+            }
             ModuleMemberKind::Function => {
                 return Err(Error::logic(format!(
                     "module '{}' member '{name}' is bound from its declaration; install cannot replace it",
@@ -374,7 +381,6 @@ impl<'c> ModuleInstaller<'c> {
             CompileConstant::Nil => self.table.set(&stack, name, &())?,
             CompileConstant::Boolean(b) => self.table.set(&stack, name, b)?,
             CompileConstant::Number(n) => self.table.set(&stack, name, n)?,
-            CompileConstant::Integer(i) => self.table.set(&stack, name, &crate::convert::Integer(*i))?,
             CompileConstant::Vector(x, y, z) => {
                 self.table.set(&stack, name, &crate::convert::Vector3 { x: *x, y: *y, z: *z })?;
             }
@@ -404,6 +410,11 @@ impl<'c> ModuleInstaller<'c> {
                     module.table.set(&runtime.stack(), &member.name, &function)?;
                 }
                 ModuleMemberKind::Constant(value) => module.set_constant(&member.name, value)?,
+                ModuleMemberKind::Value => {
+                    let set = member.value.as_ref().expect("a declared value carries its setter");
+                    module.record(&member.name, ModuleMemberInfo::Unknown)?;
+                    set(runtime, &module.table, &member.name)?;
+                }
                 ModuleMemberKind::Installed => {}
             }
         }
@@ -538,7 +549,7 @@ fn build_runtime(plan: &Rc<RuntimePlan>) -> Result<Runtime> {
     }
     let runtime = builder.build()?;
     for kind in &plan.packed_kinds {
-        runtime.shared().register_packed_kind(*kind)?;
+        runtime.adopt_packed_kind(*kind)?;
     }
     #[cfg(feature = "jit")]
     {
@@ -635,6 +646,10 @@ fn compile_options(plan: &RuntimePlan, members: &Rc<ModuleMembers>) -> CompileOp
     options.userdata_types = compiler_typed(plan)
         .iter()
         .map(|u| CString::new(super::typedefs::class_name(&u.key)).expect("class names have no NUL"))
+        .collect();
+    options.packed_types = super::typedefs::packed_type_names(plan)
+        .into_iter()
+        .map(|name| CString::new(name).expect("kind names have no NUL"))
         .collect();
     #[cfg(feature = "jit")]
     if plan.policy.native_code.is_some() {

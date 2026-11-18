@@ -9,6 +9,7 @@
 #include "lstate.h"
 #include "ltable.h"
 
+#include "Luau/Bytecode.h"
 #include "Luau/Common.h"
 
 #include <stdio.h>
@@ -125,10 +126,10 @@ void luau_visitfflags(void* context, void (*visit)(void* context, const char* na
 
 extern "C" {
 
-// One call for the binder's scalar readers: the slot's type tag, plus the payload when it is a
-// number or an integer. Replaces a lua_type + lua_tonumberx/lua_tointeger64 pair, and never
-// coerces strings (lua_tonumberx would). Returns LUA_TNONE for a nonexistent slot.
-int l3i_read_scalar(lua_State* L, int idx, double* number, int64_t* integer)
+// One call for the binder's number readers: the slot's type tag, plus the payload when it is a
+// number. Replaces a lua_type + lua_tonumberx pair, and never coerces strings (lua_tonumberx
+// would). Returns LUA_TNONE for a nonexistent slot.
+int l3i_read_scalar(lua_State* L, int idx, double* number)
 {
     const TValue* o = luaA_toobject(L, idx);
     if (o == nullptr)
@@ -137,11 +138,6 @@ int l3i_read_scalar(lua_State* L, int idx, double* number, int64_t* integer)
     {
         *number = nvalue(o);
         return LUA_TNUMBER;
-    }
-    if (ttisinteger(o))
-    {
-        *integer = lvalue(o);
-        return LUA_TINTEGER;
     }
     return ttype(o);
 }
@@ -194,8 +190,12 @@ static_assert(LUA_VECTOR_SIZE == 3, "l3i mirrors three-component vectors");
 static_assert(offsetof(Udata, tag) == 3, "l3i mirrors the userdata tag at offset 3");
 // `native_code::USERDATA_PAYLOAD_OFFSET` publishes this one, and a test holds them together.
 static_assert(offsetof(Udata, data) == 16, "l3i mirrors the userdata payload at offset 16");
-static_assert(offsetof(TString, len) == 20, "l3i mirrors the string length at offset 20");
-static_assert(offsetof(TString, data) == 24, "l3i mirrors the string bytes at offset 24");
+// TString holds a `next` pointer before its hash and length, so they move with the pointer
+// width: 20 and 24 on 64-bit targets, 16 and 20 on 32-bit ones (wasm32). src/convert/raw.rs
+// reads them with the same rule.
+static_assert(offsetof(TString, len) == (sizeof(void*) == 8 ? 20 : 16), "l3i mirrors the string length");
+static_assert(offsetof(TString, data) == (sizeof(void*) == 8 ? 24 : 20), "l3i mirrors the string bytes");
+static_assert(sizeof(void*) == 8 || sizeof(void*) == 4, "l3i mirrors 32- and 64-bit layouts only");
 static_assert(offsetof(Buffer, len) == 4, "l3i mirrors the buffer length at offset 4");
 static_assert(offsetof(Buffer, data) == 8, "l3i mirrors the buffer bytes at offset 8");
 
@@ -210,6 +210,55 @@ const TValue* l3i_call_base(lua_State* L)
 const TValue* l3i_stack_slot(lua_State* L, int idx)
 {
     return luaA_toobject(L, idx);
+}
+
+// The light userdata tags (build.rs defines the limit; src/raw/ffi.rs mirrors it and splits it
+// into the host's 0..128 and the packed scalars' 128..160).
+static_assert(LUA_LUTAG_LIMIT == 160, "l3i mirrors 160 light userdata tags");
+
+// src/bytecode_scan.rs walks chunks with these numbers before luau_load reads them.
+static_assert(LBC_VERSION_MIN == 3 && LBC_VERSION_MAX == 14 && LBC_VERSION_CLASSES == 100, "bytecode versions moved");
+static_assert(LBC_TYPE_VERSION_MIN == 1 && LBC_TYPE_VERSION_MAX == 3, "bytecode type versions moved");
+static_assert(LBC_CONSTANT_NIL == 0 && LBC_CONSTANT_BOOLEAN == 1 && LBC_CONSTANT_NUMBER == 2 && LBC_CONSTANT_STRING == 3 &&
+                  LBC_CONSTANT_IMPORT == 4 && LBC_CONSTANT_TABLE == 5 && LBC_CONSTANT_CLOSURE == 6 && LBC_CONSTANT_VECTOR == 7 &&
+                  LBC_CONSTANT_TABLE_WITH_CONSTANTS == 8 && LBC_CONSTANT_INTEGER_DEPRECATED == 9 && LBC_CONSTANT_CLASS_SHAPE == 10 &&
+                  LBC_CONSTANT_VECTORD == 11 && LBC_CONSTANT__COUNT == 12,
+    "bytecode constant kinds moved; update src/bytecode_scan.rs");
+static_assert(LFT_CALLTARGET == 0 && LFT_CONSTRUCT == 1 && LPF_INLINABLE == (1 << 3), "bytecode feedback and flags moved");
+// Every type tag src/raw/ffi.rs declares: Luau 0.747 removed LUA_TINTEGER and moved every tag after
+// LUA_TNUMBER down by one, and a stale tag would make a raw read match the wrong type.
+static_assert(LUA_TNONE == -1 && LUA_TNIL == 0 && LUA_TBOOLEAN == 1, "l3i mirrors the type tags");
+static_assert(LUA_TLIGHTUSERDATA == 2 && LUA_TNUMBER == 3 && LUA_TVECTOR == 4, "l3i mirrors the type tags");
+static_assert(LUA_TSTRING == 5 && LUA_TTABLE == 6 && LUA_TFUNCTION == 7 && LUA_TUSERDATA == 8, "l3i mirrors the type tags");
+static_assert(LUA_TTHREAD == 9 && LUA_TBUFFER == 10 && LUA_TCLASS == 11 && LUA_TOBJECT == 12, "l3i mirrors the type tags");
+static_assert(offsetof(Udata, len) == 4, "l3i mirrors the userdata length at offset 4");
+static_assert(offsetof(Udata, metatable) == 8, "l3i mirrors the userdata metatable at offset 8");
+
+// Pushes a packed scalar on the light userdata carrier (src/packed/carrier.rs): the 64 bits in the
+// value word, `tag` in `extra`, the light userdata type tag. The bits are copied, never converted
+// to a pointer: most of them are not valid pointers (kind 1 alone is non-canonical on x86-64), and
+// the VM only copies the word and compares it. Only the 64-bit carrier calls this.
+void l3i_push_light_bits(lua_State* L, uint64_t bits, int tag)
+{
+    static_assert(sizeof(L->top->value) >= sizeof(bits), "the value word holds 64 bits");
+    api_check(L, unsigned(tag) < LUA_LUTAG_LIMIT);
+    TValue* o = L->top;
+    memcpy(&o->value, &bits, sizeof(bits));
+    o->extra[0] = tag;
+    o->tt = LUA_TLIGHTUSERDATA;
+    // lapi.cpp's api_incr_top, which is private to that file.
+    api_check(L, L->top < L->ci->top);
+    L->top++;
+}
+
+// A direct field getter's result as a light userdata packed scalar (src/direct/field.rs): the
+// same three fields as l3i_push_light_bits, written where Luau's own direct field setters write.
+void l3i_directfield_setlightbits(void* result, uint64_t bits, int tag)
+{
+    TValue* o = static_cast<TValue*>(result);
+    memcpy(&o->value, &bits, sizeof(bits));
+    o->extra[0] = tag;
+    o->tt = LUA_TLIGHTUSERDATA;
 }
 
 // One call for the generated and planned dispatchers: the argument count, the thread's data

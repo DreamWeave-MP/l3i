@@ -143,7 +143,9 @@ public:
         }
         else if (auto* stat = node->as<Luau::AstStatClass>())
         {
-            remapLocal(stat->name);
+            // A `class a.b` name is an expression, remapped where the walk visits it.
+            if (stat->declModifier != Luau::AstStatClass::DeclModifier::None)
+                remapLocal(stat->localName);
             for (size_t i = 0; i < stat->members.size; ++i)
             {
                 Luau::visit(

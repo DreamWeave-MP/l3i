@@ -1,6 +1,8 @@
 //! The plan's generated `.d.luau` is checked by Luau's own frontend, and strict scripts that
 //! `require` every built-in module by its canonical path type check against the plan's stubs:
 //! the declared API and the runtime agree, with no compatibility global in sight.
+// The strict-mode scripts and the plan they check against serve a test that needs `jit`.
+#![cfg_attr(not(feature = "jit"), allow(dead_code))]
 
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -102,11 +104,11 @@ const BYTES_SCRIPT: (&str, &str) = (
      local piece: buffer = bytes.slice(buf, 0, 4)\n\
      local text: string, after: number = bytes.readCString('abc', 0)\n\
      local next: number = bytes.writeCString(buf, 0, text, 8)\n\
-     local value: integer, after2: number = bytes.readVarint(buf, 0)\n\
+     local value: number, after2: number = bytes.readVarint(buf, 0)\n\
      local written: number = bytes.writeVarint(buf, 8, value)\n\
      local n: number = bytes.readu32be(buf, 0) + bytes.readf16(buf, 4) + bytes.readi24be('abc', 0)\n\
      bytes.writef64be(buf, 8, n)\n\
-     local big: integer = bytes.readi64be(buf, 8)\n\
+     local big: Bits64 = bytes.readi64be(buf, 8)\n\
      local B = bytes.math()\n\
      local m: number = B:readu16be(buf, 0) + B:readf32be(buf, 4)\n\
      B:writei64be(buf, 16, big)\n\
@@ -195,12 +197,12 @@ const INTL_SCRIPT: (&str, &str) = (
      local rules = intl.pluralRules(locale, 'ordinal')\n\
      local category: dream_intl_PluralCategory = rules:category(21)\n\
      local exact: string = rules:category('1.00')\n\
-     local whole: string = intl.pluralRules('pl'):category(5i)\n\
+     local whole: string = intl.pluralRules('pl'):category(5)\n\
      local categories: { dream_intl_PluralCategory } = rules:categories()\n\
      local kind: dream_intl_PluralType = rules:type()\n\
      local rulesLocale: string = rules:locale()\n\
      local formatter = intl.decimalFormatter('fr', { grouping = 'min2', minFractionDigits = 2, maxFractionDigits = 2 })\n\
-     local text: string = formatter:format('1234567.895') .. formatter:format(2) .. formatter:format(3i)\n\
+     local text: string = formatter:format('1234567.895') .. formatter:format(2) .. formatter:format(3)\n\
      local options = formatter:resolvedOptions()\n\
      local grouping: dream_intl_Grouping = options.grouping\n\
      local digits: number = options.minFractionDigits + options.maxFractionDigits\n\
@@ -465,32 +467,32 @@ const SCRIPTS: &[(&str, &str)] = &[
         "quat_script",
         "--!strict\n\
          local quat = require('@dream/quat')\n\
-         local q: integer = quat.axisAngle(vector.create(0, 0, 1), 1.0)\n\
+         local q: Quaternion = quat.axisAngle(vector.create(0, 0, 1), 1.0)\n\
          local r: vector = quat.rotate(q, vector.create(1, 0, 0))\n\
-         local m: integer = quat.mul(q, quat.IDENTITY)\n\
-         local s: integer = quat.slerp(q, quat.inverse(m), 0.5)\n\
+         local m: Quaternion = quat.mul(q, quat.IDENTITY)\n\
+         local s: Quaternion = quat.slerp(q, quat.inverse(m), 0.5)\n\
          local x, y, z, w = quat.toXYZW(s)\n\
          local angle: number = quat.angleTo(q, m) + x + y + z + w\n\
-         local k: integer = quat.key(q, 3)\n\
-         local back: integer = quat.keyRotation(k)\n\
+         local k: AnimationKey = quat.key(q, 3)\n\
+         local back: Quaternion = quat.keyRotation(k)\n\
          local flags: number = quat.keyFlags(k)\n\
          local math = quat.math()\n\
-         local lowered: integer = math:mul(back, math:slerp(q, m, 0.25))\n\
+         local lowered: Quaternion = math:mul(back, math:slerp(q, m, 0.25))\n\
          print(r, angle, flags, lowered)\n",
     ),
     (
         "raster_script",
         "--!strict\n\
          local raster = require('@dream/raster')\n\
-         local c: integer = raster.rgba8(1, 2, 3, 4)\n\
-         local d: integer = raster.lerp(c, raster.WHITE, 0.5)\n\
+         local c: Color = raster.rgba8(1, 2, 3, 4)\n\
+         local d: Color = raster.lerp(c, raster.WHITE, 0.5)\n\
          local r, g, b, a = raster.channels(d)\n\
          local sum: number = r + g + b + a + raster.packed(c)\n\
          local m = raster.math()\n\
-         local e: integer = m:add(m:mul(c, d), m:scale(raster.BLACK, 0.5))\n\
-         local wide: integer = raster.widen(e)\n\
-         local narrow: integer = m:narrow(m:lerp16(wide, raster.WHITE16, 0.5))\n\
-         local clip: integer = raster.clip(0, 0, 10, 10)\n\
+         local e: Color = m:add(m:mul(c, d), m:scale(raster.BLACK, 0.5))\n\
+         local wide: Color16 = raster.widen(e)\n\
+         local narrow: Color = m:narrow(m:lerp16(wide, raster.WHITE16, 0.5))\n\
+         local clip: ClipRect = raster.clip(0, 0, 10, 10)\n\
          local minX, minY, maxX, maxY = raster.clipBounds(raster.CLIP_ALL)\n\
          print(sum, narrow, clip, minX + minY + maxX + maxY)\n",
     ),
@@ -519,7 +521,7 @@ const SCRIPTS: &[(&str, &str)] = &[
         "--!strict\n\
          local udp = require('@dream/udp')\n\
          local schema = udp.schema({ version = 1, channels = { { name = 'state', delivery = 'unreliable' } }, events = { { name = 'ping', channel = 'state', maxPayload = 8 } } })\n\
-         local id: integer = schema:eventId('ping') or 0i\n\
+         local id: number = schema:eventId('ping') or 0\n\
          local name: string = schema:eventName(id) or ''\n\
          local count: number = schema.eventCount\n\
          local client = udp.client({ schema = schema })\n\
@@ -533,13 +535,17 @@ const SCRIPTS: &[(&str, &str)] = &[
 
 /// The plan's definitions parse and type check in Luau's own frontend, and a strict script
 /// against every built-in module has no diagnostics: the declared API and the runtime agree.
+/// The scripts use the lowered receivers (`quat.math()`, `bytes.math()`), which only a `jit`
+/// build declares.
+#[cfg(feature = "jit")]
 #[test]
 fn the_generated_definitions_type_check_and_typed_scripts_pass_strict_mode() {
     let plan = plan();
     let definitions = plan.type_definitions();
     assert!(definitions.contains("declare extern type dream_quat_Math with"), "{definitions}");
     assert!(definitions.contains("declare extern type dream_udp_Client with"), "{definitions}");
-    assert!(definitions.contains("    IDENTITY: integer,"), "{definitions}");
+    assert!(definitions.contains("    IDENTITY: Quaternion,"), "{definitions}");
+    assert!(definitions.contains("declare extern type Quaternion with end"), "{definitions}");
     for fallback in ["(self, ...any): any", "(...any) -> ...any", ": any,\n", ": any\n"] {
         assert!(!definitions.contains(fallback), "every built-in member is typed ({fallback:?} found):\n{definitions}");
     }
@@ -631,12 +637,12 @@ struct Numbers(Vec<i64>);
 
 impl l3i::sequence::SequenceSource for Numbers {
     const NAME: &'static str = "dream.views.Numbers";
-    type Item = l3i::convert::Integer;
+    type Item = i64;
     fn len(&self) -> usize {
         self.0.len()
     }
     fn get(&self, index: usize) -> Option<Self::Item> {
-        self.0.get(index).map(|n| l3i::convert::Integer(*n))
+        self.0.get(index).copied()
     }
 }
 
@@ -689,7 +695,7 @@ impl l3i::extension::Extension for Views {
         "dream.views"
     }
     fn describe(&self, d: &mut l3i::extension::ExtensionDescriptor) -> l3i::Result<()> {
-        d.sequence::<Numbers>("dream.views.Numbers").item_type("integer");
+        d.sequence::<Numbers>("dream.views.Numbers").item_type("number");
         d.sequence::<Rows>("dream.views.Rows").item_type("dream_views_Row");
         d.stream::<Countdown>("dream.views.Countdown").item_type("number");
         d.userdata::<Row>("dream.views.Row").getter("name", |r: &Row| r.name.clone()).signature("string");
@@ -719,10 +725,10 @@ const VIEW_SCRIPT: &str = "--!strict\n\
     local views = require('@dream/views')\n\
     local s = views.numbers(3)\n\
     local n: number = #s\n\
-    local first: integer? = s[1]\n\
+    local first: number? = s[1]\n\
     local sum: number = 0\n\
-    for i, v in s do local x: integer = v sum += i end\n\
-    local t: { integer } = s:toTable()\n\
+    for i, v in s do local x: number = v sum += i end\n\
+    local t: { number } = s:toTable()\n\
     local rows = views.rows()\n\
     local names = ''\n\
     for _, r in rows do local name: string = r.name names ..= name end\n\
@@ -735,12 +741,12 @@ const VIEW_SCRIPT: &str = "--!strict\n\
 fn views_are_typed_forward_module_references_resolve_and_owned_rows_need_no_clone() {
     let plan = RuntimePlan::builder().extension(Views).finalize().unwrap();
     let definitions = plan.type_definitions();
-    assert!(definitions.contains("    [number]: integer?"), "{definitions}");
+    assert!(definitions.contains("    [number]: number?"), "{definitions}");
     assert!(
         definitions.contains("function __iter(self): (({}, number) -> (number?, dream_views_Row), {}, number)"),
         "{definitions}"
     );
-    assert!(definitions.contains("    function toTable(self): { integer }"), "{definitions}");
+    assert!(definitions.contains("    function toTable(self): { number }"), "{definitions}");
     let child = definitions.find("export type Module__dream_parent_child").unwrap();
     let parent = definitions.find("export type Module__dream_parent =").unwrap();
     assert!(child < parent, "the referenced module is declared first:\n{definitions}");
@@ -761,9 +767,8 @@ fn views_are_typed_forward_module_references_resolve_and_owned_rows_need_no_clon
     assert!(report.is_clean(), "{}", text.join("\n"));
     // ...and runs with the same answers on the VM.
     let runtime = l3i::Runtime::from_plan(&plan).unwrap();
-    let (n, first, sum, len, names, total): (f64, l3i::convert::Integer, f64, f64, String, f64) =
-        runtime.eval(VIEW_SCRIPT).unwrap();
-    assert_eq!((n, first.0, sum, len, names.as_str(), total), (3.0, 10, 6.0, 3.0, "ab", 6.0));
+    let (n, first, sum, len, names, total): (f64, f64, f64, f64, String, f64) = runtime.eval(VIEW_SCRIPT).unwrap();
+    assert_eq!((n, first, sum, len, names.as_str(), total), (3.0, 10.0, 6.0, 3.0, "ab", 6.0));
 }
 
 /// Every method of a `math()` receiver is also a module function of the same name, taking the

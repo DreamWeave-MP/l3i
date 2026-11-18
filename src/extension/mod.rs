@@ -27,6 +27,8 @@ mod install;
 mod plan;
 mod typedefs;
 
+pub(crate) use typedefs::class_name;
+
 /// Crate-internal seams the runtime uses.
 pub(crate) mod install_detail {
     pub(crate) use super::install::{ModuleMembers, downcast, instantiate};
@@ -43,7 +45,7 @@ pub use plan::{ResolvedMember, ResolvedModule, ResolvedUserdata, RuntimePlan, Ru
 
 use std::rc::Rc;
 
-use install::{Registrar, SharedFieldRegistrar, SharedInstaller, SharedModuleFunction};
+use install::{Registrar, SharedFieldRegistrar, SharedInstaller, SharedModuleFunction, SharedModuleValue};
 
 use crate::bind::Binding;
 use crate::direct::field::DirectField;
@@ -331,7 +333,7 @@ impl<T: Userdata> UserdataBuilder<'_, T> {
         &mut self.decl.members[index]
     }
 
-    /// A direct primitive field (boolean, number, integer64, Vec3, nil) served by `H`,
+    /// A direct primitive field (boolean, number, 64-bit pattern, Vec3, nil) served by `H`,
     /// installed as the canonical property too. Makes the tag policy effectively `Required`.
     pub fn field<H: DirectField<T>>(&mut self, name: &str) -> &mut MemberDecl {
         let owned = name.to_owned();
@@ -391,6 +393,10 @@ pub enum ModuleMemberKind {
     Function,
     /// A constant the compiler may fold when the module is a known global library.
     Constant(CompileConstant),
+    /// A value set in every runtime from its declaration, which the compiler knows nothing
+    /// about: a packed scalar, which has no compile-time constant form. Under a safe environment
+    /// an imported `module.NAME` is still resolved once, at load.
+    Value,
     /// A member whose value `install` provides per runtime: a function that depends on the
     /// resolved policy, or a Lua object (a nested table, an instance of a declared type). The
     /// name and its signature are part of the plan; only the value waits for the VM.
@@ -409,6 +415,7 @@ pub struct ModuleMemberDecl {
     pub untyped: bool,
     pub doc: Option<String>,
     pub(crate) binder: Option<SharedModuleFunction>,
+    pub(crate) value: Option<SharedModuleValue>,
 }
 
 impl std::fmt::Debug for ModuleMemberDecl {
@@ -455,6 +462,7 @@ impl ModuleDecl {
             untyped: false,
             doc: None,
             binder,
+            value: None,
         });
         let index = self.members.len() - 1;
         ModuleMemberBuilder { module: self, index }
@@ -476,6 +484,19 @@ impl ModuleDecl {
     /// A constant the compiler may fold when the module is a known global library.
     pub fn constant(&mut self, name: &str, value: CompileConstant) -> ModuleMemberBuilder<'_> {
         self.push(name, ModuleMemberKind::Constant(value), None)
+    }
+
+    /// A value set in every runtime from this declaration ([`ModuleMemberKind::Value`]): a
+    /// packed scalar constant, say. It needs a signature like a function.
+    pub fn value<T: crate::convert::Push + Clone + 'static>(
+        &mut self,
+        name: &str,
+        value: T,
+    ) -> ModuleMemberBuilder<'_> {
+        let set: SharedModuleValue = Rc::new(move |runtime, table, name| table.set(&runtime.stack(), name, &value));
+        let builder = self.push(name, ModuleMemberKind::Value, None);
+        builder.module.members[builder.index].value = Some(set);
+        builder
     }
 
     /// A member `install` provides in every runtime (`InstallContext::module(..).function`
@@ -525,6 +546,10 @@ impl<'m> ModuleMemberBuilder<'m> {
 
     pub fn constant(self, name: &str, value: CompileConstant) -> ModuleMemberBuilder<'m> {
         self.module.constant(name, value)
+    }
+
+    pub fn value<T: crate::convert::Push + Clone + 'static>(self, name: &str, value: T) -> ModuleMemberBuilder<'m> {
+        self.module.value(name, value)
     }
 
     pub fn installed(self, name: &str) -> ModuleMemberBuilder<'m> {

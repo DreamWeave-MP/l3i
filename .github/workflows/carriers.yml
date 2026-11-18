@@ -1,0 +1,111 @@
+name: Packed scalar carriers
+
+# The Luau 0.747 campaign: every carrier a packed scalar can ride in (src/packed/carrier.rs), on
+# x86-64 and AArch64. `light` is the tagged light userdata carrier, `boxed` the interned userdata
+# carrier wasm32 and every other target use, forced here on a desktop
+# build with jit off (it has no native lowering). The library workflow tests the default carrier,
+# and the doctests, which rustdoc links with the system cc on Linux AArch64.
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches: main
+
+permissions:
+  contents: read
+
+env:
+  # Every feature but `jit`.
+  NOJIT: analysis,soft-render,bytes,bytes-codecs,bytes-digests,bytes-crypto,bytes-text,bytes-regex,data,syntax,fs,fs-authenticated,process,intern,intl,tcp,dns,tls,audio
+
+jobs:
+  carriers:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-latest]
+        carrier: [light, boxed]
+    runs-on: ${{ matrix.os }}
+    env:
+      L3I_CARRIER: ${{ matrix.carrier }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: true
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: DreamWeave-MP/StroggForge/.github/actions/setup-llvm@v72
+      - name: Test with jit
+        if: matrix.carrier != 'boxed'
+        run: cargo test --workspace --lib --tests --all-features
+      - name: Test without jit
+        run: cargo test --workspace --lib --tests --features "$NOJIT"
+
+  # wasm32, the target the boxed carrier exists for: Luau and l3i built with emscripten for
+  # wasm32-unknown-emscripten, no `jit` (CodeGen does not target wasm), the boxed carrier by
+  # default, and the suites that need no sockets, processes or threads run under Node: the
+  # carrier specification and self-test, the corpus and BufferPack goldens, Bits64, the 0.747
+  # removals and bytecode walk, the packed kinds, and the type surface.
+  wasm32:
+    runs-on: ubuntu-24.04
+    env:
+      # V8 runs wasm frames on its own native stack, about 1 MB by default: too little for an
+      # unoptimized build's frontend and parser at their nesting limits. 7800 KB stays inside
+      # the runner's 8 MB main thread.
+      CARGO_TARGET_WASM32_UNKNOWN_EMSCRIPTEN_RUNNER: node --stack-size=7800
+      # The goldens and fixtures are read from the checkout: Node's real filesystem, not
+      # emscripten's in-memory one. Emscripten's default 64 KiB stack is too small for Luau's
+      # parser at its recursion limit; 8 MiB is a desktop main thread's.
+      CARGO_TARGET_WASM32_UNKNOWN_EMSCRIPTEN_RUSTFLAGS: >-
+        -Clink-arg=-sNODERAWFS=1 -Clink-arg=-sSTACK_SIZE=8MB -Clink-arg=-sALLOW_MEMORY_GROWTH=1
+      L3I_UNVERIFIED_TOOLCHAIN: "1"
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: true
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-emscripten
+      - uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: 4.0.9
+      - name: Build the library
+        run: cargo build --target wasm32-unknown-emscripten --lib
+      # The whole default-feature suite, but what emscripten cannot do: UDP sockets (udp::), child
+      # processes (the coroutine finalizer tests rerun themselves in one) and threads (the hostile
+      # source cases run on a thread with a larger stack). One thread: there are no others.
+      - name: Test the default-feature suite
+        timeout-minutes: 20
+        run: >
+          cargo test --target wasm32-unknown-emscripten --test integration -- --test-threads=1
+          --skip udp:: --skip memory::a_failed_coroutine_hands_its_error_to_its_finalizers
+          --skip memory::a_finalizer_registers_from_inside_a_lua_call --skip memory::coroutine_finalizers_run_when_asked
+          --skip source::hostile_source_is_scanned_in_linear_time
+      - name: Record the boxed carrier's cost per bound call
+        run: >
+          cargo test --release --target wasm32-unknown-emscripten --test integration --
+          --ignored --nocapture --exact carrier_cost::record_the_bound_call_cost_per_argument_kind
+      # Every feature but jit and those emscripten cannot back: process, tcp, dns and tls need
+      # processes and sockets, and bytes-crypto's `ring` has no emscripten support. Excluded on
+      # top of the default suite's: fs tests of what emscripten's Node filesystem does not have
+      # (advisory locks, permission bits, FIFOs and devices, links and identity, direct writes,
+      # child processes), and tests that spawn threads.
+      - name: Test the feature-gated suites
+        timeout-minutes: 30
+        run: >
+          cargo test --target wasm32-unknown-emscripten --test integration
+          --features analysis,soft-render,bytes,bytes-codecs,bytes-digests,bytes-text,bytes-regex,data,syntax,fs,fs-authenticated,intern,intl,audio
+          -- --test-threads=1 --skip udp:: --skip memory::a_failed_coroutine_hands_its_error_to_its_finalizers
+          --skip memory::a_finalizer_registers_from_inside_a_lua_call --skip memory::coroutine_finalizers_run_when_asked
+          --skip source::hostile_source_is_scanned_in_linear_time
+          --skip fs::a_mode_is_exactly_the_bits_of_what_a_call_creates
+          --skip fs::a_mode_leaves_a_file_that_exists_alone_and_chmod_changes_it
+          --skip fs::fifos_and_devices_are_refused_instead_of_blocking_or_never_ending
+          --skip fs::files_read_whole_positionally_and_through_a_reader
+          --skip fs::killed_processes_leave_reopenable_files_and_release_locks
+          --skip fs::links_and_identity --skip fs::locks_are_the_operating_systems_and_end_with_their_holder
+          --skip fs::namespace_barriers_accept_relative_paths --skip fs::retained_single_file_checkpoint_fixture
+          --skip fs::retained_single_file_survives_process_kills_at_record_boundaries
+          --skip fs::write_through_writer_remains_usable_after_sync
+          --skip fs_authenticated::a_racing_writer_can_fail_reads_but_never_change_what_one_returns
+          --skip fs_authenticated::through_luau::a_missing_file_is_an_answer_for_a_publisher_too
+          --skip syntax::long_shadow_chains_do_not_recurse

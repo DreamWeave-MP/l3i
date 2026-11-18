@@ -5,10 +5,9 @@
 //! `tcp` feature's `dream.tcp`, which shares nothing with it). dream-net stays pure Rust and
 //! knows peers, event ids, channels, and bytes; this module owns the Luau-facing shape:
 //!
-//! - peer, event, channel, and client ids are Luau integers (exact, compared with `==`),
-//!   never strings or doubles; sizes and counters are plain numbers, because Luau integers
-//!   have no `<`/`<=` operators (the `integer` library orders them) and counters get
-//!   thresholded;
+//! - peer, event and channel ids are Luau numbers, exact or an error, never rounded; the
+//!   protocol id and client ids are opaque 64-bit patterns (`Bits64`, `@dream/bits64`), compared
+//!   with `==`; sizes and counters are plain numbers;
 //! - payloads are Luau buffers (or strings on send); `pollInto` copies one received payload
 //!   into a caller-owned buffer and `sendEvent` copies out of one before returning, so no Lua
 //!   memory is ever retained by the transport;
@@ -35,7 +34,7 @@ use dream_net::{
 };
 
 use crate::bind::{Call, Return};
-use crate::convert::{Bits64, BufferView, BytesView, Exact, Integer, NewBuffer, Push};
+use crate::convert::{Bits64, BufferView, BytesView, Exact, NewBuffer, Push};
 use crate::direct::field::{DirectField, FieldValue};
 use crate::error::{Error, Result};
 use crate::extension::{Extension, ExtensionDescriptor, InstallContext, TagPolicy};
@@ -64,15 +63,17 @@ pub fn monotonic_clock() -> Clock {
 // Ids
 // ---------------------------------------------------------------------------------------------
 
-/// `PeerId` as the Luau integer scripts see (the u64 bit pattern).
+/// `PeerId` as the number scripts see: a 48-bit generation above a 16-bit slot. A number holds it
+/// exactly while the generation stays below 2^37 (137 billion connections); past that the push is
+/// an error ("cannot be represented exactly"), never a nearby number.
 #[inline]
-fn peer_to_int(peer: PeerId) -> i64 {
-    peer.0 as i64
+fn peer_to_int(peer: PeerId) -> u64 {
+    peer.0
 }
 
-/// Peer ids are opaque 64-bit patterns (`Bits64`): all bits cross, none are numbers.
+/// A peer id from a script: a whole number, never rounded.
 #[inline]
-fn peer_from_int(value: Bits64) -> PeerId {
+fn peer_from_int(value: Exact<u64>) -> PeerId {
     PeerId(value.0)
 }
 
@@ -203,7 +204,8 @@ fn build_schema(call: &Call<'_>, options: ValueView<'_>) -> Result<Owned<UdpSche
 
 /// What `pollInto` returns: `nil` when the queue is empty, else `kind, peer, a, b, c`.
 ///
-/// Ids (peer, event, channel, client) are integers; `size` is a plain number, like every count.
+/// Peer, event and channel ids are numbers, exact or an error; the client id is a `Bits64`, all 64
+/// bits; `size` is a plain number, like every count.
 ///
 /// | kind           | peer | a          | b         | c    |
 /// |----------------|------|------------|-----------|------|
@@ -214,10 +216,10 @@ fn build_schema(call: &Call<'_>, options: ValueView<'_>) -> Result<Owned<UdpSche
 /// | `connectFailed`| 0    | reason     |           |      |
 enum Polled {
     Empty,
-    Message { peer: i64, event: i64, channel: i64, size: f64 },
-    Connected { peer: i64, client_id: i64 },
-    Disconnected { peer: i64, reason: &'static str },
-    Rejected { peer: i64, client_id: i64, reason: &'static str },
+    Message { peer: u64, event: i64, channel: i64, size: f64 },
+    Connected { peer: u64, client_id: u64 },
+    Disconnected { peer: u64, reason: &'static str },
+    Rejected { peer: u64, client_id: u64, reason: &'static str },
     ConnectFailed { reason: &'static str },
 }
 
@@ -227,34 +229,34 @@ impl Return for Polled {
             Polled::Empty => Ok(0),
             Polled::Message { peer, event, channel, size } => {
                 "message".push_into(call)?;
-                Integer(peer).push_into(call)?;
-                Integer(event).push_into(call)?;
-                Integer(channel).push_into(call)?;
+                peer.push_into(call)?;
+                event.push_into(call)?;
+                channel.push_into(call)?;
                 size.push_into(call)?;
                 Ok(5)
             }
             Polled::Connected { peer, client_id } => {
                 "connected".push_into(call)?;
-                Integer(peer).push_into(call)?;
-                Integer(client_id).push_into(call)?;
+                peer.push_into(call)?;
+                Bits64(client_id).push_into(call)?;
                 Ok(3)
             }
             Polled::Disconnected { peer, reason } => {
                 "disconnected".push_into(call)?;
-                Integer(peer).push_into(call)?;
+                peer.push_into(call)?;
                 reason.push_into(call)?;
                 Ok(3)
             }
             Polled::Rejected { peer, client_id, reason } => {
                 "rejected".push_into(call)?;
-                Integer(peer).push_into(call)?;
-                Integer(client_id).push_into(call)?;
+                peer.push_into(call)?;
+                Bits64(client_id).push_into(call)?;
                 reason.push_into(call)?;
                 Ok(4)
             }
             Polled::ConnectFailed { reason } => {
                 "connectFailed".push_into(call)?;
-                Integer(0).push_into(call)?;
+                0u64.push_into(call)?;
                 reason.push_into(call)?;
                 Ok(3)
             }
@@ -347,16 +349,14 @@ impl Server {
                 size: payload as f64,
             }),
             Ok(Some(ServerEvent::Connected { peer, client_id })) => {
-                Ok(Polled::Connected { peer: peer_to_int(peer), client_id: client_id as i64 })
+                Ok(Polled::Connected { peer: peer_to_int(peer), client_id })
             }
             Ok(Some(ServerEvent::Disconnected { peer, reason })) => {
                 Ok(Polled::Disconnected { peer: peer_to_int(peer), reason: reason.name() })
             }
-            Ok(Some(ServerEvent::Rejected { peer, client_id, failure })) => Ok(Polled::Rejected {
-                peer: peer_to_int(peer),
-                client_id: client_id as i64,
-                reason: failure.reason().name(),
-            }),
+            Ok(Some(ServerEvent::Rejected { peer, client_id, failure })) => {
+                Ok(Polled::Rejected { peer: peer_to_int(peer), client_id, reason: failure.reason().name() })
+            }
             Err(too_small) => Err(Error::runtime(format!(
                 "dream.udp: pollInto buffer of {} bytes is too small for a {}-byte payload",
                 buffer.len(),
@@ -365,7 +365,7 @@ impl Server {
         }
     }
 
-    fn stat(&self, peer: Bits64, pick: impl Fn(&dream_net::ConnectionStats) -> f32) -> Option<f64> {
+    fn stat(&self, peer: Exact<u64>, pick: impl Fn(&dream_net::ConnectionStats) -> f32) -> Option<f64> {
         self.inner.borrow().stats(peer_from_int(peer)).map(|stats| f64::from(pick(&stats)))
     }
 }
@@ -556,7 +556,7 @@ impl Extension for UdpExtension {
             .doc("A transport client; needs the network.transport capability at call time.");
         d.module(MODULE)
             .installed("server")
-            .signature("(options: { schema: dream_udp_Schema, address: string, protocolId: integer, maxClients: number? }) -> dream_udp_Server")
+            .signature("(options: { schema: dream_udp_Schema, address: string, protocolId: Bits64, maxClients: number? }) -> dream_udp_Server")
             .doc("A transport server; needs network.transport. Its private key stays native; use connectToken() to mint client tokens.");
         d.optional_capability(TRANSPORT_CAPABILITY);
         d.memory_category("dream.udp");
@@ -633,35 +633,32 @@ fn describe_schema(d: &mut ExtensionDescriptor) {
     schema.getter("eventCount", |s: &UdpSchema| s.0.events().len() as i64).signature("number");
     schema.getter("channelCount", |s: &UdpSchema| s.0.channels().len() as i64).signature("number");
     schema
-        .method("eventId", |s: &UdpSchema, name: &str| s.0.event_id(name).map(|id| Integer(i64::from(id.0))))
-        .signature("(self, name: string): integer?");
+        .method("eventId", |s: &UdpSchema, name: &str| s.0.event_id(name).map(|id| id.0))
+        .signature("(self, name: string): number?");
     schema
-        .method("channelId", |s: &UdpSchema, name: &str| s.0.channel_id(name).map(|id| Integer(i64::from(id.0))))
-        .signature("(self, name: string): integer?");
+        .method("channelId", |s: &UdpSchema, name: &str| s.0.channel_id(name).map(|id| id.0))
+        .signature("(self, name: string): number?");
     schema
         .method("eventName", |s: &UdpSchema, id: Exact<i64>| -> Option<String> {
             u32::try_from(id.0).ok().and_then(|id| s.0.event(EventTypeId(id))).map(|e| e.name.clone())
         })
-        .signature("(self, id: integer): string?");
+        .signature("(self, id: number): string?");
     schema
         .method("channelName", |s: &UdpSchema, id: Exact<i64>| -> Option<String> {
             u8::try_from(id.0).ok().and_then(|id| s.0.channel(ChannelId(id))).map(|c| c.name().to_owned())
         })
-        .signature("(self, id: integer): string?");
+        .signature("(self, id: number): string?");
     schema
-        .method("maxPayload", |s: &UdpSchema, id: Exact<i64>| -> Option<Integer> {
-            u32::try_from(id.0)
-                .ok()
-                .and_then(|id| s.0.event(EventTypeId(id)))
-                .map(|e| Integer(i64::from(e.max_payload)))
+        .method("maxPayload", |s: &UdpSchema, id: Exact<i64>| -> Option<u32> {
+            u32::try_from(id.0).ok().and_then(|id| s.0.event(EventTypeId(id))).map(|e| e.max_payload)
         })
-        .signature("(self, eventId: integer): integer?");
+        .signature("(self, eventId: number): number?");
     schema
         .method("fingerprintHalves", |s: &UdpSchema| {
             let (hi, lo) = s.0.fingerprint().halves();
-            (Integer(hi as i64), Integer(lo as i64))
+            (Bits64(hi), Bits64(lo))
         })
-        .signature("(self): (number, number)");
+        .signature("(self): (Bits64, Bits64)");
     schema.metamethod("__tostring", |s: &UdpSchema| {
         format!("dream.udp.Schema(v{}, {})", s.0.schema_version(), s.0.fingerprint())
     });
@@ -709,16 +706,16 @@ fn describe_server(d: &mut ExtensionDescriptor) {
                 Ok(NewBuffer(token.to_vec()))
             },
         )
-        .signature("(self, clientId: integer, expiresInSeconds: number?, timeoutSeconds: number?): buffer")
+        .signature("(self, clientId: Bits64, expiresInSeconds: number?, timeoutSeconds: number?): buffer")
         .doc("Mints an authenticated connect token; private key material is never returned.");
     server
         .method("pollInto", |server: &Server, buffer: BufferView| server.poll_into(buffer))
-        .signature("(self, buffer: buffer): (string?, integer, ...any)");
+        .signature("(self, buffer: buffer): (string?, number, ...any)");
     server
         .method(
             "sendEvent",
             |server: &Server,
-             peer: Bits64,
+             peer: Exact<u64>,
              event: Exact<i64>,
              payload: BytesView,
              offset: Option<Exact<i64>>,
@@ -730,9 +727,7 @@ fn describe_server(d: &mut ExtensionDescriptor) {
                 .map_err(send_error)
             },
         )
-        .signature(
-            "(self, peer: integer, eventId: integer, payload: buffer | string, offset: number?, length: number?)",
-        );
+        .signature("(self, peer: number, eventId: number, payload: buffer | string, offset: number?, length: number?)");
     server
         .method(
             "broadcast",
@@ -743,30 +738,35 @@ fn describe_server(d: &mut ExtensionDescriptor) {
              length: Option<Exact<i64>>| {
                 let event = event_from_int(event)?;
                 payload_range(payload, offset, length, |bytes| server.inner.borrow_mut().broadcast(event, bytes))?
-                    .map(|refused| Integer(refused as i64))
                     .map_err(send_error)
             },
         )
-        .signature("(self, eventId: integer, payload: buffer | string, offset: number?, length: number?): integer");
+        .signature("(self, eventId: number, payload: buffer | string, offset: number?, length: number?): number");
     server
         .method(
             "broadcastExcept",
-            |server: &Server, peer: Bits64, event: Exact<i64>, payload: BytesView, offset: Option<Exact<i64>>, length: Option<Exact<i64>>| {
+            |server: &Server,
+             peer: Exact<u64>,
+             event: Exact<i64>,
+             payload: BytesView,
+             offset: Option<Exact<i64>>,
+             length: Option<Exact<i64>>| {
                 let event = event_from_int(event)?;
                 payload_range(payload, offset, length, |bytes| {
                     server.inner.borrow_mut().broadcast_except(Some(peer_from_int(peer)), event, bytes)
                 })?
-                .map(|refused| Integer(refused as i64))
                 .map_err(send_error)
             },
         )
         .signature(
-            "(self, peer: integer, eventId: integer, payload: buffer | string, offset: number?, length: number?): integer",
+            "(self, peer: number, eventId: number, payload: buffer | string, offset: number?, length: number?): number",
         );
     server.method("flush", |server: &Server| server.inner.borrow_mut().flush()).signature("(self)");
     server
-        .method("disconnect", |server: &Server, peer: Bits64| server.inner.borrow_mut().disconnect(peer_from_int(peer)))
-        .signature("(self, peer: integer)");
+        .method("disconnect", |server: &Server, peer: Exact<u64>| {
+            server.inner.borrow_mut().disconnect(peer_from_int(peer));
+        })
+        .signature("(self, peer: number)");
     server.method("disconnectAll", |server: &Server| server.inner.borrow_mut().disconnect_all()).signature("(self)");
     server
         .method("peers", |server: &Server, call: &Call| {
@@ -775,50 +775,50 @@ fn describe_server(d: &mut ExtensionDescriptor) {
             call.with_frame(|frame| {
                 let view = table.push_to(frame)?;
                 for (index, peer) in peers.iter().enumerate() {
-                    Integer(peer_to_int(*peer)).push_into(frame)?;
+                    peer_to_int(*peer).push_into(frame)?;
                     view.raw_set_index(frame, (index + 1) as i64)?;
                 }
                 Ok(())
             })?;
             Ok::<Table, Error>(table)
         })
-        .signature("(self): { integer }");
+        .signature("(self): { number }");
     server
-        .method("clientId", |server: &Server, peer: Bits64| {
-            server.inner.borrow().client_id(peer_from_int(peer)).map(|id| Integer(id as i64))
+        .method("clientId", |server: &Server, peer: Exact<u64>| {
+            server.inner.borrow().client_id(peer_from_int(peer)).map(Bits64)
         })
-        .signature("(self, peer: integer): integer?");
+        .signature("(self, peer: number): Bits64?");
     server
-        .method("clientAddress", |server: &Server, peer: Bits64| {
+        .method("clientAddress", |server: &Server, peer: Exact<u64>| {
             server.inner.borrow().client_address(peer_from_int(peer)).map(|a| a.to_string())
         })
-        .signature("(self, peer: integer): string?");
+        .signature("(self, peer: number): string?");
     server
-        .method("peerRtt", |server: &Server, peer: Bits64| server.stat(peer, |s| s.rtt))
-        .signature("(self, peer: integer): number?");
+        .method("peerRtt", |server: &Server, peer: Exact<u64>| server.stat(peer, |s| s.rtt))
+        .signature("(self, peer: number): number?");
     server
-        .method("peerJitter", |server: &Server, peer: Bits64| server.stat(peer, |s| s.jitter))
-        .signature("(self, peer: integer): number?");
+        .method("peerJitter", |server: &Server, peer: Exact<u64>| server.stat(peer, |s| s.jitter))
+        .signature("(self, peer: number): number?");
     server
-        .method("peerPacketLoss", |server: &Server, peer: Bits64| server.stat(peer, |s| s.packet_loss))
-        .signature("(self, peer: integer): number?");
+        .method("peerPacketLoss", |server: &Server, peer: Exact<u64>| server.stat(peer, |s| s.packet_loss))
+        .signature("(self, peer: number): number?");
     server
-        .method("peerSentKbps", |server: &Server, peer: Bits64| server.stat(peer, |s| s.sent_kbps))
-        .signature("(self, peer: integer): number?");
+        .method("peerSentKbps", |server: &Server, peer: Exact<u64>| server.stat(peer, |s| s.sent_kbps))
+        .signature("(self, peer: number): number?");
     server
-        .method("peerReceivedKbps", |server: &Server, peer: Bits64| server.stat(peer, |s| s.received_kbps))
-        .signature("(self, peer: integer): number?");
+        .method("peerReceivedKbps", |server: &Server, peer: Exact<u64>| server.stat(peer, |s| s.received_kbps))
+        .signature("(self, peer: number): number?");
     server
-        .method("peerAckedKbps", |server: &Server, peer: Bits64| server.stat(peer, |s| s.acked_kbps))
-        .signature("(self, peer: integer): number?");
+        .method("peerAckedKbps", |server: &Server, peer: Exact<u64>| server.stat(peer, |s| s.acked_kbps))
+        .signature("(self, peer: number): number?");
     server
-        .method("counters", |server: &Server, call: &Call, peer: Bits64| -> Result<Option<Table>> {
+        .method("counters", |server: &Server, call: &Call, peer: Exact<u64>| -> Result<Option<Table>> {
             match server.inner.borrow().counters(peer_from_int(peer)) {
                 Some(counters) => counters_table(call, &counters).map(Some),
                 None => Ok(None),
             }
         })
-        .signature("(self, peer: integer): { [string]: number }?");
+        .signature("(self, peer: number): { [string]: number }?");
     server
         .method("memoryUsage", |server: &Server, call: &Call| memory_table(call, &server.inner.borrow().memory_usage()))
         .signature("(self): { [string]: number }");
@@ -854,7 +854,7 @@ fn describe_client(d: &mut ExtensionDescriptor) {
         .signature("(self)");
     client
         .method("pollInto", |client: &UdpClient, buffer: BufferView| client.poll_into(buffer))
-        .signature("(self, buffer: buffer): (string?, integer, ...any)");
+        .signature("(self, buffer: buffer): (string?, number, ...any)");
     client
         .method(
             "sendEvent",
@@ -868,7 +868,7 @@ fn describe_client(d: &mut ExtensionDescriptor) {
                     .map_err(send_error)
             },
         )
-        .signature("(self, eventId: integer, payload: buffer | string, offset: number?, length: number?)");
+        .signature("(self, eventId: number, payload: buffer | string, offset: number?, length: number?)");
     client.method("flush", |client: &UdpClient| client.inner.borrow_mut().flush()).signature("(self)");
     client
         .method("counters", |client: &UdpClient, call: &Call| -> Result<Option<Table>> {

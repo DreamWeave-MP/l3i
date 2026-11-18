@@ -66,7 +66,7 @@ pub mod text;
 
 use crate::bind::{Call, StackResults};
 use crate::byte_rules::ByteRules;
-use crate::convert::{BufferView, BytesView, Exact, Integer, NewBuffer};
+use crate::convert::{Bits64, BufferView, BytesView, Exact, NewBuffer};
 use crate::error::{Error, Result};
 use crate::extension::{Extension, ExtensionDescriptor, ModuleDecl};
 use crate::stack::{Scope, ValueView};
@@ -484,27 +484,47 @@ fn write_cstring(buffer: BufferView<'_>, offset: Exact<i64>, text: &[u8], field:
     Ok((start + width) as f64)
 }
 
+/// The largest whole number a Lua number holds exactly with every smaller one: 2^53.
+const EXACT_LIMIT: u64 = 1 << 53;
+
+/// Unsigned LEB128 as a number: exact, or an error above 2^53 (`readVarint64` reads every value).
+fn read_varint(source: BytesView<'_>, offset: Exact<i64>) -> Result<(f64, f64)> {
+    let (value, after) = read_varint_bits("bytes.readVarint", source, offset)?;
+    if value > EXACT_LIMIT {
+        return Err(Error::runtime(format!(
+            "bytes.readVarint: the value {value} at offset {} is above 2^53, where a number is no longer exact; bytes.readVarint64 reads it as a Bits64",
+            offset.0
+        )));
+    }
+    Ok((value as f64, after))
+}
+
+/// Unsigned LEB128, all 64 bits, as a `Bits64`.
+fn read_varint64(source: BytesView<'_>, offset: Exact<i64>) -> Result<(Bits64, f64)> {
+    read_varint_bits("bytes.readVarint64", source, offset).map(|(value, after)| (Bits64(value), after))
+}
+
 /// Unsigned LEB128: at most ten bytes; the value and the offset after it.
-fn read_varint(source: BytesView<'_>, offset: Exact<i64>) -> Result<(Integer, f64)> {
-    let start = span("bytes.readVarint", source.len(), offset, 0)?;
+fn read_varint_bits(name: &str, source: BytesView<'_>, offset: Exact<i64>) -> Result<(u64, f64)> {
+    let start = span(name, source.len(), offset, 0)?;
     // SAFETY: as `find`.
     let data = unsafe { bytes(&source) };
     let mut value: u64 = 0;
     for (index, byte) in data[start..].iter().enumerate().take(10) {
         let payload = u64::from(byte & 0x7F);
         if index == 9 && payload > 1 {
-            return Err(Error::runtime(format!("bytes.readVarint: value at offset {start} overflows 64 bits")));
+            return Err(Error::runtime(format!("{name}: value at offset {start} overflows 64 bits")));
         }
         value |= payload << (7 * index);
         if byte & 0x80 == 0 {
-            return Ok((Integer(value as i64), (start + index + 1) as f64));
+            return Ok((value, (start + index + 1) as f64));
         }
     }
-    Err(Error::runtime(format!("bytes.readVarint: unterminated varint at offset {start}")))
+    Err(Error::runtime(format!("{name}: unterminated varint at offset {start}")))
 }
 
-/// Signed LEB128.
-fn read_signed_varint(source: BytesView<'_>, offset: Exact<i64>) -> Result<(Integer, f64)> {
+/// Signed LEB128 as a number: exact, or an error beyond 2^53 either way.
+fn read_signed_varint(source: BytesView<'_>, offset: Exact<i64>) -> Result<(f64, f64)> {
     let start = span("bytes.readSignedVarint", source.len(), offset, 0)?;
     // SAFETY: as `find`.
     let data = unsafe { bytes(&source) };
@@ -520,14 +540,27 @@ fn read_signed_varint(source: BytesView<'_>, offset: Exact<i64>) -> Result<(Inte
             if shift < 64 && byte & 0x40 != 0 {
                 value |= -1i64 << shift;
             }
-            return Ok((Integer(value), (start + index + 1) as f64));
+            if value.unsigned_abs() > EXACT_LIMIT {
+                return Err(Error::runtime(format!(
+                    "bytes.readSignedVarint: the value {value} at offset {start} is beyond 2^53, where a number is no longer exact"
+                )));
+            }
+            return Ok((value as f64, (start + index + 1) as f64));
         }
     }
     Err(Error::runtime(format!("bytes.readSignedVarint: unterminated varint at offset {start}")))
 }
 
 fn write_varint(buffer: BufferView<'_>, offset: Exact<i64>, value: Exact<i64>) -> Result<f64> {
-    let mut remaining = value.0 as u64;
+    write_varint_bits("bytes.writeVarint", buffer, offset, value.0 as u64)
+}
+
+fn write_varint64(buffer: BufferView<'_>, offset: Exact<i64>, value: Bits64) -> Result<f64> {
+    write_varint_bits("bytes.writeVarint64", buffer, offset, value.0)
+}
+
+fn write_varint_bits(name: &str, buffer: BufferView<'_>, offset: Exact<i64>, value: u64) -> Result<f64> {
+    let mut remaining = value;
     let mut encoded = [0u8; 10];
     let mut len = 0;
     loop {
@@ -539,7 +572,7 @@ fn write_varint(buffer: BufferView<'_>, offset: Exact<i64>, value: Exact<i64>) -
             break;
         }
     }
-    let start = span("bytes.writeVarint", buffer.len(), offset, len)?;
+    let start = span(name, buffer.len(), offset, len)?;
     buffer.write(start, &encoded[..len])?;
     Ok((start + len) as f64)
 }
@@ -685,15 +718,21 @@ fn describe_core(module: &mut ModuleDecl) {
         .signature("(target: buffer, offset: number, text: string, fieldLength: number?) -> number")
         .doc("The text and a NUL, padded with NUL to fieldLength when given; returns the offset after the field.")
         .function("readVarint", read_varint)
-        .signature("(source: buffer | string, offset: number) -> (integer, number)")
-        .doc("Unsigned LEB128: the value and the offset after it.")
+        .signature("(source: buffer | string, offset: number) -> (number, number)")
+        .doc("Unsigned LEB128: the value and the offset after it; an error above 2^53 (readVarint64 reads every value).")
+        .function("readVarint64", read_varint64)
+        .signature("(source: buffer | string, offset: number) -> (Bits64, number)")
+        .doc("Unsigned LEB128, all 64 bits as a Bits64, and the offset after it.")
         .function("readSignedVarint", read_signed_varint)
-        .signature("(source: buffer | string, offset: number) -> (integer, number)")
-        .doc("Signed LEB128: the value and the offset after it.")
+        .signature("(source: buffer | string, offset: number) -> (number, number)")
+        .doc("Signed LEB128: the value and the offset after it; an error beyond 2^53 either way.")
         .function("writeVarint", write_varint)
-        .signature("(target: buffer, offset: number, value: integer | number) -> number")
-        .doc("Unsigned LEB128 of the value's 64 bits; returns the offset after it.")
+        .signature("(target: buffer, offset: number, value: number) -> number")
+        .doc("Unsigned LEB128 of a whole number (a negative one as its 64-bit two's complement); returns the offset after it.")
+        .function("writeVarint64", write_varint64)
+        .signature("(target: buffer, offset: number, value: Bits64) -> number")
+        .doc("Unsigned LEB128 of all 64 bits; returns the offset after it.")
         .function("writeSignedVarint", write_signed_varint)
-        .signature("(target: buffer, offset: number, value: integer | number) -> number")
+        .signature("(target: buffer, offset: number, value: number) -> number")
         .doc("Signed LEB128; returns the offset after it.");
 }

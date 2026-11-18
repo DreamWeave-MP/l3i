@@ -26,6 +26,12 @@ pub struct CompileOptions {
     pub vector_type: Option<CString>,
     pub mutable_globals: Vec<CString>,
     pub userdata_types: Vec<CString>,
+    /// Type names compiled as `any`: the packed scalar kinds (`crate::packed::carrier`), which
+    /// the compiler would otherwise take for userdata, so a native function annotated with one
+    /// would refuse its own arguments at the entry guard and run at interpreter speed. Only the
+    /// bytecode compile sees this; analysis keeps the names. The default lists l3i's own kinds; a
+    /// plan adds its host kinds, and `Runtime::register_packed` adds the kind it registers.
+    pub packed_types: Vec<CString>,
     pub disabled_builtins: Vec<CString>,
     /// Libraries whose members the compiler may ask about through `library_members`
     /// (`librariesWithKnownMembers`); the compiler folds constant members and specialises on
@@ -57,7 +63,6 @@ pub enum CompileConstant {
     Nil,
     Boolean(bool),
     Number(f64),
-    Integer(i64),
     Vector(f32, f32, f32),
     String(String),
 }
@@ -101,7 +106,6 @@ unsafe extern "C" fn member_constant_callback(
             Some(CompileConstant::Nil) => ffi::luau_set_compile_constant_nil(constant),
             Some(CompileConstant::Boolean(b)) => ffi::luau_set_compile_constant_boolean(constant, c_int::from(b)),
             Some(CompileConstant::Number(n)) => ffi::luau_set_compile_constant_number(constant, n),
-            Some(CompileConstant::Integer(i)) => ffi::luau_set_compile_constant_integer64(constant, i),
             Some(CompileConstant::Vector(x, y, z)) => ffi::luau_set_compile_constant_vector(constant, x, y, z, 0.0),
             Some(CompileConstant::String(text)) => {
                 let kept: Box<str> = text.into_boxed_str();
@@ -124,6 +128,7 @@ impl std::fmt::Debug for CompileOptions {
             .field("vector_type", &self.vector_type)
             .field("mutable_globals", &self.mutable_globals)
             .field("userdata_types", &self.userdata_types)
+            .field("packed_types", &self.packed_types)
             .field("disabled_builtins", &self.disabled_builtins)
             .field("known_libraries", &self.known_libraries)
             .field("library_members", &self.library_members.is_some())
@@ -143,6 +148,12 @@ impl Default for CompileOptions {
             vector_type: None,
             mutable_globals: Vec::new(),
             userdata_types: Vec::new(),
+            packed_types: crate::packed::builtin_kinds()
+                .iter()
+                .map(|kind| kind.name)
+                .chain(crate::packed::WIDE_NAMES)
+                .map(|name| CString::new(name).expect("kind names have no NUL"))
+                .collect(),
             disabled_builtins: Vec::new(),
             known_libraries: Vec::new(),
             library_members: None,
@@ -162,6 +173,97 @@ fn c_array(values: &[CString], storage: &mut Vec<*const c_char>) -> *const *cons
     storage.extend(values.iter().map(|s| s.as_ptr()));
     storage.push(ptr::null());
     storage.as_ptr()
+}
+
+/// A parameter of a native function that Luau's compiler still types as a plain userdata after
+/// the packed-kind erasure: its entry guard refuses a packed scalar on every call, so the
+/// function runs, correctly, at interpreter speed. Positions are 1-based, in the source as
+/// written.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NativeAnnotationWarning {
+    pub line: u32,
+    pub column: u32,
+    pub parameter: String,
+    /// The type name the compiler did not know.
+    pub type_name: String,
+}
+
+impl std::fmt::Display for NativeAnnotationWarning {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}:{}: parameter '{}' is annotated '{}', which this compile types as a userdata: a native entry guard will refuse a packed scalar there",
+            self.line, self.column, self.parameter, self.type_name
+        )
+    }
+}
+
+/// #30's lint: the parameters of native functions (a `--!native` module, or an `@native`
+/// function) whose annotation `options` still compiles to a plain userdata guard after erasing
+/// `options.packed_types`. The packed kinds the list names never appear here, nor do prefixed
+/// names, generic parameters, unions of different types or `typeof`, which the compiler types as
+/// `any`. What does is a name the compile knows nothing about: a packed kind missing from
+/// `packed_types` (a standalone compile without the host's kinds, a kind registered after the
+/// compile), or a misspelt type. `known_userdata` names the host's own userdata types, whose
+/// guard is the right one. A parse error is `Error::Runtime`.
+pub fn lint_native_annotations(
+    source: &str,
+    options: &CompileOptions,
+    known_userdata: &[&str],
+) -> Result<Vec<NativeAnnotationWarning>> {
+    let mut userdata_types = Vec::new();
+    let mut packed_types = Vec::new();
+    let mut known_names = Vec::new();
+    let known: Vec<CString> = known_userdata
+        .iter()
+        .map(|name| CString::new(*name).map_err(|_| Error::logic("A userdata type name cannot contain NUL")))
+        .collect::<Result<_>>()?;
+    let raw = ffi::lua_CompileOptions {
+        optimizationLevel: 0,
+        debugLevel: 0,
+        typeInfoLevel: 0,
+        coverageLevel: 0,
+        vectorLib: ptr::null(),
+        vectorCtor: ptr::null(),
+        vectorType: c_ptr(options.vector_type.as_ref()),
+        vectorPrecision: 0,
+        mutableGlobals: ptr::null(),
+        userdataTypes: c_array(&options.userdata_types, &mut userdata_types),
+        librariesWithKnownMembers: ptr::null(),
+        libraryMemberTypeCb: None,
+        libraryMemberConstantCb: None,
+        disabledBuiltins: ptr::null(),
+    };
+    let erased = c_array(&options.packed_types, &mut packed_types);
+    let known = c_array(&known, &mut known_names);
+    let mut size = 0usize;
+    // SAFETY: every pointer in `raw`, `erased` and `known` outlives the call (locals of this
+    // function or borrowed from `options`); the shim catches every C++ exception and reports a
+    // parse error in-band.
+    let out =
+        unsafe { ffi::l3i_luau_lint_native(source.as_ptr().cast(), source.len(), &raw, erased, known, &mut size) };
+    if out.is_null() {
+        return Err(Error::runtime("the native annotation lint ran out of memory"));
+    }
+    // SAFETY: the shim returned `size` valid bytes, ours until `free`.
+    let text = unsafe { std::slice::from_raw_parts(out.cast::<u8>(), size) }.to_vec();
+    unsafe { ffi::free(out.cast()) };
+    if let Some(message) = text.strip_prefix(b"\0") {
+        return Err(Error::runtime(String::from_utf8_lossy(message).into_owned()));
+    }
+    let text = String::from_utf8_lossy(&text);
+    Ok(text
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.splitn(4, '\t');
+            Some(NativeAnnotationWarning {
+                line: fields.next()?.parse().ok()?,
+                column: fields.next()?.parse().ok()?,
+                parameter: fields.next()?.to_owned(),
+                type_name: fields.next()?.to_owned(),
+            })
+        })
+        .collect())
 }
 
 /// Compiles Luau source to bytecode. A compile error is returned as `Error::Runtime` carrying
@@ -276,11 +378,14 @@ fn compile_native(source: &str, options: &CompileOptions, disassemble: bool) -> 
     // an outer compile still points into its own.
     let outer = with_members.then(|| ACTIVE_MEMBERS.with(|active| active.replace(options.library_members.clone())));
     let strings = CONSTANT_STRINGS.with(|strings| strings.borrow().len());
-    let compile = if disassemble { ffi::l3i_luau_disassemble } else { ffi::l3i_luau_compile };
-    // SAFETY: every pointer in `raw` outlives this call (the CStrings and the pointer arrays
-    // are locals of this function). The C++ shim owns lowering, mapping and parsing and
-    // catches all compiler exceptions, reporting failure in-band.
-    let bytecode = unsafe { compile(source.as_ptr().cast(), source.len(), &mut raw, &mut size) };
+    let compile = if disassemble { ffi::l3i_luau_disassemble_erasing } else { ffi::l3i_luau_compile_erasing };
+    let mut packed_types = Vec::new();
+    let erased = c_array(&options.packed_types, &mut packed_types);
+    // SAFETY: every pointer in `raw` and `erased` outlives this call (the CStrings and the
+    // pointer arrays are locals of this function or borrowed from `options`). The C++ shim owns
+    // lowering, mapping, erasure and parsing and catches all compiler exceptions, reporting
+    // failure in-band.
+    let bytecode = unsafe { compile(source.as_ptr().cast(), source.len(), &mut raw, erased, &mut size) };
     if let Some(outer) = outer {
         ACTIVE_MEMBERS.with(|active| *active.borrow_mut() = outer);
         CONSTANT_STRINGS.with(|kept| kept.borrow_mut().truncate(strings));
@@ -310,23 +415,14 @@ pub trait LoadScope: Scope + Sized {
     /// chunk as a `Function`. A chunk name starting with `@` or `=` is stripped of that prefix
     /// in debug records, as Luau does. A load failure is `Error::Runtime` with Luau's message;
     /// a chunk name containing NUL is a logic error.
+    ///
+    /// Bytecode from a cache may come from an older build. Luau 0.746 and 0.747 both write
+    /// version 14, so before loading, the chunk's constants are walked: one holding a 64-bit
+    /// integer constant (which 0.747 removed and would misread), a constant kind this build does
+    /// not know, or a function cut short is refused with `Error::Runtime` naming the chunk.
     fn load_bytecode(&self, chunk_name: &str, bytecode: &[u8]) -> Result<Function> {
-        let name = CString::new(chunk_name).map_err(|_| Error::logic("Chunk name cannot contain NUL"))?;
-        self.with_frame(|frame| {
-            let state = frame.state();
-            // SAFETY: the frame's thread is live; the bytecode and name outlive the call.
-            // luau_load reports failure by status and leaves the message on top of the frame.
-            let status = unsafe { ffi::luau_load(state, name.as_ptr(), bytecode.as_ptr().cast(), bytecode.len(), 0) };
-            if status != ffi::LUA_OK {
-                // SAFETY: the message is on the frame's thread.
-                return Err(unsafe { crate::raw::protect::pop_error(state, status) });
-            }
-            #[cfg(feature = "jit")]
-            if let Some(generator) = crate::native_code::NativeCodeGen::for_scope(frame) {
-                generator.compile(frame, -1, bytecode)?;
-            }
-            Function::from_value(Value::store(frame.top_value())?)
-        })
+        crate::bytecode_scan::check(bytecode).map_err(|refusal| refusal.into_error(chunk_name))?;
+        load_checked(self, chunk_name, bytecode)
     }
 
     /// Compiles `source` with `options` and loads it as [`LoadScope::load_bytecode`] does. A
@@ -334,8 +430,29 @@ pub trait LoadScope: Scope + Sized {
     /// failed `luau_load` reports it.
     fn load_source(&self, chunk_name: &str, source: &str, options: &CompileOptions) -> Result<Function> {
         let bytecode = compile_raw(source, options)?;
-        self.load_bytecode(chunk_name, &bytecode)
+        // This build just wrote it: there is nothing older to refuse.
+        load_checked(self, chunk_name, &bytecode)
     }
+}
+
+/// [`LoadScope::load_bytecode`] past the walk over its constants.
+fn load_checked(scope: &impl Scope, chunk_name: &str, bytecode: &[u8]) -> Result<Function> {
+    let name = CString::new(chunk_name).map_err(|_| Error::logic("Chunk name cannot contain NUL"))?;
+    scope.with_frame(|frame| {
+        let state = frame.state();
+        // SAFETY: the frame's thread is live; the bytecode and name outlive the call.
+        // luau_load reports failure by status and leaves the message on top of the frame.
+        let status = unsafe { ffi::luau_load(state, name.as_ptr(), bytecode.as_ptr().cast(), bytecode.len(), 0) };
+        if status != ffi::LUA_OK {
+            // SAFETY: the message is on the frame's thread.
+            return Err(unsafe { crate::raw::protect::pop_error(state, status) });
+        }
+        #[cfg(feature = "jit")]
+        if let Some(generator) = crate::native_code::NativeCodeGen::for_scope(frame) {
+            generator.compile(frame, -1, bytecode)?;
+        }
+        Function::from_value(Value::store(frame.top_value())?)
+    })
 }
 
 impl<S: Scope> LoadScope for S {}

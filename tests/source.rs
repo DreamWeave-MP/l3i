@@ -337,8 +337,16 @@ fn large_modules_compile_past_the_former_frontend_budgets() {
 /// scanned once, never once per candidate, and spellings like generated names are checked in
 /// constant time per generated name. Four times the input may take about four times as long;
 /// a scan that rescans would take sixteen.
+///
+/// Nested function bodies run Luau's parser to its recursion limit, about 500 levels here at
+/// about 3 KiB each in an unoptimized build: more than a test thread's default 2 MiB on macOS
+/// AArch64. The cases run on a thread with the 8 MiB a host's main thread has.
 #[test]
 fn hostile_source_is_scanned_in_linear_time() {
+    std::thread::Builder::new().stack_size(8 << 20).spawn(hostile_source_cases).unwrap().join().unwrap();
+}
+
+fn hostile_source_cases() {
     use l3i::source::{LoweringMode, lowering_snapshot};
     use std::time::Instant;
     type Case = (&'static str, fn(usize) -> String);

@@ -8,7 +8,7 @@ kind = "api"
 +++
 
 Modules `l3i::extension`, `l3i::packed`, `l3i::sequence`, `l3i::quat`, `l3i::raster`,
-`l3i::udp` and, with the `soft-render` feature, `l3i::soft_render`.
+`l3i::udp`, `l3i::bits64` and, with the `soft-render` feature, `l3i::soft_render`.
 [Extensions](@/docs/extensions.md), [Primitives](@/docs/primitives.md) and
 [Built-in extensions](@/docs/builtin-extensions.md) are the guides.
 
@@ -136,7 +136,7 @@ Mutable per-runtime state belongs in `InstallContext::insert_state`.
 {{ api_signature(value="struct MemberDecl { pub name: String, pub kind: MemberKind, pub signature: Option<String>, pub untyped: bool, pub doc: Option<String>, pub contributor: &'static str }") }}
 
 One declared member. `fn signature(&mut self, signature: impl Into<String>) -> &mut Self` sets
-the Luau signature or type for definition output (`(self, x: number): integer` for a method, a
+the Luau signature or type for definition output (`(self, x: number): Color` for a method, a
 type for a getter, setter or field); `fn untyped(&mut self) -> &mut Self` leaves it without a
 type on purpose (the definitions say `...any`); `fn doc(&mut self, doc: impl Into<String>) ->
 &mut Self`. A member with neither a signature nor `untyped` fails the plan: types are never
@@ -201,12 +201,18 @@ The member just declared. `fn signature(self, signature: impl Into<String>) -> S
 
 {{ api_signature(value="struct ModuleMemberDecl { pub name: String, pub kind: ModuleMemberKind, pub signature: Option<String>, pub untyped: bool, pub doc: Option<String>, .. }") }}
 
-{{ api_signature(value="enum ModuleMemberKind { Function, Constant(CompileConstant), Installed }") }}
+{{ api_signature(value="enum ModuleMemberKind { Function, Constant(CompileConstant), Value, Installed }") }}
 
-The vocabulary for signatures follows the runtime, where Luau's checker keeps `integer` and
-`number` apart: a packed value, a `Bits64` or an `Integer` result is `integer`; a count, a size
-or an `f64` is `number`; a class is its generated name, the key with dots replaced
-(`dream_udp_Client`); a module type is `Module__dream_archive_ba2`.
+`Value` is a member set in every runtime from its declaration that the compiler knows nothing
+about: a packed scalar, which has no compile-time constant form. Under a safe environment an
+imported `module.NAME` is still resolved once, at load.
+
+The vocabulary for signatures follows the runtime: a packed value is its kind's name
+(`Quaternion`, `Color`, a host kind's `NAME`), declared by the plan as a nominal type; a 64-bit
+pattern is `Bits64`; a count, a size, an id or an `f64` is `number`; a class is its generated
+name, the key with dots replaced (`dream_udp_Client`); a module type is
+`Module__dream_archive_ba2`. A userdata class or type alias named like a packed kind fails the
+plan.
 
 ### RuntimePolicy
 
@@ -254,7 +260,7 @@ Collects extensions, services and policy. `Default`.
 | `fn pin_tag(self, key: &str, tag: RuntimeTag) -> Self` | Pins the type with stable `key` to `tag` in every runtime from this plan |
 | `fn network_clock(self, clock: udp::Clock) -> Self` | The transport clock the network bridge reads instead of a monotonic clock started at creation; scripts never see or set it |
 | `fn extension(self, extension: impl Extension) -> Self`, `fn boxed_extension(self, extension: Box<dyn Extension>) -> Self` | |
-| `fn finalize(self) -> Result<Rc<RuntimePlan>>` | Adds l3i's `dream.udp` bridge, runs every `describe`, resolves and freezes |
+| `fn finalize(self) -> Result<Rc<RuntimePlan>>` | Adds l3i's `dream.udp` bridge and `dream.bits64`, runs every `describe`, resolves and freezes |
 
 Finalize errors (`Error::Logic`, or `Error::Permission` for a missing capability): an extension
 registered twice or claiming the reserved `dream.udp` id; two ids folding to one debug prefix; a
@@ -357,10 +363,10 @@ bounds check and one copy, so `read_from` never sees a slice of Luau's storage.
 
 {{ api_signature(value="trait PackedScalar: Sized + 'static { const KIND: u8; const NAME: &'static str; fn pack(&self) -> (u64, u8); fn unpack(payload: u64, flags: u8) -> Result<Self>; }") }}
 
-A semantic value that lives in one Luau integer: a 4-bit kind, 4 flag bits, a 56-bit payload.
-The kind is checked on every read, so untyped script code handing the wrong integer to a native
-operation fails with a type error instead of decoding garbage. Kinds are a registry: `1..=4`
-are l3i's own and fixed for good (a packed integer is a file and wire format), `5..=15` are the
+A semantic value of 64 bits: a 4-bit kind, 4 flag bits, a 56-bit payload. The kind is checked on
+every read, so untyped script code handing the wrong value to a native operation fails with a
+type error instead of decoding garbage. Kinds are a registry: `1..=4` are l3i's own and fixed for
+good (a packed value is a file and wire format), `5..=15` are the
 application's, declared per extension with `ExtensionDescriptor::packed` or per runtime with
 `Runtime::register_packed`. A `Packed<T>` crossing a VM where `T` is not the kind's registered
 owner is a logic error.
@@ -383,20 +389,48 @@ bool`. `Clone`, `Copy`, `Debug`, `Eq`.
 
 l3i's own kinds in kind order from 1.
 
+{{ api_signature(value="const WIDE_NAMES: [&str; 2] = [\"Color16\", \"Bits64\"]") }}
+
+The wide scalars: all 64 bits, no kind nibble, each its own type to scripts. `trait WideScalar`
+is sealed: `raster::Color16` and `convert::Bits64` are the only ones. A wide parameter reads the
+bits of any light userdata (on the boxed carrier, of any packed value), whatever its kind, and
+refuses everything else. A forged value costs a wrong decode, never a dereference.
+
 {{ api_signature(value="struct Packed<T>(pub T)") }}
 
-The Luau integer carrying a packed scalar of kind `T`. `FromView` (an integer of kind `T::KIND`,
-after the registry check), `Push`, `Param`, `Return`, `BufferPack`, `SequenceItem`. `Clone`,
-`Copy`, `Debug`, `Eq`, `Hash`.
+A packed scalar of kind `T` as a Luau value. `FromView` (a packed value of kind `T::KIND`, after
+the registry check), `Push`, `Param`, `Return`, `BufferPack`, `SequenceItem`. `Clone`, `Copy`,
+`Debug`, `Eq`, `Hash`. `typeof` answers `T::NAME`.
 
 | Method | Meaning |
 |---|---|
-| `fn bits(&self) -> Result<i64>` | The integer bit pattern; an error if `T::pack` returned more bits than its fields hold |
+| `fn bits(&self) -> Result<i64>` | The 64-bit pattern; an error if `T::pack` returned more bits than its fields hold |
 | `fn from_bits(bits: i64) -> Result<Self>` | Decodes, checking the kind first: `expected a packed Quaternion, got kind 3` |
 
 {{ api_signature(value="fn encode(kind: u8, flags: u8, payload: u64) -> Result<i64>") }}
 
 {{ api_signature(value="fn decode(bits: i64) -> (u8, u8, u64)") }}
+
+### The carrier
+
+Module `l3i::packed::carrier`. How the 64 bits ride in a Luau value, chosen when l3i is built:
+on x86-64 and AArch64 a light userdata whose pointer word is the bits (never followed) under a
+light userdata tag per kind; elsewhere, wasm32 first, an untagged userdata interned by tag and
+bits in a weak table, so equality and table keys behave the same. `L3I_CARRIER=boxed` forces the
+interned carrier on a desktop build, without `jit`. Every runtime proves its carrier at
+creation: each single bit, zero, all ones and non-canonical patterns through a push, a read,
+equality, inequality under another tag and a table key.
+
+| Item | Value |
+|---|---|
+| `const CARRIER: &str` | `"light userdata"` or `"boxed userdata"` |
+| `type LightTag = u8` | A light userdata tag |
+| `const NIBBLE_TAG_BASE: LightTag` | 128; kind `k` takes tag `128 + k` (`const fn nibble_tag(kind)`) |
+| `const WIDE_TAG_FIRST`, `COLOR16_TAG`, `BITS64_TAG` | 144, 144, 145 |
+| `const TAG_END: LightTag` | 160, Luau's `LUA_LUTAG_LIMIT` in this build |
+
+Host light userdata keeps tags `0..128`: a push or `set_light_userdata_name` above that, or a
+pointer whose top four bits are not zero, is refused.
 
 The bit pattern for `kind`, `flags` and `payload`, refusing a kind outside `1..=15`, flags above
 four bits or a payload above 56 bits rather than truncating; and the split back into `(kind,
@@ -449,7 +483,7 @@ rounded neighbour.
 
 ## dream.quat
 
-Module `l3i::quat`: rotations as packed Luau integers. A unit quaternion is compressed
+Module `l3i::quat`: rotations as packed scalars. A unit quaternion is compressed
 smallest-three into the 56-bit payload: two bits name the largest component, the other three are
 18-bit lanes over `[-1/√2, 1/√2]`, and the omitted one is rebuilt from the unit norm. The
 identity and axis-aligned rotations round-trip exactly; a random rotation comes back within
@@ -514,7 +548,7 @@ call's result to a local first.
 
 ## dream.raster
 
-Module `l3i::raster`: raster scalars as packed integers.
+Module `l3i::raster`: raster scalars as packed values.
 
 {{ api_signature(value="struct RasterExtension") }}
 
@@ -544,7 +578,7 @@ Channel meaning (straight or premultiplied) belongs to the consumer. `BufferPack
 | `const fn rgba(r: u8, g: u8, b: u8, a: u8) -> Color` | |
 | `const fn packed(self) -> u32`, `const fn from_packed(bits: u32) -> Color` | The fixed 32-bit layout |
 | `const fn to_array(self) -> [u8; 4]` | |
-| `const fn pack(self) -> Packed<Color>` | The Luau integer |
+| `const fn pack(self) -> Packed<Color>` | The packed value |
 | `fn channel(value: f64) -> u8` | Clamped to `0..=255`, rounded to nearest, NaN to 0 |
 | `fn from_numbers(r: f64, g: f64, b: f64, a: f64) -> Color` | Each through `channel` |
 | `fn with_alpha(self, a: f64) -> Color` | |
@@ -557,9 +591,11 @@ Channel meaning (straight or premultiplied) belongs to the consumer. `BufferPack
 {{ api_signature(value="struct Color16 { pub r: u16, pub g: u16, pub b: u16, pub a: u16 }") }}
 
 The wide form for formats that require 16 bits per channel: red in bits 0..15 through alpha in
-bits 48..63, the little-endian `u64` being an RGBA16 pixel. It fills the whole Luau integer and
-so has no kind nibble: any integer is accepted as a `Color16`, and nothing at runtime tells it
-from an RGBA8 color or an id. The same methods as `Color` over `u16`, plus `const WIDEN: f64 =
+bits 48..63, the little-endian `u64` being an RGBA16 pixel. It fills all 64 bits and so has no
+kind nibble: a wide scalar, `typeof` `Color16`, whose parameters read the bits of any light
+userdata or packed value (a `Color` passed by mistake reads as an RGBA16 pixel) and refuse a
+number. The same methods as
+`Color` over `u16`, plus `const WIDEN: f64 =
 257.0`, `const fn bits(self) -> i64`, `fn widen(color: Color) -> Color16` (`x * 257`) and `fn
 narrow(self) -> Color` (`round(x / 257)`). `FromView`, `Push`, `Param`, `Return`, `BufferPack`.
 
@@ -586,8 +622,9 @@ The color arithmetic receiver (`dream.raster.Math`). Module `l3i::raster::loweri
 
 Module `l3i::udp`: the dream-net bridge, extension `dream.udp`, module `@dream/udp`, types
 `dream.udp.Server`, `dream.udp.Client` and `dream.udp.Schema`. Every `RuntimePlan` carries it
-and the id is reserved. Peer, event, channel and client ids are Luau integers; sizes and counters
-plain numbers; payloads Luau buffers (or strings on send), copied on the way in and out so no
+and the id is reserved. Peer, event and channel ids are numbers, exact or an error; the protocol
+id, client ids and fingerprint halves are `Bits64`; sizes and counters plain numbers; payloads
+Luau buffers (or strings on send), copied on the way in and out so no
 Lua memory is retained by the transport; the transport clock is the plan's; the server private
 key never reaches Luau; nothing calls into Luau from inside dream-net.
 
@@ -640,12 +677,25 @@ impl FnOnce(&mut Client))`. Connection statistics are direct fields on the clien
 
 `Delivery` names as scripts spell them.
 
+## dream.bits64
+
+Module `l3i::bits64`: extension `dream.bits64`, module `@dream/bits64`, which converts a
+`convert::Bits64` to and from exact numbers, 32-bit halves, hex and buffer bytes. Every
+`RuntimePlan` carries it and the id is reserved.
+
+{{ api_signature(value="struct Bits64Extension") }}
+
+| Constant | Value |
+|---|---|
+| `EXTENSION_ID: &str` | `dream.bits64` |
+| `MODULE: &str` | `@dream/bits64` |
+
 ## dream.soft_render
 
 Module `l3i::soft_render`, feature `soft-render`: dream-soft-render's CPU rasterizer as a small
 software rendering device. Rectangles, textured rectangles and triangle meshes from Luau buffers
 are drawn immediately in call order into a renderer-owned RGBA8 surface. Colors are `raster`
-integers the renderer reads as premultiplied; clip rectangles are `ClipRect` integers; vertex
+`Color` values the renderer reads as premultiplied; clip rectangles are `ClipRect` values; vertex
 data is a buffer of 20-byte vertices and an index buffer of `u32`, borrowed for one draw call and
 never kept. Malformed input is an error in the renderer's own words, never a quietly clipped draw.
 

@@ -51,11 +51,9 @@
 //! # Tokens and lifetime
 //!
 //! A token is the 1-based position of its identity in its pool: `1, 2, 3, ...` in first-seen
-//! order, dense, below 2^32, as a Luau number. A number and not an `integer`, because a table
-//! keyed by dense numbers keeps them in its array part, and an `integer` key always hashes: a
-//! read costs about a fifth of the instructions of an integer or string key, and a third of an
-//! integer key's L1 misses (`benches/intern.rs`). Dense tokens also fit a `u32` column
-//! (`buffer.writeu32`).
+//! order, dense, below 2^32, as a Luau number. A table keyed by dense numbers keeps them in its
+//! array part, where a string key always hashes (`benches/intern.rs`). Dense tokens also fit a
+//! `u32` column (`buffer.writeu32`).
 //!
 //! Tokens are pool-relative: two pools hand out the same numbers, and a token means something
 //! only to the pool that made it. Pools only grow (no removal, no reuse), so a token never

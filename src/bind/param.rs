@@ -5,7 +5,7 @@ use std::ffi::c_int;
 
 use super::Call;
 use super::diagnostics;
-use crate::convert::{BufferView, FromView, Integer, Vector3};
+use crate::convert::{BufferView, FromView, Vector3};
 use crate::error::{Error, Result};
 use crate::stack::{Scope, Type, ValueView};
 use crate::userdata::{Userdata, check_receiver, receiver};
@@ -147,7 +147,6 @@ impl_param_from_view!(
     f64,
     String,
     Vec<u8>,
-    Integer,
     crate::convert::Exact<i8>,
     crate::convert::Exact<i16>,
     crate::convert::Exact<i32>,
@@ -158,7 +157,6 @@ impl_param_from_view!(
     crate::convert::Exact<u32>,
     crate::convert::Exact<u64>,
     crate::convert::Exact<usize>,
-    crate::convert::Bits64,
     Vector3,
     Value,
 );

@@ -51,7 +51,7 @@ fn per_call(c: &mut Criterion) {
             .load_function(&format!(
                 "return function() local bytes = bytes local B = bytes.math() \
                  local buf = buffer.create(64) buffer.writestring(buf, 0, 'record name here') \
-                 local needle = 'here' local v, w, s = 0, 0i, '' \
+                 local needle = 'here' local v, w, s = 0, nil, '' \
                  local FOLD = bytes.rules({{ nocase = true, replace = {{ ['\\\\'] = '/' }} }}) \
                  local path, folded = 'Meshes\\\\Architecture\\\\Rock_01.NIF', 'meshes/architecture/rock_01.nif' \
                  for i = 1, {CALLS} do {body} end return v end"
@@ -105,7 +105,7 @@ fn lowered(c: &mut Criterion) {
                 "bench.lua",
                 &format!(
                     "--!native\nlocal B: dream_bytes_Math = bytes.math()\n\
-                     return function() local buf = buffer.create(64) local v, w = 0, 0i \
+                     return function() local buf = buffer.create(64) local v, w = 0, nil \
                      for i = 1, {CALLS} do {body} end return v end"
                 ),
             )
@@ -159,7 +159,7 @@ fn throughput(c: &mut Criterion) {
                  local copy = buffer.create(1048576) buffer.copy(copy, 0, big) \
                  local packed = bytes.deflate and bytes.deflate(big) or nil \
                  local lz4 = bytes.lz4Compress and bytes.lz4Compress(big) or nil \
-                 local v, w, s, b = 0, 0i, '', nil";
+                 local v, w, s, b = 0, nil, '', nil";
     let mut group = c.benchmark_group("bytes_throughput");
     group.throughput(Throughput::Bytes(MIB));
     for (name, body) in cases {

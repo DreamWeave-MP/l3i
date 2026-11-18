@@ -4,7 +4,7 @@
 use std::cell::Cell;
 
 use l3i::bind::Call;
-use l3i::convert::{Bits64, BufferView, BytesView, Exact, Integer, Push};
+use l3i::convert::{Bits64, BufferView, BytesView, Exact, Push};
 use l3i::extension::{Extension, ExtensionDescriptor, RuntimePlan, RuntimePolicy};
 use l3i::options::{FromOptions, Options};
 use l3i::packed::{BufferPack, Packed, PackedScalar};
@@ -79,7 +79,7 @@ fn options_are_strict_and_precise() {
     let cases = [
         ("{ path = 'a' }", "Ok: Extract { path: \"a\", force: false, limit: None, nested: None }"),
         (
-            "{ path = 'a', force = true, limit = 3i, nested = { depth = 2i } }",
+            "{ path = 'a', force = true, limit = 3, nested = { depth = 2 } }",
             "Ok: Extract { path: \"a\", force: true, limit: Some(3), nested: Some(2) }",
         ),
         ("{ }", "archive:extract: missing required option 'path'"),
@@ -93,7 +93,7 @@ fn options_are_strict_and_precise() {
         ),
         ("{ path = 5 }", "archive:extract.path: "),
         (
-            "{ path = 'a', nested = { depth = 1i, dept = 2i } }",
+            "{ path = 'a', nested = { depth = 1, dept = 2 } }",
             "archive:extract.nested: unknown option 'dept'; known options are depth",
         ),
         ("{ path = 'a', nested = { } }", "archive:extract.nested: missing required option 'depth'"),
@@ -201,14 +201,16 @@ fn exact_integers_never_round_and_bit_patterns_keep_all_sixty_four_bits() {
     for (name, function) in [("exact", &exact), ("unsigned", &unsigned), ("legacy", &legacy), ("bits", &bits)] {
         runtime.set_global(name, function).unwrap();
     }
+    runtime.set_global("ones", &Bits64(u64::MAX)).unwrap();
+    runtime.set_global("almost", &Bits64(u64::MAX ^ 1)).unwrap();
     runtime
         .exec(
-            "assert(exact(3) == 6 and exact(3i) == 6 and exact(-2^53) == -2^54, 'integral numbers and integers') \
+            "assert(exact(3) == 6 and exact(-2^53) == -2^54, 'integral numbers') \
              assert(not pcall(exact, 3.5), 'fraction') assert(not pcall(exact, 1/0), 'infinity') \
              assert(not pcall(exact, 0/0), 'nan') assert(not pcall(exact, 2^63), 'range') assert(not pcall(exact, 'x')) \
              assert(unsigned(2^63), 'unsigned range reaches past i64') assert(not pcall(unsigned, -1)) \
              assert(legacy(3.5) == 4, 'the compatibility conversion still rounds') \
-             assert(bits(-1i) == -2i, 'all sixty-four bits, as a pattern') assert(not pcall(bits, 5), 'a number is not a pattern')",
+             assert(bits(ones) == almost, 'all sixty-four bits, as a pattern') assert(not pcall(bits, 5), 'a number is not a pattern')",
         )
         .unwrap();
     // The full pattern round-trips through the stack.
@@ -259,13 +261,13 @@ impl PackedScalar for Handle {
 }
 
 #[test]
-fn packed_scalars_cross_as_integers_with_a_kind_check() {
+fn packed_scalars_cross_with_a_kind_check() {
     let runtime = Runtime::new().unwrap();
     // Nothing crosses until the kind is registered on this VM.
     let unregistered =
         runtime.bind_function("dreamweave.tests.unregistered", |h: Packed<Handle>| i64::from(h.0.id)).unwrap();
     runtime.set_global("unregistered", &unregistered).unwrap();
-    let error = runtime.exec("unregistered(5i)").unwrap_err().to_string();
+    let error = runtime.exec("unregistered(5)").unwrap_err().to_string();
     assert!(error.contains("Handle (kind 5) is not registered"), "{error}");
     let error = runtime
         .stack()
@@ -281,10 +283,11 @@ fn packed_scalars_cross_as_integers_with_a_kind_check() {
         runtime.bind_function("dreamweave.tests.read", |handle: Packed<Handle>| i64::from(handle.0.id) * 2).unwrap();
     runtime.set_global("make", &make).unwrap();
     runtime.set_global("read", &read).unwrap();
+    runtime.set_global("kind_name", "Handle").unwrap();
     runtime
         .exec(
-            "local h = make(21) assert(type(h) == 'number' or type(h) == 'integer', type(h)) assert(read(h) == 42) \
-             local ok, err = pcall(read, 21i) assert(not ok and string.find(err, 'Handle'), err) \
+            "local h = make(21) assert(typeof(h) == kind_name, typeof(h)) assert(read(h) == 42) \
+             local ok, err = pcall(read, 21) assert(not ok and string.find(err, 'Handle'), err) \
              local ok2 = pcall(read, 1.5) assert(not ok2)",
         )
         .unwrap();
@@ -298,12 +301,12 @@ fn packed_scalars_cross_as_integers_with_a_kind_check() {
         .unwrap();
     let load = runtime
         .bind_function("dreamweave.tests.load", |buffer: BufferView| {
-            buffer.read_packed::<Packed<Handle>>(0).map(|h| Integer(i64::from(h.0.id)))
+            buffer.read_packed::<Packed<Handle>>(0).map(|h| f64::from(h.0.id))
         })
         .unwrap();
     runtime.set_global("store", &store).unwrap();
     runtime.set_global("load", &load).unwrap();
-    runtime.exec("local b = buffer.create(8) store(b, make(99)) assert(load(b) == 99i)").unwrap();
+    runtime.exec("local b = buffer.create(8) store(b, make(99)) assert(load(b) == 99)").unwrap();
 
     // One number, one owner per VM; l3i's own numbers are never a host's.
     #[derive(Debug)]

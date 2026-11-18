@@ -4,7 +4,7 @@
 autotests = false
 autobenches = false
 name = "l3i"
-version = "2.11.0"
+version = "3.0.0"
 description = "Luau binder for DreamWeave component crates: typed function binding, tagged and untagged userdata, direct userdata access, sandboxed runtimes"
 authors = ["Dave Corley (S3kshun8) <corleycomputerrepair@protonmail.ch>"]
 license = "MIT OR Apache-2.0"
@@ -17,7 +17,7 @@ keywords = ["luau", "lua", "bindings", "gamedev"]
 categories = ["api-bindings", "game-development"]
 links = "luau"
 # The whole package builds from this tree: the Luau submodule (`luau/`, MIT, pinned at the
-# 0.745 release; only the components the build uses are packaged) plus the binder's
+# 0.747 release; only the components the build uses are packaged) plus the binder's
 # C++ additions and shims (`csrc/`), and for `audio` the libopus submodule (`opus/`,
 # BSD-3-Clause, pinned at 1.6.1). No network at build time, no separate Lua binding crate.
 # Root-level entries are anchored with a leading slash: gitignore semantics would otherwise
@@ -130,11 +130,15 @@ libc = { version = "0.2", optional = true }
 cc = { version = "1", features = ["parallel"] }
 
 [dev-dependencies]
-criterion = { version = "0.8.2", features = ["html_reports"] }
-# Test PKIs for `@dream/tls`: CAs, chains, expired and mismatched certificates, made per run.
-rcgen = { version = "0.14", default-features = false, features = ["ring", "pem"] }
 # Signal masks, dispositions and descriptor limits for tests of what the OS does at the edges.
 libc = "0.2"
+
+# Not on emscripten, where wasm32's tests run without them: Criterion (rayon refuses wasm
+# targets; only the benches use it) and rcgen, the test PKIs for `@dream/tls` (its `ring` backend
+# does not build there, and `tls` is not tested there).
+[target.'cfg(not(target_os = "emscripten"))'.dev-dependencies]
+criterion = { version = "0.8.2", features = ["html_reports"] }
+rcgen = { version = "0.14", default-features = false, features = ["ring", "pem"] }
 
 [[test]]
 name = "integration"

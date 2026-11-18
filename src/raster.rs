@@ -45,12 +45,11 @@
 //! `rgb8` are the strict constructors (an integer outside `0..=255` is an error); the receiver's
 //! clamp, so both paths of a lowered call agree by construction.
 
-use crate::convert::{Exact, FromView, Integer, Push};
+use crate::convert::Exact;
 use crate::error::{Error, Result};
 use crate::extension::{Extension, ExtensionDescriptor};
 use crate::packed::{BufferPack, Packed, PackedScalar};
 use crate::source::CompileConstant;
-use crate::stack::{Scope, Type, ValueView};
 
 /// An RGBA8 color. Channel meaning (straight or premultiplied) belongs to the consumer.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -277,67 +276,20 @@ impl Color16 {
     }
 }
 
-impl<'v> FromView<'v> for Color16 {
-    const EXPECTED: &'static str = "integer";
-
+impl crate::packed::WideScalar for Color16 {
+    const NAME: &'static str = "Color16";
+    const LIGHT_TAG: crate::packed::carrier::LightTag = crate::packed::carrier::COLOR16_TAG;
     #[inline]
-    fn from_view(view: ValueView<'v>) -> Result<Self> {
-        match crate::convert::read_integer64(view) {
-            Some(bits) => Ok(Color16::from_packed(bits as u64)),
-            None => Err(view.type_error(Type::Integer)),
-        }
-    }
-
-    #[inline(always)]
-    fn from_raw_arg(raw: &crate::convert::RawValue, view: impl FnOnce() -> ValueView<'v>) -> Result<Self> {
-        if raw.tag() == crate::raw::ffi::LUA_TINTEGER {
-            Ok(Color16::from_packed(raw.integer() as u64))
-        } else {
-            Err(view().type_error(Type::Integer))
-        }
-    }
-
-    fn matches(view: ValueView<'v>) -> bool {
-        crate::convert::read_integer64(view).is_some()
-    }
-}
-
-impl crate::bind::Param for Color16 {
-    type Item<'c> = Color16;
-}
-
-impl<'c> crate::bind::ParamItem<'c> for Color16 {
-    const KIND: crate::bind::ParamKind = crate::bind::ParamKind::Regular;
-    const EXPECTED: &'static str = "integer";
-    #[inline]
-    fn read_slot(view: ValueView<'c>) -> Result<Self> {
-        <Color16 as FromView<'c>>::from_view(view)
-    }
-    #[inline(always)]
-    fn read_arg(call: &'c crate::bind::Call<'c>, index: std::ffi::c_int) -> Result<Self> {
-        match call.raw_arg(index) {
-            Some(raw) => <Color16 as FromView<'c>>::from_raw_arg(raw, || call.arg(index)),
-            None => <Color16 as FromView<'c>>::from_view(call.arg(index)),
-        }
+    fn to_bits(self) -> u64 {
+        self.packed()
     }
     #[inline]
-    fn matches(view: ValueView<'c>) -> bool {
-        <Color16 as FromView<'c>>::matches(view)
+    fn from_bits(bits: u64) -> Self {
+        Color16::from_packed(bits)
     }
 }
 
-impl Push for Color16 {
-    fn push_into<'s, S: Scope>(&self, scope: &'s S) -> Result<ValueView<'s>> {
-        Integer(self.bits()).push_into(scope)
-    }
-}
-
-impl crate::bind::Return for Color16 {
-    fn push_results(self, call: &crate::bind::Call<'_>) -> Result<std::ffi::c_int> {
-        self.push_into(call)?;
-        Ok(1)
-    }
-}
+crate::packed::wide_scalar_conversions!(Color16);
 
 /// Eight bytes, little-endian: an RGBA16 pixel.
 impl BufferPack for Color16 {
@@ -360,6 +312,10 @@ unsafe impl crate::userdata::Userdata for Math {
     const NAME: &'static str = "dream.raster.Math";
 }
 
+/// The width of a [`Color`]'s payload: its `unpack` refuses any bit above it, and so must lowered
+/// code.
+pub(crate) const COLOR_PAYLOAD_BITS: u32 = 32;
+
 impl PackedScalar for Color {
     const KIND: u8 = 3;
     const NAME: &'static str = "Color";
@@ -367,8 +323,10 @@ impl PackedScalar for Color {
         (u64::from(self.packed()), 0)
     }
     fn unpack(payload: u64, _flags: u8) -> Result<Self> {
-        let bits = u32::try_from(payload).map_err(|_| Error::runtime("Color payload has bits above 32"))?;
-        Ok(Color::from_packed(bits))
+        if payload >> COLOR_PAYLOAD_BITS != 0 {
+            return Err(Error::runtime("Color payload has bits above 32"));
+        }
+        Ok(Color::from_packed(payload as u32))
     }
 }
 
@@ -479,74 +437,74 @@ impl Extension for RasterExtension {
                 $each!(
                     "rgba8",
                     "r: number, g: number, b: number, a: number",
-                    "integer",
+                    "Color",
                     |r: f64, g: f64, b: f64, a: f64| Color::from_numbers(r, g, b, a).pack()
                 );
-                $each!("rgb8", "r: number, g: number, b: number", "integer", |r: f64, g: f64, b: f64| {
+                $each!("rgb8", "r: number, g: number, b: number", "Color", |r: f64, g: f64, b: f64| {
                     Color::from_numbers(r, g, b, 255.0).pack()
                 });
-                $each!("red", "color: integer", "number", |c: Packed<Color>| f64::from(c.0.r));
-                $each!("green", "color: integer", "number", |c: Packed<Color>| f64::from(c.0.g));
-                $each!("blue", "color: integer", "number", |c: Packed<Color>| f64::from(c.0.b));
-                $each!("alpha", "color: integer", "number", |c: Packed<Color>| f64::from(c.0.a));
-                $each!("channels", "color: integer", "(number, number, number, number)", |c: Packed<Color>| (
+                $each!("red", "color: Color", "number", |c: Packed<Color>| f64::from(c.0.r));
+                $each!("green", "color: Color", "number", |c: Packed<Color>| f64::from(c.0.g));
+                $each!("blue", "color: Color", "number", |c: Packed<Color>| f64::from(c.0.b));
+                $each!("alpha", "color: Color", "number", |c: Packed<Color>| f64::from(c.0.a));
+                $each!("channels", "color: Color", "(number, number, number, number)", |c: Packed<Color>| (
                     f64::from(c.0.r),
                     f64::from(c.0.g),
                     f64::from(c.0.b),
                     f64::from(c.0.a)
                 ));
-                $each!("withAlpha", "color: integer, a: number", "integer", |c: Packed<Color>, a: f64| c
+                $each!("withAlpha", "color: Color, a: number", "Color", |c: Packed<Color>, a: f64| c
                     .0
                     .with_alpha(a)
                     .pack());
                 $each!(
                     "lerp",
-                    "a: integer, b: integer, t: number",
-                    "integer",
+                    "a: Color, b: Color, t: number",
+                    "Color",
                     |a: Packed<Color>, b: Packed<Color>, t: f64| a.0.lerp(b.0, t).pack()
                 );
-                $each!("mul", "a: integer, b: integer", "integer", |a: Packed<Color>, b: Packed<Color>| a
+                $each!("mul", "a: Color, b: Color", "Color", |a: Packed<Color>, b: Packed<Color>| a
                     .0
                     .modulate(b.0)
                     .pack());
-                $each!("add", "a: integer, b: integer", "integer", |a: Packed<Color>, b: Packed<Color>| a
+                $each!("add", "a: Color, b: Color", "Color", |a: Packed<Color>, b: Packed<Color>| a
                     .0
                     .saturating_add(b.0)
                     .pack());
-                $each!("scale", "color: integer, factor: number", "integer", |c: Packed<Color>, factor: f64| c
+                $each!("scale", "color: Color, factor: number", "Color", |c: Packed<Color>, factor: f64| c
                     .0
                     .scale(factor)
                     .pack());
-                $each!("premultiply", "color: integer", "integer", |c: Packed<Color>| c.0.premultiply().pack());
+                $each!("premultiply", "color: Color", "Color", |c: Packed<Color>| c.0.premultiply().pack());
                 $each!(
                     "rgba16",
                     "r: number, g: number, b: number, a: number",
-                    "integer",
+                    "Color16",
                     |r: f64, g: f64, b: f64, a: f64| Color16::from_numbers(r, g, b, a)
                 );
-                $each!("rgb16", "r: number, g: number, b: number", "integer", |r: f64, g: f64, b: f64| {
+                $each!("rgb16", "r: number, g: number, b: number", "Color16", |r: f64, g: f64, b: f64| {
                     Color16::from_numbers(r, g, b, 65535.0)
                 });
-                $each!("red16", "color: integer", "number", |c: Color16| f64::from(c.r));
-                $each!("green16", "color: integer", "number", |c: Color16| f64::from(c.g));
-                $each!("blue16", "color: integer", "number", |c: Color16| f64::from(c.b));
-                $each!("alpha16", "color: integer", "number", |c: Color16| f64::from(c.a));
-                $each!("channels16", "color: integer", "(number, number, number, number)", |c: Color16| (
+                $each!("red16", "color: Color16", "number", |c: Color16| f64::from(c.r));
+                $each!("green16", "color: Color16", "number", |c: Color16| f64::from(c.g));
+                $each!("blue16", "color: Color16", "number", |c: Color16| f64::from(c.b));
+                $each!("alpha16", "color: Color16", "number", |c: Color16| f64::from(c.a));
+                $each!("channels16", "color: Color16", "(number, number, number, number)", |c: Color16| (
                     f64::from(c.r),
                     f64::from(c.g),
                     f64::from(c.b),
                     f64::from(c.a)
                 ));
-                $each!("withAlpha16", "color: integer, a: number", "integer", |c: Color16, a: f64| c.with_alpha(a));
-                $each!("lerp16", "a: integer, b: integer, t: number", "integer", |a: Color16, b: Color16, t: f64| a
+                $each!("withAlpha16", "color: Color16, a: number", "Color16", |c: Color16, a: f64| c.with_alpha(a));
+                $each!("lerp16", "a: Color16, b: Color16, t: number", "Color16", |a: Color16, b: Color16, t: f64| a
                     .lerp(b, t));
-                $each!("mul16", "a: integer, b: integer", "integer", |a: Color16, b: Color16| a.modulate(b));
-                $each!("add16", "a: integer, b: integer", "integer", |a: Color16, b: Color16| a.saturating_add(b));
-                $each!("scale16", "color: integer, factor: number", "integer", |c: Color16, factor: f64| c
+                $each!("mul16", "a: Color16, b: Color16", "Color16", |a: Color16, b: Color16| a.modulate(b));
+                $each!("add16", "a: Color16, b: Color16", "Color16", |a: Color16, b: Color16| a.saturating_add(b));
+                $each!("scale16", "color: Color16, factor: number", "Color16", |c: Color16, factor: f64| c
                     .scale(factor));
-                $each!("premultiply16", "color: integer", "integer", |c: Color16| c.premultiply());
-                $each!("widen", "color: integer", "integer", |c: Packed<Color>| Color16::widen(c.0));
-                $each!("narrow", "color: integer", "integer", |c: Color16| c.narrow().pack());
+                $each!("premultiply16", "color: Color16", "Color16", |c: Color16| c.premultiply());
+                $each!("widen", "color: Color", "Color16", |c: Packed<Color>| Color16::widen(c.0));
+                $each!("narrow", "color: Color16", "Color", |c: Color16| c.narrow().pack());
             };
         }
 
@@ -566,15 +524,22 @@ impl Extension for RasterExtension {
 
         let module = d.module(MODULE);
         module
-            .doc("Colors and clip rectangles as packed integers.")
-            .constant("TRANSPARENT", CompileConstant::Integer(Color::TRANSPARENT.pack().bits()?))
-            .constant("BLACK", CompileConstant::Integer(Color::BLACK.pack().bits()?))
-            .constant("WHITE", CompileConstant::Integer(Color::WHITE.pack().bits()?))
-            .constant("CLIP_ALL", CompileConstant::Integer(ClipRect::ALL.pack().bits()?))
+            .doc("Colors and clip rectangles as packed scalars.")
+            .value("TRANSPARENT", Color::TRANSPARENT.pack())
+            .signature("Color")
+            .value("BLACK", Color::BLACK.pack())
+            .signature("Color")
+            .value("WHITE", Color::WHITE.pack())
+            .signature("Color")
+            .value("CLIP_ALL", ClipRect::ALL.pack())
+            .signature("ClipRect")
             .constant("CLIP_MAX_COORD", CompileConstant::Number(f64::from(ClipRect::MAX_COORD)))
-            .constant("TRANSPARENT16", CompileConstant::Integer(Color16::TRANSPARENT.bits()))
-            .constant("BLACK16", CompileConstant::Integer(Color16::BLACK.bits()))
-            .constant("WHITE16", CompileConstant::Integer(Color16::WHITE.bits()));
+            .value("TRANSPARENT16", Color16::TRANSPARENT)
+            .signature("Color16")
+            .value("BLACK16", Color16::BLACK)
+            .signature("Color16")
+            .value("WHITE16", Color16::WHITE)
+            .signature("Color16");
         macro_rules! module_member {
             ($name:literal, $args:literal, $result:literal, |$($param:ident: $ty:ty),*| $body:expr) => {
                 module.function($name, |$($param: $ty),*| $body).signature(concat!("(", $args, ") -> ", $result));
@@ -583,7 +548,7 @@ impl Extension for RasterExtension {
         color_members!(module_member);
         module
             .function("packed", |c: Packed<Color>| f64::from(c.0.packed()))
-            .signature("(color: integer) -> number")
+            .signature("(color: Color) -> number")
             .function("math", || crate::userdata::Owned(Math))
             .signature("() -> dream_raster_Math")
             .function(
@@ -602,11 +567,11 @@ impl Extension for RasterExtension {
                     .pack())
                 },
             )
-            .signature("(minX: number, minY: number, maxX: number, maxY: number) -> integer")
+            .signature("(minX: number, minY: number, maxX: number, maxY: number) -> ClipRect")
             .function("clipBounds", |c: Packed<ClipRect>| {
                 (f64::from(c.0.min_x), f64::from(c.0.min_y), f64::from(c.0.max_x), f64::from(c.0.max_y))
             })
-            .signature("(clip: integer) -> (number, number, number, number)");
+            .signature("(clip: ClipRect) -> (number, number, number, number)");
         Ok(())
     }
 }
@@ -709,9 +674,11 @@ pub mod lowering {
 
     use super::{Color, Color16, Math};
     use crate::native_code::hooks::{NamecallSite, NativeCodeHooks, NativeContext};
-    use crate::native_code::ir::{IrBuilder, IrCmd, IrCondition, IrOp, bytecode_type};
+    use crate::native_code::ir::{IrBuilder, IrCmd, IrOp, bytecode_type};
+    use crate::native_code::packed_ir;
     use crate::packed::PackedScalar;
-    use crate::raw::ffi::{LUA_TINTEGER, LUA_TNUMBER};
+    use crate::packed::carrier::{COLOR16_TAG, LightTag, nibble_tag};
+    use crate::raw::ffi::LUA_TNUMBER;
 
     static LOWERED: AtomicUsize = AtomicUsize::new(0);
 
@@ -729,12 +696,19 @@ pub mod lowering {
     struct Format {
         bits: i64,
         max: f64,
-        /// The packed kind to check, or none for the raw 16-bit form.
-        kind: Option<i64>,
+        /// The packed kind to check, or none for the wide 16-bit form.
+        kind: Option<u8>,
+        /// The light tag results are stored under.
+        tag: LightTag,
     }
 
-    const RGBA8: Format = Format { bits: 8, max: 255.0, kind: Some(<Color as PackedScalar>::KIND as i64) };
-    const RGBA16: Format = Format { bits: 16, max: 65535.0, kind: None };
+    const RGBA8: Format = Format {
+        bits: 8,
+        max: 255.0,
+        kind: Some(<Color as PackedScalar>::KIND),
+        tag: nibble_tag(<Color as PackedScalar>::KIND),
+    };
+    const RGBA16: Format = Format { bits: 16, max: 65535.0, kind: None, tag: COLOR16_TAG };
 
     impl Format {
         fn shift(self, lane: usize) -> i64 {
@@ -742,21 +716,13 @@ pub mod lowering {
         }
     }
 
-    /// Checks the register holds an integer (and, for the 8-bit form, a packed `Color`) and
-    /// returns its bits.
+    /// Checks the register holds a packed `Color` (the 8-bit form) or any value on the carrier
+    /// (the wide 16-bit form) and returns its bits.
     fn checked(build: &mut IrBuilder<'_>, reg: IrOp, exit: IrOp, format: Format) -> IrOp {
-        build.load_and_check_tag(reg, LUA_TINTEGER as u8, exit);
-        let bits = build.inst(IrCmd::LOAD_INT64, &[reg]);
-        if let Some(kind) = format.kind {
-            let sixty = build.const_int64(60);
-            let fifteen = build.const_int64(15);
-            let actual = build.inst(IrCmd::BITRSHIFT_INT64, &[bits, sixty]);
-            let actual = build.inst(IrCmd::BITAND_INT64, &[actual, fifteen]);
-            let expected = build.const_int64(kind);
-            let equal = build.cond(IrCondition::Equal);
-            build.inst(IrCmd::CHECK_CMP_INT64, &[actual, expected, equal, exit]);
+        match format.kind {
+            Some(kind) => packed_ir::load_checked_payload(build, reg, kind, super::COLOR_PAYLOAD_BITS, exit),
+            None => packed_ir::load_wide(build, reg, exit),
         }
-        bits
     }
 
     fn number(build: &mut IrBuilder<'_>, reg: IrOp, exit: IrOp) -> IrOp {
@@ -819,17 +785,11 @@ pub mod lowering {
         let bits = bits.expect("four channels");
         match format.kind {
             Some(kind) => {
-                let kind = build.const_int64(kind << 60);
+                let kind = build.const_int64(i64::from(kind) << 60);
                 build.inst(IrCmd::BITOR_INT64, &[bits, kind])
             }
             None => bits,
         }
-    }
-
-    fn store_integer(build: &mut IrBuilder<'_>, result: IrOp, bits: IrOp) {
-        build.inst(IrCmd::STORE_INT64, &[result, bits]);
-        let tag = build.const_tag(LUA_TINTEGER as u8);
-        build.inst(IrCmd::STORE_TAG, &[result, tag]);
     }
 
     fn store_number(build: &mut IrBuilder<'_>, result: IrOp, value: IrOp) {
@@ -873,7 +833,7 @@ pub mod lowering {
             match classify(member) {
                 Some(("red" | "green" | "blue" | "alpha", _, _)) => bytecode_type::NUMBER,
                 Some(("channels", _, _)) | None => bytecode_type::ANY,
-                Some(_) => bytecode_type::INTEGER,
+                Some(_) => packed_ir::RESULT_TYPE,
             }
         }
 
@@ -912,7 +872,7 @@ pub mod lowering {
                         channels[3] = build.const_double(format.max);
                     }
                     let bits = pack(build, channels, true, format);
-                    store_integer(build, result, bits);
+                    packed_ir::store(build, result, bits, format.tag);
                 }
                 ("red" | "green" | "blue" | "alpha", 2) => {
                     let reg = arg(build, 0);
@@ -941,7 +901,7 @@ pub mod lowering {
                         alpha,
                     ];
                     let bits = pack(build, channels, true, format);
-                    store_integer(build, result, bits);
+                    packed_ir::store(build, result, bits, format.tag);
                 }
                 ("lerp", 4) => {
                     let (a_reg, b_reg, t_reg) = (arg(build, 0), arg(build, 1), arg(build, 2));
@@ -960,7 +920,7 @@ pub mod lowering {
                         out[i] = build.inst(IrCmd::ADD_NUM, &[a[i], step]);
                     }
                     let bits = pack(build, out, true, format);
-                    store_integer(build, result, bits);
+                    packed_ir::store(build, result, bits, format.tag);
                 }
                 ("mul" | "add", 3) => {
                     let (a_reg, b_reg) = (arg(build, 0), arg(build, 1));
@@ -979,7 +939,7 @@ pub mod lowering {
                         };
                     }
                     let bits = pack(build, out, true, format);
-                    store_integer(build, result, bits);
+                    packed_ir::store(build, result, bits, format.tag);
                 }
                 ("scale", 3) => {
                     let (c_reg, f_reg) = (arg(build, 0), arg(build, 1));
@@ -991,7 +951,7 @@ pub mod lowering {
                     }
                     // Alpha passes through: already an exact channel, so rounding is a no-op.
                     let bits = pack(build, out, true, format);
-                    store_integer(build, result, bits);
+                    packed_ir::store(build, result, bits, format.tag);
                 }
                 ("premultiply", 2) => {
                     let reg = arg(build, 0);
@@ -1008,7 +968,7 @@ pub mod lowering {
                     }
                     // Truncating conversion: `(c * a + bias) / max` in integer arithmetic.
                     let bits = pack(build, out, false, format);
-                    store_integer(build, result, bits);
+                    packed_ir::store(build, result, bits, format.tag);
                 }
                 ("widen", 2) => {
                     let reg = arg(build, 0);
@@ -1020,7 +980,7 @@ pub mod lowering {
                     }
                     // Exact integers: no rounding needed.
                     let bits = pack(build, out, false, RGBA16);
-                    store_integer(build, result, bits);
+                    packed_ir::store(build, result, bits, RGBA16.tag);
                 }
                 ("narrow", 2) => {
                     let reg = arg(build, 0);
@@ -1031,7 +991,7 @@ pub mod lowering {
                         *slot = build.inst(IrCmd::DIV_NUM, &[*slot, factor]);
                     }
                     let bits = pack(build, out, true, RGBA8);
-                    store_integer(build, result, bits);
+                    packed_ir::store(build, result, bits, RGBA8.tag);
                 }
                 _ => return false,
             }

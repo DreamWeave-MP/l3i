@@ -14,7 +14,7 @@
 #include <string>
 #include <vector>
 
-LUAU_FASTFLAG(DebugLuauWhileLocalSyntax)
+LUAU_FASTFLAG(LuauExperimentalWhileLocalSyntax)
 
 namespace
 {
@@ -70,7 +70,7 @@ std::vector<Luau::Location> remapped(const std::string& source, bool skip)
 
 int main()
 {
-    FFlag::DebugLuauWhileLocalSyntax.value = true;
+    FFlag::LuauExperimentalWhileLocalSyntax.value = true;
     const std::vector<std::string> sources = {
         "local values = {1, 2}\nreturn [for x in values if x > 1 => x * 2]\n",
         "@native\nfunction f(a) return a end\nreturn [for x in xs => f(x)]\n",

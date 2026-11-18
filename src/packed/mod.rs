@@ -4,10 +4,11 @@
 //! domain type states its byte size and how to read and write itself, and l3i owns the safe
 //! crossing into and out of Luau buffers (bounds checked, one copy, no per-field calls).
 //!
-//! [`PackedScalar`] (§28.1) is a value that physically occupies one Luau integer. The top byte
-//! is a discriminator (a 4-bit kind and 4 bits the kind may use for flags), the low 56 bits the
-//! payload. The kind is checked on every read, so untyped script code handing the wrong integer
-//! to a native operation fails with a type error instead of decoding garbage.
+//! [`PackedScalar`] (§28.1) is a value that physically occupies 64 bits. The top byte is a
+//! discriminator (a 4-bit kind and 4 bits the kind may use for flags), the low 56 bits the
+//! payload. The kind is checked on every read, so untyped script code handing the wrong value to
+//! a native operation fails with a type error instead of decoding garbage. Which Luau value
+//! carries the 64 bits is [`carrier`]'s business alone.
 //! [`crate::quat::Quaternion`] and [`crate::quat::AnimationKey`] are the first kinds: a rotation
 //! in 56 bits, with or without four bits of side data.
 //!
@@ -19,9 +20,11 @@
 //! of a VM where `T` is not the registered owner of its kind fails with a logic error rather
 //! than decoding another type's bits. A plan with two types on one kind does not finalize.
 
-use crate::convert::{BufferView, FromView, Integer, Push};
+pub mod carrier;
+
+use crate::convert::{BufferView, FromView, Push};
 use crate::error::{Error, Result};
-use crate::stack::{Scope, Type, ValueView};
+use crate::stack::{Scope, ValueView};
 
 /// A value with a fixed little-endian byte layout inside a Luau buffer.
 pub trait BufferPack: Sized {
@@ -125,9 +128,9 @@ pub const HOST_KIND_FIRST: u8 = 5;
 /// The last kind: the discriminator is four bits and 0 is reserved.
 pub const LAST_KIND: u8 = 15;
 
-/// A semantic value that lives in one Luau integer: 4-bit kind, 4-bit flags, 56-bit payload.
+/// A semantic value that lives in 64 bits: 4-bit kind, 4-bit flags, 56-bit payload.
 pub trait PackedScalar: Sized + 'static {
-    /// The kind discriminator, `1..=15` (0 is reserved so a plain zero integer never passes).
+    /// The kind discriminator, `1..=15` (0 is reserved so an all-zero value never passes).
     /// Kinds 1 to 4 are [`crate::quat::Quaternion`], [`crate::quat::AnimationKey`],
     /// [`crate::raster::Color`], and [`crate::raster::ClipRect`]; a host's own kinds are
     /// [`HOST_KIND_FIRST`]`..=`[`LAST_KIND`], registered per runtime (see the module docs).
@@ -192,12 +195,27 @@ pub fn builtin_kinds() -> [PackedKind; 4] {
     ]
 }
 
+/// The names of l3i's wide kinds, [`crate::raster::Color16`] and [`crate::convert::Bits64`], under
+/// their light tags `carrier::COLOR16_TAG` and `carrier::BITS64_TAG`.
+pub const WIDE_NAMES: [&str; 2] = ["Color16", "Bits64"];
+
 /// The kind numbers of [`builtin_kinds`], as documentation and as a compile-time anchor.
 pub const BUILTIN_KINDS: [u8; 4] = [1, 2, 3, 4];
 
-/// Fails unless `T` is the registered owner of its kind on the VM behind `state`.
+/// Fails unless `T` is the registered owner of its kind on the VM behind `state`. l3i's own kinds
+/// pass without a lookup: every runtime registers them at creation and no other type can take
+/// their numbers, so the check could only succeed (the comparison folds away per `T`).
 #[inline(always)]
 fn check_registered<T: PackedScalar>(state: *mut crate::raw::ffi::lua_State) -> Result<()> {
+    use std::any::TypeId;
+    let id = TypeId::of::<T>();
+    if id == TypeId::of::<crate::quat::Quaternion>()
+        || id == TypeId::of::<crate::quat::AnimationKey>()
+        || id == TypeId::of::<crate::raster::Color>()
+        || id == TypeId::of::<crate::raster::ClipRect>()
+    {
+        return Ok(());
+    }
     // SAFETY: `state` comes from a live scope.
     let shared = unsafe { crate::runtime::shared_for(state) };
     match shared.and_then(|shared| shared.packed_owner(T::KIND)) {
@@ -221,7 +239,7 @@ fn unregistered<T: PackedScalar>(shared: Option<&crate::runtime::shared::Shared>
     }
 }
 
-/// The Luau integer carrying a packed scalar of kind `T`.
+/// A packed scalar of kind `T` as a Luau value ([`carrier`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Packed<T>(pub T);
 
@@ -275,10 +293,10 @@ impl<'v, T: PackedScalar> FromView<'v> for Packed<T> {
     #[inline]
     fn from_view(view: ValueView<'v>) -> Result<Self> {
         check_registered::<T>(view.state())?;
-        // One read for the tag and the payload; the kind check is on the bits.
-        match crate::convert::read_integer64(view) {
-            Some(bits) => Packed::from_bits(bits),
-            None => Err(view.type_error(Type::Integer)),
+        // One read for the type and the payload; the kind check is on the bits.
+        match carrier::read(view) {
+            Some(bits) => Packed::from_bits(bits as i64),
+            None => Err(view.type_error_expecting(T::NAME)),
         }
     }
 
@@ -286,15 +304,18 @@ impl<'v, T: PackedScalar> FromView<'v> for Packed<T> {
     /// the only caller with the VM at hand.
     #[inline(always)]
     fn from_raw_arg(raw: &crate::convert::RawValue, view: impl FnOnce() -> ValueView<'v>) -> Result<Self> {
-        if raw.tag() == crate::raw::ffi::LUA_TINTEGER {
-            Packed::from_bits(raw.integer())
-        } else {
-            Err(view().type_error(Type::Integer))
+        // The view is only built on a mismatch, and by the boxed carrier to find its VM.
+        let mut make = Some(view);
+        let mut built: Option<ValueView<'v>> = None;
+        let mut view = || *built.get_or_insert_with(|| (make.take().expect("built once"))());
+        match carrier::read_raw(raw, || view().state()) {
+            Some(bits) => Packed::from_bits(bits as i64),
+            None => Err(view().type_error_expecting(T::NAME)),
         }
     }
 
     fn matches(view: ValueView<'v>) -> bool {
-        crate::convert::read_integer64(view).is_some_and(|bits| decode(bits).0 == T::KIND)
+        carrier::read(view).is_some_and(|bits| decode(bits as i64).0 == T::KIND)
     }
 }
 
@@ -328,7 +349,8 @@ impl<'c, T: PackedScalar> crate::bind::ParamItem<'c> for Packed<T> {
 impl<T: PackedScalar> Push for Packed<T> {
     fn push_into<'s, S: Scope>(&self, scope: &'s S) -> Result<ValueView<'s>> {
         check_registered::<T>(scope.state())?;
-        Integer(self.bits()?).push_into(scope)
+        carrier::push(scope, self.bits()? as u64, carrier::nibble_tag(T::KIND))?;
+        Ok(scope.top_value())
     }
 }
 
@@ -338,6 +360,191 @@ impl<T: PackedScalar> crate::bind::Return for Packed<T> {
         Ok(1)
     }
 }
+
+/// The encoded bits of a packed `T`, pushed as they are: for an operation that computes the
+/// encoding itself, and so must match its lowering bit for bit, rather than through `T::pack`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct PackedBits<T>(u64, std::marker::PhantomData<T>);
+
+impl<T: PackedScalar> PackedBits<T> {
+    /// `bits` as a `T`; an error unless their kind nibble is `T`'s.
+    pub(crate) fn new(bits: i64) -> Result<Self> {
+        let (kind, _, _) = decode(bits);
+        if kind != T::KIND {
+            return Err(Error::runtime(format!("expected a packed {}, got kind {kind}", T::NAME)));
+        }
+        Ok(PackedBits(bits as u64, std::marker::PhantomData))
+    }
+
+    /// The 56-bit payload.
+    pub(crate) fn payload(self) -> u64 {
+        self.0 & PAYLOAD_MASK
+    }
+
+    /// The four flag bits.
+    pub(crate) fn flags(self) -> u8 {
+        ((self.0 >> PAYLOAD_BITS) & 0xF) as u8
+    }
+}
+
+/// A `PackedBits<T>` parameter: the registry check and the kind nibble, exactly what lowered code
+/// checks, and no `unpack`: an operation on the bits themselves (moving a payload under another
+/// kind, setting flags) must not canonicalize a payload its lowering passes through.
+impl<'v, T: PackedScalar> FromView<'v> for PackedBits<T> {
+    const EXPECTED: &'static str = T::NAME;
+
+    fn from_view(view: ValueView<'v>) -> Result<Self> {
+        check_registered::<T>(view.state())?;
+        match carrier::read(view) {
+            Some(bits) => PackedBits::new(bits as i64),
+            None => Err(view.type_error_expecting(T::NAME)),
+        }
+    }
+
+    fn matches(view: ValueView<'v>) -> bool {
+        carrier::read(view).is_some_and(|bits| decode(bits as i64).0 == T::KIND)
+    }
+}
+
+impl<T: PackedScalar> crate::bind::Param for PackedBits<T> {
+    type Item<'c> = PackedBits<T>;
+}
+
+impl<'c, T: PackedScalar> crate::bind::ParamItem<'c> for PackedBits<T> {
+    const KIND: crate::bind::ParamKind = crate::bind::ParamKind::Regular;
+    const EXPECTED: &'static str = T::NAME;
+    fn read_slot(view: ValueView<'c>) -> Result<Self> {
+        <PackedBits<T> as FromView<'c>>::from_view(view)
+    }
+    fn matches(view: ValueView<'c>) -> bool {
+        <PackedBits<T> as FromView<'c>>::matches(view)
+    }
+}
+
+impl<T: PackedScalar> Push for PackedBits<T> {
+    fn push_into<'s, S: Scope>(&self, scope: &'s S) -> Result<ValueView<'s>> {
+        check_registered::<T>(scope.state())?;
+        carrier::push(scope, self.0, carrier::nibble_tag(T::KIND))?;
+        Ok(scope.top_value())
+    }
+}
+
+impl<T: PackedScalar> crate::bind::Return for PackedBits<T> {
+    fn push_results(self, call: &crate::bind::Call<'_>) -> Result<std::ffi::c_int> {
+        self.push_into(call)?;
+        Ok(1)
+    }
+}
+
+pub(crate) mod sealed {
+    pub trait Sealed {}
+}
+
+/// A scalar that uses all 64 bits, with no kind nibble: [`crate::raster::Color16`] and
+/// [`crate::convert::Bits64`]. Each has its own light tag, so its own `typeof` name, and a
+/// `Color16` never equals a `Bits64` of the same bits. A parameter of a wide type accepts any
+/// value on the carrier (any light userdata on the light carrier), in the binder and in lowered
+/// code alike: nothing in the bits says which wide kind they are, and checking the tag would cost
+/// lowered code more than it is worth. Sealed: the tags are l3i's.
+pub trait WideScalar: sealed::Sealed + Copy + 'static {
+    /// The name `typeof` answers and type errors use.
+    const NAME: &'static str;
+    /// The light tag this type is pushed under.
+    #[doc(hidden)]
+    const LIGHT_TAG: carrier::LightTag;
+    /// All 64 bits.
+    fn to_bits(self) -> u64;
+    /// The value with these bits; every `u64` is one.
+    fn from_bits(bits: u64) -> Self;
+}
+
+/// `FromView`, `ParamItem`, `Push` and `Return` for a [`WideScalar`], through the carrier.
+macro_rules! wide_scalar_conversions {
+    ($t:ty) => {
+        impl $crate::packed::sealed::Sealed for $t {}
+
+        impl<'v> $crate::convert::FromView<'v> for $t {
+            const EXPECTED: &'static str = <$t as $crate::packed::WideScalar>::NAME;
+
+            #[inline]
+            fn from_view(view: $crate::stack::ValueView<'v>) -> $crate::error::Result<Self> {
+                match $crate::packed::carrier::read(view) {
+                    Some(bits) => Ok(<$t as $crate::packed::WideScalar>::from_bits(bits)),
+                    None => Err(view.type_error_expecting(<$t as $crate::packed::WideScalar>::NAME)),
+                }
+            }
+
+            #[inline(always)]
+            fn from_raw_arg(
+                raw: &$crate::convert::RawValue,
+                view: impl FnOnce() -> $crate::stack::ValueView<'v>,
+            ) -> $crate::error::Result<Self> {
+                let mut make = Some(view);
+                let mut built: Option<$crate::stack::ValueView<'v>> = None;
+                let mut view = || *built.get_or_insert_with(|| (make.take().expect("built once"))());
+                match $crate::packed::carrier::read_raw(raw, || view().state()) {
+                    Some(bits) => Ok(<$t as $crate::packed::WideScalar>::from_bits(bits)),
+                    None => Err(view().type_error_expecting(<$t as $crate::packed::WideScalar>::NAME)),
+                }
+            }
+
+            fn matches(view: $crate::stack::ValueView<'v>) -> bool {
+                $crate::packed::carrier::read(view).is_some()
+            }
+        }
+
+        impl $crate::bind::Param for $t {
+            type Item<'c> = $t;
+        }
+
+        impl<'c> $crate::bind::ParamItem<'c> for $t {
+            const KIND: $crate::bind::ParamKind = $crate::bind::ParamKind::Regular;
+            const EXPECTED: &'static str = <$t as $crate::packed::WideScalar>::NAME;
+            #[inline]
+            fn read_slot(view: $crate::stack::ValueView<'c>) -> $crate::error::Result<Self> {
+                <$t as $crate::convert::FromView<'c>>::from_view(view)
+            }
+            #[inline(always)]
+            fn read_arg(call: &'c $crate::bind::Call<'c>, index: std::ffi::c_int) -> $crate::error::Result<Self> {
+                match call.raw_arg(index) {
+                    Some(raw) => <$t as $crate::convert::FromView<'c>>::from_raw_arg(raw, || call.arg(index)),
+                    None => <$t as $crate::convert::FromView<'c>>::from_view(call.arg(index)),
+                }
+            }
+            #[inline]
+            fn matches(view: $crate::stack::ValueView<'c>) -> bool {
+                <$t as $crate::convert::FromView<'c>>::matches(view)
+            }
+        }
+
+        impl $crate::convert::Push for $t {
+            #[inline]
+            fn push_only<S: $crate::stack::Scope>(&self, scope: &S) -> $crate::error::Result<()> {
+                $crate::packed::carrier::push(
+                    scope,
+                    <$t as $crate::packed::WideScalar>::to_bits(*self),
+                    <$t as $crate::packed::WideScalar>::LIGHT_TAG,
+                )
+            }
+            #[inline]
+            fn push_into<'s, S: $crate::stack::Scope>(
+                &self,
+                scope: &'s S,
+            ) -> $crate::error::Result<$crate::stack::ValueView<'s>> {
+                $crate::convert::Push::push_only(self, scope)?;
+                Ok(scope.top_value())
+            }
+        }
+
+        impl $crate::bind::Return for $t {
+            fn push_results(self, call: &$crate::bind::Call<'_>) -> $crate::error::Result<std::ffi::c_int> {
+                $crate::convert::Push::push_only(&self, call)?;
+                Ok(1)
+            }
+        }
+    };
+}
+pub(crate) use wide_scalar_conversions;
 
 impl<T: PackedScalar> BufferPack for Packed<T> {
     const SIZE: usize = 8;

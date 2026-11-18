@@ -7,7 +7,7 @@ use l3i::extension::{RuntimePlan, RuntimePolicy};
 
 fn runtime() -> Runtime {
     let plan = RuntimePlan::builder()
-        .policy(RuntimePolicy::new().compat_global("@dream/bytes", "bytes"))
+        .policy(RuntimePolicy::new().compat_global("@dream/bytes", "bytes").compat_global("@dream/bits64", "bits64"))
         .extension(BytesExtension)
         .finalize()
         .unwrap();
@@ -107,14 +107,19 @@ fn record_strings_and_varints_round_trip() {
              -- Varints: the encodings of 300 and -1 are the protobuf ones. \
              next = bytes.writeVarint(buf, 0, 300) assert(next == 2, 'two bytes') \
              assert(buffer.readu8(buf, 0) == 0xAC and buffer.readu8(buf, 1) == 0x02, 'LEB128 bytes') \
-             local value, after2 = bytes.readVarint(buf, 0) assert(value == 300i and after2 == 2, 'readVarint') \
-             next = bytes.writeVarint(buf, 0, -1i) assert(next == 10, 'the full 64 bits take ten bytes') \
-             value = bytes.readVarint(buf, 0) assert(value == -1i, 'all ones round trip') \
+             local value, after2 = bytes.readVarint(buf, 0) assert(value == 300 and after2 == 2, 'readVarint') \
+             next = bytes.writeVarint(buf, 0, -1) assert(next == 10, 'the full 64 bits take ten bytes') \
+             local okBig, errBig = pcall(bytes.readVarint, buf, 0) assert(not okBig and errBig:find('above 2%^53') and errBig:find('readVarint64'), errBig) \
+             assert(bytes.readVarint64(buf, 0) == bits64.fromHex('ffffffffffffffff'), 'all ones round trip as Bits64') \
+             next = bytes.writeVarint64(buf, 0, bits64.fromHex('8000000000000001')) assert(next == 10, 'writeVarint64') \
+             assert(bytes.readVarint64(buf, 0) == bits64.fromHex('8000000000000001'), 'readVarint64') \
+             bytes.writeVarint(buf, 0, 2^53) assert(bytes.readVarint(buf, 0) == 2^53, '2^53 is a number') \
+             bytes.writeVarint64(buf, 0, bits64.fromParts(0x200000, 1)) assert(not pcall(bytes.readVarint, buf, 0), '2^53 + 1 is not') \
              next = bytes.writeSignedVarint(buf, 0, -1) assert(next == 1 and buffer.readu8(buf, 0) == 0x7F, 'signed -1') \
              next = bytes.writeSignedVarint(buf, 0, -123456) \
-             value, after2 = bytes.readSignedVarint(buf, 0) assert(value == -123456i and after2 == next, 'signed round trip') \
+             value, after2 = bytes.readSignedVarint(buf, 0) assert(value == -123456 and after2 == next, 'signed round trip') \
              next = bytes.writeSignedVarint(buf, 0, 64) assert(next == 2, 'sign bit forces a second byte') \
-             assert(bytes.readSignedVarint(buf, 0) == 64i) \
+             assert(bytes.readSignedVarint(buf, 0) == 64) \
              buffer.fill(buf, 0, 0xFF, 11) \
              local ok4, err4 = pcall(bytes.readVarint, buf, 0) assert(not ok4 and err4:find('overflows'), err4) \
              local ok5, err5 = pcall(bytes.readVarint, buffer.fromstring('\\128'), 0) assert(not ok5 and err5:find('unterminated'), err5)",
@@ -143,9 +148,11 @@ fn the_widths_and_orders_buffer_lacks_agree_with_buffer_and_with_the_receiver() 
              bytes.writei24(buf, 0, -5) assert(bytes.readi24(buf, 0) == -5 and bytes.readu24(buf, 0) == 0xFFFFFB, 'signed 24') \
              bytes.writei24be(buf, 0, -70000) assert(bytes.readi24be(buf, 0) == -70000 and B:readi24be(buf, 0) == -70000, 'signed 24 be') \
              -- 64-bit integers and floats. \
-             bytes.writei64be(buf, 0, 0x0102030405060708i) assert(buffer.readu8(buf, 0) == 1 and buffer.readu8(buf, 7) == 8, 'i64be bytes') \
-             assert(bytes.readi64be(buf, 0) == 0x0102030405060708i and B:readi64be(buf, 0) == 0x0102030405060708i, 'readi64be') \
-             assert(buffer.readinteger(buf, 0) == 0x0807060504030201i, 'buffer sees the reverse') \
+             local pattern = bits64.fromHex('0102030405060708') \
+             bytes.writei64be(buf, 0, pattern) assert(buffer.readu8(buf, 0) == 1 and buffer.readu8(buf, 7) == 8, 'i64be bytes') \
+             assert(bytes.readi64be(buf, 0) == pattern and B:readi64be(buf, 0) == pattern, 'readi64be') \
+             assert(typeof(bytes.readi64be(buf, 0)) == typeof(pattern), 'a Bits64') \
+             assert(bits64.read(buf, 0) == bits64.fromHex('0807060504030201') and bits64.read(buf, 0, 'big') == pattern, 'little-endian sees the reverse') \
              bytes.writef32be(buf, 0, 1.5) assert(bytes.readf32be(buf, 0) == 1.5 and buffer.readu8(buf, 0) == 0x3F and buffer.readu8(buf, 1) == 0xC0, 'f32be') \
              bytes.writef64be(buf, 0, -0.125) assert(bytes.readf64be(buf, 0) == -0.125 and B:readf64be(buf, 0) == -0.125, 'f64be') \
              -- Half floats. \
@@ -304,10 +311,10 @@ fn digests_match_their_published_vectors_and_the_hasher_matches_one_shot() {
              assert(bytes.crc32(fox) == bytes.crc32(' jumps over the lazy dog', bytes.crc32('The quick brown fox')), 'crc32 seed continues') \
              assert(bytes.adler32('Wikipedia') == 0x11E60398, 'adler32') \
              assert(bytes.fnv1a32('') == 0x811C9DC5 and bytes.fnv1a32('a') == 0xE40C292C, 'fnv1a32') \
-             assert(bytes.fnv1a64('a') == 0xAF63DC4C8601EC8Ci, 'fnv1a64') \
+             assert(bytes.fnv1a64('a') == bits64.fromHex('AF63DC4C8601EC8C'), 'fnv1a64') \
              assert(bytes.xxh32('') == 0x02CC5D05 and bytes.xxh32('a', 0) == 0x550D7456, 'xxh32') \
-             assert(bytes.xxh64('') == 0xEF46DB3751D8E999i, 'xxh64') \
-             assert(bytes.xxh3('') == 0x2D06800538D394C2i, 'xxh3') \
+             assert(bytes.xxh64('') == bits64.fromHex('EF46DB3751D8E999'), 'xxh64') \
+             assert(bytes.xxh3('') == bits64.fromHex('2D06800538D394C2'), 'xxh3') \
              assert(bytes.md5('') == 'd41d8cd98f00b204e9800998ecf8427e', 'md5') \
              assert(bytes.sha1('abc') == 'a9993e364706816aba3e25717850c26c9cd0d89d', 'sha1') \
              assert(bytes.sha256('abc') == 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad', 'sha256') \
@@ -321,7 +328,7 @@ fn digests_match_their_published_vectors_and_the_hasher_matches_one_shot() {
              assert(h:finish() == bytes.sha256('abc'), 'finish leaves the state alone') \
              h:update('d') assert(h:finish() == bytes.sha256('abcd'), 'and it continues') \
              h:reset() h:update('abc') assert(bytes.toHex(h:finishBytes()) == bytes.sha256('abc'), 'reset') \
-             local c = bytes.hasher('crc32') c:update(fox) assert(c:value() == 0x414FA339i, 'checksum value') \
+             local c = bytes.hasher('crc32') c:update(fox) assert(c:value() == 0x414FA339 and c:value() == bytes.crc32(fox), 'checksum value') \
              local x = bytes.hasher('xxh3') x:update('') assert(x:value() == bytes.xxh3(''), 'xxh3 value') \
              local ok, err = pcall(h.value, h) assert(not ok and err:find('sha256 is a digest'), err) \
              local ok2, err2 = pcall(bytes.hasher, 'sha512') assert(not ok2 and err2:find('sha512'), err2) \
@@ -497,11 +504,14 @@ fn integer_reads_and_writes_lower_to_native_code() {
     use l3i::runtime::{CallContext, MemoryCategory};
     use l3i::sandbox::{InstanceSpec, SandboxOptions};
 
-    let policy = RuntimePolicy::new().compat_global("@dream/bytes", "bytes").native_code(NativeCodePolicy {
-        mode: NativeCodeMode::Eager,
-        record_counters: true,
-        ..NativeCodePolicy::default()
-    });
+    let policy = RuntimePolicy::new()
+        .compat_global("@dream/bytes", "bytes")
+        .compat_global("@dream/bits64", "bits64")
+        .native_code(NativeCodePolicy {
+            mode: NativeCodeMode::Eager,
+            record_counters: true,
+            ..NativeCodePolicy::default()
+        });
     let plan = RuntimePlan::builder().policy(policy).extension(BytesExtension).finalize().unwrap();
     let runtime = Runtime::from_plan(&plan).unwrap();
     let generator = runtime.native_code().expect("built with native code");
@@ -537,7 +547,7 @@ fn integer_reads_and_writes_lower_to_native_code() {
                  B:writeu32be(buf, 12, x)\n\
                  worst = math.max(worst, math.abs(B:readu32be(buf, 12) - x))\n\
                  worst = math.max(worst, math.abs(B:readi32be(buf, 12) - bytes.readi32be(buf, 12)))\n\
-                 local big = integer.mul(integer.create(i), 0x0123456789ABCDEFi)\n\
+                 local big = bits64.fromParts((i * 40503) % 4294967296, (i * 2654435761) % 4294967296)\n\
                  B:writei64be(buf, 16, big)\n\
                  assert(B:readi64be(buf, 16) == big and bytes.readi64be(buf, 16) == big, 'i64be')\n\
              end\n\

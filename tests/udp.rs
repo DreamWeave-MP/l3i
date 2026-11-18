@@ -15,7 +15,7 @@ const SCHEMA: &str = "schema = udp.schema{ version = 1, \
     events = { { name = 'Ping', channel = 'reliable', maxPayload = 64 }, { name = 'Pong', channel = 'reliable', maxPayload = 64 }, { name = 'Move', channel = 'state', maxPayload = 12, codecVersion = 2 } } }";
 
 fn plan(transport: bool) -> std::rc::Rc<RuntimePlan> {
-    let mut policy = RuntimePolicy::new().compat_global("@dream/udp", "udp");
+    let mut policy = RuntimePolicy::new().compat_global("@dream/udp", "udp").compat_global("@dream/bits64", "bits64");
     if transport {
         policy = policy.capability(udp::TRANSPORT_CAPABILITY);
     }
@@ -44,7 +44,7 @@ fn schema_builds_from_options_and_reports_ids() {
              assert(schema:eventId('Move') ~= nil and schema:eventId('Nope') == nil) \
              assert(schema:eventName(schema:eventId('Ping')) == 'Ping') \
              assert(schema:channelName(schema:channelId('state')) == 'state') \
-             assert(schema:maxPayload(schema:eventId('Move')) == 12i) \
+             assert(schema:maxPayload(schema:eventId('Move')) == 12) \
              local hi, lo = schema:fingerprintHalves() assert(hi ~= nil and lo ~= nil) \
              assert(#schema.fingerprint == 32) assert(tostring(schema):find('dream.udp.Schema')) \
              assert(udp.CONNECT_TOKEN_BYTES == 2048 and udp.MAX_CHANNELS == 64)",
@@ -84,12 +84,11 @@ fn events_flow_both_ways_over_localhost() {
     let runtime = Runtime::from_plan(&plan(true)).unwrap();
     runtime
         .exec(&format!(
-            "{SCHEMA} server = udp.server{{ schema = schema, address = '127.0.0.1:0', protocolId = {}i, maxClients = 4 }} \
-             token = server:connectToken(77i, 30, 5) assert(buffer.len(token) == udp.CONNECT_TOKEN_BYTES)",
-            PROTOCOL as i64
+            "{SCHEMA} server = udp.server{{ schema = schema, address = '127.0.0.1:0', protocolId = bits64.fromHex('{PROTOCOL:x}'), maxClients = 4 }} \
+             token = server:connectToken(bits64.fromHex('8000000000000077'), 30, 5) assert(buffer.len(token) == udp.CONNECT_TOKEN_BYTES)"
         ))
         .unwrap();
-    let error = runtime.exec("server:connectToken(77i, 0)").unwrap_err().to_string();
+    let error = runtime.exec("server:connectToken(bits64.fromNumber(77), 0)").unwrap_err().to_string();
     assert!(error.contains("expiresInSeconds must be in [1, 86400]"), "{error}");
 
     runtime
@@ -103,7 +102,8 @@ fn events_flow_both_ways_over_localhost() {
                      local kind, peer, a, b, c = server:pollInto(buf) \
                      if not kind then break end \
                      table.insert(log, 'server:' .. kind) \
-                     if kind == 'connected' then assert(a == 77i, 'client id') serverPeer = peer end \
+                     if kind == 'connected' then assert(a == bits64.fromHex('8000000000000077'), 'a client id above 2^53, all 64 bits') serverPeer = peer end \
+                     if kind == 'connected' then assert(bits64.parts(a) == 0x80000000, 'high half') serverPeer = peer end \
                      if kind == 'message' then \
                          if a == schema:eventId('Ping') then pings += 1 assert(c == 4 and buffer.readstring(buf, 0, 4) == 'ping') \
                              server:sendEvent(peer, schema:eventId('Pong'), 'pong!') \
@@ -142,7 +142,7 @@ fn events_flow_both_ways_over_localhost() {
         .exec(
             "assert(pings == 1 and pongs == 1 and moves == 1, 'counts') assert(client.connected and client.status == 'connected') \
              assert(server.numConnected == 1) assert(#server:peers() == 1 and server:peers()[1] == serverPeer) \
-             assert(server:clientId(serverPeer) == 77i) assert(server:clientAddress(serverPeer):find('127.0.0.1')) \
+             assert(server:clientId(serverPeer) == bits64.fromHex('8000000000000077')) assert(server:clientAddress(serverPeer):find('127.0.0.1')) \
              assert(type(server:peerRtt(serverPeer)) == 'number') assert(type(client.rtt) == 'number') assert(client.packetLoss ~= nil) \
              assert(server:counters(serverPeer).eventsReceived >= 2) assert(client:counters().eventsSent >= 2) \
              assert(server:memoryUsage().total > 0 and client:memoryUsage().total >= 0) \
@@ -155,7 +155,7 @@ fn events_flow_both_ways_over_localhost() {
     assert!(error.contains("dream.udp"), "{error}");
     let error = runtime.exec("client:sendEvent(schema:eventId('Ping'), 'toolong', 0, 40)").unwrap_err().to_string();
     assert!(error.contains("exceeds the 7-byte buffer"), "{error}");
-    let error = runtime.exec("server:sendEvent(12345i, schema:eventId('Ping'), 'x')").unwrap_err().to_string();
+    let error = runtime.exec("server:sendEvent(12345, schema:eventId('Ping'), 'x')").unwrap_err().to_string();
     assert!(error.contains("dream.udp"), "{error}");
     // A too-small poll buffer reports the size it needed and consumes nothing: the same event
     // is still there for a big enough buffer afterwards.

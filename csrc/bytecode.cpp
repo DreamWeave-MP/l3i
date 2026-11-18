@@ -116,7 +116,344 @@ Parsed parseForCompile(std::string_view source, Luau::AstNameTable& names, Luau:
     return parsed;
 }
 
-char* compileImpl(const char* source, size_t size, lua_CompileOptions* options, size_t* outsize, bool dump)
+// Renames every annotation that names a packed scalar kind (src/packed/carrier.rs) to `any`,
+// between the parse and the compile. Luau's compiler takes a type name it does not know for a
+// userdata, and a native function's entry guard then refuses the light userdata a packed scalar
+// is, on every call: correct results at interpreter speed. Only the name changes, never a
+// location, so line info and source maps are untouched; analysis parses on its own and never
+// sees this. The compiler's own rules decide what is left alone: a prefixed name (`mod.Color`),
+// a name a type alias in an enclosing block binds (`type Color = { r: number }`; every alias in a
+// block covers the whole block, as the compiler's do), and a generic parameter in scope. Erasing
+// to `any` is never wrong at run time; it only gives up a type the compiler would have used.
+class ErasePackedTypes final : public Luau::AstVisitor
+{
+public:
+    ErasePackedTypes(Luau::AstNameTable& names, const char* const* erased)
+    {
+        for (; erased && *erased; ++erased)
+        {
+            // A name the parse never interned appears nowhere in this source.
+            Luau::AstName name = names.get(*erased);
+            if (name.value)
+                targets.push_back(name);
+        }
+        if (!targets.empty())
+            any = names.getOrAdd("any");
+    }
+
+    bool active() const
+    {
+        return !targets.empty();
+    }
+
+    bool visit(Luau::AstStatBlock* block) override
+    {
+        size_t mark = bound.size();
+        for (Luau::AstStat* stat : block->body)
+        {
+            if (auto alias = stat->as<Luau::AstStatTypeAlias>())
+                bound.push_back(alias->name);
+            else if (auto function = stat->as<Luau::AstStatTypeFunction>())
+                bound.push_back(function->name);
+        }
+        for (Luau::AstStat* stat : block->body)
+            stat->visit(this);
+        bound.resize(mark);
+        return false;
+    }
+
+    bool visit(Luau::AstExprFunction* function) override
+    {
+        size_t mark = bindGenerics(function->generics, function->genericPacks);
+        for (Luau::AstLocal* arg : function->args)
+            if (arg->annotation)
+                arg->annotation->visit(this);
+        if (function->varargAnnotation)
+            function->varargAnnotation->visit(this);
+        if (function->returnAnnotation)
+            function->returnAnnotation->visit(this);
+        function->body->visit(this);
+        bound.resize(mark);
+        return false;
+    }
+
+    bool visit(Luau::AstStatTypeAlias* alias) override
+    {
+        size_t mark = bindGenerics(alias->generics, alias->genericPacks);
+        alias->type->visit(this);
+        bound.resize(mark);
+        return false;
+    }
+
+    bool visit(Luau::AstTypeFunction* function) override
+    {
+        size_t mark = bindGenerics(function->generics, function->genericPacks);
+        for (Luau::AstType* arg : function->argTypes.types)
+            arg->visit(this);
+        if (function->argTypes.tailType)
+            function->argTypes.tailType->visit(this);
+        if (function->returnTypes)
+            function->returnTypes->visit(this);
+        bound.resize(mark);
+        return false;
+    }
+
+    // AstVisitor skips type annotations by default; this pass is about nothing else, so it walks
+    // every type and type pack: unions (`Color?`), tables, groups, function types, packs.
+    bool visit(Luau::AstType*) override
+    {
+        return true;
+    }
+
+    bool visit(Luau::AstTypePack*) override
+    {
+        return true;
+    }
+
+    bool visit(Luau::AstTypeReference* reference) override
+    {
+        if (!reference->prefix && isTarget(reference->name) && !isBound(reference->name))
+            reference->name = any;
+        return true;
+    }
+
+private:
+    std::vector<Luau::AstName> targets;
+    std::vector<Luau::AstName> bound;
+    Luau::AstName any;
+
+    size_t bindGenerics(const Luau::AstArray<Luau::AstGenericType*>& generics, const Luau::AstArray<Luau::AstGenericTypePack*>& packs)
+    {
+        size_t mark = bound.size();
+        for (Luau::AstGenericType* generic : generics)
+            bound.push_back(generic->name);
+        for (Luau::AstGenericTypePack* pack : packs)
+            bound.push_back(pack->name);
+        return mark;
+    }
+
+    bool isTarget(Luau::AstName name) const
+    {
+        return std::find(targets.begin(), targets.end(), name) != targets.end();
+    }
+
+    bool isBound(Luau::AstName name) const
+    {
+        return std::find(bound.begin(), bound.end(), name) != bound.end();
+    }
+};
+
+// #30's lint, run on the erased tree: a parameter of a native function (a `--!native` module, or
+// `@native`) whose annotation Luau's compiler still types as a plain userdata. Its entry guard
+// refuses a packed scalar on every call, so the function returns the right answer at interpreter
+// speed. After the erasure that happens only for a name the compile does not know: a packed kind
+// missing from the erasure list, or a misspelt type. Classification mirrors `getType` in
+// luau/Compiler/src/Types.cpp; `known` names a host's own userdata types, whose guard is right.
+class NativeAnnotationLint final : public Luau::AstVisitor
+{
+public:
+    struct Warning
+    {
+        Luau::Location location;
+        std::string parameter;
+        std::string type;
+    };
+
+    NativeAnnotationLint(Luau::AstNameTable& names, bool moduleNative, const lua_CompileOptions* options, const char* const* known)
+        : moduleNative(moduleNative)
+    {
+        auto add = [&](const char* name)
+        {
+            Luau::AstName interned = names.get(name);
+            if (interned.value)
+                knownNames.push_back(interned);
+        };
+        for (; known && *known; ++known)
+            add(*known);
+        if (options && options->userdataTypes)
+            for (const char* const* type = options->userdataTypes; *type; ++type)
+                add(*type);
+        if (options && options->vectorType)
+            vectorName = names.get(options->vectorType);
+    }
+
+    std::vector<Warning> warnings;
+
+    bool visit(Luau::AstStatBlock* block) override
+    {
+        size_t mark = aliases.size();
+        for (Luau::AstStat* stat : block->body)
+            if (auto alias = stat->as<Luau::AstStatTypeAlias>())
+                aliases.push_back(alias);
+        for (Luau::AstStat* stat : block->body)
+            stat->visit(this);
+        aliases.resize(mark);
+        return false;
+    }
+
+    bool visit(Luau::AstExprFunction* function) override
+    {
+        if (moduleNative || function->hasNativeAttribute())
+            for (Luau::AstLocal* arg : function->args)
+            {
+                if (!arg->annotation)
+                    continue;
+                Luau::AstName offending;
+                if ((classify(arg->annotation, function->generics, offending) & ~kOptional) == kUserdata && offending.value)
+                    warnings.push_back({arg->location, arg->name.value, offending.value});
+            }
+        function->body->visit(this);
+        return false;
+    }
+
+private:
+    // LuauBytecodeType's numbers for what matters here; `kKnown` stands for a tagged or declared
+    // userdata, which the guard is right to expect.
+    static constexpr int kNil = 0, kBoolean = 1, kNumber = 2, kString = 3, kTable = 4, kFunction = 5, kThread = 6, kUserdata = 7,
+                         kVector = 8, kBuffer = 9, kAny = 15, kKnown = 64, kOptional = 128, kInvalid = 256;
+
+    bool moduleNative;
+    std::vector<Luau::AstName> knownNames;
+    Luau::AstName vectorName;
+    std::vector<Luau::AstStatTypeAlias*> aliases;
+    std::vector<Luau::AstName> seen;
+
+    static int primitive(Luau::AstName name)
+    {
+        if (name == "nil")
+            return kNil;
+        if (name == "boolean")
+            return kBoolean;
+        if (name == "number")
+            return kNumber;
+        if (name == "string")
+            return kString;
+        if (name == "thread")
+            return kThread;
+        if (name == "buffer")
+            return kBuffer;
+        if (name == "vector")
+            return kVector;
+        if (name == "any" || name == "unknown")
+            return kAny;
+        return kInvalid;
+    }
+
+    Luau::AstStatTypeAlias* aliasFor(Luau::AstName name) const
+    {
+        for (auto it = aliases.rbegin(); it != aliases.rend(); ++it)
+            if ((*it)->name == name)
+                return *it;
+        return nullptr;
+    }
+
+    int classify(Luau::AstType* type, const Luau::AstArray<Luau::AstGenericType*>& generics, Luau::AstName& offending)
+    {
+        if (auto reference = type->as<Luau::AstTypeReference>())
+        {
+            if (reference->prefix)
+                return kAny;
+            if (Luau::AstStatTypeAlias* alias = aliasFor(reference->name))
+            {
+                if (std::find(seen.begin(), seen.end(), reference->name) != seen.end())
+                    return kAny;
+                seen.push_back(reference->name);
+                int result = classify(alias->type, alias->generics, offending);
+                seen.pop_back();
+                return result;
+            }
+            for (Luau::AstGenericType* generic : generics)
+                if (generic->name == reference->name)
+                    return kAny;
+            if (vectorName.value && reference->name == vectorName)
+                return kVector;
+            if (int prim = primitive(reference->name); prim != kInvalid)
+                return prim;
+            if (std::find(knownNames.begin(), knownNames.end(), reference->name) != knownNames.end())
+                return kKnown;
+            offending = reference->name;
+            return kUserdata;
+        }
+        if (type->is<Luau::AstTypeTable>())
+            return kTable;
+        if (type->is<Luau::AstTypeFunction>())
+            return kFunction;
+        if (auto un = type->as<Luau::AstTypeUnion>())
+        {
+            bool optional = false;
+            int result = kInvalid;
+            for (Luau::AstType* member : un->types)
+            {
+                int each = classify(member, generics, offending);
+                if (each == kNil)
+                {
+                    optional = true;
+                    continue;
+                }
+                if (result == kInvalid)
+                {
+                    result = each;
+                    continue;
+                }
+                if (result != each)
+                    return kAny;
+            }
+            if (result == kInvalid)
+                return kAny;
+            return result | (optional && result != kAny ? kOptional : 0);
+        }
+        if (type->is<Luau::AstTypeIntersection>())
+            return kAny;
+        if (auto group = type->as<Luau::AstTypeGroup>())
+            return classify(group->type, generics, offending);
+        if (type->is<Luau::AstTypeOptional>())
+            return kNil;
+        if (type->is<Luau::AstTypeSingletonBool>())
+            return kBoolean;
+        if (type->is<Luau::AstTypeSingletonString>())
+            return kString;
+        return kAny;
+    }
+};
+
+// One line per warning, `line<TAB>column<TAB>parameter<TAB>type`, 1-based, in source coordinates;
+// a leading NUL and a message on a parse error, as the compiler reports one.
+std::string lintImpl(const char* source, size_t size, const lua_CompileOptions* options, const char* const* erased, const char* const* known)
+{
+    try
+    {
+        Luau::Allocator allocator;
+        Luau::AstNameTable names(allocator);
+        Parsed parsed = parseForCompile(std::string_view(source, size), names, allocator);
+        L3i::Surface::remapLocations(parsed.result, parsed.lowered.map);
+        if (!parsed.result.errors.empty())
+            throw parsed.result.errors.front();
+        bool moduleNative = false;
+        for (const Luau::HotComment& comment : parsed.result.hotcomments)
+            if (comment.header && comment.content == "native")
+                moduleNative = true;
+        ErasePackedTypes erase(names, erased);
+        if (erase.active())
+            parsed.result.root->visit(&erase);
+        NativeAnnotationLint lint(names, moduleNative, options, known);
+        parsed.result.root->visit(&lint);
+        std::string out;
+        for (const auto& warning : lint.warnings)
+            out += std::to_string(warning.location.begin.line + 1) + "\t" + std::to_string(warning.location.begin.column + 1) + "\t" +
+                   warning.parameter + "\t" + warning.type + "\n";
+        return out;
+    }
+    catch (const Luau::ParseError& error)
+    {
+        return std::string(1, '\0') + ":" + std::to_string(error.getLocation().begin.line + 1) + ": " + error.what();
+    }
+    catch (const std::exception& error)
+    {
+        return std::string(1, '\0') + error.what();
+    }
+}
+
+char* compileImpl(const char* source, size_t size, lua_CompileOptions* options, const char* const* erased, size_t* outsize, bool dump)
 {
 
     if (!outsize)
@@ -146,6 +483,9 @@ char* compileImpl(const char* source, size_t size, lua_CompileOptions* options, 
             throw parsed.result.errors.front();
         if (!parsed.lowered.map.empty())
             L3i::Surface::orderLocalReads(parsed.result);
+        ErasePackedTypes erase(names, erased);
+        if (erase.active())
+            parsed.result.root->visit(&erase);
         Luau::compileOrThrow(bytecode, parsed.result, names, compileOptions);
         output = dump ? bytecode.dumpEverything() : bytecode.getBytecode();
     }
@@ -177,14 +517,14 @@ char* compileImpl(const char* source, size_t size, lua_CompileOptions* options, 
     return result;
 }
 
-char* compile(const char* source, size_t size, lua_CompileOptions* options, size_t* outsize, bool dump) noexcept
+char* compile(const char* source, size_t size, lua_CompileOptions* options, const char* const* erased, size_t* outsize, bool dump) noexcept
 {
     if (!outsize)
         return nullptr;
     *outsize = 0;
     try
     {
-        return compileImpl(source, size, options, outsize, dump);
+        return compileImpl(source, size, options, erased, outsize, dump);
     }
     catch (...)
     {
@@ -197,12 +537,54 @@ char* compile(const char* source, size_t size, lua_CompileOptions* options, size
 
 extern "C" char* l3i_luau_compile(const char* source, size_t size, lua_CompileOptions* options, size_t* outsize)
 {
-    return compile(source, size, options, outsize, false);
+    return compile(source, size, options, nullptr, outsize, false);
 }
 
 extern "C" char* l3i_luau_disassemble(const char* source, size_t size, lua_CompileOptions* options, size_t* outsize)
 {
-    return compile(source, size, options, outsize, true);
+    return compile(source, size, options, nullptr, outsize, true);
+}
+
+// The two above with `erased`, a null-terminated list of type names compiled as `any`
+// (ErasePackedTypes), or null for none.
+extern "C" char* l3i_luau_compile_erasing(
+    const char* source, size_t size, lua_CompileOptions* options, const char* const* erased, size_t* outsize
+)
+{
+    return compile(source, size, options, erased, outsize, false);
+}
+
+// The native annotation lint (NativeAnnotationLint) over `source` compiled with `options` and
+// `erased`; `known` is a null-terminated list of host userdata type names, or null. Returns a
+// malloc'd buffer of `*outsize` bytes, or null when even that allocation failed.
+extern "C" char* l3i_luau_lint_native(
+    const char* source, size_t size, const lua_CompileOptions* options, const char* const* erased, const char* const* known, size_t* outsize
+)
+{
+    if (!outsize)
+        return nullptr;
+    *outsize = 0;
+    try
+    {
+        std::string out = lintImpl(source, size, options, erased, known);
+        char* result = static_cast<char*>(std::malloc(out.size() + 1));
+        if (!result)
+            return nullptr;
+        std::memcpy(result, out.data(), out.size());
+        *outsize = out.size();
+        return result;
+    }
+    catch (...)
+    {
+        return nullptr;
+    }
+}
+
+extern "C" char* l3i_luau_disassemble_erasing(
+    const char* source, size_t size, lua_CompileOptions* options, const char* const* erased, size_t* outsize
+)
+{
+    return compile(source, size, options, erased, outsize, true);
 }
 
 namespace

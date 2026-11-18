@@ -97,10 +97,18 @@ single_results!(
     f64,
     String,
     Vec<u8>,
-    crate::convert::Integer,
+    crate::convert::Bits64,
     crate::convert::Vector3,
+    crate::raster::Color16,
     Value,
 );
+
+impl<T: crate::packed::PackedScalar> CallResults for crate::packed::Packed<T> {
+    const COUNT: c_int = 1;
+    fn read(frame: &Frame<'_>, first: c_int) -> Result<Self> {
+        frame.at(first).read::<crate::packed::Packed<T>>()
+    }
+}
 
 impl<T> CallResults for Option<T>
 where

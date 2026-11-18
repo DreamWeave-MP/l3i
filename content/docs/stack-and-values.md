@@ -93,7 +93,7 @@ itself.
 ## Views
 
 A `ValueView` is one stack slot, `Copy`, and bound to the scope that keeps the slot alive.
-`type_of()` reports a `stack::Type` (Luau's own set, including `Integer`, `Vector` and
+`type_of()` reports a `stack::Type` (Luau's own set, including `Vector` and
 `Buffer`), the `is_*` predicates test one type, and `read::<T>()` runs one checked conversion.
 `as_table()` and `as_function()` give a `TableView` or a `call::FunctionView`.
 
@@ -159,13 +159,14 @@ because the result slots are popped when the call frame closes.
 converts with one checked conversion or it does not convert. There is no string-to-number
 coercion and no silent fallback.
 
-- Luau has two numeric runtime types. A `number` (f64) converts to a Rust integer by rounding
-  half away from zero and must land inside the type's range; an `integer` (i64) converts by
-  range check only. Non-finite numbers never convert to integers.
-- Rust integers push as `number` and must be exactly representable as an f64. `convert::Integer`
-  pushes a Luau 64-bit `integer`; `convert::Bits64` carries an opaque 64-bit pattern through one.
-- `convert::Exact<T>` reads an integer that never rounds: a Luau integer or an integer-valued
-  number, in range. It is input only.
+- Luau has one numeric runtime type, `number` (f64). It converts to a Rust integer by rounding
+  half away from zero and must land inside the type's range. Non-finite numbers never convert to
+  integers.
+- Rust integers push as `number` and must be exactly representable as an f64: a value past 2^53
+  is an error, never rounded. `convert::Bits64` carries an opaque 64-bit pattern as a wide packed
+  scalar.
+- `convert::Exact<T>` reads an integer that never rounds: an integer-valued number, in range. It
+  is input only.
 - `f32` rejects finite values outside its range; NaN and infinities pass through.
 - `&str` borrows the slot's bytes and fails on invalid UTF-8; `String` copies.
 - `convert::Vector3` is Luau's native three-component vector (a tag check and a 12-byte copy);
@@ -186,7 +187,7 @@ Accepted parameter types:
 | Parameter | Consumes |
 |---|---|
 | `bool`, `i8` to `i64`, `u8` to `u64`, `isize`, `usize`, `f32`, `f64`, `String`, `Vec<u8>` | One argument, converted |
-| `Integer`, `Exact<T>`, `Bits64`, `Vector3`, `Packed<T>` | One argument, converted |
+| `Exact<T>`, `Bits64`, `Vector3`, `Packed<T>`, `Color16` | One argument, converted |
 | `&str`, `BufferView`, `BytesView` | One argument, borrowed for the call |
 | `ValueView` | One argument slot, no conversion |
 | `Value`, `Table`, `Function` | One argument, pinned |
@@ -207,7 +208,7 @@ Return types follow `bind::Return`:
 | Return | Pushes |
 |---|---|
 | `()` | Nothing |
-| Any `Push` scalar, string, `Vector3`, `Integer`, `Value`, `Table`, `Function` | One value |
+| Any `Push` scalar, string, `Vector3`, `Bits64`, `Packed<T>`, `Value`, `Table`, `Function` | One value |
 | `Option<T>` | `None` is one nil; `Some` pushes the inner results |
 | Tuples | One value per element |
 | `Variadic(Vec<T>)` | Every element as its own result |

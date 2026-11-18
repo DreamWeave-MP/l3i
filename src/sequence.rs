@@ -98,7 +98,6 @@ sequence_items!(
     String,
     &'static str,
     Vec<u8>,
-    crate::convert::Integer,
     crate::convert::Bits64,
     crate::convert::Vector3,
     crate::value::Value,
@@ -149,7 +148,7 @@ unsafe extern "C-unwind" fn sequence_index<S: SequenceSource>(state: *mut ffi::l
         trampoline::enter(state, || {
             let call = Call::from_raw(state);
             if let (Some(receiver), Some(key)) = (call.raw_arg(1), call.raw_arg(2))
-                && (key.tag() == ffi::LUA_TINTEGER || key.tag() == ffi::LUA_TNUMBER)
+                && key.tag() == ffi::LUA_TNUMBER
             {
                 let sequence: &Sequence<S> = match tagged_payload::<Sequence<S>>(state, receiver) {
                     Some(sequence) => sequence,

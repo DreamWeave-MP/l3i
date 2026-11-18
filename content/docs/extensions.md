@@ -95,7 +95,7 @@ metatable `__type`); the key is the script-facing identity, ASCII letters, digit
 
 Every member carries a signature or is marked `untyped()`; a plan with neither fails to finalize,
 so a type is never `any` by accident. A method's signature is the Luau function type after the
-name, with `self`: `(self, x: number): integer`. A getter, setter or field's signature is a type:
+name, with `self`: `(self, x: number): Color`. A getter, setter or field's signature is a type:
 `number`, `string?`.
 
 `TagPolicy::Required` means planning fails without a tag (direct fields and native lowering need
@@ -105,12 +105,13 @@ plan fails rather than leave that path interpreted.
 
 ### The type vocabulary
 
-The signatures follow the runtime, where Luau's checker keeps `integer` and `number` apart:
+The signatures follow the runtime:
 
 | Value | Luau type |
 |---|---|
-| A packed scalar, a `Bits64`, an `Integer` result, a `CompileConstant::Integer` | `integer` |
-| A count, a size, a plain Rust integer result, an `f64` | `number` |
+| A packed scalar of kind `T` | `T::NAME` (`Quaternion`, `Color`, ...), a nominal type the plan declares |
+| A `Bits64`, a `Color16` | `Bits64`, `Color16` |
+| A count, a size, an id, a plain Rust integer result, an `f64` | `number` |
 | A userdata type with key `k` | Its class name: `k` with every non-identifier character replaced by `_`, so `dream.udp.Client` is `dream_udp_Client` |
 | A module at path `p` | `Module_` plus the class name of `p`, so `@dream/udp` is `Module__dream_udp` |
 | A sequence or stream element | What `item_type(..)` names, `any` until it does |
@@ -240,7 +241,7 @@ declare extern type dream_tests_Counter with
     function get(self): number
     function add(self, n: number)
     twice: number
-    value: integer
+    value: number
     function double(self): number
 end
 
@@ -249,7 +250,7 @@ end
 export type Module__dream_core = {
     new: (n: number) -> dream_tests_Counter,
     ANSWER: number,
-    LIMIT: integer,
+    LIMIT: number,
 }
 declare core: Module__dream_core
 ```
@@ -278,7 +279,7 @@ apart.
 
 ## Rules the first extensions ran into
 
-- Direct fields carry nil, booleans, numbers, integers, and vectors: Luau's direct-field API has no string setter, so a text field is a getter. Return borrowed text from a getter with `call.push(&text)?` and `StackResults`; a `Return` type cannot borrow from the arguments.
+- Direct fields carry nil, booleans, numbers, `Bits64` values (not on the boxed carrier, which would have to allocate) and vectors: Luau's direct-field API has no string setter, so a text field is a getter. Return borrowed text from a getter with `call.push(&text)?` and `StackResults`; a `Return` type cannot borrow from the arguments.
 - Module types in the definitions are ordered by reference, so a member may name a module declared later in the plan (`() -> Module__dream_archive_ba2`).
 - `Runtime::eval::<R>(source)` runs a chunk and reads what it returns (`f64`, a tuple, `()`), the shape a benchmark harness wants; `load_function` stays for chunks that return a closure. A harness must not hold `Runtime::stack()` across `load_function` or `eval`, which lease the root stack themselves.
 - One frame per scope: inside a bound function, read the arguments before opening a frame, or open it from the call; a second frame on the same scope panics with that message.
@@ -317,7 +318,7 @@ struct ValueField;
 
 impl DirectField<Counter> for ValueField {
     fn get(counter: &Counter) -> FieldValue {
-        FieldValue::Integer(counter.value.get())
+        FieldValue::Number(counter.value.get() as f64)
     }
 }
 
@@ -341,14 +342,14 @@ impl Extension for Core {
         counter
             .property("twice", |c: &Counter| c.value.get() * 2, |c: &Counter, v: i64| c.value.set(v / 2))
             .signature("number");
-        counter.field::<ValueField>("value").signature("integer");
+        counter.field::<ValueField>("value").signature("number");
         counter.metamethod("__tostring", |c: &Counter| format!("Counter({})", c.value.get()));
         d.module("@dream/core")
             .doc("Counters.")
             .function("new", |n: i64| Owned(Counter { value: Cell::new(n) }))
             .signature("(n: number) -> dream_tests_Counter")
             .constant("ANSWER", CompileConstant::Number(42.0))
-            .constant("LIMIT", CompileConstant::Integer(7));
+            .constant("LIMIT", CompileConstant::Number(7.0));
         d.memory_category("dream.core");
         Ok(())
     }
@@ -383,7 +384,7 @@ fn main() -> Result<()> {
         .extension(Tools)
         .extension(Core)
         .finalize()?;
-    assert_eq!(plan.installation_order(), ["dream.core", "dream.tools", "dream.udp"]);
+    assert_eq!(plan.installation_order(), ["dream.bits64", "dream.core", "dream.tools", "dream.udp"]);
     assert_eq!(plan.tag_of("dream.tests.Counter"), Some(1));
 
     let runtime = Runtime::from_plan(&plan)?;
@@ -395,8 +396,8 @@ fn main() -> Result<()> {
         assert(c:get() == 7 and c:double() == 14)
         assert(c.twice == 14)
         c.twice = 20
-        assert(c:get() == 10 and c.value == 10i)
-        assert(core.ANSWER == 42 and core.LIMIT == 7i and tools.version() == 2)
+        assert(c:get() == 10 and c.value == 10)
+        assert(core.ANSWER == 42 and core.LIMIT == 7 and tools.version() == 2)
         assert(tostring(c) == "Counter(10)")
         "#,
     )?;

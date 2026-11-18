@@ -228,7 +228,7 @@ impl Layout {
         let (name, offset) = match name.split_once('+') {
             Some((name, offset)) => (
                 name,
-                offset.parse::<usize>().map_err(|_| {
+                offset.parse::<u64>().map(saturating_usize).map_err(|_| {
                     Error::runtime(format!("{what}: field offset '{offset}' must be a whole number of bytes"))
                 })?,
             ),
@@ -237,7 +237,12 @@ impl Layout {
         let (kind, stride) = match name.split_once('@') {
             Some((kind, stride)) => {
                 let kind = Kind::parse(what, kind)?;
-                let stride = stride.parse::<usize>().ok().filter(|stride| *stride >= kind.size()).ok_or_else(|| {
+                let stride = stride
+                    .parse::<u64>()
+                    .ok()
+                    .map(saturating_usize)
+                    .filter(|stride| *stride >= kind.size())
+                    .ok_or_else(|| {
                     Error::runtime(format!(
                         "{what}: stride '{stride}' must be a whole number of bytes of at least {} for {}",
                         kind.size(),
@@ -265,6 +270,19 @@ impl Layout {
     }
 }
 
+/// A byte count, offset or stride from a script as a `usize`. Past this target's address space,
+/// which only a 32-bit target (wasm32) has below 2^64, it saturates to `usize::MAX`: no buffer is
+/// that long, so the bounds check after it refuses the value as it would on a 64-bit target,
+/// rather than a failed conversion being reported as something else.
+fn saturating_usize(value: u64) -> usize {
+    usize::try_from(value).unwrap_or(usize::MAX)
+}
+
+/// A script's offset or count: an error when negative, saturating past the address space.
+fn non_negative(what: &str, name: &str, value: i64) -> Result<usize> {
+    u64::try_from(value).map(saturating_usize).map_err(|_| Error::runtime(format!("{what}: negative {name} {value}")))
+}
+
 /// A bounds-checked typed span: `count` elements of a layout starting `offset` bytes into a
 /// buffer. Built once per operation; element access from here is unchecked by construction.
 #[derive(Clone, Copy)]
@@ -278,14 +296,10 @@ struct Span {
 impl Span {
     fn new(what: &str, buffer: &BufferView<'_>, layout: Layout, offset: Exact<i64>, count: Exact<i64>) -> Result<Span> {
         let Layout { kind, stride, offset: field } = layout;
-        let offset = usize::try_from(offset.0)
-            .map_err(|_| Error::runtime(format!("{what}: negative offset {}", offset.0)))?
-            .checked_add(field)
-            .ok_or_else(|| {
-                Error::runtime(format!("{what}: offset {} plus field offset {field} overflows", offset.0))
-            })?;
-        let count =
-            usize::try_from(count.0).map_err(|_| Error::runtime(format!("{what}: negative count {}", count.0)))?;
+        let offset = non_negative(what, "offset", offset.0)?.checked_add(field).ok_or_else(|| {
+            Error::runtime(format!("{what}: offset {} plus field offset {field} overflows", offset.0))
+        })?;
+        let count = non_negative(what, "count", count.0)?;
         // The last element ends at offset + (count - 1) * stride + size; an empty span needs
         // only its offset to be in range.
         let bytes = if count == 0 {
@@ -380,12 +394,9 @@ impl Indices {
     }
 
     fn new(what: &str, buffer: &BufferView<'_>, offset: Exact<i64>, count: Option<Exact<i64>>) -> Result<Indices> {
-        let offset =
-            usize::try_from(offset.0).map_err(|_| Error::runtime(format!("{what}: negative offset {}", offset.0)))?;
+        let offset = non_negative(what, "offset", offset.0)?;
         let count = match count {
-            Some(count) => {
-                usize::try_from(count.0).map_err(|_| Error::runtime(format!("{what}: negative count {}", count.0)))?
-            }
+            Some(count) => non_negative(what, "count", count.0)?,
             None => buffer.len().saturating_sub(offset) / 4,
         };
         match count.checked_mul(4).and_then(|bytes| bytes.checked_add(offset)) {
@@ -513,7 +524,9 @@ pub(crate) mod selection_layout {
     use super::Selection;
 
     pub const LEN: i32 = 0;
-    pub const WORDS: i32 = 8;
+    /// After `len`, a `usize`: 8 on the 64-bit targets native code runs on, 4 on wasm32, which
+    /// has no native code but builds the type all the same.
+    pub const WORDS: i32 = if cfg!(target_pointer_width = "64") { 8 } else { 4 };
 
     const _: () = {
         assert!(std::mem::offset_of!(Selection, len) == LEN as usize);
@@ -793,9 +806,22 @@ fn select_words(span: &Span, comparison: Comparison, threshold: f64, words: &mut
 }
 
 fn selection(len: Exact<i64>) -> Result<Owned<Selection>> {
-    let len =
-        usize::try_from(len.0).map_err(|_| Error::runtime(format!("data.selection: negative length {}", len.0)))?;
-    Ok(Owned(Selection::new(len)))
+    // Not saturated, unlike a span's numbers: no bounds check follows a selection's length, so a
+    // length past this target's address space is refused rather than silently shortened.
+    let requested = len.0;
+    let no_memory = || Error::runtime(format!("data.selection: no memory for a selection of length {requested}"));
+    let len = u64::try_from(requested)
+        .map_err(|_| Error::runtime(format!("data.selection: negative length {requested}")))
+        .and_then(|len| usize::try_from(len).map_err(|_| no_memory()))?;
+    // The bitset is Rust's memory, outside the VM's limit: a length the host cannot allocate is
+    // an error here, where `Selection::new` would abort the process.
+    let mut bits = Vec::new();
+    bits.try_reserve_exact(len.div_ceil(64)).map_err(|_| no_memory())?;
+    bits.resize(len.div_ceil(64), 0);
+    let selection = Selection::new(0);
+    selection.set_bits(bits);
+    selection.len.set(len);
+    Ok(Owned(selection))
 }
 
 fn combine(
@@ -1353,9 +1379,11 @@ fn describe_select<const K: u8>(receiver: &mut crate::extension::UserdataBuilder
 fn receiver_stride(what: &str, kind: Kind, stride: Option<Exact<i64>>) -> Result<usize> {
     match stride {
         None => Ok(kind.size()),
-        Some(stride) => usize::try_from(stride.0).ok().filter(|stride| *stride >= kind.size()).ok_or_else(|| {
-            Error::runtime(format!("{what}: stride must be at least {} bytes for {}", kind.size(), kind.name()))
-        }),
+        Some(stride) => {
+            u64::try_from(stride.0).ok().map(saturating_usize).filter(|stride| *stride >= kind.size()).ok_or_else(
+                || Error::runtime(format!("{what}: stride must be at least {} bytes for {}", kind.size(), kind.name())),
+            )
+        }
     }
 }
 

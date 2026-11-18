@@ -517,3 +517,51 @@ A run that 2.10.0 called held is still held when a process its child started rea
 
 Not changed in this release: on Windows a run still waits for a held pipe until a limit.
 """
+
+[[releases]]
+version = "3.0.0"
+date = 2026-11-17
+summary = "Luau 0.747, which removed the integer type: packed scalars ride in tagged light userdata on x86-64 and AArch64 and in interned userdata elsewhere, each kind is its own nominal type, and every other 64-bit value is an exact number or a Bits64."
+breaking = [
+    "Luau 0.747 (from 0.745). The `integer` type, `42i` literals, the `integer` library and `buffer.readinteger`/`writeinteger` are gone from the language: `42i` is a syntax error (`Malformed number`) and `integer` an unknown type to the checker.",
+    "Fast flags: the integer flags left with the type, and `LuauCompileNoFoldVectorEqW`, `LuauCompileMoveElision`, `LuauCompileFastpcall`, `LuauFastpcall`, `LuauTableRobustOom` and `LuauCodegenPropagateFallbackTags` graduated and left the list, so `memory::fast_flag` answers `None` for them. The while-local flags lost their `Debug` prefix (`LuauExperimentalWhileLocalSyntax`, `LuauExperimentalWhileLocalAnalysis`).",
+    "A packed scalar is no longer a Luau integer. `typeof` answers its kind's name (`Quaternion`, `AnimationKey`, `Color`, `ClipRect`, `Color16`, `Bits64`, a host kind's `NAME`); it compares and keys tables by its 64 bits and kind, and arithmetic or ordering on one raises. Its bits are unchanged, so `BufferPack` bytes, saved files and wire formats read the same.",
+    "Signatures and definitions name each packed kind as a nominal type instead of `integer`, so a strict script that passes a `Color` where a `Quaternion` is expected no longer type checks. A plan whose userdata class or type alias takes a kind's name does not finalize.",
+    "The packed constants (`quat.IDENTITY`, raster's `TRANSPARENT`, `BLACK`, `WHITE`, `CLIP_ALL` and the three 16-bit colours) are module values, no longer folded by the compiler.",
+    "`@dream/udp`: peer, event and channel ids are numbers, exact or an error, never rounded; the protocol id, client ids and connect-token fingerprint halves are `Bits64`. `udp.server{ protocolId = ... }` takes a `Bits64` (`bits64.fromNumber(n)` or `bits64.fromHex(s)`).",
+    "`@dream/bytes`: `readVarint` and `readSignedVarint` answer an exact number or raise above 2^53, and `readVarint64`/`writeVarint64` carry all 64 bits as a `Bits64`; `readi64be`/`writei64be`, `fnv1a64`, `xxh64`, `xxh3` and a 64-bit hasher's `value()` are `Bits64`. 32-bit checksums stay numbers.",
+    "Rust: `convert::Integer`, `FieldValue::Integer`, `CompileConstant::Integer`, `stack::Type::Integer`, `ValueView::is_integer`, `Library::Integer` and the integer arms of the number readers are gone; `Library::STANDARD` has 11 entries. `Bits64` is a wide packed scalar. `FieldValue::Bits64` replaces `FieldValue::Integer` where the light carrier is in use.",
+    "Rust FFI: Luau 0.747 renumbers the type tags after `LUA_TNUMBER` (`LUA_TVECTOR` is 4 through `LUA_TOBJECT` 12), and the integer entry points (`lua_pushinteger64`, `lua_tointeger64`, `lua_isinteger64`, `luaL_checkinteger64`, `luaL_optinteger64`, `luaopen_integer`, `luau_set_compile_constant_integer64`, `lua_userdatadirectfield_setinteger64`) are gone.",
+    "Host light userdata: `LightUserdata` pushes and `set_light_userdata_name` refuse tags at or above 128, which packed kinds own, and a pointer with a non-zero top nibble.",
+    "`@dream/luau` trees: `ExprConstantInteger` is gone, a `StatClass` name is a `Local` or an `Expr` (Luau 0.747's `class a.b`), and `TypeTable` lost `isExact` with Luau's exact table types.",
+    "Bytecode with a 64-bit integer constant, which an l3i built on Luau 0.746 or older could write, is refused by `load_bytecode` with an error naming the chunk. Luau 0.747 keeps bytecode version 14, so its own version check would not catch it.",
+]
+added = [
+    "`@dream/bits64` in every plan: `fromNumber`, `toNumber` (exact, an error past 2^53), `fromParts`, `parts`, `hex`, `fromHex`, and `read` and `write` on a buffer in little or big byte order. A `Bits64` has no arithmetic.",
+    "`l3i::packed::carrier`: one seam for how a packed scalar is stored, checked by a self-test at every runtime creation (every single bit, all ones and the non-canonical patterns through a push, a read, equality, inequality under another tag and a table key). `L3I_CARRIER=boxed` at build time forces the interned carrier on a desktop for testing, without `jit`.",
+    "`ffi::luau_loadlazy`, Luau 0.747's loader that builds each function on first call. l3i does not use it.",
+    "`Runtime::lint_native_annotations` and `source::lint_native_annotations`: the parameters of native functions whose annotation still compiles to a userdata guard after the packed-kind erasure (a kind missing from `packed_types`, a misspelt type), each with its position. Such a guard refuses a packed scalar on every call and leaves the function at interpreter speed.",
+    "Luau 0.747's compiler and code generator fixes are on: `LuauCompileLoopUnrollNegativeZero`, `LuauCodegenExitSyncExpectedTag` and `LuauCodegenFastcallAnalysisLimit`, with 0.746's `LuauCompileRequireNoInline`, `LuauLoadExplicitGcDisable`, `LuauSaltedInterningTable` and `LuauCodegenX64ConflictCheck`.",
+]
+changed = [
+    "Luau 0.747 adds about 9 instructions to every C function call on AArch64 (a raw `lua_CFunction` counts 243 against 234 on 0.746 under Cachegrind) and none on x86-64; l3i's own share of a bound call is unchanged. The measurements and how to repeat them are in `CARRIER_BUDGETS.md`.",
+    "Native lowering of `@dream/quat`, `@dream/raster` and `@dream/bytes` reads and writes the light carrier directly and checks the kind nibble, so a lowered call stays native. A lowered call that produces a packed value writes three stores where the integer took one (Luau does not track a light userdata's `extra` word), so the smallest such operations cost more than they did: `C:rgba8` 2 to 3 instructions (+10 to 15 percent) and about 65 percent more cycles, `Q:fromXYZW` +2 to +3 percent, a reassigned `acc = Q:mul(acc, r)` about 18 cycles, reassigned raster operations 3 to 5 ns. `C:rgba8` exceeds the 3 percent native budget the migration set and is accepted as an exception until Luau tracks `extra` (#34). Binder instruction counts are unchanged.",
+    "On targets other than x86-64 and AArch64 (wasm32 first) a packed scalar is an interned userdata: the same semantics, at the cost of a lookup and, for a new value, an allocation. `jit` is refused there. CI builds `wasm32-unknown-emscripten` and runs the integration suite there under Node with every feature emscripten can back (all but `jit`, `process`, `tcp`, `dns`, `tls`, `bytes-crypto`), but for UDP sockets, child processes, threads and filesystem semantics its Node filesystem lacks; the boxed carrier reproduces the integer carrier's corpus and BufferPack goldens byte for byte. A wasm32 host links with a `-sSTACK_SIZE` well above emscripten's 64 KiB default and with `ALLOW_MEMORY_GROWTH`.",
+    "Packed type names are erased to `any` before bytecode, so native type guards never reject a packed value; analysis still sees the names.",
+]
+fixed = [
+    "A lowered colour operation accepted a `Color` whose payload exceeded 32 bits, which the bound call refuses; it now exits to the bound call.",
+    "`quat.key`, `keyRotation` and `keyFlags` canonicalized a non-canonical payload where their lowering did not; both now compute on the bits.",
+    "`data.selection` with a length the host cannot allocate aborted the process (Rust's infallible allocation); it raises. On 32-bit targets a span's count, offset or stride past the address space was reported as negative or as a short stride; it is refused as a 64-bit target refuses it.",
+    "l3i did not build for wasm32: the value mirror pinned a 64-bit `TString` layout (its asserts refused the build rather than misread), the toolchain config handed emscripten's target to plain clang, and the value mirror's self-test compared a light userdata's whole value word where a 32-bit pointer fills half of it, and `data` pinned a 64-bit offset for its selections' word pointer.",
+    "`quat.mul`, `slerp` and `rotate` (module and `quat.math()`) agreed with their native lowering only to the angle: the bound path decoded, renormalised and branched differently. They now run the lowering's operations in its order and return the same bits; results from well-formed rotations are unchanged.",
+]
+migration = """
+Rebuild every bytecode cache: a chunk with an integer constant is refused, and chunks without one load but were compiled with the old flags.
+
+Scripts that wrote integer literals write numbers (`7` for `7i`) where the value is a count or a size, and `bits64.fromNumber(n)` or `bits64.fromHex(s)` where it is an id or a hash. `typeof(x) == "integer"` checks become `typeof(x) == "Quaternion"` (or the kind expected). Comparing a udp client id or a digest with a number never succeeds; compare it with another `Bits64`.
+
+Hosts that pushed light userdata with tags at or above 128, or with high pointer bits set, move those tags below 128. A host that matched on `stack::Type::Integer`, read `convert::Integer` or set `CompileConstant::Integer` uses numbers or `Bits64` instead.
+
+Packed values written to files, buffers or sockets keep their bytes; nothing needs converting.
+"""

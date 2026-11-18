@@ -1,7 +1,7 @@
 //! Ported from `testluaucall.cpp`.
 
 use l3i::call::CallResults;
-use l3i::convert::Integer;
+use l3i::convert::Bits64;
 use l3i::source::CompileOptions;
 use l3i::stack::Type;
 use l3i::value::{Function, Value};
@@ -139,15 +139,16 @@ fn with_result_visitor_and_argument_edges() {
 }
 
 #[test]
-fn integer_kind_is_preserved_through_the_call_boundary() {
+fn a_64_bit_pattern_is_preserved_through_the_call_boundary() {
     let runtime = Runtime::new().unwrap();
     let echo = load(&runtime, "return function(v) return v end");
-    let kind_of = load(&runtime, "return function(v) return type(v) end");
+    let kind_of = load(&runtime, "return function(v) return typeof(v) end");
     let stack = runtime.stack();
-    let echoed = echo.invoke::<Value, _>(&stack, (Integer(i64::MAX),)).unwrap();
-    assert_eq!(echoed.type_of(), Type::Integer);
-    assert_eq!(echo.invoke::<i64, _>(&stack, (Integer(i64::MAX),)).unwrap(), i64::MAX);
-    assert_eq!(kind_of.invoke::<String, _>(&stack, (Integer(1),)).unwrap(), "integer");
+    let echoed = echo.invoke::<Value, _>(&stack, (Bits64(u64::MAX),)).unwrap();
+    assert_ne!(echoed.type_of(), Type::Number);
+    assert_eq!(echo.invoke::<Bits64, _>(&stack, (Bits64(u64::MAX),)).unwrap(), Bits64(u64::MAX));
+    assert!(echo.invoke::<i64, _>(&stack, (Bits64(1),)).is_err(), "a pattern is not a number");
+    assert_eq!(kind_of.invoke::<String, _>(&stack, (Bits64(1),)).unwrap(), "Bits64");
     assert_eq!(echo.invoke::<Value, _>(&stack, (7i64,)).unwrap().type_of(), Type::Number);
     assert_eq!(kind_of.invoke::<String, _>(&stack, (7i64,)).unwrap(), "number");
 }

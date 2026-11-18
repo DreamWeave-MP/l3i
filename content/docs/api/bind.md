@@ -128,7 +128,7 @@ remaining argument converted; every remaining argument borrowed. `Clone`, `Copy`
 
 | Parameter type | Kind | Reads |
 |---|---|---|
-| `bool`, the Rust integers, `f32`, `f64`, `String`, `Vec<u8>`, `Integer`, `Exact<T>`, `Bits64`, `Vector3`, `Value`, `Table`, `Function`, `Packed<T>`, `Color16` | Regular | One `FromView` conversion; scalars read the raw slot |
+| `bool`, the Rust integers, `f32`, `f64`, `String`, `Vec<u8>`, `Exact<T>`, `Bits64`, `Vector3`, `Value`, `Table`, `Function`, `Packed<T>`, `Color16` | Regular | One `FromView` conversion; scalars read the raw slot |
 | `&str`, `&[u8]`, `BufferView`, `BytesView` | Regular | Borrowed for the call |
 | `ValueView` | Regular | Any present value, including nil, without conversion |
 | `&T where T: Userdata` | Regular | A tagged or untagged `T`; `EXPECTED` is `T::NAME`. As a method receiver the dispatcher's verification lets it skip the type check |
@@ -172,7 +172,7 @@ A callable's result, pushed as zero or more Lua values.
 | Return type | Pushes |
 |---|---|
 | `()` | Nothing |
-| `bool`, the Rust integers, `f32`, `f64`, `String`, `&'static str`, `Vec<u8>`, `Integer`, `Bits64`, `Vector3`, `Value`, `Table`, `Function`, `Packed<T>`, `Color16`, `FieldValue` | One value through `Push` |
+| `bool`, the Rust integers, `f32`, `f64`, `String`, `&'static str`, `Vec<u8>`, `Bits64`, `Vector3`, `Value`, `Table`, `Function`, `Packed<T>`, `Color16`, `FieldValue` | One value through `Push` |
 | `Option<T: Return>` | `None` is one nil result; `Some` pushes the inner results |
 | `Result<T: Return>` | `Err` is raised as the Lua error; `Ok` pushes the inner results |
 | `(A, B)` .. `(A, B, C, D, E, F)` of `Push` | One value each |
@@ -519,14 +519,14 @@ index: c_int)` and `populate_require_placeholder(&self, placeholder: c_int, resu
 Module `l3i::libraries`: standard-library and VM utility entry points the C++ binder never
 needed but Luau offers.
 
-{{ api_signature(value="enum Library { Base, Coroutine, Table, Os, String, Bit32, Buffer, Utf8, Math, Debug, Vector, Integer, Class }") }}
+{{ api_signature(value="enum Library { Base, Coroutine, Table, Os, String, Bit32, Buffer, Utf8, Math, Debug, Vector, Class }") }}
 
 One of Luau's standard libraries; `Class` is Luau's experimental `class` library. `Clone`,
 `Copy`, `Debug`, `Eq`, `Hash`.
 
 | Item | Meaning |
 |---|---|
-| `const STANDARD: [Library; 12]` | Every library `luaL_openlibs` opens, in its order |
+| `const STANDARD: [Library; 11]` | Every library `luaL_openlibs` opens, in its order |
 | `fn global_name(self) -> &'static str` | The global it is installed as (empty for `Base`) |
 
 On `Runtime`:

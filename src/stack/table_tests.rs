@@ -2,7 +2,6 @@
 //! ChainedRawLookups, TypedFunctionView's forEach) and `testluaustack.cpp`
 //! (TableCapacityHintsAndIntegerRawWritesAreChecked, CheckedFieldReadsReportContextAndBalance).
 
-use crate::convert::Integer;
 use crate::error::Error;
 use crate::runtime::Runtime;
 use crate::stack::{Scope, Type};
@@ -131,9 +130,9 @@ fn cold_tier_table_access_leaves_the_stack_untouched() {
     let stack = runtime.stack();
     let table = Table::new(&stack, 0, 2).unwrap();
     table.set(&stack, "answer", &42i32).unwrap();
-    table.set(&stack, "big", &Integer(i64::MAX)).unwrap();
+    table.set(&stack, "big", &crate::convert::Bits64(u64::MAX)).unwrap();
     assert_eq!(table.get::<i32>(&stack, "answer").unwrap(), 42);
-    assert_eq!(table.get::<i64>(&stack, "big").unwrap(), i64::MAX);
+    assert_eq!(table.get::<crate::convert::Bits64>(&stack, "big").unwrap(), crate::convert::Bits64(u64::MAX));
     assert_eq!(table.get::<Option<i32>>(&stack, "missing").unwrap(), None);
     assert!(table.get::<i32>(&stack, "missing").is_err());
     assert_eq!(stack.top(), 0);

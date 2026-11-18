@@ -46,66 +46,20 @@ impl Push for bool {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Luau 64-bit integers
+// Numbers
 // ---------------------------------------------------------------------------------------------
 
-/// An explicit Luau 64-bit integer. Plain Rust integers push as Lua numbers; wrap them in
-/// `Integer` to push the `integer` runtime type instead.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
-pub struct Integer(pub i64);
-
-impl<'v> FromView<'v> for Integer {
-    const EXPECTED: &'static str = "integer";
-
-    #[inline(always)]
-    fn from_view(view: ValueView<'v>) -> Result<Integer> {
-        match read_scalar(view) {
-            Scalar::Integer(value) => Ok(Integer(value)),
-            _ => Err(view.type_error(Type::Integer)),
-        }
-    }
-
-    #[inline(always)]
-    fn from_raw_arg(raw: &RawValue, view: impl FnOnce() -> ValueView<'v>) -> Result<Integer> {
-        if raw.tag() == ffi::LUA_TINTEGER { Ok(Integer(raw.integer())) } else { Err(view().type_error(Type::Integer)) }
-    }
-
-    #[inline]
-    fn matches(view: ValueView<'v>) -> bool {
-        view.is_integer()
-    }
-}
-
-impl Push for Integer {
-    #[inline]
-    fn push_only<S: Scope>(&self, scope: &S) -> Result<()> {
-        unsafe { crate::stack::push_fixed(scope.state(), |state| ffi::lua_pushinteger64(state, self.0)) }?;
-        Ok(())
-    }
-    #[inline]
-    fn push_into<'s, S: Scope>(&self, scope: &'s S) -> Result<ValueView<'s>> {
-        self.push_only(scope)?;
-        Ok(scope.top_value())
-    }
-}
-
-/// The payload of an `integer` slot, or `None` for any other type.
-/// A slot read in one call: its type, with the payload for numbers and integers.
+/// A slot read in one call: its type, with the payload for numbers.
 #[derive(Clone, Copy)]
 pub(super) enum Scalar {
     Number(f64),
-    Integer(i64),
     Other,
 }
 
 /// The scalar in a directly read slot; strings are never coerced.
 #[inline(always)]
 pub(super) fn raw_scalar(raw: &RawValue) -> Scalar {
-    match raw.tag() {
-        ffi::LUA_TNUMBER => Scalar::Number(raw.number()),
-        ffi::LUA_TINTEGER => Scalar::Integer(raw.integer()),
-        _ => Scalar::Other,
-    }
+    if raw.tag() == ffi::LUA_TNUMBER { Scalar::Number(raw.number()) } else { Scalar::Other }
 }
 
 /// One FFI call classifies the slot and reads a numeric payload; strings are never coerced.
@@ -115,21 +69,10 @@ pub(super) fn read_scalar(view: ValueView<'_>) -> Scalar {
         return Scalar::Other;
     }
     let mut number = 0.0f64;
-    let mut integer = 0i64;
-    // SAFETY: the slot exists on a live thread; the helper writes only the matching output.
-    match unsafe { ffi::l3i_read_scalar(view.state(), view.index(), &mut number, &mut integer) } {
+    // SAFETY: the slot exists on a live thread; the helper writes only the number output.
+    match unsafe { ffi::l3i_read_scalar(view.state(), view.index(), &mut number) } {
         ffi::LUA_TNUMBER => Scalar::Number(number),
-        ffi::LUA_TINTEGER => Scalar::Integer(integer),
         _ => Scalar::Other,
-    }
-}
-
-/// The payload of a slot the caller has already matched as `Type::Integer`.
-#[inline]
-pub(crate) fn read_integer64(view: ValueView<'_>) -> Option<i64> {
-    match read_scalar(view) {
-        Scalar::Integer(value) => Some(value),
-        _ => None,
     }
 }
 
@@ -138,7 +81,7 @@ pub(crate) fn read_integer64(view: ValueView<'_>) -> Option<i64> {
 fn read_number(view: ValueView<'_>) -> Option<f64> {
     match read_scalar(view) {
         Scalar::Number(value) => Some(value),
-        _ => None,
+        Scalar::Other => None,
     }
 }
 
@@ -163,9 +106,6 @@ macro_rules! integer_conversions {
             #[inline(always)]
             fn from_view(view: ValueView<'v>) -> Result<$t> {
                 match read_scalar(view) {
-                    Scalar::Integer(raw) => {
-                        <$t>::try_from(raw).map_err(|_| integer_out_of_range(&view, raw, stringify!($t)))
-                    }
                     Scalar::Number(number) => rounded_integer::<$t>(number, $signed, const { power_of_two($digits) })
                         .ok_or_else(|| number_out_of_range(&view, number, stringify!($t))),
                     Scalar::Other => Err(view.type_error(Type::Number)),
@@ -175,9 +115,6 @@ macro_rules! integer_conversions {
             #[inline(always)]
             fn from_raw_arg(raw: &RawValue, view: impl FnOnce() -> ValueView<'v>) -> Result<$t> {
                 match raw_scalar(raw) {
-                    Scalar::Integer(raw) => {
-                        <$t>::try_from(raw).map_err(|_| integer_out_of_range(&view(), raw, stringify!($t)))
-                    }
                     Scalar::Number(number) => rounded_integer::<$t>(number, $signed, const { power_of_two($digits) })
                         .ok_or_else(|| number_out_of_range(&view(), number, stringify!($t))),
                     Scalar::Other => Err(view().type_error(Type::Number)),
@@ -186,12 +123,8 @@ macro_rules! integer_conversions {
 
             #[inline]
             fn matches(view: ValueView<'v>) -> bool {
-                match view.type_of() {
-                    Type::Integer => read_integer64(view).is_some_and(|raw| <$t>::try_from(raw).is_ok()),
-                    Type::Number => read_number(view)
-                        .is_some_and(|n| rounded_integer::<$t>(n, $signed, const { power_of_two($digits) }).is_some()),
-                    _ => false,
-                }
+                read_number(view)
+                    .is_some_and(|n| rounded_integer::<$t>(n, $signed, const { power_of_two($digits) }).is_some())
             }
         }
 
@@ -242,12 +175,6 @@ fn rounded_integer<T: TryFrom<i64> + TryFrom<u64>>(number: f64, signed: bool, up
     }
 }
 
-/// A Luau integer that does not fit the requested Rust integer.
-#[cold]
-pub(super) fn integer_out_of_range(view: &ValueView<'_>, value: i64, target: &str) -> Error {
-    Error::runtime(format!("Lua stack index {}: integer {value} is out of range for {target}", view.index()))
-}
-
 /// A Lua number that, rounded, does not fit the requested Rust integer (or is not finite).
 #[cold]
 fn number_out_of_range(view: &ValueView<'_>, value: f64, target: &str) -> Error {
@@ -278,7 +205,6 @@ impl<'v> FromView<'v> for f64 {
     fn from_view(view: ValueView<'v>) -> Result<f64> {
         match read_scalar(view) {
             Scalar::Number(value) => Ok(value),
-            Scalar::Integer(value) => Ok(value as f64),
             Scalar::Other => Err(view.type_error(Type::Number)),
         }
     }
@@ -287,7 +213,6 @@ impl<'v> FromView<'v> for f64 {
     fn from_raw_arg(raw: &RawValue, view: impl FnOnce() -> ValueView<'v>) -> Result<f64> {
         match raw_scalar(raw) {
             Scalar::Number(value) => Ok(value),
-            Scalar::Integer(value) => Ok(value as f64),
             Scalar::Other => Err(view().type_error(Type::Number)),
         }
     }
@@ -314,7 +239,6 @@ impl Push for f64 {
 #[inline(always)]
 fn f32_from_scalar<'v>(scalar: Scalar, view: impl FnOnce() -> ValueView<'v>) -> Result<f32> {
     let value = match scalar {
-        Scalar::Integer(value) => return Ok(value as f32),
         Scalar::Number(value) => value,
         Scalar::Other => return Err(view().type_error(Type::Number)),
     };
@@ -327,9 +251,7 @@ fn f32_from_scalar<'v>(scalar: Scalar, view: impl FnOnce() -> ValueView<'v>) -> 
 impl<'v> FromView<'v> for f32 {
     const EXPECTED: &'static str = "number";
 
-    /// Finite values outside the f32 range are rejected; NaN and infinities pass through. A
-    /// Luau integer converts in one step (i64 to f32), as the C++ `static_cast` did, rather than
-    /// rounding twice through f64.
+    /// Finite values outside the f32 range are rejected; NaN and infinities pass through.
     #[inline(always)]
     fn from_view(view: ValueView<'v>) -> Result<f32> {
         f32_from_scalar(read_scalar(view), || view)
@@ -342,12 +264,7 @@ impl<'v> FromView<'v> for f32 {
 
     #[inline]
     fn matches(view: ValueView<'v>) -> bool {
-        match view.type_of() {
-            Type::Integer => true,
-            Type::Number => read_number(view)
-                .is_some_and(|n| !n.is_finite() || (n >= -f64::from(f32::MAX) && n <= f64::from(f32::MAX))),
-            _ => false,
-        }
+        read_number(view).is_some_and(|n| !n.is_finite() || (n >= -f64::from(f32::MAX) && n <= f64::from(f32::MAX)))
     }
 }
 

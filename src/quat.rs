@@ -39,11 +39,10 @@
 //! against 220 ns through the binder; `fromXYZW` takes 93 instructions against 459 through the
 //! binder (`benches/instructions`).
 
-use crate::convert::{Exact, Integer, Vector3};
+use crate::convert::{Exact, Vector3};
 use crate::error::Result;
 use crate::extension::{Extension, ExtensionDescriptor};
-use crate::packed::{Packed, PackedScalar};
-use crate::source::CompileConstant;
+use crate::packed::{Packed, PackedBits, PackedScalar};
 
 /// A unit quaternion in f64: the reference representation and the host's accumulator.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -369,7 +368,7 @@ fn finite_weight(t: f64) -> Result<()> {
 /// is refused by `Exact`; higher bits are dropped, on the lowered path too).
 /// `quat.fromXYZW` and `Q:fromXYZW`: four components normalized and packed, or an error when they
 /// are not a rotation (all zero, or not finite).
-fn from_xyzw(x: f64, y: f64, z: f64, w: f64) -> Result<Integer> {
+fn from_xyzw(x: f64, y: f64, z: f64, w: f64) -> Result<crate::packed::PackedBits<Quaternion>> {
     let n2 = x * x + y * y + z * z + w * w;
     // NaN fails both comparisons.
     if !(n2 > 0.0 && n2 < f64::INFINITY) {
@@ -384,15 +383,149 @@ fn from_xyzw(x: f64, y: f64, z: f64, w: f64) -> Result<Integer> {
         (components, components.iter().map(|v| v * v).sum())
     };
     let bits = PackedRotation::encode_scaled(components, n2);
-    Ok(Integer(crate::packed::encode(Quaternion::KIND, 0, bits.0)?))
+    crate::packed::PackedBits::new(crate::packed::encode(Quaternion::KIND, 0, bits.0)?)
 }
 
 fn key_flags(flags: Exact<i64>) -> u8 {
     (flags.0 & 0xF) as u8
 }
 
-fn to_vec3(v: [f64; 3]) -> Vector3 {
-    Vector3 { x: v[0] as f32, y: v[1] as f32, z: v[2] as f32 }
+/// `quat.key` on the bits: the rotation's payload under the key kind with the low four bits of
+/// `flags`, as the lowering computes it. A payload is carried over, never decoded and re-encoded.
+fn key_bits(q: PackedBits<Quaternion>, flags: Exact<i64>) -> Result<PackedBits<AnimationKey>> {
+    PackedBits::new(crate::packed::encode(AnimationKey::KIND, key_flags(flags), q.payload())?)
+}
+
+/// `quat.keyRotation` on the bits: the key's payload under the rotation kind, flags dropped.
+fn key_rotation_bits(k: PackedBits<AnimationKey>) -> Result<PackedBits<Quaternion>> {
+    PackedBits::new(crate::packed::encode(Quaternion::KIND, 0, k.payload())?)
+}
+
+/// The script-facing `mul`, `slerp` and `rotate`, on the module and on `dream.quat.Math`, computed
+/// with the native lowering's operations in the lowering's order (`lowering::decode_bits`,
+/// `quantize`, `product`, `lower_slerp`), so the bound call and the lowered one agree bit for bit
+/// on every payload, forged ones included. The host's [`Quat`] math is not this: it decodes,
+/// renormalises off-unit results and branches where the lowering selects.
+// The names are the lowering's own (a, b, c, l, x, y, z, w), and `max` then `min` is the IR's
+// MAX_NUM then MIN_NUM, which `clamp` is not guaranteed to match on every input.
+#[allow(clippy::many_single_char_names, clippy::manual_clamp)]
+mod exact {
+    use super::{CENTER, COMPONENT_BITS, COMPONENT_MAX, RANGE, SCALE, acos_poly, sin_poly};
+
+    const LANE: u64 = (1 << COMPONENT_BITS) - 1;
+    const DECODE_SCALE: f64 = 2.0 * RANGE / COMPONENT_MAX;
+
+    /// `decode_bits`: three lanes scaled and offset, the omitted one from the unit norm, placed
+    /// by the index in bits 54 and 55.
+    pub(super) fn decode(payload: u64) -> [f64; 4] {
+        let lane = |shift: u32| ((payload >> shift) & LANE) as f64 * DECODE_SCALE + -RANGE;
+        let (a, b, c) = (lane(2 * COMPONENT_BITS), lane(COMPONENT_BITS), lane(0));
+        let l = ((payload >> (3 * COMPONENT_BITS)) & 3) as f64;
+        let sum = a * a + b * b + c * c;
+        let big = 0.0f64.max(1.0 - sum).sqrt();
+        let x = if l == 0.0 { big } else { a };
+        let y = if l == 0.0 {
+            a
+        } else if l == 1.0 {
+            big
+        } else {
+            b
+        };
+        let z = if l == 3.0 {
+            c
+        } else if l == 2.0 {
+            big
+        } else {
+            b
+        };
+        let w = if l == 3.0 { big } else { c };
+        [x, y, z, w]
+    }
+
+    /// `quantize` with no norm: the largest magnitude's index (ties to the lowest) and sign, each
+    /// lane scaled, centred, clamped and truncated, packed as `pack_lanes` packs them.
+    pub(super) fn encode(c: [f64; 4]) -> u64 {
+        let abs = c.map(f64::abs);
+        let m = abs[0].max(abs[1]).max(abs[2].max(abs[3]));
+        let index = if abs[0] == m {
+            0
+        } else if abs[1] == m {
+            1
+        } else if abs[2] == m {
+            2
+        } else {
+            3
+        };
+        let signed = if c[index] == 0.0 - m { -SCALE } else { SCALE };
+        let lanes = c.map(|v| (v * signed + CENTER).max(0.5).min(COMPONENT_MAX + 0.5) as i64 as u64);
+        let a = if index == 0 { lanes[1] } else { lanes[0] };
+        let b = if index == 1 || index == 0 { lanes[2] } else { lanes[1] };
+        let c = if index == 3 { lanes[2] } else { lanes[3] };
+        ((index as u64) << (3 * COMPONENT_BITS)) | (a << (2 * COMPONENT_BITS)) | (b << COMPONENT_BITS) | c
+    }
+
+    /// `product`: the Hamilton product, each component summed left to right.
+    pub(super) fn mul(a: [f64; 4], b: [f64; 4]) -> [f64; 4] {
+        let [ax, ay, az, aw] = a;
+        let [bx, by, bz, bw] = b;
+        [
+            aw * bx + ax * bw + ay * bz - az * by,
+            aw * by - ax * bz + ay * bw + az * bx,
+            aw * bz + ax * by - ay * bx + az * bw,
+            aw * bw - ax * bx - ay * by - az * bz,
+        ]
+    }
+
+    /// The `rotate` lowering: `v + w t + q × t` with `t = 2 (q × v)`, rounded to `f32` last.
+    pub(super) fn rotate(q: [f64; 4], v: [f64; 3]) -> [f32; 3] {
+        let cross = |a: [f64; 3], b: [f64; 3]| {
+            [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+        };
+        let qv = [q[0], q[1], q[2]];
+        let t = cross(qv, v).map(|x| x * 2.0);
+        let qt = cross(qv, t);
+        [0, 1, 2].map(|i| (v[i] + q[3] * t[i] + qt[i]) as f32)
+    }
+
+    /// `lower_slerp`: both weight pairs computed, the linear pair selected at `dot >= 0.9995`,
+    /// the shorter arc taken by the sign of the dot, then normalised by multiplying by `1 / norm`.
+    pub(super) fn slerp(a: [f64; 4], b: [f64; 4], t: f64) -> [f64; 4] {
+        let t = 0.0f64.max(1.0f64.min(t));
+        let d = a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3];
+        let sign = if d < 0.0 { -1.0 } else { 1.0 };
+        let dot = d.abs();
+        let theta = acos_poly(dot);
+        let sin_theta = (1.0 - dot * dot).sqrt();
+        let one_minus_t = 1.0 - t;
+        let inv_sin_theta = 1.0 / sin_theta;
+        let spherical0 = sin_poly(one_minus_t * theta) * inv_sin_theta;
+        let spherical1 = sin_poly(t * theta) * inv_sin_theta;
+        let linear = dot.max(0.9995) == dot;
+        let s0 = if linear { one_minus_t } else { spherical0 };
+        let s1 = if linear { t } else { spherical1 } * sign;
+        let r = [0, 1, 2, 3].map(|i| s0 * a[i] + s1 * b[i]);
+        let sum = r[0] * r[0] + r[1] * r[1] + r[2] * r[2] + r[3] * r[3];
+        let inv = 1.0 / sum.sqrt();
+        r.map(|v| v * inv)
+    }
+}
+
+/// `quat.mul` and `Q:mul` on the bits, as the lowering computes it.
+fn mul_bits(a: PackedBits<Quaternion>, b: PackedBits<Quaternion>) -> Result<PackedBits<Quaternion>> {
+    let bits = exact::encode(exact::mul(exact::decode(a.payload()), exact::decode(b.payload())));
+    PackedBits::new(crate::packed::encode(Quaternion::KIND, 0, bits)?)
+}
+
+/// `quat.slerp` and `Q:slerp` on the bits, as the lowering computes it; a non-finite `t` is an error.
+fn slerp_bits(a: PackedBits<Quaternion>, b: PackedBits<Quaternion>, t: f64) -> Result<PackedBits<Quaternion>> {
+    finite_weight(t)?;
+    let bits = exact::encode(exact::slerp(exact::decode(a.payload()), exact::decode(b.payload()), t));
+    PackedBits::new(crate::packed::encode(Quaternion::KIND, 0, bits)?)
+}
+
+/// `quat.rotate` and `Q:rotate` on the bits, as the lowering computes it.
+fn rotate_bits(q: PackedBits<Quaternion>, v: Vector3) -> Vector3 {
+    exact::rotate(exact::decode(q.payload()), from_vec3(v)).into()
 }
 
 fn from_vec3(v: Vector3) -> [f64; 3] {
@@ -411,8 +544,9 @@ impl Extension for QuatExtension {
     fn describe(&self, d: &mut ExtensionDescriptor) -> Result<()> {
         let module = d.module("@dream/quat");
         module
-            .doc("Rotations as packed integers.")
-            .constant("IDENTITY", CompileConstant::Integer(Quaternion::pack(Quat::IDENTITY).bits()?))
+            .doc("Rotations as packed scalars.")
+            .value("IDENTITY", Quaternion::pack(Quat::IDENTITY))
+            .signature("Quaternion")
             .function("axisAngle", |axis: Vector3, angle: f64| -> Result<Packed<Quaternion>> {
                 Quat::try_from_axis_angle(from_vec3(axis), angle).map(Quaternion::pack).ok_or_else(|| {
                     crate::error::Error::runtime(
@@ -420,30 +554,27 @@ impl Extension for QuatExtension {
                     )
                 })
             })
-            .signature("(axis: vector, angle: number) -> integer")
+            .signature("(axis: vector, angle: number) -> Quaternion")
             .function("fromXYZW", from_xyzw)
-            .signature("(x: number, y: number, z: number, w: number) -> integer")
+            .signature("(x: number, y: number, z: number, w: number) -> Quaternion")
             .function("toXYZW", |q: Packed<Quaternion>| (q.0.0.x, q.0.0.y, q.0.0.z, q.0.0.w))
-            .signature("(q: integer) -> (number, number, number, number)")
-            .function("mul", |a: Packed<Quaternion>, b: Packed<Quaternion>| Quaternion::pack(a.0.0 * b.0.0))
-            .signature("(a: integer, b: integer) -> integer")
+            .signature("(q: Quaternion) -> (number, number, number, number)")
+            .function("mul", mul_bits)
+            .signature("(a: Quaternion, b: Quaternion) -> Quaternion")
             .function("inverse", |q: Packed<Quaternion>| Quaternion::pack(q.0.0.inverse()))
-            .signature("(q: integer) -> integer")
-            .function("slerp", |a: Packed<Quaternion>, b: Packed<Quaternion>, t: f64| -> Result<Packed<Quaternion>> {
-                finite_weight(t)?;
-                Ok(Quaternion::pack(a.0.0.slerp(b.0.0, t)))
-            })
-            .signature("(a: integer, b: integer, t: number) -> integer")
-            .function("rotate", |q: Packed<Quaternion>, v: Vector3| to_vec3(q.0.0.rotate(from_vec3(v))))
-            .signature("(q: integer, v: vector) -> vector")
+            .signature("(q: Quaternion) -> Quaternion")
+            .function("slerp", slerp_bits)
+            .signature("(a: Quaternion, b: Quaternion, t: number) -> Quaternion")
+            .function("rotate", rotate_bits)
+            .signature("(q: Quaternion, v: vector) -> vector")
             .function("angleTo", |a: Packed<Quaternion>, b: Packed<Quaternion>| a.0.0.angle_to(b.0.0))
-            .signature("(a: integer, b: integer) -> number")
-            .function("key", |q: Packed<Quaternion>, flags: Exact<i64>| AnimationKey::pack(q.0.0, key_flags(flags)))
-            .signature("(q: integer, flags: number) -> integer")
-            .function("keyRotation", |k: Packed<AnimationKey>| Quaternion::pack(k.0.rotation))
-            .signature("(k: integer) -> integer")
-            .function("keyFlags", |k: Packed<AnimationKey>| i64::from(k.0.flags))
-            .signature("(k: integer) -> number");
+            .signature("(a: Quaternion, b: Quaternion) -> number")
+            .function("key", key_bits)
+            .signature("(q: Quaternion, flags: number) -> AnimationKey")
+            .function("keyRotation", key_rotation_bits)
+            .signature("(k: AnimationKey) -> Quaternion")
+            .function("keyFlags", |k: PackedBits<AnimationKey>| i64::from(k.flags()))
+            .signature("(k: AnimationKey) -> number");
         #[cfg(feature = "jit")]
         {
             module.function("math", || crate::userdata::Owned(lowering::Math)).signature("() -> dream_quat_Math");
@@ -453,30 +584,30 @@ impl Extension for QuatExtension {
                 .compiler_type(crate::extension::CompilerTypePolicy::Required)
                 .doc("Natively lowered rotation operations.");
             receiver
-                .method("rotate", |_: &lowering::Math, q: Packed<Quaternion>, v: Vector3| lowering::rotate(q, v))
-                .signature("(self, q: integer, v: vector): vector");
+                .method("rotate", |_: &lowering::Math, q: PackedBits<Quaternion>, v: Vector3| rotate_bits(q, v))
+                .signature("(self, q: Quaternion, v: vector): vector");
             receiver
-                .method("mul", |_: &lowering::Math, a: Packed<Quaternion>, b: Packed<Quaternion>| lowering::mul(a, b))
-                .signature("(self, a: integer, b: integer): integer");
-            receiver
-                .method("slerp", |_: &lowering::Math, a: Packed<Quaternion>, b: Packed<Quaternion>, t: f64| {
-                    lowering::slerp(a, b, t)
+                .method("mul", |_: &lowering::Math, a: PackedBits<Quaternion>, b: PackedBits<Quaternion>| {
+                    mul_bits(a, b)
                 })
-                .signature("(self, a: integer, b: integer, t: number): integer");
+                .signature("(self, a: Quaternion, b: Quaternion): Quaternion");
+            receiver
+                .method("slerp", |_: &lowering::Math, a: PackedBits<Quaternion>, b: PackedBits<Quaternion>, t: f64| {
+                    slerp_bits(a, b, t)
+                })
+                .signature("(self, a: Quaternion, b: Quaternion, t: number): Quaternion");
             receiver
                 .method("fromXYZW", |_: &lowering::Math, x: f64, y: f64, z: f64, w: f64| from_xyzw(x, y, z, w))
-                .signature("(self, x: number, y: number, z: number, w: number): integer");
+                .signature("(self, x: number, y: number, z: number, w: number): Quaternion");
             receiver
-                .method("key", |_: &lowering::Math, q: Packed<Quaternion>, flags: Exact<i64>| {
-                    AnimationKey::pack(q.0.0, key_flags(flags))
-                })
-                .signature("(self, q: integer, flags: number): integer");
+                .method("key", |_: &lowering::Math, q: PackedBits<Quaternion>, flags: Exact<i64>| key_bits(q, flags))
+                .signature("(self, q: Quaternion, flags: number): AnimationKey");
             receiver
-                .method("keyRotation", |_: &lowering::Math, k: Packed<AnimationKey>| Quaternion::pack(k.0.rotation))
-                .signature("(self, k: integer): integer");
+                .method("keyRotation", |_: &lowering::Math, k: PackedBits<AnimationKey>| key_rotation_bits(k))
+                .signature("(self, k: AnimationKey): Quaternion");
             receiver
-                .method("keyFlags", |_: &lowering::Math, k: Packed<AnimationKey>| i64::from(k.0.flags))
-                .signature("(self, k: integer): number");
+                .method("keyFlags", |_: &lowering::Math, k: PackedBits<AnimationKey>| i64::from(k.flags()))
+                .signature("(self, k: AnimationKey): number");
             d.native_hooks(lowering::Lowering);
         }
         Ok(())
@@ -503,11 +634,12 @@ pub mod lowering {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::{AnimationKey, CENTER, COMPONENT_BITS, COMPONENT_MAX, NORM2_FLOOR, Quaternion, RANGE, SCALE};
-    use crate::convert::Vector3;
     use crate::native_code::hooks::{NamecallSite, NativeCodeHooks, NativeContext};
     use crate::native_code::ir::{IrBuilder, IrCmd, IrCondition, IrOp, bytecode_type};
-    use crate::packed::{Packed, PackedScalar};
-    use crate::raw::ffi::{LUA_TINTEGER, LUA_TNUMBER, LUA_TVECTOR};
+    use crate::native_code::packed_ir;
+    use crate::packed::PackedScalar;
+    use crate::packed::carrier::{LightTag, nibble_tag};
+    use crate::raw::ffi::{LUA_TNUMBER, LUA_TVECTOR};
     use crate::userdata::Userdata;
 
     /// The receiver `quat.math()` returns (`dream.quat.Math`, class `dream_quat_Math` in annotations).
@@ -525,23 +657,6 @@ pub mod lowering {
     #[doc(hidden)]
     pub fn lowered_sites() -> usize {
         LOWERED.load(Ordering::Relaxed)
-    }
-
-    /// The interpreter path of `Math:rotate`, the oracle the lowering must match.
-    pub fn rotate(q: Packed<Quaternion>, v: Vector3) -> Vector3 {
-        let r = q.0.0.rotate([f64::from(v.x), f64::from(v.y), f64::from(v.z)]);
-        Vector3 { x: r[0] as f32, y: r[1] as f32, z: r[2] as f32 }
-    }
-
-    /// The interpreter path of `Math:mul`.
-    pub fn mul(a: Packed<Quaternion>, b: Packed<Quaternion>) -> Packed<Quaternion> {
-        Packed(Quaternion(a.0.0 * b.0.0))
-    }
-
-    /// The interpreter path of `Math:slerp`; a non-finite `t` is an error, as on the module.
-    pub fn slerp(a: Packed<Quaternion>, b: Packed<Quaternion>, t: f64) -> crate::error::Result<Packed<Quaternion>> {
-        super::finite_weight(t)?;
-        Ok(Packed(Quaternion(a.0.0.slerp(b.0.0, t))))
     }
 
     /// The hook set; [`super::QuatExtension`] registers it.
@@ -579,31 +694,14 @@ pub mod lowering {
         build.inst(IrCmd::SELECT_NUM, &[else_value, then_value, l, which])
     }
 
-    /// Checks the register holds an integer of packed kind `expected_kind` and loads its bits;
-    /// anything else exits to the interpreter.
-    fn checked_bits(build: &mut IrBuilder<'_>, reg: IrOp, expected_kind: i64, exit: IrOp) -> IrOp {
-        build.load_and_check_tag(reg, LUA_TINTEGER as u8, exit);
-        let bits = build.inst(IrCmd::LOAD_INT64, &[reg]);
-        let sixty = i64c(build, 60);
-        let fifteen = i64c(build, 15);
-        let kind = op(build, IrCmd::BITRSHIFT_INT64, bits, sixty);
-        let kind = op(build, IrCmd::BITAND_INT64, kind, fifteen);
-        let expected = i64c(build, expected_kind);
-        let equal = build.cond(IrCondition::Equal);
-        build.inst(IrCmd::CHECK_CMP_INT64, &[kind, expected, equal, exit]);
-        bits
-    }
-
-    fn store_integer(build: &mut IrBuilder<'_>, result: IrOp, bits: IrOp) {
-        build.inst(IrCmd::STORE_INT64, &[result, bits]);
-        let integer_tag = build.const_tag(LUA_TINTEGER as u8);
-        build.inst(IrCmd::STORE_TAG, &[result, integer_tag]);
-    }
+    /// The light tags results are stored under.
+    const QUATERNION_TAG: LightTag = nibble_tag(<Quaternion as PackedScalar>::KIND);
+    const KEY_TAG: LightTag = nibble_tag(<AnimationKey as PackedScalar>::KIND);
 
     /// Checks the register holds a packed `Quaternion` and unpacks it: three 18-bit lanes and
     /// the omitted component rebuilt from the unit norm.
     fn decode(build: &mut IrBuilder<'_>, reg: IrOp, exit: IrOp) -> Decoded {
-        let bits = checked_bits(build, reg, KIND, exit);
+        let bits = packed_ir::load_checked(build, reg, <Quaternion as PackedScalar>::KIND, exit);
         decode_bits(build, bits)
     }
 
@@ -796,7 +894,7 @@ pub mod lowering {
         let less = build.cond(IrCondition::Less);
         build.inst(IrCmd::CHECK_CMP_NUM, &[n2, infinity, less, exit]);
         let bits = encode_scaled(build, c, n2);
-        store_integer(build, result, bits);
+        packed_ir::store(build, result, bits, QUATERNION_TAG);
     }
 
     /// `Q:slerp(a, b, t)` in one block: both weight sets are computed and the linear pair is
@@ -853,7 +951,7 @@ pub mod lowering {
         }
         let unit = normalized(build, r);
         let bits = encode(build, &unit);
-        store_integer(build, result, bits);
+        packed_ir::store(build, result, bits, QUATERNION_TAG);
     }
 
     /// Four components divided by their norm.
@@ -910,7 +1008,7 @@ pub mod lowering {
             }
             match member {
                 "rotate" => bytecode_type::VECTOR,
-                "mul" | "slerp" | "key" | "keyRotation" | "fromXYZW" => bytecode_type::INTEGER,
+                "mul" | "slerp" | "key" | "keyRotation" | "fromXYZW" => packed_ir::RESULT_TYPE,
                 "keyFlags" => bytecode_type::NUMBER,
                 _ => bytecode_type::ANY,
             }
@@ -975,7 +1073,7 @@ pub mod lowering {
                     let b = decode(build, second, exit);
                     let product = product(build, &a, &b);
                     let bits = encode(build, &product);
-                    store_integer(build, result, bits);
+                    packed_ir::store(build, result, bits, QUATERNION_TAG);
                 }
                 ("slerp", 4) => lower_slerp(build, result, first, second, site.arg_res_reg + 4, exit),
                 ("fromXYZW", 5) => lower_from_xyzw(build, result, site.arg_res_reg + 2, exit),
@@ -991,7 +1089,7 @@ pub mod lowering {
                     let equal = build.cond(IrCondition::Equal);
                     build.inst(IrCmd::CHECK_CMP_NUM, &[number, back, equal, exit]);
                     // The rotation payload with the low four bits of `flags` and kind 2.
-                    let q = checked_bits(build, first, KIND, exit);
+                    let q = packed_ir::load_checked(build, first, <Quaternion as PackedScalar>::KIND, exit);
                     let fifteen = i64c(build, 15);
                     let flags = op(build, IrCmd::BITAND_INT64, truncated, fifteen);
                     let shift = i64c(build, FLAG_SHIFT);
@@ -1001,18 +1099,18 @@ pub mod lowering {
                     let bits = op(build, IrCmd::BITOR_INT64, payload, flags);
                     let kind = i64c(build, KEY_KIND << 60);
                     let bits = op(build, IrCmd::BITOR_INT64, bits, kind);
-                    store_integer(build, result, bits);
+                    packed_ir::store(build, result, bits, KEY_TAG);
                 }
                 ("keyRotation", 2) => {
-                    let k = checked_bits(build, first, KEY_KIND, exit);
+                    let k = packed_ir::load_checked(build, first, <AnimationKey as PackedScalar>::KIND, exit);
                     let payload_mask = i64c(build, PAYLOAD_MASK);
                     let payload = op(build, IrCmd::BITAND_INT64, k, payload_mask);
                     let kind = i64c(build, KIND << 60);
                     let bits = op(build, IrCmd::BITOR_INT64, payload, kind);
-                    store_integer(build, result, bits);
+                    packed_ir::store(build, result, bits, QUATERNION_TAG);
                 }
                 ("keyFlags", 2) => {
-                    let k = checked_bits(build, first, KEY_KIND, exit);
+                    let k = packed_ir::load_checked(build, first, <AnimationKey as PackedScalar>::KIND, exit);
                     let shift = i64c(build, FLAG_SHIFT);
                     let flags = op(build, IrCmd::BITRSHIFT_INT64, k, shift);
                     let fifteen = i64c(build, 15);

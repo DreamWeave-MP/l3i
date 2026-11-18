@@ -22,7 +22,6 @@ pub mod bytecode_type {
     pub const USERDATA: u8 = 7;
     pub const VECTOR: u8 = 8;
     pub const BUFFER: u8 = 9;
-    pub const INTEGER: u8 = 10;
     pub const ANY: u8 = 15;
     /// Userdata type index `i` (into the compilation's `userdata_types`) is `TAGGED_USERDATA_BASE + i`.
     pub const TAGGED_USERDATA_BASE: u8 = 64;

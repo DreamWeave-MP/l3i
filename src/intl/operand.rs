@@ -7,7 +7,7 @@ use fixed_decimal::{Decimal, FloatPrecision};
 use std::ffi::c_int;
 
 use crate::bind::{Call, Param, ParamItem, ParamKind};
-use crate::convert::{FromView, Integer, RawValue};
+use crate::convert::{FromView, RawValue};
 use crate::error::Result;
 use crate::raw::ffi;
 use crate::stack::{Type, ValueView};
@@ -21,7 +21,8 @@ use crate::stack::{Type, ValueView};
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum Operand<'a> {
-    /// A whole number.
+    /// A whole number from Rust: every `i64`, exactly, including those a Lua number cannot hold.
+    /// Scripts pass numbers and decimal strings.
     Integer(i64),
     /// A double; NaN and the infinities are refused.
     Number(f64),
@@ -107,7 +108,6 @@ impl<'v> FromView<'v> for Operand<'v> {
 
     fn from_view(view: ValueView<'v>) -> Result<Self> {
         match view.type_of() {
-            Type::Integer => Ok(Operand::Integer(view.read::<Integer>()?.0)),
             Type::Number => Ok(Operand::Number(view.read::<f64>()?)),
             Type::String => Ok(Operand::Decimal(view.read::<&str>()?)),
             _ => Err(view.type_error_expecting(<Self as FromView<'v>>::EXPECTED)),
@@ -118,7 +118,6 @@ impl<'v> FromView<'v> for Operand<'v> {
     fn from_raw_arg(raw: &RawValue, view: impl FnOnce() -> ValueView<'v>) -> Result<Self> {
         match raw.tag() {
             ffi::LUA_TNUMBER => Ok(Operand::Number(raw.number())),
-            ffi::LUA_TINTEGER => Ok(Operand::Integer(raw.integer())),
             _ => Self::from_view(view()),
         }
     }
@@ -147,7 +146,7 @@ impl<'c> ParamItem<'c> for Operand<'c> {
 
     #[inline]
     fn matches(view: ValueView<'c>) -> bool {
-        matches!(view.type_of(), Type::Number | Type::Integer | Type::String)
+        matches!(view.type_of(), Type::Number | Type::String)
     }
 }
 

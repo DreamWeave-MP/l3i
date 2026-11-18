@@ -7,7 +7,7 @@
 //! functions run through the binder. Values written through a `u`/`i` form are truncated to
 //! the width, as `buffer.writeu16` truncates; 64-bit values are Luau integers.
 
-use crate::convert::{BufferView, BytesView, Exact, Integer};
+use crate::convert::{Bits64, BufferView, BytesView, Exact};
 use crate::error::Result;
 use crate::extension::{ModuleDecl, UserdataBuilder};
 
@@ -94,7 +94,7 @@ reads! {
     (read_i32be, "bytes.readi32be", 4, f64, |b| f64::from(i32::from_be_bytes(b))),
     (read_f32be, "bytes.readf32be", 4, f64, |b| f64::from(f32::from_be_bytes(b))),
     (read_f64be, "bytes.readf64be", 8, f64, f64::from_be_bytes),
-    (read_i64be, "bytes.readi64be", 8, Integer, |b| Integer(i64::from_be_bytes(b))),
+    (read_i64be, "bytes.readi64be", 8, Bits64, |b| Bits64(u64::from_be_bytes(b))),
     (read_f16, "bytes.readf16", 2, f64, |b| f64::from(f16_to_f32(u16::from_le_bytes(b)))),
     (read_f16be, "bytes.readf16be", 2, f64, |b| f64::from(f16_to_f32(u16::from_be_bytes(b)))),
 }
@@ -127,7 +127,7 @@ writes! {
     (write_i32be, "bytes.writei32be", 4, f64, |v| (truncate(v) as u32).to_be_bytes()),
     (write_f32be, "bytes.writef32be", 4, f64, |v| (v as f32).to_be_bytes()),
     (write_f64be, "bytes.writef64be", 8, f64, f64::to_be_bytes),
-    (write_i64be, "bytes.writei64be", 8, Integer, |v| v.0.to_be_bytes()),
+    (write_i64be, "bytes.writei64be", 8, Bits64, |v| v.0.to_be_bytes()),
     (write_f16, "bytes.writef16", 2, f64, |v| f32_to_f16(v as f32).to_le_bytes()),
     (write_f16be, "bytes.writef16be", 2, f64, |v| f32_to_f16(v as f32).to_be_bytes()),
 }
@@ -147,7 +147,7 @@ macro_rules! numeric_members {
         $read!("readi32be", read_i32be, "number");
         $read!("readf32be", read_f32be, "number");
         $read!("readf64be", read_f64be, "number");
-        $read!("readi64be", read_i64be, "integer");
+        $read!("readi64be", read_i64be, "Bits64");
         $read!("readf16", read_f16, "number");
         $read!("readf16be", read_f16be, "number");
         $write!("writeu16be", write_u16be, "number");
@@ -160,7 +160,7 @@ macro_rules! numeric_members {
         $write!("writei32be", write_i32be, "number");
         $write!("writef32be", write_f32be, "number");
         $write!("writef64be", write_f64be, "number");
-        $write!("writei64be", write_i64be, "integer");
+        $write!("writei64be", write_i64be, "Bits64");
         $write!("writef16", write_f16, "number");
         $write!("writef16be", write_f16be, "number");
     };

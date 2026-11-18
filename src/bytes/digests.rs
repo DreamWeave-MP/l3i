@@ -14,6 +14,24 @@ use crate::userdata::Owned;
 
 use super::to_hex;
 
+/// A checksum as its one-shot function returns it: a number for the 32-bit ones, a `Bits64` for
+/// the 64-bit ones, so `hasher:value()` equals `bytes.crc32(data)` or `bytes.xxh3(data)`.
+enum Checksum {
+    Narrow(u32),
+    Wide(u64),
+}
+
+impl crate::bind::Return for Checksum {
+    fn push_results(self, call: &crate::bind::Call<'_>) -> Result<std::ffi::c_int> {
+        use crate::convert::Push;
+        match self {
+            Checksum::Narrow(value) => f64::from(value).push_only(call)?,
+            Checksum::Wide(value) => Bits64(value).push_only(call)?,
+        }
+        Ok(1)
+    }
+}
+
 /// The bytes of a view for the duration of a call that never touches Lua.
 ///
 /// # Safety
@@ -120,15 +138,15 @@ impl State {
     }
 
     /// The checksum as an integer, for the algorithms that are one.
-    fn value(&self) -> Option<i64> {
+    fn value(&self) -> Option<Checksum> {
         Some(match self {
-            State::Crc32(h) => i64::from(h.clone().finalize()),
-            State::Adler32(h) => i64::from(h.checksum()),
-            State::Fnv1a32(h) => i64::from(*h),
-            State::Fnv1a64(h) => *h as i64,
-            State::Xxh32(h) => i64::from(h.digest()),
-            State::Xxh64(h) => h.digest() as i64,
-            State::Xxh3(h) => h.digest() as i64,
+            State::Crc32(h) => Checksum::Narrow(h.clone().finalize()),
+            State::Adler32(h) => Checksum::Narrow(h.checksum()),
+            State::Fnv1a32(h) => Checksum::Narrow(*h),
+            State::Fnv1a64(h) => Checksum::Wide(*h),
+            State::Xxh32(h) => Checksum::Narrow(h.digest()),
+            State::Xxh64(h) => Checksum::Wide(h.digest()),
+            State::Xxh3(h) => Checksum::Wide(h.digest()),
             _ => return None,
         })
     }
@@ -189,12 +207,12 @@ pub(crate) fn describe_hasher(d: &mut ExtensionDescriptor) {
     hasher.method("finish", |h: &Hasher| to_hex(&h.state.borrow().finish())).signature("(self): string");
     hasher.method("finishBytes", |h: &Hasher| NewBuffer(h.state.borrow().finish())).signature("(self): buffer");
     hasher
-        .method("value", |h: &Hasher| -> Result<Bits64> {
-            h.state.borrow().value().map(|v| Bits64(v as u64)).ok_or_else(|| {
+        .method("value", |h: &Hasher| -> Result<Checksum> {
+            h.state.borrow().value().ok_or_else(|| {
                 Error::runtime(format!("bytes.Hasher:value: {} is a digest, not a checksum; use finish", h.algorithm))
             })
         })
-        .signature("(self): integer");
+        .signature("(self): number | Bits64");
     hasher.method("reset", |h: &Hasher| h.state.borrow_mut().reset()).signature("(self): ()");
 }
 
@@ -232,7 +250,7 @@ pub(crate) fn describe(module: &mut ModuleDecl) {
             // SAFETY: as `crc32`.
             Bits64(fnv1a64(unsafe { bytes(&data) }))
         })
-        .signature("(data: buffer | string) -> integer")
+        .signature("(data: buffer | string) -> Bits64")
         .function("xxh32", |data: BytesView<'_>, seed: Option<Exact<i64>>| -> Result<f64> {
             let seed = seed
                 .map_or(Ok(0), |s| u32::try_from(s.0).map_err(|_| Error::runtime("bytes.xxh32: seed is not a u32")))?;
@@ -244,12 +262,12 @@ pub(crate) fn describe(module: &mut ModuleDecl) {
             // SAFETY: as `crc32`.
             Bits64(xxhash_rust::xxh64::xxh64(unsafe { bytes(&data) }, seed.map_or(0, |s| s.0)))
         })
-        .signature("(data: buffer | string, seed: integer?) -> integer")
+        .signature("(data: buffer | string, seed: Bits64?) -> Bits64")
         .function("xxh3", |data: BytesView<'_>| -> Bits64 {
             // SAFETY: as `crc32`.
             Bits64(xxhash_rust::xxh3::xxh3_64(unsafe { bytes(&data) }))
         })
-        .signature("(data: buffer | string) -> integer")
+        .signature("(data: buffer | string) -> Bits64")
         .doc("xxHash3, 64 bits.");
     let hex = |what: &'static str, algorithm: &'static str| {
         let digest = one_shot(what, algorithm);

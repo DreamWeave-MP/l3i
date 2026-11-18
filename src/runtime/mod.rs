@@ -259,7 +259,16 @@ impl RuntimeBuilder {
         // SAFETY: a fresh main thread with a free stack.
         unsafe { crate::convert::raw::self_test(state)? };
         for kind in crate::packed::builtin_kinds() {
-            runtime.shared().register_packed_kind(kind)?;
+            runtime.adopt_packed_kind(kind)?;
+        }
+        // SAFETY: the fresh main thread, at host level.
+        unsafe {
+            use crate::packed::carrier::{BITS64_TAG, COLOR16_TAG, name_tag, self_test};
+            name_tag(state, COLOR16_TAG, "Color16")?;
+            name_tag(state, BITS64_TAG, "Bits64")?;
+            // A platform or VM that does not keep a packed scalar whole fails here, naming the
+            // carrier, rather than later with a wrong rotation.
+            self_test(state)?;
         }
         Ok(runtime)
     }
@@ -587,7 +596,27 @@ impl Runtime {
     /// same kind number is a logic error.
     pub fn register_packed<T: crate::packed::PackedScalar>(&self) -> Result<()> {
         self.refuse_if_planned("register a packed kind")?;
-        self.shared().register_packed_kind(crate::packed::PackedKind::of::<T>())
+        self.adopt_packed_kind(crate::packed::PackedKind::of::<T>())
+    }
+
+    /// Records `kind` in this VM's registry and, the first time, names its light tag so
+    /// `typeof` answers the kind's name.
+    pub(crate) fn adopt_packed_kind(&self, kind: crate::packed::PackedKind) -> Result<()> {
+        if self.shared().register_packed_kind(kind)? {
+            // Scripts compiled from here on erase the kind's annotations; ones compiled before
+            // keep treating the name as a userdata (see `CompileOptions::packed_types`).
+            let name = std::ffi::CString::new(kind.name).map_err(|_| Error::logic("packed kind name contains NUL"))?;
+            let mut options = self.compile_options.borrow_mut();
+            if !options.packed_types.contains(&name) {
+                options.packed_types.push(name);
+            }
+            drop(options);
+            // SAFETY: the main thread; the tag is the kind's, in l3i's band.
+            unsafe {
+                crate::packed::carrier::name_tag(self.state, crate::packed::carrier::nibble_tag(kind.kind), kind.name)
+            }?;
+        }
+        Ok(())
     }
 
     /// A runtime made from a plan has one immutable shape: its packed kinds, compiler
@@ -632,6 +661,17 @@ impl Runtime {
     /// libraries and userdata types).
     pub fn compile_options(&self) -> CompileOptions {
         self.compile_options.borrow().clone()
+    }
+
+    /// [`crate::source::lint_native_annotations`] with this runtime's compiler options, its
+    /// packed kinds included, and its plan's userdata types as the known ones.
+    pub fn lint_native_annotations(&self, source: &str) -> Result<Vec<crate::source::NativeAnnotationWarning>> {
+        let classes: Vec<String> = self
+            .plan()
+            .map(|plan| plan.userdata().iter().map(|ud| crate::extension::class_name(&ud.key)).collect())
+            .unwrap_or_default();
+        let known: Vec<&str> = classes.iter().map(String::as_str).collect();
+        crate::source::lint_native_annotations(source, &self.compile_options(), &known)
     }
 
     /// Replaces the compiler options of a manually assembled runtime; a runtime made from a
@@ -750,10 +790,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn integer_library_is_live_after_flags() {
+    fn the_integer_type_is_gone() {
+        // Luau 0.747 removed the type: `42i` does not parse, there is no integer library.
         let runtime = Runtime::new().unwrap();
-        // LuauIntegerType2 parses `42i`; LuauIntegerLibrary provides the integer library.
-        runtime.exec("assert(typeof(42i) == 'integer', typeof(42i))").unwrap();
+        let error = runtime.exec("return 42i").unwrap_err().to_string();
+        assert!(error.contains("Malformed number"), "{error}");
+        runtime.exec("assert(integer == nil, 'no integer library')").unwrap();
     }
 
     #[test]

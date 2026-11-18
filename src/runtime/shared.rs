@@ -145,6 +145,12 @@ pub(crate) struct Shared {
     /// the type alone on the hot path, the names beside it for messages.
     packed_owners: [Cell<Option<TypeId>>; 16],
     packed_names: [Cell<&'static str>; 16],
+    /// The boxed carrier's interning table and each light tag's metatable, as registry
+    /// references, and the metatables' identities, which recognise a boxed packed scalar.
+    #[cfg(l3i_carrier = "boxed")]
+    boxed_intern: Cell<std::ffi::c_int>,
+    #[cfg(l3i_carrier = "boxed")]
+    boxed_metatables: [Cell<(std::ffi::c_int, *const std::ffi::c_void)>; 32],
     /// The bytecode type the compiler gives each Rust type named in this runtime's userdata
     /// type list (`TAGGED_USERDATA_BASE + index`), for native lowering hooks.
     #[cfg(feature = "jit")]
@@ -249,6 +255,10 @@ impl Shared {
             direct_entries: RefCell::new(Vec::new()),
             packed_owners: std::array::from_fn(|_| Cell::new(None)),
             packed_names: std::array::from_fn(|_| Cell::new("")),
+            #[cfg(l3i_carrier = "boxed")]
+            boxed_intern: Cell::new(crate::raw::ffi::LUA_NOREF),
+            #[cfg(l3i_carrier = "boxed")]
+            boxed_metatables: std::array::from_fn(|_| Cell::new((crate::raw::ffi::LUA_NOREF, std::ptr::null()))),
             slot_table: std::cell::OnceCell::new(),
             #[cfg(feature = "jit")]
             userdata_types: RefCell::new(HashMap::default()),
@@ -267,13 +277,47 @@ impl Shared {
         self.packed_owner(kind).map(|_| self.packed_names[usize::from(kind)].get())
     }
 
+    /// The boxed carrier's interning table (a registry reference), or `LUA_NOREF`.
+    #[cfg(l3i_carrier = "boxed")]
+    pub(crate) fn boxed_intern(&self) -> std::ffi::c_int {
+        self.boxed_intern.get()
+    }
+
+    #[cfg(l3i_carrier = "boxed")]
+    pub(crate) fn set_boxed_intern(&self, reference: std::ffi::c_int) {
+        self.boxed_intern.set(reference);
+    }
+
+    /// The registry reference of light tag `tag`'s boxed metatable, or `LUA_NOREF`.
+    #[cfg(l3i_carrier = "boxed")]
+    pub(crate) fn boxed_metatable_ref(&self, tag: u8) -> std::ffi::c_int {
+        self.boxed_metatables
+            .get(usize::from(tag.wrapping_sub(crate::packed::carrier::NIBBLE_TAG_BASE)))
+            .map_or(crate::raw::ffi::LUA_NOREF, |cell| cell.get().0)
+    }
+
+    /// The identity of light tag `tag`'s boxed metatable, or null.
+    #[cfg(l3i_carrier = "boxed")]
+    #[inline]
+    pub(crate) fn boxed_metatable(&self, tag: u8) -> *const std::ffi::c_void {
+        self.boxed_metatables
+            .get(usize::from(tag.wrapping_sub(crate::packed::carrier::NIBBLE_TAG_BASE)))
+            .map_or(std::ptr::null(), |cell| cell.get().1)
+    }
+
+    #[cfg(l3i_carrier = "boxed")]
+    pub(crate) fn set_boxed_metatable(&self, tag: u8, reference: std::ffi::c_int, identity: *const std::ffi::c_void) {
+        self.boxed_metatables[usize::from(tag - crate::packed::carrier::NIBBLE_TAG_BASE)].set((reference, identity));
+    }
+
     /// Registers `kind`'s owner; registering the same type again is a no-op, another type on
-    /// the same number is refused.
-    pub(crate) fn register_packed_kind(&self, kind: crate::packed::PackedKind) -> crate::error::Result<()> {
+    /// the same number is refused. Returns whether this registration was the first, when the
+    /// caller names the kind's light tag.
+    pub(crate) fn register_packed_kind(&self, kind: crate::packed::PackedKind) -> crate::error::Result<bool> {
         kind.validate()?;
         let index = usize::from(kind.kind);
         match self.packed_owners[index].get() {
-            Some(existing) if existing == kind.type_id => Ok(()),
+            Some(existing) if existing == kind.type_id => Ok(false),
             Some(_) => Err(crate::error::Error::logic(format!(
                 "packed kind {} is already registered to {} in this runtime; {} cannot take it",
                 kind.kind,
@@ -283,7 +327,7 @@ impl Shared {
             None => {
                 self.packed_owners[index].set(Some(kind.type_id));
                 self.packed_names[index].set(kind.name);
-                Ok(())
+                Ok(true)
             }
         }
     }

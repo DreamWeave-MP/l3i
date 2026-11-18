@@ -40,17 +40,27 @@ void operator delete[](void* memory, size_t) noexcept { std::free(memory); }
 
 extern "C" char* l3i_luau_compile(const char*, size_t, lua_CompileOptions*, size_t*);
 extern "C" char* l3i_luau_disassemble(const char*, size_t, lua_CompileOptions*, size_t*);
+extern "C" char* l3i_luau_compile_erasing(const char*, size_t, lua_CompileOptions*, const char* const*, size_t*);
+
+// The packed-type erasure runs between the parse and the compile; every budget must fail inside it too.
+static const char* const erasedTypes[] = {"Quaternion", "Color", nullptr};
+static char* compileErasing(const char* source, size_t size, lua_CompileOptions* options, size_t* outsize)
+{
+    return l3i_luau_compile_erasing(source, size, options, erasedTypes, outsize);
+}
+
 int main()
 {
     using Compile = decltype(&l3i_luau_compile);
     // Record patterns take the lowering's second parse; every budget must fail inside it too.
     const std::string parseError = "local {a} = {a = 1}\nlocal xs = [for x in {1} => x]\n\nlocal broken =";
-    const std::string compileError = "local function f({x}) return x end\nreturn [for x in {1} => f({x = x})]";
+    const std::string compileError =
+        "local q: Quaternion? = nil\nlocal function f({x}, c: Color) return x end\nreturn [for x in {1} => f({x = x})]";
     const char* types[257];
     for (size_t i = 0; i < 256; ++i)
         types[i] = "UnusedType";
     types[256] = nullptr;
-    for (Compile compile : {&l3i_luau_compile, &l3i_luau_disassemble})
+    for (Compile compile : {&l3i_luau_compile, &l3i_luau_disassemble, &compileErasing})
         for (bool parser : {true, false})
         {
             const std::string& source = parser ? parseError : compileError;

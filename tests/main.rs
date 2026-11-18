@@ -66,9 +66,14 @@ fn grows_linearly_fails_only_what_is_slow_on_every_attempt() {
 mod analysis;
 #[cfg(feature = "audio")]
 mod audio;
+mod bits64;
 #[cfg(feature = "bytes")]
 mod bytes;
 mod call;
+mod carrier_corpus;
+mod carrier_cost;
+#[cfg(feature = "jit")]
+mod carrier_equivalence;
 mod comprehension;
 #[cfg(feature = "data")]
 mod data;
@@ -90,11 +95,13 @@ mod intl;
 mod iterator;
 mod libraries;
 mod lowering;
+mod luau_0747;
 mod memory;
 mod metatable;
 mod module;
 #[cfg(feature = "jit")]
 mod native_code;
+mod packed_carrier;
 mod patterns;
 mod primitives;
 #[cfg(feature = "process")]
@@ -114,6 +121,7 @@ mod tcp;
 mod thread;
 #[cfg(feature = "tls")]
 mod tls;
+mod type_surface;
 #[cfg(all(feature = "analysis", feature = "soft-render"))]
 mod typed_definitions;
 mod udp;

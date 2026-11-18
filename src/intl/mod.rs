@@ -252,7 +252,7 @@ fn describe_plural_rules(d: &mut ExtensionDescriptor) {
                 .map(Category::name)
                 .map_err(|error| Error::runtime(format!("PluralRules:category: {error}")))
         })
-        .signature("(self, value: number | integer | string): dream_intl_PluralCategory")
+        .signature("(self, value: number | string): dream_intl_PluralCategory")
         .doc("The category of a number; a decimal string keeps its visible fraction digits.");
     rules
         .method("categories", |rules: &PluralRules, call: &Call<'_>| {
@@ -284,7 +284,7 @@ fn describe_decimal_formatter(d: &mut ExtensionDescriptor) {
                 .map_err(|error| Error::runtime(format!("DecimalFormatter:format: {error}")))?;
             push_str(call, &scratch)
         })
-        .signature("(self, value: number | integer | string): string")
+        .signature("(self, value: number | string): string")
         .doc("A number in the locale's digits and separators; a decimal string formats exactly.");
     decimal
         .method("locale", |handle: &FormatterHandle, call: &Call<'_>| {

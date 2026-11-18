@@ -197,23 +197,23 @@ function ops.release()
 end
 
 -- Table reads by key kind over the occurrences' identities: the pool's dense number tokens,
--- the same identities as integers, and as strings.
+-- the same identities as Bits64 values (light userdata keys, which always hash), and as strings.
 function ops.lookupPrepare()
   local pool: dream_intern_Pool = intern.new('exact')
-  local tokens, integers, strings = table.create(count), table.create(count), table.create(count)
-  local byToken, byInteger, byString = {}, {}, {}
+  local tokens, wides, strings = table.create(count), table.create(count), table.create(count)
+  local byToken, byBits64, byString = {}, {}, {}
   for i = 0, count - 1 do
     local o, l = buffer.readu32(index, i * 8), buffer.readu32(index, i * 8 + 4)
     local s = buffer.readstring(text, o, l)
     local token = pool:intern(text, o, l)
-    local asInteger = integer.create(token)
-    tokens[i + 1], integers[i + 1], strings[i + 1] = token, asInteger, s
-    byToken[token], byInteger[asInteger], byString[s] = 1, 1, 1
+    local asBits64 = bits64.fromNumber(token)
+    tokens[i + 1], wides[i + 1], strings[i + 1] = token, asBits64, s
+    byToken[token], byBits64[asBits64], byString[s] = 1, 1, 1
   end
 
   lookup = {
     token = { keys = tokens, map = byToken },
-    integer = { keys = integers, map = byInteger },
+    Bits64 = { keys = wides, map = byBits64 },
     string = { keys = strings, map = byString },
   }
   return 0, 0
@@ -665,7 +665,7 @@ end
             min_into(&mut loop_only, &bench.counted("lookupLoop", None));
         }
         print!("\nTable read `map[keys[i]]` per occurrence, the key walk subtracted:");
-        for kind in ["token", "integer", "string"] {
+        for kind in ["token", "Bits64", "string"] {
             let mut best = vec![u64::MAX; COUNTERS.len()];
             for _ in 0..ROUNDS {
                 min_into(&mut best, &bench.counted("lookup", Some(kind)));
@@ -813,7 +813,8 @@ end
             return;
         };
         let filter = std::env::args().skip(1).find(|arg| !arg.starts_with('-'));
-        let policy = RuntimePolicy::new().compat_global("@dream/intern", "intern");
+        let policy =
+            RuntimePolicy::new().compat_global("@dream/intern", "intern").compat_global("@dream/bits64", "bits64");
         // With `jit`, every chunk runs as native code, as a host that enables it ships scripts.
         #[cfg(feature = "jit")]
         let policy = policy.native_code(l3i::extension::NativeCodePolicy {
