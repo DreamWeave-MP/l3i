@@ -121,6 +121,9 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       BASELINE: 2c6eb5498012727866c31cca12f4180e32a3e94f
+      # Luau 0.746 with the light carrier, the integer one deleted: tells the carrier's share of a
+      # difference from the pin's.
+      MIDDLE: 0f56feccc527d4ed1b9d936326a94beafd2eaa6f
       CALLS: "20000"
     steps:
       - uses: actions/checkout@v6
@@ -134,16 +137,19 @@ jobs:
       - name: Build the harness here and on the Luau 0.746 integer carrier
         run: |
           set -euo pipefail
-          git worktree add ../baseline "$BASELINE"
-          git -C ../baseline submodule update --init luau
-          cp tests/carrier_cost.rs ../baseline/tests/carrier_cost.rs
-          echo 'mod carrier_cost;' >> ../baseline/tests/main.rs
+          for tree in baseline:"$BASELINE" middle:"$MIDDLE"; do
+            git worktree add "../${tree%%:*}" "${tree#*:}"
+            git -C "../${tree%%:*}" submodule update --init luau
+            cp tests/carrier_cost.rs "../${tree%%:*}/tests/carrier_cost.rs"
+            echo 'mod carrier_cost;' >> "../${tree%%:*}/tests/main.rs"
+          done
           binary() {
             cargo test --release --test integration --no-run --message-format=json \
               | jq -r 'select(.executable != null and .target.name == "integration") | .executable' | tail -1
           }
           echo "CURRENT=$(binary)" >> "$GITHUB_ENV"
           echo "INTEGER=$(cd ../baseline && binary)" >> "$GITHUB_ENV"
+          echo "LIGHT746=$(cd ../middle && binary)" >> "$GITHUB_ENV"
       - name: Hold every binder row to 2 percent over the integer carrier
         run: |
           set -euo pipefail
@@ -160,14 +166,17 @@ jobs:
           }
           current_loop=$(per_call "$CURRENT" loop)
           integer_loop=$(per_call "$INTEGER" loop)
-          echo "loop alone: current $current_loop, integer $integer_loop instructions per iteration"
+          middle_loop=$(per_call "$LIGHT746" loop)
+          echo "loop alone: current $current_loop, light on 0.746 $middle_loop, integer $integer_loop per iteration"
           status=0
           for scenario in number vector color bits make_color; do
             current=$(( $(per_call "$CURRENT" "$scenario") - current_loop ))
             integer=$(( $(per_call "$INTEGER" "$scenario") - integer_loop ))
+            middle=$(( $(per_call "$LIGHT746" "$scenario") - middle_loop ))
             limit=$(( integer + (integer * 2 + 99) / 100 ))
             verdict=ok
             if [ "$current" -gt "$limit" ]; then verdict="OVER BUDGET"; status=1; fi
-            printf '%-12s current %6d  integer %6d  limit %6d  %s\n' "$scenario" "$current" "$integer" "$limit" "$verdict"
+            printf '%-12s current %6d  light 0.746 %6d  integer 0.746 %6d  limit %6d  %s\n' \
+              "$scenario" "$current" "$middle" "$integer" "$limit" "$verdict"
           done
           exit $status
