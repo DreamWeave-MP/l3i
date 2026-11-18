@@ -333,12 +333,16 @@ drop the work; the bare native loop is subtracted.
 | `C:rgba8`, lowered | 23 | 18 |
 | `C:rgba8` into a fresh local, then `C:red`, lowered | 33 | 22 |
 
-The reassigned row is the light userdata carrier's one real cost. Luau does not track a light
-userdata's `extra` word, so a lowered result is written as three narrower stores and the next
-read of the whole value stalls on store forwarding: on Luau 0.746, against the integer it
-replaced, the reassigned `Q:mul` is about 18 cycles (12 percent) slower and the `C:rgba8` then
-`C:red` chain 57 to 65 percent, with the same instruction counts. Results kept in a local and
-used once cost within 1.5 percent of what they did.
+Producing a packed result in native code is where the light userdata carrier costs. Luau does
+not track a light userdata's `extra` word, so a lowered result is written as three stores (value,
+`extra`, tag) where an integer took one value-and-tag store the optimizer could forward, and the
+next read of the whole value stalls on store forwarding. On Luau 0.746, against the integer it
+replaced: `C:rgba8` 23 instructions against 20 (+15 percent) and 65 percent more cycles;
+`C:rgba8` then `C:red` 33 against 28 (+18 percent); `Q:fromXYZW` 96 against 93 (+3.2 percent);
+the reassigned `Q:mul` 211 against 208 and about 18 cycles (12 percent) more; `Q:mul` into a local
++1.5 percent; `Q:rotate`, whose result is a vector, unchanged. #32 budgets non-copying native
+calls at 3 percent: the smallest operations that produce a packed value exceed it, by two or three
+instructions that l3i cannot remove until Luau tracks `extra` (#34).
 
 ### The binder budget in CI
 
@@ -361,6 +365,20 @@ At the Luau 0.747 release, per call:
 The light carrier costs l3i nothing it did not cost as an integer, and returning a packed value
 costs less. Luau 0.747 itself adds about 9 instructions to every C function call on AArch64, bound
 or not, and none on x86-64: an upstream change, carried as it is.
+
+The same job counts the lowered calls in `--!native` code, the native loop subtracted, against
+#32's 3 percent:
+
+| Lowered call | x86-64: current, integer 0.746 | AArch64: current, integer 0.746 |
+|---|---:|---:|
+| `Q:fromXYZW` | 96, 93 | 189, 185 |
+| `Q:rotate` | 104, 103 | 153, 153 |
+| `Q:mul` into a local | 207, 205 | 371, 367 |
+| `C:rgba8` | 22, 20 (over) | 32, 29 (over) |
+
+`C:rgba8` exceeds the budget on both: the result's three stores against the integer's one (the
+paragraph after the native table under "Instructions and cycles"). The gate reports it as over budget rather than
+widening the limit, which is a decision for the project, not the measurement.
 
 ### The carriers in wall time
 
