@@ -344,14 +344,14 @@ the reassigned `Q:mul` 211 against 208 and about 18 cycles (12 percent) more; `Q
 calls at 3 percent: the smallest operations that produce a packed value exceed it, by two or three
 instructions that l3i cannot remove until Luau tracks `extra` (#34).
 
-### The binder budget in CI
+### The carrier budgets under Cachegrind
 
-The `budgets` job in `.github/workflows/carriers.yml` holds #32's binder budget on every push, on
-x86-64 and AArch64 Linux: it builds `tests/carrier_cost.rs` on the branch, on Luau 0.746 with the
-light carrier, and on Luau 0.746 with the integer carrier the light one replaced, and counts each
-bound call's instructions under Cachegrind, which needs no perf counters. What l3i adds to Luau's
-own call (a row minus a raw `lua_CFunction`) may be at most 2 percent over the integer carrier's.
-At the Luau 0.747 release, per call:
+`tests/carrier_cost.rs` was built on the branch, on Luau 0.746 with the light carrier, and on Luau
+0.746 with the integer carrier the light one replaced, and each call's instructions counted under
+Cachegrind on x86-64 and AArch64 Linux runners. #32 budgets what l3i adds to Luau's own call (a
+row minus a raw `lua_CFunction`) at 2 percent over the integer carrier. `CARRIER_BUDGETS.md` in
+the repository root has every measurement and the commands that reproduce them. At the Luau
+0.747 release, per call:
 
 | Row | x86-64: total, l3i's share | integer 0.746 | AArch64: total, l3i's share | integer 0.746 |
 |---|---:|---:|---:|---:|
@@ -366,8 +366,7 @@ The light carrier costs l3i nothing it did not cost as an integer, and returning
 costs less. Luau 0.747 itself adds about 9 instructions to every C function call on AArch64, bound
 or not, and none on x86-64: an upstream change, carried as it is.
 
-The same job counts the lowered calls in `--!native` code, the native loop subtracted, against
-#32's 3 percent:
+The lowered calls in `--!native` code, the native loop subtracted, against #32's 3 percent:
 
 | Lowered call | x86-64: current, integer 0.746 | AArch64: current, integer 0.746 |
 |---|---:|---:|
@@ -378,8 +377,7 @@ The same job counts the lowered calls in `--!native` code, the native loop subtr
 
 `C:rgba8` exceeds the budget on both: the result's three stores against the integer's one (the
 paragraph after the native table under "Instructions and cycles"). It is an accepted exception
-until Luau tracks a light userdata's `extra` word (#34): the gate allows it at most 4
-instructions over the integer carrier, and still fails it past that.
+until Luau tracks a light userdata's `extra` word (#34).
 
 ### The carriers in wall time
 

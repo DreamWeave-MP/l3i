@@ -4,13 +4,12 @@
 //! - `record_the_bound_call_cost_per_argument_kind` prints wall time per call. wasm32 under Node
 //!   has no CPU counters, so the wasm32 job runs it and its log is the record #32 asks for
 //!   ("boxed wasm recorded only"). It asserts nothing about speed.
-//! - `budget_scenario` runs one scenario a given number of times for the budgets job, which counts
-//!   its instructions under Cachegrind at two call counts, here and on the Luau 0.746 integer
-//!   carrier, and holds every binder row to #32's 2 percent. Cachegrind counts in software, so
-//!   the gate runs on hosted runners without perf counters, on x86-64 and AArch64.
+//! - `budget_scenario` and `native_budget_scenario` run one scenario a given number of times, for
+//!   Cachegrind to count at two call counts, here and on the Luau 0.746 baselines.
+//!   `CARRIER_BUDGETS.md` has the commands and the measurements.
 //!
-//! The file compiles unchanged on the last commit with the integer carrier, which the budgets job
-//! builds it into for the paired baseline.
+//! The file compiles unchanged on the Luau 0.746 integer and light carrier commits, so the same
+//! scenarios run on all three builds.
 
 use l3i::Runtime;
 use l3i::convert::{Bits64, Vector3};
@@ -20,7 +19,7 @@ use l3i::raster::Color;
 const CALLS: u32 = 200_000;
 const ROUNDS: usize = 5;
 
-/// The scenarios: a name the budgets job uses, a label, and the loop body.
+/// The scenarios: a name for `L3I_BUDGET_SCENARIO`, a label, and the loop body.
 const SCENARIOS: [(&str, &str, &str); 7] = [
     ("loop", "the loop alone", "s = i"),
     // Luau's own call, no binder: what a pin moves in the call path, apart from l3i.
@@ -97,10 +96,10 @@ fn record_the_bound_call_cost_per_argument_kind() {
 }
 
 /// One scenario (`L3I_BUDGET_SCENARIO`, a name from `SCENARIOS`) run `L3I_BUDGET_CALLS` times, for
-/// the budgets job to count. Everything but the loop is the same at every call count, so the
+/// Cachegrind to count (`CARRIER_BUDGETS.md`). Everything but the loop is the same at every call count, so the
 /// difference between two counts is the loop's own instructions.
 #[test]
-#[ignore = "an instruction budget scenario: the budgets job runs it under Cachegrind"]
+#[ignore = "an instruction budget scenario, counted under Cachegrind: see CARRIER_BUDGETS.md"]
 fn budget_scenario() {
     let wanted = std::env::var("L3I_BUDGET_SCENARIO").expect("L3I_BUDGET_SCENARIO names a scenario");
     let calls: u32 = std::env::var("L3I_BUDGET_CALLS").expect("L3I_BUDGET_CALLS").parse().expect("a call count");
@@ -110,7 +109,7 @@ fn budget_scenario() {
     f.invoke::<f64, _>(&runtime.stack(), ()).unwrap();
 }
 
-/// The lowered calls #32 budgets at 3 percent, in natively compiled code, for the budgets job: a
+/// The lowered calls #32 budgets at 3 percent, in natively compiled code, for Cachegrind: a
 /// name, then the loop body. `x` varies per iteration so nothing is hoisted, as in
 /// `benches/instructions`; `loop` is the bare native loop.
 #[cfg(feature = "jit")]
@@ -123,10 +122,10 @@ const NATIVE_SCENARIOS: [(&str, &str); 5] = [
 ];
 
 /// One native scenario (`L3I_BUDGET_SCENARIO`) run `L3I_BUDGET_CALLS` times inside `--!native`
-/// code with the lowered receivers, for the budgets job to count.
+/// code with the lowered receivers, for Cachegrind to count.
 #[cfg(feature = "jit")]
 #[test]
-#[ignore = "an instruction budget scenario: the budgets job runs it under Cachegrind"]
+#[ignore = "an instruction budget scenario, counted under Cachegrind: see CARRIER_BUDGETS.md"]
 fn native_budget_scenario() {
     use l3i::extension::{NativeCodePolicy, RuntimePlan, RuntimePolicy};
     use l3i::native_code::NativeCodeMode;
@@ -147,7 +146,7 @@ fn native_budget_scenario() {
     let runtime = Runtime::from_plan(&plan).unwrap();
     assert!(
         runtime.native_code().is_some_and(l3i::native_code::NativeCodeGen::is_available),
-        "the budgets job runs where Luau generates native code"
+        "native scenarios run where Luau generates native code"
     );
     let sandbox = runtime
         .sandbox(|_| {}, SandboxOptions { compile_options: runtime.compile_options(), ..SandboxOptions::default() })
