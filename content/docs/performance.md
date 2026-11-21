@@ -23,11 +23,11 @@ deliberate change that re-audits the hand-declared C API and the flag list.
 
 | Dependency | Version | For |
 |---|---|---|
-| `dream-net` | `=1.1.1` | The `dream.udp` bridge every plan carries |
+| `dream-net` | `=2.1.0` | The `dream.udp` bridge every plan carries; compiles Más Bandwidth's C netcode and reliable with clang |
 | `dream-soft-render` | `=2.0.0`, optional (`soft-render`) | The `dream.soft_render` extension |
 | `memchr`, `miniz_oxide`, `lz4_flex`, `ruzstd`, `lzma-rs`, `crc32fast`, `adler2`, `xxhash-rust`, `md-5`, `sha1`, `sha2`, `blake3`, `encoding_rs` | Optional, behind `bytes` and its `bytes-*` features | `@dream/bytes`'s searches, codecs, digests and text encodings |
 | `icu_locale_core`, `icu_plurals`, `icu_decimal`, `fixed_decimal`, `writeable` | `2.3` (`fixed_decimal` `0.7` with `ryu`, `writeable` `0.6`), optional, behind `intl` | `@dream/intl`'s locales, plural rules and decimal formatting, with ICU4X's compiled CLDR data |
-| `mio`, `socket2` | `1.2` (`os-poll`, `net`), `0.6` (`all`), optional, behind `tcp` | `@dream/tcp`'s nonblocking sockets and OS readiness; `socket2` is already in the tree through `dream-net` |
+| `mio`, `socket2` | `1.2` (`os-poll`, `net`), `0.6` (`all`), optional, behind `tcp` | `@dream/tcp`'s nonblocking sockets and OS readiness |
 | `idna`, `libc` (Unix) | `1.1`, `0.2`, optional, behind `dns` (`idna` also behind `tls`) | Host names mapped to A-labels; `getaddrinfo` |
 | `rustls`, `rustls-platform-verifier`, `zeroize` | `0.23.40` (ring, std, tls12), `0.7`, `1.8`, optional, behind `tls` | `@dream/tls`'s sessions, the platform trust store, the zeroed copy of key input |
 | `cc` | `1`, `parallel` feature, build only | Compiling the Luau submodule and `csrc/` |
@@ -43,6 +43,11 @@ l3i is **MIT OR Apache-2.0**, at your option.
 
 Luau is Roblox's, under the MIT license; its notice ships in the package as `luau/LICENSE.txt`
 and `luau/lua_LICENSE.txt` and travels with any product that ships l3i.
+
+dream-net, which every build links, is `(MIT OR Apache-2.0) AND BSD-3-Clause AND ISC`: its own
+code is MIT OR Apache-2.0, and the C it vendors and compiles is netcode and reliable (BSD
+3-Clause, Más Bandwidth LLC) and netcode's libsodium subset (ISC). Its `NOTICE.md` carries every
+notice, and a product that ships l3i reproduces them.
 
 The `dns` and `tls` features link ICU4X's normalizer data through `idna`, also under the
 Unicode License v3. `tls` links rustls (Apache-2.0, ISC or MIT), rustls-webpki (ISC) and ring
