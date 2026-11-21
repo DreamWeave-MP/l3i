@@ -41,8 +41,12 @@ use super::{
 pub const PIPE_BUFFER: usize = 64 * 1024;
 /// Bytes `write` accepts before it answers `wouldBlock`: the stdin queue's bound.
 pub const STDIN_QUEUE: usize = 1024 * 1024;
-/// Largest piece a reader or the writer moves at once.
+/// Largest piece a reader moves at once.
 const CHUNK: usize = 8 * 1024;
+/// Largest piece the writer takes from the stdin queue at once. Each piece is a lock and a write
+/// to the pipe: at the readers' size, a child fed a few hundred megabytes a second spent its time
+/// in them.
+const WRITE_CHUNK: usize = 256 * 1024;
 /// The longest a wait sleeps before it looks at the child again.
 const POLL: Duration = Duration::from_millis(20);
 
@@ -457,8 +461,15 @@ fn write_loop(shared: &Shared, cancel: &Cancel, mut pipe: ChildStdin) {
                 }
                 state = shared.wait_change(state);
             }
-            let take = state.stdin.bytes.len().min(CHUNK);
-            let chunk: Vec<u8> = state.stdin.bytes.drain(..take).collect();
+            let take = state.stdin.bytes.len().min(WRITE_CHUNK);
+            // The queue's two halves copied as slices: a drain collected byte by byte held the
+            // lock longer than the write took.
+            let (front, back) = state.stdin.bytes.as_slices();
+            let first = front.len().min(take);
+            let mut chunk = Vec::with_capacity(take);
+            chunk.extend_from_slice(&front[..first]);
+            chunk.extend_from_slice(&back[..take - first]);
+            state.stdin.bytes.drain(..take);
             state.stdin.writing = chunk.len();
             chunk
         };
