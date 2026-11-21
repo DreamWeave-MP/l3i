@@ -2,8 +2,9 @@
 //! `dream.udp.Client`, `dream.udp.Schema`.
 //!
 //! The game transport is runtime infrastructure here, not a feature (raw TCP is the optional
-//! `tcp` feature's `dream.tcp`, which shares nothing with it). dream-net stays pure Rust and
-//! knows peers, event ids, channels, and bytes; this module owns the Luau-facing shape:
+//! `tcp` feature's `dream.tcp`, which shares nothing with it). dream-net, over Más Bandwidth's C
+//! netcode and reliable, knows peers, event ids, channels, and bytes; this module owns the
+//! Luau-facing shape:
 //!
 //! - peer, event and channel ids are Luau numbers, exact or an error, never rounded; the
 //!   protocol id and client ids are opaque 64-bit patterns (`Bits64`, `@dream/bits64`), compared
@@ -618,7 +619,14 @@ impl Extension for UdpExtension {
                 max_clients,
                 transport: TransportConfig::default(),
             };
-            let server = dream_net::Server::new(config, &key, schema, clock()).map_err(config_error)?;
+            // dream-net refuses tokens expiring within the server's maximum token lifetime of its
+            // start, so a token minted before a restart on the same key cannot open a second
+            // session. This key is generated here and dies with the server, so no earlier token
+            // can decrypt under it: the floor would only refuse a script's first tokens (a
+            // 30-second token minted in the start second, with the default maximum of 30).
+            // The smallest maximum keeps the floor out of the way.
+            let server =
+                dream_net::Server::with_max_token_lifetime(config, &key, schema, clock(), 1).map_err(config_error)?;
             Ok(Owned(Server::new_from_luau(server, Rc::clone(&clock), key, protocol_id)))
         })?;
         Ok(())

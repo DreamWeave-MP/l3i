@@ -39,13 +39,16 @@ which is what the tests do; `require("@dream/quat")` is the canonical path.
 The game transport is runtime infrastructure, not a feature: l3i depends on dream-net and owns
 the Luau bridge. (Raw TCP is a separate, optional extension, [dream.tcp](#dream-tcp).) The planner adds `UdpExtension` to every plan and reserves the id `dream.udp`, so no
 runtime lacks the network and the policy's capabilities decide what scripts may do with it.
-dream-net stays pure Rust and knows peers, event ids, channels and bytes; this module owns the
-Luau-facing shape.
+dream-net knows peers, event ids, channels and bytes; this module owns the Luau-facing shape.
+Since dream-net 2.0 its transport is Más Bandwidth's C netcode and reliable, vendored in the
+crate and compiled with clang, so a build of l3i compiles that C too (l3i needs clang anyway).
 
 - Peer, event and channel ids are numbers, exact or an error, never rounded: a peer id is a generation above a 16-bit slot, exact while the generation stays below 2^37. The protocol id, client ids and the schema's fingerprint halves are opaque 64-bit patterns, [`Bits64`](#dream-bits64) values compared with `==`. Sizes and counters are plain numbers.
 - Payloads are Luau buffers, or strings on send. `pollInto` copies one received payload into a caller-owned buffer and `sendEvent` copies out of one before returning, so the transport retains no Lua memory.
 - The transport clock is the plan's: `update()` reads a monotonic clock started with the bridge, or the clock the host gave `RuntimePlanBuilder::network_clock`, so a script cannot spoof time and a simulation can drive it.
 - The server private key never reaches Luau. A host may still hand scripts a `udp::Server` handle, or Luau may create one with `udp.server{}`; both `udp.server{}` and `udp.client{}` require the `network.transport` capability (`udp::TRANSPORT_CAPABILITY`). A Luau-created server keeps its generated key in native userdata and mints client tokens with `server:connectToken(clientId, expiresInSeconds?, timeoutSeconds?)`.
+- A connect token admits one session and one connection attempt: once a session is established with it, the server refuses it again, from any address, even after the session ends. Mint a fresh token for every attempt. A refused token is never answered, so the client reports `connectFailed` with the reason `"timeout"`. A Luau-created server's key is generated with it and never outlives it, so it accepts a token in the second it started: dream-net's restart floor, which guards servers whose key survives a restart, is set to its one-second minimum there. A host-created server keeps whatever floor the host built it with.
+- The protocol is NETCODE 1.03 (dream-net 2.1): peers on dream-net 2.0 or 1.x speak NETCODE 1.02 and never connect to it. Upgrade servers and clients together.
 - Nothing calls into Luau from inside dream-net; the host drives one network phase per frame.
 
 ### The module
@@ -2460,8 +2463,7 @@ is about 210 VM bytes and 90 native bytes, a listener 96 and 120, a watch 79 nat
 no VM bytes; kernel socket buffers are the OS's and not counted.
 
 The bottleneck is the system calls themselves, one per `readInto` or `write`, by design: there
-is no hidden queue to batch them. The feature adds one crate, mio (socket2 is already in the tree
-through dream-net).
+is no hidden queue to batch them. The feature adds two crates, mio and socket2.
 
 Sockets are native memory the VM's memory limit does not see. Streams a script connects have no
 per-runtime cap beyond the `network.tcp.connect` grant, and accepted streams are capped per
