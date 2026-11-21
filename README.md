@@ -146,14 +146,14 @@ Each row is a page of the guide.
 | `fs` | The `@dream/fs` extension | `memmap2`, `walkdir`, `same-file` |
 | `fs-authenticated` | Ranged reads of `@dream/fs` verified against a trusted commitment | `sha2` |
 | `process` | The `@dream/process` extension | none |
-| `tcp` | The `@dream/tcp` extension | `mio` (`socket2` is already a dependency of `dream-net`) |
+| `tcp` | The `@dream/tcp` extension | `mio`, `socket2` |
 | `dns` | The `@dream/dns` extension | `idna` (ICU4X's normalizer, Unicode-3.0), `libc` on Unix |
 | `tls` | The `@dream/tls` extension (turns on `tcp`) | `rustls` with ring, `rustls-platform-verifier`, `zeroize`, `idna` |
 | `audio` | The `@dream/audio` extension | `nanomp3` (with `wide`), `lewton`; libopus from the `opus` submodule, built by cc with clang |
 | `soft-render` | The `dream.soft_render` extension | `dream-soft-render` |
 
 The default feature set is empty. The game transport is not a feature: `dream-net` is a
-dependency.
+dependency, and it compiles Más Bandwidth's C netcode and reliable with clang.
 Everything optional is Rust, except the C and assembly compiled with clang for BLAKE3's
 kernels (`bytes-digests`) and ring (`tls`, `bytes-crypto`), and libopus (`audio`).
 
@@ -230,6 +230,10 @@ has every table.
 
 MIT OR Apache-2.0. Luau is Roblox's, under the MIT license; its notice ships in the package as
 `luau/LICENSE.txt` and `luau/lua_LICENSE.txt`.
+
+dream-net, linked by every build, is `(MIT OR Apache-2.0) AND BSD-3-Clause AND ISC`: the C it
+vendors is netcode and reliable (BSD 3-Clause, Más Bandwidth LLC) and netcode's libsodium subset
+(ISC). Its `NOTICE.md` carries every notice, and a binary that ships l3i reproduces them.
 
 The `audio` feature compiles libopus, under the BSD 3-Clause license (copyright Xiph.Org and its
 contributors); its notice ships as `opus/COPYING`, and a binary that enables the feature

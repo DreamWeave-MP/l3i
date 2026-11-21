@@ -28,7 +28,7 @@ crate = "l3i"
 [[requires]]
 id = "f82752ac-e7f6-43c0-8c2f-d91b7f6b3dda"
 name = "dream-net"
-version = "=1.1.1"
+version = "=2.1.0"
 url = "https://DreamWeave-MP.github.io/dream-net/"
 reason = "Runtime infrastructure: the @dream/udp module is in every plan, and l3i owns the bridge."
 
@@ -47,7 +47,7 @@ url = "https://luau.org"
 
 [[credits]]
 name = "Más Bandwidth LLC"
-role = "netcode, reliable and serialize, beneath dream-net"
+role = "netcode and reliable, the C beneath dream-net (BSD-3-Clause; a binary that ships it reproduces dream-net's NOTICE.md)"
 url = "https://mas-bandwidth.com"
 
 [[credits]]
