@@ -25,11 +25,14 @@ deliberate change that re-audits the hand-declared C API and the flag list.
 |---|---|---|
 | `dream-net` | `=2.1.0` | The `dream.udp` bridge every plan carries; compiles Más Bandwidth's C netcode and reliable with clang |
 | `dream-soft-render` | `=2.0.0`, optional (`soft-render`) | The `dream.soft_render` extension |
-| `memchr`, `miniz_oxide`, `lz4_flex`, `ruzstd`, `lzma-rs`, `crc32fast`, `adler2`, `xxhash-rust`, `md-5`, `sha1`, `sha2`, `blake3`, `encoding_rs` | Optional, behind `bytes` and its `bytes-*` features | `@dream/bytes`'s searches, codecs, digests and text encodings |
+| `memchr`, `miniz_oxide`, `lz4_flex`, `ruzstd`, `lzma-rs`, `crc32fast`, `adler2`, `xxhash-rust`, `md-5`, `sha1`, `sha2`, `blake3`, `encoding_rs`, `regex` | Optional, behind `bytes` and its `bytes-*` features (`ruzstd` from `0.9.1`) | `@dream/bytes`'s searches, codecs, digests, text encodings and regular expressions |
+| `ring`, `zeroize` | `0.17`, `1.8`, optional, behind `bytes-crypto` | `@dream/bytes`'s random bytes, HMAC and signatures |
+| `memmap2`, `walkdir`, `same-file` | `0.9`, `2.5`, `1.0.6`, optional, behind `fs` (`sha2` too, behind `fs-authenticated`) | `@dream/fs`'s mapped reads, walks and file identity |
+| `nanomp3`, `lewton` | `0.2`, `0.10.2`, optional, behind `audio` | `@dream/audio`'s MP3 and Vorbis decoders; Opus is the `opus` submodule |
 | `icu_locale_core`, `icu_plurals`, `icu_decimal`, `fixed_decimal`, `writeable` | `2.3` (`fixed_decimal` `0.7` with `ryu`, `writeable` `0.6`), optional, behind `intl` | `@dream/intl`'s locales, plural rules and decimal formatting, with ICU4X's compiled CLDR data |
 | `mio`, `socket2` | `1.2` (`os-poll`, `net`), `0.6` (`all`), optional, behind `tcp` | `@dream/tcp`'s nonblocking sockets and OS readiness |
 | `idna`, `libc` (Unix) | `1.1`, `0.2`, optional, behind `dns` (`idna` also behind `tls`) | Host names mapped to A-labels; `getaddrinfo` |
-| `rustls`, `rustls-platform-verifier`, `zeroize` | `0.23.40` (ring, std, tls12), `0.7`, `1.8`, optional, behind `tls` | `@dream/tls`'s sessions, the platform trust store, the zeroed copy of key input |
+| `rustls`, `rustls-platform-verifier`, `zeroize` | `0.23.46` (ring, std, tls12), `0.7`, `1.8`, optional, behind `tls` | `@dream/tls`'s sessions, the platform trust store, the zeroed copy of key input |
 | `cc` | `1`, `parallel` feature, build only | Compiling the Luau submodule and `csrc/` |
 | `criterion` | `0.8.2`, dev only | The benchmarks |
 | `rcgen` | `0.14` (ring, pem), dev only | Test PKIs for `@dream/tls`, made per run |
