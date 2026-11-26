@@ -227,6 +227,58 @@ fn a_wait_the_deadline_cuts_short_fails_the_call_it_ends() {
     runtime.exec("local after = true").unwrap();
 }
 
+/// The clock counts a sleep: `std::thread::sleep` sleeps at least as long as asked, so the gap
+/// is a lower bound that no stall can break.
+#[test]
+fn clock_is_monotonic_and_counts_the_time_a_sleep_takes() {
+    let runtime = runtime_granting(&[], Limits::default());
+    runtime
+        .exec(
+            "local start = process.clock() \
+             assert(type(start) == 'number' and start >= 0, 'a number of seconds') \
+             local last = start \
+             for _ = 1, 1000 do local now = process.clock() assert(now >= last, 'never backwards') last = now end \
+             process.sleep(0.05) \
+             assert(process.clock() - start >= 0.05, 'the sleep is counted')",
+        )
+        .unwrap();
+    // One start for the process: a second runtime reads on from where the first left off.
+    let first: f64 = runtime.eval("return process.clock()").unwrap();
+    let other = runtime_granting(&[], Limits::default());
+    let second: f64 = other.eval("return process.clock()").unwrap();
+    assert!(second >= first, "{second} < {first}");
+}
+
+/// Refuses sleeps alone, as a frame-driven host refuses what would freeze its frames.
+struct Sleepless;
+
+impl l3i::process::input::Policy for Sleepless {
+    fn check(&self, _: l3i::process::input::Operation) -> l3i::Result<()> {
+        Ok(())
+    }
+
+    fn check_sleep(&self) -> l3i::Result<()> {
+        Err(l3i::Error::permission("this host does not sleep"))
+    }
+}
+
+#[test]
+fn a_host_policy_can_refuse_sleep_and_one_that_does_not_say_admits_it() {
+    let runtime = runtime_with_policy(false, std::rc::Rc::new(Sleepless));
+    runtime
+        .exec(
+            "local ok, message = pcall(process.sleep, 0) \
+             assert(not ok and message:find('this host does not sleep', 1, true), message) \
+             local bad, problem = pcall(process.sleep, -1) \
+             assert(not bad and problem:find('at least 0', 1, true), problem) \
+             assert(process.clock() >= 0, 'the clock is never refused')",
+        )
+        .unwrap();
+    // `Refusing` refuses stdin waits but leaves `check_sleep` to its default.
+    let runtime = runtime_with_policy(false, std::rc::Rc::new(Refusing(std::rc::Rc::default())));
+    runtime.exec("process.sleep(0)").unwrap();
+}
+
 /// A process the child started can hold a captured pipe open after the child is gone; the run
 /// still ends at the time limit, without waiting for it.
 #[cfg(unix)]

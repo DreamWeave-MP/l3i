@@ -292,7 +292,9 @@ const PROCESS_SCRIPT: (&str, &str) = (
      local output: string = result.stdout or ''\n\
      local home: string? = process.env('HOME')\n\
      local wrote: boolean? = process.write('stderr', 'x')\n\
-     print(result.success, code, output, result.signal, home, wrote, process.isTerminal('stdout'))\n",
+     local started: number = process.clock()\n\
+     process.sleep(0)\n\
+     print(result.success, code, output, result.signal, home, wrote, process.isTerminal('stdout'), process.clock() - started)\n",
 );
 
 #[cfg(feature = "tcp")]
