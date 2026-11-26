@@ -641,13 +641,22 @@ compressed bytes are ready, often none, since the compressor holds back up to a 
 `finish(source?)` compresses the last of the input, ends the stream (adding gzip's CRC-32 and
 length trailer), returns the rest and frees the compressor; any call after it is an error. The
 returned buffers, concatenated, are exactly one zlib, raw or gzip stream, so a PNG writer can
-emit each non-empty one as an `IDAT` chunk.
+emit each non-empty one as an `IDAT` chunk. `close()` abandons the stream without producing
+anything, for a caller that cancels or whose own write failed: it frees the compressor, can be
+called any number of times, changes nothing on a stream that already ended, and makes every
+later `write` or `finish` an error.
 
 A deflater holds about 300 KiB of window, hash chains and buffers in Rust's heap, which Luau's
-memory limit and collector do not see: the userdata itself is small, so one dropped without
-`finish` keeps that memory until a collection happens to reach it. Finish every deflater, even
-one whose output is no longer wanted. If the compressor ever fails, the deflater frees it too,
-and every later call says the stream failed.
+memory limit does not see, so a runtime may hold only so many live at once: 32 unless the host
+says otherwise with `BytesExtension.with_max_deflaters(max)` (1 to 1024). Past that,
+`bytes.deflater()` raises `at most N deflaters may be live at once`. A deflater stops counting
+when it is finished, closed, fails, or is collected, so `finish` or `close` every one rather than
+leave it to the collector, which does not know what it holds.
+
+A write or finish whose output Luau cannot take, because the heap is at its limit, raises; the
+compressor has already moved past those bytes, so the stream fails for good and frees its
+compressor rather than carry on without them. Every later call says the stream failed, as it
+does if the compressor itself ever fails.
 
 `flush` is `'none'` (the default), `'sync'` or `'full'`. A sync flush ends the pending block and
 appends an empty stored block (`00 00 ff ff`), so everything written so far can be decoded from
@@ -1907,36 +1916,35 @@ if not result.success then error(`tes3cmd exited with {result.code}`) end
 | `write(stream, data)` | `true`: data to `"stdout"` or `"stderr"`, unbuffered, without `print`'s newline. A closed pipe is not an error in a host that ignores `SIGPIPE`, which every Rust binary does on startup; a host that has restored the default disposition dies on it, as `| head` has always killed writers |
 | `isTerminal(stream)` | Whether the stream is a terminal |
 | `sleep(seconds)` | Nothing: blocks the script's thread for `seconds` (finite, at least 0). Never past the runtime's execution time limit: a sleep the deadline cuts short ends there and the watchdog stops the script at its next instruction. No capability, since waiting grants nothing, but a host's policy may refuse it (below) |
-| `clock()` | Seconds on a monotonic clock from an unspecified start, one start for the whole process, so readings from different runtimes compare. Differences are elapsed wall time, sleeps and waits included, and never negative. Measure deadlines and backoff with it |
 
-A command that has to wait, say for a server that answered `429 Too Many Requests`, sleeps and
-measures with these two:
+The clock to measure a sleep with is Luau's own `os.clock()`. Unlike conventional Lua's, it is
+not CPU time: Luau reads it from `CLOCK_MONOTONIC` on Linux, Android and FreeBSD, from
+`QueryPerformanceCounter` on Windows, from `mach_absolute_time` on Apple platforms and from
+`emscripten_get_now` on wasm32, with no start of its own, so a sleep that spends no CPU still
+counts and two runtimes in one process read the same clock. Only a platform outside that list
+falls back to C's `clock()`. A command that has to wait, say for a server that answered
+`429 Too Many Requests`, sleeps and measures with the two:
 
 ```luau
-local deadline = process.clock() + 60
+local deadline = os.clock() + 60
 local delay = 0.5
-while process.clock() < deadline do
+while os.clock() < deadline do
     local response = fetch()
     if response.status ~= 429 then
         return response
     end
-    process.sleep(math.clamp(deadline - process.clock(), 0, delay))
+    process.sleep(math.clamp(deadline - os.clock(), 0, delay))
     delay *= 2
 end
 error('still rate limited after 60 seconds')
 ```
-
-`os.clock()` is a monotonic wall clock on Windows, Apple platforms, Linux, FreeBSD and Emscripten,
-because that is how Luau builds it, but C's CPU time elsewhere; `process.clock()` is monotonic
-wherever Rust's `Instant` is, which is every platform l3i builds for.
 
 The program is found the way the OS finds one, and its arguments reach it as they are, with no
 shell in between. A program the OS can't start returns `nil`, the message and the kind, as
 `@dream/fs` does. `run` needs `process.spawn` (`l3i::process::SPAWN_CAPABILITY`), `env` and
 `knownFolder` need `process.environment` (`ENVIRONMENT_CAPABILITY`): where a user's folders are
 says who the user is. `write` needs `process.stdio` (`STDIO_CAPABILITY`), so a sandboxed script's
-output goes where its host routes `print`; `isTerminal`, `platform`, `sleep` and `clock` need
-nothing.
+output goes where its host routes `print`; `isTerminal`, `platform` and `sleep` need nothing.
 
 A child inherits the host's environment only when the runtime grants `process.environment`;
 without it the child starts with the host's `PATH` and exactly the variables `env` names, since
@@ -2265,7 +2273,7 @@ refuses raises in the caller. It runs after the `process.stdio` gate, which it c
 reads and `close()` are never checked. The same policy's `check_sleep` is asked before every
 `process.sleep`, after its argument is checked; it admits every sleep unless the host overrides
 it, so a host that drives frames can refuse what would freeze them while a command-line host
-lets its scripts wait. `process.clock()` is never checked. The live-child limit is set the same way, and the two
+lets its scripts wait. The live-child limit is set the same way, and the two
 combine: `ProcessExtension.with_max_children(8).with_input_policy(policy)`. Both return a
 `process::ProcessConfig`, which is itself an extension.
 
