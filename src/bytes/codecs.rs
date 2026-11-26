@@ -232,9 +232,11 @@ unsafe impl crate::userdata::Userdata for Deflater {
 
 struct DeflaterState {
     format: DeflateFormat,
-    /// `None` once the stream is finished, which frees the compressor's window and tables.
-    /// Boxed: the compressor holds its code buffer inline, tens of KiB.
+    /// `None` once the stream is finished or has failed, which frees the compressor: about
+    /// 300 KiB of window, hash chains and buffers outside the Luau heap. Boxed: it holds its
+    /// 64 KiB code buffer inline.
     compressor: Option<Box<CompressorOxide>>,
+    failed: bool,
     started: bool,
     crc: crc32fast::Hasher,
     /// The input length modulo 2^32, as the gzip trailer records it.
@@ -250,6 +252,7 @@ impl DeflaterState {
         DeflaterState {
             format,
             compressor: Some(Box::new(CompressorOxide::new(flags))),
+            failed: false,
             started: false,
             crc: crc32fast::Hasher::new(),
             size: 0,
@@ -258,8 +261,10 @@ impl DeflaterState {
 
     /// Compresses `data` under `flush` and returns everything the compressor emits.
     fn run(&mut self, what: &str, data: &[u8], flush: TDEFLFlush) -> Result<Vec<u8>> {
-        let compressor =
-            self.compressor.as_mut().ok_or_else(|| Error::runtime(format!("{what}: the stream is finished")))?;
+        let Some(compressor) = self.compressor.as_mut() else {
+            let ended = if self.failed { "failed" } else { "finished" };
+            return Err(Error::runtime(format!("{what}: the stream is {ended}")));
+        };
         let mut out = Vec::new();
         if self.format == DeflateFormat::Gzip && !self.started {
             out.extend_from_slice(&GZIP_HEADER);
@@ -278,7 +283,13 @@ impl DeflaterState {
                 TDEFLStatus::Done => break,
                 TDEFLStatus::Okay if input.is_empty() && flush != TDEFLFlush::Finish => break,
                 TDEFLStatus::Okay if consumed > 0 => {}
-                status => return Err(Error::runtime(format!("{what}: the compressor failed ({status:?})"))),
+                status => {
+                    // Whatever this call produced is lost, so the stream cannot be completed:
+                    // free the compressor and refuse every later call.
+                    self.compressor = None;
+                    self.failed = true;
+                    return Err(Error::runtime(format!("{what}: the compressor failed ({status:?})")));
+                }
             }
         }
         if self.format == DeflateFormat::Gzip {

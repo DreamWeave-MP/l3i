@@ -635,24 +635,34 @@ the `regex` options are: `dream_bytes_DecompressOptions` is `inflate`'s and `lzm
 `{ maxSize? }`.
 
 For data too large to hold whole, raw and compressed at once, `deflater(options)` takes the
-input in pieces and returns one stream in pieces. It accepts `deflate`'s options and checks them the same
-way. `write(source, flush?)` compresses `source` and returns a buffer of whatever compressed bytes
-are ready, often none, since the compressor holds back up to a block. `finish(source?)` compresses
-the last of the input, ends the stream (adding gzip's CRC-32 and length trailer), returns the rest
-and frees the compressor; any call after it is an error. The returned buffers, concatenated, are
-exactly one zlib, raw or gzip stream, so a PNG writer can emit each one as an `IDAT` chunk.
+input in pieces and returns one stream in pieces. It accepts `deflate`'s options and checks them
+the same way. `write(source, flush?)` compresses `source` and returns a buffer of whatever
+compressed bytes are ready, often none, since the compressor holds back up to a block.
+`finish(source?)` compresses the last of the input, ends the stream (adding gzip's CRC-32 and
+length trailer), returns the rest and frees the compressor; any call after it is an error. The
+returned buffers, concatenated, are exactly one zlib, raw or gzip stream, so a PNG writer can
+emit each non-empty one as an `IDAT` chunk.
+
+A deflater holds about 300 KiB of window, hash chains and buffers in Rust's heap, which Luau's
+memory limit and collector do not see: the userdata itself is small, so one dropped without
+`finish` keeps that memory until a collection happens to reach it. Finish every deflater, even
+one whose output is no longer wanted. If the compressor ever fails, the deflater frees it too,
+and every later call says the stream failed.
 
 `flush` is `'none'` (the default), `'sync'` or `'full'`. A sync flush ends the pending block and
 appends an empty stored block (`00 00 ff ff`), so everything written so far can be decoded from
 what has been returned; a full flush does the same and also forgets the window, so decoding can
-restart there. Both cost a few bytes and some ratio each time. Without a flush, the stream is
-byte for byte what `deflate` makes of the whole input at the same format and level, however the
-input was split, down to a byte at a time:
+restart there. Both cost a few bytes and some ratio every time, even on a write of nothing.
+Without a flush, the stream is byte for byte what `deflate` makes of the whole input at the same
+format and level, however the input was split, down to a byte at a time:
 
 ```luau
 local deflater = bytes.deflater({ format = 'zlib', level = 9 })
 for _, band in bands do
-    writeChunk('IDAT', deflater:write(band))
+    local ready = deflater:write(band)
+    if buffer.len(ready) > 0 then
+        writeChunk('IDAT', ready)
+    end
 end
 writeChunk('IDAT', deflater:finish())
 ```
