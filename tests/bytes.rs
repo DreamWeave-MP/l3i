@@ -300,6 +300,202 @@ fn codecs_round_trip_and_decode_foreign_fixtures() {
         .unwrap();
 }
 
+/// A runtime whose heap stops at `memory_bytes`, with `extension` for `@dream/bytes` and the
+/// collector open to scripts.
+#[cfg(feature = "bytes-codecs")]
+fn runtime_with(extension: impl l3i::extension::Extension + 'static, memory_bytes: usize) -> Runtime {
+    let limits = l3i::runtime::Limits { memory_bytes, ..l3i::runtime::Limits::default() };
+    let plan = RuntimePlan::builder()
+        .policy(RuntimePolicy::new().compat_global("@dream/bytes", "bytes").collectgarbage(true).limits(limits))
+        .extension(extension)
+        .finalize()
+        .unwrap();
+    Runtime::from_plan(&plan).unwrap()
+}
+
+/// The compressor has moved on by the time its output becomes a Luau buffer, so a buffer the
+/// heap cannot hold loses bytes the stream needs: the deflater must not go on as if it hadn't.
+#[cfg(feature = "bytes-codecs")]
+#[test]
+fn a_deflater_whose_output_cannot_be_delivered_fails_for_good() {
+    let runtime = runtime_with(BytesExtension, 6 << 20);
+    runtime
+        .exec(
+            "local deflater = bytes.deflater({ format = 'raw', level = 0 }) \
+             local data = string.rep('x', 4 * 1024 * 1024) \
+             local ok, err = pcall(deflater.write, deflater, data, 'sync') \
+             assert(not ok, 'a stored block as large as the input did not fit, so the write failed') \
+             data = nil \
+             local again, problem = pcall(deflater.write, deflater, 'more') \
+             assert(not again and tostring(problem):find('bytes.Deflater:write: the stream failed', 1, true), tostring(problem)) \
+             local last, why = pcall(deflater.finish, deflater) \
+             assert(not last and tostring(why):find('the stream failed', 1, true), tostring(why))",
+        )
+        .unwrap();
+}
+
+/// A runtime may hold only the host's number of live deflaters; the next is refused.
+#[cfg(feature = "bytes-codecs")]
+#[test]
+fn a_runtime_holds_no_more_live_deflaters_than_its_host_allows() {
+    let runtime = runtime_with(BytesExtension.with_max_deflaters(2), 0);
+    runtime
+        .exec(
+            "local first, second = bytes.deflater(), bytes.deflater() \
+             local ok, err = pcall(bytes.deflater) \
+             assert(not ok and err:find('bytes.deflater: at most 2 deflaters may be live at once', 1, true), err) \
+             assert(first and second, 'both still held')",
+        )
+        .unwrap();
+    // The default is 32, and the limit belongs to each runtime: another starts with all of its own.
+    let fresh = runtime_with(BytesExtension, 0);
+    fresh
+        .exec(
+            "local held = {} \
+             for i = 1, 32 do held[i] = bytes.deflater() end \
+             local ok, err = pcall(bytes.deflater) \
+             assert(not ok and err:find('at most 32', 1, true), err)",
+        )
+        .unwrap();
+    let other = runtime_with(BytesExtension.with_max_deflaters(2), 0);
+    other.exec("local a, b = bytes.deflater(), bytes.deflater()").unwrap();
+}
+
+/// Every way a stream ends gives its slot back: finishing, closing, a failure, and the collector
+/// taking a deflater nobody ended.
+#[cfg(feature = "bytes-codecs")]
+#[test]
+fn a_deflater_gives_its_slot_back_however_its_stream_ends() {
+    let runtime = runtime_with(BytesExtension.with_max_deflaters(1), 0);
+    runtime
+        .exec(
+            "local finished = bytes.deflater() \
+             finished:finish('data') \
+             local closed = bytes.deflater() \
+             closed:close() \
+             local dropped = bytes.deflater() \
+             dropped:write('pending') \
+             assert(not pcall(bytes.deflater), 'the dropped one still holds the slot') \
+             dropped = nil \
+             collectgarbage('collect') \
+             local last = bytes.deflater() \
+             assert(buffer.tostring(bytes.inflate(last:finish('ok'))) == 'ok', 'the collected slot came back')",
+        )
+        .unwrap();
+}
+
+/// A stream that cannot deliver its output fails, and its slot comes back with it.
+#[cfg(feature = "bytes-codecs")]
+#[test]
+fn a_failed_deflater_gives_its_slot_back() {
+    let runtime = runtime_with(BytesExtension.with_max_deflaters(1), 6 << 20);
+    runtime
+        .exec(
+            "local deflater = bytes.deflater({ format = 'raw', level = 0 }) \
+             local data = string.rep('x', 4 * 1024 * 1024) \
+             assert(not pcall(deflater.write, deflater, data, 'sync'), 'the output did not fit') \
+             data = nil \
+             collectgarbage('collect') \
+             local fresh = bytes.deflater() \
+             assert(buffer.tostring(bytes.inflate(fresh:finish('ok'))) == 'ok', 'the failed slot came back') \
+             assert(deflater, 'the failed deflater is still referenced')",
+        )
+        .unwrap();
+}
+
+/// `close` abandons a stream without output, as a caller cancelling or failing to write does;
+/// it is idempotent and harmless on a stream that already ended, and nothing writes after it.
+#[cfg(feature = "bytes-codecs")]
+#[test]
+fn closing_a_deflater_abandons_its_stream_and_refuses_what_follows() {
+    let runtime = runtime_with(BytesExtension, 0);
+    runtime
+        .exec(
+            "local deflater = bytes.deflater({ format = 'gzip' }) \
+             deflater:write('half a stream') \
+             assert(deflater:close() == nil, 'close returns nothing') \
+             deflater:close() \
+             local ok, err = pcall(deflater.write, deflater, 'more') \
+             assert(not ok and err:find('bytes.Deflater:write: the stream is closed', 1, true), err) \
+             local ok2, err2 = pcall(deflater.finish, deflater) \
+             assert(not ok2 and err2:find('bytes.Deflater:finish: the stream is closed', 1, true), err2) \
+             local done = bytes.deflater() \
+             local packed = done:finish('whole') \
+             done:close() \
+             local ok3, err3 = pcall(done.write, done, 'more') \
+             assert(not ok3 and err3:find('the stream is finished', 1, true), err3) \
+             assert(buffer.tostring(bytes.inflate(packed)) == 'whole', 'closing after finish changes nothing')",
+        )
+        .unwrap();
+}
+
+// The script is one line (each `\` joins the next), so its comments are block comments: a `--`
+// comment would swallow every statement after it.
+#[cfg(feature = "bytes-codecs")]
+#[test]
+fn a_deflater_writes_one_stream_in_pieces_and_matches_whole_buffer_deflate() {
+    runtime()
+        .exec(
+            "--[[ Text, then bytes from an LCG, then a long run: several blocks of each kind of input. ]] \
+             local parts, seed = { string.rep('The quick brown fox jumps over the lazy dog. ', 1500) }, 1 \
+             local noise = buffer.create(70000) \
+             for i = 0, 69999 do seed = (seed * 1103515245 + 12345) % 2147483648 buffer.writeu8(noise, i, seed // 65536 % 256) end \
+             table.insert(parts, buffer.tostring(noise)) \
+             table.insert(parts, string.rep('a', 100000)) \
+             local big = table.concat(parts) \
+             local small = string.sub(big, 1, 3000) \
+             local function stream(data, options, step, flush) \
+                 local deflater, out = bytes.deflater(options), {} \
+                 for at = 1, #data, step do table.insert(out, buffer.tostring(deflater:write(string.sub(data, at, at + step - 1), flush))) end \
+                 table.insert(out, buffer.tostring(deflater:finish())) \
+                 return table.concat(out) \
+             end \
+             for _, format in { 'zlib', 'raw', 'gzip' } do \
+                 for _, level in { 0, 1, 6, 10 } do \
+                     local options = { format = format, level = level } \
+                     local whole = buffer.tostring(bytes.deflate(big, options)) \
+                     local label = format .. ' level ' .. level \
+                     assert(buffer.tostring(bytes.deflater(options):finish(big)) == whole, label .. ': finish takes the input') \
+                     for _, step in { #big, 65537, 4096, 7 } do \
+                         assert(stream(big, options, step) == whole, label .. ' in pieces of ' .. step) \
+                     end \
+                     assert(stream(small, options, 1) == buffer.tostring(bytes.deflate(small, options)), label .. ' a byte at a time') \
+                     assert(buffer.tostring(bytes.deflater(options):finish()) == buffer.tostring(bytes.deflate('', options)), label .. ' empty') \
+                     assert(buffer.tostring(bytes.inflate(bytes.deflater(options):finish(), { format = format })) == '', label .. ' empty round trip') \
+                     for _, flush in { 'sync', 'full' } do \
+                         local flushed = stream(big, options, 10000, flush) \
+                         assert(buffer.tostring(bytes.inflate(flushed, { format = format })) == big, label .. ' with ' .. flush .. ' flushes') \
+                     end \
+                 end \
+             end \
+             assert(stream(big, nil, 4096) == buffer.tostring(bytes.deflate(big)), 'defaults agree') \
+             --[[ Without a flush, a small write is held back; a sync flush hands it over, ending on the empty stored block. ]] \
+             local held = bytes.deflater({ format = 'raw' }) \
+             assert(buffer.len(held:write('hello')) == 0, 'nothing ready yet') \
+             local synced = held:write(' world', 'sync') \
+             assert(bytes.toHex(bytes.slice(synced, buffer.len(synced) - 4, 4)) == '0000ffff', 'sync flush marker') \
+             local rest = held:finish() \
+             assert(buffer.tostring(bytes.inflate(buffer.tostring(synced) .. buffer.tostring(rest), { format = 'raw' })) == 'hello world', 'flushed round trip') \
+             --[[ The gzip trailer covers every piece, and a gzip stream starts with its header even when the first write is empty. ]] \
+             local gz = bytes.deflater({ format = 'gzip' }) \
+             local head = buffer.tostring(gz:write('')) \
+             assert(bytes.toHex(head) == '1f8b08000000000000ff', 'gzip header first') \
+             local packed = head .. buffer.tostring(gz:write('abc')) .. buffer.tostring(gz:write(buffer.fromstring('def'))) .. buffer.tostring(gz:finish('ghi')) \
+             assert(buffer.tostring(bytes.inflate(packed, { format = 'gzip' })) == 'abcdefghi', 'gzip pieces') \
+             assert(packed == buffer.tostring(bytes.deflate('abcdefghi', { format = 'gzip' })), 'gzip pieces match') \
+             --[[ A finished stream takes nothing more; options are checked as deflate checks them. ]] \
+             local ok, err = pcall(gz.write, gz, 'more') assert(not ok and err:find('bytes.Deflater:write: the stream is finished'), err) \
+             local ok2, err2 = pcall(gz.finish, gz) assert(not ok2 and err2:find('bytes.Deflater:finish: the stream is finished'), err2) \
+             local open = bytes.deflater() \
+             local ok3, err3 = pcall(open.write, open, 'x', 'partial') assert(not ok3 and err3:find(\"flush 'partial' is not none, sync or full\"), err3) \
+             assert(buffer.tostring(bytes.inflate(open:finish())) == '', 'a refused flush writes nothing') \
+             local ok4, err4 = pcall(bytes.deflater, { level = 11 }) assert(not ok4 and err4:find('bytes.deflater: level 11 is outside 0..=10'), err4) \
+             local ok5, err5 = pcall(bytes.deflater, { format = 'bzip2' }) assert(not ok5 and err5:find('not zlib, raw or gzip'), err5) \
+             local ok6, err6 = pcall(bytes.deflater, { bogus = 1 }) assert(not ok6 and err6:find('bogus'), err6)",
+        )
+        .unwrap();
+}
+
 #[cfg(feature = "bytes-digests")]
 #[test]
 fn digests_match_their_published_vectors_and_the_hasher_matches_one_shot() {

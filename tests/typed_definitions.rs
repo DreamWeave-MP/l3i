@@ -142,7 +142,12 @@ const BYTES_CODECS_SCRIPT: (&str, &str) = (
      local framed, c = pcall(bytes.lz4FrameDecompress, bytes.lz4FrameCompress('x'), limit)\n\
      local block, d = pcall(bytes.lz4Decompress, bytes.lz4Compress('x'), 1, limit)\n\
      local data: buffer = bytes.zstdDecompress(bytes.zstdCompress('x'), limit)\n\
-     print(inflated, a, unpacked, b, framed, c, block, d, data)\n",
+     local deflater: dream_bytes_Deflater = bytes.deflater({ format = 'gzip', level = 9 })\n\
+     local head: buffer = deflater:write('x', 'sync')\n\
+     local rest: buffer = deflater:write(buffer.create(1))\n\
+     local tail: buffer = deflater:finish('y')\n\
+     deflater:close()\n\
+     print(inflated, a, unpacked, b, framed, c, block, d, data, head, rest, tail, bytes.deflater():finish())\n",
 );
 
 #[cfg(feature = "audio")]
@@ -288,6 +293,7 @@ const PROCESS_SCRIPT: (&str, &str) = (
      local output: string = result.stdout or ''\n\
      local home: string? = process.env('HOME')\n\
      local wrote: boolean? = process.write('stderr', 'x')\n\
+     process.sleep(0)\n\
      print(result.success, code, output, result.signal, home, wrote, process.isTerminal('stdout'))\n",
 );
 

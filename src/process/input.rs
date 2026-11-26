@@ -243,7 +243,7 @@ pub enum Operation {
 }
 
 /// A host's own check on stdin, on top of the runtime's `process.stdio` grant, which it cannot
-/// bypass. A failure raises in the caller.
+/// bypass, and on `process.sleep`, which needs no capability. A failure raises in the caller.
 pub trait Policy {
     /// Admits `operation` for the code calling now, or says why not.
     ///
@@ -251,6 +251,17 @@ pub trait Policy {
     ///
     /// Whatever the host wants raised instead of the operation.
     fn check(&self, operation: Operation) -> Result<()>;
+
+    /// Admits a `process.sleep` for the code calling now, or says why not: a frame-driven host
+    /// refuses it where a sleeping frame would freeze its window. Every sleep is admitted unless a
+    /// policy says otherwise.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the host wants raised instead of the sleep.
+    fn check_sleep(&self) -> Result<()> {
+        Ok(())
+    }
 }
 
 /// The consumer, shared with the runtime's resource list so [`Runtime::shutdown`] releases the

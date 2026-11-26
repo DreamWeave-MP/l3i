@@ -26,7 +26,7 @@ the root.
 | `analysis` | Luau's type checker, linter, autocomplete and parser over a host source provider; `RuntimePlan::check_definitions` | `analysis` |
 | `soft-render` | dream-soft-render as the `dream.soft_render` extension and `@dream/soft-render` module | `soft_render` |
 | `bytes` | The `dream.bytes` extension and `@dream/bytes` module: searching, record strings, varints, the widths and orders `buffer` lacks, and the `bytes.math()` receiver lowered under `jit` | `bytes`, `bytes::numeric` |
-| `bytes-codecs` | `inflate`/`deflate` (zlib, raw, gzip), LZ4 blocks and frames, zstd and LZMA/XZ decoding | `bytes::codecs` |
+| `bytes-codecs` | `inflate`/`deflate` (zlib, raw, gzip), `deflater` for one stream in pieces, LZ4 blocks and frames, zstd and LZMA/XZ decoding | `bytes::codecs` |
 | `bytes-digests` | CRC-32, Adler-32, FNV-1a, xxHash, MD5, SHA-1, SHA-256, BLAKE3, one-shot and incremental | `bytes::digests` |
 | `bytes-crypto` | Bytes from the OS CSPRNG, HMAC and its constant-time verification, PKCS#1 v1.5 RSA and ECDSA signing | `bytes::crypto` |
 | `bytes-text` | Decoding and encoding every WHATWG-labelled text encoding | `bytes::text` |

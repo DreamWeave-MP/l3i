@@ -35,7 +35,8 @@
 //! - `process.isTerminal(stream)`: whether a stream is a terminal (to decide on colors); no
 //!   capability.
 //! - `process.sleep(seconds)`: blocks the script's thread, never past the runtime's execution time
-//!   limit; no capability.
+//!   limit; no capability, but a host's [`input::Policy`] may refuse it (`check_sleep`). Luau's
+//!   `os.clock()` measures the wait: it reads a monotonic wall clock, not CPU time.
 //!
 //! A function whose capability the runtime lacks exists, typed, and raises a permission error.
 //! A program the OS can't start, or a stream it can't write, is an answer, not an exception:
@@ -1235,11 +1236,14 @@ fn write(name: &str, data: BytesView<'_>) -> Result<Outcome<bool>> {
 /// `process.sleep(seconds)`: blocks the script's thread for `seconds`, never past the runtime's
 /// execution time limit: a sleep the deadline cuts short marks the call expired, so the watchdog
 /// stops the script as soon as it runs again.
-fn sleep(call: &Call<'_>, seconds: f64) -> Result<()> {
+fn sleep(call: &Call<'_>, seconds: f64, policy: Option<&dyn input::Policy>) -> Result<()> {
     if !(seconds.is_finite() && seconds >= 0.0) {
         return Err(Error::runtime(format!(
             "dream.process.sleep: seconds must be a finite number of at least 0, got {seconds}"
         )));
+    }
+    if let Some(policy) = policy {
+        policy.check_sleep()?;
     }
     // Above `Duration::MAX` a sleep is forever in every sense that matters.
     let mut duration = std::time::Duration::try_from_secs_f64(seconds).unwrap_or(std::time::Duration::MAX);
@@ -1409,9 +1413,9 @@ impl Extension for ProcessExtension {
             .function("isTerminal", is_terminal)
             .signature("(stream: \"stdout\" | \"stderr\") -> boolean")
             .doc("Whether the stream is a terminal.")
-            .function("sleep", sleep)
+            .installed("sleep")
             .signature("(seconds: number) -> ()")
-            .doc("Blocks the script for seconds, never past the runtime's execution time limit.");
+            .doc("Blocks the script for seconds, never past the runtime's execution time limit. A host's policy may refuse it, as a frame-driven host does where a sleep would freeze its frames. Measure the wait with os.clock(), which Luau reads from a monotonic wall clock.");
         Ok(())
     }
 
@@ -1429,7 +1433,7 @@ impl ProcessExtension {
     }
 
     /// This extension with a host's [`input::Policy`] checked at every stdin operation, on top of
-    /// the `process.stdio` capability gate.
+    /// the `process.stdio` capability gate, and at every `process.sleep`.
     #[must_use]
     pub fn with_input_policy(self, policy: std::rc::Rc<dyn input::Policy>) -> ProcessConfig {
         ProcessConfig::default().with_input_policy(policy)
@@ -1437,7 +1441,7 @@ impl ProcessExtension {
 }
 
 /// The `dream.process` extension with a host's settings: the live-child limit, and optionally a
-/// [`input::Policy`] for stdin. Built from [`ProcessExtension`].
+/// [`input::Policy`] for stdin and `process.sleep`. Built from [`ProcessExtension`].
 pub struct ProcessConfig {
     max_children: u32,
     input_policy: Option<std::rc::Rc<dyn input::Policy>>,
@@ -1459,7 +1463,8 @@ impl ProcessConfig {
         self
     }
 
-    /// Checks every stdin operation against `policy`, on top of the `process.stdio` capability.
+    /// Checks every stdin operation against `policy`, on top of the `process.stdio` capability,
+    /// and every `process.sleep` against its [`input::Policy::check_sleep`].
     #[must_use]
     pub fn with_input_policy(mut self, policy: std::rc::Rc<dyn input::Policy>) -> ProcessConfig {
         self.input_policy = Some(policy);
@@ -1496,6 +1501,8 @@ fn install(
     })?;
     module.gated("knownFolder", ENVIRONMENT_CAPABILITY, environment, known_folder)?;
     module.gated("write", STDIO_CAPABILITY, stdio, write)?;
+    let sleep_policy = input_policy.clone();
+    module.function("sleep", move |call: &Call<'_>, seconds: f64| sleep(call, seconds, sleep_policy.as_deref()))?;
     module
         .gated("openStdin", STDIO_CAPABILITY, stdio, move |call: &Call<'_>| input::open(call, input_policy.as_ref()))?;
     module.gated(

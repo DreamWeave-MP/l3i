@@ -623,6 +623,7 @@ end
 |---|---|
 | `inflate(source, { format?, maxSize? }?)` | DEFLATE: `zlib` (default), `raw` or `gzip`; the gzip trailer's CRC and size are checked |
 | `deflate(source, { format?, level? }?)` | Levels 0 to 10, default 6 |
+| `deflater({ format?, level? }?)` | The same stream written in pieces: a `dream_bytes_Deflater` (below) |
 | `lz4Decompress(source, decompressedSize, { maxSize? }?)`, `lz4Compress(source)` | LZ4 blocks; the block format carries no size, so the caller supplies it, and `maxSize` caps what the caller may ask for |
 | `lz4FrameDecompress(source, { maxSize? }?)`, `lz4FrameCompress(source)` | LZ4 frames |
 | `zstdDecompress(source, { maxSize? }?)`, `zstdCompress(source, { level? }?)` | Zstandard; the encoder is ruzstd's, whose only implemented level is 1 (roughly zstd's own level 1), so any other `level` is an error. Frames carry a content checksum |
@@ -632,6 +633,50 @@ The decoders' options records are named, for a caller that reaches a decoder thr
 the `regex` options are: `dream_bytes_DecompressOptions` is `inflate`'s and `lzmaDecompress`'s
 `{ format?, maxSize? }`, and `dream_bytes_DecompressLimit` is the LZ4 and zstd decoders'
 `{ maxSize? }`.
+
+For data too large to hold whole, raw and compressed at once, `deflater(options)` takes the
+input in pieces and returns one stream in pieces. It accepts `deflate`'s options and checks them
+the same way. `write(source, flush?)` compresses `source` and returns a buffer of whatever
+compressed bytes are ready, often none, since the compressor holds back up to a block.
+`finish(source?)` compresses the last of the input, ends the stream (adding gzip's CRC-32 and
+length trailer), returns the rest and frees the compressor; any call after it is an error. The
+returned buffers, concatenated, are exactly one zlib, raw or gzip stream, so a PNG writer can
+emit each non-empty one as an `IDAT` chunk. `close()` abandons the stream without producing
+anything, for a caller that cancels or whose own write failed: it frees the compressor, can be
+called any number of times, changes nothing on a stream that already ended, and makes every
+later `write` or `finish` an error.
+
+A deflater holds about 300 KiB of window, hash chains and buffers in Rust's heap, which Luau's
+memory limit does not see, so a runtime may hold only so many live at once: 32 unless the host
+says otherwise with `BytesExtension.with_max_deflaters(max)` (1 to 1024). Past that,
+`bytes.deflater()` raises `at most N deflaters may be live at once`. A deflater stops counting
+when it is finished, closed, fails, or is collected, so `finish` or `close` every one rather than
+leave it to the collector, which does not know what it holds.
+
+A write or finish whose output Luau cannot take, because the heap is at its limit, raises; the
+compressor has already moved past those bytes, so the stream fails for good and frees its
+compressor rather than carry on without them. Every later call says the stream failed, as it
+does if the compressor itself ever fails.
+
+`flush` is `'none'` (the default), `'sync'` or `'full'`. A sync flush ends the pending block and
+appends an empty stored block (`00 00 ff ff`), so everything written so far can be decoded from
+what has been returned; a full flush does the same and also forgets the window, so decoding can
+restart there. Both cost a few bytes and some ratio every time, even on a write of nothing.
+Without a flush, the stream is byte for byte what `deflate` makes of the whole input at the same
+format and level, however the input was split, down to a byte at a time:
+
+```luau
+local deflater = bytes.deflater({ format = 'zlib', level = 9 })
+for _, band in bands do
+    local ready = deflater:write(band)
+    if buffer.len(ready) > 0 then
+        writeChunk('IDAT', ready)
+    end
+end
+writeChunk('IDAT', deflater:finish())
+```
+
+There is no incremental inflater: `inflate` decodes a whole stream.
 
 Every decoder takes `maxSize`, the most it will produce (default 1 GiB), and enforces it while
 producing, never only afterwards: DEFLATE and zstd through their libraries' limits, LZMA and XZ
@@ -1870,7 +1915,29 @@ if not result.success then error(`tes3cmd exited with {result.code}`) end
 | `platform()` | The OS the host was built for, as Rust's `std::env::consts::OS` names it: `"windows"`, `"macos"`, `"linux"`, `"android"`, and so on. A call, not a constant, so compiled code never carries another platform's answer |
 | `write(stream, data)` | `true`: data to `"stdout"` or `"stderr"`, unbuffered, without `print`'s newline. A closed pipe is not an error in a host that ignores `SIGPIPE`, which every Rust binary does on startup; a host that has restored the default disposition dies on it, as `| head` has always killed writers |
 | `isTerminal(stream)` | Whether the stream is a terminal |
-| `sleep(seconds)` | Nothing: blocks the script's thread for `seconds` (finite, at least 0). Never past the runtime's execution time limit: a sleep the deadline cuts short ends there and the watchdog stops the script at its next instruction |
+| `sleep(seconds)` | Nothing: blocks the script's thread for `seconds` (finite, at least 0). Never past the runtime's execution time limit: a sleep the deadline cuts short ends there and the watchdog stops the script at its next instruction. No capability, since waiting grants nothing, but a host's policy may refuse it (below) |
+
+The clock to measure a sleep with is Luau's own `os.clock()`. Unlike conventional Lua's, it is
+not CPU time: Luau reads it from `CLOCK_MONOTONIC` on Linux, Android and FreeBSD, from
+`QueryPerformanceCounter` on Windows, from `mach_absolute_time` on Apple platforms and from
+`emscripten_get_now` on wasm32, with no start of its own, so a sleep that spends no CPU still
+counts and two runtimes in one process read the same clock. Only a platform outside that list
+falls back to C's `clock()`. A command that has to wait, say for a server that answered
+`429 Too Many Requests`, sleeps and measures with the two:
+
+```luau
+local deadline = os.clock() + 60
+local delay = 0.5
+while os.clock() < deadline do
+    local response = fetch()
+    if response.status ~= 429 then
+        return response
+    end
+    process.sleep(math.clamp(deadline - os.clock(), 0, delay))
+    delay *= 2
+end
+error('still rate limited after 60 seconds')
+```
 
 The program is found the way the OS finds one, and its arguments reach it as they are, with no
 shell in between. A program the OS can't start returns `nil`, the message and the kind, as
@@ -2203,7 +2270,10 @@ even while a script still holds the handle, whose reads then report a closed con
 A host can add its own check with `ProcessExtension.with_input_policy(policy)`, an
 `Rc<dyn process::input::Policy>` asked about `Open` and `Wait` at every such call. What it
 refuses raises in the caller. It runs after the `process.stdio` gate, which it cannot bypass;
-reads and `close()` are never checked. The live-child limit is set the same way, and the two
+reads and `close()` are never checked. The same policy's `check_sleep` is asked before every
+`process.sleep`, after its argument is checked; it admits every sleep unless the host overrides
+it, so a host that drives frames can refuse what would freeze them while a command-line host
+lets its scripts wait. The live-child limit is set the same way, and the two
 combine: `ProcessExtension.with_max_children(8).with_input_policy(policy)`. Both return a
 `process::ProcessConfig`, which is itself an extension.
 
