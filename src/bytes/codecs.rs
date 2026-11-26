@@ -1,5 +1,6 @@
 //! Compression codecs (feature `bytes-codecs`): DEFLATE in zlib, raw and gzip framing, LZ4
-//! blocks and frames, zstd, and LZMA/XZ decoding, all pure Rust.
+//! blocks and frames, zstd, and LZMA/XZ decoding, all pure Rust. DEFLATE also encodes in
+//! pieces, through a [`Deflater`].
 //!
 //! Decoders take an optional `maxSize`, the most they will produce (default 1 GiB), and every
 //! one of them enforces it while producing, never only after: a hostile stream cannot grow the
@@ -7,14 +8,20 @@
 //! stream that exceeds it is an error, not a truncated result. Encoders take a `level` where
 //! the format has one.
 
+use std::cell::RefCell;
 use std::io::Read;
+
+use miniz_oxide::deflate::core::{
+    CompressorOxide, TDEFLFlush, TDEFLStatus, compress_to_output, create_comp_flags_from_zip_params,
+};
 
 use crate::bind::Call;
 use crate::convert::{BytesView, Exact, NewBuffer};
 use crate::error::{Error, Result};
-use crate::extension::ModuleDecl;
+use crate::extension::{ExtensionDescriptor, ModuleDecl, TagPolicy};
 use crate::options::Options;
 use crate::stack::ValueView;
+use crate::userdata::Owned;
 
 /// The default output cap for a decoder, in bytes.
 pub const DEFAULT_MAX_SIZE: usize = 1 << 30;
@@ -169,22 +176,28 @@ fn inflate(call: &Call<'_>, source: BytesView<'_>, options: Option<ValueView<'_>
     Ok(NewBuffer(out))
 }
 
+/// `deflate`'s and `deflater`'s options: the framing and the level, 0 to 10, default 6.
+fn deflate_options(call: &Call<'_>, options: Option<ValueView<'_>>, what: &str) -> Result<(DeflateFormat, u8)> {
+    let Some(options) = options else { return Ok((DeflateFormat::Zlib, 6)) };
+    Options::read(call, options, what, |o| {
+        let format = DeflateFormat::parse(what, o.optional::<String>("format")?.as_deref())?;
+        let level = match o.optional::<Exact<i64>>("level")? {
+            Some(level) => u8::try_from(level.0)
+                .ok()
+                .filter(|l| *l <= 10)
+                .ok_or_else(|| Error::runtime(format!("{what}: level {} is outside 0..=10", level.0)))?,
+            None => 6,
+        };
+        Ok((format, level))
+    })
+}
+
+/// The gzip member header both encoders write: no flags, no time, unknown operating system.
+const GZIP_HEADER: [u8; 10] = [0x1F, 0x8B, 8, 0, 0, 0, 0, 0, 0, 255];
+
 fn deflate(call: &Call<'_>, source: BytesView<'_>, options: Option<ValueView<'_>>) -> Result<NewBuffer> {
     const WHAT: &str = "bytes.deflate";
-    let (format, level) = match options {
-        None => (DeflateFormat::Zlib, 6u8),
-        Some(options) => Options::read(call, options, WHAT, |o| {
-            let format = DeflateFormat::parse(WHAT, o.optional::<String>("format")?.as_deref())?;
-            let level = match o.optional::<Exact<i64>>("level")? {
-                Some(level) => u8::try_from(level.0)
-                    .ok()
-                    .filter(|l| *l <= 10)
-                    .ok_or_else(|| Error::runtime(format!("{WHAT}: level {} is outside 0..=10", level.0)))?,
-                None => 6,
-            };
-            Ok((format, level))
-        })?,
-    };
+    let (format, level) = deflate_options(call, options, WHAT)?;
     // SAFETY: as `inflate`.
     let data = unsafe { bytes(&source) };
     let out = match format {
@@ -193,7 +206,7 @@ fn deflate(call: &Call<'_>, source: BytesView<'_>, options: Option<ValueView<'_>
         DeflateFormat::Gzip => {
             let body = miniz_oxide::deflate::compress_to_vec(data, level);
             let mut out = Vec::with_capacity(body.len() + 18);
-            out.extend_from_slice(&[0x1F, 0x8B, 8, 0, 0, 0, 0, 0, 0, 255]);
+            out.extend_from_slice(&GZIP_HEADER);
             out.extend_from_slice(&body);
             out.extend_from_slice(&crc32fast::hash(data).to_le_bytes());
             out.extend_from_slice(&(data.len() as u32).to_le_bytes());
@@ -201,6 +214,123 @@ fn deflate(call: &Call<'_>, source: BytesView<'_>, options: Option<ValueView<'_>
         }
     };
     Ok(NewBuffer(out))
+}
+
+/// An incremental DEFLATE encoder (`dream.bytes.Deflater`, from `bytes.deflater(options)`):
+/// `write` takes the input in any pieces and returns the compressed bytes that are ready,
+/// `finish` ends the stream and returns the rest. Together the pieces are one stream in the
+/// chosen framing, byte for byte what `bytes.deflate` makes of the whole input at the same level
+/// unless a write asked for a flush.
+pub struct Deflater {
+    state: RefCell<DeflaterState>,
+}
+
+// SAFETY: the payload holds no Lua references.
+unsafe impl crate::userdata::Userdata for Deflater {
+    const NAME: &'static str = "dream.bytes.Deflater";
+}
+
+struct DeflaterState {
+    format: DeflateFormat,
+    /// `None` once the stream is finished, which frees the compressor's window and tables.
+    /// Boxed: the compressor holds its code buffer inline, tens of KiB.
+    compressor: Option<Box<CompressorOxide>>,
+    started: bool,
+    crc: crc32fast::Hasher,
+    /// The input length modulo 2^32, as the gzip trailer records it.
+    size: u32,
+}
+
+impl DeflaterState {
+    fn new(format: DeflateFormat, level: u8) -> Self {
+        // The same flags `compress_to_vec` and `compress_to_vec_zlib` derive, so the stream is
+        // theirs: window bits above zero ask for the zlib wrapper.
+        let window_bits = i32::from(format == DeflateFormat::Zlib);
+        let flags = create_comp_flags_from_zip_params(i32::from(level), window_bits, 0);
+        DeflaterState {
+            format,
+            compressor: Some(Box::new(CompressorOxide::new(flags))),
+            started: false,
+            crc: crc32fast::Hasher::new(),
+            size: 0,
+        }
+    }
+
+    /// Compresses `data` under `flush` and returns everything the compressor emits.
+    fn run(&mut self, what: &str, data: &[u8], flush: TDEFLFlush) -> Result<Vec<u8>> {
+        let compressor =
+            self.compressor.as_mut().ok_or_else(|| Error::runtime(format!("{what}: the stream is finished")))?;
+        let mut out = Vec::new();
+        if self.format == DeflateFormat::Gzip && !self.started {
+            out.extend_from_slice(&GZIP_HEADER);
+        }
+        self.started = true;
+        let mut input = data;
+        loop {
+            let (status, consumed) = compress_to_output(compressor, input, flush, |chunk| {
+                out.extend_from_slice(chunk);
+                true
+            });
+            input = &input[consumed..];
+            // The callback takes every byte, so the compressor returns once it has consumed the
+            // input and done the flush; a return short of that which made progress is resumed.
+            match status {
+                TDEFLStatus::Done => break,
+                TDEFLStatus::Okay if input.is_empty() && flush != TDEFLFlush::Finish => break,
+                TDEFLStatus::Okay if consumed > 0 => {}
+                status => return Err(Error::runtime(format!("{what}: the compressor failed ({status:?})"))),
+            }
+        }
+        if self.format == DeflateFormat::Gzip {
+            self.crc.update(data);
+            self.size = self.size.wrapping_add(data.len() as u32);
+        }
+        Ok(out)
+    }
+
+    fn finish(&mut self, what: &str, data: &[u8]) -> Result<NewBuffer> {
+        let mut out = self.run(what, data, TDEFLFlush::Finish)?;
+        self.compressor = None;
+        if self.format == DeflateFormat::Gzip {
+            out.extend_from_slice(&self.crc.clone().finalize().to_le_bytes());
+            out.extend_from_slice(&self.size.to_le_bytes());
+        }
+        Ok(NewBuffer(out))
+    }
+}
+
+fn flush_mode(what: &str, name: Option<&str>) -> Result<TDEFLFlush> {
+    match name {
+        None | Some("none") => Ok(TDEFLFlush::None),
+        Some("sync") => Ok(TDEFLFlush::Sync),
+        Some("full") => Ok(TDEFLFlush::Full),
+        Some(other) => Err(Error::runtime(format!("{what}: flush '{other}' is not none, sync or full"))),
+    }
+}
+
+pub(crate) fn describe_deflater(d: &mut ExtensionDescriptor) {
+    let mut deflater = d.userdata::<Deflater>("dream.bytes.Deflater");
+    deflater.tag(TagPolicy::Never).doc("An incremental DEFLATE encoder: one stream written in pieces.");
+    deflater
+        .method("write", |z: &Deflater, source: BytesView<'_>, flush: Option<&str>| -> Result<NewBuffer> {
+            const WHAT: &str = "bytes.Deflater:write";
+            let flush = flush_mode(WHAT, flush)?;
+            // SAFETY: the compressor reads the view and calls nothing; the output is a fresh Vec.
+            z.state.borrow_mut().run(WHAT, unsafe { bytes(&source) }, flush).map(NewBuffer)
+        })
+        .signature("(self, source: buffer | string, flush: string?): buffer");
+    deflater
+        .method("finish", |z: &Deflater, source: Option<BytesView<'_>>| -> Result<NewBuffer> {
+            // SAFETY: as `write`.
+            let data = source.as_ref().map_or(&[][..], |source| unsafe { bytes(source) });
+            z.state.borrow_mut().finish("bytes.Deflater:finish", data)
+        })
+        .signature("(self, source: (buffer | string)?): buffer");
+}
+
+fn deflater(call: &Call<'_>, options: Option<ValueView<'_>>) -> Result<Owned<Deflater>> {
+    let (format, level) = deflate_options(call, options, "bytes.deflater")?;
+    Ok(Owned(Deflater { state: RefCell::new(DeflaterState::new(format, level)) }))
 }
 
 fn lz4_decompress(
@@ -337,6 +467,9 @@ pub(crate) fn describe(module: &mut ModuleDecl) {
         .function("deflate", deflate)
         .signature("(source: buffer | string, options: { format: string?, level: number? }?) -> buffer")
         .doc("DEFLATE encoding: format zlib (default), raw or gzip; level 0 to 10, default 6.")
+        .function("deflater", deflater)
+        .signature("(options: { format: string?, level: number? }?) -> dream_bytes_Deflater")
+        .doc("deflate written in pieces: write returns what is ready, finish ends the one stream.")
         .function("lz4Decompress", lz4_decompress)
         .signature(
             "(source: buffer | string, decompressedSize: number, options: dream_bytes_DecompressLimit?) -> buffer",

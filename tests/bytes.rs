@@ -300,6 +300,73 @@ fn codecs_round_trip_and_decode_foreign_fixtures() {
         .unwrap();
 }
 
+// The script is one line (each `\` joins the next), so its comments are block comments: a `--`
+// comment would swallow every statement after it.
+#[cfg(feature = "bytes-codecs")]
+#[test]
+fn a_deflater_writes_one_stream_in_pieces_and_matches_whole_buffer_deflate() {
+    runtime()
+        .exec(
+            "--[[ Text, then bytes from an LCG, then a long run: several blocks of each kind of input. ]] \
+             local parts, seed = { string.rep('The quick brown fox jumps over the lazy dog. ', 1500) }, 1 \
+             local noise = buffer.create(70000) \
+             for i = 0, 69999 do seed = (seed * 1103515245 + 12345) % 2147483648 buffer.writeu8(noise, i, seed // 65536 % 256) end \
+             table.insert(parts, buffer.tostring(noise)) \
+             table.insert(parts, string.rep('a', 100000)) \
+             local big = table.concat(parts) \
+             local small = string.sub(big, 1, 3000) \
+             local function stream(data, options, step, flush) \
+                 local deflater, out = bytes.deflater(options), {} \
+                 for at = 1, #data, step do table.insert(out, buffer.tostring(deflater:write(string.sub(data, at, at + step - 1), flush))) end \
+                 table.insert(out, buffer.tostring(deflater:finish())) \
+                 return table.concat(out) \
+             end \
+             for _, format in { 'zlib', 'raw', 'gzip' } do \
+                 for _, level in { 0, 1, 6, 10 } do \
+                     local options = { format = format, level = level } \
+                     local whole = buffer.tostring(bytes.deflate(big, options)) \
+                     local label = format .. ' level ' .. level \
+                     assert(buffer.tostring(bytes.deflater(options):finish(big)) == whole, label .. ': finish takes the input') \
+                     for _, step in { #big, 65537, 4096, 7 } do \
+                         assert(stream(big, options, step) == whole, label .. ' in pieces of ' .. step) \
+                     end \
+                     assert(stream(small, options, 1) == buffer.tostring(bytes.deflate(small, options)), label .. ' a byte at a time') \
+                     assert(buffer.tostring(bytes.deflater(options):finish()) == buffer.tostring(bytes.deflate('', options)), label .. ' empty') \
+                     assert(buffer.tostring(bytes.inflate(bytes.deflater(options):finish(), { format = format })) == '', label .. ' empty round trip') \
+                     for _, flush in { 'sync', 'full' } do \
+                         local flushed = stream(big, options, 10000, flush) \
+                         assert(buffer.tostring(bytes.inflate(flushed, { format = format })) == big, label .. ' with ' .. flush .. ' flushes') \
+                     end \
+                 end \
+             end \
+             assert(stream(big, nil, 4096) == buffer.tostring(bytes.deflate(big)), 'defaults agree') \
+             --[[ Without a flush, a small write is held back; a sync flush hands it over, ending on the empty stored block. ]] \
+             local held = bytes.deflater({ format = 'raw' }) \
+             assert(buffer.len(held:write('hello')) == 0, 'nothing ready yet') \
+             local synced = held:write(' world', 'sync') \
+             assert(bytes.toHex(bytes.slice(synced, buffer.len(synced) - 4, 4)) == '0000ffff', 'sync flush marker') \
+             local rest = held:finish() \
+             assert(buffer.tostring(bytes.inflate(buffer.tostring(synced) .. buffer.tostring(rest), { format = 'raw' })) == 'hello world', 'flushed round trip') \
+             --[[ The gzip trailer covers every piece, and a gzip stream starts with its header even when the first write is empty. ]] \
+             local gz = bytes.deflater({ format = 'gzip' }) \
+             local head = buffer.tostring(gz:write('')) \
+             assert(bytes.toHex(head) == '1f8b08000000000000ff', 'gzip header first') \
+             local packed = head .. buffer.tostring(gz:write('abc')) .. buffer.tostring(gz:write(buffer.fromstring('def'))) .. buffer.tostring(gz:finish('ghi')) \
+             assert(buffer.tostring(bytes.inflate(packed, { format = 'gzip' })) == 'abcdefghi', 'gzip pieces') \
+             assert(packed == buffer.tostring(bytes.deflate('abcdefghi', { format = 'gzip' })), 'gzip pieces match') \
+             --[[ A finished stream takes nothing more; options are checked as deflate checks them. ]] \
+             local ok, err = pcall(gz.write, gz, 'more') assert(not ok and err:find('bytes.Deflater:write: the stream is finished'), err) \
+             local ok2, err2 = pcall(gz.finish, gz) assert(not ok2 and err2:find('bytes.Deflater:finish: the stream is finished'), err2) \
+             local open = bytes.deflater() \
+             local ok3, err3 = pcall(open.write, open, 'x', 'partial') assert(not ok3 and err3:find(\"flush 'partial' is not none, sync or full\"), err3) \
+             assert(buffer.tostring(bytes.inflate(open:finish())) == '', 'a refused flush writes nothing') \
+             local ok4, err4 = pcall(bytes.deflater, { level = 11 }) assert(not ok4 and err4:find('bytes.deflater: level 11 is outside 0..=10'), err4) \
+             local ok5, err5 = pcall(bytes.deflater, { format = 'bzip2' }) assert(not ok5 and err5:find('not zlib, raw or gzip'), err5) \
+             local ok6, err6 = pcall(bytes.deflater, { bogus = 1 }) assert(not ok6 and err6:find('bogus'), err6)",
+        )
+        .unwrap();
+}
+
 #[cfg(feature = "bytes-digests")]
 #[test]
 fn digests_match_their_published_vectors_and_the_hasher_matches_one_shot() {

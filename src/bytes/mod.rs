@@ -17,8 +17,9 @@
 //!   code under `jit` when the script annotates it (`local B: dream_bytes_Math = bytes.math()`).
 //!   A big-endian float in native code is two lowered steps in script: read the integer form,
 //!   write it into a scratch buffer with `buffer.writeu32`, read it back with `buffer.readf32`.
-//! - **Codecs** (`bytes-codecs`): `inflate` and `deflate` in zlib, raw and gzip framing, LZ4
-//!   blocks and frames, zstd and LZMA/XZ decoding.
+//! - **Codecs** (`bytes-codecs`): `inflate` and `deflate` in zlib, raw and gzip framing, the
+//!   latter also through a `Deflater` for one stream written in pieces, LZ4 blocks and frames,
+//!   zstd and LZMA/XZ decoding.
 //! - **Digests** (`bytes-digests`): CRC-32, Adler-32, FNV-1a, xxHash and the cryptographic
 //!   digests, one-shot or through a `Hasher` for data that arrives in pieces.
 //! - **Crypto** (`bytes-crypto`): bytes from the operating system's CSPRNG, HMAC signing and
@@ -619,6 +620,8 @@ impl Extension for BytesExtension {
         numeric::describe_receiver(&mut math);
         #[cfg(feature = "jit")]
         d.native_hooks(lowering::ByteMath);
+        #[cfg(feature = "bytes-codecs")]
+        codecs::describe_deflater(d);
         #[cfg(feature = "bytes-digests")]
         digests::describe_hasher(d);
         #[cfg(feature = "bytes-regex")]
