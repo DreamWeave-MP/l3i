@@ -1906,14 +1906,36 @@ if not result.success then error(`tes3cmd exited with {result.code}`) end
 | `platform()` | The OS the host was built for, as Rust's `std::env::consts::OS` names it: `"windows"`, `"macos"`, `"linux"`, `"android"`, and so on. A call, not a constant, so compiled code never carries another platform's answer |
 | `write(stream, data)` | `true`: data to `"stdout"` or `"stderr"`, unbuffered, without `print`'s newline. A closed pipe is not an error in a host that ignores `SIGPIPE`, which every Rust binary does on startup; a host that has restored the default disposition dies on it, as `| head` has always killed writers |
 | `isTerminal(stream)` | Whether the stream is a terminal |
-| `sleep(seconds)` | Nothing: blocks the script's thread for `seconds` (finite, at least 0). Never past the runtime's execution time limit: a sleep the deadline cuts short ends there and the watchdog stops the script at its next instruction |
+| `sleep(seconds)` | Nothing: blocks the script's thread for `seconds` (finite, at least 0). Never past the runtime's execution time limit: a sleep the deadline cuts short ends there and the watchdog stops the script at its next instruction. No capability, since waiting grants nothing, but a host's policy may refuse it (below) |
+| `clock()` | Seconds on a monotonic clock from an unspecified start, one start for the whole process, so readings from different runtimes compare. Differences are elapsed wall time, sleeps and waits included, and never negative. Measure deadlines and backoff with it |
+
+A command that has to wait, say for a server that answered `429 Too Many Requests`, sleeps and
+measures with these two:
+
+```luau
+local deadline = process.clock() + 60
+local delay = 0.5
+while process.clock() < deadline do
+    local response = fetch()
+    if response.status ~= 429 then
+        return response
+    end
+    process.sleep(math.clamp(deadline - process.clock(), 0, delay))
+    delay *= 2
+end
+```
+
+`os.clock()` is a monotonic wall clock on Windows, Apple platforms, Linux, FreeBSD and Emscripten,
+because that is how Luau builds it, but C's CPU time elsewhere; `process.clock()` is monotonic
+wherever Rust's `Instant` is, which is every platform l3i builds for.
 
 The program is found the way the OS finds one, and its arguments reach it as they are, with no
 shell in between. A program the OS can't start returns `nil`, the message and the kind, as
 `@dream/fs` does. `run` needs `process.spawn` (`l3i::process::SPAWN_CAPABILITY`), `env` and
 `knownFolder` need `process.environment` (`ENVIRONMENT_CAPABILITY`): where a user's folders are
 says who the user is. `write` needs `process.stdio` (`STDIO_CAPABILITY`), so a sandboxed script's
-output goes where its host routes `print`; `isTerminal`, `platform` and `sleep` need nothing.
+output goes where its host routes `print`; `isTerminal`, `platform`, `sleep` and `clock` need
+nothing.
 
 A child inherits the host's environment only when the runtime grants `process.environment`;
 without it the child starts with the host's `PATH` and exactly the variables `env` names, since
@@ -2239,7 +2261,10 @@ even while a script still holds the handle, whose reads then report a closed con
 A host can add its own check with `ProcessExtension.with_input_policy(policy)`, an
 `Rc<dyn process::input::Policy>` asked about `Open` and `Wait` at every such call. What it
 refuses raises in the caller. It runs after the `process.stdio` gate, which it cannot bypass;
-reads and `close()` are never checked. The live-child limit is set the same way, and the two
+reads and `close()` are never checked. The same policy's `check_sleep` is asked before every
+`process.sleep`, after its argument is checked; it admits every sleep unless the host overrides
+it, so a host that drives frames can refuse what would freeze them while a command-line host
+lets its scripts wait. `process.clock()` is never checked. The live-child limit is set the same way, and the two
 combine: `ProcessExtension.with_max_children(8).with_input_policy(policy)`. Both return a
 `process::ProcessConfig`, which is itself an extension.
 

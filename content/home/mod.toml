@@ -579,10 +579,14 @@ Ship servers and clients built on 3.0 together: they do not connect to 2.x peers
 [[releases]]
 version = "3.1.0"
 date = 2026-11-26
-summary = "bytes.deflater: one zlib, raw or gzip stream written in pieces, so a large output never needs its whole input and whole compressed form in memory at once."
+summary = "bytes.deflater: one zlib, raw or gzip stream written in pieces, so a large output never needs its whole input and whole compressed form in memory at once. process.clock, a monotonic clock to measure waits against, and a host policy that can refuse process.sleep (#56)."
 added = [
-    "`bytes.deflater(options)` (`bytes-codecs`) takes `deflate`'s options and returns a `dream_bytes_Deflater`. `write(source, flush?)` returns the compressed bytes that are ready, `finish(source?)` ends the stream and returns the rest; together they are one stream. Without a flush it is byte for byte what `bytes.deflate` makes of the whole input at the same format and level, however the input was split. `flush` is `'sync'` or `'full'` for a decodable point mid-stream. Any call after `finish` is an error. `l3i::bytes::codecs::Deflater` is its userdata.",
+    "`bytes.deflater(options)` (`bytes-codecs`) takes `deflate`'s options and returns a `dream_bytes_Deflater`. `write(source, flush?)` returns the compressed bytes that are ready, `finish(source?)` ends the stream and returns the rest; together they are one stream. Without a flush it is byte for byte what `bytes.deflate` makes of the whole input at the same format and level, however the input was split. `flush` is `'sync'` or `'full'` for a decodable point mid-stream. Any call after `finish`, or after the compressor fails, is an error. A deflater holds about 300 KiB outside the Luau heap until `finish` frees it. `l3i::bytes::codecs::Deflater` is its userdata.",
+    "`process.clock()`: seconds on a monotonic clock, one start for the whole process, so differences are elapsed wall time on every platform, sleeps included. `os.clock()` is that only where Luau builds it so. No capability.",
+    "`process::input::Policy::check_sleep`, asked before every `process.sleep`, so a frame-driven host can refuse a sleep that would freeze its frames. Its default admits every sleep, so a policy written for 3.0 behaves as it did.",
 ]
 migration = """
 Take 3.1.0 in place of 3.0.0. Nothing a caller wrote changes.
+
+A script that waits measures with `process.clock()` rather than `os.clock()`. A host whose frames must not block overrides `check_sleep` in the policy it already passes to `with_input_policy`.
 """
