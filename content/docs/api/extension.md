@@ -768,7 +768,7 @@ Lower-case hex, the module's `toHex`.
 | Module | Feature | Items |
 |---|---|---|
 | `bytes::numeric` | `bytes` | `f16_to_f32(bits: u16) -> f32`, `f32_to_f16(value: f32) -> u16` (round to nearest even, overflow to infinity), the read and write implementations |
-| `bytes::codecs` | `bytes-codecs` | `DEFAULT_MAX_SIZE` (1 GiB), the codec bindings |
+| `bytes::codecs` | `bytes-codecs` | `DEFAULT_MAX_SIZE` (1 GiB), `Deflater` (`Userdata::NAME` `"dream.bytes.Deflater"`, untagged), the codec bindings |
 | `bytes::digests` | `bytes-digests` | `fnv1a32(&[u8]) -> u32`, `fnv1a64(&[u8]) -> u64`, `Hasher` (`Userdata::NAME` `"dream.bytes.Hasher"`, untagged) |
 | `bytes::text` | `bytes-text` | The text bindings |
 | `bytes::lowering` | `jit` | `ByteMath`, the `NativeCodeHooks` set that lowers the receiver's integer methods; `lowered_sites()` |

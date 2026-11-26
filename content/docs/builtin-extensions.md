@@ -623,6 +623,7 @@ end
 |---|---|
 | `inflate(source, { format?, maxSize? }?)` | DEFLATE: `zlib` (default), `raw` or `gzip`; the gzip trailer's CRC and size are checked |
 | `deflate(source, { format?, level? }?)` | Levels 0 to 10, default 6 |
+| `deflater({ format?, level? }?)` | The same stream written in pieces: a `dream_bytes_Deflater` (below) |
 | `lz4Decompress(source, decompressedSize, { maxSize? }?)`, `lz4Compress(source)` | LZ4 blocks; the block format carries no size, so the caller supplies it, and `maxSize` caps what the caller may ask for |
 | `lz4FrameDecompress(source, { maxSize? }?)`, `lz4FrameCompress(source)` | LZ4 frames |
 | `zstdDecompress(source, { maxSize? }?)`, `zstdCompress(source, { level? }?)` | Zstandard; the encoder is ruzstd's, whose only implemented level is 1 (roughly zstd's own level 1), so any other `level` is an error. Frames carry a content checksum |
@@ -632,6 +633,31 @@ The decoders' options records are named, for a caller that reaches a decoder thr
 the `regex` options are: `dream_bytes_DecompressOptions` is `inflate`'s and `lzmaDecompress`'s
 `{ format?, maxSize? }`, and `dream_bytes_DecompressLimit` is the LZ4 and zstd decoders'
 `{ maxSize? }`.
+
+For data too large to hold whole, raw and compressed at once, `deflater(options)` takes the
+input in pieces and returns one stream in pieces. It accepts `deflate`'s options and checks them the same
+way. `write(source, flush?)` compresses `source` and returns a buffer of whatever compressed bytes
+are ready, often none, since the compressor holds back up to a block. `finish(source?)` compresses
+the last of the input, ends the stream (adding gzip's CRC-32 and length trailer), returns the rest
+and frees the compressor; any call after it is an error. The returned buffers, concatenated, are
+exactly one zlib, raw or gzip stream, so a PNG writer can emit each one as an `IDAT` chunk.
+
+`flush` is `'none'` (the default), `'sync'` or `'full'`. A sync flush ends the pending block and
+appends an empty stored block (`00 00 ff ff`), so everything written so far can be decoded from
+what has been returned; a full flush does the same and also forgets the window, so decoding can
+restart there. Both cost a few bytes and some ratio each time. Without a flush, the stream is
+byte for byte what `deflate` makes of the whole input at the same format and level, however the
+input was split, down to a byte at a time:
+
+```luau
+local deflater = bytes.deflater({ format = 'zlib', level = 9 })
+for _, band in bands do
+    writeChunk('IDAT', deflater:write(band))
+end
+writeChunk('IDAT', deflater:finish())
+```
+
+There is no incremental inflater: `inflate` decodes a whole stream.
 
 Every decoder takes `maxSize`, the most it will produce (default 1 GiB), and enforces it while
 producing, never only afterwards: DEFLATE and zstd through their libraries' limits, LZMA and XZ
