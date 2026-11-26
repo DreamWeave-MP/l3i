@@ -227,26 +227,29 @@ fn a_wait_the_deadline_cuts_short_fails_the_call_it_ends() {
     runtime.exec("local after = true").unwrap();
 }
 
-/// The clock counts a sleep: `std::thread::sleep` sleeps at least as long as asked, so the gap
-/// is a lower bound that no stall can break.
+/// `os.clock()` is what measures a sleep: Luau reads it from a monotonic wall clock with no
+/// per-VM start (`lperf.cpp`), not C's CPU-time `clock()`, so a sleep that uses no CPU still
+/// counts. `std::thread::sleep` sleeps at least as long as asked, so every gap here is a lower
+/// bound that no stall can break.
+#[cfg(any(windows, target_vendor = "apple", target_os = "linux", target_os = "android", target_os = "freebsd"))]
 #[test]
-fn clock_is_monotonic_and_counts_the_time_a_sleep_takes() {
+fn os_clock_is_monotonic_counts_a_sleep_and_reads_the_same_across_runtimes() {
     let runtime = runtime_granting(&[], Limits::default());
     runtime
         .exec(
-            "local start = process.clock() \
-             assert(type(start) == 'number' and start >= 0, 'a number of seconds') \
+            "local start = os.clock() \
              local last = start \
-             for _ = 1, 1000 do local now = process.clock() assert(now >= last, 'never backwards') last = now end \
+             for _ = 1, 1000 do local now = os.clock() assert(now >= last, 'never backwards') last = now end \
              process.sleep(0.05) \
-             assert(process.clock() - start >= 0.05, 'the sleep is counted')",
+             assert(os.clock() - start >= 0.05, 'the sleep is counted, though it spent no CPU')",
         )
         .unwrap();
-    // One start for the process: a second runtime reads on from where the first left off.
-    let first: f64 = runtime.eval("return process.clock()").unwrap();
+    // One timebase for every VM: a runtime made after this reading, which then sleeps, reads
+    // later still. A clock that started with each VM would read less than `first` here.
+    let first: f64 = runtime.eval("return os.clock()").unwrap();
     let other = runtime_granting(&[], Limits::default());
-    let second: f64 = other.eval("return process.clock()").unwrap();
-    assert!(second >= first, "{second} < {first}");
+    let second: f64 = other.eval("process.sleep(0.05) return os.clock()").unwrap();
+    assert!(second - first >= 0.05, "{second} - {first} < 0.05");
 }
 
 /// Refuses sleeps alone, as a frame-driven host refuses what would freeze its frames.
@@ -270,8 +273,7 @@ fn a_host_policy_can_refuse_sleep_and_one_that_does_not_say_admits_it() {
             "local ok, message = pcall(process.sleep, 0) \
              assert(not ok and message:find('this host does not sleep', 1, true), message) \
              local bad, problem = pcall(process.sleep, -1) \
-             assert(not bad and problem:find('at least 0', 1, true), problem) \
-             assert(process.clock() >= 0, 'the clock is never refused')",
+             assert(not bad and problem:find('at least 0', 1, true), problem)",
         )
         .unwrap();
     // `Refusing` refuses stdin waits but leaves `check_sleep` to its default.

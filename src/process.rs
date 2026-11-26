@@ -35,9 +35,8 @@
 //! - `process.isTerminal(stream)`: whether a stream is a terminal (to decide on colors); no
 //!   capability.
 //! - `process.sleep(seconds)`: blocks the script's thread, never past the runtime's execution time
-//!   limit; no capability, but a host's [`input::Policy`] may refuse it (`check_sleep`).
-//! - `process.clock()`: seconds on a monotonic clock shared by the process, to measure waits and
-//!   deadlines against; no capability.
+//!   limit; no capability, but a host's [`input::Policy`] may refuse it (`check_sleep`). Luau's
+//!   `os.clock()` measures the wait: it reads a monotonic wall clock, not CPU time.
 //!
 //! A function whose capability the runtime lacks exists, typed, and raises a permission error.
 //! A program the OS can't start, or a stream it can't write, is an answer, not an exception:
@@ -1260,14 +1259,6 @@ fn sleep(call: &Call<'_>, seconds: f64, policy: Option<&dyn input::Policy>) -> R
     Ok(())
 }
 
-/// `process.clock()`: seconds since the first reading in this process, on `Instant`, which is
-/// monotonic on every platform Rust supports. One start for the process, so readings from two
-/// runtimes, or a worker's and its parent's, compare.
-fn clock() -> f64 {
-    static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
-    START.get_or_init(Instant::now).elapsed().as_secs_f64()
-}
-
 fn is_terminal(name: &str) -> Result<bool> {
     use std::io::IsTerminal as _;
     Ok(if stream("isTerminal", name)? { std::io::stderr().is_terminal() } else { std::io::stdout().is_terminal() })
@@ -1424,10 +1415,7 @@ impl Extension for ProcessExtension {
             .doc("Whether the stream is a terminal.")
             .installed("sleep")
             .signature("(seconds: number) -> ()")
-            .doc("Blocks the script for seconds, never past the runtime's execution time limit. A host's policy may refuse it, as a frame-driven host does where a sleep would freeze its frames.")
-            .function("clock", clock)
-            .signature("() -> number")
-            .doc("Seconds on a monotonic clock from an unspecified start, the same for every runtime in the process: differences measure elapsed wall time, sleeps and waits included, and never run backwards.");
+            .doc("Blocks the script for seconds, never past the runtime's execution time limit. A host's policy may refuse it, as a frame-driven host does where a sleep would freeze its frames. Measure the wait with os.clock(), which Luau reads from a monotonic wall clock.");
         Ok(())
     }
 
