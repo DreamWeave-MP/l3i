@@ -575,3 +575,14 @@ Packed values written to files, buffers or sockets keep their bytes; nothing nee
 
 Ship servers and clients built on 3.0 together: they do not connect to 2.x peers. Mint a new connect token for every connection attempt, and keep none to present again after a reconnect or a restart. A Rust host that matched netcode-official's `Error` matches `dream_net::NetcodeError`, which has the same variants and texts.
 """
+
+[[releases]]
+version = "3.1.0"
+date = 2026-11-26
+summary = "bytes.deflater: one zlib, raw or gzip stream written in pieces, so a large output never needs its whole input and whole compressed form in memory at once."
+added = [
+    "`bytes.deflater(options)` (`bytes-codecs`) takes `deflate`'s options and returns a `dream_bytes_Deflater`. `write(source, flush?)` returns the compressed bytes that are ready, `finish(source?)` ends the stream and returns the rest; together they are one stream. Without a flush it is byte for byte what `bytes.deflate` makes of the whole input at the same format and level, however the input was split. `flush` is `'sync'` or `'full'` for a decodable point mid-stream. Any call after `finish` is an error. `l3i::bytes::codecs::Deflater` is its userdata.",
+]
+migration = """
+Take 3.1.0 in place of 3.0.0. Nothing a caller wrote changes.
+"""
