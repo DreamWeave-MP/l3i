@@ -8,19 +8,20 @@
 //! stream that exceeds it is an error, not a truncated result. Encoders take a `level` where
 //! the format has one.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::io::Read;
+use std::rc::Rc;
 
 use miniz_oxide::deflate::core::{
     CompressorOxide, TDEFLFlush, TDEFLStatus, compress_to_output, create_comp_flags_from_zip_params,
 };
 
-use crate::bind::Call;
+use crate::bind::{Call, StackResults};
 use crate::convert::{BytesView, Exact, NewBuffer};
 use crate::error::{Error, Result};
-use crate::extension::{ExtensionDescriptor, ModuleDecl, TagPolicy};
+use crate::extension::{ExtensionDescriptor, ModuleDecl, ModuleInstaller, TagPolicy};
 use crate::options::Options;
-use crate::stack::ValueView;
+use crate::stack::{Scope, ValueView};
 use crate::userdata::Owned;
 
 /// The default output cap for a decoder, in bytes.
@@ -216,27 +217,75 @@ fn deflate(call: &Call<'_>, source: BytesView<'_>, options: Option<ValueView<'_>
     Ok(NewBuffer(out))
 }
 
+/// The live deflaters a runtime may hold at once unless its host says otherwise: each holds
+/// about 300 KiB outside the Luau heap, so this is about 10 MiB.
+pub const DEFAULT_MAX_DEFLATERS: u32 = 32;
+/// The most live deflaters a host may allow one runtime (about 300 MiB).
+pub const MAX_DEFLATERS_LIMIT: u32 = 1024;
+
+/// The live deflaters one runtime may hold. A deflater is live from its creation until it is
+/// finished, closed, fails, or is collected. Scripts cannot change the limit: only the host's
+/// extension sets it.
+pub(crate) struct DeflaterQuota {
+    max: usize,
+    live: Cell<usize>,
+}
+
+/// One live deflater's slot, released when it drops.
+struct Slot(Rc<DeflaterQuota>);
+
+impl DeflaterQuota {
+    pub(crate) fn new(max: u32) -> Rc<DeflaterQuota> {
+        Rc::new(DeflaterQuota { max: max.clamp(1, MAX_DEFLATERS_LIMIT) as usize, live: Cell::new(0) })
+    }
+
+    fn reserve(quota: &Rc<DeflaterQuota>) -> Result<Slot> {
+        if quota.live.get() >= quota.max {
+            return Err(Error::runtime(format!(
+                "bytes.deflater: at most {} deflaters may be live at once; finish or close one first",
+                quota.max
+            )));
+        }
+        quota.live.set(quota.live.get() + 1);
+        Ok(Slot(Rc::clone(quota)))
+    }
+}
+
+impl Drop for Slot {
+    fn drop(&mut self) {
+        self.0.live.set(self.0.live.get() - 1);
+    }
+}
+
 /// An incremental DEFLATE encoder (`dream.bytes.Deflater`, from `bytes.deflater(options)`):
 /// `write` takes the input in any pieces and returns the compressed bytes that are ready,
-/// `finish` ends the stream and returns the rest. Together the pieces are one stream in the
-/// chosen framing, byte for byte what `bytes.deflate` makes of the whole input at the same level
-/// unless a write asked for a flush.
+/// `finish` ends the stream and returns the rest, `close` abandons it. Together the pieces are
+/// one stream in the chosen framing, byte for byte what `bytes.deflate` makes of the whole input
+/// at the same level unless a write asked for a flush.
 pub struct Deflater {
     state: RefCell<DeflaterState>,
 }
 
-// SAFETY: the payload holds no Lua references.
+// SAFETY: the payload holds no Lua references, and dropping it only frees Rust memory and
+// releases a quota slot.
 unsafe impl crate::userdata::Userdata for Deflater {
     const NAME: &'static str = "dream.bytes.Deflater";
 }
 
+/// Where a stream is. Only `Open` holds the compressor, about 300 KiB of window, hash chains and
+/// buffers outside the Luau heap, and the runtime's quota slot; every other state has let both
+/// go.
+enum Stream {
+    // Boxed: the compressor holds its 64 KiB code buffer inline.
+    Open { compressor: Box<CompressorOxide>, _slot: Slot },
+    Finished,
+    Closed,
+    Failed,
+}
+
 struct DeflaterState {
     format: DeflateFormat,
-    /// `None` once the stream is finished or has failed, which frees the compressor: about
-    /// 300 KiB of window, hash chains and buffers outside the Luau heap. Boxed: it holds its
-    /// 64 KiB code buffer inline.
-    compressor: Option<Box<CompressorOxide>>,
-    failed: bool,
+    stream: Stream,
     started: bool,
     crc: crc32fast::Hasher,
     /// The input length modulo 2^32, as the gzip trailer records it.
@@ -244,15 +293,14 @@ struct DeflaterState {
 }
 
 impl DeflaterState {
-    fn new(format: DeflateFormat, level: u8) -> Self {
+    fn new(format: DeflateFormat, level: u8, slot: Slot) -> Self {
         // The same flags `compress_to_vec` and `compress_to_vec_zlib` derive, so the stream is
         // theirs: window bits above zero ask for the zlib wrapper.
         let window_bits = i32::from(format == DeflateFormat::Zlib);
         let flags = create_comp_flags_from_zip_params(i32::from(level), window_bits, 0);
         DeflaterState {
             format,
-            compressor: Some(Box::new(CompressorOxide::new(flags))),
-            failed: false,
+            stream: Stream::Open { compressor: Box::new(CompressorOxide::new(flags)), _slot: slot },
             started: false,
             crc: crc32fast::Hasher::new(),
             size: 0,
@@ -261,9 +309,11 @@ impl DeflaterState {
 
     /// Compresses `data` under `flush` and returns everything the compressor emits.
     fn run(&mut self, what: &str, data: &[u8], flush: TDEFLFlush) -> Result<Vec<u8>> {
-        let Some(compressor) = self.compressor.as_mut() else {
-            let ended = if self.failed { "failed" } else { "finished" };
-            return Err(Error::runtime(format!("{what}: the stream is {ended}")));
+        let compressor = match &mut self.stream {
+            Stream::Open { compressor, .. } => compressor,
+            Stream::Finished => return Err(Error::runtime(format!("{what}: the stream is finished"))),
+            Stream::Closed => return Err(Error::runtime(format!("{what}: the stream is closed"))),
+            Stream::Failed => return Err(Error::runtime(format!("{what}: the stream failed"))),
         };
         let mut out = Vec::new();
         if self.format == DeflateFormat::Gzip && !self.started {
@@ -286,8 +336,7 @@ impl DeflaterState {
                 status => {
                     // Whatever this call produced is lost, so the stream cannot be completed:
                     // free the compressor and refuse every later call.
-                    self.compressor = None;
-                    self.failed = true;
+                    self.stream = Stream::Failed;
                     return Err(Error::runtime(format!("{what}: the compressor failed ({status:?})")));
                 }
             }
@@ -299,15 +348,39 @@ impl DeflaterState {
         Ok(out)
     }
 
-    fn finish(&mut self, what: &str, data: &[u8]) -> Result<NewBuffer> {
+    fn finish(&mut self, what: &str, data: &[u8]) -> Result<Vec<u8>> {
         let mut out = self.run(what, data, TDEFLFlush::Finish)?;
-        self.compressor = None;
+        self.stream = Stream::Finished;
         if self.format == DeflateFormat::Gzip {
             out.extend_from_slice(&self.crc.clone().finalize().to_le_bytes());
             out.extend_from_slice(&self.size.to_le_bytes());
         }
-        Ok(NewBuffer(out))
+        Ok(out)
     }
+
+    /// Abandons an open stream; a stream that already ended stays as it ended.
+    fn close(&mut self) {
+        if matches!(self.stream, Stream::Open { .. }) {
+            self.stream = Stream::Closed;
+        }
+    }
+}
+
+/// Hands `out` to Luau as a new buffer. The compressor has already moved past these bytes, so if
+/// the buffer cannot be made (the heap is at its limit, which raises through this frame) the
+/// stream is missing them for good: the guard marks it failed and frees the compressor and its
+/// slot as the raise unwinds.
+fn deliver(call: &Call<'_>, state: &RefCell<DeflaterState>, out: Vec<u8>) -> Result<StackResults> {
+    struct Undelivered<'a>(&'a RefCell<DeflaterState>);
+    impl Drop for Undelivered<'_> {
+        fn drop(&mut self) {
+            self.0.borrow_mut().stream = Stream::Failed;
+        }
+    }
+    let guard = Undelivered(state);
+    call.push(&NewBuffer(out))?;
+    std::mem::forget(guard);
+    Ok(StackResults)
 }
 
 fn flush_mode(what: &str, name: Option<&str>) -> Result<TDEFLFlush> {
@@ -323,25 +396,37 @@ pub(crate) fn describe_deflater(d: &mut ExtensionDescriptor) {
     let mut deflater = d.userdata::<Deflater>("dream.bytes.Deflater");
     deflater.tag(TagPolicy::Never).doc("An incremental DEFLATE encoder: one stream written in pieces.");
     deflater
-        .method("write", |z: &Deflater, source: BytesView<'_>, flush: Option<&str>| -> Result<NewBuffer> {
-            const WHAT: &str = "bytes.Deflater:write";
-            let flush = flush_mode(WHAT, flush)?;
-            // SAFETY: the compressor reads the view and calls nothing; the output is a fresh Vec.
-            z.state.borrow_mut().run(WHAT, unsafe { bytes(&source) }, flush).map(NewBuffer)
-        })
+        .method(
+            "write",
+            |z: &Deflater, call: &Call<'_>, source: BytesView<'_>, flush: Option<&str>| -> Result<StackResults> {
+                const WHAT: &str = "bytes.Deflater:write";
+                let flush = flush_mode(WHAT, flush)?;
+                // SAFETY: the compressor reads the view and calls nothing; the output is a fresh
+                // Vec, and the borrow ends before it is delivered.
+                let out = z.state.borrow_mut().run(WHAT, unsafe { bytes(&source) }, flush)?;
+                deliver(call, &z.state, out)
+            },
+        )
         .signature("(self, source: buffer | string, flush: string?): buffer");
     deflater
-        .method("finish", |z: &Deflater, source: Option<BytesView<'_>>| -> Result<NewBuffer> {
+        .method("finish", |z: &Deflater, call: &Call<'_>, source: Option<BytesView<'_>>| -> Result<StackResults> {
             // SAFETY: as `write`.
             let data = source.as_ref().map_or(&[][..], |source| unsafe { bytes(source) });
-            z.state.borrow_mut().finish("bytes.Deflater:finish", data)
+            let out = z.state.borrow_mut().finish("bytes.Deflater:finish", data)?;
+            deliver(call, &z.state, out)
         })
         .signature("(self, source: (buffer | string)?): buffer");
+    deflater.method("close", |z: &Deflater| z.state.borrow_mut().close()).signature("(self): ()");
 }
 
-fn deflater(call: &Call<'_>, options: Option<ValueView<'_>>) -> Result<Owned<Deflater>> {
-    let (format, level) = deflate_options(call, options, "bytes.deflater")?;
-    Ok(Owned(Deflater { state: RefCell::new(DeflaterState::new(format, level)) }))
+/// `bytes.deflater`, installed per runtime so each runtime counts its own live deflaters.
+pub(crate) fn install(module: &mut ModuleInstaller<'_>, quota: Rc<DeflaterQuota>) -> Result<()> {
+    module.function("deflater", move |call: &Call<'_>, options: Option<ValueView<'_>>| -> Result<Owned<Deflater>> {
+        let (format, level) = deflate_options(call, options, "bytes.deflater")?;
+        let slot = DeflaterQuota::reserve(&quota)?;
+        Ok(Owned(Deflater { state: RefCell::new(DeflaterState::new(format, level, slot)) }))
+    })?;
+    Ok(())
 }
 
 fn lz4_decompress(
@@ -478,9 +563,9 @@ pub(crate) fn describe(module: &mut ModuleDecl) {
         .function("deflate", deflate)
         .signature("(source: buffer | string, options: { format: string?, level: number? }?) -> buffer")
         .doc("DEFLATE encoding: format zlib (default), raw or gzip; level 0 to 10, default 6.")
-        .function("deflater", deflater)
+        .installed("deflater")
         .signature("(options: { format: string?, level: number? }?) -> dream_bytes_Deflater")
-        .doc("deflate written in pieces: write returns what is ready, finish ends the one stream.")
+        .doc("deflate written in pieces: write returns what is ready, finish ends the one stream, close abandons it. A runtime holds at most a host-set number of live deflaters (32 unless the host says otherwise).")
         .function("lz4Decompress", lz4_decompress)
         .signature(
             "(source: buffer | string, decompressedSize: number, options: dream_bytes_DecompressLimit?) -> buffer",

@@ -69,7 +69,7 @@ use crate::bind::{Call, StackResults};
 use crate::byte_rules::ByteRules;
 use crate::convert::{Bits64, BufferView, BytesView, Exact, NewBuffer};
 use crate::error::{Error, Result};
-use crate::extension::{Extension, ExtensionDescriptor, ModuleDecl};
+use crate::extension::{Extension, ExtensionDescriptor, InstallContext, ModuleDecl};
 use crate::stack::{Scope, ValueView};
 
 /// The extension id.
@@ -80,6 +80,41 @@ pub const MODULE: &str = "@dream/bytes";
 /// The `dream.bytes` extension.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct BytesExtension;
+
+impl BytesExtension {
+    /// This extension with at most `max` deflaters live per runtime at once (1 to
+    /// [`codecs::MAX_DEFLATERS_LIMIT`]; default [`codecs::DEFAULT_MAX_DEFLATERS`]). Each holds
+    /// about 300 KiB outside the Luau heap until it is finished, closed or collected. Scripts
+    /// cannot change it.
+    #[cfg(feature = "bytes-codecs")]
+    #[must_use]
+    pub fn with_max_deflaters(self, max: u32) -> BytesConfig {
+        BytesConfig { max_deflaters: max.clamp(1, codecs::MAX_DEFLATERS_LIMIT) }
+    }
+}
+
+/// The `dream.bytes` extension with a host's settings: the live-deflater limit. Built from
+/// [`BytesExtension`].
+#[cfg(feature = "bytes-codecs")]
+#[derive(Clone, Copy, Debug)]
+pub struct BytesConfig {
+    max_deflaters: u32,
+}
+
+#[cfg(feature = "bytes-codecs")]
+impl Extension for BytesConfig {
+    fn id(&self) -> &'static str {
+        EXTENSION_ID
+    }
+
+    fn describe(&self, d: &mut ExtensionDescriptor) -> Result<()> {
+        BytesExtension.describe(d)
+    }
+
+    fn install(&self, cx: &mut InstallContext<'_>) -> Result<()> {
+        codecs::install(cx.module(MODULE)?, codecs::DeflaterQuota::new(self.max_deflaters))
+    }
+}
 
 /// The numeric receiver (`dream.bytes.Math`, from `bytes.math()`): the big-endian, 24-bit and
 /// half-float reads and writes as methods, lowered to native code under `jit`; see
@@ -642,6 +677,13 @@ impl Extension for BytesExtension {
         #[cfg(feature = "bytes-regex")]
         regex::describe(module);
         framing::describe(module);
+        Ok(())
+    }
+
+    #[cfg_attr(not(feature = "bytes-codecs"), allow(unused_variables))]
+    fn install(&self, cx: &mut InstallContext<'_>) -> Result<()> {
+        #[cfg(feature = "bytes-codecs")]
+        codecs::install(cx.module(MODULE)?, codecs::DeflaterQuota::new(codecs::DEFAULT_MAX_DEFLATERS))?;
         Ok(())
     }
 }

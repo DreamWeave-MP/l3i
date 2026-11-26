@@ -146,6 +146,7 @@ const BYTES_CODECS_SCRIPT: (&str, &str) = (
      local head: buffer = deflater:write('x', 'sync')\n\
      local rest: buffer = deflater:write(buffer.create(1))\n\
      local tail: buffer = deflater:finish('y')\n\
+     deflater:close()\n\
      print(inflated, a, unpacked, b, framed, c, block, d, data, head, rest, tail, bytes.deflater():finish())\n",
 );
 

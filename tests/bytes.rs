@@ -300,6 +300,135 @@ fn codecs_round_trip_and_decode_foreign_fixtures() {
         .unwrap();
 }
 
+/// A runtime whose heap stops at `memory_bytes`, with `extension` for `@dream/bytes` and the
+/// collector open to scripts.
+#[cfg(feature = "bytes-codecs")]
+fn runtime_with(extension: impl l3i::extension::Extension + 'static, memory_bytes: usize) -> Runtime {
+    let limits = l3i::runtime::Limits { memory_bytes, ..l3i::runtime::Limits::default() };
+    let plan = RuntimePlan::builder()
+        .policy(RuntimePolicy::new().compat_global("@dream/bytes", "bytes").collectgarbage(true).limits(limits))
+        .extension(extension)
+        .finalize()
+        .unwrap();
+    Runtime::from_plan(&plan).unwrap()
+}
+
+/// The compressor has moved on by the time its output becomes a Luau buffer, so a buffer the
+/// heap cannot hold loses bytes the stream needs: the deflater must not go on as if it hadn't.
+#[cfg(feature = "bytes-codecs")]
+#[test]
+fn a_deflater_whose_output_cannot_be_delivered_fails_for_good() {
+    let runtime = runtime_with(BytesExtension, 6 << 20);
+    runtime
+        .exec(
+            "local deflater = bytes.deflater({ format = 'raw', level = 0 }) \
+             local data = string.rep('x', 4 * 1024 * 1024) \
+             local ok, err = pcall(deflater.write, deflater, data, 'sync') \
+             assert(not ok, 'a stored block as large as the input did not fit, so the write failed') \
+             data = nil \
+             local again, problem = pcall(deflater.write, deflater, 'more') \
+             assert(not again and tostring(problem):find('bytes.Deflater:write: the stream failed', 1, true), tostring(problem)) \
+             local last, why = pcall(deflater.finish, deflater) \
+             assert(not last and tostring(why):find('the stream failed', 1, true), tostring(why))",
+        )
+        .unwrap();
+}
+
+/// A runtime may hold only the host's number of live deflaters; the next is refused.
+#[cfg(feature = "bytes-codecs")]
+#[test]
+fn a_runtime_holds_no_more_live_deflaters_than_its_host_allows() {
+    let runtime = runtime_with(BytesExtension.with_max_deflaters(2), 0);
+    runtime
+        .exec(
+            "local first, second = bytes.deflater(), bytes.deflater() \
+             local ok, err = pcall(bytes.deflater) \
+             assert(not ok and err:find('bytes.deflater: at most 2 deflaters may be live at once', 1, true), err) \
+             assert(first and second, 'both still held')",
+        )
+        .unwrap();
+    // The default is 32, and the limit belongs to each runtime: another starts with all of its own.
+    let fresh = runtime_with(BytesExtension, 0);
+    fresh
+        .exec(
+            "local held = {} \
+             for i = 1, 32 do held[i] = bytes.deflater() end \
+             local ok, err = pcall(bytes.deflater) \
+             assert(not ok and err:find('at most 32', 1, true), err)",
+        )
+        .unwrap();
+    let other = runtime_with(BytesExtension.with_max_deflaters(2), 0);
+    other.exec("local a, b = bytes.deflater(), bytes.deflater()").unwrap();
+}
+
+/// Every way a stream ends gives its slot back: finishing, closing, a failure, and the collector
+/// taking a deflater nobody ended.
+#[cfg(feature = "bytes-codecs")]
+#[test]
+fn a_deflater_gives_its_slot_back_however_its_stream_ends() {
+    let runtime = runtime_with(BytesExtension.with_max_deflaters(1), 0);
+    runtime
+        .exec(
+            "local finished = bytes.deflater() \
+             finished:finish('data') \
+             local closed = bytes.deflater() \
+             closed:close() \
+             local dropped = bytes.deflater() \
+             dropped:write('pending') \
+             assert(not pcall(bytes.deflater), 'the dropped one still holds the slot') \
+             dropped = nil \
+             collectgarbage('collect') \
+             local last = bytes.deflater() \
+             assert(buffer.tostring(bytes.inflate(last:finish('ok'))) == 'ok', 'the collected slot came back')",
+        )
+        .unwrap();
+}
+
+/// A stream that cannot deliver its output fails, and its slot comes back with it.
+#[cfg(feature = "bytes-codecs")]
+#[test]
+fn a_failed_deflater_gives_its_slot_back() {
+    let runtime = runtime_with(BytesExtension.with_max_deflaters(1), 6 << 20);
+    runtime
+        .exec(
+            "local deflater = bytes.deflater({ format = 'raw', level = 0 }) \
+             local data = string.rep('x', 4 * 1024 * 1024) \
+             assert(not pcall(deflater.write, deflater, data, 'sync'), 'the output did not fit') \
+             data = nil \
+             collectgarbage('collect') \
+             local fresh = bytes.deflater() \
+             assert(buffer.tostring(bytes.inflate(fresh:finish('ok'))) == 'ok', 'the failed slot came back') \
+             assert(deflater, 'the failed deflater is still referenced')",
+        )
+        .unwrap();
+}
+
+/// `close` abandons a stream without output, as a caller cancelling or failing to write does;
+/// it is idempotent and harmless on a stream that already ended, and nothing writes after it.
+#[cfg(feature = "bytes-codecs")]
+#[test]
+fn closing_a_deflater_abandons_its_stream_and_refuses_what_follows() {
+    let runtime = runtime_with(BytesExtension, 0);
+    runtime
+        .exec(
+            "local deflater = bytes.deflater({ format = 'gzip' }) \
+             deflater:write('half a stream') \
+             assert(deflater:close() == nil, 'close returns nothing') \
+             deflater:close() \
+             local ok, err = pcall(deflater.write, deflater, 'more') \
+             assert(not ok and err:find('bytes.Deflater:write: the stream is closed', 1, true), err) \
+             local ok2, err2 = pcall(deflater.finish, deflater) \
+             assert(not ok2 and err2:find('bytes.Deflater:finish: the stream is closed', 1, true), err2) \
+             local done = bytes.deflater() \
+             local packed = done:finish('whole') \
+             done:close() \
+             local ok3, err3 = pcall(done.write, done, 'more') \
+             assert(not ok3 and err3:find('the stream is finished', 1, true), err3) \
+             assert(buffer.tostring(bytes.inflate(packed)) == 'whole', 'closing after finish changes nothing')",
+        )
+        .unwrap();
+}
+
 // The script is one line (each `\` joins the next), so its comments are block comments: a `--`
 // comment would swallow every statement after it.
 #[cfg(feature = "bytes-codecs")]
