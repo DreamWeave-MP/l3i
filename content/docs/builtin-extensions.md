@@ -1923,6 +1923,7 @@ while process.clock() < deadline do
     process.sleep(math.clamp(deadline - process.clock(), 0, delay))
     delay *= 2
 end
+error('still rate limited after 60 seconds')
 ```
 
 `os.clock()` is a monotonic wall clock on Windows, Apple platforms, Linux, FreeBSD and Emscripten,

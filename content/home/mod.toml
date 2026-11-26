@@ -589,4 +589,6 @@ migration = """
 Take 3.1.0 in place of 3.0.0. Nothing a caller wrote changes.
 
 A script that waits measures with `process.clock()` rather than `os.clock()`. A host whose frames must not block overrides `check_sleep` in the policy it already passes to `with_input_policy`.
+
+`process.sleep` is now installed rather than described as a plain function, so a host extension that reuses `ProcessExtension`'s `describe` with an `install` of its own must install it too. `ProcessExtension` and `ProcessConfig` themselves need nothing.
 """
